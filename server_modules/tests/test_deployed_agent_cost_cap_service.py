@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -52,6 +53,12 @@ def _run(
 
 
 class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global deployed_agent_cost_cap_service
+        deployed_agent_cost_cap_service = importlib.import_module(
+            "server_modules.deployed_agent_cost_cap_service"
+        )
+
     async def test_settle_records_80_percent_notification_once(self) -> None:
         deployed_agent = _deployed_agent(metadata={"monthly_cost_cap_usd": 10.0})
 

@@ -430,8 +430,11 @@ class OperatorChatNoProviderTests(unittest.TestCase):
             availability={"ai_ready": False},
         )
 
-        self.assertEqual(payload["mode"], "error")
-        self.assertEqual(payload["actions"], [])
-        self.assertEqual(payload["error"], "no_provider")
-        self.assertEqual(payload["message"], "No AI provider configured")
+        self.assertEqual(payload["mode"], "connect")
+        self.assertEqual(payload["actions"], [{"label": "Connect", "href": "/connect-ai"}])
         self.assertEqual(payload["reply"], "")
+        interventions = payload.get("interventions") or []
+        self.assertTrue(interventions)
+        self.assertEqual(interventions[0]["kind"], "connect_required")
+        self.assertEqual(interventions[0]["title"], "Hosted Sage AI is blocked")
+        self.assertIn("Hosted Sage AI is disabled", str(interventions[0].get("detail") or ""))

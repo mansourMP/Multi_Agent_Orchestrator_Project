@@ -17,13 +17,24 @@ sys.modules["operator_chat_direct_tools_under_test"] = operator_chat
 assert spec and spec.loader
 spec.loader.exec_module(operator_chat)
 
+_PUBLIC_ALIASES = {
+    "direct_chat_workspace_context_text": "_direct_chat_workspace_context_text",
+    "preferred_provider": "_preferred_provider",
+    "supports_direct_message_native_chat": "_supports_direct_message_native_chat",
+    "start_direct_chat_run_handoff": "_start_direct_chat_run_handoff",
+    "execute_single_direct_tool_call": "_execute_single_direct_tool_call",
+}
+for public_name, private_name in _PUBLIC_ALIASES.items():
+    if not hasattr(operator_chat, public_name) and hasattr(operator_chat, private_name):
+        setattr(operator_chat, public_name, getattr(operator_chat, private_name))
+
 
 class OperatorChatDirectToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self._semantic_model_patcher = patch.object(operator_chat.memory_service._workspace_memory_store, "_SEMANTIC_MODEL", False)
         self._semantic_model_patcher.start()
         self._workspace_context_patcher = patch(
-            "operator_chat_direct_tools_under_test._direct_chat_workspace_context_text",
+            "operator_chat_direct_tools_under_test.direct_chat_workspace_context_text",
             return_value="",
         )
         self._workspace_context_patcher.start()
@@ -57,11 +68,11 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             return_value=[],
         ):
             with patch(
-                "operator_chat_direct_tools_under_test._preferred_provider",
+                "operator_chat_direct_tools_under_test.preferred_provider",
                 return_value=("codex_cli", {}),
             ):
                 with patch(
-                    "operator_chat_direct_tools_under_test._supports_direct_message_native_chat",
+                    "operator_chat_direct_tools_under_test.supports_direct_message_native_chat",
                     return_value=True,
                 ):
                     with patch(
@@ -72,7 +83,7 @@ class OperatorChatDirectToolTests(unittest.TestCase):
                             message="What do you know about my preferences?",
                             workspace_id="default",
                             requested_model="gpt-5.4",
-                            requested_provider="openai",
+                            requested_provider="codex_cli",
                             availability={"ai_ready": True},
                         )
 
@@ -186,8 +197,8 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             }
         ],
     )
-    @patch("operator_chat_direct_tools_under_test._preferred_provider", return_value=("codex_cli", {}))
-    @patch("operator_chat_direct_tools_under_test._supports_direct_message_native_chat", return_value=True)
+    @patch("operator_chat_direct_tools_under_test.preferred_provider", return_value=("codex_cli", {}))
+    @patch("operator_chat_direct_tools_under_test.supports_direct_message_native_chat", return_value=True)
     @patch("operator_chat_direct_tools_under_test.generate_chat_reply_stream_with_provider_fallback")
     @patch("server_modules.runs_execution._workflow_execute_connector_action")
     def test_direct_chat_executes_tool_call_result(
@@ -250,7 +261,7 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             message="Send a Telegram message saying hello from direct chat.",
             workspace_id="default",
             requested_model="gpt-5.4",
-            requested_provider="openai",
+            requested_provider="codex_cli",
             availability={"ai_ready": True},
         )
 
@@ -274,8 +285,8 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             }
         ],
     )
-    @patch("operator_chat_direct_tools_under_test._preferred_provider", return_value=("codex_cli", {}))
-    @patch("operator_chat_direct_tools_under_test._supports_direct_message_native_chat", return_value=True)
+    @patch("operator_chat_direct_tools_under_test.preferred_provider", return_value=("codex_cli", {}))
+    @patch("operator_chat_direct_tools_under_test.supports_direct_message_native_chat", return_value=True)
     @patch("operator_chat_direct_tools_under_test.generate_chat_reply_stream_with_provider_fallback")
     def test_direct_chat_passes_tool_schemas_to_worker(
         self,
@@ -308,7 +319,7 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             message="Send a Telegram message saying hi.",
             workspace_id="default",
             requested_model="gpt-5.4",
-            requested_provider="openai",
+            requested_provider="codex_cli",
             availability={"ai_ready": True},
         )
 
@@ -331,8 +342,8 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             }
         ],
     )
-    @patch("operator_chat_direct_tools_under_test._preferred_provider", return_value=("codex_cli", {}))
-    @patch("operator_chat_direct_tools_under_test._supports_direct_message_native_chat", return_value=True)
+    @patch("operator_chat_direct_tools_under_test.preferred_provider", return_value=("codex_cli", {}))
+    @patch("operator_chat_direct_tools_under_test.supports_direct_message_native_chat", return_value=True)
     @patch("operator_chat_direct_tools_under_test.generate_chat_reply_stream_with_provider_fallback")
     @patch("server_modules.runs_execution._workflow_execute_connector_action")
     def test_direct_chat_requires_approval_before_executing_tool_call(
@@ -367,7 +378,7 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             message="Send a Telegram message saying hello from direct chat.",
             workspace_id="default",
             requested_model="gpt-5.4",
-            requested_provider="openai",
+            requested_provider="codex_cli",
             availability={"ai_ready": True},
         )
 
@@ -430,12 +441,12 @@ class OperatorChatDirectToolTests(unittest.TestCase):
         self.assertIn("telegram_bot.send_message", payload["reply"])
         execute_tool_mock.assert_called_once()
 
-    @patch("operator_chat_direct_tools_under_test._start_direct_chat_run_handoff")
+    @patch("operator_chat_direct_tools_under_test.start_direct_chat_run_handoff")
     @patch("operator_chat_direct_tools_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    @patch("operator_chat_direct_tools_under_test._preferred_provider", return_value=("codex_cli", {}))
-    @patch("operator_chat_direct_tools_under_test._supports_direct_message_native_chat", return_value=True)
+    @patch("operator_chat_direct_tools_under_test.preferred_provider", return_value=("codex_cli", {}))
+    @patch("operator_chat_direct_tools_under_test.supports_direct_message_native_chat", return_value=True)
     @patch("operator_chat_direct_tools_under_test.generate_chat_reply_stream_with_provider_fallback")
-    @patch("operator_chat_direct_tools_under_test._execute_single_direct_tool_call")
+    @patch("operator_chat_direct_tools_under_test.execute_single_direct_tool_call")
     def test_simple_local_file_request_stays_on_direct_tool_path(
         self,
         execute_direct_tool_mock,
@@ -451,7 +462,7 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             message="Open file /tmp/README.md",
             workspace_id="default",
             requested_model="gpt-5.4",
-            requested_provider="openai",
+            requested_provider="codex_cli",
             availability={"ai_ready": True, "runtime_ok": True, "connection_mode": "local_companion"},
         )
 

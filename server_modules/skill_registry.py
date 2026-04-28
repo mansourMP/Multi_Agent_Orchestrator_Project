@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import quote_plus
 
 from server_modules import inventory_skill, mcp_registry_service, tools_http, web_tools
-from server_modules.browser_engine import BrowserEngine
+from server_modules.execution_router import get_browser_adapter
 from server_modules.installed_skills import list_installed_skills
 
 
@@ -193,7 +193,14 @@ async def _live_browser_skill(
 ) -> dict[str, Any]:
     del hard_context, operational_policy
     target_url = _search_url_from_goal(goal)
-    browser = BrowserEngine()
+    browser = get_browser_adapter(
+        {
+            "trust_mode": "reviewed",
+            "skill_id": "browser",
+            "source": "skill_registry",
+        },
+        target="local_companion",
+    )
     navigation = await browser.navigate(target_url)
     observation = await browser.observe()
     preview = str(observation.get("text") or "").strip()

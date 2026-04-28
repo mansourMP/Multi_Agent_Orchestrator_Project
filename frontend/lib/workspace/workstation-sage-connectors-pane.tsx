@@ -1,8 +1,9 @@
 'use client';
 
 import { Fragment, type ClipboardEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 
+import { CommandSheet } from '@/lib/ui/command-sheet';
 import { FormField, FormInput, FormSelect } from '@/lib/ui/form-controls';
 import { MotionSlidePanel } from '@/lib/ui/motion';
 import { AppButton, AppNotice, joinClassNames } from '@/lib/ui/primitives';
@@ -41,6 +42,11 @@ type ProviderSnapshot = {
   authModes: ProviderAuthModeSnapshot[];
   providerScopes: string[];
   activeSource: string | null;
+  credentialPlane: string | null;
+  credentialPlaneLabel: string | null;
+  credentialOwnerKind: string | null;
+  workspaceConnected: boolean;
+  hostedSageAiPolicy: string | null;
   stateDetail: string | null;
   modelsSyncedAt: string | null;
   modelsError: string | null;
@@ -58,6 +64,12 @@ type ProviderCardRecord = {
   profile: ProviderProfileRecord | null;
   connected: boolean;
   keyTail: string | null;
+};
+
+type ProviderPickerSection = {
+  id: 'byok' | 'hosted';
+  label: string;
+  items: ProviderCardRecord[];
 };
 
 type ConnectorCardDefinition = {
@@ -319,8 +331,13 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
       defaultAuthMode: readOptionalString(provider.default_auth_mode),
       authModes: normalizeProviderAuthModes(provider.auth_modes),
       providerScopes: readStringList(provider.provider_scopes),
-      activeSource: readOptionalString(provider.active_source),
-      stateDetail: readOptionalString(provider.state_detail),
+      activeSource: readOptionalString(provider.runtime_active_source) ?? readOptionalString(provider.connection_active_source),
+      credentialPlane: readOptionalString(provider.credential_plane),
+      credentialPlaneLabel: readOptionalString(provider.credential_plane_label),
+      credentialOwnerKind: readOptionalString(provider.credential_owner_kind),
+      workspaceConnected: provider.workspace_connected === true,
+      hostedSageAiPolicy: readOptionalString(provider.hosted_sage_ai_policy),
+      stateDetail: readOptionalString(provider.runtime_state_detail) ?? readOptionalString(provider.connection_state_detail),
       modelsSyncedAt: readOptionalString(provider.models_synced_at),
       modelsError: readOptionalString(provider.models_error),
       models: Array.isArray(provider.models)
@@ -346,6 +363,11 @@ function fallbackProviderCatalog(): ProviderSnapshot[] {
     authModes: [],
     providerScopes: [],
     activeSource: null,
+    credentialPlane: null,
+    credentialPlaneLabel: null,
+    credentialOwnerKind: null,
+    workspaceConnected: false,
+    hostedSageAiPolicy: null,
     stateDetail: null,
     modelsSyncedAt: null,
     modelsError: null,
@@ -388,6 +410,12 @@ function sortProfiles(profiles: ProviderProfileRecord[]): ProviderProfileRecord[
     }
     return readString(left.id).localeCompare(readString(right.id));
   });
+}
+
+function profileMetadataRecord(profile: ProviderProfileRecord | null | undefined): Record<string, unknown> {
+  return profile && typeof profile.metadata === 'object' && profile.metadata
+    ? profile.metadata as Record<string, unknown>
+    : {};
 }
 
 function sortCredentials(credentials: VaultCredentialRecord[]): VaultCredentialRecord[] {
@@ -445,6 +473,35 @@ function providerCredentialPlaceholder(provider: ProviderSnapshot): string {
   return 'sk-...';
 }
 
+function providerNeedsGateway(providerId: string): boolean {
+  return providerId === 'ollama' || providerId === 'openai-codex';
+}
+
+function providerPickerStatusLabel(record: ProviderCardRecord, localCompanionOnline: boolean): string {
+  if (providerNeedsGateway(record.provider.id) && !localCompanionOnline) {
+    return 'Requires local gateway';
+  }
+  return record.connected ? 'Connected' : 'Not configured';
+}
+
+function providerPickerConnected(record: ProviderCardRecord, localCompanionOnline: boolean): boolean {
+  if (providerNeedsGateway(record.provider.id) && !localCompanionOnline) {
+    return false;
+  }
+  return record.connected;
+}
+
+function providerActiveModelLabel(record: ProviderCardRecord | null): string {
+  if (!record) {
+    return 'No model selected';
+  }
+  return readString(record.profile?.model)
+    || readString(record.provider.defaultModel)
+    || readString(record.provider.models[0]?.label)
+    || readString(record.provider.models[0]?.id)
+    || 'No model selected';
+}
+
 function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
   if (!credential || typeof credential.metadata !== 'object' || !credential.metadata) {
     return null;
@@ -490,6 +547,9 @@ function BrandLogo({
 function describeProviderCard(record: ProviderCardRecord, localCompanionOnline: boolean): string {
   const modelCount = record.provider.models.length;
   const authMode = readString(record.profile?.auth_mode).replace(/_/g, ' ');
+  if (record.provider.id === 'ollama' && !localCompanionOnline) {
+    return 'Unavailable — requires local gateway';
+  }
   if (record.connected) {
     if (record.provider.defaultModel) {
       return record.provider.defaultModel;
@@ -514,6 +574,62 @@ function describeProviderCard(record: ProviderCardRecord, localCompanionOnline: 
   return providerRequiresSecret(record.provider, record.profile)
     ? `Add ${providerCredentialLabel(record.provider, record.profile).toLowerCase()}`
     : 'Connect to continue';
+}
+
+function providerRouteBadge(record: ProviderCardRecord): { label: string; tone: 'neutral' | 'hosted' | 'local' } | null {
+  const providerId = readString(record.provider.id).toLowerCase();
+  const credentialPlane = readString(record.provider.credentialPlane).toLowerCase();
+  const defaultAuthMode = readString(record.provider.defaultAuthMode).toLowerCase();
+  const activeSource = readString(record.provider.activeSource).toLowerCase();
+
+  if (providerId === 'openai-codex' || defaultAuthMode === 'oauth_token' || activeSource.includes('cli')) {
+    return { label: 'CLI', tone: 'local' };
+  }
+  if (providerId === 'ollama' || record.provider.localOnly || credentialPlane === 'local_runtime') {
+    return { label: 'Local', tone: 'local' };
+  }
+  if (
+    credentialPlane === 'platform_runtime'
+    || record.provider.hostedSageAiPolicy === 'allowed'
+    || activeSource.includes('platform')
+    || activeSource.includes('hosted')
+  ) {
+    return { label: 'Via Empyralis', tone: 'hosted' };
+  }
+  if (
+    credentialPlane === 'workspace_connection'
+    || record.provider.workspaceConnected
+    || Boolean(record.credential)
+    || Boolean(readString(record.profile?.credential_id))
+  ) {
+    return { label: 'BYOK', tone: 'neutral' };
+  }
+  return null;
+}
+
+function providerStatusPresentation(
+  record: ProviderCardRecord,
+  localCompanionOnline: boolean,
+): { label: string; className: string | null; showDot: boolean } {
+  if (record.provider.id === 'ollama' && !localCompanionOnline) {
+    return {
+      label: 'Unavailable',
+      className: 'sage-unified-card__status--warning',
+      showDot: false,
+    };
+  }
+  if (record.status === 'connected') {
+    return {
+      label: 'Connected',
+      className: 'sage-unified-card__status--connected',
+      showDot: true,
+    };
+  }
+  return {
+    label: 'Not connected',
+    className: null,
+    showDot: false,
+  };
 }
 
 function describeConnectorCard(record: ConnectorCardRecord): string {
@@ -823,6 +939,8 @@ export function WorkstationSageConnectorsPane({
   const [status, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [providerDraftKeys, setProviderDraftKeys] = useState<Record<string, string>>({});
+  const [providerPickerOpen, setProviderPickerOpen] = useState(false);
+  const [providerPickerDraftId, setProviderPickerDraftId] = useState<string | null>(null);
   const [connectorMemoryEnabled, setConnectorMemoryEnabled] = useState<Record<string, boolean>>({});
   const [providerModelOverrides, setProviderModelOverrides] = useState<Record<string, ProviderCatalogModelRecord[]>>({});
   const [failedLogos, setFailedLogos] = useState<Set<string>>(() => new Set());
@@ -985,7 +1103,9 @@ export function WorkstationSageConnectorsPane({
     const profile = providerProfiles[0] ?? null;
     const credential = providerCredentials[0] ?? null;
     const secretlessConnected = isSecretlessConnection(resolvedProvider.id, profile);
-    const connected = Boolean(credential) || secretlessConnected;
+    const connected = resolvedProvider.id === 'ollama'
+      ? localCompanionOnline && (Boolean(credential) || secretlessConnected || resolvedProvider.models.length > 0)
+      : Boolean(credential) || secretlessConnected;
     return {
       kind: 'provider',
       id: resolvedProvider.id,
@@ -998,7 +1118,54 @@ export function WorkstationSageConnectorsPane({
       connected,
       keyTail: maskKeyTail(credential),
     };
-  }), [credentials, profiles, providerModelOverrides, providers]);
+  }), [credentials, localCompanionOnline, profiles, providerModelOverrides, providers]);
+
+  const hostedProviderCard = useMemo(
+    () => providerCards.find((record) =>
+      record.provider.hostedSageAiPolicy === 'allowed'
+      || providerRouteBadge(record)?.label === 'Via Empyralis') ?? null,
+    [providerCards],
+  );
+
+  const explicitSelectedProfile = useMemo(
+    () => sortProfiles(profiles).find((profile) =>
+      readString(profileMetadataRecord(profile).chat_model_selection).toLowerCase() === 'explicit'
+      && profile.enabled !== false) ?? null,
+    [profiles],
+  );
+
+  const activeProviderCard = useMemo(() => {
+    const explicitProviderId = readString(explicitSelectedProfile?.provider).toLowerCase();
+    if (explicitProviderId) {
+      return providerCards.find((record) => record.provider.id === explicitProviderId) ?? null;
+    }
+    return providerCards.find((record) => record.provider.active)
+      ?? hostedProviderCard
+      ?? providerCards.find((record) => providerPickerConnected(record, localCompanionOnline))
+      ?? null;
+  }, [explicitSelectedProfile, hostedProviderCard, localCompanionOnline, providerCards]);
+
+  const providerPickerSections = useMemo<ProviderPickerSection[]>(() => {
+    const orderedByokIds = ['anthropic', 'openai', 'gemini', 'deepseek', 'mistral', 'qwen', 'vertex', 'ollama', 'openai-codex'];
+    const byokItems = orderedByokIds
+      .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
+      .filter((record): record is ProviderCardRecord => Boolean(record));
+    const sections: ProviderPickerSection[] = [
+      {
+        id: 'byok',
+        label: 'Your API keys',
+        items: byokItems,
+      },
+    ];
+    if (hostedProviderCard) {
+      sections.push({
+        id: 'hosted',
+        label: 'Empyralis hosted',
+        items: [hostedProviderCard],
+      });
+    }
+    return sections;
+  }, [hostedProviderCard, providerCards]);
 
   const selectedGateway = useMemo(
     () => gateways.find((gateway) => readString(gateway.gateway_id, '') === readString(selectedGatewayId, '')) ?? null,
@@ -1103,6 +1270,112 @@ export function WorkstationSageConnectorsPane({
     }
   }
 
+  async function setActiveProvider(record: ProviderCardRecord, { hosted = false }: { hosted?: boolean } = {}): Promise<void> {
+    const activeModel = providerActiveModelLabel(record);
+    const nextProfiles = sortProfiles(profiles).filter((profile) => {
+      const providerId = readString(profile.provider).toLowerCase();
+      return providerId && providerCards.some((card) => card.provider.id === providerId);
+    });
+    const targetProviderId = record.provider.id;
+    const targetProfile = nextProfiles.find((profile) => readString(profile.provider).toLowerCase() === targetProviderId) ?? null;
+    const profilesToWrite = new Map<string, ProviderProfileRecord | null>();
+    nextProfiles.forEach((profile) => {
+      profilesToWrite.set(readString(profile.provider).toLowerCase(), profile);
+    });
+    profilesToWrite.set(targetProviderId, targetProfile);
+
+    await Promise.all([...profilesToWrite.entries()].map(([providerId, profile]) => {
+      const metadata = {
+        ...profileMetadataRecord(profile),
+        chat_model_selection: providerId === targetProviderId ? 'explicit' : 'default',
+      };
+      return services.client.upsertProviderProfile({
+        id: readString(profile?.id) || null,
+        provider: providerId,
+        label: readString(profile?.label) || `Sage ${record.provider.label}`,
+        credentialId: readString(profile?.credential_id) || readString(record.credential?.id) || null,
+        authMode: readString(profile?.auth_mode) || readString(record.provider.defaultAuthMode) || null,
+        priority: Number(profile?.priority ?? (providerId === targetProviderId ? 10 : 100)),
+        enabled: profile?.enabled !== false,
+        model: providerId === targetProviderId
+          ? (activeModel || null)
+          : readString(profile?.model) || null,
+        metadata,
+      });
+    }));
+
+    emitWorkstationProviderChanged({
+      workspaceId: services.scope.workspaceId,
+      providerId: record.provider.id,
+      action: 'saved',
+    });
+    await refreshAfterMutation(
+      hosted
+        ? 'Empyralis default model is now active.'
+        : `${record.label} is now active.`,
+    );
+  }
+
+  async function handleProviderSelect(record: ProviderCardRecord, { hosted = false }: { hosted?: boolean } = {}) {
+    if (providerNeedsGateway(record.provider.id) && !localCompanionOnline) {
+      setError(`${record.label} requires the local gateway before it can be selected.`);
+      return;
+    }
+    if (!hosted && !providerPickerConnected(record, localCompanionOnline) && providerRequiresSecret(record.provider, record.profile)) {
+      setProviderPickerDraftId(record.id);
+      setStatus(null);
+      setError(null);
+      return;
+    }
+    setBusyCardId(record.id);
+    setError(null);
+    setStatus(null);
+    try {
+      if (!providerPickerConnected(record, localCompanionOnline) && !providerRequiresSecret(record.provider, record.profile)) {
+        await handleProviderSave(record);
+      }
+      await setActiveProvider(record, { hosted });
+      setProviderPickerDraftId(null);
+      setProviderPickerOpen(false);
+    } catch (selectionError) {
+      setError(selectionError instanceof Error ? selectionError.message : 'Could not select this provider.');
+    } finally {
+      setBusyCardId(null);
+    }
+  }
+
+  async function handleProviderConnectAndSelect(record: ProviderCardRecord) {
+    const draftApiKey = (providerDraftKeys[record.id] ?? '').trim();
+    if (!draftApiKey) {
+      setError(`${providerCredentialLabel(record.provider, record.profile)} is required before Sage can connect this provider.`);
+      return;
+    }
+    setBusyCardId(record.id);
+    setError(null);
+    setStatus(null);
+    try {
+      await services.client.upsertWorkspaceProviderCredential({
+        provider: record.provider.id,
+        apiKey: draftApiKey,
+        model: null,
+      });
+      emitWorkstationProviderChanged({
+        workspaceId: services.scope.workspaceId,
+        providerId: record.provider.id,
+        action: 'saved',
+      });
+      await loadState();
+      setProviderDraftKeys((current) => ({ ...current, [record.id]: '' }));
+      await setActiveProvider(record);
+      setProviderPickerDraftId(null);
+      setProviderPickerOpen(false);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Provider connection failed.');
+    } finally {
+      setBusyCardId(null);
+    }
+  }
+
   async function handleProviderDisconnect(record: ProviderCardRecord): Promise<void> {
     setBusyCardId(record.id);
     setError(null);
@@ -1171,6 +1444,8 @@ export function WorkstationSageConnectorsPane({
 
   function renderProviderCard(record: ProviderCardRecord) {
     const isExpanded = expandedCardId === record.id;
+    const badge = providerRouteBadge(record);
+    const status = providerStatusPresentation(record, localCompanionOnline);
     return (
       <button
         key={record.id}
@@ -1187,11 +1462,24 @@ export function WorkstationSageConnectorsPane({
           failedLogos={failedLogos}
           onError={markLogoFailed}
         />
-        <strong className="sage-unified-card__title">{record.label}</strong>
+        <div className="sage-unified-card__title-row">
+          <strong className="sage-unified-card__title">{record.label}</strong>
+          {badge ? (
+            <span
+              className={joinClassNames(
+                'sage-unified-card__badge',
+                badge.tone === 'hosted' && 'sage-unified-card__badge--hosted',
+                badge.tone === 'local' && 'sage-unified-card__badge--local',
+              )}
+            >
+              {badge.label}
+            </span>
+          ) : null}
+        </div>
         <span className="sage-unified-card__detail">{describeProviderCard(record, localCompanionOnline)}</span>
-        <span className={joinClassNames('sage-unified-card__status', record.status === 'connected' && 'sage-unified-card__status--connected')}>
-          {record.status === 'connected' ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
-          {record.status === 'connected' ? 'Connected' : 'Not connected'}
+        <span className={joinClassNames('sage-unified-card__status', status.className)}>
+          {status.showDot ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
+          {status.label}
         </span>
       </button>
     );
@@ -1507,6 +1795,83 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderProviderPickerRow(record: ProviderCardRecord, sectionId: ProviderPickerSection['id']) {
+    const pickerConnected = providerPickerConnected(record, localCompanionOnline);
+    const isActive = activeProviderCard?.id === record.id;
+    const requiresSecret = providerRequiresSecret(record.provider, record.profile);
+    const showInlineKey = providerPickerDraftId === record.id && !pickerConnected && requiresSecret;
+    const busy = busyCardId === record.id;
+    const displayLabel = sectionId === 'hosted' ? 'Empyralis default model' : record.label;
+    return (
+      <div key={`${sectionId}:${record.id}`} className="sage-provider-picker__item">
+        <button
+          type="button"
+          className={joinClassNames('sage-provider-picker__row', isActive && 'sage-provider-picker__row--active')}
+          onClick={() => {
+            void handleProviderSelect(record, { hosted: sectionId === 'hosted' });
+          }}
+        >
+          <BrandLogo
+            id={record.id}
+            label={displayLabel}
+            src={record.image}
+            failedLogos={failedLogos}
+            onError={markLogoFailed}
+          />
+          <div className="sage-provider-picker__copy">
+            <span className="sage-provider-picker__name">{displayLabel}</span>
+            <span className="sage-provider-picker__detail">{providerPickerStatusLabel(record, localCompanionOnline)}</span>
+          </div>
+          <span className={joinClassNames('sage-provider-picker__status-dot', pickerConnected && 'sage-provider-picker__status-dot--connected')} aria-hidden="true" />
+          {isActive ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : null}
+        </button>
+        {showInlineKey ? (
+          <div className="sage-provider-picker__inline-key">
+            <FormField label={providerCredentialLabel(record.provider, record.profile)}>
+              <FormInput
+                type="text"
+                value={providerDraftKeys[record.id] ?? ''}
+                placeholder={providerCredentialPlaceholder(record.provider)}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
+                onPasteCapture={(event) => {
+                  handleProviderKeyPaste(record.id, event);
+                }}
+                onChange={(event) => {
+                  setProviderDraftKeys((current) => ({ ...current, [record.id]: event.currentTarget.value }));
+                }}
+              />
+            </FormField>
+            <div className="sage-provider-picker__inline-actions">
+              <AppButton
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  void handleProviderConnectAndSelect(record);
+                }}
+              >
+                {busy ? 'Saving…' : 'Save'}
+              </AppButton>
+              <button
+                type="button"
+                className="sage-unified-expand__link"
+                onClick={() => {
+                  setProviderPickerDraftId(null);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)}>
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
@@ -1528,25 +1893,47 @@ export function WorkstationSageConnectorsPane({
           </section>
         ) : renderSection('Personal', personalCards, renderPersonalCard, renderPersonalExpand)}
         {showProviders ? (
-          isLoading
-            ? renderProviderSkeletons()
-            : renderSection(
-              'AI Providers',
-              providerCards.length > 0 ? providerCards : fallbackProviderCatalog().map((provider) => ({
-                kind: 'provider' as const,
-                id: provider.id,
-                label: provider.label,
-                image: PROVIDER_IMAGE_BY_ID[provider.id] ?? '',
-                status: 'not_connected' as const,
-                provider,
-                credential: null,
-                profile: null,
-                connected: false,
-                keyTail: null,
-              })),
-              renderProviderCard,
-              renderProviderExpand,
-            )
+          isLoading ? renderProviderSkeletons() : (
+            <section className="sage-unified-section">
+              <p className="sage-unified-section__label">AI Providers</p>
+              <div className="sage-provider-active">
+                <div className="sage-provider-active__row">
+                  {activeProviderCard ? (
+                    <>
+                      <BrandLogo
+                        id={activeProviderCard.id}
+                        label={activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Empyralis default model' : activeProviderCard.label}
+                        src={activeProviderCard.image}
+                        failedLogos={failedLogos}
+                        onError={markLogoFailed}
+                      />
+                      <div className="sage-provider-active__copy">
+                        <strong className="sage-provider-active__name">
+                          {activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Empyralis default model' : activeProviderCard.label}
+                        </strong>
+                        <span className="sage-provider-active__model">{providerActiveModelLabel(activeProviderCard)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="sage-provider-active__copy">
+                      <strong className="sage-provider-active__name">No provider active</strong>
+                      <span className="sage-provider-active__model">Choose a provider to start chatting.</span>
+                    </div>
+                  )}
+                  <AppButton
+                    type="button"
+                    tone="secondary"
+                    onClick={() => {
+                      setProviderPickerOpen(true);
+                      setProviderPickerDraftId(null);
+                    }}
+                  >
+                    Change
+                  </AppButton>
+                </div>
+              </div>
+            </section>
+          )
         ) : null}
         {showTools ? (
           <section className="sage-unified-section">
@@ -1560,6 +1947,27 @@ export function WorkstationSageConnectorsPane({
           </div>
         ) : renderSection('Apps & Accounts', connectorCards, renderConnectorCard, renderConnectorExpand)}
       </div>
+
+      <CommandSheet
+        open={providerPickerOpen}
+        title="Choose provider"
+        description="Pick the provider Sage should use for your chat turns."
+        onClose={() => {
+          setProviderPickerOpen(false);
+          setProviderPickerDraftId(null);
+        }}
+      >
+        <div className="sage-provider-picker">
+          {providerPickerSections.map((section) => (
+            <section key={section.id} className="sage-provider-picker__section">
+              <h3 className="sage-provider-picker__section-label">{section.label}</h3>
+              <div className="sage-provider-picker__list">
+                {section.items.map((record) => renderProviderPickerRow(record, section.id))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </CommandSheet>
     </div>
   );
 }

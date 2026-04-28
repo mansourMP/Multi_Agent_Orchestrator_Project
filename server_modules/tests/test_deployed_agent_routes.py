@@ -1033,19 +1033,25 @@ async def test_get_deployed_agent_conversation_detail_route_returns_transcript(m
 
 
 @pytest.mark.anyio
-async def test_get_deployed_agent_conversations_route_forbids_cross_workspace_member_access() -> None:
+async def test_get_deployed_agent_conversations_route_forbids_cross_workspace_member_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = _build_app()
-    app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {
-        "user_id": "user-member",
-        "auth_type": "bearer",
-        "workspace_access": {
-            "ws-1": {
-                "workspace_id": "ws-1",
-                "tenant_id": "tenant-1",
-                "role": "member",
-            }
-        },
-    }
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = _member_user
+
+    async def fake_forbidden_list_deployed_agent_conversations(**kwargs):
+        current_user = kwargs.get("current_user")
+        assert isinstance(current_user, dict)
+        assert current_user["user_id"] == "user-member"
+        assert kwargs["deployed_agent_id"] == "dagent_1"
+        assert kwargs["owner_workspace_id"] == "ws-1"
+        raise HTTPException(status_code=403, detail="Owner role required for workspace 'ws-1'.")
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "list_deployed_agent_conversations",
+        fake_forbidden_list_deployed_agent_conversations,
+    )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

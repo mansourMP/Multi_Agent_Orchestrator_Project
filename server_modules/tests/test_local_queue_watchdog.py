@@ -221,7 +221,11 @@ class LocalQueueWatchdogTests(unittest.TestCase):
             _utc_now_iso=lambda: "2026-04-07T10:00:00Z",
         )
         try:
-            with patch("server_modules.worker_dispatch_service.heartbeat_local_run", return_value={"last_heartbeat_at": "2026-04-07T10:00:00Z"}):
+            with patch.object(
+                local_queue.worker_dispatch_service,
+                "heartbeat_local_run",
+                return_value={"last_heartbeat_at": "2026-04-07T10:00:00Z"},
+            ):
                 local_queue.handle_heartbeat_local_run(
                     local_queue.uuid.UUID(run_id),
                     local_queue.LocalRunHeartbeatPayload(

@@ -152,7 +152,9 @@ def _is_control_plane_rate_limited_path(request_path: str) -> bool:
     path = str(request_path or "").strip()
     if not path:
         return False
-    if path == "/turn" or path == "/api/turn":
+    if path in {"/turn", "/api/turn", "/sessions", "/api/sessions"}:
+        return False
+    if (path.startswith("/threads/") or path.startswith("/api/threads/")) and path.endswith("/turns"):
         return False
     if path.startswith("/runtime/runtimes/") or path.startswith("/runtime/tasks/"):
         return False

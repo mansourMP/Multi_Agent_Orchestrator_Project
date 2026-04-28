@@ -1,10 +1,16 @@
 import unittest
 from unittest.mock import AsyncMock, patch
+import importlib
 
 from server_modules import bounded_scheduler_service
 
 
 class BoundedSchedulerServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        global bounded_scheduler_service
+
+        bounded_scheduler_service = importlib.import_module("server_modules.bounded_scheduler_service")
+
     def test_resolve_scheduler_policy_uses_entitlement_defaults(self):
         policy = bounded_scheduler_service.resolve_scheduler_policy(
             workspace={"metadata": {"billing": {"plan": "free"}}},

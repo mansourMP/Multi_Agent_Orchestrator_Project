@@ -68,14 +68,15 @@ class Phase73AuthorizationBoundaryTests(unittest.TestCase):
         try:
             with (
                 patch.object(runs_history, "_owned_run_ids_for_user", return_value={"run-1", "run-2"}),
-                patch(
-                    "server_modules.runs_history.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                patch.object(
+                    runs_history.entitlements_service,
+                    "workspace_entitlement_payload_for_workspace_id",
                     return_value={"capabilities": {"approvals_enabled": True}},
                 ),
             ):
                 payload = self._run_async(
                     runs_history.get_approval_audit(
-                        workspace_id="default",
+                        workspace_id="ws-1",
                         current_user=current_user,
                     )
                 )
@@ -89,7 +90,7 @@ class Phase73AuthorizationBoundaryTests(unittest.TestCase):
     def test_security_audit_event_uses_security_event_type(self) -> None:
         captured = {}
 
-        with patch("server_modules.security_audit_service.outbox_service.emit_runtime_event") as mock_emit:
+        with patch.object(security_audit_service.outbox_service, "emit_runtime_event") as mock_emit:
             mock_emit.side_effect = lambda **kwargs: captured.update(kwargs) or None
             security_audit_service.emit_security_audit_event(
                 action="auth.login",

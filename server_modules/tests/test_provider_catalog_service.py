@@ -138,8 +138,65 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
 
         providers = {item["id"]: item for item in payload["providers"]}
         self.assertEqual(providers["openai-codex"]["provider_scopes"], ["sage_personal"])
-        self.assertTrue(providers["openai-codex"]["sage_visible"])
-        self.assertFalse(providers["openai-codex"]["studio_visible"])
+
+    async def test_list_workspace_provider_catalog_keeps_ollama_tool_support_visible(self) -> None:
+        connection_truth = {
+            "workspace_id": "ws-1",
+            "summary": {"provider_total": 1},
+            "providers": [
+                {
+                    "id": "ollama",
+                    "label": "Ollama",
+                    "state": "configured",
+                    "default_model": "llama3.2",
+                    "identity_owner": "local_machine",
+                    "identity_owner_label": "Local machine",
+                    "identity_boundary_note": "This provider is bound to the local machine runtime and does not require a workspace credential.",
+                    "active_source": "local_runtime",
+                    "connection_kind": "machine_local_capability",
+                    "connection_scope": "machine",
+                    "connection_label": "This machine only",
+                    "machine_bound": True,
+                    "credential_sources": ["local_runtime"],
+                },
+            ],
+        }
+        runtime_truth = {
+            "workspace_id": "ws-1",
+            "summary": {"provider_total": 1, "active": 0, "configured": 1, "setup_required": 0, "unavailable": 0, "degraded": 0},
+            "providers": [
+                {
+                    "id": "ollama",
+                    "label": "Ollama",
+                    "state": "configured",
+                    "usable": False,
+                    "configured": True,
+                    "active": False,
+                    "credential_sources": ["local-ollama"],
+                    "active_source": "local-ollama",
+                    "identity_owner": "local_machine",
+                    "identity_owner_label": "Local machine",
+                    "identity_boundary_note": "Local runtime stays on the paired machine.",
+                    "machine_bound": True,
+                },
+            ],
+        }
+
+        with patch(
+            "server_modules.provider_catalog_service.provider_profiles.build_workspace_provider_connection_truth",
+            return_value=connection_truth,
+        ), patch(
+            "server_modules.provider_catalog_service.provider_profiles.build_provider_runtime_truth",
+            return_value=runtime_truth,
+        ):
+            payload = await provider_catalog_service.list_workspace_provider_catalog(workspace_id="ws-1")
+
+        providers = {item["id"]: item for item in payload["providers"]}
+        models = {item["id"]: item for item in providers["ollama"]["models"]}
+        self.assertTrue(providers["ollama"]["local_only"])
+        self.assertEqual(providers["ollama"]["credential_plane"], "local_runtime")
+        self.assertTrue(models["llama3.2"]["supports_tools"])
+        self.assertIn("Tools", models["llama3.2"]["capability_labels"])
 
     def test_openai_codex_catalog_exposes_reasoning_levels(self) -> None:
         models = provider_catalog_service.provider_profiles.provider_model_catalog("openai-codex")

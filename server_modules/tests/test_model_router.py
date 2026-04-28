@@ -1,3 +1,4 @@
+import importlib
 import unittest
 from unittest.mock import patch
 
@@ -5,6 +6,10 @@ from server_modules import model_router
 
 
 class ModelRouterTests(unittest.TestCase):
+    def setUp(self):
+        global model_router
+        model_router = importlib.import_module("server_modules.model_router")
+
     def test_resolve_model_aliases(self):
         self.assertEqual(model_router.resolve_model("claude-sonnet"), "anthropic/claude-3-7-sonnet-20250219")
         self.assertEqual(model_router.resolve_model("gemini-flash"), "gemini/gemini-2.5-flash")
@@ -58,13 +63,16 @@ class ModelRouterTests(unittest.TestCase):
 
         self.assertTrue(by_alias["gpt-4o"]["is_global_default"])
         self.assertFalse(by_alias["gpt-4o-mini"]["is_global_default"])
-        self.assertTrue(by_alias["claude-sonnet"]["is_provider_default"])
+        self.assertFalse(by_alias["claude-haiku"]["is_provider_default"])
+        self.assertFalse(by_alias["claude-sonnet"]["is_provider_default"])
         self.assertTrue(by_alias["gemini-flash"]["is_provider_default"])
         self.assertTrue(by_alias["vertex-gemini-pro"]["is_provider_default"])
         self.assertFalse(by_alias["gemini-flash"]["is_global_default"])
 
-    @patch("server_modules.model_router.http_json_request")
-    def test_call_model_sync_returns_normalized_shape(self, http_json_request_mock):
+    def test_call_model_sync_returns_normalized_shape(self):
+        http_json_request_patcher = patch.object(model_router, "http_json_request")
+        http_json_request_mock = http_json_request_patcher.start()
+        self.addCleanup(http_json_request_patcher.stop)
         http_json_request_mock.return_value = {
             "status": 200,
             "json": {
@@ -96,8 +104,10 @@ class ModelRouterTests(unittest.TestCase):
         self.assertEqual(kwargs["payload"]["messages"], [{"role": "user", "content": "Say hello"}])
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test-key")
 
-    @patch("server_modules.model_router.resolve_provider_adapter")
-    def test_vertex_current_credential_shape_uses_compatibility_fallback(self, resolve_provider_adapter_mock):
+    def test_vertex_current_credential_shape_uses_compatibility_fallback(self):
+        resolve_provider_adapter_patcher = patch.object(model_router, "resolve_provider_adapter")
+        resolve_provider_adapter_mock = resolve_provider_adapter_patcher.start()
+        self.addCleanup(resolve_provider_adapter_patcher.stop)
         class _FakeAdapter:
             def generate(self, system_prompt, user_input, model, credentials):
                 self.last_call = {

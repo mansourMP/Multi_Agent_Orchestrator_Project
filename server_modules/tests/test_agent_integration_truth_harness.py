@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import importlib
 import sys
 import types
 import unittest
@@ -31,6 +32,9 @@ class _FakeApp:
 
     def put(self, path, **kwargs):
         return self._register("PUT", path, **kwargs)
+
+    def delete(self, path, **kwargs):
+        return self._register("DELETE", path, **kwargs)
 
 
 def _manifest_payload(manifest: AgentManifest) -> dict:
@@ -67,6 +71,14 @@ def _build_manifest() -> AgentManifest:
 
 
 class AgentIntegrationTruthHarnessTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global agent_registry_api, AgentManifest, AgentManifestBible, AgentManifestSkillBinding
+        agent_registry_api = importlib.import_module("server_modules.agent_registry_api")
+        agent_manifest_module = importlib.import_module("server_modules.agent_manifest")
+        AgentManifest = agent_manifest_module.AgentManifest
+        AgentManifestBible = agent_manifest_module.AgentManifestBible
+        AgentManifestSkillBinding = agent_manifest_module.AgentManifestSkillBinding
+
     def test_specialist_lifecycle_routes_stay_glued_across_save_reload_and_preview(self):
         fake_server = types.ModuleType("server")
         fake_server.require_api_key = object()

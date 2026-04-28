@@ -4,15 +4,38 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
-_server = None
 def _init():
-    global _server
-    if _server is not None: return
-    import server as _s
-    _server = _s
-    for k, v in vars(_s).items():
-        if not k.startswith("__") and k not in globals():
-            globals()[k] = v
+    return None
+
+
+def _utc_now() -> datetime:
+    from server_modules import runtime_common
+
+    return runtime_common._utc_now()
+
+
+def _utc_now_iso() -> str:
+    from server_modules import runtime_common
+
+    return runtime_common._utc_now_iso()
+
+
+def _parse_utc_ts(value: Any) -> Optional[datetime]:
+    from server_modules import runtime_common
+
+    return runtime_common._parse_utc_ts(value)
+
+
+def _shared_state():
+    from server_modules import shared
+
+    return shared
+
+
+def _runtime_config():
+    from server_modules import runtime_config
+
+    return runtime_config
 
 def _idempotency_record_key(method: str, path: str, idem_key: str) -> str:
     raw = f"{method.upper()}:{path}:{idem_key.strip()}"
@@ -20,39 +43,38 @@ def _idempotency_record_key(method: str, path: str, idem_key: str) -> str:
 
 
 def _prune_idempotency_locked():
-    _init()
     now = _utc_now()
     expired: List[str] = []
-    for key, record in IDEMPOTENCY_RECORDS.items():
+    for key, record in _shared_state().IDEMPOTENCY_RECORDS.items():
         expires_at = _parse_utc_ts(record.get("expires_at"))
         if expires_at is None or expires_at <= now:
             expired.append(key)
     for key in expired:
-        IDEMPOTENCY_RECORDS.pop(key, None)
+        _shared_state().IDEMPOTENCY_RECORDS.pop(key, None)
 
 
 def _persist_idempotency():
-    _init()
-    with IDEMPOTENCY_LOCK:
+    shared = _shared_state()
+    with shared.IDEMPOTENCY_LOCK:
         _prune_idempotency_locked()
-    _server.sync_acp_manager_paths(idempotency_path=_server.ORION_IDEMPOTENCY_FILE)
-    _server.ACP_MANAGER._persist_idempotency()
+    shared.sync_acp_manager_paths(idempotency_path=_runtime_config().ORION_IDEMPOTENCY_FILE)
+    shared.ACP_MANAGER._persist_idempotency()
 
 
 def _load_idempotency():
-    _init()
-    with IDEMPOTENCY_LOCK:
-        _server.sync_acp_manager_paths(idempotency_path=_server.ORION_IDEMPOTENCY_FILE)
-        _server.ACP_MANAGER.reload_secondary_state()
+    shared = _shared_state()
+    with shared.IDEMPOTENCY_LOCK:
+        shared.sync_acp_manager_paths(idempotency_path=_runtime_config().ORION_IDEMPOTENCY_FILE)
+        shared.ACP_MANAGER.reload_secondary_state()
         _prune_idempotency_locked()
 
 
 def _idempotency_get(method: str, path: str, idem_key: str, body_hash: str) -> Dict[str, Any]:
-    _init()
     composite = _idempotency_record_key(method, path, idem_key)
-    with IDEMPOTENCY_LOCK:
+    shared = _shared_state()
+    with shared.IDEMPOTENCY_LOCK:
         _prune_idempotency_locked()
-        record = IDEMPOTENCY_RECORDS.get(composite)
+        record = shared.IDEMPOTENCY_RECORDS.get(composite)
     if not isinstance(record, dict):
         return {"hit": False}
     stored_hash = str(record.get("body_hash") or "")
@@ -62,9 +84,8 @@ def _idempotency_get(method: str, path: str, idem_key: str, body_hash: str) -> D
 
 
 def _idempotency_store(method: str, path: str, idem_key: str, body_hash: str, status_code: int, response_json: Any):
-    _init()
     composite = _idempotency_record_key(method, path, idem_key)
-    expires_at = (_utc_now() + timedelta(seconds=max(60, ORION_IDEMPOTENCY_TTL_SECONDS))).isoformat().replace("+00:00", "Z")
+    expires_at = (_utc_now() + timedelta(seconds=max(60, _runtime_config().ORION_IDEMPOTENCY_TTL_SECONDS))).isoformat().replace("+00:00", "Z")
     record = {
         "method": method.upper(),
         "path": path,
@@ -75,6 +96,7 @@ def _idempotency_store(method: str, path: str, idem_key: str, body_hash: str, st
         "created_at": _utc_now_iso(),
         "expires_at": expires_at,
     }
-    with IDEMPOTENCY_LOCK:
-        IDEMPOTENCY_RECORDS[composite] = record
+    shared = _shared_state()
+    with shared.IDEMPOTENCY_LOCK:
+        shared.IDEMPOTENCY_RECORDS[composite] = record
     _persist_idempotency()

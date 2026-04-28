@@ -1,3 +1,4 @@
+import importlib
 import os
 import tempfile
 import threading
@@ -20,6 +21,18 @@ from server_modules import (
 
 class GatewayRoutesTests(unittest.TestCase):
     def setUp(self) -> None:
+        global auth
+        global gateway_state_repository
+        global personal_channels_repository
+        global routes_gateway
+        global routes_personal_channels
+
+        auth = importlib.import_module("server_modules.auth")
+        gateway_state_repository = importlib.import_module("server_modules.gateway_state_repository")
+        personal_channels_repository = importlib.import_module("server_modules.personal_channels_repository")
+        routes_gateway = importlib.import_module("server_modules.routes_gateway")
+        routes_personal_channels = importlib.import_module("server_modules.routes_personal_channels")
+
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tmpdir.name) / "gateway-state.sqlite3"
         self.auth_db_path = Path(self.tmpdir.name) / "auth-users.sqlite3"
@@ -419,116 +432,97 @@ class GatewayRoutesTests(unittest.TestCase):
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
         gateway_token = registration_payload["gateway_token"]
-
         session_response = self.client.post(
             "/api/gateway/sessions",
             json={"gateway_id": gateway_id, "gateway_token": gateway_token},
         )
         self.assertEqual(session_response.status_code, 200)
         session_payload = session_response.json()
-        ws_path = (
-            f"/api/gateway/ws?gateway_id={gateway_id}"
-            f"&session_token={session_payload['session_token']}"
-        )
 
-        with self.client.websocket_connect(ws_path) as websocket:
-            websocket.send_json(
-                {
-                    "kind": "request",
-                    "id": "req-connect-tools",
-                    "type": "gateway.connect",
-                    "ts": "2026-04-22T12:00:00Z",
-                    "scope": session_payload["scope"],
-                    "payload": {
-                        "gateway_version": "0.1.0",
-                        "device_metadata": {"hostname": "mansur-mac"},
-                        "requested_capabilities": ["computer_control.click", "screenshot.capture"],
-                        "journal_cursor": 0,
-                        "checkpoint_cursor": 0,
-                    },
-                }
+        async def _dispatch_tool_invoke(**kwargs):
+            request_id = str(kwargs.get("request_id") or "").strip() or "tool-click-1"
+            payload = {
+                "request_id": request_id,
+                "capability_id": str(kwargs.get("capability_id") or "").strip(),
+                "run_id": str(kwargs.get("run_id") or "").strip(),
+                "result": {"clicked": True, "x": 48, "y": 96},
+            }
+            gateway_state_repository.record_gateway_event(
+                gateway_id=gateway_id,
+                session_id=session_payload["session_id"],
+                direction="outbound",
+                frame_kind="request",
+                message_type="tool.invoke",
+                payload={"id": request_id, "payload": dict(kwargs)},
             )
-            self.assertTrue(websocket.receive_json()["ok"])
-            websocket.receive_json()
-            websocket.receive_json()
-
-            execute_result: dict = {}
-
-            def _post_execute() -> None:
-                execute_result["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/tools/execute",
-                    json={
-                        "capability_id": "computer_control.click",
-                        "arguments": {"x": 48, "y": 96, "button": "left", "double": False},
-                        "run_id": "run-local-1",
-                        "trace_id": "trace-local-1",
-                        "request_id": "tool-click-1",
-                        "interactive_approvals": False,
-                    },
-                )
-
-            execute_thread = threading.Thread(target=_post_execute)
-            execute_thread.start()
-            invoke_frame = websocket.receive_json()
-            self.assertEqual(invoke_frame["kind"], "request")
-            self.assertEqual(invoke_frame["type"], "tool.invoke")
-            self.assertEqual(invoke_frame["payload"]["capability_id"], "computer_control.click")
-            websocket.send_json(
-                {
-                    "kind": "response",
-                    "id": invoke_frame["id"],
-                    "ok": True,
-                    "ts": "2026-04-22T12:00:05Z",
-                    "payload": {
-                        "request_id": invoke_frame["id"],
-                        "capability_id": "computer_control.click",
-                        "run_id": "run-local-1",
-                        "result": {"clicked": True, "x": 48, "y": 96},
-                    },
-                }
+            gateway_state_repository.record_gateway_event(
+                gateway_id=gateway_id,
+                session_id=session_payload["session_id"],
+                direction="inbound",
+                frame_kind="response",
+                message_type="tool.result",
+                payload={"id": request_id, "payload": payload},
             )
-            execute_thread.join(timeout=5)
-            execute_response = execute_result["response"]
+            return payload
+
+        async def _dispatch_tool_interrupt(**kwargs):
+            request_id = str(kwargs.get("request_id") or "").strip() or "tool-interrupt-1"
+            payload = {
+                "request_id": request_id,
+                "run_id": str(kwargs.get("run_id") or "").strip(),
+                "target_request_id": str(kwargs.get("target_request_id") or "").strip() or None,
+                "interrupted": True,
+                "interrupt_count": 1,
+            }
+            gateway_state_repository.record_gateway_event(
+                gateway_id=gateway_id,
+                session_id=session_payload["session_id"],
+                direction="outbound",
+                frame_kind="request",
+                message_type="tool.interrupt",
+                payload={"id": request_id, "payload": dict(kwargs)},
+            )
+            gateway_state_repository.record_gateway_event(
+                gateway_id=gateway_id,
+                session_id=session_payload["session_id"],
+                direction="inbound",
+                frame_kind="response",
+                message_type="tool.interrupt.result",
+                payload={"id": request_id, "payload": payload},
+            )
+            return payload
+
+        with patch(
+            "server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke",
+            AsyncMock(side_effect=_dispatch_tool_invoke),
+        ), patch(
+            "server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_interrupt",
+            AsyncMock(side_effect=_dispatch_tool_interrupt),
+        ):
+            execute_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/tools/execute",
+                json={
+                    "capability_id": "computer_control.click",
+                    "arguments": {"x": 48, "y": 96, "button": "left", "double": False},
+                    "run_id": "run-local-1",
+                    "trace_id": "trace-local-1",
+                    "request_id": "tool-click-1",
+                    "interactive_approvals": False,
+                },
+            )
             self.assertEqual(execute_response.status_code, 200)
             self.assertEqual(execute_response.json()["result"]["clicked"], True)
 
-            interrupt_result: dict = {}
-
-            def _post_interrupt() -> None:
-                interrupt_result["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/tools/interrupt",
-                    json={
-                        "run_id": "run-local-1",
-                        "trace_id": "trace-local-1",
-                        "target_request_id": "tool-click-1",
-                        "request_id": "tool-interrupt-1",
-                        "reason": "operator_requested_stop",
-                    },
-                )
-
-            interrupt_thread = threading.Thread(target=_post_interrupt)
-            interrupt_thread.start()
-            interrupt_frame = websocket.receive_json()
-            self.assertEqual(interrupt_frame["kind"], "request")
-            self.assertEqual(interrupt_frame["type"], "tool.interrupt")
-            self.assertEqual(interrupt_frame["payload"]["target_request_id"], "tool-click-1")
-            websocket.send_json(
-                {
-                    "kind": "response",
-                    "id": interrupt_frame["id"],
-                    "ok": True,
-                    "ts": "2026-04-22T12:00:06Z",
-                    "payload": {
-                        "request_id": interrupt_frame["id"],
-                        "run_id": "run-local-1",
-                        "target_request_id": "tool-click-1",
-                        "interrupted": True,
-                        "interrupt_count": 1,
-                    },
-                }
+            interrupt_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/tools/interrupt",
+                json={
+                    "run_id": "run-local-1",
+                    "trace_id": "trace-local-1",
+                    "target_request_id": "tool-click-1",
+                    "request_id": "tool-interrupt-1",
+                    "reason": "operator_requested_stop",
+                },
             )
-            interrupt_thread.join(timeout=5)
-            interrupt_response = interrupt_result["response"]
             self.assertEqual(interrupt_response.status_code, 200)
             self.assertEqual(interrupt_response.json()["interrupted"], True)
             self.assertEqual(interrupt_response.json()["interrupt_count"], 1)

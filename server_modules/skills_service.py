@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+from pathlib import Path
 import re
 from typing import Any, Dict, List
+import uuid
 
 from server_modules.capability_registry import resolve_capability
 
@@ -1236,6 +1238,218 @@ def _direct_tool_session_metadata(session_ctx: Dict[str, Any] | None) -> Dict[st
     return metadata
 
 
+_DIRECT_TOOL_HOME_ALIAS_DIRS = {
+    "desktop": "Desktop",
+    "documents": "Documents",
+    "downloads": "Downloads",
+}
+
+
+def _normalize_direct_local_path_argument(raw_path: Any) -> str:
+    token = str(raw_path or "").strip()
+    if not token:
+        return ""
+    normalized = token.replace("\\", "/").strip()
+    lowered = normalized.lower()
+    home = Path.home()
+    for alias, folder_name in _DIRECT_TOOL_HOME_ALIAS_DIRS.items():
+        canonical = home / folder_name
+        if lowered in {alias, f"~/{alias}", f"/root/{alias}", f"/home/user/{alias}"}:
+            return str(canonical)
+        for prefix in (f"/root/{alias}/", f"/home/user/{alias}/"):
+            if lowered.startswith(prefix):
+                suffix = normalized[len(prefix) :].lstrip("/")
+                return str(canonical / suffix) if suffix else str(canonical)
+    if normalized.startswith("~/"):
+        return str(home / normalized[2:])
+    if normalized.startswith("/root/"):
+        return str(home / normalized[len("/root/") :])
+    if normalized.startswith("/home/user/"):
+        return str(home / normalized[len("/home/user/") :])
+    return token
+
+
+def _gateway_capability_for_direct_local_tool(connector_id: str, action_id: str) -> str:
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if normalized_connector == "file":
+        return "filesystem.read_write"
+    if normalized_connector == "shell":
+        return "shell.execute"
+    if normalized_connector == "screenshot":
+        return "screenshot.capture"
+    if normalized_connector == "computer" and normalized_action:
+        if normalized_action in {"launch", "launch_app"}:
+            return "computer_control.launch_app"
+        return f"computer_control.{normalized_action}"
+    return ""
+
+
+def _gateway_arguments_for_direct_local_tool(
+    connector_id: str,
+    action_id: str,
+    argument_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    payload = dict(argument_payload or {})
+    if normalized_connector == "file":
+        normalized_path = _normalize_direct_local_path_argument(
+            payload.get("path") or payload.get("file_path")
+        )
+        if normalized_path:
+            payload["path"] = normalized_path
+        payload.setdefault("mode", normalized_action or "read")
+        return payload
+    if normalized_connector == "shell":
+        command = str(payload.get("command") or "").strip()
+        if command:
+            command = command.replace("/root/Desktop", str(Path.home() / "Desktop"))
+            command = command.replace("/root/Documents", str(Path.home() / "Documents"))
+            command = command.replace("/root/Downloads", str(Path.home() / "Downloads"))
+            payload["command"] = command
+        return payload
+    if normalized_connector == "computer":
+        normalized_path = _normalize_direct_local_path_argument(
+            payload.get("path") or payload.get("file_path")
+        )
+        if normalized_path:
+            payload["path"] = normalized_path
+        return payload
+    return payload
+
+
+def _resolve_direct_tool_gateway_id(
+    workspace_id: str,
+    *,
+    session_ctx: Dict[str, Any] | None,
+) -> str | None:
+    from server_modules import gateway_protocol_service, gateway_state_repository
+
+    metadata = _direct_tool_session_metadata(session_ctx)
+    candidate_ids: List[str] = []
+    for key in (
+        "gateway_id",
+        "execution_target_preferred_runtime_id",
+        "runtime_id",
+    ):
+        value = str(metadata.get(key) or "").strip()
+        if value and value not in candidate_ids:
+            candidate_ids.append(value)
+    matching_runtime_ids = metadata.get("execution_target_matching_runtime_ids")
+    if isinstance(matching_runtime_ids, list):
+        for item in matching_runtime_ids:
+            value = str(item or "").strip()
+            if value and value not in candidate_ids:
+                candidate_ids.append(value)
+    for gateway_id in candidate_ids:
+        registration = gateway_state_repository.get_gateway_registration(gateway_id)
+        if not registration:
+            continue
+        if str(registration.get("status") or "").strip().lower() != "active":
+            continue
+        if gateway_protocol_service.gateway_connection_is_live(gateway_id):
+            return gateway_id
+    for registration in gateway_state_repository.list_workspace_gateway_registrations(
+        str(workspace_id or "default").strip() or "default",
+        include_revoked=False,
+    ):
+        gateway_id = str(registration.get("gateway_id") or "").strip()
+        if not gateway_id:
+            continue
+        if str(registration.get("status") or "").strip().lower() != "active":
+            continue
+        if gateway_protocol_service.gateway_connection_is_live(gateway_id):
+            return gateway_id
+    return None
+
+
+def _format_gateway_direct_local_tool_result(
+    *,
+    connector_id: str,
+    action_id: str,
+    capability_id: str,
+    gateway_response: Dict[str, Any],
+    callbacks: Any,
+) -> str:
+    inner_result = gateway_response.get("result")
+    if isinstance(inner_result, dict) and (
+        "summary" in inner_result or "result_data" in inner_result
+    ):
+        return callbacks.format_direct_local_tool_result(inner_result)
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if normalized_connector == "shell" and isinstance(inner_result, dict):
+        command = str(inner_result.get("command") or "").strip()
+        stdout = str(inner_result.get("stdout") or "").strip()
+        stderr = str(inner_result.get("stderr") or "").strip()
+        exit_code = inner_result.get("exit_code")
+        parts = [f"Command completed: {command}" if command else "Command completed."]
+        if stdout:
+            parts.append(stdout)
+        if stderr:
+            parts.append(f"stderr:\n{stderr}")
+        if not stdout and not stderr and exit_code is not None:
+            parts.append(f"Exit code: {exit_code}")
+        return "\n".join(part for part in parts if part).strip()
+    if normalized_connector == "file" and isinstance(inner_result, dict):
+        path = str(inner_result.get("path") or "").strip()
+        mode = str(inner_result.get("mode") or normalized_action or "read").strip().lower()
+        if mode == "read" and bool(inner_result.get("is_directory")):
+            entries = inner_result.get("entries") if isinstance(inner_result.get("entries"), list) else []
+            lines = [f"Listed directory: {path}" if path else "Listed directory:"]
+            lines.extend(
+                f"{index}. {str(item or '').strip()}"
+                for index, item in enumerate(entries[:200], start=1)
+            )
+            return "\n".join(lines).strip()
+        if mode == "read":
+            content = str(inner_result.get("content") or "").strip()
+            return "\n".join(
+                part
+                for part in [f"Read file: {path}" if path else "Read file:", content]
+                if part
+            ).strip()
+        if mode in {"write", "append"}:
+            return f"Wrote file: {path}" if path else "File write completed."
+        if mode == "delete":
+            return f"Deleted file: {path}" if path else "File delete completed."
+    if isinstance(inner_result, dict):
+        try:
+            return json.dumps(inner_result, ensure_ascii=False)
+        except Exception:
+            return str(inner_result)
+    if inner_result is not None:
+        return str(inner_result).strip()
+    capability_summary = str(capability_id or "").strip() or "local capability"
+    return f"{capability_summary} completed."
+
+
+def _execute_direct_tool_via_gateway(
+    *,
+    gateway_id: str,
+    capability_id: str,
+    arguments: Dict[str, Any],
+    run_id: str,
+    trace_id: str,
+    workspace_id: str,
+    callbacks: Any,
+) -> Dict[str, Any]:
+    from server_modules import gateway_execution_service
+
+    response = callbacks.run_async_tool_call(
+        gateway_execution_service.execute_tool_via_gateway(
+            gateway_id=gateway_id,
+            capability_id=capability_id,
+            arguments=arguments,
+            run_id=run_id,
+            trace_id=trace_id,
+            workspace_id=workspace_id,
+        )
+    )
+    return dict(response) if isinstance(response, dict) else {"result": response}
+
+
 def _safe_direct_shell_command(command: str) -> bool:
     compact = re.sub(r"\s+", " ", str(command or "").strip()).lower()
     if not compact:
@@ -1304,6 +1518,8 @@ def _execute_safe_direct_local_tool_call(
     provider: Any,
     model: Any,
     credentials: Dict[str, Any] | None,
+    thread_id: str,
+    index: int,
     session_ctx: Dict[str, Any] | None,
     callbacks: Any,
 ) -> str:
@@ -1318,6 +1534,41 @@ def _execute_safe_direct_local_tool_call(
             _raise_direct_chat_tool_execution_blocked()
     elif normalized_connector not in {"file"}:
         _raise_direct_chat_tool_execution_blocked()
+
+    gateway_capability_id = _gateway_capability_for_direct_local_tool(
+        normalized_connector,
+        normalized_action,
+    )
+    gateway_id = _resolve_direct_tool_gateway_id(
+        workspace_id,
+        session_ctx=session_ctx,
+    )
+    if gateway_id and gateway_capability_id:
+        gateway_arguments = _gateway_arguments_for_direct_local_tool(
+            normalized_connector,
+            normalized_action,
+            argument_payload if isinstance(argument_payload, dict) else {},
+        )
+        gateway_run_id = (
+            f"direct_chat:{str(thread_id or 'thread').strip() or 'thread'}:{index}:{uuid.uuid4().hex}"
+        )
+        gateway_trace_id = f"trace_{uuid.uuid4().hex}"
+        gateway_response = _execute_direct_tool_via_gateway(
+            gateway_id=gateway_id,
+            capability_id=gateway_capability_id,
+            arguments=gateway_arguments,
+            run_id=gateway_run_id,
+            trace_id=gateway_trace_id,
+            workspace_id=str(workspace_id or "default").strip() or "default",
+            callbacks=callbacks,
+        )
+        return _format_gateway_direct_local_tool_result(
+            connector_id=normalized_connector,
+            action_id=normalized_action,
+            capability_id=gateway_capability_id,
+            gateway_response=gateway_response,
+            callbacks=callbacks,
+        )
 
     variant, config = callbacks.build_direct_local_tool_config(
         normalized_connector,
@@ -1525,6 +1776,8 @@ def execute_single_direct_tool_call(
             provider=provider,
             model=model,
             credentials=credentials,
+            thread_id=thread_id,
+            index=index,
             session_ctx=session_ctx,
             callbacks=callbacks,
         )

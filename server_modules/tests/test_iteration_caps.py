@@ -88,7 +88,7 @@ class IterationCapTests(unittest.TestCase):
             message="Keep going until the task is done.",
             workspace_id="default",
             requested_model="gpt-5.4",
-            requested_provider="openai",
+            requested_provider="codex_cli",
             availability={"ai_ready": True},
             max_iterations=2,
         )

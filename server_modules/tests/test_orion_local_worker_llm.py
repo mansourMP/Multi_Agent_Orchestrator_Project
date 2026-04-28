@@ -1,4 +1,6 @@
+import http.client
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -219,18 +221,19 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertEqual(model, "claude-3-7-sonnet-20250219")
 
     def test_generate_chat_remaps_retired_anthropic_model(self):
-        with patch.object(worker_llm, "provider_order_for_run", return_value=["anthropic"]):
-            with patch.object(
-                worker_llm,
-                "anthropic_chat_text",
-                return_value=("Anthropic reply", {"input_tokens": 5, "output_tokens": 7}, "claude-3-7-sonnet-20250219", ""),
-            ) as anthropic_mock:
-                text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
-                    context={"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"},
-                    metadata={"provider": "anthropic", "disable_provider_fallback": True},
-                    user_goal="hello",
-                    system_prompt="You are concise.",
-                )
+        with patch.object(worker_llm, "anthropic_default_model", return_value="claude-3-5-haiku-20241022"):
+            with patch.object(worker_llm, "provider_order_for_run", return_value=["anthropic"]):
+                with patch.object(
+                    worker_llm,
+                    "anthropic_chat_text",
+                    return_value=("Anthropic reply", {"input_tokens": 5, "output_tokens": 7}, "claude-3-5-haiku-20241022", ""),
+                ) as anthropic_mock:
+                    text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                        context={"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"},
+                        metadata={"provider": "anthropic", "disable_provider_fallback": True},
+                        user_goal="hello",
+                        system_prompt="You are concise.",
+                    )
 
         self.assertEqual(text, "Anthropic reply")
         self.assertEqual(attempted, "anthropic")
@@ -239,7 +242,7 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         anthropic_mock.assert_called_once_with(
             "You are concise.",
             "hello",
-            model_override="claude-3-7-sonnet-20250219",
+            model_override="claude-3-5-haiku-20241022",
             prior_messages=None,
             credential_override=None,
         )
@@ -418,6 +421,85 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertIsNone(usage)
         self.assertEqual(model, "")
         self.assertEqual(error, worker_llm.OPENAI_API_KEY_MISSING_ERROR)
+
+    def test_anthropic_chat_text_falls_back_to_curl_on_incomplete_read(self):
+        curl_body = (
+            b'{"content":[{"type":"text","text":"Desktop files listed."}],"usage":{"input_tokens":3,"output_tokens":5}}'
+            b"\n__CODEX_STATUS__:200"
+        )
+        with patch.object(worker_llm, "resolve_anthropic_api_key", return_value="test-key"):
+            with patch.object(worker_llm.urllib.request, "urlopen", side_effect=http.client.IncompleteRead(b"", 0)):
+                with patch.object(worker_llm.shutil, "which", return_value="/usr/bin/curl"):
+                    with patch.object(
+                        worker_llm.subprocess,
+                        "run",
+                        return_value=subprocess.CompletedProcess(
+                            args=["curl"],
+                            returncode=0,
+                            stdout=curl_body,
+                            stderr=b"",
+                        ),
+                    ):
+                        text, usage, model, error = worker_llm.anthropic_chat_text(
+                            "You are concise.",
+                            "List the files on my desktop.",
+                            model_override="claude-3-7-sonnet-20250219",
+                        )
+
+        self.assertEqual(text, "Desktop files listed.")
+        self.assertEqual(model, "claude-3-7-sonnet-20250219")
+        self.assertEqual(error, "")
+        self.assertEqual(usage, {"input_tokens": 3, "output_tokens": 5})
+
+    def test_iter_anthropic_chat_events_falls_back_to_curl_on_incomplete_read(self):
+        curl_body = (
+            b'{"content":[{"type":"text","text":"Desktop files listed."}],"usage":{"input_tokens":3,"output_tokens":5}}'
+            b"\n__CODEX_STATUS__:200"
+        )
+        with patch.object(worker_llm, "resolve_anthropic_api_key", return_value="test-key"):
+            with patch.object(worker_llm.urllib.request, "urlopen", side_effect=http.client.IncompleteRead(b"", 0)):
+                with patch.object(worker_llm.shutil, "which", return_value="/usr/bin/curl"):
+                    with patch.object(
+                        worker_llm.subprocess,
+                        "run",
+                        return_value=subprocess.CompletedProcess(
+                            args=["curl"],
+                            returncode=0,
+                            stdout=curl_body,
+                            stderr=b"",
+                        ),
+                    ):
+                        events = list(
+                            worker_llm.iter_anthropic_chat_events(
+                                "You are concise.",
+                                "List the files on my desktop.",
+                                model_override="claude-3-7-sonnet-20250219",
+                            )
+                        )
+
+        self.assertEqual(events[0]["type"], "delta")
+        self.assertEqual(events[0]["delta"], "Desktop files listed.")
+        self.assertEqual(events[1]["type"], "done")
+        self.assertEqual(events[1]["text"], "Desktop files listed.")
+        self.assertEqual(events[1]["usage"], {"input_tokens": 3, "output_tokens": 5})
+
+    def test_ollama_enabled_when_local_service_has_models(self):
+        with patch.dict(os.environ, {"ORION_LOCAL_WORKER_OLLAMA_ENABLED": "0"}, clear=False):
+            with patch.object(
+                worker_llm,
+                "ollama_service_status",
+                return_value={"reachable": True, "has_models": True, "models": ["llama3.2"]},
+            ):
+                self.assertTrue(worker_llm.ollama_enabled())
+
+    def test_ollama_disabled_when_local_service_has_no_models(self):
+        with patch.dict(os.environ, {"ORION_LOCAL_WORKER_OLLAMA_ENABLED": "0"}, clear=False):
+            with patch.object(
+                worker_llm,
+                "ollama_service_status",
+                return_value={"reachable": True, "has_models": False, "models": []},
+            ):
+                self.assertFalse(worker_llm.ollama_enabled())
 
 
 if __name__ == "__main__":

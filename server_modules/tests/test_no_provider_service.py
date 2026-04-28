@@ -110,6 +110,7 @@ class NoProviderServiceTests(unittest.TestCase):
         self.assertTrue(
             no_provider_service.looks_like_directory_listing_request("List the first 2 files in /tmp/does-not-need-to-exist")
         )
+        self.assertTrue(no_provider_service.looks_like_directory_listing_request("List the files on my desktop"))
         self.assertFalse(no_provider_service.looks_like_directory_listing_request("Explain the tradeoffs between SQLite and Postgres"))
 
     def test_no_provider_reasoning_required_response_is_stable(self) -> None:
@@ -208,6 +209,17 @@ class NoProviderServiceTests(unittest.TestCase):
         self.assertTrue(
             no_provider_service.has_obvious_direct_tool_intent(
                 "List the first 2 files in /tmp/example",
+                [],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
+        self.assertTrue(
+            no_provider_service.has_obvious_direct_tool_intent(
+                "List the files on my desktop.",
                 [],
                 compact_text=_compact_text,
                 extract_first_path_reference=_extract_first_path_reference,

@@ -1,4 +1,5 @@
 import unittest
+import importlib
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -7,6 +8,10 @@ from server_modules import app_bridge_service
 
 
 class AppBridgeServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global app_bridge_service
+        app_bridge_service = importlib.import_module("server_modules.app_bridge_service")
+
     def test_normalize_bridge_contract_rejects_unsupported_bridge_type(self) -> None:
         with patch(
             "server_modules.app_bridge_service._resolve_registry_app_item",

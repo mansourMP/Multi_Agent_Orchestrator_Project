@@ -20,8 +20,9 @@ class McpRegistryServiceTests(unittest.TestCase):
         super().tearDown()
 
     def test_upsert_can_discover_tools_and_expose_virtual_skill_entries(self) -> None:
-        with patch(
-            "server_modules.mcp_registry_service._list_tools_streamable_http_async",
+        with patch.object(
+            mcp_registry_service,
+            "_list_tools_streamable_http_async",
             new=AsyncMock(
                 return_value=[
                     {
@@ -79,8 +80,9 @@ class McpRegistryServiceTests(unittest.TestCase):
             metadata={},
         )
 
-        with patch(
-            "server_modules.mcp_registry_service._call_streamable_http_tool_async",
+        with patch.object(
+            mcp_registry_service,
+            "_call_streamable_http_tool_async",
             new=AsyncMock(return_value={"reply": "SKU-1 is in stock.", "sku": "SKU-1"}),
         ):
             result = mcp_registry_service.invoke_workspace_mcp_skill(

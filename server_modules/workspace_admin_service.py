@@ -617,6 +617,17 @@ async def update_workspace_routing_payload(
                 if "health_safety_enabled" in raw_defaults
                 else existing_defaults.health_safety_enabled
             ),
+            "hosted_sage_ai_policy": str(
+                raw_defaults.get("hosted_sage_ai_policy")
+                if "hosted_sage_ai_policy" in raw_defaults
+                else existing_defaults.hosted_sage_ai_policy
+            ).strip()
+            or existing_defaults.hosted_sage_ai_policy,
+            "hosted_sage_ai_monthly_cap_usd": (
+                raw_defaults.get("hosted_sage_ai_monthly_cap_usd")
+                if "hosted_sage_ai_monthly_cap_usd" in raw_defaults
+                else existing_defaults.hosted_sage_ai_monthly_cap_usd
+            ),
             "allowed_live_channels": [
                 str(item).strip()
                 for item in list(raw_defaults.get("allowed_live_channels") or existing_defaults.allowed_live_channels)

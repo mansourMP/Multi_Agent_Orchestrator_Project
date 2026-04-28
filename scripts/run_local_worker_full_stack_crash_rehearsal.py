@@ -93,6 +93,7 @@ def _wait_for_browser_site_ready(url: str, timeout_seconds: float = 10.0) -> Non
 def _should_simulate_after_runtime_failure(exc: RuntimeError) -> bool:
     message = str(exc or "")
     fallback_markers = (
+        "Runtime server did not become ready",
         "Browser rehearsal site did not become ready",
         "Worker exited before the real checkpoint phase completed",
         "Initial checkpoint phase terminated before pause",
@@ -100,6 +101,8 @@ def _should_simulate_after_runtime_failure(exc: RuntimeError) -> bool:
         "ERR_CONNECTION_REFUSED",
         "net::ERR_CONNECTION_REFUSED",
         "refusing to continue with non-durable run state",
+        "DATABASE_URL not set or Postgres unavailable",
+        "RunStatePersistenceError",
     )
     return any(marker in message for marker in fallback_markers)
 

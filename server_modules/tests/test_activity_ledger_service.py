@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
@@ -7,6 +8,18 @@ from server_modules import activity_ledger_service
 
 
 class ActivityLedgerServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global activity_ledger_service
+        activity_ledger_service = importlib.import_module("server_modules.activity_ledger_service")
+        self._history_cutoff_patcher = patch(
+            "server_modules.activity_ledger_service._workspace_history_cutoff_ts",
+            return_value=None,
+        )
+        self._history_cutoff_patcher.start()
+
+    def tearDown(self) -> None:
+        self._history_cutoff_patcher.stop()
+
     def test_list_notification_feed_items_projects_bounded_notification_shape(self) -> None:
         created_at = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
         with patch(

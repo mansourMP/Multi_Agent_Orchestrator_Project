@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +20,10 @@ def _manifest() -> AgentManifest:
 
 
 class ExecutionSandboxServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global execution_sandbox_service
+        execution_sandbox_service = importlib.import_module("server_modules.execution_sandbox_service")
+
     def test_runtime_scope_for_hosted_secure_has_ephemeral_isolation_defaults(self):
         scope = execution_sandbox_service.runtime_scope(
             runtime_mode="hosted_secure",

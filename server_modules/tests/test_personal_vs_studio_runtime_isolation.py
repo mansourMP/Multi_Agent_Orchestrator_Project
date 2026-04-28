@@ -63,8 +63,9 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
             capabilities=["channel.whatsapp.personal"],
         )
 
-        with patch(
-            "server_modules.connectors_actions.whatsapp_twilio_webhook",
+        with patch.object(
+            routes_connectors.actions,
+            "whatsapp_twilio_webhook",
             new=AsyncMock(side_effect=RuntimeError("studio_connector_failure")),
         ):
             connector_failure = self.client.post("/api/channels/whatsapp/twilio/webhook")

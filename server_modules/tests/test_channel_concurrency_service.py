@@ -1,6 +1,7 @@
 import unittest
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
+import importlib
 
 from server_modules import channel_concurrency_service
 
@@ -76,6 +77,11 @@ def _fake_scoped_connection(connection: _FakeConnection):
 
 
 class ChannelConcurrencyServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        global channel_concurrency_service
+
+        channel_concurrency_service = importlib.import_module("server_modules.channel_concurrency_service")
+
     def test_resolve_channel_quota_snapshot_prefers_workspace_and_agent_metadata(self):
         workspace = {
             "metadata": {

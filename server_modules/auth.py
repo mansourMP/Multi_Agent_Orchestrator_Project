@@ -44,10 +44,10 @@ ORION_ADMIN_USER_IDS = {item.strip() for item in str(os.getenv("ORION_ADMIN_USER
 ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMIN_EMAILS", "")).split(",") if item.strip()}
 ORION_SERVICE_RATE_LIMIT_PER_MINUTE = int(os.getenv("ORION_SERVICE_RATE_LIMIT_PER_MINUTE", "600"))
 ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE = int(
-    os.getenv("ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE", "60")
+    os.getenv("ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE", "600")
 )
 ORION_MOBILE_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE = int(
-    os.getenv("ORION_MOBILE_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE", "240")
+    os.getenv("ORION_MOBILE_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE", "600")
 )
 ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED = str(
     os.getenv("ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED", "1")
@@ -4567,7 +4567,13 @@ def _should_rate_limit_authenticated_api_path(request_path: Any) -> bool:
         "/auth/account-shell",
         "/api/auth/account-shell",
         "/api/v1/auth/account-shell",
+        "/sessions",
+        "/api/sessions",
+        "/turn",
+        "/api/turn",
     }:
+        return False
+    if (path.startswith("/threads/") or path.startswith("/api/threads/")) and path.endswith("/turns"):
         return False
     return True
 

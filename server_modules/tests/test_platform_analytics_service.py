@@ -90,28 +90,34 @@ class PlatformAnalyticsServiceTests(unittest.IsolatedAsyncioTestCase):
             return cost_summaries[deployed_agent_id]
 
         with (
-            patch(
-                "server_modules.platform_analytics_service.control_plane_repository.list_platform_deployed_agents",
+            patch.object(
+                platform_analytics_service.control_plane_repository,
+                "list_platform_deployed_agents",
                 new=AsyncMock(return_value=deployments),
             ),
-            patch(
-                "server_modules.platform_analytics_service.control_plane_repository.get_workspace_by_id",
+            patch.object(
+                platform_analytics_service.control_plane_repository,
+                "get_workspace_by_id",
                 new=AsyncMock(side_effect=fake_get_workspace_by_id),
             ),
-            patch(
-                "server_modules.platform_analytics_service.control_plane_repository.get_workspace_billing_summary",
+            patch.object(
+                platform_analytics_service.control_plane_repository,
+                "get_workspace_billing_summary",
                 new=AsyncMock(side_effect=fake_get_workspace_billing_summary),
             ),
-            patch(
-                "server_modules.platform_analytics_service.control_plane_repository.list_platform_deployed_agent_monthly_cost_ledger_entries",
+            patch.object(
+                platform_analytics_service.control_plane_repository,
+                "list_platform_deployed_agent_monthly_cost_ledger_entries",
                 new=AsyncMock(return_value=cost_ledger_rows),
             ),
-            patch(
-                "server_modules.platform_analytics_service.control_plane_repository.summarize_deployed_agent_activity_rollup",
+            patch.object(
+                platform_analytics_service.control_plane_repository,
+                "summarize_deployed_agent_activity_rollup",
                 new=AsyncMock(side_effect=fake_summarize_activity_rollup),
             ),
-            patch(
-                "server_modules.platform_analytics_service.control_plane_repository.summarize_deployed_agent_monthly_cost_ledger",
+            patch.object(
+                platform_analytics_service.control_plane_repository,
+                "summarize_deployed_agent_monthly_cost_ledger",
                 new=AsyncMock(side_effect=fake_summarize_cost_ledger),
             ),
         ):

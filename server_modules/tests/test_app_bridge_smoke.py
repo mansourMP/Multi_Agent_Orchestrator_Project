@@ -1,9 +1,11 @@
 import asyncio
+import importlib
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
@@ -31,6 +33,13 @@ class _FakeApp:
 
 
 class AppBridgeSmokeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global app_registry_api, AppCaptainBridgeRequest, AppSpecialistBridgeRequest
+        app_registry_api = importlib.import_module("server_modules.app_registry_api")
+        schemas_module = importlib.import_module("server_modules.schemas")
+        AppCaptainBridgeRequest = schemas_module.AppCaptainBridgeRequest
+        AppSpecialistBridgeRequest = schemas_module.AppSpecialistBridgeRequest
+
     def test_app_bridge_requests_execute_canonical_master_and_specialist_turns(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             registry_path = Path(tempdir) / "apps.json"
@@ -130,6 +139,23 @@ class AppBridgeSmokeTests(unittest.TestCase):
                 async def _compiled_artifact(install_id, **kwargs):
                     return compiled_by_install[str(install_id)]
 
+                async def _start_turn(*, payload=None, current_user=None, **kwargs):
+                    turn_request = importlib.import_module("server_modules.api_contract").request_body_to_turn_request(payload)
+                    run_id = "run-sage"
+                    if str(turn_request.context_hints.get("agent_role") or "").strip() == "research":
+                        run_id = "run-specialist"
+                    return SimpleNamespace(
+                        turn_request=turn_request,
+                        result={
+                            "status": "accepted",
+                            "run_id": run_id,
+                            "engine": "orion",
+                            "route": {"selected": "cloud"},
+                            "doctor_preflight": {"blocking": False},
+                            "created_run": {"run_id": run_id, "status": "queued"},
+                        },
+                    )
+
                 with (
                     patch("server_modules.auth.enforce_workspace_access", return_value="workspace-1"),
                     patch("server_modules.auth.workspace_tenant_id", return_value="tenant-1"),
@@ -169,39 +195,14 @@ class AppBridgeSmokeTests(unittest.TestCase):
                         ),
                     ),
                     patch("server_modules.agent_registry_api.thread_service.ensure_master_thread", new=AsyncMock()) as ensure_master_thread,
-                    patch("server_modules.agent_registry_api._run_execution_services", return_value={"run": "services"}),
+                    patch("server_modules.agent_registry_api._run_execution_services", return_value=object()),
                     patch(
                         "server_modules.app_bridge_service.record_app_bridge_audit",
                         new=AsyncMock(side_effect=[{"id": "audit-sage"}, {"id": "audit-specialist"}]),
                     ),
                     patch(
-                        "server_modules.agent_registry_api.execute_canonical_agent_turn",
-                        new=AsyncMock(
-                            side_effect=[
-                                {
-                                    "kind": "durable_run",
-                                    "result": {
-                                        "status": "accepted",
-                                        "run_id": "run-sage",
-                                        "engine": "orion",
-                                        "route": {"selected": "cloud"},
-                                        "doctor_preflight": {"blocking": False},
-                                        "created_run": {"run_id": "run-sage", "status": "queued"},
-                                    },
-                                },
-                                {
-                                    "kind": "durable_run",
-                                    "result": {
-                                        "status": "accepted",
-                                        "run_id": "run-specialist",
-                                        "engine": "orion",
-                                        "route": {"selected": "cloud"},
-                                        "doctor_preflight": {"blocking": False},
-                                        "created_run": {"run_id": "run-specialist", "status": "queued"},
-                                    },
-                                },
-                            ]
-                        ),
+                        "server_modules.agent_registry_api.turn_ingress_service.start_turn",
+                        new=AsyncMock(side_effect=_start_turn),
                     ) as turn_mock,
                 ):
                     captain_result = asyncio.run(
@@ -244,7 +245,8 @@ class AppBridgeSmokeTests(unittest.TestCase):
                 self.assertEqual(specialist_result["audit"]["activity_event_id"], "audit-specialist")
                 ensure_master_thread.assert_awaited_once()
 
-                sage_turn_request = turn_mock.await_args_list[0].kwargs["turn_request"]
+                sage_turn_request = turn_mock.await_args_list[0].kwargs["payload"]
+                sage_turn_request = importlib.import_module("server_modules.api_contract").request_body_to_turn_request(sage_turn_request)
                 self.assertEqual(sage_turn_request.thread_id, "thread_sage_workspace-1_user-1")
                 self.assertEqual(
                     sage_turn_request.context_hints["metadata"]["app_bridge"]["bridge_kind"],
@@ -255,7 +257,8 @@ class AppBridgeSmokeTests(unittest.TestCase):
                     ["explicit_imports_from_sage", "user_selected_inputs"],
                 )
 
-                specialist_turn_request = turn_mock.await_args_list[1].kwargs["turn_request"]
+                specialist_turn_request = turn_mock.await_args_list[1].kwargs["payload"]
+                specialist_turn_request = importlib.import_module("server_modules.api_contract").request_body_to_turn_request(specialist_turn_request)
                 self.assertEqual(specialist_turn_request.thread_id, "thread-install-research")
                 self.assertEqual(
                     specialist_turn_request.context_hints["metadata"]["app_bridge"]["bridge_kind"],

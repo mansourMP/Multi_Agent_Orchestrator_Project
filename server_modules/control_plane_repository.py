@@ -534,6 +534,27 @@ CREATE TABLE IF NOT EXISTS deployed_agent_monthly_cost_ledger (
     UNIQUE(tenant_id, workspace_id, deployed_agent_id, run_id)
 );
 
+CREATE TABLE IF NOT EXISTS workspace_hosted_ai_monthly_cost_ledger (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    usage_month DATE NOT NULL,
+    request_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL DEFAULT '',
+    source_surface TEXT NOT NULL DEFAULT 'sage_direct_chat',
+    provider TEXT NULL,
+    model TEXT NULL,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    completed_at TIMESTAMPTZ NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, request_id)
+);
+
 CREATE TABLE IF NOT EXISTS channel_user_acquisition_touches (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -1358,6 +1379,32 @@ def _row_to_deployed_agent_monthly_cost_ledger_entry(row: Any) -> Optional[Dict[
         "usage_month": usage_month.isoformat() if isinstance(usage_month, date) else str(usage_month or "").strip() or None,
         "run_id": str(payload.get("run_id") or "").strip() or None,
         "run_status": str(payload.get("run_status") or "").strip().lower() or None,
+        "provider": str(payload.get("provider") or "").strip().lower() or None,
+        "model": str(payload.get("model") or "").strip() or None,
+        "prompt_tokens": int(payload.get("prompt_tokens") or 0),
+        "completion_tokens": int(payload.get("completion_tokens") or 0),
+        "total_tokens": int(payload.get("total_tokens") or 0),
+        "estimated_cost_usd": round(float(payload.get("estimated_cost_usd") or 0.0), 6),
+        "completed_at": _iso(payload.get("completed_at")),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_workspace_hosted_ai_monthly_cost_ledger_entry(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    usage_month = payload.get("usage_month")
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "usage_month": usage_month.isoformat() if isinstance(usage_month, date) else str(usage_month or "").strip() or None,
+        "request_id": str(payload.get("request_id") or "").strip() or None,
+        "thread_id": str(payload.get("thread_id") or "").strip() or None,
+        "source_surface": str(payload.get("source_surface") or "").strip().lower() or None,
         "provider": str(payload.get("provider") or "").strip().lower() or None,
         "model": str(payload.get("model") or "").strip() or None,
         "prompt_tokens": int(payload.get("prompt_tokens") or 0),
@@ -4366,6 +4413,83 @@ async def record_deployed_agent_monthly_cost_ledger_entry(
     return _row_to_deployed_agent_monthly_cost_ledger_entry(row)
 
 
+async def record_workspace_hosted_ai_monthly_cost_ledger_entry(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    request_id: str,
+    thread_id: Optional[str] = None,
+    source_surface: Optional[str] = None,
+    usage_month: Optional[Any] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
+    estimated_cost_usd: float = 0.0,
+    completed_at: Optional[Any] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    ledger_entry_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_request_id = _require_scope_token(request_id, "request_id")
+    resolved_usage_month = _coerce_month_start_date(usage_month)
+    if usage_month is not None and resolved_usage_month is None:
+        raise ValueError("usage_month must be an ISO date string or date value.")
+    resolved_usage_month = resolved_usage_month or datetime.now(timezone.utc).date().replace(day=1)
+    record_id = str(ledger_entry_id or f"shost_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO workspace_hosted_ai_monthly_cost_ledger (
+                id, tenant_id, workspace_id, usage_month, request_id, thread_id,
+                source_surface, provider, model, prompt_tokens, completion_tokens, total_tokens,
+                estimated_cost_usd, completed_at, metadata, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4::date, $5, $6,
+                $7, $8, $9, $10, $11, $12,
+                $13, $14::timestamptz, $15::jsonb, $16::timestamptz, $16::timestamptz
+            )
+            ON CONFLICT (tenant_id, workspace_id, request_id)
+            DO UPDATE SET
+                usage_month = EXCLUDED.usage_month,
+                thread_id = EXCLUDED.thread_id,
+                source_surface = EXCLUDED.source_surface,
+                provider = EXCLUDED.provider,
+                model = EXCLUDED.model,
+                prompt_tokens = EXCLUDED.prompt_tokens,
+                completion_tokens = EXCLUDED.completion_tokens,
+                total_tokens = EXCLUDED.total_tokens,
+                estimated_cost_usd = EXCLUDED.estimated_cost_usd,
+                completed_at = COALESCE(EXCLUDED.completed_at, workspace_hosted_ai_monthly_cost_ledger.completed_at),
+                metadata = workspace_hosted_ai_monthly_cost_ledger.metadata || EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+            RETURNING *
+            """,
+            record_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_usage_month,
+            resolved_request_id,
+            str(thread_id or "").strip(),
+            str(source_surface or "").strip().lower() or "sage_direct_chat",
+            str(provider or "").strip().lower() or None,
+            str(model or "").strip() or None,
+            max(0, int(prompt_tokens or 0)),
+            max(0, int(completion_tokens or 0)),
+            max(0, int(total_tokens or 0)),
+            round(float(estimated_cost_usd or 0.0), 6),
+            _coerce_timestamptz(completed_at),
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+    return _row_to_workspace_hosted_ai_monthly_cost_ledger_entry(row)
+
+
 async def upsert_channel_user_acquisition_touch(
     *,
     tenant_id: str,
@@ -5049,6 +5173,11 @@ async def summarize_workspace_billing_usage(
                 "hosted_total_tokens_monthly": 0,
                 "hosted_cost_usd_monthly": 0.0,
                 "hosted_runs_monthly": 0,
+                "hosted_sage_input_tokens_monthly": 0,
+                "hosted_sage_output_tokens_monthly": 0,
+                "hosted_sage_total_tokens_monthly": 0,
+                "hosted_sage_cost_usd_monthly": 0.0,
+                "hosted_sage_runs_monthly": 0,
                 "specialist_external_messages_today": 0,
                 "specialist_external_users_today": 0,
                 "daily_quota_subjects_today": 0,
@@ -5085,18 +5214,46 @@ async def summarize_workspace_billing_usage(
             resolved_workspace_id,
             resolved_usage_day,
         )
+        sage_cost_row = await connection.fetchrow(
+            """
+            SELECT
+                COALESCE(SUM(prompt_tokens), 0)::bigint AS hosted_sage_input_tokens_monthly,
+                COALESCE(SUM(completion_tokens), 0)::bigint AS hosted_sage_output_tokens_monthly,
+                COALESCE(SUM(total_tokens), 0)::bigint AS hosted_sage_total_tokens_monthly,
+                COALESCE(SUM(estimated_cost_usd), 0)::double precision AS hosted_sage_cost_usd_monthly,
+                COUNT(*)::int AS hosted_sage_runs_monthly
+            FROM workspace_hosted_ai_monthly_cost_ledger
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND usage_month = $3::date
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_usage_month,
+        )
     cost_payload = dict(cost_row or {})
+    sage_cost_payload = dict(sage_cost_row or {})
     daily_payload = dict(daily_message_row or {})
+    hosted_input_tokens = int(cost_payload.get("hosted_input_tokens_monthly") or 0) + int(sage_cost_payload.get("hosted_sage_input_tokens_monthly") or 0)
+    hosted_output_tokens = int(cost_payload.get("hosted_output_tokens_monthly") or 0) + int(sage_cost_payload.get("hosted_sage_output_tokens_monthly") or 0)
+    hosted_total_tokens = int(cost_payload.get("hosted_total_tokens_monthly") or 0) + int(sage_cost_payload.get("hosted_sage_total_tokens_monthly") or 0)
+    hosted_cost_usd = round(float(cost_payload.get("hosted_cost_usd_monthly") or 0.0) + float(sage_cost_payload.get("hosted_sage_cost_usd_monthly") or 0.0), 6)
+    hosted_runs = int(cost_payload.get("hosted_runs_monthly") or 0) + int(sage_cost_payload.get("hosted_sage_runs_monthly") or 0)
     return {
         "tenant_id": resolved_tenant_id,
         "workspace_id": resolved_workspace_id,
         "usage_month": resolved_usage_month.isoformat(),
         "usage_day": resolved_usage_day.isoformat(),
-        "hosted_input_tokens_monthly": int(cost_payload.get("hosted_input_tokens_monthly") or 0),
-        "hosted_output_tokens_monthly": int(cost_payload.get("hosted_output_tokens_monthly") or 0),
-        "hosted_total_tokens_monthly": int(cost_payload.get("hosted_total_tokens_monthly") or 0),
-        "hosted_cost_usd_monthly": round(float(cost_payload.get("hosted_cost_usd_monthly") or 0.0), 6),
-        "hosted_runs_monthly": int(cost_payload.get("hosted_runs_monthly") or 0),
+        "hosted_input_tokens_monthly": hosted_input_tokens,
+        "hosted_output_tokens_monthly": hosted_output_tokens,
+        "hosted_total_tokens_monthly": hosted_total_tokens,
+        "hosted_cost_usd_monthly": hosted_cost_usd,
+        "hosted_runs_monthly": hosted_runs,
+        "hosted_sage_input_tokens_monthly": int(sage_cost_payload.get("hosted_sage_input_tokens_monthly") or 0),
+        "hosted_sage_output_tokens_monthly": int(sage_cost_payload.get("hosted_sage_output_tokens_monthly") or 0),
+        "hosted_sage_total_tokens_monthly": int(sage_cost_payload.get("hosted_sage_total_tokens_monthly") or 0),
+        "hosted_sage_cost_usd_monthly": round(float(sage_cost_payload.get("hosted_sage_cost_usd_monthly") or 0.0), 6),
+        "hosted_sage_runs_monthly": int(sage_cost_payload.get("hosted_sage_runs_monthly") or 0),
         "specialist_external_messages_today": int(daily_payload.get("specialist_external_messages_today") or 0),
         "specialist_external_users_today": int(daily_payload.get("specialist_external_users_today") or 0),
         "daily_quota_subjects_today": int(daily_payload.get("daily_quota_subjects_today") or 0),

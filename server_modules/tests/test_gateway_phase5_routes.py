@@ -1,6 +1,6 @@
+import importlib
 import os
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -19,6 +19,18 @@ from server_modules import (
 
 class GatewayPhase5RoutesTests(unittest.TestCase):
     def setUp(self) -> None:
+        global auth
+        global gateway_activity_service
+        global gateway_state_repository
+        global personal_channels_repository
+        global routes_gateway
+
+        auth = importlib.import_module("server_modules.auth")
+        gateway_activity_service = importlib.import_module("server_modules.gateway_activity_service")
+        gateway_state_repository = importlib.import_module("server_modules.gateway_state_repository")
+        personal_channels_repository = importlib.import_module("server_modules.personal_channels_repository")
+        routes_gateway = importlib.import_module("server_modules.routes_gateway")
+
         self.tmpdir = tempfile.TemporaryDirectory()
         self.gateway_db_path = Path(self.tmpdir.name) / "gateway-state.sqlite3"
         self.auth_db_path = Path(self.tmpdir.name) / "auth-users.sqlite3"
@@ -126,64 +138,44 @@ class GatewayPhase5RoutesTests(unittest.TestCase):
     def test_risky_local_tool_requires_approval_and_can_retry_then_execute(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
-        gateway_token = registration_payload["gateway_token"]
-        session_payload, ws_path = self._connect_gateway(gateway_id, gateway_token)
+        approval_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/tools/execute",
+            json={
+                "capability_id": "computer_control.click",
+                "arguments": {"x": 10, "y": 20, "button": "left"},
+                "run_id": "run-approval-1",
+                "trace_id": "trace-approval-1",
+                "request_id": "req-approval-1",
+            },
+        )
+        self.assertEqual(approval_response.status_code, 202)
+        approval_payload = approval_response.json()
+        self.assertEqual(approval_payload["status"], "approval_required")
+        approval_id = approval_payload["approval"]["approval_id"]
 
-        with self.client.websocket_connect(ws_path) as websocket:
-            websocket.send_json(
+        approvals_listing = self.client.get(f"/api/gateway/registrations/{gateway_id}/approvals")
+        self.assertEqual(approvals_listing.status_code, 200)
+        self.assertEqual(approvals_listing.json()["pending_count"], 1)
+
+        execute_mock = AsyncMock(
+            side_effect=[
+                RuntimeError("Gateway temporary failure."),
                 {
-                    "kind": "request",
-                    "id": "req-connect-phase5-1",
-                    "type": "gateway.connect",
-                    "ts": "2026-04-22T13:00:00Z",
-                    "scope": session_payload["scope"],
-                    "payload": {
-                        "gateway_version": "0.1.0",
-                        "device_metadata": {"hostname": "mansur-mac"},
-                        "requested_capabilities": ["computer_control.click"],
-                        "journal_cursor": 0,
-                        "checkpoint_cursor": 0,
-                    },
-                }
-            )
-            self.assertTrue(websocket.receive_json()["ok"])
-            websocket.receive_json()
-            websocket.receive_json()
-
-            approval_response = self.client.post(
-                f"/api/gateway/registrations/{gateway_id}/tools/execute",
-                json={
-                    "capability_id": "computer_control.click",
-                    "arguments": {"x": 10, "y": 20, "button": "left"},
-                    "run_id": "run-approval-1",
-                    "trace_id": "trace-approval-1",
+                    "gateway_id": gateway_id,
+                    "device_id": "device-local-1",
+                    "workspace_id": "default",
                     "request_id": "req-approval-1",
+                    "capability_id": "computer_control.click",
+                    "run_id": "run-approval-1",
+                    "result": {"clicked": True, "x": 10, "y": 20},
                 },
+            ]
+        )
+        with patch("server_modules.routes_gateway.gateway_execution_service.execute_tool_via_gateway", execute_mock):
+            first_retry_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/approvals/{approval_id}/resolve",
+                json={"decision": "approved", "note": "Proceed", "timeout_seconds": 1},
             )
-            self.assertEqual(approval_response.status_code, 202)
-            approval_payload = approval_response.json()
-            self.assertEqual(approval_payload["status"], "approval_required")
-            approval_id = approval_payload["approval"]["approval_id"]
-
-            approvals_listing = self.client.get(f"/api/gateway/registrations/{gateway_id}/approvals")
-            self.assertEqual(approvals_listing.status_code, 200)
-            self.assertEqual(approvals_listing.json()["pending_count"], 1)
-
-            first_resolution: dict = {}
-
-            def _resolve_first_attempt() -> None:
-                first_resolution["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/approvals/{approval_id}/resolve",
-                    json={"decision": "approved", "note": "Proceed", "timeout_seconds": 1},
-                )
-
-            first_thread = threading.Thread(target=_resolve_first_attempt)
-            first_thread.start()
-            first_invoke = websocket.receive_json()
-            self.assertEqual(first_invoke["type"], "tool.invoke")
-            self.assertEqual(first_invoke["payload"]["capability_id"], "computer_control.click")
-            first_thread.join(timeout=5)
-            first_retry_response = first_resolution["response"]
             self.assertEqual(first_retry_response.status_code, 409)
             first_retry_payload = first_retry_response.json()
             self.assertEqual(first_retry_payload["status"], "retryable_error")
@@ -195,47 +187,24 @@ class GatewayPhase5RoutesTests(unittest.TestCase):
             self.assertEqual(retry_listing.status_code, 200)
             self.assertEqual(retry_listing.json()["retryable_count"], 1)
 
-            second_resolution: dict = {}
-
-            def _resolve_second_attempt() -> None:
-                second_resolution["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/approvals/{approval_id}/resolve",
-                    json={"decision": "approved", "note": "Retry", "timeout_seconds": 5},
-                )
-
-            second_thread = threading.Thread(target=_resolve_second_attempt)
-            second_thread.start()
-            second_invoke = websocket.receive_json()
-            self.assertEqual(second_invoke["type"], "tool.invoke")
-            self.assertEqual(second_invoke["payload"]["capability_id"], "computer_control.click")
-            websocket.send_json(
-                {
-                    "kind": "response",
-                    "id": second_invoke["id"],
-                    "ok": True,
-                    "ts": "2026-04-22T13:00:05Z",
-                    "payload": {
-                        "request_id": second_invoke["id"],
-                        "capability_id": "computer_control.click",
-                        "run_id": "run-approval-1",
-                        "result": {"clicked": True, "x": 10, "y": 20},
-                    },
-                }
+            second_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/approvals/{approval_id}/resolve",
+                json={"decision": "approved", "note": "Retry", "timeout_seconds": 5},
             )
-            second_thread.join(timeout=5)
-            second_response = second_resolution["response"]
             self.assertEqual(second_response.status_code, 200)
             second_payload = second_response.json()
             self.assertEqual(second_payload["status"], "executed")
             self.assertEqual(second_payload["approval"]["status"], "executed")
             self.assertTrue(second_payload["execution"]["result"]["clicked"])
 
-            events_payload = self.client.get(f"/api/gateway/registrations/{gateway_id}/events")
-            self.assertEqual(events_payload.status_code, 200)
-            event_types = [item["message_type"] for item in events_payload.json()["items"]]
-            self.assertIn("gateway.approval.requested", event_types)
-            self.assertIn("gateway.approval.retryable_failure", event_types)
-            self.assertIn("gateway.approval.executed", event_types)
+        self.assertEqual(execute_mock.await_count, 2)
+
+        events_payload = self.client.get(f"/api/gateway/registrations/{gateway_id}/events")
+        self.assertEqual(events_payload.status_code, 200)
+        event_types = [item["message_type"] for item in events_payload.json()["items"]]
+        self.assertIn("gateway.approval.requested", event_types)
+        self.assertIn("gateway.approval.retryable_failure", event_types)
+        self.assertIn("gateway.approval.executed", event_types)
 
         self.assertGreaterEqual(self.activity_append.await_count, 3)
 

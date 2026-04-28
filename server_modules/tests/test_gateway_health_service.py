@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -8,6 +9,8 @@ from server_modules import gateway_health_service
 
 class GatewayHealthServiceTests(unittest.TestCase):
     def setUp(self) -> None:
+        global gateway_health_service
+        gateway_health_service = importlib.import_module("server_modules.gateway_health_service")
         gateway_health_service._PROVIDER_PROBE_CACHE.clear()
 
     def test_gateway_doctor_payload_includes_specialist_provider_and_quota_facets(self) -> None:

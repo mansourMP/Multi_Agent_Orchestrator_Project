@@ -22,8 +22,9 @@ export class WorkspaceBootstrapError extends Error {
   }
 }
 
-const TRANSIENT_BOOTSTRAP_STATUSES = new Set([500, 502, 503, 504]);
+const TRANSIENT_BOOTSTRAP_STATUSES = new Set([403, 429, 500, 502, 503, 504]);
 const WORKSPACE_BOOTSTRAP_CACHE_TTL_MS = 5_000;
+const WORKSPACE_BOOTSTRAP_TIMEOUT_MS = 12_000;
 
 type WorkspaceBootstrapCacheEntry = {
   expiresAt: number;
@@ -66,11 +67,21 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        cache: 'no-store',
-        headers: forwardHeaders,
-      });
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => {
+        controller.abort();
+      }, WORKSPACE_BOOTSTRAP_TIMEOUT_MS);
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: 'GET',
+          cache: 'no-store',
+          headers: forwardHeaders,
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
 
       if (response.ok) {
         const payload = await response.json();
@@ -88,6 +99,9 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
       }
     } catch (error) {
       lastError = error;
+      if (error instanceof Error && error.name === 'AbortError') {
+        lastStatus = 504;
+      }
       if (error instanceof WorkspaceBootstrapError && !TRANSIENT_BOOTSTRAP_STATUSES.has(error.status)) {
         throw error;
       }
@@ -103,6 +117,8 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
   throw new WorkspaceBootstrapError(
     workspaceId,
     lastStatus,
-    lastError instanceof Error ? lastError.message : undefined,
+    lastError instanceof Error && lastError.name === 'AbortError'
+      ? `Workspace bootstrap timed out after ${WORKSPACE_BOOTSTRAP_TIMEOUT_MS}ms.`
+      : lastError instanceof Error ? lastError.message : undefined,
   );
 }

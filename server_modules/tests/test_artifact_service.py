@@ -1,4 +1,5 @@
 import os
+import importlib
 from pathlib import Path
 import tempfile
 from unittest import TestCase
@@ -33,6 +34,10 @@ class FakeS3Client:
 
 
 class ArtifactServiceTests(TestCase):
+    def setUp(self) -> None:
+        global artifact_service
+        artifact_service = importlib.import_module("server_modules.artifact_service")
+
     def test_store_artifact_file_persists_metadata_and_resolves_content(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             source = Path(tempdir) / "report.txt"

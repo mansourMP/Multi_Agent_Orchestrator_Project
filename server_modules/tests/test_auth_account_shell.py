@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from types import SimpleNamespace
-
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -15,6 +13,17 @@ def _build_app() -> FastAPI:
     app = FastAPI()
     app.include_router(routes_auth.router)
     return app
+
+
+def _entitlement_state(**entitlements):
+    return account_shell_service.entitlements_service.WorkspaceEntitlementState(
+        plan_id="pro",
+        plan_label="Pro",
+        source="workspace_metadata",
+        entitlements=dict(entitlements),
+        usage={},
+        non_gated_capabilities={},
+    )
 
 
 @pytest.mark.anyio
@@ -101,17 +110,12 @@ async def test_build_account_shell_payload_uses_membership_truth_and_shell_deriv
     monkeypatch.setattr(
         account_shell_service.entitlements_service,
         "resolve_workspace_entitlement_state_for_workspace_id",
-        lambda workspace_id, workspace=None: SimpleNamespace(
-            plan_id="personal",
-            plan_label="Personal",
-            source="workspace_metadata",
-            entitlements={
-                "artifacts_enabled": True,
-                "approvals_enabled": True,
-                "mobile_app_enabled": True,
-                "telegram_channel_enabled": True,
-                "whatsapp_channel_enabled": False,
-            },
+        lambda workspace_id, workspace=None: _entitlement_state(
+            artifacts_enabled=True,
+            approvals_enabled=True,
+            mobile_app_enabled=True,
+            telegram_channel_enabled=True,
+            whatsapp_channel_enabled=False,
         ),
     )
 
@@ -266,15 +270,10 @@ async def test_build_account_shell_payload_handles_datetime_membership_versions_
     monkeypatch.setattr(
         account_shell_service.entitlements_service,
         "resolve_workspace_entitlement_state_for_workspace_id",
-        lambda workspace_id, workspace=None: SimpleNamespace(
-            plan_id="personal",
-            plan_label="Personal",
-            source="workspace_metadata",
-            entitlements={
-                "artifacts_enabled": False,
-                "approvals_enabled": False,
-                "mobile_app_enabled": True,
-            },
+        lambda workspace_id, workspace=None: _entitlement_state(
+            artifacts_enabled=False,
+            approvals_enabled=False,
+            mobile_app_enabled=True,
         ),
     )
 
@@ -365,15 +364,10 @@ async def test_build_account_shell_payload_skips_invalid_memberships_without_fai
     monkeypatch.setattr(
         account_shell_service.entitlements_service,
         "resolve_workspace_entitlement_state_for_workspace_id",
-        lambda workspace_id, workspace=None: SimpleNamespace(
-            plan_id="personal",
-            plan_label="Personal",
-            source="workspace_metadata",
-            entitlements={
-                "artifacts_enabled": False,
-                "approvals_enabled": False,
-                "mobile_app_enabled": True,
-            },
+        lambda workspace_id, workspace=None: _entitlement_state(
+            artifacts_enabled=False,
+            approvals_enabled=False,
+            mobile_app_enabled=True,
         ),
     )
 

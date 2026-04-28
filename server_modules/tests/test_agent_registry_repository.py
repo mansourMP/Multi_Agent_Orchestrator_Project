@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import unittest
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
@@ -46,6 +47,10 @@ class _FakePool:
 
 
 class AgentRegistryRepositoryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global agent_registry_repository
+        agent_registry_repository = importlib.import_module("server_modules.agent_registry_repository")
+
     def test_create_compiled_workflow_artifact_binds_real_datetimes(self) -> None:
         connection = _FakeConnection()
         pool = _FakePool(connection)

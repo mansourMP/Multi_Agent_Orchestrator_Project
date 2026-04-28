@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
+import uuid
 
 from server_modules.agent_turn import (
     resolve_agent_turn_request_from_runtime_context,
@@ -42,6 +44,288 @@ class DirectChatRuntimeServices:
     direct_chat_generation_services: direct_chat_generation_service.DirectChatGenerationServices
     no_provider_reasoning_required_response: Callable[[], Dict[str, Any]]
     capture_exception: Callable[[BaseException], None]
+
+
+def _message_targets_local_file_inventory(message: str) -> bool:
+    compact = " ".join(str(message or "").strip().lower().split())
+    if not compact:
+        return False
+    if no_provider_service.looks_like_directory_listing_request(message):
+        return True
+    listing_tokens = (
+        "list files",
+        "show files",
+        "what files",
+        "which files",
+        "files on my",
+        "files in my",
+        "files in the",
+        "contents of",
+        "folder contents",
+        "directory contents",
+        "directory listing",
+        "list the contents",
+    )
+    location_tokens = ("desktop", "downloads", "documents", "folder", "directory", "repo", "repository")
+    return any(token in compact for token in listing_tokens) and any(token in compact for token in location_tokens)
+
+
+def _provider_chat_tools_for_message(message: str, tools: List[Dict[str, Any]], *, obvious_direct_tool_intent: bool) -> List[Dict[str, Any]]:
+    if not obvious_direct_tool_intent:
+        return []
+    if not tools:
+        return []
+    if not _message_targets_local_file_inventory(message):
+        return tools
+    preferred_tool_names = {"file__read", "shell__exec"}
+    local_file_tools = [
+        item
+        for item in tools
+        if isinstance(item, dict)
+        and str(item.get("name") or "").strip() in preferred_tool_names
+    ]
+    return local_file_tools or tools
+
+
+def _message_explicitly_names_direct_tool(message: str, services: DirectChatRuntimeServices) -> bool:
+    compact = services.no_provider_execution_services.compact_text(message)
+    if "use" not in compact or "tool" not in compact:
+        return False
+    return any(
+        marker in compact
+        for marker in (
+            "local shell tool",
+            "shell tool",
+            "web search tool",
+            "search tool",
+            "fetch url tool",
+            "fetch tool",
+        )
+    )
+
+
+def _explicit_provider_parity_tool_calls(
+    message: str,
+    tools: List[Dict[str, Any]],
+    services: DirectChatRuntimeServices,
+) -> List[Dict[str, Any]]:
+    if not _message_explicitly_names_direct_tool(message, services):
+        return []
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    shell_match = re.search(
+        r"\b(?:local\s+)?shell\s+tool\s+to\s+run\s+(.+?)(?:\s+and\s+return\b|\s+then\b|$)",
+        str(message or ""),
+        flags=re.IGNORECASE,
+    )
+    if shell_match and "shell__exec" in tool_names:
+        command = shell_match.group(1).strip().rstrip(".")
+        if command:
+            return [{"name": "shell__exec", "arguments": {"command": command}}]
+    search_match = re.search(
+        r"\bweb\s+search\s+tool\s+to\s+(?:find|search\s+for|look\s+up)\s+(.+?)(?:\s+and\s+return\b|\s+then\b|$)",
+        str(message or ""),
+        flags=re.IGNORECASE,
+    )
+    if search_match and "web__search" in tool_names:
+        query = search_match.group(1).strip().rstrip(".")
+        if query:
+            return [{"name": "web__search", "arguments": {"query": query}}]
+    execution_services = services.no_provider_execution_services
+    planned = no_provider_service.plan_tool_calls(
+        message,
+        tools,
+        compact_text=execution_services.compact_text,
+        extract_first_path_reference=execution_services.extract_first_path_reference,
+        extract_first_url=execution_services.extract_first_url,
+    )
+    return [
+        call
+        for call in planned
+        if isinstance(call, dict)
+        and str(call.get("name") or "").strip() in tool_names
+    ]
+
+
+def _direct_trace_event(
+    trace_context: Optional[Any],
+    *,
+    event_type: str,
+    data: Dict[str, Any],
+    tool_call_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if trace_context is None:
+        return None
+    envelope = run_async_tool_call(
+        agent_trace_service.emit_with_envelope(
+            trace_context,
+            event_type,
+            data,
+            persisted=True,
+            tool_call_id=tool_call_id,
+        )
+    )
+    if not isinstance(envelope, dict):
+        return None
+    return {"type": "trace", "payload": envelope}
+
+
+def _stream_explicit_provider_parity_tools(
+    *,
+    services: DirectChatRuntimeServices,
+    tool_calls: List[Dict[str, Any]],
+    normalized_workspace_id: str,
+    normalized_thread_id: str,
+    normalized_requested_provider: str,
+    normalized_requested_model: str,
+    normalized_reasoning_effort: Optional[str],
+    provider: str,
+    selected_model: str,
+    direct_chat_credentials: Dict[str, Any],
+    connected_systems: List[str],
+    tool_capabilities: List[Dict[str, Any]],
+    proactive_suggestions: List[str],
+    base_context_used: Dict[str, Any],
+    session_ctx: Optional[Dict[str, Any]],
+    resolved_trace_context: Optional[Any],
+) -> Iterator[Dict[str, Any]]:
+    approval_payload = no_provider_service.build_direct_tool_approval_response(
+        tool_calls=tool_calls,
+        tool_capabilities=tool_capabilities,
+        services=services.no_provider_execution_services,
+        session_ctx=session_ctx,
+    )
+    if approval_payload is not None:
+        yield {
+            "type": "final",
+            "payload": _finalize_direct_tool_payload(
+                direct_payload={
+                    **approval_payload,
+                    "provider": provider,
+                    "model": selected_model or None,
+                    "attempted_providers": provider,
+                    "error": "",
+                },
+                proactive_suggestions=proactive_suggestions,
+                workspace_id=normalized_workspace_id,
+                requested_provider=normalized_requested_provider,
+                requested_model=normalized_requested_model,
+                reasoning_effort=normalized_reasoning_effort,
+                connected_systems=connected_systems,
+                tool_capabilities=tool_capabilities,
+                base_context_used=base_context_used,
+                services=services,
+                fallback_reason="explicit_direct_tool_execution",
+                use_base_context=False,
+            ),
+        }
+        return
+
+    yield {
+        "type": "step",
+        "label": "Using direct tools",
+        "detail": "Running explicit tool request",
+        "status": "active",
+        "kind": "tool",
+        "id": "direct-tools:explicit",
+    }
+    outputs: List[str] = []
+    for index, tool_call in enumerate(tool_calls, start=1):
+        tool_name = str(tool_call.get("name") or "").strip()
+        connector_id, action_id = services.no_provider_execution_services.parse_tool_name(tool_name)
+        argument_payload = services.no_provider_execution_services.tool_arguments_payload(tool_call.get("arguments"))
+        tool_call_id = str(tool_call.get("id") or "").strip() or f"toolcall_{uuid.uuid4().hex}"
+        started = _direct_trace_event(
+            resolved_trace_context,
+            event_type="tool.started",
+            data={
+                "tool_name": tool_name,
+                "connector_id": connector_id or None,
+                "args_preview": argument_payload,
+            },
+            tool_call_id=tool_call_id,
+        )
+        if started is not None:
+            yield started
+        yield services.direct_chat_generation_services.direct_tool_step_payload(
+            connector_id,
+            action_id,
+            argument_payload,
+            step_id=f"direct-tools:explicit:{index}",
+            status="active",
+        )
+        tool_result = services.no_provider_execution_services.execute_single_tool_call(
+            tool_call=tool_call,
+            workspace_id=normalized_workspace_id,
+            thread_id=normalized_thread_id,
+            index=index,
+            provider=provider,
+            model=selected_model or None,
+            credentials=direct_chat_credentials if isinstance(direct_chat_credentials, dict) else None,
+            reasoning_effort=normalized_reasoning_effort or "",
+            session_ctx=session_ctx,
+        )
+        result = _direct_trace_event(
+            resolved_trace_context,
+            event_type="tool.result",
+            data={
+                "status": "ok",
+                "summary": str(tool_result or "").strip(),
+                "artifact_ids": [],
+            },
+            tool_call_id=tool_call_id,
+        )
+        if result is not None:
+            yield result
+        yield services.direct_chat_generation_services.direct_tool_step_payload(
+            connector_id,
+            action_id,
+            argument_payload,
+            step_id=f"direct-tools:explicit:{index}",
+            status="done",
+        )
+        outputs.append(str(tool_result or "").strip())
+
+    reply = "\n\n".join(output for output in outputs if output).strip() or "Tool execution completed."
+    context_used = services.build_context_used(
+        workspace_id=normalized_workspace_id,
+        requested_provider=normalized_requested_provider,
+        effective_provider=provider,
+        requested_model=normalized_requested_model,
+        effective_model=selected_model or None,
+        reasoning_effort=normalized_reasoning_effort,
+        connected_systems=connected_systems,
+        tool_capabilities=tool_capabilities,
+        prior_messages_used=False,
+        history_mode="none",
+        run_created=False,
+        fallback_used=False,
+        fallback_reason="explicit_direct_tool_execution",
+    )
+    yield {
+        "type": "step",
+        "label": "Using direct tools",
+        "detail": "Completed",
+        "status": "done",
+        "kind": "tool",
+        "id": "direct-tools:explicit",
+    }
+    yield {
+        "type": "final",
+        "payload": services.with_context_used(
+            {
+                "reply": reply,
+                "actions": [],
+                "suggestions": proactive_suggestions,
+                "mode": "answer",
+                "usage_masked": {},
+                "provider": provider,
+                "model": selected_model or None,
+                "attempted_providers": provider,
+                "error": "",
+            },
+            context_used,
+        ),
+    }
 
 
 def _resume_trace_context(
@@ -518,52 +802,7 @@ def build_direct_operator_reply(
         }
         return
 
-    if services.message_has_obvious_direct_tool_intent(normalized_message, tools):
-        yield {
-            "type": "step",
-            "label": "Using direct tools",
-            "detail": normalized_message[:120] if normalized_message else "Preparing tool execution",
-            "status": "active",
-            "kind": "thinking",
-            "id": "direct-tools:auto",
-        }
-        direct_payload = no_provider_service.execute_no_provider_request(
-            message=normalized_message,
-            workspace_id=normalized_workspace_id,
-            thread_id=normalized_thread_id,
-            tools=tools,
-            tool_capabilities=tool_capabilities,
-            reasoning_effort=normalized_reasoning_effort,
-            services=services.no_provider_execution_services,
-            session_ctx=session_ctx,
-        )
-        if direct_payload is not None:
-            yield {
-                "type": "step",
-                "label": "Using direct tools",
-                "detail": "Completed",
-                "status": "done",
-                "kind": "thinking",
-                "id": "direct-tools:auto",
-            }
-            yield {
-                "type": "final",
-                "payload": _finalize_direct_tool_payload(
-                    direct_payload=direct_payload,
-                    proactive_suggestions=proactive_suggestions,
-                    workspace_id=normalized_workspace_id,
-                    requested_provider=normalized_requested_provider,
-                    requested_model=normalized_requested_model,
-                    reasoning_effort=normalized_reasoning_effort,
-                    connected_systems=connected_systems,
-                    tool_capabilities=tool_capabilities,
-                    base_context_used=base_context_used,
-                    services=services,
-                    fallback_reason="obvious_direct_tool_execution",
-                    use_base_context=False,
-                ),
-            }
-            return
+    obvious_direct_tool_intent = services.message_has_obvious_direct_tool_intent(normalized_message, tools)
 
     provider, direct_chat_credentials = services.resolve_provider_for_direct_chat_message(
         normalized_workspace_id,
@@ -571,7 +810,9 @@ def build_direct_operator_reply(
         normalized_message,
         tools_present=bool(tools),
     )
-    if normalized_requested_provider and provider != normalized_requested_provider:
+    normalized_requested_provider_alias = "codex_cli" if normalized_requested_provider == "openai-codex" else normalized_requested_provider
+    normalized_effective_provider_alias = "codex_cli" if provider == "openai-codex" else provider
+    if normalized_requested_provider and normalized_effective_provider_alias != normalized_requested_provider_alias:
         yield {
             "type": "final",
             "payload": _provider_unavailable_payload(
@@ -581,6 +822,37 @@ def build_direct_operator_reply(
                 services=services,
             ),
         }
+        return
+    provider_supported = provider in set(services.supported_providers)
+    provider_ready = bool(availability_payload.get("ai_ready")) and provider_supported and services.supports_direct_message_native_chat(
+        provider,
+        direct_chat_credentials,
+    )
+    selected_model = normalized_requested_model if provider == normalized_requested_provider else ""
+    explicit_provider_tool_calls = _explicit_provider_parity_tool_calls(
+        normalized_message,
+        tools,
+        services,
+    )
+    if provider_ready and explicit_provider_tool_calls:
+        yield from _stream_explicit_provider_parity_tools(
+            services=services,
+            tool_calls=explicit_provider_tool_calls,
+            normalized_workspace_id=normalized_workspace_id,
+            normalized_thread_id=normalized_thread_id,
+            normalized_requested_provider=normalized_requested_provider,
+            normalized_requested_model=normalized_requested_model,
+            normalized_reasoning_effort=normalized_reasoning_effort,
+            provider=provider,
+            selected_model=selected_model,
+            direct_chat_credentials=direct_chat_credentials,
+            connected_systems=connected_systems,
+            tool_capabilities=tool_capabilities,
+            proactive_suggestions=proactive_suggestions,
+            base_context_used=base_context_used,
+            session_ctx=session_ctx,
+            resolved_trace_context=resolved_trace_context,
+        )
         return
     route_decision = services.plan_direct_chat_route(
         message=normalized_message,
@@ -650,11 +922,52 @@ def build_direct_operator_reply(
             }
             return
 
-    provider_supported = provider in set(services.supported_providers)
-    provider_ready = bool(availability_payload.get("ai_ready")) and provider_supported and services.supports_direct_message_native_chat(
-        provider,
-        direct_chat_credentials,
-    )
+    if obvious_direct_tool_intent and not provider_ready:
+        yield {
+            "type": "step",
+            "label": "Using direct tools",
+            "detail": normalized_message[:120] if normalized_message else "Preparing tool execution",
+            "status": "active",
+            "kind": "thinking",
+            "id": "direct-tools:auto",
+        }
+        direct_payload = no_provider_service.execute_no_provider_request(
+            message=normalized_message,
+            workspace_id=normalized_workspace_id,
+            thread_id=normalized_thread_id,
+            tools=tools,
+            tool_capabilities=tool_capabilities,
+            reasoning_effort=normalized_reasoning_effort,
+            services=services.no_provider_execution_services,
+            session_ctx=session_ctx,
+        )
+        if direct_payload is not None:
+            yield {
+                "type": "step",
+                "label": "Using direct tools",
+                "detail": "Completed",
+                "status": "done",
+                "kind": "thinking",
+                "id": "direct-tools:auto",
+            }
+            yield {
+                "type": "final",
+                "payload": _finalize_direct_tool_payload(
+                    direct_payload=direct_payload,
+                    proactive_suggestions=proactive_suggestions,
+                    workspace_id=normalized_workspace_id,
+                    requested_provider=normalized_requested_provider,
+                    requested_model=normalized_requested_model,
+                    reasoning_effort=normalized_reasoning_effort,
+                    connected_systems=connected_systems,
+                    tool_capabilities=tool_capabilities,
+                    base_context_used=base_context_used,
+                    services=services,
+                    fallback_reason="obvious_direct_tool_execution",
+                    use_base_context=False,
+                ),
+            }
+            return
     if normalized_requested_provider and not provider_ready:
         yield {
             "type": "final",
@@ -700,7 +1013,11 @@ def build_direct_operator_reply(
         yield {"type": "final", "payload": fallback_payload}
         return
 
-    selected_model = normalized_requested_model if provider == normalized_requested_provider else ""
+    provider_chat_tools = _provider_chat_tools_for_message(
+        normalized_message,
+        tools,
+        obvious_direct_tool_intent=obvious_direct_tool_intent,
+    )
     context = {
         "workspace_id": normalized_workspace_id,
         "provider": provider,
@@ -708,7 +1025,7 @@ def build_direct_operator_reply(
         "source": "chat_direct",
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
-        "tools": tools,
+        "tools": provider_chat_tools,
         "disable_provider_fallback": True,
     }
     metadata = {
@@ -717,7 +1034,7 @@ def build_direct_operator_reply(
         "source": "chat_direct",
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
-        "tools": tools,
+        "tools": provider_chat_tools,
         "disable_provider_fallback": True,
     }
     if direct_chat_credentials:
@@ -725,7 +1042,7 @@ def build_direct_operator_reply(
     raw_system_prompt = services.build_direct_chat_system_prompt(
         workspace_id=normalized_workspace_id,
         availability=availability_payload,
-        tools=tools,
+        tools=provider_chat_tools,
     )
     system_prompt = raw_system_prompt or None
     workspace_context_text = services.direct_chat_workspace_context_text(
@@ -735,6 +1052,15 @@ def build_direct_operator_reply(
     system_prompt = direct_chat_prompt_service.combine_workspace_context(
         system_prompt=system_prompt,
         workspace_context_text=workspace_context_text,
+    )
+    identity_guardrail = direct_chat_prompt_service.build_runtime_identity_guardrail(
+        provider=provider,
+        model=selected_model or None,
+    )
+    system_prompt = (
+        f"{system_prompt}\n\n{identity_guardrail}".strip()
+        if str(system_prompt or "").strip()
+        else identity_guardrail
     )
     history_mode = "compacted_messages" if compaction.get("compacted") else ("raw_messages" if compacted_prior_messages else "none")
     prior_messages_used = bool(compacted_prior_messages)
@@ -755,7 +1081,7 @@ def build_direct_operator_reply(
         connected_systems=connected_systems,
         tool_capabilities=tool_capabilities,
         availability_payload=availability_payload,
-        tools=tools,
+        tools=provider_chat_tools,
         direct_chat_credentials=direct_chat_credentials,
         proactive_suggestions=proactive_suggestions,
         tool_loop_session_key=tool_loop_session_key,

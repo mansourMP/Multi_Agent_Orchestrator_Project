@@ -28,6 +28,9 @@ def tool_runtime_usable(availability: Dict[str, Any], tool_id: str) -> Optional[
 def local_worker_available(availability: Dict[str, Any]) -> bool:
     if not isinstance(availability, dict):
         return False
+    local_gateway_online = availability.get("local_gateway_online")
+    if isinstance(local_gateway_online, bool):
+        return local_gateway_online
     runtime_ok = availability.get("runtime_ok")
     if isinstance(runtime_ok, bool):
         return runtime_ok

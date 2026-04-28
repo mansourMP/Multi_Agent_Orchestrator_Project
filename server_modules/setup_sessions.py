@@ -7,15 +7,50 @@ from typing import Any, Dict, List, Optional, Set
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-_server = None
 def _init():
-    global _server
-    if _server is not None: return
-    import server as _s
-    _server = _s
-    for k, v in vars(_s).items():
-        if not k.startswith("__") and k not in globals():
-            globals()[k] = v
+    return None
+
+
+def _utc_now() -> datetime:
+    from server_modules import runtime_common
+
+    return runtime_common._utc_now()
+
+
+def _utc_now_iso() -> str:
+    from server_modules import runtime_common
+
+    return runtime_common._utc_now_iso()
+
+
+def _parse_utc_ts(value: Any) -> Optional[datetime]:
+    from server_modules import runtime_common
+
+    return runtime_common._parse_utc_ts(value)
+
+
+def _normalize_workspace_id(value: Any) -> str:
+    from server_modules import runtime_common
+
+    return runtime_common._normalize_workspace_id(value)
+
+
+def _shared_state():
+    from server_modules import shared
+
+    return shared
+
+
+def _runtime_config():
+    from server_modules import runtime_config
+
+    return runtime_config
+
+
+def _provider_catalog():
+    from server_modules import provider_profiles
+
+    return provider_profiles.PROVIDER_CATALOG
 
 _SETUP_ACTIONS: Set[str] = {
     "select_provider",
@@ -85,9 +120,8 @@ class SetupSessionActionRequest(BaseModel):
 
 # --- COPIED LOGIC ---
 def _cleanup_setup_sessions_locked(now: Optional[datetime] = None):
-    _init()
     ref = now or _utc_now()
-    for session in SETUP_SESSIONS.values():
+    for session in _shared_state().SETUP_SESSIONS.values():
         if not isinstance(session, dict):
             continue
         if str(session.get("state") or "") in {"complete", "cancelled", "expired"}:
@@ -104,18 +138,18 @@ def _cleanup_setup_sessions_locked(now: Optional[datetime] = None):
 
 
 def _persist_setup_sessions():
-    _init()
-    with SETUP_SESSIONS_LOCK:
+    shared = _shared_state()
+    with shared.SETUP_SESSIONS_LOCK:
         _cleanup_setup_sessions_locked()
-    _server.sync_acp_manager_paths(setup_sessions_path=_server.ORION_SETUP_SESSIONS_FILE)
-    _server.ACP_MANAGER._persist_setup_sessions()
+    shared.sync_acp_manager_paths(setup_sessions_path=_runtime_config().ORION_SETUP_SESSIONS_FILE)
+    shared.ACP_MANAGER._persist_setup_sessions()
 
 
 def _load_setup_sessions():
-    _init()
-    with SETUP_SESSIONS_LOCK:
-        _server.sync_acp_manager_paths(setup_sessions_path=_server.ORION_SETUP_SESSIONS_FILE)
-        _server.ACP_MANAGER.reload_secondary_state()
+    shared = _shared_state()
+    with shared.SETUP_SESSIONS_LOCK:
+        shared.sync_acp_manager_paths(setup_sessions_path=_runtime_config().ORION_SETUP_SESSIONS_FILE)
+        shared.ACP_MANAGER.reload_secondary_state()
         _cleanup_setup_sessions_locked()
 
 
@@ -201,11 +235,10 @@ def _allowed_actions_for_state(state: str) -> List[str]:
 
 
 def _setup_state_transition(session: Dict[str, Any], action: str, payload: Optional[Dict[str, Any]] = None):
-    _init()
     payload = payload if isinstance(payload, dict) else {}
     state = str(session.get("state") or "init")
     now_iso = _utc_now_iso()
-    ttl = max(300, ORION_SETUP_SESSION_TTL_SECONDS)
+    ttl = max(300, _runtime_config().ORION_SETUP_SESSION_TTL_SECONDS)
     expires_at = (_utc_now() + timedelta(seconds=ttl)).isoformat().replace("+00:00", "Z")
 
     if state in {"cancelled", "complete"} and action not in {"resume"}:
@@ -233,7 +266,7 @@ def _setup_state_transition(session: Dict[str, Any], action: str, payload: Optio
 
     if action == "select_provider":
         provider = str(payload.get("provider") or "").strip().lower()
-        if provider not in PROVIDER_CATALOG:
+        if provider not in _provider_catalog():
             raise HTTPException(status_code=400, detail="A valid provider is required.")
         session["provider"] = provider
         session["state"] = "provider_selected"
@@ -340,10 +373,9 @@ def _serialize_setup_session(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def handle_create_setup_session(body: Optional[SetupSessionCreateRequest] = None):
-    _init()
     payload = body or SetupSessionCreateRequest()
     now = _utc_now_iso()
-    ttl = max(300, ORION_SETUP_SESSION_TTL_SECONDS)
+    ttl = max(300, _runtime_config().ORION_SETUP_SESSION_TTL_SECONDS)
     expires_at = (_utc_now() + timedelta(seconds=ttl)).isoformat().replace("+00:00", "Z")
     workspace_id = _normalize_workspace_id(payload.workspace_id) or "default"
     flow = str(payload.flow or "quickstart").strip().lower() or "quickstart"
@@ -364,61 +396,62 @@ async def handle_create_setup_session(body: Optional[SetupSessionCreateRequest] 
         "expires_at": expires_at,
         "events": [],
     }
-    with SETUP_SESSIONS_LOCK:
-        SETUP_SESSIONS[session_id] = session
+    shared = _shared_state()
+    with shared.SETUP_SESSIONS_LOCK:
+        shared.SETUP_SESSIONS[session_id] = session
         if payload.provider:
             _setup_state_transition(session, "select_provider", {"provider": payload.provider})
-            SETUP_SESSIONS[session_id] = session
+            shared.SETUP_SESSIONS[session_id] = session
     _persist_setup_sessions()
     return {"session": _serialize_setup_session(session)}
 
 
 async def handle_get_setup_session(session_id: str):
-    _init()
-    with SETUP_SESSIONS_LOCK:
+    shared = _shared_state()
+    with shared.SETUP_SESSIONS_LOCK:
         _cleanup_setup_sessions_locked()
-        session = SETUP_SESSIONS.get(session_id)
+        session = shared.SETUP_SESSIONS.get(session_id)
         if not isinstance(session, dict):
             raise HTTPException(status_code=404, detail="Setup session not found.")
     return {"session": _serialize_setup_session(session)}
 
 
 async def handle_setup_session_action(session_id: str, body: SetupSessionActionRequest):
-    _init()
     body.validate_fields()
     action = str(body.action).strip().lower()
     payload = dict(body.payload or {})
-    with SETUP_SESSIONS_LOCK:
+    shared = _shared_state()
+    with shared.SETUP_SESSIONS_LOCK:
         _cleanup_setup_sessions_locked()
-        session = SETUP_SESSIONS.get(session_id)
+        session = shared.SETUP_SESSIONS.get(session_id)
         if not isinstance(session, dict):
             raise HTTPException(status_code=404, detail="Setup session not found.")
         _setup_state_transition(session, action, payload)
-        SETUP_SESSIONS[session_id] = session
+        shared.SETUP_SESSIONS[session_id] = session
     _persist_setup_sessions()
     return {"session": _serialize_setup_session(session)}
 
 
 async def handle_cancel_setup_session(session_id: str):
-    _init()
-    with SETUP_SESSIONS_LOCK:
-        session = SETUP_SESSIONS.get(session_id)
+    shared = _shared_state()
+    with shared.SETUP_SESSIONS_LOCK:
+        session = shared.SETUP_SESSIONS.get(session_id)
         if not isinstance(session, dict):
             raise HTTPException(status_code=404, detail="Setup session not found.")
         _setup_state_transition(session, "cancel", {})
-        SETUP_SESSIONS[session_id] = session
+        shared.SETUP_SESSIONS[session_id] = session
     _persist_setup_sessions()
     return {"session": _serialize_setup_session(session)}
 
 
 async def handle_resume_setup_session(session_id: str):
-    _init()
-    with SETUP_SESSIONS_LOCK:
-        session = SETUP_SESSIONS.get(session_id)
+    shared = _shared_state()
+    with shared.SETUP_SESSIONS_LOCK:
+        session = shared.SETUP_SESSIONS.get(session_id)
         if not isinstance(session, dict):
             raise HTTPException(status_code=404, detail="Setup session not found.")
         _setup_state_transition(session, "resume", {})
-        SETUP_SESSIONS[session_id] = session
+        shared.SETUP_SESSIONS[session_id] = session
     _persist_setup_sessions()
     return {"session": _serialize_setup_session(session)}
 

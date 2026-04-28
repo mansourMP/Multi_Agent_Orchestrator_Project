@@ -128,6 +128,150 @@ def _validation_result(provider_label: str, response: Dict[str, Any]) -> Dict[st
     }
 
 
+def _curl_json_request(
+    url: str,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    payload: Optional[Any] = None,
+    method: Optional[str] = None,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    command = [
+        "curl",
+        "-sS",
+        "-L",
+        "-X",
+        (method or ("POST" if payload is not None else "GET")).upper(),
+        "--max-time",
+        str(max(1, int(timeout))),
+        "-w",
+        "\n__CODEX_STATUS__:%{http_code}",
+    ]
+    for key, value in dict(headers or {}).items():
+        command.extend(["-H", f"{key}: {value}"])
+    body: Optional[bytes] = None
+    if payload is not None:
+        if isinstance(payload, (bytes, bytearray)):
+            body = bytes(payload)
+        elif dict(headers or {}).get("Content-Type") == "application/x-www-form-urlencoded":
+            if isinstance(payload, str):
+                body = payload.encode("utf-8")
+            else:
+                from urllib.parse import urlencode as _urlencode
+
+                body = _urlencode(payload, doseq=True).encode("utf-8")
+        else:
+            body = json.dumps(payload).encode("utf-8")
+        command.extend(["--data-binary", "@-"])
+    command.append(url)
+    completed = subprocess.run(
+        command,
+        input=body,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(stderr or f"curl request failed for {url}")
+    raw_output = completed.stdout.decode("utf-8", errors="replace")
+    marker = "\n__CODEX_STATUS__:"
+    body_text, _, status_text = raw_output.rpartition(marker)
+    if not status_text:
+        body_text = raw_output
+        status_code = 200
+    else:
+        try:
+            status_code = int(status_text.strip() or "0")
+        except Exception:
+            status_code = 0
+    parsed: Any = None
+    try:
+        parsed = json.loads(body_text) if body_text else None
+    except Exception:
+        parsed = None
+    return {
+        "status": status_code,
+        "text": body_text,
+        "json": parsed,
+        "headers": {},
+    }
+
+
+def _anthropic_models_request(credentials: Dict[str, Any], *, timeout: int = 30) -> Dict[str, Any]:
+    url = "https://api.anthropic.com/v1/models"
+    headers = {
+        "x-api-key": str(credentials.get("api_key") or ""),
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    try:
+        return http_json_request(url, headers=headers, timeout=timeout)
+    except Exception:
+        if not shutil.which("curl"):
+            raise
+        return _curl_json_request(url, headers=headers, timeout=timeout)
+
+
+def ollama_local_status(*, timeout: int = 5) -> Dict[str, Any]:
+    base_url = str(
+        os.getenv("ORION_LOCAL_WORKER_OLLAMA_URL")
+        or "http://127.0.0.1:11434"
+    ).rstrip("/")
+    url = f"{base_url}/api/tags"
+    try:
+        response = http_json_request(url, timeout=timeout)
+    except Exception:
+        if not shutil.which("curl"):
+            return {"reachable": False, "has_models": False, "models": [], "error": "service_unreachable"}
+        try:
+            response = _curl_json_request(url, timeout=timeout)
+        except Exception:
+            return {"reachable": False, "has_models": False, "models": [], "error": "service_unreachable"}
+    payload = response.get("json") if isinstance(response.get("json"), dict) else {}
+    items = payload.get("models") if isinstance(payload.get("models"), list) else []
+    models: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("model") or "").strip()
+        if name:
+            models.append(name)
+    return {
+        "reachable": int(response.get("status") or 0) == 200,
+        "has_models": bool(models),
+        "models": sorted(set(models)),
+        "error": "",
+    }
+
+
+def workspace_live_gateway_available(workspace_id: str) -> bool:
+    try:
+        from server_modules import gateway_protocol_service, gateway_state_repository
+    except Exception:
+        return False
+
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    try:
+        registrations = gateway_state_repository.list_workspace_gateway_registrations(
+            normalized_workspace_id,
+            include_revoked=False,
+        )
+    except Exception:
+        return False
+
+    for registration in registrations:
+        if not isinstance(registration, dict):
+            continue
+        gateway_id = str(registration.get("gateway_id") or "").strip()
+        if not gateway_id:
+            continue
+        if str(registration.get("status") or "").strip().lower() != "active":
+            continue
+        if gateway_protocol_service.gateway_connection_is_live(gateway_id):
+            return True
+    return False
+
+
 def _openai_credential_type(credentials: Optional[Dict[str, Any]]) -> str:
     payload = credentials if isinstance(credentials, dict) else {}
     explicit = str(payload.get("credential_type") or "").strip().lower()
@@ -416,7 +560,7 @@ PROVIDER_GOVERNANCE_CATALOG = {
         "jurisdiction": "Self-hosted / operator-controlled",
         "residency": "Local machine or self-hosted runtime.",
         "enterprise_risk_note": "Operational risk shifts to the operator because patching, logging, and perimeter controls are self-managed.",
-        "capability_labels": ["Local", "Self-hosted", "Offline-capable"],
+        "capability_labels": ["Local", "Self-hosted", "Offline-capable", "Tools"],
         "local_self_hosted_compatible": True,
     },
 }
@@ -672,50 +816,50 @@ PROVIDER_MODEL_CATALOG = {
             "context_window_tokens": 128000,
             "input_cost_per_1k_usd": 0.0,
             "output_cost_per_1k_usd": 0.0,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_reasoning": False,
             "local_self_hosted_compatible": True,
-            "capability_labels": ["Local", "Self-hosted", "Offline-capable"],
+            "capability_labels": ["Local", "Self-hosted", "Offline-capable", "Tools"],
         },
         "llama3": {
             "label": "Llama 3",
             "context_window_tokens": 8192,
             "input_cost_per_1k_usd": 0.0,
             "output_cost_per_1k_usd": 0.0,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_reasoning": False,
             "local_self_hosted_compatible": True,
-            "capability_labels": ["Local", "Self-hosted"],
+            "capability_labels": ["Local", "Self-hosted", "Tools"],
         },
         "mistral": {
             "label": "Mistral (Ollama)",
             "context_window_tokens": 32768,
             "input_cost_per_1k_usd": 0.0,
             "output_cost_per_1k_usd": 0.0,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_reasoning": False,
             "local_self_hosted_compatible": True,
-            "capability_labels": ["Local", "Self-hosted"],
+            "capability_labels": ["Local", "Self-hosted", "Tools"],
         },
         "gemma": {
             "label": "Gemma (Ollama)",
             "context_window_tokens": 8192,
             "input_cost_per_1k_usd": 0.0,
             "output_cost_per_1k_usd": 0.0,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_reasoning": False,
             "local_self_hosted_compatible": True,
-            "capability_labels": ["Local", "Self-hosted"],
+            "capability_labels": ["Local", "Self-hosted", "Tools"],
         },
         "phi3": {
             "label": "Phi-3 (Ollama)",
             "context_window_tokens": 128000,
             "input_cost_per_1k_usd": 0.0,
             "output_cost_per_1k_usd": 0.0,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_reasoning": False,
             "local_self_hosted_compatible": True,
-            "capability_labels": ["Local", "Self-hosted"],
+            "capability_labels": ["Local", "Self-hosted", "Tools"],
         },
     },
 }
@@ -1347,24 +1491,14 @@ class AnthropicAdapter(ProviderAdapter):
         }
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        res = http_json_request("https://api.anthropic.com/v1/models", headers=self._headers(credentials))
-        status = int(res.get("status") or 500)
-        if status == 200:
-            return {
-                "ok": True,
-                "status": status,
-                "message": "Anthropic credential is valid.",
-            }
-        if status == 401:
-            return {
-                "ok": False,
-                "status": status,
-                "message": "Anthropic API key is invalid.",
-            }
-        raise RuntimeError(f"Anthropic credential validation failed with status {status}.")
+        res = _anthropic_models_request(credentials)
+        result = _validation_result("Anthropic", res)
+        if int(result.get("status") or 500) == 401:
+            result["message"] = "Anthropic API key is invalid."
+        return result
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
-        res = http_json_request("https://api.anthropic.com/v1/models", headers=self._headers(credentials))
+        res = _anthropic_models_request(credentials)
         body = res.get("json") or {}
         out = []
         for item in body.get("data", []) if isinstance(body.get("data"), list) else []:
@@ -2196,13 +2330,23 @@ def build_provider_runtime_truth(
         if existing is not None:
             return existing
         catalog_entry = provider_catalog_entry(provider_id)
+        provider_scopes = [
+            str(scope).strip()
+            for scope in list(catalog_entry.get("provider_scopes") or [])
+            if str(scope).strip()
+        ]
+        local_only_provider = "local_only" in provider_scopes
         created: Dict[str, Any] = {
             "id": provider_id,
             "kind": "provider",
             "label": catalog_entry.get("label", provider_id),
-            "identity_owner": "platform_account",
-            "identity_owner_label": "Empyralis account",
-            "identity_boundary_note": "Platform sign-in stays separate from provider capabilities and machine-local sessions.",
+            "identity_owner": "local_machine" if local_only_provider else "platform_account",
+            "identity_owner_label": "Local machine" if local_only_provider else "Empyralis account",
+            "identity_boundary_note": (
+                "This provider is bound to the local machine runtime and does not require a workspace credential."
+                if local_only_provider
+                else "Platform sign-in stays separate from provider capabilities and machine-local sessions."
+            ),
             "auth": list(catalog_entry.get("auth", [])),
             "auth_modes": list(catalog_entry.get("auth_modes", [])),
             "default_auth_mode": catalog_entry.get("default_auth_mode"),
@@ -2502,13 +2646,47 @@ def build_provider_runtime_truth(
             )
 
     ollama_entry = _entry("ollama")
-    _register_provider_path(
-        ollama_entry,
-        state="configured",
-        source="local-ollama",
-        detail="Ollama is a local-only provider on this machine and needs the local Ollama service running before it becomes usable.",
-        issue_code="local_service_required",
-    )
+    ollama_status = ollama_local_status()
+    ollama_gateway_live = workspace_live_gateway_available(requested_workspace_id)
+    if ollama_status.get("reachable") and ollama_status.get("has_models") and ollama_gateway_live:
+        _register_provider_path(
+            ollama_entry,
+            state="active",
+            source="local-ollama",
+            detail="Ollama is running locally on this machine, has at least one model available, and the paired gateway is online.",
+        )
+    elif ollama_status.get("reachable") and ollama_status.get("has_models"):
+        _register_provider_path(
+            ollama_entry,
+            state="configured",
+            source="local-ollama",
+            detail="Ollama is running locally and has a model installed, but the paired gateway is offline.",
+            issue_code="local_gateway_required",
+        )
+    elif ollama_status.get("reachable"):
+        _register_provider_path(
+            ollama_entry,
+            state="configured",
+            source="local-ollama",
+            detail=(
+                "Ollama is running locally on this machine, but no local model is installed yet."
+                if ollama_gateway_live
+                else "Ollama is running locally, but the paired gateway is offline and no local model is installed yet."
+            ),
+            issue_code="local_model_required" if ollama_gateway_live else "local_gateway_required",
+        )
+    else:
+        _register_provider_path(
+            ollama_entry,
+            state="configured",
+            source="local-ollama",
+            detail=(
+                "Ollama is a local-only provider on this machine and needs the local Ollama service running before it becomes usable."
+                if ollama_gateway_live
+                else "Ollama is a local-only provider on this machine and requires the paired gateway to be online before it becomes usable."
+            ),
+            issue_code="local_service_required" if ollama_gateway_live else "local_gateway_required",
+        )
 
     providers: List[Dict[str, Any]] = []
     state_summary = {"active": 0, "configured": 0, "setup_required": 0, "unavailable": 0, "degraded": 0}
@@ -2596,6 +2774,13 @@ def build_workspace_provider_connection_truth(
             else {}
         )
 
+        provider_scopes = [
+            str(item).strip().lower()
+            for item in list(catalog_entry.get("provider_scopes") or [])
+            if str(item).strip()
+        ]
+        local_only_provider = "local_only" in provider_scopes
+
         if healthy_profiles:
             state = "active"
             state_detail = "A provider key is connected for this workspace."
@@ -2612,6 +2797,11 @@ def build_workspace_provider_connection_truth(
             state_detail = "A provider key is saved for this workspace but is currently disabled."
             issue_code = "profile_disabled"
             issue = state_detail
+        elif local_only_provider:
+            state = "configured"
+            state_detail = "This provider runs on the local machine and does not require a workspace credential."
+            issue_code = None
+            issue = None
         else:
             state = "setup_required"
             state_detail = None
@@ -2632,9 +2822,13 @@ def build_workspace_provider_connection_truth(
             "id": provider_id,
             "kind": "provider",
             "label": catalog_entry.get("label", provider_id),
-            "identity_owner": "workspace",
-            "identity_owner_label": "Workspace connection",
-            "identity_boundary_note": "This provider becomes available only after a workspace owner connects an API key.",
+            "identity_owner": "local_machine" if local_only_provider else "workspace",
+            "identity_owner_label": "Local machine" if local_only_provider else "Workspace connection",
+            "identity_boundary_note": (
+                "This provider is bound to the local machine runtime and does not require a workspace credential."
+                if local_only_provider
+                else "This provider becomes available only after a workspace owner connects an API key."
+            ),
             "auth": auth_mode_ids,
             "auth_modes": auth_modes,
             "default_auth_mode": default_auth_mode or None,
@@ -2646,7 +2840,13 @@ def build_workspace_provider_connection_truth(
             "disabled_profile_count": max(0, len(workspace_profiles) - len(enabled_profiles)),
             "healthy_profile_count": len(healthy_profiles),
             "cooldown_profile_count": len([profile for profile in workspace_profiles if _profile_health_value(profile, now) == "cooldown"]),
-            "credential_sources": ["workspace_profile"] if workspace_profiles else [],
+            "credential_sources": (
+                ["workspace_profile"]
+                if workspace_profiles
+                else ["local_runtime"]
+                if local_only_provider
+                else []
+            ),
             "issues": ([{"code": str(issue_code), "message": str(issue)}] if issue_code and issue else []),
             "backpressure": state == "degraded" and bool(classify_profile_failure(state_detail or "").get("backpressure")),
             "retry_after_seconds": None,
@@ -2658,11 +2858,17 @@ def build_workspace_provider_connection_truth(
             "issue_code": issue_code,
             "issue": issue,
             "state_detail": state_detail,
-            "active_source": "workspace_profile" if workspace_profiles else None,
-            "connection_kind": "workspace_provider_connection",
-            "connection_scope": "workspace",
-            "connection_label": "Workspace provider",
-            "machine_bound": False,
+            "active_source": (
+                "workspace_profile"
+                if workspace_profiles
+                else "local_runtime"
+                if local_only_provider
+                else None
+            ),
+            "connection_kind": "machine_local_capability" if local_only_provider else "workspace_provider_connection",
+            "connection_scope": "machine" if local_only_provider else "workspace",
+            "connection_label": "This machine only" if local_only_provider else "Workspace provider",
+            "machine_bound": local_only_provider,
             "profile_metadata": selected_profile_metadata,
         }
         state_summary[state] += 1

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -45,6 +46,10 @@ def _event_row() -> dict[str, object]:
 
 
 class AgentTraceServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global agent_trace_service
+        agent_trace_service = importlib.import_module("server_modules.agent_trace_service")
+
     async def test_start_trace_creates_repository_row(self) -> None:
         with patch(
             "server_modules.agent_trace_service.control_plane_repository.create_agent_trace",

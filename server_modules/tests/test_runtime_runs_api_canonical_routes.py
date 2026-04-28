@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from unittest.mock import patch
 
 from server_modules import runtime_runs_api
-from server_modules.api_contract import ApiAgentTurnRequest
+from server_modules.api_contract import ApiAgentTurnRequest, ApiThreadTurnCreateRequest
 
 
 class _FakeApp:
@@ -237,6 +237,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             self.assertIn(("DELETE", "/sessions/{session_id}"), app.routes)
             self.assertIn(("GET", "/threads"), app.routes)
             self.assertIn(("GET", "/threads/{thread_id}"), app.routes)
+            self.assertIn(("POST", "/threads/{thread_id}/turns"), app.routes)
 
             turn_payload = self._run_async(
                 app.routes[("POST", "/turn")](
@@ -939,19 +940,82 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                             current_user=self._current_user(),
                         )
                     )
+            self.assertEqual([item["id"] for item in payload["items"]], ["thread-new"])
+            self.assertEqual([item["id"] for item in detail["turns"]], ["turn-new"])
+            self.assertEqual(exc.exception.status_code, 404)
         finally:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
             runtime_runs_api._refresh_server_exports = original_refresh
             runtime_runs_api.thread_service.list_threads = original_list_threads
             runtime_runs_api.thread_service.get_thread = original_get_thread
+
+    def test_create_thread_turn_route_persists_user_turn(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+        fake_server.require_admin_api_key = object()
+        fake_server.ORION_SINGLE_AGENT_MODE = False
+        fake_server.runs = {}
+        fake_server.iter_logs_for_run = lambda run_id: []
+        fake_server._get_replay_payload = lambda run_id: {}
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        original_register = runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api
+        original_refresh = runtime_runs_api._refresh_server_exports
+        original_privileged = runtime_runs_api._current_user_is_privileged
+        original_ensure_master_thread = runtime_runs_api.thread_service.ensure_master_thread
+        original_record_user_turn = runtime_runs_api.thread_service.record_user_turn
+        original_get_thread = runtime_runs_api.thread_service.get_thread
+        try:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
+            runtime_runs_api._refresh_server_exports = lambda: fake_server
+            runtime_runs_api._current_user_is_privileged = lambda current_user: False
+            runtime_runs_api.thread_service.ensure_master_thread = self._fake_ensure_master_thread
+            runtime_runs_api.thread_service.record_user_turn = self._fake_record_user_turn
+            runtime_runs_api.thread_service.get_thread = self._fake_persisted_get_thread
+
+            app = _FakeApp()
+            runtime_runs_api.register_run_routes(app)
+
+            payload = self._run_async(
+                app.routes[("POST", "/threads/{thread_id}/turns")](
+                    "thread-1",
+                    ApiThreadTurnCreateRequest(
+                        workspace_id="default",
+                        tenant_id="default",
+                        session_id="session-1",
+                        channel="web",
+                        actor={"type": "user", "id": "user-1"},
+                        content="hello before stream",
+                        client_request_id="req-thread-1",
+                        metadata={"source": "workstation_chat_pane"},
+                    ),
+                    current_user=self._current_user(),
+                )
+            )
+
+            self.assertEqual(payload["id"], "thread-1")
+            self.assertEqual(payload["turns"][0]["content"], "hello before stream")
+            self.assertEqual(self._last_ensure_master_thread_kwargs["thread_id"], "thread-1")
+            self.assertEqual(self._last_record_user_turn_kwargs["thread_id"], "thread-1")
+            self.assertEqual(self._last_record_user_turn_kwargs["session_id"], "session-1")
+            self.assertEqual(self._last_record_user_turn_kwargs["metadata"]["request_id"], "req-thread-1")
+            self.assertEqual(self._last_record_user_turn_kwargs["metadata"]["client_request_id"], "req-thread-1")
+        finally:
             if previous_server is None:
                 sys.modules.pop("server", None)
             else:
                 sys.modules["server"] = previous_server
-
-        self.assertEqual([item["id"] for item in payload["items"]], ["thread-new"])
-        self.assertEqual([item["id"] for item in detail["turns"]], ["turn-new"])
-        self.assertEqual(exc.exception.status_code, 404)
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
+            runtime_runs_api._refresh_server_exports = original_refresh
+            runtime_runs_api._current_user_is_privileged = original_privileged
+            runtime_runs_api.thread_service.ensure_master_thread = original_ensure_master_thread
+            runtime_runs_api.thread_service.record_user_turn = original_record_user_turn
+            runtime_runs_api.thread_service.get_thread = original_get_thread
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
 
     async def _fake_agent_turn(self, **kwargs):
         turn_request = kwargs.get("turn_request")
@@ -1195,6 +1259,49 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
     async def _fake_get_thread(self, thread_id, *, tenant_id, workspace_id, include_turns=True):
         items = await self._fake_list_threads(workspace_id="default", tenant_id="default", owner_user_id="user-1", include_turns=include_turns, limit=1)
         return items[0] if thread_id == "thread-1" else None
+
+    async def _fake_ensure_master_thread(self, **kwargs):
+        self._last_ensure_master_thread_kwargs = kwargs
+        return {"id": kwargs["thread_id"]}
+
+    async def _fake_record_user_turn(self, **kwargs):
+        self._last_record_user_turn_kwargs = kwargs
+        return {"id": "turn-persisted", **kwargs}
+
+    async def _fake_persisted_get_thread(self, thread_id, *, tenant_id, workspace_id, include_turns=True):
+        turn = getattr(self, "_last_record_user_turn_kwargs", {})
+        return {
+            "id": thread_id,
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "owner_user_id": "user-1",
+            "channel": "web",
+            "title": "hello before stream",
+            "status": "active",
+            "metadata": {},
+            "created_at": "2026-04-26T00:00:00Z",
+            "updated_at": "2026-04-26T00:00:05Z",
+            "last_turn_at": "2026-04-26T00:00:05Z",
+            "turns": [
+                {
+                    "id": "turn-persisted",
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
+                    "thread_id": thread_id,
+                    "session_id": turn.get("session_id"),
+                    "request_id": turn.get("metadata", {}).get("request_id"),
+                    "role": "user",
+                    "status": "completed",
+                    "content": turn.get("content", ""),
+                    "actor": turn.get("actor", {}),
+                    "approvals": [],
+                    "interventions": [],
+                    "metadata": turn.get("metadata", {}),
+                    "created_at": "2026-04-26T00:00:05Z",
+                    "updated_at": "2026-04-26T00:00:05Z",
+                },
+            ] if include_turns else [],
+        }
 
     def _run_async(self, coroutine):
         import asyncio

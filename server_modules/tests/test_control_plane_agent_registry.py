@@ -1,5 +1,6 @@
 import unittest
 from contextlib import asynccontextmanager
+import importlib
 from unittest.mock import AsyncMock, patch
 
 from server_modules import control_plane_repository, thread_service
@@ -120,6 +121,11 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
 
 
 class ThreadServiceAgentBindingTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global thread_service
+
+        thread_service = importlib.import_module("server_modules.thread_service")
+
     async def test_ensure_master_thread_passes_master_agent_install_id(self):
         ensure_mock = AsyncMock(return_value={"id": "thread-1"})
         with patch("server_modules.thread_service.control_plane_repository.ensure_agent_thread", new=ensure_mock):
@@ -156,6 +162,11 @@ class ThreadServiceAgentBindingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ControlPlaneInstallIsolationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global control_plane_repository
+
+        control_plane_repository = importlib.import_module("server_modules.control_plane_repository")
+
     async def test_list_agent_turns_can_filter_by_active_install(self):
         connection = AsyncMock()
         connection.fetch = AsyncMock(return_value=[])

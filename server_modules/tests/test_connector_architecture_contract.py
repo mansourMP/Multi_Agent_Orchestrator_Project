@@ -1,5 +1,6 @@
 import types
 import unittest
+import importlib
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
@@ -9,6 +10,17 @@ from server_modules.schemas import ConnectorDocumentCreateRequest
 
 
 class ConnectorArchitectureContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global agent_channel_router
+        global connectors_actions
+        global file_bridge_service
+        global routes_connectors
+
+        agent_channel_router = importlib.import_module("server_modules.agent_channel_router")
+        connectors_actions = importlib.import_module("server_modules.connectors_actions")
+        file_bridge_service = importlib.import_module("server_modules.file_bridge_service")
+        routes_connectors = importlib.import_module("server_modules.routes_connectors")
+
     def test_shell_classes_share_one_captain_identity_but_not_one_control_depth(self) -> None:
         mobile_shell = agent_channel_router.full_shell_contract("mobile")
         telegram_shell = agent_channel_router.channel_shell_contract("telegram")
@@ -63,6 +75,17 @@ class ConnectorArchitectureContractTests(unittest.TestCase):
 
 
 class ConnectorActionExecutionContractTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global agent_channel_router
+        global connectors_actions
+        global file_bridge_service
+        global routes_connectors
+
+        agent_channel_router = importlib.import_module("server_modules.agent_channel_router")
+        connectors_actions = importlib.import_module("server_modules.connectors_actions")
+        file_bridge_service = importlib.import_module("server_modules.file_bridge_service")
+        routes_connectors = importlib.import_module("server_modules.routes_connectors")
+
     async def test_google_drive_browse_rejects_direct_execution_bypass(self) -> None:
         with self.assertRaises(HTTPException) as raised:
             await connectors_actions.browse_google_connector_drive("cred-google", workspace_id="workspace-1")

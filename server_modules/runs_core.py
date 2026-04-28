@@ -199,7 +199,7 @@ def set_run_status(run_id: str, status: str):
         status,
         run=run,
         now_mono=now_mono,
-        now_iso=datetime.utcnow().isoformat() + "Z",
+        now_iso=_utc_now_iso(),
         terminal_statuses=TERMINAL_RUN_STATUSES,
         local_queue_lock=LOCAL_QUEUE_LOCK,
         local_pending_run_ids=LOCAL_PENDING_RUN_IDS,
@@ -219,7 +219,7 @@ def set_run_status(run_id: str, status: str):
 def emit_log(log_queue, level: str, message: str, event: str = "runtime", data: Optional[dict] = None):
     payload = {
         "event_id": str(uuid.uuid4()),
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": _utc_now_iso(),
         "level": level,
         "event": event,
         "message": message,

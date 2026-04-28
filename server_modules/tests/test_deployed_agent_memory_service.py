@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -40,6 +41,13 @@ def _event(
 
 
 class DeployedAgentMemoryServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global control_plane_repository, deployed_agent_memory_service
+        control_plane_repository = importlib.import_module("server_modules.control_plane_repository")
+        deployed_agent_memory_service = importlib.import_module(
+            "server_modules.deployed_agent_memory_service"
+        )
+
     def test_control_plane_schema_declares_conversation_memory_table(self) -> None:
         schema = control_plane_repository.CONTROL_PLANE_SCHEMA_SQL
         self.assertIn("CREATE TABLE IF NOT EXISTS deployed_agent_conversation_memory", schema)

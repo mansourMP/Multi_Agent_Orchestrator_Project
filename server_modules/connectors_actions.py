@@ -532,7 +532,7 @@ async def create_google_connector_document(
     payload = {}
     if body is not None:
         payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
-    title = str(payload.get("title") or "").strip() or f"Empyralis Doc {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+    title = str(payload.get("title") or "").strip() or f"Empyralis Doc {_utc_now().strftime('%Y-%m-%d %H:%M')}"
     try:
         created = google_workspace_create_document(secret, title)
         document_id = str(created.get("documentId") or "").strip()
@@ -572,7 +572,7 @@ async def create_google_connector_spreadsheet(
     payload = {}
     if body is not None:
         payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
-    title = str(payload.get("title") or "").strip() or f"Empyralis Sheet {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+    title = str(payload.get("title") or "").strip() or f"Empyralis Sheet {_utc_now().strftime('%Y-%m-%d %H:%M')}"
     try:
         created = google_workspace_create_spreadsheet(secret, title)
         spreadsheet_id = str(created.get("spreadsheetId") or "").strip()
@@ -608,13 +608,16 @@ def _canonical_route_error_response(error: Exception, error_response):
     raise error
 
 
-def _resolve_connector_tenant_id(entry: Dict[str, Any], workspace_id: str) -> str:
+async def _resolve_connector_tenant_id(entry: Dict[str, Any], workspace_id: str) -> str:
     metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
     for candidate in (entry.get("tenant_id"), metadata.get("tenant_id")):
         token = str(candidate or "").strip()
         if token:
             return token
-    tenant_id = str(_workspace_payload(workspace_id).get("tenant_id") or "").strip()
+    from server_modules import control_plane_repository
+
+    workspace = await control_plane_repository.get_workspace_by_id(str(workspace_id or "").strip())
+    tenant_id = str((workspace or {}).get("tenant_id") or "").strip()
     if tenant_id:
         return tenant_id
     raise RuntimeError("Connector is not scoped to a tenant.")
@@ -668,7 +671,8 @@ async def telegram_webhook_canonical(request: Request, connector_id: str):
             str(auth_result.get("content") or "forbidden"),
         )
 
-    ingress = shell.telegram_service_registry().telegram_ingress_service()
+    registry = shell.telegram_service_registry()
+    ingress = registry.telegram_ingress_service()
     connector_token = str(connector_id or "").strip()
 
     try:
@@ -699,31 +703,16 @@ async def telegram_webhook_canonical(request: Request, connector_id: str):
         if not bool(envelope.get("handled")):
             return {"ok": True, **envelope}
 
-        route_result = await agent_channel_router.route_inbound_channel_message(
-            tenant_id=_resolve_connector_tenant_id(connector_entry, workspace_id),
+        dispatch_result = ingress._dispatch_public_deployed_agent_envelope(
+            entry=connector_entry,
             workspace_id=workspace_id,
-            channel_key="telegram",
-            endpoint_key=_resolve_channel_endpoint_key(
-                entry=connector_entry,
-                channel_key="telegram",
-                connector_id=connector_token,
-                fallback=configured_chat_id,
-            ),
-            customer_message=str(envelope.get("message_text") or ""),
-            session_key=str(envelope.get("session_key") or "") or None,
-            message_id=str(envelope.get("inbound_message_id") or "") or None,
-            actor_id=str(envelope.get("sender_id") or "") or None,
-            actor_display_name=str(envelope.get("sender_display_name") or "") or None,
-            metadata={
-                "connector_id": connector_token,
-                "delivery_source": str(envelope.get("delivery_source") or "").strip() or None,
-                "telegram_update_id": int(envelope.get("update_id") or 0) or None,
-                "telegram_chat_id": str(envelope.get("chat_id") or "").strip() or None,
-                "source_event_id": str(envelope.get("source_event_id") or "").strip() or None,
-            },
-            allow_master_fallback=False,
+            connector_id=connector_token,
+            bot_token=bot_token,
+            configured_chat_id=configured_chat_id,
+            profile=profile,
+            envelope=envelope,
         )
-        return {"ok": True, **(route_result if isinstance(route_result, dict) else {})}
+        return {"ok": True, **(dispatch_result if isinstance(dispatch_result, dict) else {})}
     except LookupError as exc:
         return bridge.error_response(404, str(exc))
     except ValueError as exc:
@@ -786,7 +775,7 @@ def _telegram_webhook_registration_result(
     connector_id: str,
     credentials: Dict[str, Any],
 ) -> Dict[str, Any]:
-    checked_at = datetime.utcnow().isoformat() + "Z"
+    checked_at = _utc_now_iso()
     delivery_mode = str(ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE or "polling").strip().lower() or "polling"
     webhook_url = _telegram_connector_webhook_url(connector_id)
     if delivery_mode != "webhook":
@@ -855,7 +844,7 @@ def _telegram_webhook_registration_result(
             raise RuntimeError(detail)
         if actual_url and actual_url != webhook_url:
             raise RuntimeError(f"Telegram webhook URL mismatch: {actual_url}")
-        registered_at = datetime.utcnow().isoformat() + "Z"
+        registered_at = _utc_now_iso()
         return {
             "status": "registered",
             "webhook_url": webhook_url,
@@ -868,7 +857,7 @@ def _telegram_webhook_registration_result(
         return {
             "status": "failed",
             "webhook_url": webhook_url,
-            "checked_at": datetime.utcnow().isoformat() + "Z",
+            "checked_at": _utc_now_iso(),
             "registered_at": None,
             "last_error": str(exc).strip() or "Telegram webhook registration failed.",
             "delivery_mode": delivery_mode,
@@ -893,7 +882,7 @@ def _persist_connector_metadata_patch(credential_id: str, patch: Dict[str, Any])
         metadata = dict(next_item.get("metadata") if isinstance(next_item.get("metadata"), dict) else {})
         metadata.update(patch)
         next_item["metadata"] = _sanitize_connector_metadata(metadata)
-        next_item["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        next_item["updated_at"] = _utc_now_iso()
         updated_entry = next_item
         next_items.append(next_item)
     if updated_entry is None:
@@ -942,7 +931,7 @@ def _upsert_slack_oauth_connector_entry(
     metadata: Optional[Dict[str, Any]],
     test_result: Dict[str, Any],
 ) -> Dict[str, Any]:
-    now = datetime.utcnow().isoformat() + "Z"
+    now = _utc_now_iso()
     connector = "slack"
     safe_metadata = dict(metadata or {})
     team = test_result.get("team") if isinstance(test_result.get("team"), dict) else {}
@@ -1241,7 +1230,7 @@ async def discord_webhook(request: Request):
             if not goal:
                 continue
             route_result = await agent_channel_router.route_inbound_channel_message(
-                tenant_id=_resolve_connector_tenant_id(row, workspace_id),
+                tenant_id=await _resolve_connector_tenant_id(row, workspace_id),
                 workspace_id=workspace_id,
                 channel_key="discord",
                 endpoint_key=_resolve_channel_endpoint_key(
@@ -1410,7 +1399,7 @@ async def create_connector_vault(body: ConnectorCreate):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    now = datetime.utcnow().isoformat() + "Z"
+    now = _utc_now_iso()
     connector_metadata = {
         **_connector_public_metadata(connector, credentials),
         **(body.metadata or {}),
@@ -1684,7 +1673,7 @@ async def update_connector_vault(credential_id: str, body: ConnectorPatchRequest
                 else:
                     merged_metadata[str(key)] = value
             next_item["metadata"] = _sanitize_connector_metadata(merged_metadata)
-        next_item["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        next_item["updated_at"] = _utc_now_iso()
         updated_entry = next_item
         next_items.append(next_item)
     if not found or not isinstance(updated_entry, dict):
@@ -1742,7 +1731,7 @@ async def test_connector_vault(credential_id: str, workspace_id: Optional[str] =
                     credentials=credentials,
                 )
             next_item["metadata"] = _sanitize_connector_metadata(metadata)
-            next_item["updated_at"] = datetime.utcnow().isoformat() + "Z"
+            next_item["updated_at"] = _utc_now_iso()
             next_items.append(next_item)
             updated = True
         if updated:
@@ -1902,7 +1891,7 @@ async def create_vault_credential(body: CredentialUpsertRequest):
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    now = datetime.utcnow().isoformat() + "Z"
+    now = _utc_now_iso()
     entry_metadata = {
         **_provider_public_metadata(provider, credentials),
         **(body.metadata or {}),

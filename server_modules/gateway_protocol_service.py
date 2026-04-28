@@ -563,6 +563,14 @@ async def handle_gateway_websocket(
                 ack=frame.get("ack"),
             )
             if frame_kind == "response":
+                if message_type == "channel.outbound.result":
+                    try:
+                        personal_channels_service.sync_gateway_channel_outbound_result(
+                            gateway_id=gateway_id,
+                            payload=dict(payload),
+                        )
+                    except Exception:
+                        pass
                 gateway_state_repository.touch_gateway_session(
                     session_id=session_id,
                     gateway_id=gateway_id,

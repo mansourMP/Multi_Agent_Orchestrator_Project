@@ -27,6 +27,7 @@ class DirectChatGenerationServices:
     clear_direct_tool_loop_state: Callable[[str], None]
     persist_direct_chat_memory_best_effort: Callable[..., None]
     persist_direct_chat_transcript_best_effort: Callable[..., None]
+    persist_direct_chat_hosted_usage_best_effort: Callable[..., None]
     record_direct_tool_signature: Callable[[str, Dict[str, Any]], bool]
     direct_chat_error_reply: Callable[[str], str]
     capture_exception: Callable[[BaseException], None]
@@ -106,6 +107,28 @@ def _finish_trace(trace_context: Optional[Any], *, outcome: str, final_message_i
     )
 
 
+def _public_generation_error_code(llm_error: str) -> str:
+    detail = str(llm_error or "").strip()
+    if detail.startswith("max_tool_iterations_reached:"):
+        return detail
+    return "provider_generation_failed" if detail else "unknown_error"
+
+
+def _public_generation_error_reply(services: DirectChatGenerationServices, llm_error: str) -> str:
+    reply = str(services.direct_chat_error_reply(llm_error) or "").strip()
+    lower_reply = reply.lower()
+    if (
+        reply
+        and not lower_reply.startswith("chat failed:")
+        and "incompleteread" not in lower_reply
+        and "incomplete read" not in lower_reply
+        and "connection reset" not in lower_reply
+        and "remote end closed" not in lower_reply
+    ):
+        return reply
+    return "Sage hit a temporary error while generating the response. Please try again in a moment."
+
+
 def stream_provider_backed_direct_chat(
     *,
     services: DirectChatGenerationServices,
@@ -139,8 +162,28 @@ def stream_provider_backed_direct_chat(
     llm_error = ""
     actual_provider: Optional[str] = str(metadata.get("provider") or "").strip() or None
     actual_model: Optional[str] = str(metadata.get("model") or "").strip() or None
+    
+    # Reasoning effort logic
+    if normalized_reasoning_effort:
+        supports_reasoning = False
+        if actual_model:
+            model_lower = actual_model.lower()
+            supports_reasoning = (
+                model_lower.startswith("o1")
+                or model_lower.startswith("o3")
+                or "deepseek-r1" in model_lower
+                or "deepseek-reasoner" in model_lower
+                or ("gemini" in model_lower and "thinking" in model_lower)
+            )
+        
+        if not supports_reasoning:
+            # Model does not support reasoning effort natively, pass as system prompt instruction
+            system_instruction = f"The user has requested a {normalized_reasoning_effort} reasoning effort. Please adjust the depth of your thinking and response accordingly."
+            system_prompt = f"{system_prompt}\n\n[System Instruction: {system_instruction}]" if system_prompt else f"[System Instruction: {system_instruction}]"
+            normalized_reasoning_effort = None
+
     executed_any_tools = False
-    conversation_messages: List[Dict[str, str]] = []
+    conversation_messages: List[Dict[str, Any]] = []
     conversation_messages.extend(compacted_prior_messages)
     current_prompt = normalized_message
     max_iterations = resolved_chat_max_iterations
@@ -258,9 +301,17 @@ def stream_provider_backed_direct_chat(
                     "Prepared the next action" if iteration_tool_calls else "Answer ready",
                 )
 
-                conversation_messages.append({"role": "user", "content": current_prompt})
-                if final_reply:
-                    conversation_messages.append({"role": "assistant", "content": final_reply})
+                if current_prompt:
+                    conversation_messages.append({"role": "user", "content": current_prompt})
+                effective_iteration_provider = str(actual_provider or context.get("provider") or "").strip().lower()
+                if final_reply or iteration_tool_calls:
+                    assistant_message: Dict[str, Any] = {"role": "assistant"}
+                    if final_reply:
+                        assistant_message["content"] = final_reply
+                    if iteration_tool_calls and effective_iteration_provider != "codex_cli":
+                        assistant_message["tool_calls"] = iteration_tool_calls
+                    if assistant_message.get("content") or assistant_message.get("tool_calls"):
+                        conversation_messages.append(assistant_message)
 
                 if iteration_tool_calls:
                     plan_done = _emit_trace_event(
@@ -595,20 +646,33 @@ def stream_provider_backed_direct_chat(
                                 step_id=step_id,
                                 status="done",
                             )
-                            conversation_messages.append(
-                                {
-                                    "role": "user",
-                                    "content": services.direct_tool_followup_message(
-                                        str(tool_call.get("name") or f"{connector_id}__{action_id}"),
-                                        tool_result,
-                                    ),
-                                }
+                            if effective_iteration_provider == "codex_cli":
+                                conversation_messages.append(
+                                    {
+                                        "role": "user",
+                                        "content": services.direct_tool_followup_message(
+                                            str(tool_call.get("name") or f"{connector_id}__{action_id}"),
+                                            tool_result,
+                                        ),
+                                    }
+                                )
+                            else:
+                                conversation_messages.append(
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": tool_call_id,
+                                        "name": str(tool_call.get("name") or f"{connector_id}__{action_id}"),
+                                        "content": tool_result,
+                                    }
+                                )
+                        if effective_iteration_provider == "codex_cli":
+                            conversation_messages.append({"role": "system", "content": direct_tool_result_summary_system_message})
+                            current_prompt = (
+                                "Continue until the task is complete. If another tool is needed, call it now. "
+                                "Otherwise provide the final answer to the user."
                             )
-                        conversation_messages.append({"role": "system", "content": direct_tool_result_summary_system_message})
-                        current_prompt = (
-                            "Continue until the task is complete. If another tool is needed, call it now. "
-                            "Otherwise provide the final answer to the user."
-                        )
+                        else:
+                            current_prompt = ""
                         break
                     except Exception as exc:
                         llm_error = str(exc).strip() or "connector_action_failed"
@@ -626,6 +690,42 @@ def stream_provider_backed_direct_chat(
                         )
                         if tool_failure is not None:
                             yield tool_failure
+                        tool_name_for_error = str(tool_call.get("name") or f"{connector_id}__{action_id}").strip()
+                        tool_plan_failed = _emit_trace_event(
+                            trace_context,
+                            event_type="plan.item.updated",
+                            data={
+                                "item_id": tool_item_id,
+                                "status": "failed",
+                                "summary": f"{tool_name_for_error} failed.",
+                            },
+                            persisted=True,
+                            item_id=tool_item_id,
+                        )
+                        if tool_plan_failed is not None:
+                            yield tool_plan_failed
+                        yield services.direct_tool_step_payload(
+                            connector_id,
+                            action_id,
+                            argument_payload,
+                            step_id=step_id,
+                            status="error",
+                            detail_override=llm_error,
+                        )
+                        if effective_iteration_provider != "codex_cli":
+                            conversation_messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call_id,
+                                    "name": tool_name_for_error,
+                                    "content": (
+                                        f"Tool execution failed: {llm_error}. "
+                                        "Use only the provided tools and choose another tool if needed."
+                                    ),
+                                }
+                            )
+                            current_prompt = ""
+                            break
                         trace_failed = _emit_trace_event(
                             trace_context,
                             event_type="trace.failed",
@@ -641,14 +741,6 @@ def stream_provider_backed_direct_chat(
                         if trace_failed is not None:
                             yield trace_failed
                         _finish_trace(trace_context, outcome="partial", final_message_id=None)
-                        yield services.direct_tool_step_payload(
-                            connector_id,
-                            action_id,
-                            argument_payload,
-                            step_id=step_id,
-                            status="error",
-                            detail_override=llm_error,
-                        )
                         yield {
                             "type": "final",
                             "payload": {
@@ -748,6 +840,38 @@ def stream_provider_backed_direct_chat(
                 if trace_completed is not None:
                     yield trace_completed
                 _finish_trace(trace_context, outcome="success", final_message_id=assistant_message_id)
+                effective_provider = str(actual_provider or context.get("provider") or "").strip() or None
+                effective_model = str(actual_model or "").strip() or None
+                services.persist_direct_chat_memory_best_effort(
+                    workspace_id=normalized_workspace_id,
+                    provider=effective_provider,
+                    model=effective_model,
+                    credentials=direct_chat_credentials,
+                    reasoning_effort=normalized_reasoning_effort,
+                    prior_messages=compacted_prior_messages,
+                    user_message=normalized_message,
+                    assistant_reply=final_reply,
+                )
+                services.persist_direct_chat_transcript_best_effort(
+                    workspace_id=normalized_workspace_id,
+                    thread_id=normalized_thread_id,
+                    provider=effective_provider,
+                    model=effective_model,
+                    messages=conversation_messages,
+                    user_message=normalized_message,
+                    assistant_reply=final_reply,
+                )
+                services.persist_direct_chat_hosted_usage_best_effort(
+                    workspace_id=normalized_workspace_id,
+                    thread_id=normalized_thread_id,
+                    session_ctx=session_ctx,
+                    availability_payload=availability_payload,
+                    usage_masked=usage_masked,
+                    requested_provider=normalized_requested_provider,
+                    effective_provider=effective_provider,
+                    requested_model=normalized_requested_model,
+                    effective_model=effective_model,
+                )
                 yield {
                     "type": "final",
                     "payload": {
@@ -763,9 +887,9 @@ def stream_provider_backed_direct_chat(
                         "context_used": services.build_context_used(
                             workspace_id=normalized_workspace_id,
                             requested_provider=normalized_requested_provider,
-                            effective_provider=str(actual_provider or context.get("provider") or "").strip() or None,
+                            effective_provider=effective_provider,
                             requested_model=normalized_requested_model,
-                            effective_model=str(actual_model or "").strip() or None,
+                            effective_model=effective_model,
                             reasoning_effort=normalized_reasoning_effort,
                             connected_systems=connected_systems,
                             tool_capabilities=tool_capabilities,
@@ -778,43 +902,27 @@ def stream_provider_backed_direct_chat(
                     },
                 }
                 services.clear_direct_tool_loop_state(tool_loop_session_key)
-                services.persist_direct_chat_memory_best_effort(
-                    workspace_id=normalized_workspace_id,
-                    provider=str(actual_provider or context.get("provider") or "").strip() or None,
-                    model=str(actual_model or "").strip() or None,
-                    credentials=direct_chat_credentials,
-                    reasoning_effort=normalized_reasoning_effort,
-                    prior_messages=compacted_prior_messages,
-                    user_message=normalized_message,
-                    assistant_reply=final_reply,
-                )
-                services.persist_direct_chat_transcript_best_effort(
-                    workspace_id=normalized_workspace_id,
-                    thread_id=normalized_thread_id,
-                    provider=str(actual_provider or context.get("provider") or "").strip() or None,
-                    model=str(actual_model or "").strip() or None,
-                    messages=conversation_messages,
-                    user_message=normalized_message,
-                    assistant_reply=final_reply,
-                )
                 return
             if event_type == "failure":
                 attempted_providers = str(event.get("attempted_providers") or "").strip()
                 llm_error = str(event.get("error") or "").strip()
+                public_error_reply = _public_generation_error_reply(services, llm_error)
+                public_error_code = _public_generation_error_code(llm_error)
                 trace_plan_failure = _emit_trace_event(
                     trace_context,
                     event_type="plan.item.updated",
                     data={
                         "item_id": planning_item_id,
                         "status": "failed",
-                        "summary": llm_error or "Model call failed",
+                        "summary": public_error_reply,
                     },
                     persisted=True,
                     item_id=planning_item_id,
                 )
                 if trace_plan_failure is not None:
                     yield trace_plan_failure
-                yield services.thinking_step_payload(thinking_iteration, "error", llm_error or "Model call failed")
+                yield services.thinking_step_payload(thinking_iteration, "error", public_error_reply)
+                llm_error = public_error_code
                 iteration_failed = True
                 break
 
@@ -827,12 +935,30 @@ def stream_provider_backed_direct_chat(
 
     actions = [] if executed_any_tools else services.suggest_actions(normalized_message, availability_payload)
     services.clear_direct_tool_loop_state(tool_loop_session_key)
+    public_error_reply = _public_generation_error_reply(services, llm_error)
+    public_error_code = _public_generation_error_code(llm_error)
+    effective_provider = str(actual_provider or context.get("provider") or "").strip() or None
+    effective_model = str(actual_model or "").strip() or None
+    if normalized_message and public_error_reply:
+        services.persist_direct_chat_transcript_best_effort(
+            workspace_id=normalized_workspace_id,
+            thread_id=normalized_thread_id,
+            provider=effective_provider,
+            model=effective_model,
+            messages=[
+                *conversation_messages,
+                {"role": "user", "content": normalized_message},
+                {"role": "assistant", "content": public_error_reply},
+            ],
+            user_message=normalized_message,
+            assistant_reply=public_error_reply,
+        )
     trace_failed = _emit_trace_event(
         trace_context,
         event_type="trace.failed",
         data={
-            "code": llm_error or "unknown_error",
-            "message": services.direct_chat_error_reply(llm_error),
+            "code": public_error_code,
+            "message": public_error_reply,
             "retryable": False,
             "failed_item_id": planning_item_id,
         },
@@ -845,31 +971,22 @@ def stream_provider_backed_direct_chat(
     yield {
         "type": "final",
         "payload": {
-            "reply": "",
+            "reply": public_error_reply,
             "actions": actions,
-            "interventions": [
-                build_intervention(
-                    "system_error",
-                    "Chat execution failed",
-                    detail=services.direct_chat_error_reply(llm_error),
-                    severity="error",
-                    status="failed",
-                    code=llm_error or "unknown_error",
-                )
-            ],
+            "interventions": [],
             "suggestions": proactive_suggestions,
             "mode": "answer_with_action" if actions else "answer",
             "usage_masked": usage_masked,
             "provider": actual_provider,
             "model": actual_model,
             "attempted_providers": attempted_providers,
-            "error": llm_error,
+            "error": public_error_code,
             "context_used": services.build_context_used(
                 workspace_id=normalized_workspace_id,
                 requested_provider=normalized_requested_provider,
-                effective_provider=str(actual_provider or context.get("provider") or "").strip() or None,
+                effective_provider=effective_provider,
                 requested_model=normalized_requested_model,
-                effective_model=str(actual_model or "").strip() or None,
+                effective_model=effective_model,
                 reasoning_effort=normalized_reasoning_effort,
                 connected_systems=connected_systems,
                 tool_capabilities=tool_capabilities,

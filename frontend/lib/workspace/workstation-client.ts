@@ -18,6 +18,8 @@ export type WorkstationSessionRecord = {
   tenant_id?: string;
   channel?: string;
   actor?: Record<string, unknown>;
+  created_at?: string | null;
+  expires_at?: string | null;
   metadata?: Record<string, unknown>;
   status?: string;
 };
@@ -40,6 +42,11 @@ export type WorkstationTurnStreamEvent = {
   payload: Record<string, unknown>;
 };
 
+export type WorkstationTurnStreamAbortHandle = {
+  abort: () => void;
+  signal: AbortSignal;
+};
+
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -49,6 +56,37 @@ function createClientRequestId(): string {
     return crypto.randomUUID();
   }
   return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function parseIsoTimestamp(value: unknown): number | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isActiveSessionRecord(session: WorkstationSessionRecord | null | undefined): session is WorkstationSessionRecord {
+  if (!session || typeof session !== 'object') {
+    return false;
+  }
+  const sessionId = readString(session.session_id);
+  if (!sessionId) {
+    return false;
+  }
+  const status = readString(session.status).toLowerCase();
+  if (status && status !== 'active') {
+    return false;
+  }
+  const expiresAt = parseIsoTimestamp(session.expires_at);
+  if (expiresAt !== null && expiresAt <= Date.now()) {
+    return false;
+  }
+  return true;
 }
 
 export type WorkstationRunDetailPayload = Record<string, unknown> & {
@@ -248,6 +286,25 @@ export type ProviderCatalogRecord = Record<string, unknown> & {
   models_source?: string | null;
   models_synced_at?: string | null;
   models_error?: string | null;
+  connection_state?: string | null;
+  connection_state_detail?: string | null;
+  connection_active_source?: string | null;
+  connection_credential_sources?: string[] | null;
+  runtime_state?: string | null;
+  runtime_state_detail?: string | null;
+  runtime_active_source?: string | null;
+  runtime_credential_sources?: string[] | null;
+  workspace_connected?: boolean | null;
+  credential_owner_kind?: string | null;
+  credential_owner_label?: string | null;
+  credential_plane?: string | null;
+  credential_plane_label?: string | null;
+  hosted_sage_ai_policy?: string | null;
+  hosted_sage_ai_monthly_cap_usd?: number | null;
+  hosted_sage_ai_monthly_cost_usd?: number | null;
+  hosted_sage_ai_monthly_remaining_usd?: number | null;
+  hosted_sage_ai_reason?: string | null;
+  platform_runtime_allowed?: boolean | null;
 };
 
 export type ProviderProfileRecord = Record<string, unknown> & {
@@ -443,6 +500,7 @@ export type WorkstationClientDependencies = {
   queryClient: {
     peek: <T>(key: string) => T | null;
     set: <T>(key: string, value: T) => T;
+    invalidate?: (key?: string) => void;
   };
   realtime: {
     trackEventSource: <T extends EventSource>(source: T) => T;
@@ -475,7 +533,9 @@ export type WorkstationClientPaths = {
   workspaceBootstrap: (workspaceId: string) => string;
   sessionCreate: string;
   turnSubmit: string;
+  threads: (options?: { includeTurns?: boolean; limit?: number }) => string;
   thread: (threadId: string) => string;
+  threadTurns: (threadId: string) => string;
   runs: (limit?: number) => string;
   runDetail: (runId: string) => string;
   approvals: (limit?: number) => string;
@@ -596,7 +656,18 @@ export type WorkstationClient = {
   scope: WorkstationClientScope;
   paths: WorkstationClientPaths;
   requestJson: <T>(options: WorkstationClientRequestOptions) => Promise<T | null>;
+  listThreads: (options?: { includeTurns?: boolean; limit?: number }) => Promise<Record<string, unknown>>;
   getThread: (options: { threadId: string; allowMissing?: boolean }) => Promise<Record<string, unknown> | null>;
+  persistUserTurn: (options: {
+    actor: WorkstationSessionActor;
+    sessionId: string;
+    threadId: string;
+    message: string;
+    channel?: string;
+    runtimeProfileId?: string | null;
+    metadata?: Record<string, unknown>;
+    clientRequestId?: string | null;
+  }) => Promise<Record<string, unknown>>;
   listRuns: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
   getRunDetail: (options: { runId: string; allowMissing?: boolean }) => Promise<Record<string, unknown> | null>;
   listApprovals: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
@@ -690,6 +761,7 @@ export type WorkstationClient = {
     priority?: number;
     enabled?: boolean;
     model?: string | null;
+    metadata?: Record<string, unknown> | null;
   }) => Promise<Record<string, unknown> | null>;
   upsertWorkspaceProviderCredential: (options: {
     provider: string;
@@ -839,6 +911,7 @@ export type WorkstationClient = {
     channel?: string;
     source?: string;
     forceNew?: boolean;
+    existingSession?: WorkstationSessionRecord | null;
   }) => Promise<WorkstationSessionRecord>;
   submitTurn: (options: {
     actor: WorkstationSessionActor;
@@ -849,9 +922,11 @@ export type WorkstationClient = {
     source?: string;
     runtimeTarget?: string | null;
     machineTarget?: string | null;
+    provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
+    clientRequestId?: string | null;
   }) => Promise<WorkstationTurnResponse>;
   submitTurnStream: (options: {
     actor: WorkstationSessionActor;
@@ -862,10 +937,13 @@ export type WorkstationClient = {
     source?: string;
     runtimeTarget?: string | null;
     machineTarget?: string | null;
+    provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
+    clientRequestId?: string | null;
+    abortHandle?: WorkstationTurnStreamAbortHandle | null;
   }) => Promise<WorkstationTurnResponse>;
   submitTurnWithSessionRetry: (options: {
     actor: WorkstationSessionActor;
@@ -875,9 +953,12 @@ export type WorkstationClient = {
     source?: string;
     runtimeTarget?: string | null;
     machineTarget?: string | null;
+    provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
+    existingSession?: WorkstationSessionRecord | null;
+    clientRequestId?: string | null;
   }) => Promise<{
     response: WorkstationTurnResponse;
     session: WorkstationSessionRecord;
@@ -891,10 +972,14 @@ export type WorkstationClient = {
     source?: string;
     runtimeTarget?: string | null;
     machineTarget?: string | null;
+    provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
+    existingSession?: WorkstationSessionRecord | null;
+    clientRequestId?: string | null;
+    abortHandle?: WorkstationTurnStreamAbortHandle | null;
   }) => Promise<{
     response: WorkstationTurnResponse;
     session: WorkstationSessionRecord;
@@ -948,8 +1033,12 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/workspaces/${encodeURIComponent(targetWorkspaceId)}/bootstrap`,
     sessionCreate: '/api/sessions',
     turnSubmit: '/api/turn',
+    threads: ({ includeTurns = false, limit = 50 } = {}) =>
+      `/api/threads${buildQueryString({ workspace_id: workspaceId, include_turns: includeTurns, limit })}`,
     thread: (threadId) =>
       `/api/threads/${encodeURIComponent(threadId)}${buildQueryString({ workspace_id: workspaceId })}`,
+    threadTurns: (threadId) =>
+      `/api/threads/${encodeURIComponent(threadId)}/turns${buildQueryString({ workspace_id: workspaceId })}`,
     runs: (limit = 80) =>
       `/api/runs${buildQueryString({ workspace_id: workspaceId, limit })}`,
     runDetail: (runId) =>
@@ -1255,14 +1344,14 @@ function extractRetryAfterSeconds(
 const READ_REQUEST_POLICY: WorkstationRequestPolicy = {
   timeoutMs: 10_000,
   retryCount: 1,
-  retryOnStatuses: [408, 425, 429, 500, 502, 503, 504],
+  retryOnStatuses: [408, 425, 500, 502, 503, 504],
   refreshSessionOn401: true,
 };
 
 const PROVIDER_READ_REQUEST_POLICY: WorkstationRequestPolicy = {
   timeoutMs: 25_000,
   retryCount: 1,
-  retryOnStatuses: [408, 425, 429, 500, 502, 503, 504],
+  retryOnStatuses: [408, 425, 500, 502, 503, 504],
   refreshSessionOn401: true,
 };
 
@@ -1409,18 +1498,29 @@ export function createWorkstationClient(
     channel = 'web',
     source = 'workstation_client',
     forceNew = false,
+    existingSession = null,
   }: {
     actor: WorkstationSessionActor;
     threadId: string;
     channel?: string;
     source?: string;
     forceNew?: boolean;
+    existingSession?: WorkstationSessionRecord | null;
   }): Promise<WorkstationSessionRecord> {
+    if (!forceNew && isActiveSessionRecord(existingSession)) {
+      return existingSession;
+    }
+
     const cacheKey = sessionCacheKey(scope, threadId, channel, actor.id);
     if (!forceNew) {
       const cached = queryClient.peek<WorkstationSessionRecord>(cacheKey);
-      if (cached?.session_id) {
+      if (isActiveSessionRecord(cached)) {
         return cached;
+      }
+      const staleCached = cached as WorkstationSessionRecord | null;
+      const cachedSessionId = readString(staleCached?.session_id);
+      if (cachedSessionId) {
+        queryClient.invalidate?.(cacheKey);
       }
     }
 
@@ -1446,6 +1546,47 @@ export function createWorkstationClient(
     return session as WorkstationSessionRecord;
   }
 
+  async function persistUserTurn({
+    actor,
+    sessionId,
+    threadId,
+    message,
+    channel = 'web',
+    runtimeProfileId = null,
+    metadata = {},
+    clientRequestId = null,
+  }: {
+    actor: WorkstationSessionActor;
+    sessionId: string;
+    threadId: string;
+    message: string;
+    channel?: string;
+    runtimeProfileId?: string | null;
+    metadata?: Record<string, unknown>;
+    clientRequestId?: string | null;
+  }): Promise<Record<string, unknown>> {
+    const resolvedRequestId = readString(clientRequestId) || createClientRequestId();
+    return (await requestJson<Record<string, unknown>>({
+      path: paths.threadTurns(threadId),
+      init: {
+        method: 'POST',
+        headers: mergeJsonHeaders(),
+        body: JSON.stringify({
+          tenant_id: scope.tenantId,
+          workspace_id: scope.workspaceId,
+          session_id: sessionId,
+          channel,
+          actor,
+          content: message,
+          runtime_profile_id: runtimeProfileId ?? undefined,
+          metadata,
+          client_request_id: resolvedRequestId,
+        }),
+      },
+      policy: WRITE_REQUEST_POLICY,
+    })) as Record<string, unknown>;
+  }
+
   async function submitTurn({
     actor,
     sessionId,
@@ -1455,9 +1596,11 @@ export function createWorkstationClient(
     source = 'workstation_client',
     runtimeTarget = null,
     machineTarget = null,
+    provider = null,
     model = null,
     reasoningEffort = null,
     policyContext = {},
+    clientRequestId = null,
   }: {
     actor: WorkstationSessionActor;
     sessionId: string;
@@ -1467,11 +1610,13 @@ export function createWorkstationClient(
     source?: string;
     runtimeTarget?: string | null;
     machineTarget?: string | null;
+    provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
+    clientRequestId?: string | null;
   }): Promise<WorkstationTurnResponse> {
-    const clientRequestId = createClientRequestId();
+    const resolvedRequestId = readString(clientRequestId) || createClientRequestId();
     return (await requestJson<WorkstationTurnResponse>({
       path: paths.turnSubmit,
       init: {
@@ -1482,10 +1627,11 @@ export function createWorkstationClient(
           workspace_id: scope.workspaceId,
           thread_id: threadId,
           session_id: sessionId,
-          client_request_id: clientRequestId,
+          client_request_id: resolvedRequestId,
           channel,
           actor,
           message,
+          provider: provider ?? undefined,
           model: model ?? undefined,
           reasoning_effort: reasoningEffort ?? undefined,
           machine_target: machineTarget ?? undefined,
@@ -1493,7 +1639,11 @@ export function createWorkstationClient(
           context_hints: {
             source,
             thread_id: threadId,
-            request_id: clientRequestId,
+            request_id: resolvedRequestId,
+            provider: provider ?? undefined,
+            model: model ?? undefined,
+            reasoning_effort: reasoningEffort ?? undefined,
+            force_direct_chat: true,
           },
           execution_mode: 'sync',
           response_mode: 'artifact',
@@ -1605,10 +1755,13 @@ export function createWorkstationClient(
     source = 'workstation_client',
     runtimeTarget = null,
     machineTarget = null,
+    provider = null,
     model = null,
     reasoningEffort = null,
     policyContext = {},
     onEvent,
+    clientRequestId = null,
+    abortHandle = null,
   }: {
     actor: WorkstationSessionActor;
     sessionId: string;
@@ -1618,28 +1771,33 @@ export function createWorkstationClient(
     source?: string;
     runtimeTarget?: string | null;
     machineTarget?: string | null;
+    provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
+    clientRequestId?: string | null;
+    abortHandle?: WorkstationTurnStreamAbortHandle | null;
   }): Promise<WorkstationTurnResponse> {
-    const clientRequestId = createClientRequestId();
+    const resolvedRequestId = readString(clientRequestId) || createClientRequestId();
     let response: Response;
     try {
       response = await transport.request(
         paths.turnSubmit,
         {
           method: 'POST',
+          signal: abortHandle?.signal,
           headers: mergeJsonHeaders(),
           body: JSON.stringify({
             tenant_id: scope.tenantId,
             workspace_id: scope.workspaceId,
             thread_id: threadId,
             session_id: sessionId,
-            client_request_id: clientRequestId,
+            client_request_id: resolvedRequestId,
             channel,
             actor,
             message,
+            provider: provider ?? undefined,
             model: model ?? undefined,
             reasoning_effort: reasoningEffort ?? undefined,
             machine_target: machineTarget ?? undefined,
@@ -1647,7 +1805,11 @@ export function createWorkstationClient(
             context_hints: {
               source,
               thread_id: threadId,
-              request_id: clientRequestId,
+              request_id: resolvedRequestId,
+              provider: provider ?? undefined,
+              model: model ?? undefined,
+              reasoning_effort: reasoningEffort ?? undefined,
+              force_direct_chat: true,
             },
             execution_mode: 'sync',
             response_mode: 'stream',
@@ -1660,6 +1822,17 @@ export function createWorkstationClient(
         resolveRequestPolicy({ method: 'POST' }, STREAM_REQUEST_POLICY),
       );
     } catch (error) {
+      if (abortHandle?.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+        throw new WorkstationClientError(
+          'Sage stopped before finishing the response.',
+          0,
+          null,
+          'stream_aborted',
+          {
+            retryable: false,
+          },
+        );
+      }
       throw normalizeTransportFailure(error);
     }
 
@@ -1709,7 +1882,24 @@ export function createWorkstationClient(
     let streamedReply = '';
 
     while (true) {
-      const { done, value } = await reader.read();
+      let readResult: ReadableStreamReadResult<Uint8Array>;
+      try {
+        readResult = await reader.read();
+      } catch (error) {
+        if (abortHandle?.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+          throw new WorkstationClientError(
+            'Sage stopped before finishing the response.',
+            0,
+            null,
+            'stream_aborted',
+            {
+              retryable: false,
+            },
+          );
+        }
+        throw error;
+      }
+      const { done, value } = readResult;
       buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done }).replace(/\r/g, '');
 
       while (true) {
@@ -1748,6 +1938,22 @@ export function createWorkstationClient(
     }
 
     if (!finalPayload) {
+      if (streamedReply.trim()) {
+        return normalizeStreamTurnResponse({
+          status: 'incomplete',
+          reply: streamedReply,
+          thread_id: threadId,
+          session_id: sessionId,
+          metadata: {
+            incomplete: true,
+          },
+        }, {
+          threadId,
+          sessionId,
+          traceId,
+          fallbackReply: streamedReply,
+        });
+      }
       throw new WorkstationClientError(
         'The workstation stream ended before the final response arrived.',
         0,
@@ -1768,6 +1974,11 @@ export function createWorkstationClient(
     scope,
     paths,
     requestJson,
+    listThreads: ({ includeTurns = false, limit = 50 } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.threads({ includeTurns, limit }),
+        allowStatuses: [],
+      }).then((payload) => payload ?? { items: [], count: 0 }),
     getThread: ({ threadId, allowMissing = false }) =>
       requestJson<Record<string, unknown>>({
         path: paths.thread(threadId),
@@ -2079,6 +2290,7 @@ export function createWorkstationClient(
       priority = 0,
       enabled = true,
       model = null,
+      metadata = null,
     }) =>
       requestJson<Record<string, unknown>>({
         path: paths.providerProfilesRoot,
@@ -2095,6 +2307,7 @@ export function createWorkstationClient(
             priority,
             enabled,
             model: model ?? undefined,
+            metadata: metadata ?? undefined,
           }),
         },
         policy: WRITE_REQUEST_POLICY,
@@ -2514,6 +2727,7 @@ export function createWorkstationClient(
         policy: WRITE_REQUEST_POLICY,
       }),
     createSession,
+    persistUserTurn,
     submitTurn,
     submitTurnWithSessionRetry: async ({
       actor,
@@ -2523,9 +2737,12 @@ export function createWorkstationClient(
       source = 'workstation_client',
       runtimeTarget = null,
       machineTarget = null,
+      provider = null,
       model = null,
       reasoningEffort = null,
       policyContext = {},
+      existingSession = null,
+      clientRequestId = null,
     }) => {
       let session = await createSession({
         actor,
@@ -2533,6 +2750,7 @@ export function createWorkstationClient(
         channel,
         source,
         forceNew: false,
+        existingSession,
       });
 
       try {
@@ -2545,9 +2763,11 @@ export function createWorkstationClient(
           source,
           runtimeTarget,
           machineTarget,
+          provider,
           model,
           reasoningEffort,
           policyContext,
+          clientRequestId,
         });
         return { response, session, renewed: false };
       } catch (error) {
@@ -2561,6 +2781,7 @@ export function createWorkstationClient(
           channel,
           source,
           forceNew: true,
+          existingSession: null,
         });
         const response = await submitTurn({
           actor,
@@ -2571,9 +2792,11 @@ export function createWorkstationClient(
           source,
           runtimeTarget,
           machineTarget,
+          provider,
           model,
           reasoningEffort,
           policyContext,
+          clientRequestId,
         });
         return { response, session, renewed: true };
       }
@@ -2587,17 +2810,22 @@ export function createWorkstationClient(
       source = 'workstation_client',
       runtimeTarget = null,
       machineTarget = null,
+      provider = null,
       model = null,
       reasoningEffort = null,
       policyContext = {},
-      onEvent,
-    }) => {
+    onEvent,
+    existingSession = null,
+    clientRequestId = null,
+    abortHandle = null,
+  }) => {
       let session = await createSession({
         actor,
         threadId,
         channel,
         source,
         forceNew: false,
+        existingSession,
       });
 
       try {
@@ -2610,10 +2838,13 @@ export function createWorkstationClient(
           source,
           runtimeTarget,
           machineTarget,
+          provider,
           model,
           reasoningEffort,
           policyContext,
           onEvent,
+          clientRequestId,
+          abortHandle,
         });
         return { response, session, renewed: false };
       } catch (error) {
@@ -2627,6 +2858,7 @@ export function createWorkstationClient(
           channel,
           source,
           forceNew: true,
+          existingSession: null,
         });
         const response = await submitTurnStream({
           actor,
@@ -2637,10 +2869,13 @@ export function createWorkstationClient(
           source,
           runtimeTarget,
           machineTarget,
+          provider,
           model,
           reasoningEffort,
           policyContext,
           onEvent,
+          clientRequestId,
+          abortHandle,
         });
         return { response, session, renewed: true };
       }

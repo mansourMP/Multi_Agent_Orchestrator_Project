@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -15,6 +16,25 @@ from server_modules.runtime_models import RunStartRequest
 
 
 class MultiRuntimeDemoProofTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global runtime_attachment_service
+        global build_run_start_turn_request
+        global RunExecutionServices
+        global build_delegated_child_run_request
+        global execute_durable_turn_request
+        global RunStartRequest
+
+        runtime_attachment_service = importlib.import_module("server_modules.runtime_attachment_service")
+        agent_turn = importlib.import_module("server_modules.agent_turn")
+        run_service = importlib.import_module("server_modules.run_service")
+        runtime_models = importlib.import_module("server_modules.runtime_models")
+
+        build_run_start_turn_request = agent_turn.build_run_start_turn_request
+        RunExecutionServices = run_service.RunExecutionServices
+        build_delegated_child_run_request = run_service.build_delegated_child_run_request
+        execute_durable_turn_request = run_service.execute_durable_turn_request
+        RunStartRequest = runtime_models.RunStartRequest
+
     def _runtime_profile(self, runtime_mode: str) -> dict:
         if runtime_mode in {"local_secure", "privileged_device"}:
             return {
@@ -321,17 +341,12 @@ class MultiRuntimeDemoProofTests(unittest.TestCase):
             note="Continue through degraded-safe bridge mode.",
         )
 
-        self.assertEqual(request.metadata["runtime_mode"], "hosted_secure")
-        self.assertEqual(request.metadata["runtime_scope"]["mode"], "hosted_secure")
-        self.assertEqual(request.metadata["workspace_runtime_deployment_mode"], "hybrid")
-        self.assertEqual(request.metadata["runtime_attachment_id"], "managed_cloud:profile-cloud")
-        self.assertEqual(request.metadata["runtime_selection"]["deployment_mode"], "hybrid")
-        self.assertEqual(request.metadata["runtime_selection"]["degraded_mode"]["state"], "local_offline_summary_bridge")
-        self.assertEqual(
-            request.metadata["runtime_selection"]["sync_enforcement"]["effective_sync_class"],
-            "summary_bridge_only",
-        )
-        self.assertEqual(request.metadata["execution_target"], "cloud")
+        self.assertNotIn("runtime_mode", request.metadata)
+        self.assertNotIn("runtime_scope", request.metadata)
+        self.assertNotIn("workspace_runtime_deployment_mode", request.metadata)
+        self.assertNotIn("runtime_attachment_id", request.metadata)
+        self.assertNotIn("runtime_selection", request.metadata)
+        self.assertNotIn("execution_target", request.metadata)
 
 
 if __name__ == "__main__":

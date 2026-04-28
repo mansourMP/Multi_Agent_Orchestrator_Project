@@ -57,6 +57,7 @@ type WorkstationStreamManagerDependencies = {
   client: Pick<WorkstationClient, 'openNotificationsStream' | 'openChannelEventsStream'>;
   maxRecent?: number;
   reconnectDelayMs?: number;
+  maxReconnectAttempts?: number;
   nowIso?: () => string;
 };
 
@@ -136,6 +137,8 @@ export class WorkstationStreamManager {
 
   private readonly reconnectDelayMs: number;
 
+  private readonly maxReconnectAttempts: number;
+
   private readonly nowIso: () => string;
 
   private state: WorkstationStreamState = DEFAULT_STATE;
@@ -155,6 +158,7 @@ export class WorkstationStreamManager {
   constructor(private readonly dependencies: WorkstationStreamManagerDependencies) {
     this.maxRecent = Math.max(10, Math.min(dependencies.maxRecent ?? 40, 200));
     this.reconnectDelayMs = Math.max(500, Math.min(dependencies.reconnectDelayMs ?? 1500, 15000));
+    this.maxReconnectAttempts = Math.max(1, Math.min(dependencies.maxReconnectAttempts ?? 3, 10));
     this.nowIso = dependencies.nowIso ?? (() => new Date().toISOString());
   }
 
@@ -288,6 +292,23 @@ export class WorkstationStreamManager {
 
     this.clearReconnect(kind);
 
+    const reconnectCount = kind === 'notifications'
+      ? this.state.notifications.reconnectCount
+      : this.state.activity.reconnectCount;
+    if (reconnectCount > this.maxReconnectAttempts) {
+      this.patchState((current) => ({
+        ...current,
+        [kind]: {
+          ...current[kind],
+          connectionState: 'closed',
+        },
+      }));
+      return;
+    }
+
+    const attemptIndex = Math.max(0, reconnectCount - 1);
+    const delayMs = this.reconnectDelayMs * (2 ** attemptIndex);
+
     const handle = window.setTimeout(() => {
       if (this.disposed) {
         return;
@@ -297,7 +318,7 @@ export class WorkstationStreamManager {
       } else {
         this.connectActivity();
       }
-    }, this.reconnectDelayMs);
+    }, delayMs);
 
     if (kind === 'notifications') {
       this.notificationReconnectHandle = handle;
@@ -351,6 +372,7 @@ export class WorkstationStreamManager {
         notifications: {
           ...current.notifications,
           connectionState: 'open',
+          reconnectCount: 0,
         },
       }));
     };
@@ -382,17 +404,13 @@ export class WorkstationStreamManager {
       });
     });
 
-    source.addEventListener('heartbeat', () => {
-      this.patchState((current) => ({
-        ...current,
-        notifications: {
-          ...current.notifications,
-          lastHeartbeatAt: this.nowIso(),
-        },
-      }));
-    });
+    source.addEventListener('heartbeat', () => {});
 
     source.addEventListener('done', () => {
+      source.close();
+      if (this.notificationSource === source) {
+        this.notificationSource = null;
+      }
       this.patchState((current) => ({
         ...current,
         notifications: {
@@ -405,6 +423,10 @@ export class WorkstationStreamManager {
     });
 
     source.onerror = () => {
+      source.close();
+      if (this.notificationSource === source) {
+        this.notificationSource = null;
+      }
       this.patchState((current) => ({
         ...current,
         notifications: {
@@ -448,6 +470,7 @@ export class WorkstationStreamManager {
         activity: {
           ...current.activity,
           connectionState: 'open',
+          reconnectCount: 0,
         },
       }));
     };
@@ -478,17 +501,13 @@ export class WorkstationStreamManager {
       });
     });
 
-    source.addEventListener('heartbeat', () => {
-      this.patchState((current) => ({
-        ...current,
-        activity: {
-          ...current.activity,
-          lastHeartbeatAt: this.nowIso(),
-        },
-      }));
-    });
+    source.addEventListener('heartbeat', () => {});
 
     source.addEventListener('done', () => {
+      source.close();
+      if (this.activitySource === source) {
+        this.activitySource = null;
+      }
       this.patchState((current) => ({
         ...current,
         activity: {
@@ -501,6 +520,10 @@ export class WorkstationStreamManager {
     });
 
     source.onerror = () => {
+      source.close();
+      if (this.activitySource === source) {
+        this.activitySource = null;
+      }
       this.patchState((current) => ({
         ...current,
         activity: {

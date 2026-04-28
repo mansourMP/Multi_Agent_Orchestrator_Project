@@ -36,6 +36,8 @@ Shell classes are explicit:
   - web chat
 
 Shell truth:
+- every shell shares the same captain identity
+- every shell shares the same run engine truth
 - every shell shares the same auth and billing identity
 - every shell shares the same infrastructure guardrails
 - channel shells are lightweight conversation surfaces, not separate product brains
@@ -45,12 +47,14 @@ Shell truth:
 
 ## The 4-Layer OS Model
 
-### 1. Sage / Personal AI
+### 1. Sage / Personal Captain
 
 Sage is the user's main agent and the only primary intelligence the user should feel.
 
 Sage owns:
 - the main relationship with the user
+- a stable captain install identity with editable display metadata
+- stable internal id stays bound to the captain install
 - personal memory facade
 - the user's own provider selection and tools
 - direct chat and personal work sessions
@@ -62,8 +66,9 @@ Sage isolation contract:
 - Sage does not control Studio agents
 - Sage does not inherit Studio memory or execution state
 - Sage does not support external customer-live mode switching
+- captain does not support owner_edit, owner_test, or customer_live mode switching
 
-### 2. Studio Workers
+### 2. Specialist Workers
 
 Studio agents are real deployable workers, not wrappers.
 
@@ -90,6 +95,21 @@ Mode truth:
 ### Separation Contract
 
 Sage is an independent personal AI. Studio agents are independent deployable workers. They do not share memory, context, or execution. The only shared layer is auth, billing, and channel infrastructure.
+
+### Shared Operational Board
+
+The shared operational board is the only structured shared state layer between captain and specialists.
+
+It may contain:
+- shared instructions
+- SOP and playbook entries
+- published shared operational board entries
+
+It may not become:
+- raw shared memory
+
+Write modes stay explicit:
+- `propose_update`
 
 ### 3. Applications
 
@@ -186,18 +206,19 @@ The system must fail closed if a placement or sync rule cannot be satisfied.
 ## Strict Sandbox And Memory Boundaries
 
 Allowed state layers are frozen as:
-- Sage private memory
-- Studio-agent private memory
+- captain private memory
+- specialist private memory
+- shared operational board
 - artifacts/history
 
 ### Memory Boundaries
 
-Sage can read:
+Captain can read:
 - its own private memory
 - user-selected inputs and artifacts
 - its own approved connector history
 
-Sage does not automatically read:
+Captain does not automatically read:
 - Studio-agent memory
 - Studio-agent execution state
 - local-private memory that policy marks as local-only
@@ -219,6 +240,7 @@ Artifact/history boundary:
 Sandbox and broker truth:
 - sandbox runtime scope carries the same state-layer policy the broker sees
 - cross-install private memory is denied by default
+- specialist-to-captain private memory access is denied by default
 - specialist-to-Sage private memory access is denied by default
 - app-private context not explicitly shared
 
@@ -237,6 +259,7 @@ Applications cannot read by default:
 All execution remains brokered through policy-bound boundaries:
 - tool access goes through `tool_broker`
 - secrets go through `secrets_broker` and vault paths
+- platform-hosted provider secrets resolve through `secrets_broker` hosted resolver paths with audit events
 - runtime placement goes through runtime attachment and hybrid policy services
 - connector and egress actions are auditable
 

@@ -128,16 +128,12 @@ export function useWorkstationDesktopBridge(): WorkstationDesktopBridgeState {
     };
 
     void refresh();
-    const interval = window.setInterval(() => {
-      void refresh();
-    }, 1500);
     const onResize = () => {
       void refresh();
     };
     window.addEventListener('resize', onResize);
     return () => {
       active = false;
-      window.clearInterval(interval);
       window.removeEventListener('resize', onResize);
     };
   }, [desktopBridge]);

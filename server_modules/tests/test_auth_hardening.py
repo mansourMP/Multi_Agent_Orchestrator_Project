@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 import os
+import importlib
 
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -28,6 +29,15 @@ def _request(path: str = "/test", query_string: bytes = b"") -> Request:
 
 class AuthHardeningTests(unittest.TestCase):
     def setUp(self):
+        global auth
+        global runtime_common
+        global runtime_db
+        global routes_connectors
+
+        auth = importlib.import_module("server_modules.auth")
+        runtime_common = importlib.import_module("server_modules.runtime_common")
+        runtime_db = importlib.import_module("server_modules.db")
+        routes_connectors = importlib.import_module("server_modules.routes_connectors")
         auth.USER_RATE_LIMIT_BUCKETS.clear()
         auth.LOGIN_RATE_LIMIT_BUCKETS.clear()
 

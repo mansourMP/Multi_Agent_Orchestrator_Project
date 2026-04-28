@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
@@ -17,6 +18,10 @@ def _fake_scoped_connection(connection):
 
 
 class DeployedAgentRateLimitRepositoryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global control_plane_repository
+        control_plane_repository = importlib.import_module("server_modules.control_plane_repository")
+
     def test_control_plane_schema_declares_daily_message_usage_table_and_indexes(self) -> None:
         schema = control_plane_repository.CONTROL_PLANE_SCHEMA_SQL
         self.assertIn("CREATE TABLE IF NOT EXISTS deployed_agent_daily_message_usage", schema)
@@ -107,6 +112,12 @@ class DeployedAgentRateLimitRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DeployedAgentRateLimitServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global deployed_agent_rate_limit_service
+        deployed_agent_rate_limit_service = importlib.import_module(
+            "server_modules.deployed_agent_rate_limit_service"
+        )
+
     async def test_enforce_daily_message_limit_is_disabled_without_configured_limit(self) -> None:
         verdict = await deployed_agent_rate_limit_service.enforce_deployed_agent_daily_message_limit(
             tenant_id="tenant-1",

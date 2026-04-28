@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import logging
 import os
@@ -151,6 +152,354 @@ def _build_responses_input(
             }
         )
     return items
+
+
+def _tool_arguments_json(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return "{}"
+    return "{}"
+
+
+def _tool_arguments_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        parsed = parse_json_object_loose(value)
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _tool_spec_items(tools: Any) -> List[Dict[str, Any]]:
+    specs: List[Dict[str, Any]] = []
+    if not isinstance(tools, list):
+        return specs
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        parameters = item.get("parameters") if isinstance(item.get("parameters"), dict) else None
+        if not name or not parameters:
+            continue
+        specs.append(
+            {
+                "name": name,
+                "description": str(item.get("description") or "").strip(),
+                "parameters": parameters,
+            }
+        )
+    return specs
+
+
+def _normalize_openai_tool_calls(raw_tool_calls: Any) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    if not isinstance(raw_tool_calls, list):
+        return normalized
+    for item in raw_tool_calls:
+        if not isinstance(item, dict):
+            continue
+        function_payload = item.get("function") if isinstance(item.get("function"), dict) else {}
+        tool_name = str(
+            function_payload.get("name")
+            or item.get("name")
+            or ""
+        ).strip()
+        if not tool_name:
+            continue
+        normalized.append(
+            {
+                "id": str(item.get("id") or "").strip() or None,
+                "name": tool_name,
+                "arguments": function_payload.get("arguments") if "arguments" in function_payload else item.get("arguments"),
+            }
+        )
+    return normalized
+
+
+def _normalize_openai_function_call(message: Any) -> List[Dict[str, Any]]:
+    if not isinstance(message, dict):
+        return []
+    tool_calls = _normalize_openai_tool_calls(message.get("tool_calls"))
+    if tool_calls:
+        return tool_calls
+    function_call = message.get("function_call") if isinstance(message.get("function_call"), dict) else None
+    if not function_call:
+        return []
+    tool_name = str(function_call.get("name") or "").strip()
+    if not tool_name:
+        return []
+    return [
+        {
+            "id": None,
+            "name": tool_name,
+            "arguments": function_call.get("arguments"),
+        }
+    ]
+
+
+def _extract_openai_message_text(message: Any) -> str:
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if text:
+                parts.append(text)
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _build_openai_compatible_messages(
+    user_prompt: str,
+    *,
+    prior_messages: Any = None,
+) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+    if isinstance(prior_messages, list):
+        for item in prior_messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role == "tool":
+                content = str(item.get("content") or "").strip()
+                tool_call_id = str(item.get("tool_call_id") or "").strip()
+                if content and tool_call_id:
+                    tool_message = {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": content,
+                    }
+                    name = str(item.get("name") or "").strip()
+                    if name:
+                        tool_message["name"] = name
+                    messages.append(tool_message)
+                continue
+            if role not in {"system", "user", "assistant"}:
+                continue
+            content = str(item.get("content") or "").strip()
+            tool_calls = _normalize_openai_tool_calls(item.get("tool_calls"))
+            if role == "assistant" and tool_calls:
+                assistant_message: Dict[str, Any] = {"role": "assistant", "tool_calls": []}
+                if content:
+                    assistant_message["content"] = content
+                for tool_call in tool_calls:
+                    assistant_message["tool_calls"].append(
+                        {
+                            "id": str(tool_call.get("id") or "").strip() or f"toolcall_{len(assistant_message['tool_calls']) + 1}",
+                            "type": "function",
+                            "function": {
+                                "name": str(tool_call.get("name") or "").strip(),
+                                "arguments": _tool_arguments_json(tool_call.get("arguments")),
+                            },
+                        }
+                    )
+                if assistant_message["tool_calls"] or content:
+                    messages.append(assistant_message)
+                continue
+            if content:
+                messages.append({"role": role, "content": content})
+    content = str(user_prompt or "").strip()
+    if content:
+        messages.append({"role": "user", "content": content})
+    return messages
+
+
+def _build_anthropic_messages(
+    user_prompt: str,
+    *,
+    prior_messages: Any = None,
+) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+    if isinstance(prior_messages, list):
+        for item in prior_messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role == "tool":
+                content = str(item.get("content") or "").strip()
+                tool_call_id = str(item.get("tool_call_id") or "").strip()
+                if content and tool_call_id:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_call_id,
+                                    "content": content,
+                                }
+                            ],
+                        }
+                    )
+                continue
+            if role not in {"user", "assistant"}:
+                continue
+            text = str(item.get("content") or "").strip()
+            tool_calls = _normalize_openai_tool_calls(item.get("tool_calls"))
+            if role == "assistant" and tool_calls:
+                blocks: List[Dict[str, Any]] = []
+                if text:
+                    blocks.append({"type": "text", "text": text})
+                for tool_call in tool_calls:
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": str(tool_call.get("id") or "").strip() or f"tooluse_{len(blocks)}",
+                            "name": str(tool_call.get("name") or "").strip(),
+                            "input": _tool_arguments_dict(tool_call.get("arguments")),
+                        }
+                    )
+                if blocks:
+                    messages.append({"role": "assistant", "content": blocks})
+                continue
+            if text:
+                messages.append({"role": role, "content": text})
+    content = str(user_prompt or "").strip()
+    if content:
+        messages.append({"role": "user", "content": content})
+    return messages
+
+
+def _build_gemini_contents(
+    user_prompt: str,
+    *,
+    prior_messages: Any = None,
+) -> List[Dict[str, Any]]:
+    contents: List[Dict[str, Any]] = []
+    if isinstance(prior_messages, list):
+        for item in prior_messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role == "tool":
+                content = str(item.get("content") or "").strip()
+                tool_name = str(item.get("name") or "").strip()
+                if content and tool_name:
+                    contents.append(
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "functionResponse": {
+                                        "name": tool_name,
+                                        "response": {"content": content},
+                                    }
+                                }
+                            ],
+                        }
+                    )
+                continue
+            role_token = "model" if role == "assistant" else "user"
+            if role_token not in {"model", "user"}:
+                continue
+            text = str(item.get("content") or "").strip()
+            tool_calls = _normalize_openai_tool_calls(item.get("tool_calls"))
+            if role_token == "model" and tool_calls:
+                parts: List[Dict[str, Any]] = []
+                if text:
+                    parts.append({"text": text})
+                for tool_call in tool_calls:
+                    parts.append(
+                        {
+                            "functionCall": {
+                                "name": str(tool_call.get("name") or "").strip(),
+                                "args": _tool_arguments_dict(tool_call.get("arguments")),
+                            }
+                        }
+                    )
+                if parts:
+                    contents.append({"role": "model", "parts": parts})
+                continue
+            if text:
+                contents.append({"role": role_token, "parts": [{"text": text}]})
+    content = str(user_prompt or "").strip()
+    if content:
+        contents.append({"role": "user", "parts": [{"text": content}]})
+    return contents
+
+
+def _normalize_anthropic_tool_calls(content_blocks: Any) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    if not isinstance(content_blocks, list):
+        return normalized
+    for block in content_blocks:
+        if not isinstance(block, dict):
+            continue
+        if str(block.get("type") or "").strip() != "tool_use":
+            continue
+        tool_name = str(block.get("name") or "").strip()
+        if not tool_name:
+            continue
+        normalized.append(
+            {
+                "id": str(block.get("id") or "").strip() or None,
+                "name": tool_name,
+                "arguments": block.get("input") if isinstance(block.get("input"), dict) else {},
+            }
+        )
+    return normalized
+
+
+def _extract_anthropic_text(content_blocks: Any) -> str:
+    parts: List[str] = []
+    if not isinstance(content_blocks, list):
+        return ""
+    for block in content_blocks:
+        if not isinstance(block, dict):
+            continue
+        if str(block.get("type") or "").strip() != "text":
+            continue
+        text = str(block.get("text") or "").strip()
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _normalize_gemini_tool_calls(parts: Any) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    if not isinstance(parts, list):
+        return normalized
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        function_call = part.get("functionCall") if isinstance(part.get("functionCall"), dict) else None
+        if not function_call:
+            continue
+        tool_name = str(function_call.get("name") or "").strip()
+        if not tool_name:
+            continue
+        normalized.append(
+            {
+                "id": None,
+                "name": tool_name,
+                "arguments": function_call.get("args") if isinstance(function_call.get("args"), dict) else {},
+            }
+        )
+    return normalized
+
+
+def _extract_gemini_text(parts: Any) -> str:
+    text_parts: List[str] = []
+    if not isinstance(parts, list):
+        return ""
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        text = str(part.get("text") or "").strip()
+        if text:
+            text_parts.append(text)
+    return "\n".join(text_parts).strip()
 
 
 def safe_read_json(path: Path, fallback: Any) -> Any:
@@ -419,9 +768,39 @@ def get_mistral_api_key() -> str:
     ).strip()
 
 
+def ollama_service_status() -> Dict[str, Any]:
+    base_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OLLAMA_URL") or "http://127.0.0.1:11434")
+    req = urllib.request.Request(
+        url=f"{base_url}/api/tags",
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except Exception:
+        return {"reachable": False, "has_models": False, "models": []}
+    parsed = parse_json_object_loose(raw) or {}
+    items = parsed.get("models") if isinstance(parsed.get("models"), list) else []
+    models: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("model") or "").strip()
+        if name:
+            models.append(name)
+    return {
+        "reachable": True,
+        "has_models": bool(models),
+        "models": sorted(set(models)),
+    }
+
+
 def ollama_enabled() -> bool:
     raw = str(os.getenv("ORION_LOCAL_WORKER_OLLAMA_ENABLED", "0")).strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    status = ollama_service_status()
+    return bool(status.get("reachable") and status.get("has_models"))
 
 
 def provider_has_key(provider: str) -> bool:
@@ -684,6 +1063,249 @@ def format_provider_error(exc: Exception) -> str:
     return str(exc)
 
 
+def _curl_json_request(
+    url: str,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    timeout_seconds: int = 45,
+) -> Dict[str, Any]:
+    command = [
+        "curl",
+        "-sS",
+        "-L",
+        "-X",
+        "POST" if payload is not None else "GET",
+        "--max-time",
+        str(max(1, int(timeout_seconds))),
+        "-w",
+        "\n__CODEX_STATUS__:%{http_code}",
+    ]
+    for key, value in dict(headers or {}).items():
+        command.extend(["-H", f"{key}: {value}"])
+    body: Optional[bytes] = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        command.extend(["--data-binary", "@-"])
+    command.append(url)
+    completed = subprocess.run(
+        command,
+        input=body,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(stderr or f"curl request failed for {url}")
+    raw_output = completed.stdout.decode("utf-8", errors="replace")
+    marker = "\n__CODEX_STATUS__:"
+    body_text, _, status_text = raw_output.rpartition(marker)
+    if not status_text:
+        body_text = raw_output
+        status_code = 200
+    else:
+        try:
+            status_code = int(status_text.strip() or "0")
+        except Exception:
+            status_code = 0
+    parsed = parse_json_object_loose(body_text)
+    return {
+        "status": status_code,
+        "raw": body_text,
+        "json": parsed if isinstance(parsed, dict) else {},
+    }
+
+
+def _anthropic_messages_request(
+    *,
+    api_url: str,
+    api_key: str,
+    payload: Dict[str, Any],
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    url = f"{api_url}/v1/messages"
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    req = urllib.request.Request(
+        url=url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+            return {
+                "status": int(getattr(response, "status", response.getcode())),
+                "raw": raw,
+                "json": json.loads(raw),
+            }
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
+        return {
+            "status": int(getattr(exc, "code", 500)),
+            "raw": raw,
+            "json": parse_json_object_loose(raw) or {},
+        }
+    except Exception:
+        if not shutil.which("curl"):
+            raise
+        return _curl_json_request(url, headers=headers, payload=payload, timeout_seconds=timeout_seconds)
+
+
+def _anthropic_response_error(response: Dict[str, Any]) -> str:
+    parsed = response.get("json") if isinstance(response.get("json"), dict) else {}
+    error_payload = parsed.get("error") if isinstance(parsed, dict) else None
+    if isinstance(error_payload, dict):
+        message = str(error_payload.get("message") or "").strip()
+        if message:
+            return message
+    raw = str(response.get("raw") or "").strip()
+    if raw:
+        return raw
+    return f"anthropic_http_{response.get('status') or 0}"
+
+
+def is_retryable_provider_transport_error(error_text: Any) -> bool:
+    normalized = str(error_text or "").strip().lower()
+    if not normalized:
+        return False
+    return (
+        "incomplete read" in normalized
+        or "incompleteread" in normalized
+        or "connection reset" in normalized
+        or "remote end closed" in normalized
+    )
+
+
+def compact_tool_mode_system_prompt(system_prompt: Optional[str]) -> Optional[str]:
+    prompt = str(system_prompt or "").strip()
+    runtime_identity = ""
+    if "## Runtime Identity" in prompt:
+        runtime_start = prompt.find("## Runtime Identity")
+        runtime_identity = prompt[runtime_start:].strip()
+
+    sections = [
+        (
+            "You are Sage.\n"
+            "Use the provided API tool definitions when they match the request.\n"
+            "Do not claim you lack filesystem, browser, desktop, clipboard, shell, or web access if a matching tool is available.\n"
+            "For local machine requests like listing desktop files, reading local files, taking screenshots, or running terminal commands, call the matching tool before answering."
+        )
+    ]
+    if runtime_identity:
+        sections.append(runtime_identity)
+    compacted = "\n\n".join(section.strip() for section in sections if str(section or "").strip()).strip()
+    return compacted or system_prompt
+
+
+def is_invalid_tool_capable_final_answer(final_text: Any, tool_calls: Any) -> bool:
+    if isinstance(tool_calls, list) and tool_calls:
+        return False
+    normalized = " ".join(str(final_text or "").strip().lower().split())
+    if not normalized:
+        return False
+    denial_markers = (
+        "i don't have direct access",
+        "i do not have direct access",
+        "i can't access your",
+        "i cannot access your",
+        "i can't see or interact with files",
+        "i cannot see or interact with files",
+        "unless you upload",
+        "through file uploads",
+    )
+    return any(marker in normalized for marker in denial_markers)
+
+
+def collect_tool_capable_provider_response(events: Iterator[Dict[str, Any]]) -> Dict[str, Any]:
+    streamed_parts: List[str] = []
+    final_usage: Optional[Dict[str, Any]] = None
+    final_model = ""
+    tool_calls: List[Dict[str, Any]] = []
+    provider_error = "unknown_error"
+
+    for event in events:
+        event_type = str(event.get("type") or "").strip().lower()
+        if event_type == "delta":
+            delta = str(event.get("delta") or "")
+            if delta:
+                streamed_parts.append(delta)
+            final_model = str(event.get("model") or final_model or "").strip() or final_model
+            continue
+        if event_type == "done":
+            final_usage = event.get("usage") if isinstance(event.get("usage"), dict) else None
+            final_model = str(event.get("model") or final_model or "").strip() or final_model
+            tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
+            final_text = str(event.get("text") or "").strip() or "".join(streamed_parts).strip()
+            if is_invalid_tool_capable_final_answer(final_text, tool_calls):
+                provider_error = "tool_capable_provider_refused_available_tools"
+                break
+            if final_text or tool_calls:
+                return {
+                    "ok": True,
+                    "text": final_text,
+                    "deltas": streamed_parts,
+                    "usage": final_usage,
+                    "model": final_model,
+                    "tool_calls": tool_calls,
+                    "error": "",
+                }
+            provider_error = "empty_content"
+            break
+        if event_type == "error":
+            final_model = str(event.get("model") or final_model or "").strip() or final_model
+            provider_error = str(event.get("error") or "unknown_error").strip() or "unknown_error"
+            break
+
+    return {
+        "ok": False,
+        "text": "",
+        "deltas": streamed_parts,
+        "usage": final_usage,
+        "model": final_model,
+        "tool_calls": [],
+        "error": provider_error,
+    }
+
+
+def run_tool_capable_provider_with_prompt_fallback(
+    *,
+    system_prompt: Optional[str],
+    stream_factory: Any,
+) -> Dict[str, Any]:
+    prompt_variants: List[Optional[str]] = [system_prompt]
+    compacted_prompt = compact_tool_mode_system_prompt(system_prompt)
+    if compacted_prompt != system_prompt:
+        prompt_variants.append(compacted_prompt)
+
+    last_result: Dict[str, Any] = {
+        "ok": False,
+        "text": "",
+        "deltas": [],
+        "usage": None,
+        "model": "",
+        "tool_calls": [],
+        "error": "unknown_error",
+    }
+    for attempt_index, prompt_variant in enumerate(prompt_variants):
+        last_result = collect_tool_capable_provider_response(stream_factory(prompt_variant))
+        if last_result.get("ok"):
+            return last_result
+        if attempt_index + 1 >= len(prompt_variants):
+            break
+        if last_result.get("deltas"):
+            if str(last_result.get("error") or "").strip() != "tool_capable_provider_refused_available_tools":
+                break
+        if not is_retryable_provider_transport_error(last_result.get("error")):
+            if str(last_result.get("error") or "").strip() != "tool_capable_provider_refused_available_tools":
+                break
+    return last_result
+
+
 def codex_instructions(system_prompt: Optional[str]) -> str:
     return str(system_prompt or "")
 
@@ -796,11 +1418,20 @@ def openai_chat_json(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+            "Connection": "close",
         },
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            raw = response.read().decode("utf-8")
+            try:
+                raw_body = response.read()
+            except http.client.IncompleteRead as exc:
+                raw_body = exc.partial or b""
+                if not raw_body:
+                    raise
+            raw = raw_body.decode("utf-8")
         parsed = json.loads(raw)
         choices = parsed.get("choices") if isinstance(parsed, dict) else None
         if not isinstance(choices, list) or not choices:
@@ -854,11 +1485,20 @@ def openai_chat_text(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+            "Connection": "close",
         },
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            raw = response.read().decode("utf-8")
+            try:
+                raw_body = response.read()
+            except http.client.IncompleteRead as exc:
+                raw_body = exc.partial or b""
+                if not raw_body:
+                    raise
+            raw = raw_body.decode("utf-8")
         parsed = json.loads(raw)
         choices = parsed.get("choices") if isinstance(parsed, dict) else None
         if not isinstance(choices, list) or not choices:
@@ -881,6 +1521,358 @@ def openai_chat_text(
         return content.strip(), usage, model, ""
     except Exception as exc:
         return "", None, model, format_provider_error(exc)
+
+
+def openai_chat_text_with_retries(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+    *,
+    provider: str = "openai",
+    credential_override: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    normalized_provider = str(provider or "openai").strip().lower() or "openai"
+    max_attempts = 3 if normalized_provider == "deepseek" else 1
+    last_result: Tuple[str, Optional[Dict[str, Any]], str, str] = ("", None, "", "unknown_error")
+    for _attempt in range(max_attempts):
+        last_result = openai_chat_text(
+            system_prompt,
+            user_prompt,
+            model_override=model_override,
+            prior_messages=prior_messages,
+            provider=normalized_provider,
+            credential_override=credential_override,
+        )
+        text, _usage, _model, provider_error = last_result
+        if text:
+            return last_result
+        if normalized_provider != "deepseek":
+            return last_result
+        normalized_error = str(provider_error or "").strip().lower()
+        if not normalized_error:
+            continue
+        if "incomplete read" not in normalized_error and "connection reset" not in normalized_error and "remote end closed" not in normalized_error:
+            return last_result
+    return last_result
+
+
+def iter_openai_compatible_chat_events(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+    *,
+    provider: str = "openai",
+    credential_override: Optional[Dict[str, Any]] = None,
+    tools: Any = None,
+) -> Iterator[Dict[str, Any]]:
+    api_key = resolve_openai_compatible_api_key(provider, credential_override=credential_override)
+    if not api_key:
+        yield {"type": "error", "error": openai_compatible_missing_key_error(provider), "model": ""}
+        return
+
+    model = (str(model_override or "").strip() or default_openai_compatible_model(provider)).strip() or default_openai_compatible_model(provider)
+    temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override)
+
+    messages = _build_openai_compatible_messages(user_prompt, prior_messages=prior_messages)
+    if str(system_prompt or "").strip():
+        messages = [{"role": "system", "content": str(system_prompt).strip()}, *messages]
+    payload: Dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "messages": messages,
+    }
+    tool_specs = _tool_spec_items(tools)
+    if tool_specs:
+        payload["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": item["name"],
+                    "description": item["description"],
+                    "parameters": item["parameters"],
+                },
+            }
+            for item in tool_specs
+        ]
+        payload["tool_choice"] = "auto"
+        payload["parallel_tool_calls"] = True
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url=f"{base_url}/chat/completions",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+            "Connection": "close",
+        },
+    )
+    max_attempts = 3 if str(provider or "").strip().lower() == "deepseek" else 1
+    last_error = "unknown_error"
+    for attempt in range(max_attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+                try:
+                    raw_body = response.read()
+                except http.client.IncompleteRead as exc:
+                    raw_body = exc.partial or b""
+                    if not raw_body:
+                        raise
+                raw = raw_body.decode("utf-8")
+            parsed = json.loads(raw)
+            choices = parsed.get("choices") if isinstance(parsed, dict) else None
+            if not isinstance(choices, list) or not choices:
+                yield {"type": "error", "error": "empty_choices", "model": model}
+                return
+            message = choices[0].get("message") if isinstance(choices[0], dict) else None
+            tool_calls = _normalize_openai_function_call(message)
+            final_text = _extract_openai_message_text(message)
+            if final_text:
+                yield {"type": "delta", "delta": final_text, "model": model}
+            usage = parsed.get("usage") if isinstance(parsed.get("usage"), dict) else None
+            if final_text or tool_calls:
+                yield {
+                    "type": "done",
+                    "text": final_text,
+                    "usage": usage,
+                    "model": model,
+                    "tool_calls": tool_calls,
+                }
+                return
+            yield {"type": "error", "error": "empty_content", "model": model}
+            return
+        except Exception as exc:
+            last_error = format_provider_error(exc)
+            normalized_error = str(last_error or "").strip().lower()
+            if attempt + 1 >= max_attempts:
+                break
+            if (
+                "incomplete read" not in normalized_error
+                and "connection reset" not in normalized_error
+                and "remote end closed" not in normalized_error
+            ):
+                break
+    yield {"type": "error", "error": last_error, "model": model}
+
+
+def iter_anthropic_chat_events(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+    *,
+    credential_override: Optional[Dict[str, Any]] = None,
+    tools: Any = None,
+) -> Iterator[Dict[str, Any]]:
+    api_key = resolve_anthropic_api_key(credential_override=credential_override)
+    if not api_key:
+        yield {"type": "error", "error": "missing_api_key", "model": ""}
+        return
+
+    model = normalize_anthropic_model(model_override)
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    max_tokens = max(256, to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 1200))
+    api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_URL") or "https://api.anthropic.com")
+    payload: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": _build_anthropic_messages(user_prompt, prior_messages=prior_messages),
+    }
+    if str(system_prompt or "").strip():
+        payload["system"] = str(system_prompt).strip()
+    tool_specs = _tool_spec_items(tools)
+    if tool_specs:
+        payload["tools"] = [
+            {
+                "name": item["name"],
+                "description": item["description"],
+                "input_schema": item["parameters"],
+            }
+            for item in tool_specs
+        ]
+        payload["tool_choice"] = {"type": "auto"}
+    try:
+        response = _anthropic_messages_request(
+            api_url=api_url,
+            api_key=api_key,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        if int(response.get("status") or 0) >= 400:
+            yield {"type": "error", "error": _anthropic_response_error(response), "model": model}
+            return
+        parsed = response.get("json") if isinstance(response.get("json"), dict) else {}
+        content_blocks = parsed.get("content") if isinstance(parsed, dict) else None
+        tool_calls = _normalize_anthropic_tool_calls(content_blocks)
+        final_text = _extract_anthropic_text(content_blocks)
+        if final_text:
+            yield {"type": "delta", "delta": final_text, "model": model}
+        usage = parsed.get("usage") if isinstance(parsed.get("usage"), dict) else None
+        if final_text or tool_calls:
+            yield {
+                "type": "done",
+                "text": final_text,
+                "usage": usage,
+                "model": model,
+                "tool_calls": tool_calls,
+            }
+            return
+        yield {"type": "error", "error": "empty_content", "model": model}
+    except Exception as exc:
+        yield {"type": "error", "error": format_provider_error(exc), "model": model}
+
+
+def iter_gemini_chat_events(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+    *,
+    tools: Any = None,
+) -> Iterator[Dict[str, Any]]:
+    api_key = get_gemini_api_key()
+    if not api_key:
+        yield {"type": "error", "error": "missing_api_key", "model": ""}
+        return
+
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_GEMINI_URL") or "https://generativelanguage.googleapis.com/v1beta")
+    payload: Dict[str, Any] = {
+        "contents": _build_gemini_contents(user_prompt, prior_messages=prior_messages),
+    }
+    if str(system_prompt or "").strip():
+        payload["system_instruction"] = {"parts": [{"text": str(system_prompt).strip()}]}
+    tool_specs = _tool_spec_items(tools)
+    if tool_specs:
+        payload["tools"] = [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": item["name"],
+                        "description": item["description"],
+                        "parameters": item["parameters"],
+                    }
+                    for item in tool_specs
+                ]
+            }
+        ]
+        payload["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
+    req = urllib.request.Request(
+        url=f"{api_url}/models/{urllib.parse.quote_plus(model)}:generateContent?key={urllib.parse.quote_plus(api_key)}",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+        parsed = json.loads(raw)
+        candidates = parsed.get("candidates") if isinstance(parsed, dict) else None
+        first_candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
+        content = first_candidate.get("content") if isinstance(first_candidate, dict) else {}
+        parts = content.get("parts") if isinstance(content, dict) else None
+        tool_calls = _normalize_gemini_tool_calls(parts)
+        final_text = _extract_gemini_text(parts)
+        if final_text:
+            yield {"type": "delta", "delta": final_text, "model": model}
+        usage = parsed.get("usageMetadata") if isinstance(parsed.get("usageMetadata"), dict) else None
+        if final_text or tool_calls:
+            yield {
+                "type": "done",
+                "text": final_text,
+                "usage": usage,
+                "model": model,
+                "tool_calls": tool_calls,
+            }
+            return
+        yield {"type": "error", "error": "empty_content", "model": model}
+    except Exception as exc:
+        yield {"type": "error", "error": format_provider_error(exc), "model": model}
+
+
+def iter_ollama_chat_events(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+    *,
+    tools: Any = None,
+) -> Iterator[Dict[str, Any]]:
+    if not ollama_enabled():
+        yield {"type": "error", "error": "ollama_disabled", "model": ""}
+        return
+
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_OLLAMA_MODEL") or "llama3.1:8b").strip() or "llama3.1:8b"
+    temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
+    base_timeout = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_OLLAMA_TIMEOUT_SECONDS"), base_timeout))
+    api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OLLAMA_URL") or "http://127.0.0.1:11434")
+    num_predict = max(
+        128,
+        to_int(
+            os.getenv("ORION_LOCAL_WORKER_OLLAMA_NUM_PREDICT"),
+            to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 700),
+        ),
+    )
+    payload: Dict[str, Any] = {
+        "model": model,
+        "stream": False,
+        "messages": _build_openai_compatible_messages(user_prompt, prior_messages=prior_messages),
+        "options": {"temperature": temperature, "num_predict": num_predict},
+    }
+    if str(system_prompt or "").strip():
+        payload["system"] = str(system_prompt).strip()
+    tool_specs = _tool_spec_items(tools)
+    if tool_specs:
+        payload["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": item["name"],
+                    "description": item["description"],
+                    "parameters": item["parameters"],
+                },
+            }
+            for item in tool_specs
+        ]
+    req = urllib.request.Request(
+        url=f"{api_url}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+        parsed = json.loads(raw)
+        message = parsed.get("message") if isinstance(parsed, dict) else None
+        tool_calls = _normalize_openai_function_call(message)
+        final_text = _extract_openai_message_text(message)
+        if final_text:
+            yield {"type": "delta", "delta": final_text, "model": model}
+        usage = {
+            "prompt_eval_count": to_int(parsed.get("prompt_eval_count"), 0),
+            "eval_count": to_int(parsed.get("eval_count"), 0),
+        }
+        if final_text or tool_calls:
+            yield {
+                "type": "done",
+                "text": final_text,
+                "usage": usage,
+                "model": model,
+                "tool_calls": tool_calls,
+            }
+            return
+        yield {"type": "error", "error": "empty_content", "model": model}
+    except Exception as exc:
+        yield {"type": "error", "error": format_provider_error(exc), "model": model}
 
 
 def extract_openai_text(payload: Dict[str, Any]) -> str:
@@ -1402,20 +2394,16 @@ def anthropic_chat_text(
     }
     if str(system_prompt or "").strip():
         payload["system"] = str(system_prompt).strip()
-    req = urllib.request.Request(
-        url=f"{api_url}/v1/messages",
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            raw = response.read().decode("utf-8")
-        parsed = json.loads(raw)
+        response = _anthropic_messages_request(
+            api_url=api_url,
+            api_key=api_key,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        if int(response.get("status") or 0) >= 400:
+            return "", None, model, _anthropic_response_error(response)
+        parsed = response.get("json") if isinstance(response.get("json"), dict) else {}
         content = parsed.get("content") if isinstance(parsed, dict) else None
         parts: list[str] = []
         if isinstance(content, list):
@@ -1456,20 +2444,16 @@ def anthropic_chat_json(
     }
     if str(system_prompt or "").strip():
         payload["system"] = str(system_prompt).strip()
-    req = urllib.request.Request(
-        url=f"{api_url}/v1/messages",
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            raw = response.read().decode("utf-8")
-        parsed = json.loads(raw)
+        response = _anthropic_messages_request(
+            api_url=api_url,
+            api_key=api_key,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        if int(response.get("status") or 0) >= 400:
+            return None, None, model, _anthropic_response_error(response)
+        parsed = response.get("json") if isinstance(response.get("json"), dict) else {}
         content = parsed.get("content") if isinstance(parsed, dict) else None
         parts: list[str] = []
         if isinstance(content, list):
@@ -2032,7 +3016,7 @@ def generate_chat_reply_with_provider_fallback(
             )
             continue
         if provider in {"qwen", "deepseek", "mistral"}:
-            text, usage, model, provider_error = openai_chat_text(
+            text, usage, model, provider_error = openai_chat_text_with_retries(
                 system_prompt,
                 user_goal,
                 model_override=provider_model,
@@ -2217,6 +3201,35 @@ def generate_chat_reply_stream_with_provider_fallback(
             if direct_auth_error:
                 last_error = f"openai generation failed: {direct_auth_error}"
                 continue
+            if requested_tools:
+                provider_result = run_tool_capable_provider_with_prompt_fallback(
+                    system_prompt=system_prompt,
+                    stream_factory=lambda prompt_variant: iter_openai_compatible_chat_events(
+                        prompt_variant,
+                        user_goal,
+                        model_override=provider_model,
+                        prior_messages=prior_messages,
+                        provider="openai",
+                        credential_override=credential_override,
+                        tools=requested_tools,
+                    ),
+                )
+                if provider_result.get("ok"):
+                    for delta in list(provider_result.get("deltas") or []):
+                        yield {"type": "chunk", "delta": str(delta)}
+                    yield {
+                        "type": "result",
+                        "reply": str(provider_result.get("text") or ""),
+                        "usage_masked": build_usage_masked_from_provider("openai", provider_result.get("usage"), str(provider_result.get("model") or provider_model or "").strip() or provider_model),
+                        "provider": "openai",
+                        "model": str(provider_result.get("model") or provider_model or "").strip() or provider_model,
+                        "attempted_providers": attempted_str,
+                        "error": "",
+                        "tool_calls": provider_result.get("tool_calls") if isinstance(provider_result.get("tool_calls"), list) else [],
+                    }
+                    return
+                last_error = f"openai generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
+                continue
             text = ""
             usage: Optional[Dict[str, Any]] = None
             model = provider_model
@@ -2253,7 +3266,36 @@ def generate_chat_reply_stream_with_provider_fallback(
             continue
 
         if provider in {"qwen", "deepseek", "mistral"}:
-            text, usage, model, provider_error = openai_chat_text(
+            if requested_tools:
+                provider_result = run_tool_capable_provider_with_prompt_fallback(
+                    system_prompt=system_prompt,
+                    stream_factory=lambda prompt_variant: iter_openai_compatible_chat_events(
+                        prompt_variant,
+                        user_goal,
+                        model_override=provider_model,
+                        prior_messages=prior_messages,
+                        provider=provider,
+                        credential_override=credential_override,
+                        tools=requested_tools,
+                    ),
+                )
+                if provider_result.get("ok"):
+                    for delta in list(provider_result.get("deltas") or []):
+                        yield {"type": "chunk", "delta": str(delta)}
+                    yield {
+                        "type": "result",
+                        "reply": str(provider_result.get("text") or ""),
+                        "usage_masked": build_usage_masked_from_provider(provider, provider_result.get("usage"), str(provider_result.get("model") or provider_model or "").strip() or provider_model),
+                        "provider": provider,
+                        "model": str(provider_result.get("model") or provider_model or "").strip() or provider_model,
+                        "attempted_providers": attempted_str,
+                        "error": "",
+                        "tool_calls": provider_result.get("tool_calls") if isinstance(provider_result.get("tool_calls"), list) else [],
+                    }
+                    return
+                last_error = f"{provider} generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
+                continue
+            text, usage, model, provider_error = openai_chat_text_with_retries(
                 system_prompt,
                 user_goal,
                 model_override=provider_model,
@@ -2277,6 +3319,34 @@ def generate_chat_reply_stream_with_provider_fallback(
             continue
 
         if provider == "anthropic":
+            if requested_tools:
+                provider_result = run_tool_capable_provider_with_prompt_fallback(
+                    system_prompt=system_prompt,
+                    stream_factory=lambda prompt_variant: iter_anthropic_chat_events(
+                        prompt_variant,
+                        user_goal,
+                        model_override=provider_model,
+                        prior_messages=prior_messages,
+                        credential_override=credential_override,
+                        tools=requested_tools,
+                    ),
+                )
+                if provider_result.get("ok"):
+                    for delta in list(provider_result.get("deltas") or []):
+                        yield {"type": "chunk", "delta": str(delta)}
+                    yield {
+                        "type": "result",
+                        "reply": str(provider_result.get("text") or ""),
+                        "usage_masked": build_usage_masked_from_provider("anthropic", provider_result.get("usage"), str(provider_result.get("model") or provider_model or "").strip() or provider_model),
+                        "provider": "anthropic",
+                        "model": str(provider_result.get("model") or provider_model or "").strip() or provider_model,
+                        "attempted_providers": attempted_str,
+                        "error": "",
+                        "tool_calls": provider_result.get("tool_calls") if isinstance(provider_result.get("tool_calls"), list) else [],
+                    }
+                    return
+                last_error = f"anthropic generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
+                continue
             text, usage, model, provider_error = anthropic_chat_text(
                 system_prompt,
                 user_goal,
@@ -2285,6 +3355,33 @@ def generate_chat_reply_stream_with_provider_fallback(
                 credential_override=credential_override,
             )
         elif provider == "gemini":
+            if requested_tools:
+                provider_result = run_tool_capable_provider_with_prompt_fallback(
+                    system_prompt=system_prompt,
+                    stream_factory=lambda prompt_variant: iter_gemini_chat_events(
+                        prompt_variant,
+                        user_goal,
+                        model_override=provider_model,
+                        prior_messages=prior_messages,
+                        tools=requested_tools,
+                    ),
+                )
+                if provider_result.get("ok"):
+                    for delta in list(provider_result.get("deltas") or []):
+                        yield {"type": "chunk", "delta": str(delta)}
+                    yield {
+                        "type": "result",
+                        "reply": str(provider_result.get("text") or ""),
+                        "usage_masked": build_usage_masked_from_provider("gemini", provider_result.get("usage"), str(provider_result.get("model") or provider_model or "").strip() or provider_model),
+                        "provider": "gemini",
+                        "model": str(provider_result.get("model") or provider_model or "").strip() or provider_model,
+                        "attempted_providers": attempted_str,
+                        "error": "",
+                        "tool_calls": provider_result.get("tool_calls") if isinstance(provider_result.get("tool_calls"), list) else [],
+                    }
+                    return
+                last_error = f"gemini generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
+                continue
             text, usage, model, provider_error = gemini_chat_text(
                 system_prompt,
                 user_goal,
@@ -2292,6 +3389,33 @@ def generate_chat_reply_stream_with_provider_fallback(
                 prior_messages=prior_messages,
             )
         elif provider == "ollama":
+            if requested_tools:
+                provider_result = run_tool_capable_provider_with_prompt_fallback(
+                    system_prompt=system_prompt,
+                    stream_factory=lambda prompt_variant: iter_ollama_chat_events(
+                        prompt_variant,
+                        user_goal,
+                        model_override=provider_model,
+                        prior_messages=prior_messages,
+                        tools=requested_tools,
+                    ),
+                )
+                if provider_result.get("ok"):
+                    for delta in list(provider_result.get("deltas") or []):
+                        yield {"type": "chunk", "delta": str(delta)}
+                    yield {
+                        "type": "result",
+                        "reply": str(provider_result.get("text") or ""),
+                        "usage_masked": build_usage_masked_from_provider("ollama", provider_result.get("usage"), str(provider_result.get("model") or provider_model or "").strip() or provider_model),
+                        "provider": "ollama",
+                        "model": str(provider_result.get("model") or provider_model or "").strip() or provider_model,
+                        "attempted_providers": attempted_str,
+                        "error": "",
+                        "tool_calls": provider_result.get("tool_calls") if isinstance(provider_result.get("tool_calls"), list) else [],
+                    }
+                    return
+                last_error = f"ollama generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
+                continue
             text, usage, model, provider_error = ollama_chat_text(
                 system_prompt,
                 user_goal,

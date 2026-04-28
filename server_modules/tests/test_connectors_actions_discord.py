@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import unittest
-from unittest.mock import patch
+import importlib
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from nacl.signing import SigningKey
@@ -44,13 +45,18 @@ def _signed_headers(body: bytes, signing_key: SigningKey, *, timestamp: str = "1
 
 
 class DiscordWebhookCanonicalizationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        global connectors_actions
+
+        connectors_actions = importlib.import_module("server_modules.connectors_actions")
+
     async def test_discord_webhook_rejects_missing_signature_headers(self):
         request = _request_from_body(_body_bytes({"id": "evt-1"}))
 
         with (
             patch("server_modules.connectors_actions.load_vault") as load_vault,
             patch("server_modules.connectors_actions.discord_parse_inbound_event") as parse_event,
-            patch("server_modules.connectors_actions.discord_dispatch_inbound_event") as dispatch_event,
+            patch("server_modules.agent_channel_router.route_inbound_channel_message", new=AsyncMock()) as route_message,
         ):
             with self.assertRaises(HTTPException) as exc_info:
                 await connectors_actions.discord_webhook(request)
@@ -58,7 +64,7 @@ class DiscordWebhookCanonicalizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exc_info.exception.status_code, 401)
         load_vault.assert_not_called()
         parse_event.assert_not_called()
-        dispatch_event.assert_not_called()
+        route_message.assert_not_awaited()
 
     async def test_discord_webhook_rejects_invalid_signature(self):
         payload = {"id": "evt-1"}
@@ -71,14 +77,14 @@ class DiscordWebhookCanonicalizationTests(unittest.IsolatedAsyncioTestCase):
             patch.dict(os.environ, {"DISCORD_APP_PUBLIC_KEY": configured_key.verify_key.encode().hex()}),
             patch("server_modules.connectors_actions.load_vault", return_value={"credentials": []}),
             patch("server_modules.connectors_actions.discord_parse_inbound_event") as parse_event,
-            patch("server_modules.connectors_actions.discord_dispatch_inbound_event") as dispatch_event,
+            patch("server_modules.agent_channel_router.route_inbound_channel_message", new=AsyncMock()) as route_message,
         ):
             with self.assertRaises(HTTPException) as exc_info:
                 await connectors_actions.discord_webhook(request)
 
         self.assertEqual(exc_info.exception.status_code, 401)
         parse_event.assert_not_called()
-        dispatch_event.assert_not_called()
+        route_message.assert_not_awaited()
 
     async def test_discord_webhook_rejects_when_public_key_is_not_configured(self):
         payload = {"id": "evt-1"}
@@ -90,14 +96,14 @@ class DiscordWebhookCanonicalizationTests(unittest.IsolatedAsyncioTestCase):
             patch.dict(os.environ, {"DISCORD_APP_PUBLIC_KEY": ""}),
             patch("server_modules.connectors_actions.load_vault", return_value={"credentials": []}),
             patch("server_modules.connectors_actions.discord_parse_inbound_event") as parse_event,
-            patch("server_modules.connectors_actions.discord_dispatch_inbound_event") as dispatch_event,
+            patch("server_modules.agent_channel_router.route_inbound_channel_message", new=AsyncMock()) as route_message,
         ):
             with self.assertRaises(HTTPException) as exc_info:
                 await connectors_actions.discord_webhook(request)
 
         self.assertEqual(exc_info.exception.status_code, 503)
         parse_event.assert_not_called()
-        dispatch_event.assert_not_called()
+        route_message.assert_not_awaited()
 
     async def test_discord_webhook_accepts_valid_signed_ping(self):
         signing_key = SigningKey.generate()
@@ -132,24 +138,19 @@ class DiscordWebhookCanonicalizationTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch("server_modules.connectors_actions.discord_parse_inbound_event", return_value={"kind": "event", "event_type": "message"}),
             patch("server_modules.connectors_actions.discord_event_matches_connector", return_value=False),
-            patch("server_modules.connectors_actions.discord_dispatch_inbound_event") as dispatch_event,
+            patch("server_modules.agent_channel_router.route_inbound_channel_message", new=AsyncMock()) as route_message,
         ):
             result = await connectors_actions.discord_webhook(request)
 
         self.assertEqual(result, {"ok": True, "handled": 0, "triggered": 0})
-        dispatch_event.assert_not_called()
+        route_message.assert_not_awaited()
 
-    async def test_discord_webhook_passes_canonical_run_start_callbacks(self):
+    async def test_discord_webhook_routes_message_through_agent_channel_router(self):
         signing_key = SigningKey.generate()
         body = _body_bytes({"id": "evt-1"})
         request = _request_from_body(body, headers=_signed_headers(body, signing_key))
-        captured: dict[str, object] = {}
         connector_row = {"id": "cred-discord", "provider": "discord_bot", "workspace_id": "default", "metadata": {}}
-
-        def _fake_dispatch(parsed, **kwargs):
-            captured["parsed"] = parsed
-            captured["kwargs"] = kwargs
-            return {"ok": True, "triggered": True, "run_id": "run-123"}
+        route_message = AsyncMock(return_value={"ok": True, "triggered": True, "run_id": "run-123", "reply": "Working on it."})
 
         with (
             patch.dict(os.environ, {"DISCORD_APP_PUBLIC_KEY": ""}),
@@ -165,15 +166,17 @@ class DiscordWebhookCanonicalizationTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch("server_modules.connectors_actions.discord_parse_inbound_event", return_value={"kind": "event", "event_type": "message"}),
             patch("server_modules.connectors_actions.discord_event_matches_connector", return_value=True),
-            patch("server_modules.connectors_actions.discord_dispatch_inbound_event", side_effect=_fake_dispatch),
+            patch("server_modules.connectors_actions.discord_should_trigger_agent_run", return_value=True),
+            patch("server_modules.connectors_actions.discord_build_run_goal_from_event", return_value="hello"),
+            patch("server_modules.connectors_actions._append_channel_event", return_value=None),
+            patch("server_modules.agent_channel_router.route_inbound_channel_message", new=route_message),
         ):
             result = await connectors_actions.discord_webhook(request)
 
         self.assertEqual(result["triggered"], 1)
-        kwargs = captured["kwargs"]
-        self.assertTrue(callable(kwargs["run_start_request_class"]))
-        self.assertTrue(callable(kwargs["start_run_request"]))
-        self.assertNotIn("create_run_fn", kwargs)
-        run_request = kwargs["run_start_request_class"](engine="orion", workspace_id="default", user_goal="hello")
-        self.assertEqual(run_request.workspace_id, "default")
-        self.assertEqual(run_request.user_goal, "hello")
+        route_message.assert_awaited_once()
+        kwargs = route_message.await_args.kwargs
+        self.assertEqual(kwargs["workspace_id"], "default")
+        self.assertEqual(kwargs["channel_key"], "discord")
+        self.assertEqual(kwargs["customer_message"], "hello")
+        self.assertFalse(kwargs["allow_master_fallback"])

@@ -1,6 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules import secrets_broker
 from server_modules import provider_profiles as provider_profiles_service
 from server_modules.model_router import list_model_aliases
 
@@ -40,6 +41,40 @@ def _openai_env_credentials(token: str, source: Any) -> Dict[str, Any]:
         credentials["access_token"] = sanitized
         credentials["auth_mode"] = "access_token"
     return credentials
+
+
+def _resolve_hosted_openai_bearer(
+    *,
+    workspace_id: Optional[str],
+    purpose: str,
+) -> tuple[str, str]:
+    fallback_key, fallback_source = _openai_env_bearer_with_source()
+    resolution = secrets_broker.resolve_hosted_openai_bearer(
+        tenant_id="default",
+        workspace_id=workspace_id,
+        fallback_token=fallback_key,
+        fallback_source=fallback_source,
+        tool_name="connectors_core",
+        purpose=purpose,
+    )
+    return str(resolution.value or "").strip(), str(resolution.source or "").strip().lower()
+
+
+def _resolve_hosted_provider_api_key(
+    *,
+    provider_id: str,
+    workspace_id: Optional[str],
+    purpose: str,
+) -> str:
+    resolution = secrets_broker.resolve_hosted_provider_secret(
+        tenant_id="default",
+        workspace_id=workspace_id,
+        provider_id=provider_id,
+        field="api_key",
+        tool_name="connectors_core",
+        purpose=purpose,
+    )
+    return str(resolution.value or "").strip()
 
 def _serialize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     now = _utc_now()
@@ -374,7 +409,10 @@ async def probe_provider(
         try:
             credentials = resolve_default_vault_credential("openai", workspace_id)
         except Exception:
-            key, source = _openai_env_bearer_with_source()
+            key, source = _resolve_hosted_openai_bearer(
+                workspace_id=workspace_id,
+                purpose="provider_probe",
+            )
             if key:
                 credentials = _openai_env_credentials(key, source)
     elif provider_id == "openai-codex":
@@ -392,7 +430,11 @@ async def probe_provider(
         try:
             credentials = resolve_default_vault_credential("gemini", workspace_id)
         except Exception:
-            env_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+            env_key = _resolve_hosted_provider_api_key(
+                provider_id="gemini",
+                workspace_id=workspace_id,
+                purpose="provider_probe",
+            )
             if env_key:
                 credentials = {"api_key": env_key}
 
@@ -449,7 +491,10 @@ async def get_provider_models(
         try:
             credentials = resolve_default_vault_credential("openai", workspace_id)
         except Exception:
-            key, source = _openai_env_bearer_with_source()
+            key, source = _resolve_hosted_openai_bearer(
+                workspace_id=workspace_id,
+                purpose="provider_models_list",
+            )
             if key:
                 credentials = _openai_env_credentials(key, source)
 

@@ -8,10 +8,12 @@ from fastapi import HTTPException
 from server_modules import machine_lease_service
 
 
-def _capture_dispatched_operation(operations=None):
+def _capture_dispatched_operation(operations=None, event=None):
     def _side_effect(awaitable, operation):
         if isinstance(operations, list):
             operations.append(operation)
+        if event is not None:
+            event.set()
         close_fn = getattr(awaitable, "close", None)
         if callable(close_fn):
             close_fn()
@@ -186,9 +188,11 @@ class MachineLeaseServiceTests(unittest.TestCase):
         }
 
         repo_claims = []
-        with patch(
-            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
-            side_effect=_capture_dispatched_operation(repo_claims),
+        repo_claimed = threading.Event()
+        with patch.object(
+            machine_lease_service.run_state_repository,
+            "dispatch_repository_call",
+            side_effect=_capture_dispatched_operation(repo_claims, repo_claimed),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
                 "worker-1",
@@ -211,6 +215,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
                 now_iso_fn=lambda: "2026-04-06T00:00:00Z",
                 lease_id_factory=lambda: "lease-1",
             )
+            repo_claimed.wait(timeout=1.0)
 
         self.assertEqual(claimed_run, "run-1")
         self.assertEqual(claimed["run-1"]["machine_id"], "machine-1")
@@ -253,8 +258,9 @@ class MachineLeaseServiceTests(unittest.TestCase):
             }
         }
 
-        with patch(
-            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+        with patch.object(
+            machine_lease_service.run_state_repository,
+            "dispatch_repository_call",
             side_effect=_capture_dispatched_operation(),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
@@ -312,8 +318,9 @@ class MachineLeaseServiceTests(unittest.TestCase):
             }
         }
 
-        with patch(
-            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+        with patch.object(
+            machine_lease_service.run_state_repository,
+            "dispatch_repository_call",
             side_effect=_capture_dispatched_operation(),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
@@ -355,8 +362,9 @@ class MachineLeaseServiceTests(unittest.TestCase):
         }
         worker_registry = {"worker-1": {"runtime_id": "worker-1", "machine_id": "machine-1", "capabilities": []}}
 
-        with patch(
-            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+        with patch.object(
+            machine_lease_service.run_state_repository,
+            "dispatch_repository_call",
             side_effect=_capture_dispatched_operation(),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
@@ -401,8 +409,9 @@ class MachineLeaseServiceTests(unittest.TestCase):
             }
         }
 
-        with patch(
-            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+        with patch.object(
+            machine_lease_service.run_state_repository,
+            "dispatch_repository_call",
             side_effect=_capture_dispatched_operation(),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
@@ -444,8 +453,9 @@ class MachineLeaseServiceTests(unittest.TestCase):
         }
         worker_registry = {"worker-1": {"runtime_id": "worker-1", "machine_id": "machine-1", "capabilities": []}}
 
-        with patch(
-            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+        with patch.object(
+            machine_lease_service.run_state_repository,
+            "dispatch_repository_call",
             side_effect=_capture_dispatched_operation(),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
@@ -522,9 +532,11 @@ class MachineLeaseServiceTests(unittest.TestCase):
         seen = []
 
         repo_releases = []
-        with patch(
-            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
-            side_effect=_capture_dispatched_operation(repo_releases),
+        repo_released = threading.Event()
+        with patch.object(
+            machine_lease_service.run_state_repository,
+            "dispatch_repository_call",
+            side_effect=_capture_dispatched_operation(repo_releases, repo_released),
         ):
             result = machine_lease_service.release_machine_lease_claim(
                 "run-1",
@@ -538,6 +550,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
                 status_hint="idle",
                 note="paused_waiting_for_input",
             )
+            repo_released.wait(timeout=1.0)
 
         self.assertTrue(result["released"])
         self.assertEqual(result["resolved_worker"], "worker-1")
@@ -555,8 +568,9 @@ class MachineLeaseServiceTests(unittest.TestCase):
             }
         }
 
-        with patch(
-            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+        with patch.object(
+            machine_lease_service.run_state_repository,
+            "dispatch_repository_call",
             side_effect=_capture_dispatched_operation(),
         ) as dispatch_mock:
             result = machine_lease_service.release_machine_lease_claim(

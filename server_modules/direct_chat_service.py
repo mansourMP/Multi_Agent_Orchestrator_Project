@@ -89,22 +89,55 @@ def build_direct_chat_request_meta(
     agent_turn_request: Optional[Any] = None,
     trace_context: Optional[Any] = None,
 ) -> dict[str, Any]:
+    turn_context_hints: dict[str, Any] = {}
+    if isinstance(agent_turn_request, AgentTurnRequest):
+        turn_context_hints = dict(agent_turn_request.context_hints or {})
+    elif isinstance(agent_turn_request, dict):
+        raw_hints = agent_turn_request.get("context_hints")
+        if isinstance(raw_hints, dict):
+            turn_context_hints = dict(raw_hints)
+    turn_metadata = turn_context_hints.get("metadata") if isinstance(turn_context_hints.get("metadata"), dict) else {}
+    provider = str(body.get("provider") or turn_context_hints.get("provider") or turn_metadata.get("provider") or "").strip()
+    model = str(body.get("model") or turn_context_hints.get("model") or turn_metadata.get("model") or "").strip()
+    reasoning_effort = str(
+        body.get("reasoning_effort")
+        or turn_context_hints.get("reasoning_effort")
+        or turn_metadata.get("reasoning_effort")
+        or ""
+    ).strip()
+    prior_messages = (
+        body.get("prior_messages")
+        if isinstance(body.get("prior_messages"), list)
+        else turn_context_hints.get("prior_messages")
+        if isinstance(turn_context_hints.get("prior_messages"), list)
+        else []
+    )
+    approved_action = (
+        body.get("approved_action")
+        if isinstance(body.get("approved_action"), dict)
+        else turn_context_hints.get("approved_action")
+        if isinstance(turn_context_hints.get("approved_action"), dict)
+        else None
+    )
+    max_iterations = body.get("max_iterations")
+    if max_iterations is None:
+        max_iterations = turn_context_hints.get("max_iterations")
     request_meta = {
         "request_id": client_request_id,
         "client_request_id": client_request_id,
         "workspace_id": workspace_id,
         "thread_id": thread_id,
-        "provider": str(body.get("provider") or "").strip(),
-        "model": str(body.get("model") or "").strip(),
-        "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
-        "prior_messages": body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
-        "approved_action": body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
-        "max_iterations": body.get("max_iterations"),
+        "provider": provider,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "prior_messages": prior_messages,
+        "approved_action": approved_action,
+        "max_iterations": max_iterations,
         "runtime_options": {
             "cwd": str(body.get("cwd") or "").strip(),
-            "provider": str(body.get("provider") or "").strip(),
-            "model": str(body.get("model") or "").strip(),
-            "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
+            "provider": provider,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
             "thread_id": thread_id,
         },
     }

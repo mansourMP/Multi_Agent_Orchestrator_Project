@@ -18,6 +18,7 @@ def _inputs() -> service.DirectChatCallbackFacadeInputs:
         clear_direct_tool_loop_state=lambda session_key: None,
         persist_direct_chat_memory_best_effort=lambda **kwargs: None,
         persist_direct_chat_transcript_best_effort=lambda **kwargs: None,
+        persist_direct_chat_hosted_usage_best_effort=lambda **kwargs: None,
         record_direct_tool_signature=lambda session_key, tool_call: False,
         direct_chat_error_reply=lambda error: error,
         capture_exception=lambda exc: None,
@@ -87,6 +88,7 @@ class DirectChatCallbackFacadeServiceTests(unittest.TestCase):
         self.assertIs(services.execute_single_direct_tool_call, inputs.execute_single_direct_tool_call)
         self.assertIs(services.build_direct_tool_approval_response, inputs.build_direct_tool_approval_response)
         self.assertIs(services.generate_chat_reply_stream_with_provider_fallback, inputs.generate_chat_reply_stream_with_provider_fallback)
+        self.assertIs(services.persist_direct_chat_hosted_usage_best_effort, inputs.persist_direct_chat_hosted_usage_best_effort)
 
     def test_build_direct_chat_runtime_facade_callbacks_embeds_generation_services(self) -> None:
         inputs = _inputs()

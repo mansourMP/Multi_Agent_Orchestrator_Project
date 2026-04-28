@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from server_modules.deployed_agent_admin_dashboard_service import get_deployed_agent_admin_dashboard_service
+from server_modules import deployed_agent_admin_dashboard_service
 
 
 def _workspace_record() -> dict[str, object]:
@@ -30,6 +31,12 @@ def _owner_user() -> dict[str, object]:
 
 
 class DeployedAgentAdminDashboardServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global deployed_agent_admin_dashboard_service
+        deployed_agent_admin_dashboard_service = importlib.import_module(
+            "server_modules.deployed_agent_admin_dashboard_service"
+        )
+
     async def test_get_dashboard_enriches_customer_entry_and_specialist_profile(self) -> None:
         dashboard_payload = {
             "deployed_agent_id": "dagent_1",
@@ -96,7 +103,7 @@ class DeployedAgentAdminDashboardServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=readiness),
             ),
         ):
-            payload = await get_deployed_agent_admin_dashboard_service().get_dashboard(
+            payload = await deployed_agent_admin_dashboard_service.get_deployed_agent_admin_dashboard_service().get_dashboard(
                 agent_id="dagent_1",
                 workspace_id="ws-1",
                 current_user=_owner_user(),

@@ -566,7 +566,10 @@ class WorkspaceTransportAdapter {
 
 class WorkspaceQueryClient {
   private readonly cache = new Map<string, unknown>();
-  private readonly inFlight = new Map<string, AbortController>();
+  private readonly inFlight = new Map<string, {
+    controller: AbortController;
+    promise: Promise<unknown>;
+  }>();
 
   constructor(
     private readonly prefix: string,
@@ -586,16 +589,22 @@ class WorkspaceQueryClient {
 
   async run<T>(key: string, executor: QueryExecutor<T>): Promise<T> {
     const scopedKey = normalizeCacheKey(this.prefix, key);
-    const controller = this.disposableRegistry.trackAbortController(new AbortController());
-    this.inFlight.set(scopedKey, controller);
-
-    try {
-      const value = await executor({ signal: controller.signal, cacheKey: scopedKey });
-      this.cache.set(scopedKey, value);
-      return value;
-    } finally {
-      this.inFlight.delete(scopedKey);
+    const existing = this.inFlight.get(scopedKey);
+    if (existing) {
+      return existing.promise as Promise<T>;
     }
+    const controller = this.disposableRegistry.trackAbortController(new AbortController());
+    const promise = executor({ signal: controller.signal, cacheKey: scopedKey })
+      .then((value) => {
+        this.cache.set(scopedKey, value);
+        return value;
+      })
+      .finally(() => {
+        this.inFlight.delete(scopedKey);
+      });
+    this.inFlight.set(scopedKey, { controller, promise });
+
+    return promise;
   }
 
   invalidate(key?: string): void {
@@ -615,8 +624,8 @@ class WorkspaceQueryClient {
   }
 
   dispose(): void {
-    for (const controller of this.inFlight.values()) {
-      controller.abort();
+    for (const pending of this.inFlight.values()) {
+      pending.controller.abort();
     }
     this.inFlight.clear();
     this.cache.clear();
@@ -910,4 +919,19 @@ export function useWorkstationStreamState(): WorkstationStreamState {
     services.streams.getState.bind(services.streams),
     services.streams.getState.bind(services.streams),
   );
+}
+
+export function useWorkstationStreamSelector<T>(
+  selector: (state: WorkstationStreamState) => T,
+): T {
+  const services = useWorkstationKernel();
+  return useSyncExternalStore(
+    services.streams.subscribe.bind(services.streams),
+    () => selector(services.streams.getState()),
+    () => selector(services.streams.getState()),
+  );
+}
+
+export function useWorkstationActivityVersion(): number {
+  return useWorkstationStreamSelector((state) => state.activity.version);
 }

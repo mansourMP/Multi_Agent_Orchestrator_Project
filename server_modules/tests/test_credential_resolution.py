@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import importlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,11 @@ from server_modules import model_router, provider_profiles
 
 class CredentialResolutionTests(unittest.TestCase):
     def setUp(self):
+        global model_router
+        global provider_profiles
+
+        provider_profiles = importlib.import_module("server_modules.provider_profiles")
+        model_router = importlib.import_module("server_modules.model_router")
         provider_profiles._init()
         self._profiles_tmpdir = tempfile.TemporaryDirectory()
         self._temp_profiles_path = Path(self._profiles_tmpdir.name) / "profiles.json"
@@ -221,6 +227,56 @@ class CredentialResolutionTests(unittest.TestCase):
             resolution["model"],
             str(provider_profiles.PROVIDER_CATALOG["openai"]["default_model"]),
         )
+
+    @patch("server_modules.provider_profiles._resolve_hosted_provider_api_key", return_value=("sk-platform", "env-deepseek"))
+    @patch("server_modules.provider_profiles.resolve_vault_credential")
+    def test_build_candidates_keeps_workspace_byok_lane_separate_from_hosted_lane(
+        self,
+        resolve_vault_credential_mock,
+        _hosted_secret_mock,
+    ):
+        resolve_vault_credential_mock.return_value = {"api_key": "sk-byok"}
+        profiles = {
+            "profile-deepseek": self._profile(
+                profile_id="profile-deepseek",
+                credential_id="cred-deepseek",
+                priority=1,
+                created_at="2026-03-22T00:00:00Z",
+                model="deepseek-chat",
+                provider="deepseek",
+            ),
+        }
+
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, profiles, clear=True):
+            candidates = provider_profiles._build_provider_credential_candidates(
+                {"workspace_id": "ws-1"},
+                {},
+                "deepseek",
+            )
+
+        self.assertEqual(
+            [candidate["label"] for candidate in candidates],
+            ["profile:profile-deepseek", "env-deepseek"],
+        )
+        self.assertEqual(candidates[0]["credentials"]["api_key"], "sk-byok")
+        self.assertEqual(candidates[1]["credentials"]["api_key"], "sk-platform")
+
+    @patch("server_modules.provider_profiles._resolve_hosted_provider_api_key", return_value=("", "env-deepseek"))
+    @patch("server_modules.provider_profiles.resolve_vault_credential")
+    def test_build_candidates_missing_hosted_secret_fails_safely_for_runtime_lane(
+        self,
+        resolve_vault_credential_mock,
+        _hosted_secret_mock,
+    ):
+        resolve_vault_credential_mock.side_effect = AssertionError("No profile credentials should be resolved.")
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, {}, clear=True):
+            candidates = provider_profiles._build_provider_credential_candidates(
+                {"workspace_id": "ws-1"},
+                {},
+                "deepseek",
+            )
+
+        self.assertEqual(candidates, [])
 
 
 if __name__ == "__main__":

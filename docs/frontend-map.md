@@ -2,8 +2,33 @@
 
 Last verified: 2026-04-14
 
+This is a strict dumb-UI strategy.
+
 This document reflects the current active frontend structure.
 It replaces older maps that still referenced deleted roots such as `frontend/components`, `frontend/app/(shell)`, `mobile/src/screens`, and the old mobile `(tabs)` shell.
+
+Mobile stays the daily-use surface with the fixed tab contract:
+- Home
+- Chat
+- Applications
+- Notifications
+- Profile
+
+### Channel Shells
+
+- Telegram
+- WhatsApp
+
+They may do:
+- lightweight approvals where supported
+
+They may not become:
+- deep admin surfaces
+- separate product brains
+
+They still share the same captain identity and run engine truth as full shells.
+
+Mobile and desktop-power must use the same backend semantics.
 
 ## Active Frontend Roots
 
@@ -85,6 +110,7 @@ Notes:
 
 Current server-side route handlers under `frontend/app/api` and related proxy routes:
 
+- `frontend/app/api/activity/timeline/route.ts`
 - `api/[...path]/route.ts`
 - `api/activity/timeline/route.ts`
 - `api/auth/account-shell/route.ts`
@@ -141,6 +167,8 @@ Role:
 - one canonical token source for web, Tauri, and mobile
 - web and Tauri consume CSS-variable output
 - mobile consumes TypeScript constants
+- Radix primitives for interaction, accessibility, layering, focus, and composition
+- Framer Motion for motion orchestration and transitions
 
 ## Mobile Structure
 
@@ -210,3 +238,14 @@ These paths are real and active even if they are not the final shape:
 
 These are implementation facts, not architectural truth.
 Future cleanup should remove or consolidate them without changing the backend contract.
+
+## Backend And BFF Contract Alignment
+
+Backend and BFF contract alignment is proven for:
+- `/runs`
+- `/approvals`
+
+Current rendered truth:
+- the current web shell can render a real cloud-backed assistant answer
+- the current web shell now routes serious first-send task requests into the durable run path
+- lightweight question-and-answer chat is still allowed to stay on the direct chat path

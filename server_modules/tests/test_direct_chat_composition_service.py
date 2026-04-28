@@ -17,6 +17,7 @@ def _namespace() -> dict:
         "clear_direct_tool_loop_state": lambda session_key: None,
         "persist_direct_chat_memory_best_effort": lambda **kwargs: None,
         "persist_direct_chat_transcript_best_effort": lambda **kwargs: None,
+        "persist_direct_chat_hosted_usage_best_effort": lambda **kwargs: None,
         "record_direct_tool_signature": lambda session_key, tool_call: False,
         "direct_chat_error_reply": lambda error: error,
         "compact_text": lambda value: str(value or "").strip().lower(),

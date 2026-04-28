@@ -16,6 +16,7 @@ class DirectChatRoutingServiceTests(unittest.TestCase):
             message_requests_local_file_tool=lambda message: "/tmp/" in str(message or ""),
             message_requests_local_shell_tool=lambda message: "shell" in str(message or "").lower(),
             message_requests_local_screenshot_tool=lambda message: "screenshot" in str(message or "").lower(),
+            message_requests_local_computer_tool=lambda message: "computer" in str(message or "").lower(),
             complex_task_sequence_markers=("then", "after that"),
             complex_task_outcome_markers=("end to end", "done"),
             execution_markers=("run", "execute", "send"),

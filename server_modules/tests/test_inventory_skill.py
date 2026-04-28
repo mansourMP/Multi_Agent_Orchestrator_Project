@@ -1,13 +1,18 @@
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from server_modules import inventory_skill
+
+def _inventory_skill_module():
+    return importlib.import_module("server_modules.inventory_skill")
 
 
 class InventorySkillTests(unittest.IsolatedAsyncioTestCase):
     async def test_execute_inventory_skill_returns_live_artifact_for_matching_inventory(self):
-        with patch(
-            "server_modules.inventory_skill.search_workspace_inventory",
+        inventory_skill = _inventory_skill_module()
+        with patch.object(
+            inventory_skill,
+            "search_workspace_inventory",
             new=AsyncMock(return_value=[
                 {
                     "id": "inventory-1",
@@ -44,8 +49,10 @@ class InventorySkillTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["items"][0]["sku"], "TES-WIPER-M3-2022")
 
     async def test_execute_inventory_skill_returns_graceful_unavailable_message_on_failure(self):
-        with patch(
-            "server_modules.inventory_skill.search_workspace_inventory",
+        inventory_skill = _inventory_skill_module()
+        with patch.object(
+            inventory_skill,
+            "search_workspace_inventory",
             new=AsyncMock(side_effect=TimeoutError("db timeout")),
         ):
             result = await inventory_skill.execute_inventory_skill(

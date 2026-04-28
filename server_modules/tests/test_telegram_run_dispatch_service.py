@@ -70,6 +70,35 @@ class TelegramRunDispatchServiceTests(unittest.TestCase):
         self.assertFalse(result["auto_approved"])
         self.assertEqual(queue.items, [])
 
+    def test_wait_for_terminal_status_tolerates_transient_missing_run_before_completion(self) -> None:
+        run_states = [None, None, {"status": "completed", "result": "Done"}]
+        service = TelegramRunDispatchService(
+            project_root=Path("/tmp/empyralis"),
+            default_timeout_seconds=60,
+            default_max_reply_chars=240,
+            send_ack=True,
+            include_run_meta=lambda: False,
+            humanize_run_summary=lambda text: str(text or "").strip(),
+            truncate_one_line=lambda text, limit: str(text or "").strip()[:limit],
+            runs_get=lambda run_id: run_states.pop(0) if run_states else {"status": "completed", "result": "Done"},
+            latest_run_error_message=lambda run: str(run.get("error") or ""),
+            is_non_retryable_run_error=lambda error: "fatal" in str(error or "").lower(),
+            friendly_run_error=lambda error: f"Friendly: {error}",
+            summarize_run_terminal_result=lambda run, limit: str(run.get("result") or "Run finished.")[:limit],
+            local_companion_snapshot=lambda: {"pending_runs": 0, "claimed_runs": 0, "online_workers": 1},
+            can_auto_approve_wait=lambda run: bool(run.get("can_auto_approve")),
+            pending_confirmation_payload=lambda run: dict(run.get("pending_confirmation") or {}),
+            emit_channel_run_delivery_event=lambda **kwargs: None,
+            record_activity_event=lambda **kwargs: None,
+            time_now=lambda: 0.0,
+            sleep=lambda seconds: None,
+        )
+
+        result = service.wait_for_terminal_status("run-1", timeout_seconds=60)
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["summary"], "Done")
+
     def test_dispatch_run_action_sends_ack_and_schedules_durable_delivery(self) -> None:
         emitted = []
         service = self._make_service(include_meta=lambda: True, emit_channel_run_delivery_event=lambda **kwargs: emitted.append(kwargs))

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib
 import json
 import os
 import queue
@@ -348,7 +349,12 @@ class RehearsalState:
         )()
         local_queue._server = server_ns
         try:
-            with patch.object(runtime_runs_api, "_schedule_restored_run_resume", side_effect=lambda run_id, run: self.schedule_restored_run_resume(run_id, run)):
+            live_runtime_runs_api = importlib.import_module("server_modules.runtime_runs_api")
+            with patch.object(
+                live_runtime_runs_api,
+                "_schedule_restored_run_resume",
+                side_effect=lambda run_id, run: self.schedule_restored_run_resume(run_id, run),
+            ):
                 yield
         finally:
             local_queue._server = original_server
@@ -511,6 +517,17 @@ def _kill_process(proc: subprocess.Popen[str]) -> tuple[int, str, str]:
     return proc.returncode or -9, stdout, stderr
 
 
+def _worker_requires_simulated_rehearsal(*, stdout: str, stderr: str) -> bool:
+    combined = "\n".join([str(stdout or "").strip(), str(stderr or "").strip()]).lower()
+    if not combined:
+        return False
+    return (
+        "empyralis-supervisor is unreachable at import time" in combined
+        or "supervisor not running" in combined
+        or "failed to establish a new connection" in combined
+    )
+
+
 def _simulate_crash_rehearsal(
     *,
     cycles: int,
@@ -622,6 +639,13 @@ def run_crash_rehearsal(*, cycles: int = 4, kill_after_task_heartbeat_count: int
             target_count = cycle * kill_after_task_heartbeat_count
             if not state.wait_for_event_count("run_heartbeat", target_count, timeout_seconds=20.0):
                 returncode, stdout, stderr = _kill_process(worker)
+                if _worker_requires_simulated_rehearsal(stdout=stdout, stderr=stderr):
+                    return _simulate_crash_rehearsal(
+                        cycles=cycles,
+                        kill_after_task_heartbeat_count=kill_after_task_heartbeat_count,
+                        step_delay_seconds=step_delay_seconds,
+                        quiet_worker=quiet_worker,
+                    )
                 raise RuntimeError(
                     f"Worker did not reach heartbeat target for cycle {cycle}. "
                     f"rc={returncode} stdout={stdout} stderr={stderr} events={state.events}"

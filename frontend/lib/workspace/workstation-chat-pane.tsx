@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Plus,
+  SquarePen,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -13,7 +13,7 @@ import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { AppButton, AppNotice } from '@/lib/ui/primitives';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
-import { ChatComposer } from '@/lib/workspace/chat-composer';
+import { ChatComposer, type ComposerToolGroup } from '@/lib/workspace/chat-composer';
 import { ChatInlineStateCard } from '@/lib/workspace/chat-inline-state-card';
 import {
   ChatMessage,
@@ -21,9 +21,12 @@ import {
   type WorkstationChatMessageRecord,
 } from '@/lib/workspace/chat-message';
 import {
+  projectTimeline,
+  type TimelineProjectionEvent,
+} from '@/lib/workspace/workstation-timeline-projector';
+import {
   resolveModelContextWindow,
 } from '@/lib/workspace/model-capabilities';
-import { SageTraceView } from '@/lib/workspace/sage-trace-view';
 import { useWorkstationDesktopBridge } from '@/lib/workspace/workstation-desktop-bridge';
 import type { WorkspaceBootstrapRuntimeTarget } from '@/lib/workspace/workspace-bootstrap';
 import {
@@ -32,15 +35,23 @@ import {
 } from '@/lib/workspace/workstation-approval-events';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { subscribeWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
-import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
+import {
+  useWorkspaceServices,
+  useWorkstationActivityVersion,
+  useWorkstationStreamSelector,
+} from '@/lib/workspace/workspace-services';
 import {
   WorkstationClientError,
   type WorkstationAgentTraceEvent,
   type WorkstationAgentTraceRecord,
   type ProviderCatalogModelRecord,
   type ProviderCatalogRecord,
+  type ProviderProfileRecord,
+  type VaultCredentialRecord,
   type WorkstationSageMemoryRecord,
   type WorkstationSessionActor,
+  type WorkstationSessionRecord,
+  type WorkstationTurnStreamAbortHandle,
   type WorkstationTurnResponse,
 } from '@/lib/workspace/workstation-client';
 
@@ -48,6 +59,7 @@ type CanonicalChatThreadState = {
   threadId: string;
   title: string;
   messages: WorkstationChatMessageRecord[];
+  session: WorkstationSessionRecord | null;
 };
 
 type CanonicalRunSummary = Record<string, unknown> & {
@@ -70,6 +82,16 @@ type LiveTraceState = {
   transport: LiveTraceTransport;
   trace: WorkstationAgentTraceRecord | null;
   events: WorkstationAgentTraceEvent[];
+};
+
+type LiveActivityStepState = {
+  id: string;
+  kind: string;
+  label: string;
+  detail: string;
+  status: string;
+  toolCallId: string | null;
+  createdAt: string;
 };
 
 type SageMemoryCategoryRecord = {
@@ -100,6 +122,11 @@ type SageMemoryDraft = {
   title: string;
   content: string;
   pinned: boolean;
+};
+
+type SageToolPolicyRecord = {
+  key: string;
+  enabled: boolean;
 };
 
 type RuntimeSummaryCard = {
@@ -259,6 +286,44 @@ function normalizeArtifactReferences(metadata: Record<string, unknown>): Worksta
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function readModelParameterCountBillions(...values: unknown[]): number | null {
+  for (const value of values) {
+    const text = readString(value).toLowerCase();
+    if (!text) {
+      continue;
+    }
+    const match = text.match(/(?:^|[^a-z0-9])(\d+(?:\.\d+)?)\s*b(?:$|[^a-z0-9])/i);
+    if (!match) {
+      continue;
+    }
+    const parsed = Number(match[1]);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function isSmallOllamaSelection(providerId: unknown, modelId: unknown, modelLabel: unknown): boolean {
+  if (readString(providerId).toLowerCase() !== 'ollama') {
+    return false;
+  }
+  const parameterCount = readModelParameterCountBillions(modelId, modelLabel);
+  if (parameterCount !== null) {
+    return parameterCount < 7;
+  }
+  const modelText = `${readString(modelId)} ${readString(modelLabel)}`.toLowerCase();
+  return [
+    'llama3.2',
+    'phi3',
+    'gemma',
+    'qwen2.5:1.5b',
+    'qwen2.5:3b',
+    'qwen3:1.7b',
+    'qwen3:4b',
+  ].some((marker) => modelText.includes(marker));
 }
 
 function readNumber(value: unknown, fallback = 0): number {
@@ -618,12 +683,29 @@ function normalizeCanonicalChatThread(
     const approvals = normalizeStructuredRecordList(entry.approvals);
     const interventions = normalizeStructuredRecordList(entry.interventions);
     const nextMetadata = { ...metadata };
+    const resultMetadata = readObject(nextMetadata.result_metadata);
+    const contextUsed = readObject(nextMetadata.context_used);
+    const resultContextUsed = readObject(resultMetadata.context_used);
+    if (!contextUsed && resultContextUsed) {
+      nextMetadata.context_used = resultContextUsed;
+    }
+    const effectiveProvider = readString(nextMetadata.effective_provider)
+      || readString(resultMetadata.provider)
+      || readString(resultContextUsed.effective_provider);
+    const effectiveModel = readString(nextMetadata.effective_model)
+      || readString(resultMetadata.model)
+      || readString(resultContextUsed.effective_model);
+    if (effectiveProvider) {
+      nextMetadata.effective_provider = effectiveProvider;
+    }
+    if (effectiveModel) {
+      nextMetadata.effective_model = effectiveModel;
+    }
     const providerFailureIntervention = findProviderFailureIntervention(interventions);
-    const interventionMessage = firstInterventionMessage(interventions);
     const rawContent = String(entry.content ?? '');
     const content = rawContent.trim()
       ? rawContent
-      : interventionMessage || (
+      : (
         String(entry.role ?? 'assistant') === 'assistant'
         && String(entry.status ?? '').trim().toLowerCase() === 'failed'
           ? "Sage couldn't complete that turn."
@@ -651,6 +733,7 @@ function normalizeCanonicalChatThread(
     threadId: String(record.id ?? record.thread_id ?? threadId),
     title: String(record.title ?? 'Chat'),
     messages,
+    session: null,
   };
 }
 
@@ -682,6 +765,33 @@ function normalizeProviderCatalogRecords(payload: unknown): ProviderCatalogRecor
   return Array.isArray(providers)
     ? providers.filter((item): item is ProviderCatalogRecord => Boolean(item) && typeof item === 'object')
     : [];
+}
+
+function normalizeProviderProfiles(payload: unknown): ProviderProfileRecord[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  const items = (payload as Record<string, unknown>).items;
+  return Array.isArray(items)
+    ? items.filter((item): item is ProviderProfileRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function sortProviderProfiles(profiles: ProviderProfileRecord[]): ProviderProfileRecord[] {
+  return [...profiles].sort((left, right) => {
+    const leftPriority = Number(left.priority ?? 100);
+    const rightPriority = Number(right.priority ?? 100);
+    if (leftPriority !== rightPriority) {
+      return leftPriority - rightPriority;
+    }
+    return readString(left.id).localeCompare(readString(right.id));
+  });
+}
+
+function profileMetadataRecord(profile: ProviderProfileRecord | null | undefined): Record<string, unknown> {
+  return profile && typeof profile.metadata === 'object' && profile.metadata
+    ? profile.metadata as Record<string, unknown>
+    : {};
 }
 
 function normalizeTimelineItems(payload: unknown): Record<string, unknown>[] {
@@ -778,7 +888,7 @@ function workspaceDefaultModelOption(
   const workspaceDefaultProvider = providers.find(isProviderEligibleForWorkspaceDefault) ?? null;
   return {
     id: 'default',
-    label: 'Workspace default',
+    label: 'Auto route',
     providerId: workspaceDefaultProvider ? readString(workspaceDefaultProvider.id) || null : null,
     providerLabel: workspaceDefaultProvider
       ? readString(workspaceDefaultProvider.label) || readString(workspaceDefaultProvider.id) || null
@@ -793,6 +903,58 @@ function disconnectedModelOption(): ChatModelOption {
   return workspaceDefaultModelOption();
 }
 
+function providerRouteSuffix(provider: ProviderCatalogRecord | null | undefined): string | null {
+  if (!provider || typeof provider !== 'object') {
+    return null;
+  }
+  const providerId = readString(provider.id).toLowerCase();
+  const credentialPlane = readString(provider.credential_plane).toLowerCase();
+  const defaultAuthMode = readString(provider.default_auth_mode).toLowerCase();
+  const runtimeSource = readString(provider.runtime_active_source).toLowerCase();
+
+  if (providerId === 'openai-codex' || runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
+    return 'CLI';
+  }
+  if (providerId === 'ollama' || provider.local_only === true || credentialPlane === 'local_runtime') {
+    return 'Local';
+  }
+  if (credentialPlane === 'workspace_connection') {
+    return 'Workspace key';
+  }
+  if (credentialPlane === 'platform_runtime') {
+    return 'Hosted';
+  }
+  return null;
+}
+
+function modelOptionDisplayLabel(
+  option: ChatModelOption,
+  providerRecord: ProviderCatalogRecord | null,
+): string {
+  const baseLabel = option.id ? compactComposerLabel(option.label, option.id) : option.label;
+  const providerLabel = compactComposerLabel(option.providerLabel || readString(providerRecord?.label), option.providerId || '');
+  const routeSuffix = providerRouteSuffix(providerRecord);
+
+  if (option.id === 'default') {
+    const parts = ['Auto route'];
+    if (providerLabel) {
+      parts.push(providerLabel);
+    }
+    if (routeSuffix) {
+      parts.push(routeSuffix);
+    }
+    return parts.join(' · ');
+  }
+
+  if (routeSuffix) {
+    return `${baseLabel} · ${routeSuffix}`;
+  }
+  if (providerLabel && providerLabel.toLowerCase() !== baseLabel.toLowerCase()) {
+    return `${baseLabel} · ${providerLabel}`;
+  }
+  return baseLabel;
+}
+
 function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   const providers = Array.isArray(record.providers)
@@ -804,6 +966,7 @@ function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
     return [disconnectedModelOption()];
   }
 
+  const workspaceDefault = workspaceDefaultModelOption(connectedProviders);
   const seen = new Set<string>();
 
   const options = connectedProviders.flatMap((provider) => {
@@ -832,13 +995,13 @@ function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
     });
   });
 
-  return options.length > 0 ? options : [workspaceDefaultModelOption(connectedProviders)];
+  return [workspaceDefault, ...options];
 }
 
 function compactComposerLabel(label: string, fallback: string): string {
   const source = readString(label) || readString(fallback);
   if (!source) {
-    return 'Default';
+    return 'Auto route';
   }
 
   const gptMatch = source.match(/gpt[-\s]?(\d+(?:\.\d+)?)/i);
@@ -847,7 +1010,7 @@ function compactComposerLabel(label: string, fallback: string): string {
   }
 
   if (/default workspace model/i.test(source)) {
-    return 'Default';
+    return 'Auto route';
   }
 
   const trimmed = source.split(/[(/]/, 1)[0]?.trim() || source;
@@ -974,9 +1137,29 @@ function createCanonicalAssistantMessage(
     response.metadata && typeof response.metadata === 'object'
       ? { ...(response.metadata as Record<string, unknown>) }
       : {};
+  const responseRecord = response as Record<string, unknown>;
+  const resultMetadata = readObject(metadata.result_metadata);
+  const contextUsed = readObject(metadata.context_used);
+  const resultContextUsed = readObject(resultMetadata.context_used);
+  if (!contextUsed && resultContextUsed) {
+    metadata.context_used = resultContextUsed;
+  }
+  const effectiveProvider = readString(responseRecord.provider)
+    || readString(metadata.effective_provider)
+    || readString(resultMetadata.provider)
+    || readString(readObject(metadata.context_used).effective_provider);
+  const effectiveModel = readString(responseRecord.model)
+    || readString(metadata.effective_model)
+    || readString(resultMetadata.model)
+    || readString(readObject(metadata.context_used).effective_model);
+  if (effectiveProvider) {
+    metadata.effective_provider = effectiveProvider;
+  }
+  if (effectiveModel) {
+    metadata.effective_model = effectiveModel;
+  }
   const providerFailureIntervention = findProviderFailureIntervention(interventions);
-  const interventionMessage = firstInterventionMessage(interventions);
-  const content = reply || interventionMessage || (
+  const content = reply || (
     String(response.status ?? '').trim().toLowerCase() === 'failed' || String(response.error ?? '').trim()
       ? "Sage couldn't complete that turn."
       : ''
@@ -1017,6 +1200,28 @@ function createCanonicalUserMessage(text: string, threadId: string): Workstation
   };
 }
 
+function createPendingUserMessage(
+  text: string,
+  threadId: string,
+  clientRequestId: string,
+): WorkstationChatMessageRecord {
+  return {
+    ...createCanonicalUserMessage(text, threadId),
+    metadata: {
+      client_request_id: clientRequestId,
+      request_id: clientRequestId,
+      pending_confirmation: true,
+    },
+  };
+}
+
+function createClientTurnRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
 function createStreamingAssistantMessage(
   text: string,
   threadId: string,
@@ -1038,6 +1243,140 @@ function createStreamingAssistantMessage(
     artifacts: [],
     metadata: traceId ? { trace_id: traceId } : {},
   };
+}
+
+function createIncompleteAssistantMessage(
+  text: string,
+  threadId: string,
+  metadata: Record<string, unknown> = {},
+): WorkstationChatMessageRecord | null {
+  if (!text.trim()) {
+    return null;
+  }
+  return {
+    id: `${threadId}:assistant:partial:${Date.now()}`,
+    role: 'assistant',
+    content: text,
+    status: 'incomplete',
+    createdAt: new Date().toISOString(),
+    runId: null,
+    approvals: [],
+    interventions: [],
+    artifacts: normalizeArtifactReferences(metadata),
+    metadata: {
+      ...metadata,
+      incomplete: true,
+    },
+  };
+}
+
+function messageRequestId(message: WorkstationChatMessageRecord | null | undefined): string {
+  if (!message) {
+    return '';
+  }
+  return readString(readObject(message.metadata).client_request_id)
+    || readString(readObject(message.metadata).request_id);
+}
+
+function canonicalIncludesMessage(
+  messages: WorkstationChatMessageRecord[],
+  candidate: WorkstationChatMessageRecord | null | undefined,
+): boolean {
+  if (!candidate) {
+    return false;
+  }
+  const candidateRequestId = messageRequestId(candidate);
+  if (candidateRequestId) {
+    return messages.some((message) => messageRequestId(message) === candidateRequestId);
+  }
+  const normalizedContent = readString(candidate.content);
+  return messages.some((message) =>
+    message.role === candidate.role
+    && readString(message.content) === normalizedContent,
+  );
+}
+
+function createActivityStepMessage(
+  step: LiveActivityStepState,
+  threadId: string,
+): WorkstationChatMessageRecord {
+  const detail = readString(step.detail);
+  return {
+    id: `${threadId}:activity:${step.id}`,
+    role: 'assistant',
+    content: detail ? `${step.label} · ${detail}` : step.label,
+    status: step.status,
+    createdAt: step.createdAt,
+    runId: null,
+    approvals: [],
+    interventions: [],
+    artifacts: [],
+    metadata: {
+      display_kind: 'activity_step',
+      step_kind: step.kind,
+      step_status: step.status,
+    },
+  };
+}
+
+function upsertLiveActivityStep(
+  current: LiveActivityStepState[],
+  next: LiveActivityStepState,
+): LiveActivityStepState[] {
+  const stepKey = next.toolCallId || next.id;
+  const existingIndex = current.findIndex((item) => (item.toolCallId || item.id) === stepKey);
+  if (existingIndex < 0) {
+    return [...current, next];
+  }
+  const updated = [...current];
+  updated[existingIndex] = {
+    ...updated[existingIndex],
+    ...next,
+    label: readString(next.label) || updated[existingIndex].label,
+    detail: readString(next.detail) || updated[existingIndex].detail,
+    createdAt: updated[existingIndex].createdAt,
+  };
+  return updated;
+}
+
+function normalizeStepStatus(value: unknown): string {
+  const normalized = readString(value).toLowerCase();
+  if (normalized === 'done' || normalized === 'complete' || normalized === 'completed') {
+    return 'done';
+  }
+  if (normalized === 'error' || normalized === 'failed') {
+    return 'error';
+  }
+  return 'active';
+}
+
+function normalizeStepEvent(
+  payload: Record<string, unknown>,
+): LiveActivityStepState | null {
+  const id = readString(payload.id);
+  const label = readString(payload.label);
+  if (!id || !label) {
+    return null;
+  }
+  return {
+    id,
+    kind: readString(payload.kind) || 'tool',
+    label,
+    detail: readString(payload.detail),
+    status: normalizeStepStatus(payload.status),
+    toolCallId: null,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function settleLiveActivitySteps(
+  steps: LiveActivityStepState[],
+  status: 'done' | 'error' = 'done',
+): LiveActivityStepState[] {
+  return steps.map((step) => ({
+    ...step,
+    status: step.status === 'active' ? status : step.status,
+  }));
 }
 
 function summarizeRuns(runs: CanonicalRunSummary[]): string {
@@ -1329,6 +1668,58 @@ function normalizeSageMemorySnapshot(payload: unknown): SageMemorySnapshot {
   };
 }
 
+function normalizeSageToolPolicy(payload: unknown): SageToolPolicyRecord[] {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const tools = Array.isArray(record.tools) ? record.tools : [];
+  return tools.flatMap((item) => {
+    const candidate = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const key = readString(candidate.key);
+    if (!key) {
+      return [];
+    }
+    return [{
+      key,
+      enabled: candidate.enabled !== false,
+    }];
+  });
+}
+
+function normalizeConnectorVaultRecords(payload: unknown): VaultCredentialRecord[] {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  return Array.isArray(record.items)
+    ? record.items.filter((item): item is VaultCredentialRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function toolPolicyEnabled(policy: SageToolPolicyRecord[], key: string): boolean {
+  const record = policy.find((item) => item.key === key);
+  return record ? record.enabled : true;
+}
+
+function hasConnectedConnector(
+  connectors: VaultCredentialRecord[],
+  connectorIds: string[],
+): boolean {
+  const normalizedIds = new Set(connectorIds.map((item) => readString(item).toLowerCase()).filter(Boolean));
+  return connectors.some((connector) => {
+    const connectorId = readString(connector.connector || connector.provider).toLowerCase();
+    if (!normalizedIds.has(connectorId)) {
+      return false;
+    }
+    const metadata = readObject(connector.metadata);
+    const verification = readObject(metadata.capability_verification);
+    const runtimeUsable = verification.runtime_usable;
+    const authenticated = verification.authenticated;
+    if (typeof runtimeUsable === 'boolean') {
+      return runtimeUsable;
+    }
+    if (typeof authenticated === 'boolean') {
+      return authenticated;
+    }
+    return true;
+  });
+}
+
 function defaultSageMemoryDraft(): SageMemoryDraft {
   return {
     entryId: null,
@@ -1543,10 +1934,49 @@ function resolveProviderModelContext({
   };
 }
 
+function resolvePersistedSelectedModelId({
+  providers,
+  profiles,
+  modelOptions,
+}: {
+  providers: ProviderCatalogRecord[];
+  profiles: ProviderProfileRecord[];
+  modelOptions: ChatModelOption[];
+}): string {
+  const availableModelIds = new Set(
+    modelOptions
+      .map((option) => readString(option.id))
+      .filter((id) => id && id !== 'default'),
+  );
+  const eligibleProviderIds = new Set(
+    providers
+      .filter(isProviderEligibleForModelSelector)
+      .map((provider) => readString(provider.id))
+      .filter(Boolean),
+  );
+
+  for (const profile of sortProviderProfiles(profiles)) {
+    const providerId = readString(profile.provider);
+    if (!providerId || !eligibleProviderIds.has(providerId) || profile.enabled === false) {
+      continue;
+    }
+    const metadata = profileMetadataRecord(profile);
+    const selectionMode = readString(metadata.chat_model_selection).toLowerCase();
+    const modelId = readString(profile.model);
+    if (selectionMode === 'explicit' && modelId && availableModelIds.has(modelId)) {
+      return modelId;
+    }
+  }
+
+  return 'default';
+}
+
 export function WorkstationChatPane() {
   const { bootstrap, routeManifest } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
-  const streamState = useWorkstationStreamState();
+  const activityVersion = useWorkstationActivityVersion();
+  const activityConnectionState = useWorkstationStreamSelector((state) => state.activity.connectionState);
+  const notificationsConnectionState = useWorkstationStreamSelector((state) => state.notifications.connectionState);
   const desktop = useWorkstationDesktopBridge();
   const router = useRouter();
   const actor = useMemo<WorkstationSessionActor>(() => ({
@@ -1565,6 +1995,7 @@ export function WorkstationChatPane() {
       threadId: activeThreadId,
       title: 'Chat',
       messages: [],
+      session: null,
     },
   );
   const [draft, setDraft] = useState('');
@@ -1590,16 +2021,16 @@ export function WorkstationChatPane() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [hasEnteredConversationFlow, setHasEnteredConversationFlow] = useState(false);
+  const [smallModelWarningVisible, setSmallModelWarningVisible] = useState(false);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
   const [mutatingMemory, setMutatingMemory] = useState<string | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState<WorkstationChatMessageRecord | null>(null);
   const [streamingAssistantText, setStreamingAssistantText] = useState('');
+  const [liveTimelineEvents, setLiveTimelineEvents] = useState<TimelineProjectionEvent[]>([]);
+  const [showProjectedAssistant, setShowProjectedAssistant] = useState(false);
+  const [timelineSettled, setTimelineSettled] = useState(false);
+  const [liveActivitySteps, setLiveActivitySteps] = useState<LiveActivityStepState[]>([]);
   const [liveTrace, setLiveTrace] = useState<LiveTraceState | null>(null);
-  const [isLiveTraceExpanded, setIsLiveTraceExpanded] = useState(false);
-  const [liveTraceElapsedSeconds, setLiveTraceElapsedSeconds] = useState(0);
-  const [showLiveTraceCard, setShowLiveTraceCard] = useState(false);
-  const [isLiveTraceCardFading, setIsLiveTraceCardFading] = useState(false);
-  const [showCompletedTraceTimer, setShowCompletedTraceTimer] = useState(false);
   const [memoryFilter, setMemoryFilter] = useState<string>('all');
   const [selectedExecutionPlacement] = useState<'local'>('local');
   const [machineTrust, setMachineTrust] = useState<ChatMachineTrust>('personal');
@@ -1607,68 +2038,192 @@ export function WorkstationChatPane() {
   const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([
     disconnectedModelOption(),
   ]);
-  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [selectedModel, setSelectedModel] = useState<string>('default');
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);
+  const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRecord[]>([]);
+  const [toolPolicy, setToolPolicy] = useState<SageToolPolicyRecord[]>([]);
+  const [connectorCredentials, setConnectorCredentials] = useState<VaultCredentialRecord[]>([]);
   const [browserGatewayDoctor, setBrowserGatewayDoctor] = useState<GatewayReadinessDoctorPayload | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<ChatReasoningEffort>('medium');
+  const [isPersistingModelSelection, setIsPersistingModelSelection] = useState(false);
   const [isApprovalsSheetOpen, setIsApprovalsSheetOpen] = useState(false);
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultSageMemoryDraft());
   const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<string | null>(null);
+  const activeThreadIdRef = useRef(activeThreadId);
+  const threadRef = useRef(thread);
+  const pendingUserMessageRef = useRef<WorkstationChatMessageRecord | null>(pendingUserMessage);
+  const streamingAssistantTextRef = useRef(streamingAssistantText);
+  const liveActivityStepsRef = useRef<LiveActivityStepState[]>(liveActivitySteps);
+  const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
+  const streamAbortRequestedRef = useRef(false);
+  const streamInFlightRef = useRef(false);
+
+  useEffect(() => {
+    activeThreadIdRef.current = activeThreadId;
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    threadRef.current = thread;
+  }, [thread]);
+
+  useEffect(() => {
+    pendingUserMessageRef.current = pendingUserMessage;
+  }, [pendingUserMessage]);
+
+  useEffect(() => {
+    streamingAssistantTextRef.current = streamingAssistantText;
+  }, [streamingAssistantText]);
+
+  useEffect(() => {
+    liveActivityStepsRef.current = liveActivitySteps;
+  }, [liveActivitySteps]);
 
   const refreshProviderCatalog = useCallback(async () => {
-    const applyProviderPayload = (payload: Record<string, unknown>) => {
-      const normalizedProviders = normalizeProviderCatalogRecords(payload);
-      setProviderCatalog(normalizedProviders);
-      const nextOptions = normalizeChatModelOptions(payload);
-      setModelOptions(nextOptions.length > 0 ? nextOptions : [workspaceDefaultModelOption(normalizedProviders)]);
-    };
+    const payload = await services.queryClient.run('chat:provider-catalog', async () => {
+      const profileRequest = services.client.listProviderProfiles().catch(() => ({ items: [] }));
+      const catalogRequest = (async () => {
+        try {
+          return await services.client.listProviderCatalog();
+        } catch {
+          return await services.client.listProviders();
+        }
+      })();
+      const [catalogPayload, profilesPayload] = await Promise.all([catalogRequest, profileRequest]);
+      return {
+        catalogPayload,
+        profilesPayload,
+      };
+    }).catch(() => null);
 
-    try {
-      applyProviderPayload(await services.client.listProviderCatalog());
-      return;
-    } catch {
-      // Fall through to the older provider endpoint if the richer catalog is unavailable.
-    }
-
-    try {
-      applyProviderPayload(await services.client.listProviders());
-      return;
-    } catch {
+    if (!payload || typeof payload !== 'object') {
       setProviderCatalog((current) => current);
+      setProviderProfiles((current) => current);
       setModelOptions((current) => (current.length > 0 ? current : [disconnectedModelOption()]));
+      return;
     }
-  }, [services.client]);
+
+    const normalizedProviders = normalizeProviderCatalogRecords(
+      (payload as { catalogPayload?: unknown }).catalogPayload,
+    );
+    const normalizedProfiles = normalizeProviderProfiles(
+      (payload as { profilesPayload?: unknown }).profilesPayload,
+    );
+    setProviderCatalog(normalizedProviders);
+    setProviderProfiles(normalizedProfiles);
+    const nextOptions = normalizeChatModelOptions(
+      (payload as { catalogPayload?: unknown }).catalogPayload,
+    );
+    setModelOptions(nextOptions.length > 0 ? nextOptions : [workspaceDefaultModelOption(normalizedProviders)]);
+  }, [services.client, services.queryClient]);
+
+  const refreshToolingState = useCallback(async () => {
+    const payload = await services.queryClient.run('chat:tooling-state', async () => {
+      const [toolPolicyPayload, connectorsPayload] = await Promise.all([
+        services.client.getSageToolPolicy().catch(() => ({ tools: [] })),
+        services.client.listConnectorsVault().catch(() => ({ items: [] })),
+      ]);
+      return {
+        toolPolicyPayload,
+        connectorsPayload,
+      };
+    }).catch(() => null);
+
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+
+    setToolPolicy(normalizeSageToolPolicy((payload as { toolPolicyPayload?: unknown }).toolPolicyPayload));
+    setConnectorCredentials(normalizeConnectorVaultRecords((payload as { connectorsPayload?: unknown }).connectorsPayload));
+  }, [services.client, services.queryClient]);
 
   const refreshBrowserGatewayReadiness = useCallback(async () => {
-    const registrationsPayload = await services.client.requestJson<Record<string, unknown>>({
-      path: `/api/gateway/registrations?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}`,
-      allowStatuses: [404],
-    });
-    const registrations = Array.isArray(registrationsPayload?.items)
-      ? registrationsPayload.items.filter((item): item is GatewayReadinessRegistration => Boolean(item) && typeof item === 'object')
-      : [];
-    const selectedGateway = registrations.find((item) =>
-      readString(item.connection_status || item.status).toLowerCase() === 'online',
-    ) ?? registrations[0] ?? null;
-    const gatewayId = readString(selectedGateway?.gateway_id) || null;
-    if (!gatewayId) {
-      setBrowserGatewayDoctor(null);
-      return;
-    }
-    const doctorPayload = await services.client.requestJson<GatewayReadinessDoctorPayload>({
-      path: `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/doctor`,
-      allowStatuses: [403, 404],
-    });
+    const doctorPayload = await services.queryClient.run('chat:gateway-readiness', async () => {
+      const registrationsPayload = await services.client.requestJson<Record<string, unknown>>({
+        path: `/api/gateway/registrations?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}`,
+        allowStatuses: [404],
+      });
+      const registrations = Array.isArray(registrationsPayload?.items)
+        ? registrationsPayload.items.filter((item): item is GatewayReadinessRegistration => Boolean(item) && typeof item === 'object')
+        : [];
+      const selectedGateway = registrations.find((item) =>
+        readString(item.connection_status || item.status).toLowerCase() === 'online',
+      ) ?? registrations[0] ?? null;
+      const gatewayId = readString(selectedGateway?.gateway_id) || null;
+      if (!gatewayId) {
+        return null;
+      }
+      return await services.client.requestJson<GatewayReadinessDoctorPayload>({
+        path: `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/doctor`,
+        allowStatuses: [403, 404],
+      });
+    }).catch(() => null);
     setBrowserGatewayDoctor(doctorPayload && typeof doctorPayload === 'object' ? doctorPayload : null);
-  }, [bootstrap.workspace.id, services.client]);
+  }, [bootstrap.workspace.id, services.client, services.queryClient]);
+
+  const persistSelectedModelPreference = useCallback(async (nextModelId: string) => {
+    const sortedProfiles = sortProviderProfiles(providerProfiles).filter((profile) => {
+      const providerId = readString(profile.provider);
+      return providerId && providerCatalog.some((provider) =>
+        readString(provider.id) === providerId && isProviderEligibleForModelSelector(provider));
+    });
+
+    if (sortedProfiles.length === 0) {
+      return false;
+    }
+
+    const targetOption = nextModelId === 'default'
+      ? null
+      : modelOptions.find((option) => option.id === nextModelId) ?? null;
+    const targetProviderId = readString(targetOption?.providerId);
+    const targetProfile = targetProviderId
+      ? sortedProfiles.find((profile) => readString(profile.provider) === targetProviderId && profile.enabled !== false) ?? null
+      : null;
+
+    if (nextModelId !== 'default' && (!targetOption || !targetProviderId || !targetProfile)) {
+      return false;
+    }
+
+    await Promise.all(sortedProfiles.map((profile) => {
+      const metadata = {
+        ...profileMetadataRecord(profile),
+        chat_model_selection: readString(profile.id) === readString(targetProfile?.id) ? 'explicit' : 'default',
+      };
+      return services.client.upsertProviderProfile({
+        id: readString(profile.id) || null,
+        provider: readString(profile.provider),
+        label: readString(profile.label) || `Sage ${readString(profile.provider)}`,
+        credentialId: readString(profile.credential_id) || null,
+        authMode: readString(profile.auth_mode) || null,
+        priority: Number(profile.priority ?? 100),
+        enabled: profile.enabled !== false,
+        model: readString(profile.id) === readString(targetProfile?.id)
+          ? readString(targetOption?.id) || readString(profile.model) || null
+          : readString(profile.model) || null,
+        metadata,
+      });
+    }));
+
+    return true;
+  }, [modelOptions, providerCatalog, providerProfiles, services.client]);
 
   const writeThreadState = (nextThread: CanonicalChatThreadState) => {
-    services.queryClient.set(threadQueryKey(nextThread.threadId), nextThread);
+    const normalizedMessages = nextThread.messages.filter((message) => !isSyntheticTranscriptMessage(message));
+    const mergedThread: CanonicalChatThreadState = {
+      ...nextThread,
+      messages: normalizedMessages,
+    };
+    services.queryClient.set(threadQueryKey(mergedThread.threadId), mergedThread);
     services.queryClient.set(ACTIVE_THREAD_QUERY_KEY, nextThread.threadId);
-    persistActiveThread(bootstrap.workspace.id, nextThread.threadId);
-    setActiveThreadId(nextThread.threadId);
-    setThread(nextThread);
+    persistActiveThread(bootstrap.workspace.id, mergedThread.threadId);
+    activeThreadIdRef.current = mergedThread.threadId;
+    setActiveThreadId(mergedThread.threadId);
+    setThread(mergedThread);
+
+    const pendingMessage = pendingUserMessageRef.current;
+    if (pendingMessage && canonicalIncludesMessage(mergedThread.messages, pendingMessage)) {
+      setPendingUserMessage(null);
+    }
   };
 
   const writeOverview = ({
@@ -1695,14 +2250,19 @@ export function WorkstationChatPane() {
   };
 
   const loadThread = async (requestedThreadId = activeThreadId) => {
-    const payload = await services.client.getThread({
-      threadId: requestedThreadId,
-      allowMissing: true,
-    });
+    const cachedThread = services.queryClient.peek<CanonicalChatThreadState>(threadQueryKey(requestedThreadId));
+    const payload = await services.queryClient.run(
+      `chat:canonical:thread-load:${requestedThreadId}`,
+      async () => services.client.getThread({
+        threadId: requestedThreadId,
+        allowMissing: true,
+      }),
+    );
     if (payload === null) {
-      const cachedThread = services.queryClient.peek<CanonicalChatThreadState>(threadQueryKey(requestedThreadId));
       if (cachedThread && cachedThread.messages.length > 0) {
-        setThread(cachedThread);
+        if (activeThreadIdRef.current === requestedThreadId) {
+          setThread(cachedThread);
+        }
         return cachedThread;
       }
       if (thread.threadId === requestedThreadId && thread.messages.length > 0) {
@@ -1710,7 +2270,11 @@ export function WorkstationChatPane() {
       }
     }
     const nextThread = normalizeCanonicalChatThread(payload, requestedThreadId);
-    writeThreadState(nextThread);
+    nextThread.session = cachedThread?.session ?? null;
+    services.queryClient.set(threadQueryKey(nextThread.threadId), nextThread);
+    if (activeThreadIdRef.current === requestedThreadId) {
+      writeThreadState(nextThread);
+    }
     return nextThread;
   };
 
@@ -1760,31 +2324,35 @@ export function WorkstationChatPane() {
       throw error;
     });
 
-    const [nextRuns, nextApprovals, timelineItems] = await Promise.all([
-      runsRequest,
-      approvalsRequest,
-      timelineRequest,
-    ]);
-    writeOverview({ nextRuns, nextApprovals });
-    if (timelineItems.length > 0) {
-      writeRecentThreads(deriveRecentThreads(timelineItems, activeThreadId));
-      return;
-    }
-    if (recentThreadsFallback.length > 0) {
-      writeRecentThreads(recentThreadsFallback);
-      return;
-    }
-    writeRecentThreads(deriveRecentThreads([], activeThreadId));
+    await services.queryClient.run('chat:canonical:overview', async () => {
+      const [nextRuns, nextApprovals, timelineItems] = await Promise.all([
+        runsRequest,
+        approvalsRequest,
+        timelineRequest,
+      ]);
+      writeOverview({ nextRuns, nextApprovals });
+      if (timelineItems.length > 0) {
+        writeRecentThreads(deriveRecentThreads(timelineItems, activeThreadIdRef.current));
+        return;
+      }
+      if (recentThreadsFallback.length > 0) {
+        writeRecentThreads(recentThreadsFallback);
+        return;
+      }
+      writeRecentThreads(deriveRecentThreads([], activeThreadIdRef.current));
+    });
   };
 
   const loadMemory = async () => {
     const cachedSnapshot = services.queryClient.peek<SageMemorySnapshot>(SAGE_MEMORY_QUERY_KEY) ?? memorySnapshot;
-    const payload = await services.client.listSageMemory().catch((error) => {
-      if (isTransientBackgroundReadError(error)) {
-        return null;
-      }
-      throw error;
-    });
+    const payload = await services.queryClient.run('chat:canonical:memory', async () =>
+      services.client.listSageMemory().catch((error) => {
+        if (isTransientBackgroundReadError(error)) {
+          return null;
+        }
+        throw error;
+      }),
+    );
     const nextSnapshot = payload === null
       ? cachedSnapshot
       : normalizeSageMemorySnapshot(payload);
@@ -1930,8 +2498,12 @@ export function WorkstationChatPane() {
     }
     setHasEnteredConversationFlow(true);
     setStatusMessage(null);
+    setShowProjectedAssistant(false);
+    setTimelineSettled(false);
+    setLiveTimelineEvents([]);
     setIsLoading(true);
     try {
+      activeThreadIdRef.current = nextThreadId;
       setActiveThreadId(nextThreadId);
       await refreshCanonicalState(nextThreadId);
     } catch (error) {
@@ -1955,9 +2527,14 @@ export function WorkstationChatPane() {
     setStatusMessage(null);
     setPendingUserMessage(null);
     setStreamingAssistantText('');
+    setShowProjectedAssistant(false);
+    setTimelineSettled(false);
+    setLiveTimelineEvents([]);
+    setLiveActivitySteps([]);
     setLiveTrace(null);
     setIsLoading(true);
     try {
+      activeThreadIdRef.current = nextThreadId;
       setActiveThreadId(nextThreadId);
       await refreshCanonicalState(nextThreadId);
       writeRecentThreads([
@@ -1996,16 +2573,26 @@ export function WorkstationChatPane() {
   }), [activeThreadId]);
 
   useEffect(() => {
-    if (streamState.activity.version === 0) {
+    if (activityVersion === 0) {
       return;
     }
-    void refreshCanonicalState(activeThreadId).catch((error) => {
+    void Promise.all([
+      loadOverview(),
+      loadMemory(),
+    ]).catch((error) => {
       if (shouldSuppressBackgroundRefreshNotice(error)) {
         return;
       }
       setStatusMessage(error instanceof Error ? error.message : 'Chat refresh failed.');
     });
-  }, [activeThreadId, streamState.activity.version]);
+  }, [activeThreadId, activityVersion]);
+
+  useEffect(() => {
+    if (activityConnectionState !== 'closed' && notificationsConnectionState !== 'closed') {
+      return;
+    }
+    setStatusMessage((current) => current ?? 'Connection lost. Live updates paused.');
+  }, [activityConnectionState, notificationsConnectionState]);
 
   useEffect(() => {
     persistActiveThread(bootstrap.workspace.id, activeThreadId);
@@ -2076,145 +2663,176 @@ export function WorkstationChatPane() {
     };
   }, [activeThreadId, bootstrap.workspace.id]);
 
-  const streamingAssistantMessage = useMemo(
-    () => createStreamingAssistantMessage(
-      streamingAssistantText,
-      liveTrace?.trace?.thread_id && readString(liveTrace.trace.thread_id)
-        ? String(liveTrace.trace.thread_id)
-        : activeThreadId,
-      liveTrace?.traceId ?? null,
-    ),
-    [activeThreadId, liveTrace?.trace?.thread_id, liveTrace?.traceId, streamingAssistantText],
+  const projectedTimelineRows = useMemo(
+    () => projectTimeline(liveTimelineEvents),
+    [liveTimelineEvents],
   );
 
-  const hasConversationContent = thread.messages.length > 0
-    || Boolean(pendingUserMessage)
-    || Boolean(streamingAssistantMessage)
+  const projectedTimelineMessages = useMemo(() => {
+    const threadId = liveTrace?.trace?.thread_id && readString(liveTrace.trace.thread_id)
+      ? String(liveTrace.trace.thread_id)
+      : activeThreadId;
+    return projectedTimelineRows.flatMap((row): WorkstationChatMessageRecord[] => {
+      if (row.kind === 'user') {
+        return [];
+      }
+      if (row.kind === 'assistant') {
+        if (!showProjectedAssistant) {
+          return [];
+        }
+        const message = createStreamingAssistantMessage(
+          row.content,
+          threadId,
+          liveTrace?.traceId ?? null,
+        );
+        if (!message) {
+          return [];
+        }
+        message.status = row.isStreaming ? 'streaming' : (row.isIncomplete ? 'incomplete' : 'completed');
+        message.metadata = {
+          ...message.metadata,
+          incomplete: row.isIncomplete,
+          effective_provider: readString(liveTrace?.trace?.provider),
+          effective_model: readString(liveTrace?.trace?.model),
+        };
+        return [message];
+      }
+      if (row.kind === 'thinking') {
+        return [{
+          id: `${threadId}:thinking:${row.id}`,
+          role: 'assistant',
+          content: row.text,
+          status: row.isStreaming ? 'streaming' : 'completed',
+          createdAt: new Date().toISOString(),
+          runId: null,
+          approvals: [],
+          interventions: [],
+          artifacts: [],
+          metadata: {
+            display_kind: 'thinking_row',
+            thinking_text: row.text,
+            activity_line: row.activityLine,
+            step_streaming: row.isStreaming && !timelineSettled,
+            step_dimmed: timelineSettled,
+          },
+        }];
+      }
+      if (row.kind === 'tool') {
+        return [{
+          id: `${threadId}:tool:${row.id}`,
+          role: 'assistant',
+          content: row.name,
+          status: row.status,
+          createdAt: new Date().toISOString(),
+          runId: null,
+          approvals: [],
+          interventions: [],
+          artifacts: [],
+          metadata: {
+            display_kind: 'tool_row',
+            tool_name: row.name,
+            tool_result: row.result,
+            step_status: row.status,
+            step_dimmed: timelineSettled,
+          },
+        }];
+      }
+      if (row.kind === 'file') {
+        return [{
+          id: `${threadId}:file:${row.id}`,
+          role: 'assistant',
+          content: row.filename,
+          status: 'completed',
+          createdAt: new Date().toISOString(),
+          runId: null,
+          approvals: [],
+          interventions: [],
+          artifacts: [],
+          metadata: {
+            display_kind: 'file_row',
+            filename: row.filename,
+            file_action: row.action,
+            step_dimmed: timelineSettled,
+          },
+        }];
+      }
+      return [{
+        id: `${threadId}:search:${row.id}`,
+        role: 'assistant',
+        content: row.query,
+        status: row.status,
+        createdAt: new Date().toISOString(),
+        runId: null,
+        approvals: [],
+        interventions: [],
+        artifacts: [],
+        metadata: {
+          display_kind: 'search_row',
+          query: row.query,
+          step_status: row.status,
+          step_dimmed: timelineSettled,
+        },
+      }];
+    });
+  }, [
+    activeThreadId,
+    liveTrace?.trace?.model,
+    liveTrace?.trace?.provider,
+    liveTrace?.trace?.thread_id,
+    liveTrace?.traceId,
+    projectedTimelineRows,
+    showProjectedAssistant,
+    timelineSettled,
+  ]);
+
+  const projectedSystemMessages = useMemo(
+    () => projectedTimelineMessages.filter((message) => {
+      const displayKind = readString(readObject(message.metadata).display_kind);
+      return displayKind === 'thinking_row'
+        || displayKind === 'tool_row'
+        || displayKind === 'file_row'
+        || displayKind === 'search_row';
+    }),
+    [projectedTimelineMessages],
+  );
+
+  const pinnedTimelineMessages = isSending ? projectedSystemMessages : [];
+
+  const visibleTranscriptMessages = useMemo(() => {
+    const canonicalMessages = thread.messages.filter((message) => !isSyntheticTranscriptMessage(message));
+    const nextMessages = [...canonicalMessages];
+    if (pendingUserMessage && !canonicalIncludesMessage(canonicalMessages, pendingUserMessage)) {
+      nextMessages.push(pendingUserMessage);
+    }
+    const trailingMessage = nextMessages[nextMessages.length - 1] ?? null;
+    const trailingDisplayKind = trailingMessage ? readString(readObject(trailingMessage.metadata).display_kind) : '';
+    const scrollableSystemMessages = isSending ? [] : projectedSystemMessages;
+    const shouldInsertStepsBeforeFinalAssistant = scrollableSystemMessages.length > 0
+      && trailingMessage?.role === 'assistant'
+      && trailingDisplayKind !== 'activity_step'
+      && trailingDisplayKind !== 'thinking_row'
+      && trailingDisplayKind !== 'tool_row'
+      && trailingDisplayKind !== 'file_row'
+      && trailingDisplayKind !== 'search_row';
+    if (shouldInsertStepsBeforeFinalAssistant && trailingMessage) {
+      nextMessages.pop();
+      nextMessages.push(...scrollableSystemMessages, trailingMessage);
+    } else if (scrollableSystemMessages.length > 0) {
+      nextMessages.push(...scrollableSystemMessages);
+    }
+    const projectedAssistantMessage = projectedTimelineMessages.find((message) => message.role === 'assistant' && !message.metadata.display_kind);
+    if (projectedAssistantMessage) {
+      nextMessages.push(projectedAssistantMessage);
+    }
+    return nextMessages;
+  }, [isSending, pendingUserMessage, projectedSystemMessages, projectedTimelineMessages, thread.messages]);
+
+  const hasConversationContent = visibleTranscriptMessages.length > 0
     || Boolean(liveTrace);
   const showConversationContext = hasConversationContent || hasEnteredConversationFlow;
   const showFirstImpression = !showConversationContext;
-  const showTrace = showConversationContext && Boolean(liveTrace);
-  const traceSummary = useMemo(() => summarizeLiveTraceStep(liveTrace), [liveTrace]);
-  const traceStartedAtMs = useMemo(() => resolveTraceStartedAtMs(liveTrace), [liveTrace]);
-  const traceDurationSeconds = useMemo(
-    () => resolveTraceDurationSeconds(liveTrace, traceStartedAtMs),
-    [liveTrace, traceStartedAtMs],
-  );
-  const liveTraceState = traceSummary.state;
-  const traceTimerLabel = useMemo(() => {
-    if (liveTraceState === 'complete') {
-      return showCompletedTraceTimer ? `Took ${formatElapsedClock(traceDurationSeconds)}` : '';
-    }
-    if (liveTraceState === 'failed') {
-      return traceDurationSeconds > 0 ? `Took ${formatElapsedClock(traceDurationSeconds)}` : '';
-    }
-    return formatElapsedClock(liveTraceElapsedSeconds);
-  }, [liveTraceElapsedSeconds, liveTraceState, showCompletedTraceTimer, traceDurationSeconds]);
-  const liveTraceFailureMessage = useMemo(() => {
-    if (liveTraceState !== 'failed') {
-      return '';
-    }
-    return traceSummary.label && traceSummary.label !== 'Run failed'
-      ? traceSummary.label
-      : 'Sage ran into a problem while working.';
-  }, [liveTraceState, traceSummary.label]);
-  const liveTraceTitle = useMemo(() => {
-    if (liveTraceState === 'failed') {
-      return liveTraceFailureMessage;
-    }
-    if (traceSummary.label) {
-      return traceSummary.label;
-    }
-    if (liveTraceState === 'complete') {
-      return 'Run complete';
-    }
-    return 'Thinking...';
-  }, [liveTraceFailureMessage, liveTraceState, traceSummary.label]);
-  const liveTraceStatusLabel = useMemo(() => {
-    if (liveTraceState === 'complete') {
-      return 'Complete';
-    }
-    if (liveTraceState === 'failed') {
-      return 'Stopped';
-    }
-    return 'Thinking';
-  }, [liveTraceState]);
-  const liveTraceCardClassName = useMemo(() => {
-    const classes = ['app-chat-live-trace'];
-    if (liveTraceState === 'running') {
-      classes.push('app-chat-live-trace--running');
-    } else if (liveTraceState === 'complete') {
-      classes.push('app-chat-live-trace--complete');
-    } else if (liveTraceState === 'failed') {
-      classes.push('app-chat-live-trace--failed');
-    }
-    if (isLiveTraceCardFading) {
-      classes.push('app-chat-live-trace--fading');
-    }
-    return classes.join(' ');
-  }, [isLiveTraceCardFading, liveTraceState]);
-
-  useEffect(() => {
-    if (!showTrace || !liveTrace) {
-      setShowLiveTraceCard(false);
-      setIsLiveTraceCardFading(false);
-      setShowCompletedTraceTimer(false);
-      setLiveTraceElapsedSeconds(0);
-      return undefined;
-    }
-
-    setShowLiveTraceCard(true);
-    setIsLiveTraceCardFading(false);
-    const initialElapsed = liveTraceState === 'running'
-      ? (traceStartedAtMs ? Math.max(0, Math.round((Date.now() - traceStartedAtMs) / 1000)) : 0)
-      : traceDurationSeconds;
-    setLiveTraceElapsedSeconds(initialElapsed);
-
-    let intervalId: number | null = null;
-    let timerHideId: number | null = null;
-    let fadeId: number | null = null;
-    let removeId: number | null = null;
-
-    if (liveTraceState === 'running') {
-      intervalId = window.setInterval(() => {
-        const nextElapsed = traceStartedAtMs
-          ? Math.max(0, Math.round((Date.now() - traceStartedAtMs) / 1000))
-          : 0;
-        setLiveTraceElapsedSeconds(nextElapsed);
-      }, 1000);
-    } else if (liveTraceState === 'complete') {
-      setShowCompletedTraceTimer(true);
-      timerHideId = window.setTimeout(() => {
-        setShowCompletedTraceTimer(false);
-      }, 3000);
-      fadeId = window.setTimeout(() => {
-        setIsLiveTraceCardFading(true);
-      }, 5000);
-      removeId = window.setTimeout(() => {
-        setShowLiveTraceCard(false);
-      }, 5350);
-    }
-
-    return () => {
-      if (intervalId) {
-        window.clearInterval(intervalId);
-      }
-      if (timerHideId) {
-        window.clearTimeout(timerHideId);
-      }
-      if (fadeId) {
-        window.clearTimeout(fadeId);
-      }
-      if (removeId) {
-        window.clearTimeout(removeId);
-      }
-    };
-  }, [liveTrace, liveTraceState, showTrace, traceDurationSeconds, traceStartedAtMs]);
-
   const showBlankTranscript = !isLoading
-    && thread.messages.length === 0
-    && !pendingUserMessage
-    && !streamingAssistantMessage
+    && visibleTranscriptMessages.length === 0
     && !liveTrace;
   const latestRun = runs[0];
   const latestApproval = approvals[0];
@@ -2241,10 +2859,19 @@ export function WorkstationChatPane() {
     && localRuntimeTarget.online
     && localRuntimeTarget.healthy,
   );
+  const gatewayReadinessOnline = readString(browserGatewayDoctor?.status).toLowerCase() === 'healthy';
+  const persistedSelectedModelId = useMemo(
+    () => resolvePersistedSelectedModelId({
+      providers: providerCatalog,
+      profiles: providerProfiles,
+      modelOptions,
+    }),
+    [modelOptions, providerCatalog, providerProfiles],
+  );
   const selectedModelOption = useMemo(
     () => modelOptions.find((option) => option.id === selectedModel) ?? modelOptions[0] ?? {
       id: 'default',
-      label: 'Workspace default',
+      label: 'Auto route',
       providerId: null,
       providerLabel: null,
       supportsReasoning: false,
@@ -2262,6 +2889,137 @@ export function WorkstationChatPane() {
     }),
     [providerCatalog, selectedModel, selectedModelOption.label, selectedModelOption.providerId],
   );
+  const activeProviderSummary = useMemo(() => {
+    const providerLabelById = new Map(
+      providerCatalog.map((provider) => [readString(provider.id), readString(provider.label) || readString(provider.id)] as const),
+    );
+    const assistantMessages = [...thread.messages].reverse();
+    const latestAssistantWithProvider = assistantMessages.find((message) => {
+      if (message.role === 'user') {
+        return false;
+      }
+      const metadata = readObject(message.metadata);
+      return Boolean(readString(metadata.effective_provider) || readString(metadata.provider));
+    }) ?? null;
+    const liveProviderId = readString(liveTrace?.trace?.provider);
+    const liveModelId = readString(liveTrace?.trace?.model);
+    if (liveProviderId) {
+      const label = providerLabelById.get(liveProviderId) || liveProviderId;
+      return {
+        label: liveModelId ? `${label} · ${liveModelId}` : label,
+        connected: true,
+      };
+    }
+    if (latestAssistantWithProvider) {
+      const metadata = readObject(latestAssistantWithProvider.metadata);
+      const providerId = readString(metadata.effective_provider) || readString(metadata.provider);
+      const modelId = readString(metadata.effective_model) || readString(metadata.model);
+      if (providerId) {
+        const label = providerLabelById.get(providerId) || providerId;
+        return {
+          label: modelId ? `${label} · ${modelId}` : label,
+          connected: true,
+        };
+      }
+    }
+    if (selectedProviderContext.providerLabel) {
+      return {
+        label: selectedProviderContext.modelLabel
+          ? `${selectedProviderContext.providerLabel} · ${selectedProviderContext.modelLabel}`
+          : selectedProviderContext.providerLabel,
+        connected: true,
+      };
+    }
+    return {
+      label: 'No provider — Set up in Integrations',
+      connected: false,
+    };
+  }, [
+    liveTrace?.trace?.model,
+    liveTrace?.trace?.provider,
+    providerCatalog,
+    selectedProviderContext.modelLabel,
+    selectedProviderContext.providerLabel,
+    thread.messages,
+  ]);
+  const selectedProviderRecord = useMemo(
+    () => providerCatalog.find((provider) => readString(provider.id) === readString(selectedProviderContext.providerId)) ?? null,
+    [providerCatalog, selectedProviderContext.providerId],
+  );
+  const gatewayToolingOnline = useMemo(
+    () => gatewayReadinessOnline,
+    [gatewayReadinessOnline],
+  );
+  const runtimeStatus = useMemo(() => {
+    const providerId = readString(selectedProviderRecord?.id).toLowerCase();
+    const credentialPlane = readString(selectedProviderRecord?.credential_plane).toLowerCase();
+    const localProvider = providerId === 'ollama'
+      || providerId === 'openai-codex'
+      || selectedProviderRecord?.local_only === true
+      || credentialPlane === 'local_runtime';
+    if (!gatewayToolingOnline) {
+      return { label: 'Gateway offline', tone: 'warning' as const };
+    }
+    if (localProvider) {
+      return { label: 'This Mac', tone: 'success' as const };
+    }
+    return { label: 'Cloud', tone: 'neutral' as const };
+  }, [gatewayToolingOnline, selectedProviderRecord]);
+  const composerToolGroups = useMemo<ComposerToolGroup[]>(() => {
+    const localReason = gatewayToolingOnline ? 'Available through the paired gateway' : 'Requires local gateway';
+    const emailAvailable = hasConnectedConnector(connectorCredentials, ['google_workspace', 'smtp', 'microsoft_365']);
+    const telegramAvailable = hasConnectedConnector(connectorCredentials, ['telegram_bot']);
+    const spreadsheetAvailable = hasConnectedConnector(connectorCredentials, ['google_workspace', 'microsoft_365']);
+    const webSearchEnabled = toolPolicyEnabled(toolPolicy, 'web_search');
+    const fetchEnabled = toolPolicyEnabled(toolPolicy, 'http_request');
+    const fileEnabled = toolPolicyEnabled(toolPolicy, 'file_access');
+    const codeEnabled = toolPolicyEnabled(toolPolicy, 'code_execution');
+    return [
+      {
+        id: 'local-machine',
+        label: 'Local machine',
+        items: [
+          { id: 'files', label: 'Files', detail: fileEnabled ? localReason : 'Blocked by workspace policy', enabled: gatewayToolingOnline && fileEnabled },
+          { id: 'browser', label: 'Browser', detail: localReason, enabled: gatewayToolingOnline },
+          { id: 'screenshot', label: 'Screenshot', detail: localReason, enabled: gatewayToolingOnline },
+          { id: 'clipboard', label: 'Clipboard', detail: localReason, enabled: gatewayToolingOnline },
+          { id: 'terminal', label: 'Terminal', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: gatewayToolingOnline && codeEnabled },
+        ],
+      },
+      {
+        id: 'web',
+        label: 'Web',
+        items: [
+          { id: 'web-search', label: 'Search', detail: webSearchEnabled ? 'Automatic web lookup is allowed' : 'Blocked by workspace policy', enabled: webSearchEnabled },
+          { id: 'fetch-url', label: 'Fetch URL', detail: fetchEnabled ? 'Direct HTTP fetch is allowed' : 'Blocked by workspace policy', enabled: fetchEnabled },
+        ],
+      },
+      {
+        id: 'media',
+        label: 'Media',
+        items: [
+          { id: 'image-generation', label: 'Image generation', detail: 'Available through configured image backends', enabled: true },
+          { id: 'video-creation', label: 'Video creation', detail: 'No video backend configured yet', enabled: false },
+        ],
+      },
+      {
+        id: 'communication',
+        label: 'Communication',
+        items: [
+          { id: 'telegram-send', label: 'Telegram send', detail: telegramAvailable ? 'Telegram connector is active' : 'Connect Telegram first', enabled: telegramAvailable },
+          { id: 'email-send', label: 'Email', detail: emailAvailable ? 'Email connector is active' : 'Connect email first', enabled: emailAvailable },
+        ],
+      },
+      {
+        id: 'data',
+        label: 'Data',
+        items: [
+          { id: 'spreadsheet', label: 'Spreadsheet', detail: spreadsheetAvailable ? 'Workspace spreadsheet connector is active' : 'Connect Google Workspace or Microsoft 365', enabled: spreadsheetAvailable },
+          { id: 'code-execution', label: 'Code execution', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: gatewayToolingOnline && codeEnabled },
+        ],
+      },
+    ];
+  }, [connectorCredentials, gatewayToolingOnline, toolPolicy]);
   const integrationsHref = useMemo(
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
@@ -2292,23 +3050,34 @@ export function WorkstationChatPane() {
   const composerModelOptions = useMemo(
     () => {
       const connectedProviders = providerCatalog.filter(isProviderEligibleForModelSelector);
+      const providerById = new Map(
+        providerCatalog.map((provider) => [readString(provider.id), provider] as const),
+      );
       if (connectedProviders.length <= 1) {
         return modelOptions.map((option) => ({
           value: option.id,
-          label: option.id ? compactComposerLabel(option.label, option.id) : option.label,
+          label: modelOptionDisplayLabel(option, providerById.get(readString(option.providerId)) ?? null),
           disabled: !option.id,
         }));
       }
 
-      const groupedOptions: { label: string; options: { value: string; label: string; disabled: boolean }[] }[] = [];
+      const groupedOptions: ({ value: string; label: string; disabled: boolean } | { label: string; options: { value: string; label: string; disabled: boolean }[] })[] = [];
+      const defaultOption = modelOptions.find((option) => option.id === 'default') ?? null;
+      if (defaultOption) {
+        groupedOptions.push({
+          value: defaultOption.id,
+          label: modelOptionDisplayLabel(defaultOption, providerById.get(readString(defaultOption.providerId)) ?? null),
+          disabled: !defaultOption.id,
+        });
+      }
       for (const provider of connectedProviders) {
         const providerId = readString(provider.id);
         const providerLabel = readString(provider.label) || providerId;
         const options = modelOptions
-          .filter((option) => option.providerId === providerId)
+          .filter((option) => option.id !== 'default' && option.providerId === providerId)
           .map((option) => ({
             value: option.id,
-            label: option.id ? compactComposerLabel(option.label, option.id) : option.label,
+            label: modelOptionDisplayLabel(option, provider),
             disabled: !option.id,
           }));
         if (options.length > 0) {
@@ -2363,10 +3132,6 @@ export function WorkstationChatPane() {
     ? 'Sage saved new output in this thread so you can keep building from it.'
     : 'When Sage creates reusable output, it will show up here.';
   const memoryItems = memorySnapshot.items;
-  const visibleTranscriptMessages = useMemo(
-    () => thread.messages.filter((message) => !isSyntheticTranscriptMessage(message)),
-    [thread.messages],
-  );
   const pinnedMemoryCount = readNumber(memorySnapshot.summary.pinned_count, 0);
   const totalMemoryCount = readNumber(memorySnapshot.summary.total_count, 0);
   const memoryCardTitle = totalMemoryCount > 0 ? 'What Sage will carry forward' : 'No explicit memory saved yet';
@@ -2439,7 +3204,7 @@ export function WorkstationChatPane() {
         target: 'integrations',
       });
     }
-    if (!localCompanionOnline) {
+    if (!gatewayReadinessOnline) {
       pills.push({
         id: 'gateway',
         label: 'Gateway: Offline',
@@ -2448,13 +3213,13 @@ export function WorkstationChatPane() {
       });
     }
     const browserPill = browserReadinessPill(browserGatewayDoctor, {
-      gatewayOnline: localCompanionOnline || readString(browserGatewayDoctor?.status).toLowerCase() === 'healthy',
+      gatewayOnline: gatewayReadinessOnline,
     });
     if (browserPill) {
       pills.push(browserPill);
     }
     return pills;
-  }, [browserGatewayDoctor, localCompanionOnline, selectedProviderContext.providerLabel]);
+  }, [browserGatewayDoctor, gatewayReadinessOnline, selectedProviderContext.providerLabel]);
   const showContextStrip = true;
 
   useEffect(() => {
@@ -2466,19 +3231,21 @@ export function WorkstationChatPane() {
           return;
         }
       });
+    void refreshToolingState().catch(() => undefined);
     void refreshBrowserGatewayReadiness().catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [refreshBrowserGatewayReadiness, refreshProviderCatalog]);
+  }, [refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
 
   useEffect(() => subscribeWorkstationProviderChanged((detail) => {
     if (detail.workspaceId !== bootstrap.workspace.id) {
       return;
     }
     void refreshProviderCatalog();
+    void refreshToolingState();
     void refreshBrowserGatewayReadiness();
-  }), [bootstrap.workspace.id, refreshBrowserGatewayReadiness, refreshProviderCatalog]);
+  }), [bootstrap.workspace.id, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -2486,11 +3253,13 @@ export function WorkstationChatPane() {
     }
     const handleFocus = () => {
       void refreshProviderCatalog();
+      void refreshToolingState();
       void refreshBrowserGatewayReadiness();
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void refreshProviderCatalog();
+        void refreshToolingState();
         void refreshBrowserGatewayReadiness();
       }
     };
@@ -2500,13 +3269,19 @@ export function WorkstationChatPane() {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshBrowserGatewayReadiness, refreshProviderCatalog]);
+  }, [refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
 
   useEffect(() => {
-    if (!modelOptions.some((option) => option.id === selectedModel)) {
-      setSelectedModel(modelOptions[0]?.id ?? '');
+    if (isPersistingModelSelection) {
+      return;
     }
-  }, [modelOptions, selectedModel]);
+    const nextSelectedModel = modelOptions.some((option) => option.id === persistedSelectedModelId)
+      ? persistedSelectedModelId
+      : modelOptions[0]?.id ?? '';
+    if (nextSelectedModel !== selectedModel) {
+      setSelectedModel(nextSelectedModel);
+    }
+  }, [isPersistingModelSelection, modelOptions, persistedSelectedModelId, selectedModel]);
 
   useEffect(() => {
     if (!selectedModelOption.reasoningLevels.includes(reasoningEffort)) {
@@ -2516,34 +3291,228 @@ export function WorkstationChatPane() {
     }
   }, [reasoningEffort, selectedModelOption.reasoningLevels]);
 
-  const sendMessage = async () => {
-    const message = draft.trim();
-    if (!message || isSending) {
+  const handleModelChange = useCallback((nextModelId: string) => {
+    if (!nextModelId || nextModelId === selectedModel || isSending || isPersistingModelSelection) {
       return;
     }
+    const previousModelId = selectedModel;
+    setSelectedModel(nextModelId);
+    setStatusMessage(null);
+    setIsPersistingModelSelection(true);
+    void persistSelectedModelPreference(nextModelId)
+      .then(async (persisted) => {
+        if (!persisted) {
+          setSelectedModel(previousModelId);
+          setStatusMessage('This provider cannot save a workspace model preference yet.');
+          return;
+        }
+        services.queryClient.invalidate('chat:provider-catalog');
+        await refreshProviderCatalog();
+      })
+      .catch((error) => {
+        setSelectedModel(previousModelId);
+        setStatusMessage(error instanceof Error ? error.message : 'Could not update the model preference.');
+      })
+      .finally(() => {
+        setIsPersistingModelSelection(false);
+      });
+  }, [
+    isPersistingModelSelection,
+    isSending,
+    persistSelectedModelPreference,
+    refreshProviderCatalog,
+    selectedModel,
+    services.queryClient,
+  ]);
+
+  const finalizePartialAssistantResponse = useCallback((threadId: string) => {
+    const partialText = readString(streamingAssistantTextRef.current);
+    if (!partialText) {
+      return;
+    }
+    const currentThread = threadRef.current;
+    const incompleteMessage = createIncompleteAssistantMessage(partialText, threadId, {
+      trace_id: readString(liveTrace?.traceId),
+      effective_provider: readString(liveTrace?.trace?.provider),
+      effective_model: readString(liveTrace?.trace?.model),
+    });
+    if (!incompleteMessage) {
+      return;
+    }
+    writeThreadState({
+      ...currentThread,
+      threadId,
+      messages: [...currentThread.messages, incompleteMessage],
+      session: currentThread.session,
+    });
+    setStreamingAssistantText('');
+  }, [liveTrace?.trace?.model, liveTrace?.trace?.provider, liveTrace?.traceId]);
+
+  const stopStreamingResponse = useCallback(() => {
+    if (!streamInFlightRef.current) {
+      return;
+    }
+    streamAbortRequestedRef.current = true;
+    streamAbortHandleRef.current?.abort();
+    setShowProjectedAssistant(false);
+    setTimelineSettled(true);
+    finalizePartialAssistantResponse(activeThreadIdRef.current);
+    streamInFlightRef.current = false;
+    setIsSending(false);
+  }, [finalizePartialAssistantResponse]);
+
+  useEffect(() => {
+    if (!isSending) {
+      return undefined;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      event.preventDefault();
+      stopStreamingResponse();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isSending, stopStreamingResponse]);
+
+  const sendMessage = async () => {
+    const outboundMessage = draft.trim();
+    if (!outboundMessage || isSending) {
+      return;
+    }
+    if (!activeProviderSummary.connected) {
+      setSendFailureNotice({
+        message: 'Connect an AI provider in Integrations before sending.',
+        retryable: false,
+      });
+      return;
+    }
+    if (isSmallOllamaSelection(
+      selectedProviderContext.providerId,
+      selectedProviderContext.modelId || selectedModel,
+      selectedProviderContext.modelLabel || selectedModelOption.label,
+    )) {
+      const warningKey = [
+        'sage-small-ollama-model-warning',
+        bootstrap.workspace.id,
+        selectedProviderContext.modelId || selectedModel,
+      ].join(':');
+      try {
+        if (window.sessionStorage.getItem(warningKey) !== '1') {
+          window.sessionStorage.setItem(warningKey, '1');
+          setSmallModelWarningVisible(true);
+        }
+      } catch {
+        setSmallModelWarningVisible(true);
+      }
+    }
+    setDraft('');
     setHasEnteredConversationFlow(true);
 
     const requestedThreadId = activeThreadId;
-    const pendingMessage = createCanonicalUserMessage(message, requestedThreadId);
+    const clientRequestId = createClientTurnRequestId();
+    const pendingMessage = createPendingUserMessage(outboundMessage, requestedThreadId, clientRequestId);
+    const streamAbortHandle: WorkstationTurnStreamAbortHandle = {
+      signal: new AbortController().signal,
+      abort: () => undefined,
+    };
+    const streamAbortController = new AbortController();
+    streamAbortHandle.signal = streamAbortController.signal;
+    streamAbortHandle.abort = () => {
+      streamAbortController.abort();
+    };
     setIsSending(true);
+    streamInFlightRef.current = false;
+    streamAbortRequestedRef.current = false;
+    streamAbortHandleRef.current = streamAbortHandle;
     setStatusMessage(null);
     setSendFailureNotice(null);
     setPendingUserMessage(pendingMessage);
     setStreamingAssistantText('');
-    setIsLiveTraceExpanded(false);
-    setShowLiveTraceCard(false);
-    setIsLiveTraceCardFading(false);
-    setShowCompletedTraceTimer(false);
-    setLiveTraceElapsedSeconds(0);
-    setLiveTrace(null);
+    setShowProjectedAssistant(true);
+    setTimelineSettled(false);
+    setLiveTimelineEvents([
+      {
+        type: 'user',
+        payload: { content: outboundMessage },
+      },
+      {
+        type: 'step',
+        payload: {
+          id: `thinking:${clientRequestId}`,
+          kind: 'thinking',
+          label: 'Thinking',
+          detail: 'Planning the response',
+          status: 'active',
+        },
+      },
+    ]);
+    setLiveActivitySteps([{
+      id: `thinking:${clientRequestId}`,
+      kind: 'thinking',
+      label: 'Thinking',
+      detail: 'Planning the response',
+      status: 'active',
+      toolCallId: null,
+      createdAt: new Date().toISOString(),
+    }]);
+    setLiveTrace({
+      traceId: null,
+      transport: 'external',
+      trace: buildLiveTraceRecord({
+        traceId: null,
+        workspaceId: bootstrap.workspace.id,
+        threadId: requestedThreadId,
+        rootAgentId: 'sage',
+      }),
+      events: [],
+    });
 
     try {
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+
+      let session = await services.client.createSession({
+        actor,
+        threadId: requestedThreadId,
+        channel: 'web',
+        source: 'workstation_chat_pane',
+        forceNew: false,
+        existingSession: thread.session,
+      });
+      const persistedThreadPayload = await services.client.persistUserTurn({
+        actor,
+        sessionId: String(session.session_id),
+        threadId: requestedThreadId,
+        message: outboundMessage,
+        channel: 'web',
+        metadata: {
+          source: 'workstation_chat_pane',
+        },
+        clientRequestId,
+      });
+      const persistedThreadState: CanonicalChatThreadState = {
+        ...normalizeCanonicalChatThread(persistedThreadPayload, requestedThreadId),
+        session,
+      };
+      writeThreadState(persistedThreadState);
+
       let observedTraceId: string | null = null;
       let observedThreadId = requestedThreadId;
       let terminalTraceSeen = false;
       const onTraceEvent = (traceEvent: WorkstationAgentTraceEvent) => {
         observedTraceId = readString(traceEvent.trace_id) || observedTraceId;
         terminalTraceSeen = terminalTraceSeen || isTerminalTraceEvent(readString(traceEvent.event_type));
+        setLiveTimelineEvents((current) => [...current, {
+          type: 'trace',
+          payload: traceEvent as unknown as Record<string, unknown>,
+        }]);
         setLiveTrace((current) => {
           const nextEvents = mergeTraceEvents(current?.events ?? [], [traceEvent]);
           const traceId = readString(traceEvent.trace_id) || current?.traceId || observedTraceId;
@@ -2565,17 +3534,91 @@ export function WorkstationChatPane() {
             events: nextEvents,
           };
         });
+        const eventType = readString(traceEvent.event_type);
+        const eventData = readObject(traceEvent.data);
+        if (eventType === 'reasoning.summary.delta') {
+          const delta = readString(eventData.delta);
+          if (delta) {
+            setLiveActivitySteps((current) => {
+              const thinkingIndex = current.findIndex((item) => item.kind === 'thinking');
+              if (thinkingIndex < 0) {
+                return current;
+              }
+              const updated = [...current];
+              updated[thinkingIndex] = {
+                ...updated[thinkingIndex],
+                detail: delta,
+              };
+              return updated;
+            });
+          }
+          return;
+        }
+        if (eventType === 'tool.started') {
+          const toolName = readString(eventData.tool_name) || 'Using tool';
+          setLiveActivitySteps((current) => upsertLiveActivityStep(current, {
+            id: readString(traceEvent.tool_call_id) || `${toolName}:${current.length}`,
+            kind: 'tool',
+            label: toolName,
+            detail: 'Running',
+            status: 'active',
+            toolCallId: readString(traceEvent.tool_call_id) || null,
+            createdAt: new Date().toISOString(),
+          }));
+          return;
+        }
+        if (eventType === 'tool.result') {
+          setLiveActivitySteps((current) => upsertLiveActivityStep(current, {
+            id: readString(traceEvent.tool_call_id) || `tool:${current.length}`,
+            kind: 'tool',
+            label: '',
+            detail: eventData.status === 'error' ? 'Failed' : 'Completed',
+            status: eventData.status === 'error' ? 'error' : 'done',
+            toolCallId: readString(traceEvent.tool_call_id) || null,
+            createdAt: new Date().toISOString(),
+          }));
+          return;
+        }
+        if (eventType === 'search.query') {
+          const query = readString(eventData.query);
+          setLiveActivitySteps((current) => upsertLiveActivityStep(current, {
+            id: readString(traceEvent.tool_call_id) || `search:${query || current.length}`,
+            kind: 'search',
+            label: 'Searching',
+            detail: query,
+            status: 'active',
+            toolCallId: readString(traceEvent.tool_call_id) || null,
+            createdAt: new Date().toISOString(),
+          }));
+          return;
+        }
+        if (eventType === 'search.results') {
+          setLiveActivitySteps((current) => upsertLiveActivityStep(current, {
+            id: readString(traceEvent.tool_call_id) || `search:${current.length}`,
+            kind: 'search',
+            label: 'Search',
+            detail: 'Completed',
+            status: 'done',
+            toolCallId: readString(traceEvent.tool_call_id) || null,
+            createdAt: new Date().toISOString(),
+          }));
+        }
       };
 
-      const { renewed, response } = await services.client.submitTurnStreamWithSessionRetry({
+      streamInFlightRef.current = true;
+      const { renewed, response, session: streamedSession } = await services.client.submitTurnStreamWithSessionRetry({
         actor,
         threadId: requestedThreadId,
-        message,
+        message: outboundMessage,
         channel: 'web',
         source: 'workstation_chat_pane',
         runtimeTarget: localRuntimeTargetId || 'cloud',
+        provider: selectedProviderContext.providerId,
         model: selectedModel === 'default' ? null : selectedModel,
         reasoningEffort,
+        existingSession: session,
+        clientRequestId,
+        abortHandle: streamAbortHandle,
         policyContext: {
           session_mode: autonomyMode === 'full' ? 'agent' : 'copilot',
           trust_mode: autonomyMode === 'full' ? 'auto' : 'guarded',
@@ -2592,15 +3635,55 @@ export function WorkstationChatPane() {
             return;
           }
 
+          if (event.event === 'step') {
+            setLiveTimelineEvents((current) => [...current, {
+              type: 'step',
+              payload: event.payload,
+            }]);
+            const step = normalizeStepEvent(event.payload);
+            if (step) {
+              setLiveActivitySteps((current) => upsertLiveActivityStep(current, step));
+            }
+            return;
+          }
+
           if (event.event === 'chunk') {
             const delta = readString(event.payload.delta);
             if (delta) {
+              setLiveTimelineEvents((current) => [...current, {
+                type: 'chunk',
+                payload: { delta },
+              }]);
               setStreamingAssistantText((current) => `${current}${delta}`);
+              setLiveActivitySteps((current) => {
+                const thinkingIndex = current.findIndex((item) => item.kind === 'thinking');
+                if (thinkingIndex < 0) {
+                  return current;
+                }
+                const updated = [...current];
+                updated[thinkingIndex] = {
+                  ...updated[thinkingIndex],
+                  label: 'Writing output',
+                  detail: 'Streaming response',
+                };
+                return updated;
+              });
             }
             return;
           }
 
           if (event.event === 'final') {
+            setLiveTimelineEvents((current) => [...current, {
+              type: 'final',
+              payload: event.payload,
+            }]);
+            setTimelineSettled(true);
+            const finalReply = readString(event.payload.reply)
+              || readString(event.payload.content)
+              || readString(event.payload.message);
+            if (finalReply) {
+              setStreamingAssistantText(finalReply);
+            }
             const finalThreadId = readString(event.payload.thread_id);
             if (finalThreadId) {
               observedThreadId = finalThreadId;
@@ -2613,6 +3696,7 @@ export function WorkstationChatPane() {
           }
         },
       });
+      session = streamedSession;
 
       const responseMetadata =
         response.metadata && typeof response.metadata === 'object'
@@ -2628,12 +3712,18 @@ export function WorkstationChatPane() {
       metadata: responseMetadata,
     };
       const responseExecutionTarget = readExecutionTarget(responseMetadata);
-      const responseInterventionMessage = firstInterventionMessage(normalizedResponse.interventions ?? []);
       const providerFailureIntervention = findProviderFailureIntervention(normalizedResponse.interventions ?? []);
       const nextThreadId = String(normalizedResponse.thread_id ?? requestedThreadId);
-      const optimisticUserMessage = createCanonicalUserMessage(message, nextThreadId);
-      const nextMessages = [...visibleTranscriptMessages, optimisticUserMessage];
+      const nextMessages = (
+        persistedThreadState.threadId === nextThreadId && persistedThreadState.messages.length > 0
+          ? persistedThreadState.messages
+          : threadRef.current.messages
+      );
       const assistantMessage = createCanonicalAssistantMessage(normalizedResponse, nextThreadId);
+      const hasVisibleAssistantReply = Boolean(
+        assistantMessage
+        || (typeof normalizedResponse.reply === 'string' && normalizedResponse.reply.trim()),
+      );
       const inlineProviderFailureMessage = !assistantMessage && providerFailureIntervention
         ? {
             id: `${nextThreadId}:assistant-error:${Date.now()}`,
@@ -2677,30 +3767,43 @@ export function WorkstationChatPane() {
         };
       });
 
+      const responseMessage = assistantMessage ?? inlineProviderFailureMessage;
+      const immediateMessages = responseMessage
+        ? [...nextMessages, responseMessage]
+        : nextMessages;
       writeThreadState({
-        ...thread,
+        ...(persistedThreadState.threadId === nextThreadId ? persistedThreadState : thread),
         threadId: nextThreadId,
-        messages: nextMessages,
+        messages: immediateMessages,
+        session,
       });
-      setPendingUserMessage(null);
+      setShowProjectedAssistant(false);
+      setTimelineSettled(true);
       setStreamingAssistantText('');
-      setDraft('');
+      setLiveActivitySteps((current) => settleLiveActivitySteps(
+        current,
+        normalizedResponse.status === 'incomplete' ? 'error' : 'done',
+      ));
       services.streams.touchActivity();
       const canonicalThread = await refreshCanonicalState(nextThreadId)
         .catch(() => null);
-      if (canonicalThread && canonicalThread.messages.length >= nextMessages.length) {
-        writeThreadState(canonicalThread);
-      } else if (assistantMessage) {
+      const canonicalMessages = canonicalThread?.messages ?? [];
+      const canonicalHasAssistant = canonicalMessages.some((message) => (
+        message.role === 'assistant'
+        && readString(message.content)
+        && readString(message.content) === readString(responseMessage?.content)
+      ));
+      if (canonicalThread && (!responseMessage || canonicalHasAssistant)) {
         writeThreadState({
-          ...thread,
-          threadId: nextThreadId,
-          messages: [...nextMessages, assistantMessage],
+          ...canonicalThread,
+          session,
         });
-      } else if (inlineProviderFailureMessage) {
+      } else if (responseMessage) {
         writeThreadState({
           ...thread,
           threadId: nextThreadId,
-          messages: [...nextMessages, inlineProviderFailureMessage],
+          messages: immediateMessages,
+          session,
         });
       }
       setStatusMessage(
@@ -2708,7 +3811,7 @@ export function WorkstationChatPane() {
           ? responseExecutionTarget === 'local_companion'
             ? 'Turn submitted. Sage is waiting for approval before using the local companion.'
             : 'Turn submitted. Approval is now pending.'
-          : Array.isArray(normalizedResponse.interventions) && normalizedResponse.interventions.length > 0
+          : Array.isArray(normalizedResponse.interventions) && normalizedResponse.interventions.length > 0 && !hasVisibleAssistantReply
             ? 'Turn submitted. Your input is needed before Sage can continue.'
             : responseExecutionTarget === 'local_companion'
               ? 'Turn submitted. Sage routed this work to the local companion.'
@@ -2720,21 +3823,44 @@ export function WorkstationChatPane() {
       );
       setSendFailureNotice(null);
     } catch (error) {
-      setPendingUserMessage(null);
-      setStreamingAssistantText('');
-      const rawMessage = error instanceof WorkstationClientError || error instanceof Error
-        ? error.message
-        : 'Could not send this message.';
-      const message = isLocalCompanionGateMessage(rawMessage)
-        ? 'Could not send this message.'
-        : rawMessage;
-      setSendFailureNotice({
-        message,
-        retryable: error instanceof WorkstationClientError
-          ? error.retryable
-          : true,
-      });
+      const normalizedError = error instanceof WorkstationClientError ? error : null;
+      const aborted = normalizedError?.code === 'stream_aborted' || streamAbortRequestedRef.current;
+      const partialStreamText = readString(streamingAssistantTextRef.current);
+      const incompleteWithPartial = normalizedError?.code === 'stream_incomplete' && Boolean(partialStreamText);
+      if (aborted || incompleteWithPartial) {
+        setShowProjectedAssistant(false);
+        setTimelineSettled(true);
+        finalizePartialAssistantResponse(activeThreadIdRef.current);
+        setSendFailureNotice(incompleteWithPartial
+          ? {
+              message: 'Response interrupted before completion.',
+              retryable: true,
+            }
+          : null);
+      } else {
+        setStreamingAssistantText('');
+        setShowProjectedAssistant(false);
+        setTimelineSettled(true);
+        const rawMessage = error instanceof WorkstationClientError || error instanceof Error
+          ? error.message
+          : 'Could not send this message.';
+        const noticeMessage = isLocalCompanionGateMessage(rawMessage)
+          ? 'Could not send this message.'
+          : rawMessage.includes('provider') || rawMessage.includes('credential')
+            ? "Sage couldn't complete that response."
+            : rawMessage;
+        setSendFailureNotice({
+          message: noticeMessage,
+          retryable: error instanceof WorkstationClientError
+            ? error.retryable
+            : true,
+        });
+      }
+      setLiveActivitySteps((current) => settleLiveActivitySteps(current, aborted ? 'done' : 'error'));
     } finally {
+      streamInFlightRef.current = false;
+      streamAbortHandleRef.current = null;
+      streamAbortRequestedRef.current = false;
       setIsSending(false);
     }
   };
@@ -2746,12 +3872,12 @@ export function WorkstationChatPane() {
           type="button"
           tone="secondary"
           aria-label="New chat"
-          className="workstation-titlebar__action"
+          className="workstation-titlebar__action workstation-titlebar__action--compose"
           onClick={() => {
             void startNewThread();
           }}
         >
-          <Plus size={14} strokeWidth={2} aria-hidden="true" />
+          <SquarePen size={15} strokeWidth={1.95} aria-hidden="true" />
         </AppButton>,
         titlebarActionsHost,
       ) : null}
@@ -2764,19 +3890,10 @@ export function WorkstationChatPane() {
         <section className={`app-chat-thread app-chat-thread--surface${showBlankTranscript || showFirstImpression ? ' app-chat-thread--blank' : ''}`}>
           {showContextStrip ? (
             <div className="app-chat-context-strip" aria-label="Sage conversation context">
-              {selectedProviderContext.providerLabel ? (
-                <span>{selectedProviderContext.providerLabel}</span>
+              {activeProviderSummary.connected ? (
+                <span>{activeProviderSummary.label}</span>
               ) : (
-                <span>No provider</span>
-              )}
-              {selectedProviderContext.modelLabel ? (
                 <>
-                  <span aria-hidden="true">·</span>
-                  <span>{selectedProviderContext.modelLabel}</span>
-                </>
-              ) : !selectedProviderContext.providerLabel ? (
-                <>
-                  <span aria-hidden="true">·</span>
                   <button
                     type="button"
                     className="app-chat-context-strip__link"
@@ -2784,10 +3901,10 @@ export function WorkstationChatPane() {
                       router.push(integrationsHref);
                     }}
                   >
-                    Connect in Integrations
+                    {activeProviderSummary.label}
                   </button>
                 </>
-              ) : null}
+              )}
               {selectedProviderContext.providerLabel === 'Ollama' && contextWindowLabel ? (
                 <>
                   <span aria-hidden="true">·</span>
@@ -2800,8 +3917,6 @@ export function WorkstationChatPane() {
                   <span>{contextReasoningLabel}</span>
                 </>
               ) : null}
-              <span aria-hidden="true">·</span>
-              <span>{memoryItems.length} memory item{memoryItems.length === 1 ? '' : 's'}</span>
               {contextDeviceLabel ? (
                 <>
                   <span aria-hidden="true">·</span>
@@ -2868,70 +3983,20 @@ export function WorkstationChatPane() {
                   message={message}
                 />
               ))}
-
-              {pendingUserMessage ? (
-                <ChatMessage
-                  key={pendingUserMessage.id}
-                  message={pendingUserMessage}
-                />
-              ) : null}
-
-              {streamingAssistantMessage ? (
-                <ChatMessage
-                  key={streamingAssistantMessage.id}
-                  message={streamingAssistantMessage}
-                />
-              ) : null}
-
-              {showTrace && liveTrace ? (
-                <>
-                  {showLiveTraceCard ? (
-                    <section className={liveTraceCardClassName} aria-label="Live run trace">
-                      <div className="app-chat-live-trace__summary">
-                        <div className="app-chat-live-trace__presence">
-                          <span className="app-chat-live-trace__orb" aria-hidden="true" />
-                          <div className="app-chat-live-trace__copy">
-                            <strong className="app-chat-live-trace__title">{liveTraceTitle}</strong>
-                            <div className="app-chat-live-trace__meta">
-                              <span className="app-chat-live-trace__status" data-state={liveTraceState}>
-                                {liveTraceStatusLabel}
-                              </span>
-                              {traceTimerLabel ? (
-                                <span className="app-chat-live-trace__timer">
-                                  {traceTimerLabel}
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </section>
-                  ) : null}
-                  <div className="app-chat-live-trace__footer">
-                    <button
-                      type="button"
-                      className="app-chat-live-trace__toggle"
-                      onClick={() => {
-                        setIsLiveTraceExpanded((value) => !value);
-                      }}
-                    >
-                      {isLiveTraceExpanded ? 'Hide trace ↑' : 'View full trace ↓'}
-                    </button>
-                  </div>
-                  {isLiveTraceExpanded ? (
-                    <SageTraceView
-                      traceId={liveTrace.traceId}
-                      mode="live"
-                      liveTransport={liveTrace.transport}
-                      initialTrace={liveTrace.trace}
-                      initialEvents={liveTrace.events}
-                    />
-                  ) : null}
-                </>
-              ) : null}
             </div>
           </ScrollRegion>
         </section>
+
+        {pinnedTimelineMessages.length > 0 ? (
+          <div className="app-chat-live-activity-dock" aria-live="polite">
+            {pinnedTimelineMessages.map((message) => (
+              <ChatMessage
+                key={`pinned:${message.id}`}
+                message={message}
+              />
+            ))}
+          </div>
+        ) : null}
 
         <div className="app-chat-notices">
           {sendFailureNotice ? (
@@ -3042,9 +4107,7 @@ export function WorkstationChatPane() {
         onSubmit={() => {
           void sendMessage();
         }}
-        onOpenMemory={() => {
-          openCreateMemory();
-        }}
+        onStop={stopStreamingResponse}
         onOpenIntegrations={() => {
           router.push(integrationsHref);
         }}
@@ -3061,7 +4124,7 @@ export function WorkstationChatPane() {
         targetLabel={composerTargetLabel}
         model={selectedModel}
         modelOptions={composerModelOptions}
-        onModelChange={setSelectedModel}
+        onModelChange={handleModelChange}
         reasoningEffort={reasoningEffort}
         reasoningOptions={reasoningOptions}
         onReasoningEffortChange={(nextValue) => {
@@ -3071,10 +4134,23 @@ export function WorkstationChatPane() {
         }}
         contextWindowLabel={contextWindowLabel}
         busy={isSending}
-        controlsDisabled={false}
-        sendDisabled={false}
+        controlsDisabled={isPersistingModelSelection}
+        sendDisabled={!activeProviderSummary.connected}
         placeholder="Message Sage..."
-        providerGateVisible={!selectedProviderContext.providerLabel}
+        providerGateVisible={!activeProviderSummary.connected}
+        providerSummary={{
+          label: activeProviderSummary.label,
+          actionLabel: 'Set up in Integrations',
+        }}
+        runtimeStatusLabel={runtimeStatus.label}
+        runtimeStatusTone={runtimeStatus.tone}
+        toolGroups={composerToolGroups}
+        smallModelWarning={smallModelWarningVisible
+          ? "You're using a small model. For best results with tools and complex tasks, we recommend switching to a larger model (7B+)."
+          : null}
+        onDismissSmallModelWarning={() => {
+          setSmallModelWarningVisible(false);
+        }}
         showAutonomySelector={localCompanionConnected}
         autonomyFallbackLabel="Offline"
       />

@@ -25,6 +25,23 @@ def _normalize_scope(value: Any) -> str:
     return config_defaults_service.default_workspace_machine_enrollment_scope()
 
 
+def _normalize_hosted_sage_ai_policy(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"disabled", "owner_opt_in", "enabled_with_cap"}:
+        return token
+    return config_defaults_service.default_hosted_sage_ai_policy()
+
+
+def _coerce_non_negative_float(value: Any, fallback: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return float(fallback)
+    if parsed < 0:
+        return 0.0
+    return float(parsed)
+
+
 class WorkspaceTokenPolicyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -71,6 +88,10 @@ class WorkspaceAdminDefaultsConfig(BaseModel):
     context_budget_preset: str = Field(default_factory=config_defaults_service.default_context_budget_preset)
     retention_preset: str = Field(default_factory=config_defaults_service.default_retention_preset)
     health_safety_enabled: bool = False
+    hosted_sage_ai_policy: str = Field(default_factory=config_defaults_service.default_hosted_sage_ai_policy)
+    hosted_sage_ai_monthly_cap_usd: float = Field(
+        default_factory=config_defaults_service.default_hosted_sage_ai_monthly_cap_usd
+    )
     allowed_live_channels: List[str] = Field(
         default_factory=lambda: sorted(config_defaults_service.live_deployment_channels())
     )
@@ -173,6 +194,13 @@ def workspace_admin_defaults_from_metadata(
             ).strip()
             or config_defaults_service.default_retention_preset(),
             "health_safety_enabled": bool(raw_defaults.get("health_safety_enabled")),
+            "hosted_sage_ai_policy": _normalize_hosted_sage_ai_policy(
+                raw_defaults.get("hosted_sage_ai_policy")
+            ),
+            "hosted_sage_ai_monthly_cap_usd": _coerce_non_negative_float(
+                raw_defaults.get("hosted_sage_ai_monthly_cap_usd"),
+                config_defaults_service.default_hosted_sage_ai_monthly_cap_usd(),
+            ),
             "allowed_live_channels": _normalize_tokens(raw_defaults.get("allowed_live_channels"))
             or list(sorted(config_defaults_service.live_deployment_channels())),
         }

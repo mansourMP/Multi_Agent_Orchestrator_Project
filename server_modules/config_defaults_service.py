@@ -15,6 +15,8 @@ DEFAULT_RETENTION_PRESET = "standard"
 DEFAULT_ESCALATION_PRESET = "standard"
 DEFAULT_HANDOFF_MODE = "notify_owner"
 DEFAULT_HEALTH_SAFETY_ASSISTANT_NAME = "HealthGuide"
+DEFAULT_HOSTED_SAGE_AI_POLICY = "owner_opt_in"
+DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 5.0
 
 
 def config_schema_version() -> int:
@@ -63,3 +65,11 @@ def default_deployed_agent_handoff_mode() -> str:
 
 def default_health_safety_assistant_name() -> str:
     return DEFAULT_HEALTH_SAFETY_ASSISTANT_NAME
+
+
+def default_hosted_sage_ai_policy() -> str:
+    return DEFAULT_HOSTED_SAGE_AI_POLICY
+
+
+def default_hosted_sage_ai_monthly_cap_usd() -> float:
+    return float(DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD)

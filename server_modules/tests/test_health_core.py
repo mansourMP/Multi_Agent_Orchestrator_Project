@@ -91,17 +91,6 @@ class HealthCoreMemoryTests(unittest.TestCase):
 
 class HealthCoreRuntimeTests(unittest.TestCase):
     def test_health_uses_codex_profile_readiness_when_direct_openai_probe_is_unhealthy(self) -> None:
-        codex_profile = {
-            "id": "profile-codex",
-            "provider": "openai-codex",
-            "label": "Codex",
-            "auth_mode": "oauth_token",
-            "workspace_id": "default",
-            "enabled": True,
-            "cooldown_until": None,
-            "last_success_at": "2026-04-10T17:54:36.834958Z",
-            "last_error": None,
-        }
         direct_chat_snapshot = {
             "enabled": False,
             "runtime_cache": {"active_sessions": 0, "idle_ttl_ms": 0, "evicted_total": 0},
@@ -109,8 +98,68 @@ class HealthCoreRuntimeTests(unittest.TestCase):
             "interrupted_stale_sessions": 0,
             "errors_by_code": {},
         }
+        provider_runtime_truth = {
+            "providers_by_id": {
+                "openai-codex": {
+                    "id": "openai-codex",
+                    "state": "active",
+                    "usable": True,
+                    "active": True,
+                },
+                "openai": {
+                    "id": "openai",
+                    "state": "setup_required",
+                    "usable": False,
+                    "active": False,
+                },
+                "anthropic": {
+                    "id": "anthropic",
+                    "state": "configured",
+                    "usable": False,
+                    "active": False,
+                },
+                "gemini": {
+                    "id": "gemini",
+                    "state": "configured",
+                    "usable": False,
+                    "active": False,
+                },
+            },
+            "providers": [
+                {
+                    "id": "openai-codex",
+                    "state": "active",
+                    "usable": True,
+                    "active": True,
+                },
+                {
+                    "id": "openai",
+                    "state": "setup_required",
+                    "usable": False,
+                    "active": False,
+                },
+                {
+                    "id": "anthropic",
+                    "state": "configured",
+                    "usable": False,
+                    "active": False,
+                },
+                {
+                    "id": "gemini",
+                    "state": "configured",
+                    "usable": False,
+                    "active": False,
+                },
+            ],
+            "codex_profile_ready": True,
+            "openai_profile_ready": False,
+        }
 
-        with patch.dict(health_core.PROVIDER_PROFILES, {"profile-codex": codex_profile}, clear=True), patch.object(
+        with patch.object(
+            health_core.provider_profiles_service,
+            "build_provider_runtime_truth",
+            return_value=provider_runtime_truth,
+        ), patch.object(
             health_core,
             "_runtime_contract_payload",
             return_value={"contract_schema_version": "2026.2.0"},
@@ -381,8 +430,48 @@ class HealthCoreRuntimeTests(unittest.TestCase):
             "interrupted_stale_sessions": 0,
             "errors_by_code": {},
         }
+        provider_runtime_truth = {
+            "providers_by_id": {
+                "openai": {
+                    "id": "openai",
+                    "state": "degraded",
+                    "usable": False,
+                    "active": False,
+                    "configured": True,
+                    "active_source": "profile",
+                    "backpressure": True,
+                    "failure_class": "rate_limited",
+                    "retry_after_seconds": 30,
+                    "profile_count": 1,
+                    "enabled_profile_count": 1,
+                    "cooldown_profile_count": 1,
+                    "healthy_profile_count": 0,
+                    "issue_code": "rate_limited",
+                    "issue": "429 Rate limit exceeded.",
+                    "state_detail": "429 Rate limit exceeded.",
+                }
+            },
+            "providers": [
+                {
+                    "id": "openai",
+                    "state": "degraded",
+                    "usable": False,
+                    "active": False,
+                    "configured": True,
+                    "active_source": "profile",
+                    "backpressure": True,
+                    "failure_class": "rate_limited",
+                    "retry_after_seconds": 30,
+                }
+            ],
+            "state_summary": {"active": 0, "configured": 0, "setup_required": 0, "unavailable": 0, "degraded": 1},
+        }
 
-        with patch.dict(health_core.PROVIDER_PROFILES, {"profile-openai": rate_limited_profile}, clear=True), patch.object(
+        with patch.object(
+            health_core.provider_profiles_service,
+            "build_provider_runtime_truth",
+            return_value=provider_runtime_truth,
+        ), patch.object(
             health_core,
             "_runtime_contract_payload",
             return_value={"contract_schema_version": "2026.2.0"},

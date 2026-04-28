@@ -146,6 +146,7 @@ class DirectChatOperatorStateBindings:
     build_direct_chat_daily_log_summary: Any
     persist_direct_chat_memory_best_effort: Any
     persist_direct_chat_transcript_best_effort: Any
+    persist_direct_chat_hosted_usage_best_effort: Any
     build_context_used: Any
     with_context_used: Any
 
@@ -901,10 +902,12 @@ def build_direct_chat_entry_bindings(
             credential_auth_mode_fn=credential_auth_mode_fn,
         )
 
-    def provider_unavailable_response(provider):
+    def provider_unavailable_response(provider, issue_code=None, issue_detail=None):
         return direct_chat_provider_facade_service.provider_unavailable_response(
             provider,
             connect_action_fn=connect_action_fn,
+            issue_code=issue_code,
+            issue_detail=issue_detail,
         )
 
     def direct_chat_credentials(workspace_id, provider):
@@ -1493,6 +1496,11 @@ def build_direct_chat_state_bindings(
             **kwargs,
         )
 
+    def persist_direct_chat_hosted_usage_best_effort(**kwargs):
+        return direct_chat_support_binding_service.persist_direct_chat_hosted_usage_best_effort(
+            **kwargs,
+        )
+
     return DirectChatOperatorStateBindings(
         agent_machine_owner_user_id=direct_chat_context_service.agent_machine_owner_user_id,
         agent_machine_full_trust_for_session=agent_machine_full_trust_for_session,
@@ -1517,6 +1525,7 @@ def build_direct_chat_state_bindings(
         build_direct_chat_daily_log_summary=direct_chat_memory_facade_service.build_direct_chat_daily_log_summary,
         persist_direct_chat_memory_best_effort=persist_direct_chat_memory_best_effort,
         persist_direct_chat_transcript_best_effort=persist_direct_chat_transcript_best_effort,
+        persist_direct_chat_hosted_usage_best_effort=persist_direct_chat_hosted_usage_best_effort,
         build_context_used=direct_chat_support_binding_service.build_context_used,
         with_context_used=direct_chat_metadata_service.with_context_used,
     )
@@ -2181,6 +2190,7 @@ def build_direct_chat_shell_export_map(
         "_build_direct_chat_daily_log_summary": state_bindings.build_direct_chat_daily_log_summary,
         "_persist_direct_chat_memory_best_effort": state_bindings.persist_direct_chat_memory_best_effort,
         "_persist_direct_chat_transcript_best_effort": state_bindings.persist_direct_chat_transcript_best_effort,
+        "_persist_direct_chat_hosted_usage_best_effort": state_bindings.persist_direct_chat_hosted_usage_best_effort,
         "_build_context_used": state_bindings.build_context_used,
         "_with_context_used": state_bindings.with_context_used,
         "_connect_action": shell_bindings.connect_action,

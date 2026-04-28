@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -7,6 +8,10 @@ from server_modules import external_user_privacy_service
 
 
 class ExternalUserPrivacyServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global external_user_privacy_service
+        external_user_privacy_service = importlib.import_module("server_modules.external_user_privacy_service")
+
     def test_public_command_action_detects_privacy_and_delete_for_deployed_agents(self) -> None:
         service = external_user_privacy_service.ExternalUserPrivacyService(
             privacy_policy_url_resolver=lambda: "https://app.empyralist.com/privacy",

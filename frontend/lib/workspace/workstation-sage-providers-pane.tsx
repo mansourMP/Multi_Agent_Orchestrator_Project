@@ -5,6 +5,7 @@ import { type ClipboardEvent, useEffect, useMemo, useState } from 'react';
 import { AppButton, AppNotice, joinClassNames } from '@/lib/ui/primitives';
 import { FormField, FormInput } from '@/lib/ui/form-controls';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
+import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { emitWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import {
   type ProviderCatalogModelRecord,
@@ -109,13 +110,17 @@ function sortCredentials(credentials: VaultCredentialRecord[]): VaultCredentialR
     readString(right.updated_at ?? right.created_at).localeCompare(readString(left.updated_at ?? left.created_at)));
 }
 
-function isSecretlessConnection(providerId: string, profile: ProviderProfileRecord | null): boolean {
+function isSecretlessConnection(
+  providerId: string,
+  profile: ProviderProfileRecord | null,
+  localCompanionOnline: boolean,
+): boolean {
   const authMode = readString(profile?.auth_mode).toLowerCase();
   if (authMode === 'local_cli' || authMode === 'none') {
-    return true;
+    return providerId === 'ollama' ? localCompanionOnline : true;
   }
   if (providerId === 'ollama' && readString(profile?.health).toLowerCase() !== 'disabled') {
-    return true;
+    return localCompanionOnline;
   }
   return false;
 }
@@ -132,6 +137,7 @@ function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
 }
 
 export function WorkstationSageProvidersPane() {
+  const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const [providers, setProviders] = useState<ProviderSnapshot[]>([]);
   const [profiles, setProfiles] = useState<ProviderProfileRecord[]>([]);
@@ -179,6 +185,11 @@ export function WorkstationSageProvidersPane() {
     };
   }, [services.client]);
 
+  const localCompanionOnline = useMemo(
+    () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'local_companion' && target.online),
+    [bootstrap.runtime.runtimeTargets],
+  );
+
   const providerRows = useMemo<ProviderConnectionSnapshot[]>(() => providers.map((provider) => {
     const providerProfiles = sortProfiles(
       profiles.filter((item) => readString(item.provider).toLowerCase() === provider.id),
@@ -188,7 +199,7 @@ export function WorkstationSageProvidersPane() {
     );
     const profile = providerProfiles[0] ?? null;
     const credential = providerCredentials[0] ?? null;
-    const secretlessConnected = isSecretlessConnection(provider.id, profile);
+    const secretlessConnected = isSecretlessConnection(provider.id, profile, localCompanionOnline);
     const connected = Boolean(credential) || secretlessConnected;
     return {
       provider,
@@ -197,7 +208,7 @@ export function WorkstationSageProvidersPane() {
       connected,
       keyTail: maskKeyTail(credential),
     };
-  }), [credentials, profiles, providers]);
+  }), [credentials, localCompanionOnline, profiles, providers]);
 
   async function handleSave(providerId: string): Promise<void> {
     const trimmedKey = draftApiKey.trim();

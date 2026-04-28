@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -19,6 +20,12 @@ def _deployed_agent(**overrides: object) -> dict[str, object]:
 
 
 class DeployedAgentAnalyticsServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global deployed_agent_analytics_service
+        deployed_agent_analytics_service = importlib.import_module(
+            "server_modules.deployed_agent_analytics_service"
+        )
+
     async def test_summarize_deployed_agent_analytics_aggregates_durable_truth(self) -> None:
         with (
             patch(

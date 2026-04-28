@@ -76,6 +76,7 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
                 clear_direct_tool_loop_state=lambda session_key: None,
                 persist_direct_chat_memory_best_effort=lambda **kwargs: None,
                 persist_direct_chat_transcript_best_effort=lambda **kwargs: None,
+                persist_direct_chat_hosted_usage_best_effort=lambda **kwargs: None,
                 record_direct_tool_signature=lambda session_key, tool_call: False,
                 direct_chat_error_reply=lambda error: error,
                 capture_exception=lambda exc: None,
@@ -461,6 +462,128 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "connect")
         self.assertEqual(payload["interventions"][0]["title"], "Anthropic is not available")
         self.assertEqual(payload["suggestions"], ["Connect Anthropic"])
+
+    def test_build_direct_operator_reply_keeps_obvious_tool_intent_provider_backed_when_provider_ready(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="List the files on my desktop.",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="deepseek",
+            normalized_requested_model="deepseek-chat",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[{"name": "file__read"}, {"name": "memory_search"}],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.supported_providers = ["openai", "deepseek"]
+        services.message_has_obvious_direct_tool_intent = lambda message, tools: True
+        services.resolve_provider_for_direct_chat_message = (
+            lambda workspace_id, requested_provider, message, tools_present=False: ("deepseek", {"api_key": "sk-test"})
+        )
+        services.supports_direct_message_native_chat = lambda provider, credentials: provider == "deepseek" and bool(credentials)
+        captured: dict[str, object] = {}
+
+        def _provider_stream(**kwargs):
+            captured["context_tools"] = (kwargs.get("context") or {}).get("tools")
+            captured["metadata_tools"] = (kwargs.get("metadata") or {}).get("tools")
+            yield {
+                "type": "result",
+                "reply": "",
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "tool_calls": [{"id": "call-1", "name": "file__read", "arguments": {"path": "~/Desktop"}}],
+                "attempted_providers": "deepseek",
+                "error": "",
+                "usage_masked": {},
+            }
+
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = _provider_stream
+
+        events = list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message="List the files on my desktop.",
+                workspace_id="default",
+                requested_model="deepseek-chat",
+                requested_provider="deepseek",
+            )
+        )
+
+        self.assertEqual(captured["context_tools"], [{"name": "file__read"}])
+        self.assertEqual(captured["metadata_tools"], [{"name": "file__read"}])
+        self.assertFalse(any(event.get("detail") == "Completed" and event.get("id") == "direct-tools:auto" for event in events))
+
+    def test_build_direct_operator_reply_forces_explicit_tool_request_even_when_provider_ready(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="Use the local shell tool to run ls ~/Desktop and return the result exactly.",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="ollama",
+            normalized_requested_model="qwen2.5:1.5b",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[{"name": "shell__exec"}],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.supported_providers = ["ollama"]
+        services.message_has_obvious_direct_tool_intent = lambda message, tools: True
+        services.resolve_provider_for_direct_chat_message = (
+            lambda workspace_id, requested_provider, message, tools_present=False: ("ollama", {})
+        )
+        services.supports_direct_message_native_chat = lambda provider, credentials: provider == "ollama"
+        services.no_provider_execution_services.parse_tool_name = lambda name: tuple(str(name).split("__", 1))
+        services.no_provider_execution_services.tool_arguments_payload = (
+            lambda arguments: arguments if isinstance(arguments, dict) else {}
+        )
+        executed: dict[str, object] = {}
+
+        def _execute_single_tool_call(**kwargs):
+            executed.update(kwargs)
+            return "Desktop file A\nDesktop file B"
+
+        services.no_provider_execution_services.execute_single_tool_call = _execute_single_tool_call
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = (
+            lambda **kwargs: (_ for _ in ()).throw(AssertionError("provider generation should not run"))
+        )
+
+        events = list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message=prepared.normalized_message,
+                workspace_id="default",
+                requested_model="qwen2.5:1.5b",
+                requested_provider="ollama",
+            )
+        )
+
+        self.assertEqual(executed["tool_call"]["name"], "shell__exec")
+        self.assertEqual(executed["tool_call"]["arguments"]["command"], "ls ~/Desktop")
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertIn("Desktop file A", events[-1]["payload"]["reply"])
+        self.assertEqual(events[-1]["payload"]["provider"], "ollama")
+        self.assertEqual(events[-1]["payload"]["context_used"]["effective_provider"], "ollama")
 
 
 if __name__ == "__main__":

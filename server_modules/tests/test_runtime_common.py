@@ -66,6 +66,28 @@ class RuntimeCommonRateLimitTests(unittest.TestCase):
         self.assertIsNone(first)
         self.assertIsNone(second)
 
+    def test_api_sessions_is_exempt_from_control_plane_rate_limit(self) -> None:
+        with (
+            patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", 0),
+            patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_BURST", 0),
+        ):
+            first = runtime_common._control_plane_rate_limit(_request("/api/sessions"))
+            second = runtime_common._control_plane_rate_limit(_request("/api/sessions"))
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+
+    def test_api_thread_turns_is_exempt_from_control_plane_rate_limit(self) -> None:
+        with (
+            patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", 0),
+            patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_BURST", 0),
+        ):
+            first = runtime_common._control_plane_rate_limit(_request("/api/threads/thread-1/turns"))
+            second = runtime_common._control_plane_rate_limit(_request("/api/threads/thread-1/turns"))
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+
     def test_other_mutations_still_rate_limited(self) -> None:
         with (
             patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", 0),

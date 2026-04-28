@@ -1,3 +1,4 @@
+import importlib
 import unittest
 from unittest.mock import patch
 
@@ -5,6 +6,10 @@ from server_modules import direct_tool_approval_service as service
 
 
 class DirectToolApprovalServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global service
+        service = importlib.import_module("server_modules.direct_tool_approval_service")
+
     def test_shell_command_requires_approval_for_destructive_command(self) -> None:
         self.assertTrue(
             service.shell_command_requires_approval(

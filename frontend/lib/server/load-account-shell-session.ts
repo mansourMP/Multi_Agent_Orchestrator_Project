@@ -6,6 +6,10 @@ import { headers } from 'next/headers';
 import type { AccountShellBootstrap } from '@/lib/shell/account-shell-store';
 import { parseAccountShellPayload } from '@/lib/shell/account-shell-payload';
 
+const ACCOUNT_SHELL_TIMEOUT_MS = 4_000;
+const ACCOUNT_SHELL_RETRY_DELAYS_MS = [150, 350, 700] as const;
+const RETRYABLE_ACCOUNT_SHELL_STATUSES = new Set([403, 429, 500, 502, 503, 504]);
+
 export type DegradedAccountShellSession = {
   account: null;
   workspaceMemberships: [];
@@ -29,6 +33,12 @@ function degradedAccountShellSession(
   };
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export function isDegradedAccountShellSession(
   session: LoadedAccountShellSession,
 ): session is DegradedAccountShellSession {
@@ -44,32 +54,63 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
       return degradedAccountShellSession(null, 'Cannot resolve request host for account-shell bootstrap.');
     }
     const origin = `${proto.split(',')[0].trim() || 'http'}://${host.split(',')[0].trim()}`;
-    const response = await fetch(`${origin}/api/auth/account-shell`, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: {
-        accept: 'application/json',
-        ...(requestHeaders.get('cookie') ? { cookie: requestHeaders.get('cookie') as string } : {}),
-        ...(requestHeaders.get('authorization') ? { authorization: requestHeaders.get('authorization') as string } : {}),
-      },
-    });
+    const forwardHeaders = {
+      accept: 'application/json',
+      ...(requestHeaders.get('cookie') ? { cookie: requestHeaders.get('cookie') as string } : {}),
+      ...(requestHeaders.get('authorization') ? { authorization: requestHeaders.get('authorization') as string } : {}),
+    };
+    let lastStatus: number | null = null;
+    let lastErrorMessage: string | null = null;
 
-    if (response.status === 401) {
-      return null;
+    for (let attempt = 0; attempt <= ACCOUNT_SHELL_RETRY_DELAYS_MS.length; attempt += 1) {
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => {
+        controller.abort();
+      }, ACCOUNT_SHELL_TIMEOUT_MS);
+
+      try {
+        const response = await fetch(`${origin}/api/auth/account-shell`, {
+          method: 'GET',
+          cache: 'no-store',
+          signal: controller.signal,
+          headers: forwardHeaders,
+        });
+
+        if (response.status === 401) {
+          return null;
+        }
+
+        if (response.ok) {
+          return parseAccountShellPayload(await response.json());
+        }
+
+        lastStatus = response.status;
+        lastErrorMessage = `Account shell request failed with status ${response.status}.`;
+        if (!RETRYABLE_ACCOUNT_SHELL_STATUSES.has(response.status) || attempt === ACCOUNT_SHELL_RETRY_DELAYS_MS.length) {
+          return degradedAccountShellSession(response.status, lastErrorMessage);
+        }
+      } catch (error) {
+        lastStatus = error instanceof Error && error.name === 'AbortError' ? 504 : null;
+        lastErrorMessage = error instanceof Error && error.name === 'AbortError'
+          ? `Account shell bootstrap timed out after ${ACCOUNT_SHELL_TIMEOUT_MS}ms.`
+          : error instanceof Error ? error.message : 'Account shell bootstrap failed.';
+        if (attempt === ACCOUNT_SHELL_RETRY_DELAYS_MS.length) {
+          return degradedAccountShellSession(lastStatus, lastErrorMessage);
+        }
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
+
+      await delay(ACCOUNT_SHELL_RETRY_DELAYS_MS[attempt]);
     }
 
-    if (!response.ok) {
-      return degradedAccountShellSession(
-        response.status,
-        `Account shell request failed with status ${response.status}.`,
-      );
-    }
-
-    return parseAccountShellPayload(await response.json());
+    return degradedAccountShellSession(lastStatus, lastErrorMessage);
   } catch (error) {
     return degradedAccountShellSession(
       null,
-      error instanceof Error ? error.message : 'Account shell bootstrap failed.',
+      error instanceof Error && error.name === 'AbortError'
+        ? `Account shell bootstrap timed out after ${ACCOUNT_SHELL_TIMEOUT_MS}ms.`
+        : error instanceof Error ? error.message : 'Account shell bootstrap failed.',
     );
   }
 }

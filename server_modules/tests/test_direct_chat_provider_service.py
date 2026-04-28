@@ -17,10 +17,32 @@ class DirectChatProviderServiceTests(unittest.TestCase):
             "workspace-a",
             "anthropic",
             build_provider_credential_candidates_fn=fake_candidates,
+            hosted_sage_ai_access_state_for_workspace_id_fn=lambda **_kwargs: {"allowed": True},
         )
 
         self.assertEqual(credentials, {"auth_mode": "local_cli"})
         self.assertEqual(calls, [({"source": "chat_direct", "workspace_only": True}, "anthropic"), ({"source": "chat_direct"}, "anthropic")])
+
+    def test_direct_chat_credentials_filters_platform_runtime_when_hosted_ai_disabled(self) -> None:
+        def fake_candidates(_context: dict[str, object], metadata: dict[str, object], _provider: str) -> list[dict[str, object]]:
+            if metadata.get("workspace_only"):
+                return []
+            return [
+                {"source": "env", "credentials": {"api_key": "sk-platform"}, "label": "env-deepseek"},
+                {"source": "local", "credentials": {"auth_mode": "none"}, "label": "local-ollama"},
+            ]
+
+        credentials = direct_chat_provider_service.direct_chat_credentials(
+            "workspace-a",
+            "deepseek",
+            build_provider_credential_candidates_fn=fake_candidates,
+            hosted_sage_ai_access_state_for_workspace_id_fn=lambda **_kwargs: {
+                "allowed": False,
+                "reason": "policy_disabled",
+            },
+        )
+
+        self.assertEqual(credentials, {"auth_mode": "none"})
 
     def test_preferred_provider_maps_openai_oauth_to_codex_cli_without_explicit_selection(self) -> None:
         def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:
@@ -111,12 +133,23 @@ class DirectChatProviderServiceTests(unittest.TestCase):
             preferred_provider_fn=lambda workspace_id, requested: (requested or "openai", {"api_key": "sk-test"}),
             supports_direct_message_native_chat_fn=lambda _provider, credentials: bool(credentials),
             resolve_workspace_tool_capabilities_fn=lambda workspace_id: [{"id": "gmail", "workspace_id": workspace_id}],
+            direct_chat_provider_truth_fn=lambda _workspace_id, _provider: {
+                "credential_plane": "workspace_connection",
+                "credential_owner_kind": "workspace_byok",
+                "workspace_connected": True,
+                "connection_state": "active",
+                "runtime_state": "active",
+            },
             availability_override={"runtime_ok": False, "custom": "value"},
         )
 
         self.assertEqual(payload["provider"], "openai")
         self.assertTrue(payload["ai_ready"])
         self.assertFalse(payload["runtime_ok"])
+        self.assertEqual(payload["connection_mode"], "byok")
+        self.assertEqual(payload["credential_plane"], "workspace_connection")
+        self.assertEqual(payload["credential_owner_kind"], "workspace_byok")
+        self.assertTrue(payload["workspace_connected"])
         self.assertEqual(payload["custom"], "value")
         self.assertEqual(payload["tool_capabilities"], [{"id": "gmail", "workspace_id": "workspace-a"}])
 
@@ -128,11 +161,103 @@ class DirectChatProviderServiceTests(unittest.TestCase):
             preferred_provider_fn=lambda workspace_id, requested: (requested or "openai", {"api_key": "sk-test"}),
             supports_direct_message_native_chat_fn=lambda _provider, credentials: bool(credentials),
             resolve_workspace_tool_capabilities_fn=lambda _workspace_id: [],
+            direct_chat_provider_truth_fn=lambda _workspace_id, _provider: {
+                "credential_plane": "platform_runtime",
+                "credential_owner_kind": "platform_hosted",
+                "workspace_connected": False,
+                "connection_state": "setup_required",
+                "runtime_state": "active",
+            },
             availability_override={"surface_channel": "mobile", "source": "mobile_chat"},
         )
 
         self.assertTrue(payload["runtime_ok"])
         self.assertEqual(payload["connection_mode"], "platform")
+
+    def test_direct_chat_provider_truth_restricts_platform_runtime_when_hosted_ai_disabled(self) -> None:
+        payload = direct_chat_provider_service.direct_chat_provider_truth(
+            "workspace-a",
+            "deepseek",
+            build_workspace_provider_connection_truth_fn=lambda _workspace_id: {
+                "providers_by_id": {
+                    "deepseek": {
+                        "id": "deepseek",
+                        "state": "setup_required",
+                    },
+                },
+            },
+            build_provider_runtime_truth_fn=lambda _workspace_id: {
+                "providers_by_id": {
+                    "deepseek": {
+                        "id": "deepseek",
+                        "label": "DeepSeek",
+                        "state": "active",
+                        "active_source": "env-deepseek",
+                        "credential_sources": ["env-deepseek"],
+                        "identity_owner": "platform_account",
+                    },
+                },
+            },
+            hosted_sage_ai_access_state_for_workspace_id_fn=lambda **_kwargs: {
+                "allowed": False,
+                "policy": "owner_opt_in",
+                "monthly_cap_usd": 5.0,
+                "monthly_cost_usd": 0.0,
+                "monthly_remaining_usd": 5.0,
+                "reason": "owner_approval_required",
+            },
+        )
+
+        self.assertFalse(payload["hosted_ai_enabled"])
+        self.assertFalse(payload["platform_runtime_allowed"])
+        self.assertEqual(payload["credential_plane"], "platform_runtime")
+        self.assertEqual(payload["runtime_state"], "restricted")
+        self.assertEqual(payload["issue_code"], "hosted_ai_owner_approval_required")
+
+    def test_resolve_direct_chat_availability_prefers_local_companion_for_online_local_runtime_provider_plane(self) -> None:
+        payload = direct_chat_provider_service.resolve_direct_chat_availability(
+            "workspace-a",
+            "anthropic",
+            direct_chat_runtime_available_fn=lambda: True,
+            preferred_provider_fn=lambda workspace_id, requested: (requested or "anthropic", {"auth_mode": "local_cli"}),
+            supports_direct_message_native_chat_fn=lambda _provider, credentials: bool(credentials),
+            resolve_workspace_tool_capabilities_fn=lambda _workspace_id: [],
+            direct_chat_provider_truth_fn=lambda _workspace_id, _provider: {
+                "credential_plane": "local_runtime",
+                "credential_owner_kind": "local_machine",
+                "workspace_connected": False,
+                "connection_state": "setup_required",
+                "runtime_state": "active",
+            },
+            workspace_live_gateway_available_fn=lambda _workspace_id: True,
+        )
+
+        self.assertEqual(payload["connection_mode"], "local_companion")
+        self.assertEqual(payload["credential_owner_kind"], "local_machine")
+        self.assertTrue(payload["ai_ready"])
+        self.assertTrue(payload["local_gateway_online"])
+
+    def test_resolve_direct_chat_availability_avoids_local_companion_mode_when_local_runtime_is_offline(self) -> None:
+        payload = direct_chat_provider_service.resolve_direct_chat_availability(
+            "workspace-a",
+            "anthropic",
+            direct_chat_runtime_available_fn=lambda: False,
+            preferred_provider_fn=lambda workspace_id, requested: (requested or "anthropic", {"auth_mode": "local_cli"}),
+            supports_direct_message_native_chat_fn=lambda _provider, credentials: bool(credentials),
+            resolve_workspace_tool_capabilities_fn=lambda _workspace_id: [],
+            direct_chat_provider_truth_fn=lambda _workspace_id, _provider: {
+                "credential_plane": "local_runtime",
+                "credential_owner_kind": "local_machine",
+                "workspace_connected": False,
+                "connection_state": "setup_required",
+                "runtime_state": "active",
+            },
+            workspace_live_gateway_available_fn=lambda _workspace_id: False,
+        )
+
+        self.assertEqual(payload["connection_mode"], "")
+        self.assertFalse(payload["ai_ready"])
+        self.assertFalse(payload["local_gateway_online"])
 
     def test_connected_provider_tokens_filters_empty_credentials(self) -> None:
         connected = direct_chat_provider_service.connected_provider_tokens(

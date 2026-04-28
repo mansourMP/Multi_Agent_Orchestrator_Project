@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -7,6 +8,10 @@ from server_modules import gateway_execution_service
 
 
 class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global gateway_execution_service
+        gateway_execution_service = importlib.import_module("server_modules.gateway_execution_service")
+
     async def test_execute_tool_via_gateway_dispatches_and_appends_activity(self) -> None:
         registration = {
             "gateway_id": "gw-1",

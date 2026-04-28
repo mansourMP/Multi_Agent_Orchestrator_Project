@@ -44,6 +44,8 @@ export class GatewaySupervisorClient {
 
   supportedCapabilities(): string[] {
     return [
+      "filesystem.read_write",
+      "shell.execute",
       "screenshot.capture",
       "computer_control.ocr",
       "computer_control.move",

@@ -5,6 +5,19 @@ import re
 from typing import Any, Callable
 
 
+def tool_prompt_lines(tools: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        description = str(item.get("description") or "").strip()
+        if not name:
+            continue
+        lines.append(f"{name}: {description}" if description else name)
+    return lines
+
+
 def memory_recall_section(tools: list[dict[str, Any]], *, memory_tool_names: set[str]) -> str:
     available = {
         str(item.get("name") or "").strip()
@@ -30,11 +43,19 @@ def build_system_prompt(
     build_operator_system_prompt: Callable[..., str],
     memory_tool_names: set[str],
 ) -> str | None:
+    tool_lines = tool_prompt_lines(tools)
     base_prompt = build_operator_system_prompt(
         availability_lines(workspace_id, availability),
-        tool_lines=[],
+        tool_lines=tool_lines,
     )
     sections = [base_prompt.strip()] if str(base_prompt or "").strip() else []
+    if tool_lines:
+        sections.append(
+            "## Tool Use Rules\n"
+            "If the user's request clearly requires a listed tool, use that tool instead of answering from general knowledge.\n"
+            "Do not say you lack filesystem, browser, desktop, clipboard, shell, web, or connector access when a matching tool is available in the tool list.\n"
+            "For local machine requests like files on the Desktop, screenshots, terminal commands, browser actions, or clipboard work, call the matching local tool first."
+        )
     memory_section = memory_recall_section(tools, memory_tool_names=memory_tool_names)
     if memory_section:
         sections.append(memory_section)
@@ -46,10 +67,28 @@ def combine_workspace_context(*, system_prompt: str | None, workspace_context_te
     context = str(workspace_context_text or "").strip()
     prompt = str(system_prompt or "").strip()
     if context and prompt:
-        return f"{context}\n\n{prompt}"
+        return f"{prompt}\n\n## Workspace Context\n{context}"
     if context:
         return context
     return prompt or None
+
+
+def build_runtime_identity_guardrail(*, provider: str, model: str | None = None) -> str:
+    provider_label = str(provider or "").strip() or "the active provider"
+    model_label = str(model or "").strip()
+    if model_label:
+        identity_line = f"If the user asks which model is answering, state exactly: provider {provider_label}, model {model_label}."
+    else:
+        identity_line = (
+            f"If the user asks which model is answering, state that this turn is routed through provider {provider_label} "
+            "and that the exact model id is not exposed to this turn."
+        )
+    return (
+        "## Runtime Identity\n"
+        "Never claim to be Claude, Anthropic, OpenAI, Gemini, or any other vendor-specific assistant unless the current runtime metadata explicitly matches that identity.\n"
+        f"{identity_line}\n"
+        "If you do not know the exact model id, say so plainly instead of guessing."
+    )
 
 
 def time_of_day_suggestion(*, now: datetime | None = None) -> str:

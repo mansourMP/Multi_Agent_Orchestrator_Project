@@ -11,6 +11,8 @@ type AwaitBrowserAuthReadyOptions = {
   delayMs?: number;
 };
 
+const AUTH_REQUEST_TIMEOUT_MS = 12_000;
+
 function channelAttributionToken(): string | undefined {
   if (typeof window === 'undefined') {
     return undefined;
@@ -32,15 +34,30 @@ async function parseJson(response: Response): Promise<unknown> {
 }
 
 async function requestAuth<T>(path: string, options: AuthRequestOptions): Promise<T> {
-  const response = await fetch(path, {
-    method: options.method,
-    credentials: 'include',
-    headers: buildCookieAuthHeaders(options.method, {
-      accept: 'application/json',
-      ...(options.body ? { 'content-type': 'application/json' } : {}),
-    }),
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  const controller = new AbortController();
+  const timeoutHandle = window.setTimeout(() => {
+    controller.abort();
+  }, AUTH_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: options.method,
+      credentials: 'include',
+      signal: controller.signal,
+      headers: buildCookieAuthHeaders(options.method, {
+        accept: 'application/json',
+        ...(options.body ? { 'content-type': 'application/json' } : {}),
+      }),
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Authentication request timed out after ${AUTH_REQUEST_TIMEOUT_MS}ms.`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutHandle);
+  }
 
   const payload = await parseJson(response);
   if (!response.ok) {
@@ -61,7 +78,7 @@ function sleep(delayMs: number): Promise<void> {
 
 export async function awaitBrowserAuthReady({
   path = '/api/auth/account-shell',
-  attempts = 8,
+  attempts = 4,
   delayMs = 250,
 }: AwaitBrowserAuthReadyOptions = {}): Promise<void> {
   let lastStatus: number | null = null;

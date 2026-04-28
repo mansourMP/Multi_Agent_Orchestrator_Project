@@ -62,10 +62,14 @@ def provider_unavailable_response(
     provider: str,
     *,
     connect_action_fn: Callable[[str, str], Dict[str, Any]],
+    issue_code: Optional[str] = None,
+    issue_detail: Optional[str] = None,
 ) -> Dict[str, Any]:
     return direct_chat_provider_service.provider_unavailable_response(
         provider,
         connect_action=connect_action_fn,
+        issue_code=issue_code,
+        issue_detail=issue_detail,
     )
 
 
@@ -102,4 +106,4 @@ def direct_chat_error_reply(
         return chat_iteration_limit_reply_fn(
             safe_positive_int_fn(raw_limit, chat_max_iterations_default)
         )
-    return f"Chat failed: {detail}"
+    return "Sage hit a temporary error while generating the response. Please try again in a moment."

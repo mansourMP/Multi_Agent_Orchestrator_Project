@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import importlib
 from unittest.mock import AsyncMock, patch
 
 from server_modules import agent_trace_service
@@ -34,6 +35,47 @@ from server_modules.runtime_models import RunStartRequest
 
 
 class AgentTurnTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global agent_trace_service
+        global AgentTurnRequest, agent_turn, bind_agent_turn_request_meta, bind_agent_turn_metadata
+        global build_agent_turn_request, build_agent_turn_session_context, build_direct_chat_turn_request
+        global build_discord_turn_request, build_inbound_agent_turn_request, build_local_worker_turn_request
+        global build_telegram_turn_request, build_whatsapp_turn_request, resolve_agent_turn_session_identity
+        global build_run_start_turn_request, ensure_direct_chat_turn_request, normalize_turn_policy_context
+        global normalize_server_owned_turn_request, resolve_direct_chat_turn_request, resolve_agent_turn_request
+        global resolve_agent_turn_request_from_runtime_context, resolve_agent_turn_request_with_fallback
+        global resolve_run_start_turn_request, serialize_agent_turn_request, TurnActor
+        global build_run_start_request_from_turn, RunStartRequest
+
+        agent_trace_service = importlib.import_module("server_modules.agent_trace_service")
+        agent_turn_module = importlib.import_module("server_modules.agent_turn")
+        AgentTurnRequest = agent_turn_module.AgentTurnRequest
+        agent_turn = agent_turn_module.agent_turn
+        bind_agent_turn_request_meta = agent_turn_module.bind_agent_turn_request_meta
+        bind_agent_turn_metadata = agent_turn_module.bind_agent_turn_metadata
+        build_agent_turn_request = agent_turn_module.build_agent_turn_request
+        build_agent_turn_session_context = agent_turn_module.build_agent_turn_session_context
+        build_direct_chat_turn_request = agent_turn_module.build_direct_chat_turn_request
+        build_discord_turn_request = agent_turn_module.build_discord_turn_request
+        build_inbound_agent_turn_request = agent_turn_module.build_inbound_agent_turn_request
+        build_local_worker_turn_request = agent_turn_module.build_local_worker_turn_request
+        build_telegram_turn_request = agent_turn_module.build_telegram_turn_request
+        build_whatsapp_turn_request = agent_turn_module.build_whatsapp_turn_request
+        resolve_agent_turn_session_identity = agent_turn_module.resolve_agent_turn_session_identity
+        build_run_start_turn_request = agent_turn_module.build_run_start_turn_request
+        ensure_direct_chat_turn_request = agent_turn_module.ensure_direct_chat_turn_request
+        normalize_turn_policy_context = agent_turn_module.normalize_turn_policy_context
+        normalize_server_owned_turn_request = agent_turn_module.normalize_server_owned_turn_request
+        resolve_direct_chat_turn_request = agent_turn_module.resolve_direct_chat_turn_request
+        resolve_agent_turn_request = agent_turn_module.resolve_agent_turn_request
+        resolve_agent_turn_request_from_runtime_context = agent_turn_module.resolve_agent_turn_request_from_runtime_context
+        resolve_agent_turn_request_with_fallback = agent_turn_module.resolve_agent_turn_request_with_fallback
+        resolve_run_start_turn_request = agent_turn_module.resolve_run_start_turn_request
+        serialize_agent_turn_request = agent_turn_module.serialize_agent_turn_request
+        TurnActor = agent_turn_module.TurnActor
+        build_run_start_request_from_turn = importlib.import_module("server_modules.run_service").build_run_start_request_from_turn
+        RunStartRequest = importlib.import_module("server_modules.runtime_models").RunStartRequest
+
     def test_agent_turn_starts_trace_emits_routed_and_returns_trace_id_in_sync_result(self):
         turn_request = AgentTurnRequest(
             tenant_id="tenant-1",

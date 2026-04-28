@@ -84,11 +84,21 @@ class TelegramRunDispatchService:
         deadline = self.time_now() + wait_timeout
         last_status = "starting"
         no_worker_since: Optional[float] = None
+        missing_run_since: Optional[float] = None
+        saw_run = False
         no_worker_grace_seconds = max(8.0, min(20.0, float(wait_timeout) * 0.2))
+        missing_run_grace_seconds = max(2.0, min(6.0, float(wait_timeout) * 0.1))
         while self.time_now() < deadline:
             run = self.runs_get(run_id)
             if not isinstance(run, dict):
-                return {"status": "failed", "summary": "Run not found."}
+                if missing_run_since is None:
+                    missing_run_since = self.time_now()
+                elif not saw_run and (self.time_now() - missing_run_since) >= missing_run_grace_seconds:
+                    return {"status": "failed", "summary": "Run not found."}
+                self.sleep(1.0)
+                continue
+            saw_run = True
+            missing_run_since = None
             latest_error = self.latest_run_error_message(run)
             if latest_error and self.is_non_retryable_run_error(latest_error):
                 return {
@@ -126,6 +136,8 @@ class TelegramRunDispatchService:
                     no_worker_since = None
             self.sleep(1.0)
         run = self.runs_get(run_id)
+        if not isinstance(run, dict) and not saw_run:
+            return {"status": "failed", "summary": "Run not found."}
         if isinstance(run, dict):
             latest_error = self.latest_run_error_message(run)
             if latest_error:

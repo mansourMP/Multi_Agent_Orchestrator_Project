@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from server_modules import entitlements_service
 from server_modules import marketplace_distribution_service
 from server_modules import model_router
 from server_modules import provider_profiles
@@ -9,6 +10,46 @@ from server_modules import provider_profiles
 ANTHROPIC_MODEL_ALIASES = {
     "claude-3-7-sonnet-latest": "claude-3-7-sonnet-20250219",
 }
+
+
+def _credential_plane_metadata(
+    *,
+    source: Any,
+    identity_owner: Any,
+) -> Dict[str, str]:
+    source_token = str(source or "").strip().lower()
+    identity_owner_token = str(identity_owner or "").strip().lower()
+
+    if source_token in {"profile", "workspace_profile", "credential_id", "vault_default"} or source_token.startswith("profile:") or source_token.startswith("vault-default"):
+        return {
+            "credential_owner_kind": "workspace_byok",
+            "credential_owner_label": "Workspace BYOK",
+            "credential_plane": "workspace_connection",
+            "credential_plane_label": "Connected by workspace owner",
+        }
+
+    if source_token.startswith("env") or identity_owner_token == "platform_account":
+        return {
+            "credential_owner_kind": "platform_hosted",
+            "credential_owner_label": "Empyralis hosted runtime",
+            "credential_plane": "platform_runtime",
+            "credential_plane_label": "Provided by Empyralis",
+        }
+
+    if source_token.startswith("local") or source_token.endswith("cli") or identity_owner_token in {"local_machine", "machine_owner"}:
+        return {
+            "credential_owner_kind": "local_machine",
+            "credential_owner_label": "Local machine",
+            "credential_plane": "local_runtime",
+            "credential_plane_label": "Available on this machine",
+        }
+
+    return {
+        "credential_owner_kind": "unknown",
+        "credential_owner_label": "Unknown source",
+        "credential_plane": "unknown",
+        "credential_plane_label": "Unknown source",
+    }
 
 def _cached_model_records(provider_id: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
     cached = metadata.get("cached_models")
@@ -162,12 +203,99 @@ def _provider_catalog_projection(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _apply_hosted_ai_policy(item: Dict[str, Any], *, hosted_access_state: Dict[str, Any]) -> Dict[str, Any]:
+    projected = dict(item)
+    policy = str(hosted_access_state.get("policy") or "owner_opt_in").strip().lower() or "owner_opt_in"
+    reason = str(hosted_access_state.get("reason") or "").strip().lower() or None
+    hosted_allowed = bool(hosted_access_state.get("allowed"))
+    workspace_connected = bool(projected.get("workspace_connected"))
+    requires_hosted_lane = (
+        str(projected.get("credential_plane") or "").strip().lower() == "platform_runtime"
+        and not workspace_connected
+    )
+    projected["hosted_ai_enabled"] = hosted_allowed
+    projected["hosted_sage_ai_policy"] = policy
+    projected["hosted_sage_ai_monthly_cap_usd"] = float(hosted_access_state.get("monthly_cap_usd") or 0.0)
+    projected["hosted_sage_ai_monthly_cost_usd"] = float(hosted_access_state.get("monthly_cost_usd") or 0.0)
+    projected["hosted_sage_ai_monthly_remaining_usd"] = float(hosted_access_state.get("monthly_remaining_usd") or 0.0)
+    projected["hosted_sage_ai_reason"] = reason
+    projected["platform_runtime_allowed"] = bool(hosted_allowed or not requires_hosted_lane)
+    if projected["platform_runtime_allowed"]:
+        return projected
+
+    if reason == "owner_approval_required":
+        issue_code = "hosted_ai_owner_approval_required"
+        detail = "Hosted Sage AI requires workspace owner approval before platform runtime providers can be used."
+    elif reason == "cap_reached":
+        issue_code = "hosted_ai_cap_reached"
+        detail = (
+            "Hosted Sage AI monthly cap is reached for this workspace. "
+            "Connect your own provider key, switch to local runtime, or raise the cap."
+        )
+    else:
+        issue_code = "hosted_ai_policy_disabled"
+        detail = (
+            "Hosted Sage AI is disabled for this workspace. "
+            "Connect your own provider key or use a local runtime instead."
+        )
+    connection_state = str(projected.get("connection_state") or "").strip().lower()
+    connection_credential_sources = (
+        list(projected.get("connection_credential_sources") or [])
+        if isinstance(projected.get("connection_credential_sources"), list)
+        else []
+    )
+    issues = list(projected.get("issues") or []) if isinstance(projected.get("issues"), list) else []
+    issues.append({"code": issue_code, "detail": detail})
+    projected.update(
+        {
+            "state": connection_state or "setup_required",
+            "usable": False,
+            "configured": connection_state in {"active", "configured", "degraded", "unavailable"},
+            "active": False,
+            "issues": issues,
+            "issue_code": issue_code,
+            "issue": detail,
+            "state_detail": detail,
+            "active_source": projected.get("connection_active_source"),
+            "credential_sources": connection_credential_sources,
+            "runtime_state": "restricted",
+            "runtime_state_detail": detail,
+            "runtime_active_source": None,
+            "runtime_credential_sources": [],
+        }
+    )
+    return projected
+
+
 def _merge_runtime_truth(
     connection_item: Dict[str, Any],
     runtime_item: Dict[str, Any] | None,
 ) -> Dict[str, Any]:
+    connection_state = str(connection_item.get("state") or "").strip() or None
+    connection_state_detail = connection_item.get("state_detail")
+    connection_active_source = connection_item.get("active_source")
+    connection_credential_sources = list(connection_item.get("credential_sources") or []) if isinstance(connection_item.get("credential_sources"), list) else []
+    workspace_connected = connection_state in {"active", "configured", "degraded"}
     if not isinstance(runtime_item, dict):
-        return dict(connection_item)
+        merged = {
+            **dict(connection_item),
+            "connection_state": connection_state,
+            "connection_state_detail": connection_state_detail,
+            "connection_active_source": connection_active_source,
+            "connection_credential_sources": connection_credential_sources,
+            "workspace_connected": workspace_connected,
+            "runtime_state": connection_state,
+            "runtime_state_detail": connection_state_detail,
+            "runtime_active_source": connection_active_source,
+            "runtime_credential_sources": connection_credential_sources,
+        }
+        merged.update(
+            _credential_plane_metadata(
+                source=connection_active_source,
+                identity_owner=connection_item.get("identity_owner"),
+            )
+        )
+        return merged
     merged = {
         **dict(connection_item),
         "state": runtime_item.get("state"),
@@ -183,6 +311,15 @@ def _merge_runtime_truth(
         "issue": runtime_item.get("issue"),
         "state_detail": runtime_item.get("state_detail"),
         "active_source": runtime_item.get("active_source"),
+        "connection_state": connection_state,
+        "connection_state_detail": connection_state_detail,
+        "connection_active_source": connection_active_source,
+        "connection_credential_sources": connection_credential_sources,
+        "workspace_connected": workspace_connected,
+        "runtime_state": runtime_item.get("state"),
+        "runtime_state_detail": runtime_item.get("state_detail"),
+        "runtime_active_source": runtime_item.get("active_source"),
+        "runtime_credential_sources": list(runtime_item.get("credential_sources") or []) if isinstance(runtime_item.get("credential_sources"), list) else [],
         "profile_metadata": (
             dict(runtime_item.get("profile_metadata"))
             if isinstance(runtime_item.get("profile_metadata"), dict)
@@ -198,6 +335,12 @@ def _merge_runtime_truth(
                 merged[key] = runtime_item.get(key)
     if runtime_item.get("default_model"):
         merged["default_model"] = runtime_item.get("default_model")
+    merged.update(
+        _credential_plane_metadata(
+            source=runtime_item.get("active_source") or connection_active_source,
+            identity_owner=merged.get("identity_owner"),
+        )
+    )
     return merged
 
 
@@ -263,18 +406,28 @@ async def list_workspace_provider_catalog(
         for item in runtime_truth.get("providers", [])
         if isinstance(item, dict) and str(item.get("id") or "").strip()
     }
+    normalized_workspace_id = str(connection_truth.get("workspace_id") or workspace_id or "default").strip() or "default"
+    hosted_access_state = entitlements_service.hosted_sage_ai_access_state_for_workspace_id(
+        workspace_id=normalized_workspace_id,
+    )
     providers = [
-        _provider_catalog_projection(_merge_runtime_truth(item, runtime_by_id.get(str(item.get("id") or "").strip())))
+        _provider_catalog_projection(
+            _apply_hosted_ai_policy(
+                _merge_runtime_truth(item, runtime_by_id.get(str(item.get("id") or "").strip())),
+                hosted_access_state=hosted_access_state,
+            )
+        )
         for item in connection_truth.get("providers", [])
         if isinstance(item, dict)
     ]
-    normalized_workspace_id = str(connection_truth.get("workspace_id") or workspace_id or "default").strip() or "default"
     for item in marketplace_distribution_service.installed_provider_marketplace_packages(normalized_workspace_id):
         providers.append(_marketplace_provider_catalog_projection(item))
     summary = dict(runtime_truth.get("summary") or {}) if isinstance(runtime_truth.get("summary"), dict) else {}
     summary["provider_total"] = len(providers)
     return {
         "workspace_id": normalized_workspace_id,
+        "hosted_ai_enabled": bool(hosted_access_state.get("allowed")),
+        "hosted_sage_ai": hosted_access_state,
         "summary": summary,
         "providers": providers,
     }

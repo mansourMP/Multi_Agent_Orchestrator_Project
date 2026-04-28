@@ -107,9 +107,22 @@ def channel_reply_for_reason(
     details = dict(metadata or {})
     if normalized_reason == "deployed_agent_daily_limit_exceeded":
         specialist_name = str((deployed_agent or {}).get("name") or "").strip() or "this specialist"
-        return (
-            f"You've reached today's free message limit with {specialist_name}. "
-            "Continue in Empyralis to keep your history and unlock more messages."
+        cta = _daily_limit_cta_payload(
+            deployed_agent=deployed_agent,
+            metadata=details,
+        )
+        reply = f"{specialist_name} has reached today's free message limit."
+        if cta.get("url") and cta.get("label"):
+            reply = f"{reply} {cta['label']}: {cta['url']}"
+        elif cta.get("url"):
+            reply = f"{reply} Continue here: {cta['url']}"
+        else:
+            reply = f"{reply} Please come back tomorrow."
+        from server_modules.external_user_privacy_service import get_external_user_privacy_service
+
+        return get_external_user_privacy_service().append_privacy_policy_line(
+            reply,
+            workspace_id=str((deployed_agent or {}).get("owner_workspace_id") or "").strip() or None,
         )
     return _CHANNEL_REPLY_BY_REASON.get(normalized_reason, "The system is busy. Please try again in a moment.")
 

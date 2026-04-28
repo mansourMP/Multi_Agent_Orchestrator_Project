@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules import direct_chat_hosted_usage_service
 from server_modules import direct_chat_memory_facade_service
 from server_modules import direct_chat_metadata_service
 from server_modules import direct_chat_prompt_service
@@ -57,6 +58,10 @@ def persist_direct_chat_transcript_best_effort(
         assistant_reply=assistant_reply,
         save_session_transcript_fn=save_session_transcript_fn,
     )
+
+
+def persist_direct_chat_hosted_usage_best_effort(**kwargs: Any) -> None:
+    direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(**kwargs)
 
 
 def build_context_used(**kwargs: Any) -> Dict[str, Any]:

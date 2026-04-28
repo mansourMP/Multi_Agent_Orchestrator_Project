@@ -5,6 +5,14 @@ from server_modules import direct_chat_prompt_service
 
 
 class DirectChatPromptServiceTests(unittest.TestCase):
+    def test_tool_prompt_lines_include_name_and_description(self) -> None:
+        self.assertEqual(
+            direct_chat_prompt_service.tool_prompt_lines(
+                [{"name": "file__read", "description": "Read a local file"}]
+            ),
+            ["file__read: Read a local file"],
+        )
+
     def test_memory_recall_section_only_appears_when_memory_tools_are_available(self) -> None:
         section = direct_chat_prompt_service.memory_recall_section(
             [{"name": "memory_search"}, {"name": "memory_get"}],
@@ -33,15 +41,17 @@ class DirectChatPromptServiceTests(unittest.TestCase):
         )
 
         self.assertIn("Workspace: default", str(prompt))
-        self.assertNotIn("memory_search: Search memory", str(prompt))
+        self.assertIn("memory_search: Search memory", str(prompt))
+        self.assertIn("## Tool Use Rules", str(prompt))
+        self.assertIn("Do not say you lack filesystem", str(prompt))
         self.assertIn("## Memory Recall", str(prompt))
 
-    def test_combine_workspace_context_prefers_context_then_prompt(self) -> None:
+    def test_combine_workspace_context_prefers_prompt_then_context(self) -> None:
         combined = direct_chat_prompt_service.combine_workspace_context(
             system_prompt="Base prompt",
             workspace_context_text="Workspace context",
         )
-        self.assertEqual(combined, "Workspace context\n\nBase prompt")
+        self.assertEqual(combined, "Base prompt\n\n## Workspace Context\nWorkspace context")
 
         context_only = direct_chat_prompt_service.combine_workspace_context(
             system_prompt=None,

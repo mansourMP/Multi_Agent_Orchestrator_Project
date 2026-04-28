@@ -126,10 +126,19 @@ def list_directory(
         str(message or ""),
         flags=re.IGNORECASE,
     )
-    if not list_match:
+    desktop_match = re.search(
+        r"\blist(?:\s+the)?(?:\s+first\s+(\d+))?\s+files?\s+(?:on|in|from)\s+(?:my|the)\s+desktop\b",
+        str(message or ""),
+        flags=re.IGNORECASE,
+    )
+    if list_match:
+        requested_limit = safe_positive_int(list_match.group(1), default=0)
+        directory = resolve_local_path(str(list_match.group(2) or "").strip())
+    elif desktop_match:
+        requested_limit = safe_positive_int(desktop_match.group(1), default=0)
+        directory = Path.home() / "Desktop"
+    else:
         return None
-    requested_limit = safe_positive_int(list_match.group(1), default=0)
-    directory = resolve_local_path(str(list_match.group(2) or "").strip())
     if not directory.exists() or not directory.is_dir():
         raise RuntimeError(f"Directory not found: {directory}")
     entries = sorted(path.name for path in directory.iterdir())
@@ -146,7 +155,7 @@ def list_directory(
 def looks_like_directory_listing_request(message: str) -> bool:
     return bool(
         re.search(
-            r"\blist(?:\s+the)?(?:\s+first\s+\d+)?\s+files?\s+in\s+([^\s,;:()]+)",
+            r"\blist(?:\s+the)?(?:\s+first\s+\d+)?\s+files?\s+(?:in\s+[^\s,;:()]+|(?:on|in|from)\s+(?:my|the)\s+desktop)\b",
             str(message or ""),
             flags=re.IGNORECASE,
         )

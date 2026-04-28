@@ -3,7 +3,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bot, Compass, LayoutGrid, Settings2, Waypoints, type LucideIcon } from 'lucide-react';
+import {
+  Bot,
+  Compass,
+  LayoutGrid,
+  Monitor,
+  Moon,
+  Settings2,
+  SunMedium,
+  Waypoints,
+  type LucideIcon,
+} from 'lucide-react';
 
 import { joinClassNames } from '@/lib/ui/primitives';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
@@ -83,7 +93,7 @@ function extractActiveDestinationId(pathname: string | null): WorkspaceNavDestin
 
 export function AccountTenantSwitcher() {
   const pathname = usePathname();
-  const { state } = useAccountShell();
+  const { state, actions } = useAccountShell();
   const [usageCost, setUsageCost] = useState<number | null>(null);
   const routeWorkspaceId = resolveRouteWorkspaceId(
     state.workspaceMemberships,
@@ -99,7 +109,23 @@ export function AccountTenantSwitcher() {
   const activeMembership = state.workspaceMemberships.find((item) => item.workspace.id === activeWorkspaceId) ?? null;
   const activeTenantId = activeMembership?.workspace.tenantId ?? state.workspaceMemberships[0]?.workspace.tenantId ?? '';
   const isLightTheme = state.globalTheme === 'light';
+  const currentTheme = state.globalTheme;
   const accountInitial = String(state.account?.displayName || state.account?.email || 'You').trim().charAt(0).toUpperCase() || 'Y';
+  const nextTheme = currentTheme === 'system'
+    ? 'light'
+    : currentTheme === 'light'
+      ? 'dark'
+      : 'system';
+  const themeLabel = currentTheme === 'system'
+    ? 'Theme: System'
+    : currentTheme === 'light'
+      ? 'Theme: Light'
+      : 'Theme: Dark';
+  const ThemeIcon = currentTheme === 'system'
+    ? Monitor
+    : currentTheme === 'light'
+      ? SunMedium
+      : Moon;
   const usageClient = useMemo(() => {
     if (!activeWorkspaceId || !activeTenantId) {
       return null;
@@ -201,6 +227,17 @@ export function AccountTenantSwitcher() {
             ${usageCost.toFixed(2)}
           </div>
         ) : null}
+        <button
+          type="button"
+          className="account-switcher__link account-switcher__theme-toggle"
+          aria-label={`${themeLabel}. Click to switch to ${nextTheme}.`}
+          title={`${themeLabel}. Click to switch to ${nextTheme}.`}
+          onClick={() => {
+            actions.setGlobalTheme(nextTheme);
+          }}
+        >
+          <ThemeIcon size={18} />
+        </button>
         <nav aria-label="Settings destination" className="account-switcher__nav account-switcher__nav--secondary">
           {SECONDARY_DESTINATIONS.map((destination) => (
             <Link

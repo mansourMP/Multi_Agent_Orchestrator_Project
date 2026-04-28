@@ -1,5 +1,6 @@
 import unittest
 from contextlib import asynccontextmanager
+import importlib
 from unittest.mock import AsyncMock, patch
 
 from server_modules import agent_channel_router
@@ -7,6 +8,11 @@ from server_modules.agent_manifest import AgentManifest
 
 
 class ChannelIngressContractUnificationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global agent_channel_router
+
+        agent_channel_router = importlib.import_module("server_modules.agent_channel_router")
+
     def test_generic_inbound_and_telegram_transport_share_canonical_turn_contract(self) -> None:
         manifest = AgentManifest(
             manifest_id="manifest-parts-pro",

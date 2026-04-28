@@ -31,12 +31,39 @@ _INSECURE_BROKER_SECRETS = {
     "empyralis-dev-tool-broker-secret",
     "empyralis-dev-secrets-broker-secret",
 }
+_HOSTED_PROVIDER_SECRET_BUNDLE_ENV = "EMPYRALIS_HOSTED_PROVIDER_SECRETS_JSON"
+_HOSTED_PROVIDER_ENV_CANDIDATES: Dict[str, List[str]] = {
+    "openai": ["ORION_HOSTED_OPENAI_API_KEY", "OPENAI_API_KEY"],
+    "anthropic": ["ORION_HOSTED_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
+    "gemini": ["ORION_HOSTED_GEMINI_API_KEY", "GEMINI_API_KEY"],
+    "qwen": ["ORION_HOSTED_QWEN_API_KEY", "ORION_LOCAL_WORKER_QWEN_API_KEY", "QWEN_API_KEY", "DASHSCOPE_API_KEY"],
+    "deepseek": ["ORION_HOSTED_DEEPSEEK_API_KEY", "ORION_LOCAL_WORKER_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"],
+    "mistral": ["ORION_HOSTED_MISTRAL_API_KEY", "ORION_LOCAL_WORKER_MISTRAL_API_KEY", "MISTRAL_API_KEY"],
+}
+_HOSTED_OPENAI_BEARER_KEYS = [
+    ("env_codex_oauth_token", "codex_oauth_token"),
+    ("env_oauth_token", "oauth_token"),
+    ("env_access_token", "access_token"),
+    ("env_api_key", "api_key"),
+]
 
 
 @dataclass(frozen=True)
 class SecretAccessGrant:
     token: str
     claims: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class HostedProviderSecretResolution:
+    provider_id: str
+    field: str
+    value: str
+    source: str
+    source_kind: str
+    bootstrap_fallback: bool
+    owner_kind: str
+    owner_label: str
 
 
 class SecretBrokerError(RuntimeError):
@@ -284,6 +311,294 @@ def _run_coro_sync(coro: Any) -> Any:
     if "error" in failure:
         raise failure["error"]
     return result.get("value")
+
+
+def _sanitize_token(value: Any) -> str:
+    token = str(value or "").strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
+
+
+def _parse_hosted_provider_secret_bundle() -> Dict[str, Any]:
+    raw = str(os.getenv(_HOSTED_PROVIDER_SECRET_BUNDLE_ENV) or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def _hosted_bundle_provider_payload(provider_id: str) -> Dict[str, Any]:
+    bundle = _parse_hosted_provider_secret_bundle()
+    if not bundle:
+        return {}
+    providers = bundle.get("providers")
+    if isinstance(providers, dict):
+        nested = providers.get(provider_id)
+        if isinstance(nested, dict):
+            return nested
+    direct = bundle.get(provider_id)
+    if isinstance(direct, dict):
+        return direct
+    if provider_id == "openai" and isinstance(bundle.get("openai"), dict):
+        return dict(bundle.get("openai") or {})
+    return {}
+
+
+def _append_hosted_provider_secret_audit(
+    *,
+    tenant_id: Optional[str],
+    workspace_id: Optional[str],
+    provider_id: str,
+    field: str,
+    source_kind: str,
+    source_label: str,
+    tool_name: Optional[str],
+    run_id: Optional[str],
+    actor_type: Optional[str],
+    actor_id: Optional[str],
+    purpose: Optional[str],
+    status: str,
+    denial_code: Optional[str] = None,
+) -> None:
+    resolved_tenant_id = str(tenant_id or "default").strip() or "default"
+    resolved_workspace_id = normalize_workspace_id(workspace_id)
+    if not resolved_workspace_id:
+        resolved_workspace_id = "default"
+    try:
+        _run_coro_sync(
+            control_plane_repository.append_agent_secret_access_event(
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                secret_kind="platform_hosted_provider_secret",
+                provider_id=provider_id,
+                connector_id=None,
+                credential_id=None,
+                action_id=None,
+                tool_name=str(tool_name or "").strip().lower() or "hosted_provider_secret_resolution",
+                run_id=str(run_id or "").strip() or None,
+                actor={
+                    "type": str(actor_type or "platform_runtime").strip().lower() or "platform_runtime",
+                    "id": str(actor_id or "").strip() or None,
+                },
+                allowed_fields=[str(field or "").strip() or "api_key"],
+                metadata={
+                    "purpose": str(purpose or "hosted_provider_secret_resolution").strip().lower() or "hosted_provider_secret_resolution",
+                    "field": str(field or "api_key").strip().lower() or "api_key",
+                    "source_kind": str(source_kind or "").strip().lower() or None,
+                    "source_label": str(source_label or "").strip() or None,
+                    "ownership": "platform_hosted",
+                },
+                status=str(status or "allowed").strip().lower() or "allowed",
+                denial_code=str(denial_code or "").strip().lower() or None,
+            )
+        )
+    except Exception:
+        return
+
+
+def resolve_hosted_provider_secret(
+    *,
+    tenant_id: Optional[str],
+    workspace_id: Optional[str],
+    provider_id: str,
+    field: str = "api_key",
+    env_var_candidates: Optional[List[str]] = None,
+    allow_env_fallback: bool = True,
+    tool_name: Optional[str] = None,
+    run_id: Optional[str] = None,
+    actor_type: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    purpose: Optional[str] = None,
+) -> HostedProviderSecretResolution:
+    normalized_provider_id = str(provider_id or "").strip().lower()
+    normalized_field = str(field or "api_key").strip().lower() or "api_key"
+    bundle_payload = _hosted_bundle_provider_payload(normalized_provider_id)
+    bundle_value = _sanitize_token(bundle_payload.get(normalized_field))
+    if bundle_value:
+        _append_hosted_provider_secret_audit(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            provider_id=normalized_provider_id,
+            field=normalized_field,
+            source_kind="managed_bundle",
+            source_label=f"{_HOSTED_PROVIDER_SECRET_BUNDLE_ENV}:{normalized_provider_id}.{normalized_field}",
+            tool_name=tool_name,
+            run_id=run_id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            purpose=purpose,
+            status="allowed",
+        )
+        return HostedProviderSecretResolution(
+            provider_id=normalized_provider_id,
+            field=normalized_field,
+            value=bundle_value,
+            source=f"bundle-{normalized_provider_id}",
+            source_kind="managed_bundle",
+            bootstrap_fallback=False,
+            owner_kind="platform_hosted",
+            owner_label="Empyralis hosted runtime",
+        )
+
+    if allow_env_fallback:
+        candidates = list(env_var_candidates or _HOSTED_PROVIDER_ENV_CANDIDATES.get(normalized_provider_id) or [])
+        for env_name in candidates:
+            env_value = _sanitize_token(os.getenv(str(env_name)))
+            if not env_value:
+                continue
+            _append_hosted_provider_secret_audit(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                provider_id=normalized_provider_id,
+                field=normalized_field,
+                source_kind="env_bootstrap",
+                source_label=f"env:{str(env_name)}",
+                tool_name=tool_name,
+                run_id=run_id,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                purpose=purpose,
+                status="allowed",
+            )
+            return HostedProviderSecretResolution(
+                provider_id=normalized_provider_id,
+                field=normalized_field,
+                value=env_value,
+                source=f"env:{str(env_name)}",
+                source_kind="env_bootstrap",
+                bootstrap_fallback=True,
+                owner_kind="platform_hosted",
+                owner_label="Empyralis hosted runtime",
+            )
+
+    _append_hosted_provider_secret_audit(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        provider_id=normalized_provider_id,
+        field=normalized_field,
+        source_kind="missing",
+        source_label=f"{_HOSTED_PROVIDER_SECRET_BUNDLE_ENV}:{normalized_provider_id}.{normalized_field}",
+        tool_name=tool_name,
+        run_id=run_id,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        purpose=purpose,
+        status="denied",
+        denial_code="hosted_provider_secret_missing",
+    )
+    return HostedProviderSecretResolution(
+        provider_id=normalized_provider_id,
+        field=normalized_field,
+        value="",
+        source="missing",
+        source_kind="missing",
+        bootstrap_fallback=False,
+        owner_kind="platform_hosted",
+        owner_label="Empyralis hosted runtime",
+    )
+
+
+def resolve_hosted_openai_bearer(
+    *,
+    tenant_id: Optional[str],
+    workspace_id: Optional[str],
+    fallback_token: Any,
+    fallback_source: Any,
+    tool_name: Optional[str] = None,
+    run_id: Optional[str] = None,
+    actor_type: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    purpose: Optional[str] = None,
+) -> HostedProviderSecretResolution:
+    fallback_token_text = _sanitize_token(fallback_token)
+    fallback_source_text = str(fallback_source or "").strip().lower() or "none"
+    if fallback_token_text:
+        _append_hosted_provider_secret_audit(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            provider_id="openai",
+            field="bearer",
+            source_kind="env_bootstrap",
+            source_label=fallback_source_text,
+            tool_name=tool_name,
+            run_id=run_id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            purpose=purpose,
+            status="allowed",
+        )
+        return HostedProviderSecretResolution(
+            provider_id="openai",
+            field="bearer",
+            value=fallback_token_text,
+            source=fallback_source_text,
+            source_kind="env_bootstrap",
+            bootstrap_fallback=True,
+            owner_kind="platform_hosted",
+            owner_label="Empyralis hosted runtime",
+        )
+
+    bundle_payload = _hosted_bundle_provider_payload("openai")
+    for source_label, field in _HOSTED_OPENAI_BEARER_KEYS:
+        bundle_value = _sanitize_token(bundle_payload.get(field))
+        if not bundle_value:
+            continue
+        _append_hosted_provider_secret_audit(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            provider_id="openai",
+            field=field,
+            source_kind="managed_bundle",
+            source_label=f"{_HOSTED_PROVIDER_SECRET_BUNDLE_ENV}:openai.{field}",
+            tool_name=tool_name,
+            run_id=run_id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            purpose=purpose,
+            status="allowed",
+        )
+        return HostedProviderSecretResolution(
+            provider_id="openai",
+            field=field,
+            value=bundle_value,
+            source=source_label,
+            source_kind="managed_bundle",
+            bootstrap_fallback=False,
+            owner_kind="platform_hosted",
+            owner_label="Empyralis hosted runtime",
+        )
+
+    _append_hosted_provider_secret_audit(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        provider_id="openai",
+        field="bearer",
+        source_kind="missing",
+        source_label=f"{_HOSTED_PROVIDER_SECRET_BUNDLE_ENV}:openai",
+        tool_name=tool_name,
+        run_id=run_id,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        purpose=purpose,
+        status="denied",
+        denial_code="hosted_provider_secret_missing",
+    )
+    return HostedProviderSecretResolution(
+        provider_id="openai",
+        field="bearer",
+        value="",
+        source="none",
+        source_kind="missing",
+        bootstrap_fallback=False,
+        owner_kind="platform_hosted",
+        owner_label="Empyralis hosted runtime",
+    )
 
 
 def _append_secret_access_audit(claims: Dict[str, Any], *, status: str, denial_code: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> None:

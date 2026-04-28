@@ -369,6 +369,9 @@ class BlackboxHarness:
                 "owner_notification_destination": "ops@blackbox.example",
             },
             "commerce_policy": {},
+            "tool_policy": {
+                "enabled_tools": ["web_search"],
+            },
         }
         config = _deep_merge(base_config, config_overrides)
         response = self.client.post(
@@ -478,7 +481,86 @@ class BlackboxHarness:
             },
         )
         assert response.status_code == 200, response.text
-        return response.json()
+        payload = response.json()
+        connector_id = str(payload.get("id") or payload.get("credential_id") or "").strip()
+        if connector_id:
+            self.wait_for_vault_connector(
+                owner=owner,
+                connector_id=connector_id,
+            )
+        return payload
+
+    def wait_for_vault_connector(
+        self,
+        *,
+        owner: Dict[str, Any],
+        connector_id: str,
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        deadline = time.time() + max(1.0, float(timeout_seconds))
+        while time.time() < deadline:
+            response = self.client.get(
+                "/connectors/vault",
+                headers=owner["headers"],
+                params={"workspace_id": owner["workspace_id"]},
+            )
+            assert response.status_code == 200, response.text
+            items = response.json().get("items") or []
+            for item in items:
+                if str((item or {}).get("id") or "").strip() == connector_id:
+                    return item
+            time.sleep(0.2)
+        response = self.client.get(
+            "/connectors/vault",
+            headers=owner["headers"],
+            params={"workspace_id": owner["workspace_id"]},
+        )
+        assert response.status_code == 200, response.text
+        items = response.json().get("items") or []
+        for item in items:
+            if str((item or {}).get("id") or "").strip() == connector_id:
+                return item
+        raise AssertionError({"connector_id": connector_id, "items": items})
+
+    def bind_telegram_connector(
+        self,
+        *,
+        owner: Dict[str, Any],
+        deployed_agent: Dict[str, Any],
+        connector: Dict[str, Any],
+        endpoint_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        channels = dict(deployed_agent.get("channels") or {})
+        telegram = dict(channels.get("telegram") or {})
+        resolved_endpoint_key = str(
+            endpoint_key
+            or telegram.get("endpoint_key")
+            or deployed_agent.get("_endpoint_key")
+            or ""
+        ).strip()
+        connector_id = str(connector.get("id") or connector.get("credential_id") or "").strip()
+        telegram.update(
+            {
+                "enabled": True,
+                "connector_id": connector_id,
+                "credential_id": connector_id,
+                "endpoint_key": resolved_endpoint_key,
+                "is_inbound_owner": True,
+            }
+        )
+        channels["telegram"] = telegram
+        response = self.client.patch(
+            f"/api/deployed-agents/{deployed_agent['id']}",
+            headers=owner["headers"],
+            json={
+                "workspace_id": owner["workspace_id"],
+                "channels": channels,
+            },
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        payload["_endpoint_key"] = resolved_endpoint_key
+        return payload
 
     def create_live_telegram_deployed_agent(
         self,
@@ -497,6 +579,17 @@ class BlackboxHarness:
             or (((deployed_agent.get("channels") or {}).get("telegram") or {}).get("endpoint_key"))
             or ""
         ).strip()
+        connector = self.create_telegram_connector(
+            owner=owner,
+            deployed_agent=deployed_agent,
+            endpoint_key=endpoint_key or None,
+        )
+        deployed_agent = self.bind_telegram_connector(
+            owner=owner,
+            deployed_agent=deployed_agent,
+            connector=connector,
+            endpoint_key=endpoint_key or None,
+        )
         try:
             deployed_agent = self.deploy_deployed_agent(owner=owner, deployed_agent_id=deployed_agent["id"])
         except AssertionError as error:
@@ -507,11 +600,6 @@ class BlackboxHarness:
                 deployed_agent_id=deployed_agent["id"],
                 backing_install_id=str(deployed_agent.get("backing_install_id") or "").strip() or None,
             )
-        connector = self.create_telegram_connector(
-            owner=owner,
-            deployed_agent=deployed_agent,
-            endpoint_key=endpoint_key or None,
-        )
         return {
             "deployed_agent": deployed_agent,
             "connector": connector,
@@ -911,6 +999,8 @@ def _apply_common_runtime_environment(
         monkeypatch.setenv("DATABASE_URL", resolved_database_url)
     monkeypatch.setenv("ORION_ENV", "test")
     monkeypatch.setenv("ORION_JWT_SECRET", "blackbox-jwt-secret")
+    monkeypatch.setenv("EMPYRALIS_SECRETS_BROKER_SECRET", "blackbox-secrets-broker-secret")
+    monkeypatch.setenv("EMPYRALIS_TOOL_BROKER_SECRET", "blackbox-tool-broker-secret")
     monkeypatch.setenv("OPENAI_API_KEY", "blackbox-openai-key")
     monkeypatch.setenv("FRONTEND_ORIGINS", "https://blackbox.example")
     monkeypatch.setenv("EMPYRALIS_PUBLIC_FRONTEND_ORIGIN", "https://blackbox.example")
@@ -920,6 +1010,8 @@ def _apply_common_runtime_environment(
     monkeypatch.setenv("ORION_TELEGRAM_AUTOPILOT_ENABLED", "1")
     monkeypatch.setenv("ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT", "1")
     monkeypatch.setenv("ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE", "webhook")
+    monkeypatch.setenv("ORION_TELEGRAM_AUTOPILOT_SEND_ACK", "1")
+    monkeypatch.setenv("ORION_TELEGRAM_AUTOPILOT_PUBLIC_BASE_URL", "https://blackbox.example")
     monkeypatch.setenv("ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET", webhook_secret)
     monkeypatch.setenv("ORION_WHATSAPP_AUTOPILOT_ENABLED", "0")
     for key, value in dict(extra_env or {}).items():
@@ -991,6 +1083,21 @@ def blackbox_runtime_context(
         "validate_telegram_connector",
         lambda credentials: {"ok": True, "status": 200, "credentials": dict(credentials or {})},
     )
+
+    def _fake_connector_http_json_request(url: str, *, method: str = "GET", payload=None, timeout=None, **_kwargs):
+        if "/setWebhook" in str(url):
+            return {"status": 200, "json": {"ok": True, "result": True}}
+        if "/getWebhookInfo" in str(url):
+            return {
+                "status": 200,
+                "json": {
+                    "ok": True,
+                    "result": {"url": str((payload or {}).get("url") or "")},
+                },
+            }
+        raise AssertionError(f"Unexpected connector HTTP request in black-box runtime: {method} {url}")
+
+    active_monkeypatch.setattr(connectors_actions_module, "http_json_request", _fake_connector_http_json_request)
     active_monkeypatch.setattr(
         runs_engine_module,
         "resolve_provider_adapter",
@@ -1023,6 +1130,8 @@ def blackbox_runtime_context(
     )
     active_monkeypatch.setattr(autopilot_runtime_exports_module, "ORION_TELEGRAM_AUTOPILOT_ENABLED", True, raising=False)
     active_monkeypatch.setattr(autopilot_runtime_exports_module, "ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE", "webhook", raising=False)
+    active_monkeypatch.setattr(autopilot_runtime_exports_module, "ORION_TELEGRAM_AUTOPILOT_SEND_ACK", True, raising=False)
+    active_monkeypatch.setattr(connectors_actions_module, "ORION_TELEGRAM_AUTOPILOT_SEND_ACK", True, raising=False)
     active_monkeypatch.setattr(
         autopilot_runtime_exports_module,
         "ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET",

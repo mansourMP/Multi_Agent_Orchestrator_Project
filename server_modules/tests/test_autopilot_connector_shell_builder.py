@@ -1,7 +1,8 @@
 import unittest
 from unittest.mock import patch
+import importlib
 
-from server_modules.connectors.autopilot_connector_shell_builder import build_autopilot_connector_shell_service
+from server_modules.connectors import autopilot_connector_shell_builder
 
 
 class _FakeShellService:
@@ -10,12 +11,19 @@ class _FakeShellService:
 
 
 class AutopilotConnectorShellBuilderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global autopilot_connector_shell_builder
+
+        autopilot_connector_shell_builder = importlib.import_module(
+            "server_modules.connectors.autopilot_connector_shell_builder"
+        )
+
     def test_builder_keeps_late_bound_runtime_callbacks(self) -> None:
         namespace: dict[str, object] = {
             "_normalize_workspace_id": lambda value: f"ws:{value}",
         }
 
-        built = build_autopilot_connector_shell_service(
+        built = autopilot_connector_shell_builder.build_autopilot_connector_shell_service(
             global_namespace=namespace,
             sync_server_globals=("X",),
             server_getter=lambda: None,
@@ -49,7 +57,7 @@ class AutopilotConnectorShellBuilderTests(unittest.TestCase):
             raise AssertionError(f"unexpected import {module_name}.{attr_name}")
 
         with patch("server_modules.connectors.autopilot_connector_shell_builder._import_attr", side_effect=fake_import_attr):
-            built = build_autopilot_connector_shell_service(
+            built = autopilot_connector_shell_builder.build_autopilot_connector_shell_service(
                 global_namespace=namespace,
                 sync_server_globals=("X",),
                 server_getter=lambda: None,

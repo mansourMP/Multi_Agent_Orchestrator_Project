@@ -57,7 +57,7 @@ from server_modules.channel_memory_overlay_service import (
     apply_memory_overlay,
     persist_snapshot,
 )
-from server_modules.channel_owner_resolution_service import resolve_public_channel_owner
+from server_modules import channel_owner_resolution_service
 from server_modules.channel_preflight_service import assert_inbound_allowed
 from server_modules.channel_quota_policy_service import check_daily_limit
 from server_modules.channel_routing_models import ChannelExecutionResult, ChannelRoutingContext
@@ -79,6 +79,13 @@ from server_modules.channel_turn_request_service import (
     context_to_compat_dict,
     coerce_dict,
 )
+
+
+async def resolve_public_channel_owner(**kwargs):
+    channel_owner_resolution_service.agent_specialist_repository = agent_specialist_repository
+    channel_owner_resolution_service.deployed_agent_service = deployed_agent_service
+    channel_owner_resolution_service.agent_registry_repository = agent_registry_repository
+    return await channel_owner_resolution_service.resolve_public_channel_owner(**kwargs)
 
 
 def _merge_degraded_notice(

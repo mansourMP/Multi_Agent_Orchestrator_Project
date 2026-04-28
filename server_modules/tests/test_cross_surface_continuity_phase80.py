@@ -24,6 +24,12 @@ class _Request:
 
 @contextmanager
 def _isolated_modules(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    global auth_module
+    global channel_pairing_service_module
+    global control_plane_repository_module
+    global db_module
+    global jwt_secret_module
+
     tracked_keys = (
         "EMPYRALIS_STATE_HOME",
         "EMPYRALIS_JWT_SECRET_FILE",
@@ -40,6 +46,11 @@ def _isolated_modules(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     for key in ("ORION_JWT_SECRET", "JWT_SECRET", "ORION_API_KEY", "RUNTIME_KEY"):
         monkeypatch.delenv(key, raising=False)
+    db_module = importlib.import_module("server_modules.db")
+    control_plane_repository_module = importlib.import_module("server_modules.control_plane_repository")
+    jwt_secret_module = importlib.import_module("server_modules.jwt_secret")
+    auth_module = importlib.import_module("server_modules.auth")
+    channel_pairing_service_module = importlib.import_module("server_modules.channel_pairing_service")
     runtime_db = importlib.reload(db_module)
     runtime_db._POOLS_BY_LOOP.clear()
     runtime_db._ENV_DSN_LOADED = True
@@ -57,6 +68,11 @@ def _isolated_modules(monkeypatch: pytest.MonkeyPatch, tmp_path):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+        db_module = importlib.import_module("server_modules.db")
+        control_plane_repository_module = importlib.import_module("server_modules.control_plane_repository")
+        jwt_secret_module = importlib.import_module("server_modules.jwt_secret")
+        auth_module = importlib.import_module("server_modules.auth")
+        channel_pairing_service_module = importlib.import_module("server_modules.channel_pairing_service")
         runtime_db = importlib.reload(db_module)
         runtime_db._POOLS_BY_LOOP.clear()
         importlib.reload(jwt_secret_module)

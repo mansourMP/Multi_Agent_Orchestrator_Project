@@ -1,35 +1,86 @@
+import importlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from typing import Any, Dict
 
 from server_modules import notification_service
 from server_modules import outbox_service
 from server_modules import runtime_state_store
 
 
+def _workspace_access_entry(*, workspace_id: str, tenant_id: str, role: str) -> Dict[str, Any]:
+    return {
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "tenant_role": role,
+        "role": role,
+        "capabilities": {"allow": [], "deny": []},
+        "tenant_capabilities": {"allow": [], "deny": []},
+        "workspace_capabilities": {"allow": [], "deny": []},
+        "dangerous_action_classes": {"allow": [], "deny": []},
+        "tenant_dangerous_action_classes": {"allow": [], "deny": []},
+        "workspace_dangerous_action_classes": {"allow": [], "deny": []},
+        "connectors": {"allow": [], "deny": []},
+        "tenant_connectors": {"allow": [], "deny": []},
+        "workspace_connectors": {"allow": [], "deny": []},
+        "machine_enrollment_scope": "workspace",
+        "trusted_owner_machine_ids": [],
+        "owner_user_id": "user-1",
+        "owner_email": "user@example.com",
+    }
+
+
+def _current_user(*, workspace_id: str, tenant_id: str, role: str = "owner") -> Dict[str, Any]:
+    return {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "email": "user@example.com",
+        "role": role,
+        "is_admin": role == "owner",
+        "identity_versions": {"membership_version": 1},
+        "workspace_access": {
+            workspace_id: _workspace_access_entry(workspace_id=workspace_id, tenant_id=tenant_id, role=role),
+        },
+    }
+
+
 class NotificationServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global notification_service, outbox_service, runtime_state_store
+        notification_service = importlib.import_module("server_modules.notification_service")
+        outbox_service = importlib.import_module("server_modules.outbox_service")
+        runtime_state_store = importlib.import_module("server_modules.runtime_state_store")
+
     def test_register_notification_device_denies_push_gracefully_when_plan_disables_it(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             db_path = Path(tempdir) / "runtime-state.sqlite3"
             runtime_state_store.init_runtime_state_db(db_path)
 
-            result = notification_service.register_notification_device(
-                current_user={
-                    "auth_type": "bearer",
-                    "user_id": "user-1",
-                    "role": "owner",
-                    "workspace_access": {
-                        "workspace-1": {"tenant_id": "tenant-1", "role": "owner"},
-                    },
+            with patch(
+                "server_modules.auth.enforce_workspace_access",
+                return_value="workspace-1",
+            ), patch(
+                "server_modules.auth.workspace_tenant_id",
+                return_value="tenant-1",
+            ), patch(
+                "server_modules.notification_service.billing_service.workspace_billing_summary_for_workspace_id",
+                return_value={
+                    "workspace_id": "workspace-1",
+                    "tenant_id": "tenant-1",
+                    "subscription": {"metadata": {"source": "workspace_default"}},
                 },
-                workspace_id="workspace-1",
-                device_id="device-1",
-                push_token="ExponentPushToken[test]",
-                workspace={"metadata": {"billing": {"plan": "free"}}},
-                db_path=db_path,
-            )
+            ):
+                result = notification_service.register_notification_device(
+                    current_user=_current_user(workspace_id="workspace-1", tenant_id="tenant-1"),
+                    workspace_id="workspace-1",
+                    device_id="device-1",
+                    push_token="ExponentPushToken[test]",
+                    workspace={"metadata": {"billing": {"plan": "free"}}},
+                    db_path=db_path,
+                )
 
             self.assertFalse(result["ok"])
             self.assertEqual(result["reason"], "mobile_push_unavailable")
@@ -86,18 +137,17 @@ class NotificationServiceTests(unittest.TestCase):
 
             self.assertIsNotNone(notification)
             with patch(
+                "server_modules.auth.enforce_workspace_access",
+                return_value="workspace-1",
+            ), patch(
+                "server_modules.auth.workspace_tenant_id",
+                return_value="tenant-1",
+            ), patch(
                 "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
                 return_value={"capabilities": {"history_window_days": 30}},
             ):
                 payload = notification_service.list_notification_payload(
-                    current_user={
-                        "auth_type": "bearer",
-                        "user_id": "user-1",
-                        "role": "owner",
-                        "workspace_access": {
-                            "workspace-1": {"tenant_id": "tenant-1", "role": "owner"},
-                        },
-                    },
+                    current_user=_current_user(workspace_id="workspace-1", tenant_id="tenant-1"),
                     limit=10,
                     tenant_id="tenant-1",
                     workspace_id="workspace-1",
@@ -138,16 +188,15 @@ class NotificationServiceTests(unittest.TestCase):
                     "metadata": {"path": "/runs/run-1"},
                 },
             )
-            current_user = {
-                "auth_type": "bearer",
-                "user_id": "user-1",
-                "role": "owner",
-                "workspace_access": {
-                    workspace_id: {"tenant_id": tenant_id, "role": "owner"},
-                },
-            }
+            current_user = _current_user(workspace_id=workspace_id, tenant_id=tenant_id)
 
             with patch(
+                "server_modules.auth.enforce_workspace_access",
+                return_value=workspace_id,
+            ), patch(
+                "server_modules.auth.workspace_tenant_id",
+                return_value=tenant_id,
+            ), patch(
                 "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
                 return_value={"capabilities": {"history_window_days": 30}},
             ):
@@ -173,6 +222,12 @@ class NotificationServiceTests(unittest.TestCase):
             self.assertEqual(marked["marked_count"], 1)
 
             with patch(
+                "server_modules.auth.enforce_workspace_access",
+                return_value=workspace_id,
+            ), patch(
+                "server_modules.auth.workspace_tenant_id",
+                return_value=tenant_id,
+            ), patch(
                 "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
                 return_value={"capabilities": {"history_window_days": 30}},
             ):
@@ -240,6 +295,12 @@ class NotificationServiceTests(unittest.TestCase):
             }
 
             with patch("server_modules.notification_service.time.time", return_value=1775865600.0), patch(
+                "server_modules.auth.enforce_workspace_access",
+                return_value=workspace_id,
+            ), patch(
+                "server_modules.auth.workspace_tenant_id",
+                return_value=tenant_id,
+            ), patch(
                 "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
                 return_value={"capabilities": {"history_window_days": 7}},
             ):
@@ -276,14 +337,7 @@ class NotificationServiceTests(unittest.TestCase):
                     "metadata": {"path": "/approvals"},
                 },
             )
-            current_user = {
-                "auth_type": "bearer",
-                "user_id": "user-1",
-                "role": "owner",
-                "workspace_access": {
-                    "workspace-1": {"tenant_id": "tenant-1", "role": "owner"},
-                },
-            }
+            current_user = _current_user(workspace_id="workspace-1", tenant_id="tenant-1")
 
             with patch(
                 "server_modules.notification_service.activity_ledger_service.list_notification_feed_items_sync",
@@ -304,6 +358,12 @@ class NotificationServiceTests(unittest.TestCase):
                         "metadata": {"path": "/approvals", "detail_level": "feed_summary"},
                     }
                 ],
+            ), patch(
+                "server_modules.auth.enforce_workspace_access",
+                return_value="workspace-1",
+            ), patch(
+                "server_modules.auth.workspace_tenant_id",
+                return_value="tenant-1",
             ), patch(
                 "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
                 return_value={"capabilities": {"history_window_days": 30}},

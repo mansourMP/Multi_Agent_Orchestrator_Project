@@ -36,6 +36,7 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "free": {
         "label": "Free",
         "hosted_runtime_enabled": False,
+        "hosted_ai_enabled": False,
         "hosted_runtime_minutes_monthly": 0,
         "concurrent_hosted_executions": 0,
         "background_event_triggers_per_hour": 2,
@@ -63,6 +64,7 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "pro": {
         "label": "Pro",
         "hosted_runtime_enabled": True,
+        "hosted_ai_enabled": True,
         "hosted_runtime_minutes_monthly": 1_500,
         "concurrent_hosted_executions": 4,
         "background_event_triggers_per_hour": 8,
@@ -88,6 +90,10 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "whatsapp_channel_enabled": True,
     },
 }
+
+HOSTED_SAGE_AI_POLICIES = {"disabled", "owner_opt_in", "enabled_with_cap"}
+DEFAULT_HOSTED_SAGE_AI_POLICY = "owner_opt_in"
+DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 5.0
 
 
 class EntitlementError(RuntimeError):
@@ -162,6 +168,22 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     return bool(default)
 
 
+def _coerce_non_negative_float(value: Any, default: float) -> float:
+    parsed = _coerce_float(value)
+    if parsed is None:
+        parsed = float(default)
+    if parsed < 0:
+        return 0.0
+    return float(parsed)
+
+
+def _normalize_hosted_sage_ai_policy(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in HOSTED_SAGE_AI_POLICIES:
+        return token
+    return DEFAULT_HOSTED_SAGE_AI_POLICY
+
+
 def normalize_plan_id(value: Any) -> str:
     token = str(value or "").strip().lower()
     if token in PLAN_ALIASES:
@@ -171,17 +193,25 @@ def normalize_plan_id(value: Any) -> str:
 
 def _workspace_entitlement_metadata(workspace: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     metadata = _coerce_dict(_coerce_dict(workspace).get("metadata"))
+    admin_defaults = _coerce_dict(metadata.get("admin_defaults"))
+    if isinstance(admin_defaults.get("payload"), dict):
+        admin_defaults = _coerce_dict(admin_defaults.get("payload"))
     return {
         **_coerce_dict(metadata.get("entitlements")),
         **_coerce_dict(metadata.get("billing")),
+        **admin_defaults,
     }
 
 
 def _install_entitlement_metadata(install: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     metadata = _coerce_dict(_coerce_dict(install).get("metadata"))
+    admin_defaults = _coerce_dict(metadata.get("admin_defaults"))
+    if isinstance(admin_defaults.get("payload"), dict):
+        admin_defaults = _coerce_dict(admin_defaults.get("payload"))
     return {
         **_coerce_dict(metadata.get("entitlements")),
         **_coerce_dict(metadata.get("billing")),
+        **admin_defaults,
     }
 
 
@@ -283,6 +313,22 @@ def resolve_workspace_entitlement_state(
     entitlements = dict(PLAN_DEFINITIONS[plan_id])
     entitlements.update(_coerce_dict(workspace_meta.get("overrides")))
     entitlements.update(_coerce_dict(install_meta.get("overrides")))
+    entitlements["hosted_sage_ai_policy"] = _normalize_hosted_sage_ai_policy(
+        install_meta.get("hosted_sage_ai_policy")
+        or workspace_meta.get("hosted_sage_ai_policy")
+        or entitlements.get("hosted_sage_ai_policy")
+        or DEFAULT_HOSTED_SAGE_AI_POLICY
+    )
+    entitlements["hosted_sage_ai_monthly_cap_usd"] = _coerce_non_negative_float(
+        install_meta.get("hosted_sage_ai_monthly_cap_usd")
+        if install_meta.get("hosted_sage_ai_monthly_cap_usd") is not None
+        else workspace_meta.get("hosted_sage_ai_monthly_cap_usd")
+        if workspace_meta.get("hosted_sage_ai_monthly_cap_usd") is not None
+        else entitlements.get("hosted_sage_ai_monthly_cap_usd")
+        if entitlements.get("hosted_sage_ai_monthly_cap_usd") is not None
+        else DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD,
+        DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD,
+    )
     if _mobile_beta_override_enabled(workspace=workspace, install=install):
         entitlements["mobile_app_enabled"] = True
     source = "workspace_metadata"
@@ -323,6 +369,92 @@ def resolve_workspace_entitlement_state_for_workspace_id(
     return resolve_workspace_entitlement_state(workspace=resolved_workspace, install=install)
 
 
+def hosted_sage_ai_access_state(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+    state: Optional[WorkspaceEntitlementState] = None,
+) -> Dict[str, Any]:
+    resolved_state = state or resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    entitlements = resolved_state.entitlements
+    usage = resolved_state.usage
+
+    plan_allows_hosted_ai = bool(entitlements.get("hosted_ai_enabled"))
+    policy = _normalize_hosted_sage_ai_policy(entitlements.get("hosted_sage_ai_policy"))
+    monthly_cap_usd = _coerce_non_negative_float(
+        entitlements.get("hosted_sage_ai_monthly_cap_usd"),
+        DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD,
+    )
+    monthly_cost_usd = _coerce_non_negative_float(usage.get("hosted_sage_cost_usd_monthly"), 0.0)
+    remaining_usd = max(0.0, round(monthly_cap_usd - monthly_cost_usd, 6))
+
+    if not plan_allows_hosted_ai:
+        return {
+            "allowed": False,
+            "plan_allows_hosted_ai": False,
+            "policy": "disabled",
+            "monthly_cap_usd": monthly_cap_usd,
+            "monthly_cost_usd": monthly_cost_usd,
+            "monthly_remaining_usd": remaining_usd,
+            "reason": "policy_disabled",
+            "message": "Empyralis-hosted AI is not included in this workspace plan.",
+        }
+    if policy == "disabled":
+        return {
+            "allowed": False,
+            "plan_allows_hosted_ai": True,
+            "policy": policy,
+            "monthly_cap_usd": monthly_cap_usd,
+            "monthly_cost_usd": monthly_cost_usd,
+            "monthly_remaining_usd": remaining_usd,
+            "reason": "policy_disabled",
+            "message": "Hosted Sage AI is disabled for this workspace.",
+        }
+    if policy == "owner_opt_in":
+        return {
+            "allowed": False,
+            "plan_allows_hosted_ai": True,
+            "policy": policy,
+            "monthly_cap_usd": monthly_cap_usd,
+            "monthly_cost_usd": monthly_cost_usd,
+            "monthly_remaining_usd": remaining_usd,
+            "reason": "owner_approval_required",
+            "message": "Hosted Sage AI needs owner approval before this workspace can use it.",
+        }
+    if monthly_cost_usd >= monthly_cap_usd:
+        return {
+            "allowed": False,
+            "plan_allows_hosted_ai": True,
+            "policy": policy,
+            "monthly_cap_usd": monthly_cap_usd,
+            "monthly_cost_usd": monthly_cost_usd,
+            "monthly_remaining_usd": remaining_usd,
+            "reason": "cap_reached",
+            "message": "Hosted Sage AI monthly cap is reached for this workspace.",
+        }
+    return {
+        "allowed": True,
+        "plan_allows_hosted_ai": True,
+        "policy": policy,
+        "monthly_cap_usd": monthly_cap_usd,
+        "monthly_cost_usd": monthly_cost_usd,
+        "monthly_remaining_usd": remaining_usd,
+        "reason": None,
+        "message": None,
+    }
+
+
+def hosted_sage_ai_access_state_for_workspace_id(
+    *,
+    workspace_id: str,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_workspace = dict(workspace) if isinstance(workspace, dict) else _load_workspace_record(workspace_id)
+    state = resolve_workspace_entitlement_state(workspace=resolved_workspace, install=install)
+    return hosted_sage_ai_access_state(state=state)
+
+
 def workspace_capability_flags(
     *,
     workspace: Optional[Dict[str, Any]] = None,
@@ -331,8 +463,15 @@ def workspace_capability_flags(
 ) -> Dict[str, Any]:
     resolved_state = state or resolve_workspace_entitlement_state(workspace=workspace, install=install)
     entitlements = resolved_state.entitlements
+    hosted_state = hosted_sage_ai_access_state(state=resolved_state)
     history_window_days = max(1, _coerce_int(entitlements.get("sync_depth_days"), 30))
     return {
+        "hosted_ai_enabled": bool(hosted_state.get("allowed")),
+        "hosted_sage_ai_policy": str(hosted_state.get("policy") or DEFAULT_HOSTED_SAGE_AI_POLICY),
+        "hosted_sage_ai_monthly_cap_usd": float(hosted_state.get("monthly_cap_usd") or 0.0),
+        "hosted_sage_ai_monthly_cost_usd": float(hosted_state.get("monthly_cost_usd") or 0.0),
+        "hosted_sage_ai_monthly_remaining_usd": float(hosted_state.get("monthly_remaining_usd") or 0.0),
+        "hosted_sage_ai_reason": hosted_state.get("reason"),
         "mobile_app_enabled": bool(entitlements.get("mobile_app_enabled")),
         "mobile_push_enabled": bool(entitlements.get("mobile_push_enabled")),
         "approvals_enabled": bool(entitlements.get("approvals_enabled")),
@@ -352,6 +491,34 @@ def workspace_capability_flags(
     }
 
 
+def hosted_ai_enabled(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+    state: Optional[WorkspaceEntitlementState] = None,
+) -> bool:
+    hosted_state = hosted_sage_ai_access_state(
+        workspace=workspace,
+        install=install,
+        state=state,
+    )
+    return bool(hosted_state.get("allowed"))
+
+
+def hosted_ai_enabled_for_workspace_id(
+    *,
+    workspace_id: str,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> bool:
+    hosted_state = hosted_sage_ai_access_state_for_workspace_id(
+        workspace_id=workspace_id,
+        workspace=workspace,
+        install=install,
+    )
+    return bool(hosted_state.get("allowed"))
+
+
 def workspace_entitlement_payload(
     *,
     workspace: Optional[Dict[str, Any]] = None,
@@ -359,9 +526,11 @@ def workspace_entitlement_payload(
     state: Optional[WorkspaceEntitlementState] = None,
 ) -> Dict[str, Any]:
     resolved_state = state or resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    hosted_state = hosted_sage_ai_access_state(state=resolved_state)
     return {
         **resolved_state.as_dict(),
         "capabilities": workspace_capability_flags(state=resolved_state),
+        "hosted_sage_ai": hosted_state,
     }
 
 
@@ -590,6 +759,31 @@ def enforce_hosted_runtime_access(
             "concurrent_hosted_executions": active_hosted,
         },
         "enforcement_target": "managed_cloud",
+    }
+
+
+def enforce_hosted_ai_access(
+    *,
+    workspace: Optional[Dict[str, Any]],
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    state = resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    hosted_state = hosted_sage_ai_access_state(state=state)
+    if not bool(hosted_state.get("allowed")):
+        reason = str(hosted_state.get("reason") or "hosted_ai_unavailable").strip() or "hosted_ai_unavailable"
+        reason_code = {
+            "policy_disabled": "hosted_ai_policy_disabled",
+            "owner_approval_required": "hosted_ai_owner_approval_required",
+            "cap_reached": "hosted_ai_cap_reached",
+        }.get(reason, "hosted_ai_unavailable")
+        raise EntitlementDeniedError(
+            reason=reason_code,
+            message=str(hosted_state.get("message") or "Empyralis-hosted AI is not enabled for this workspace."),
+            entitlement_state=workspace_entitlement_payload(state=state),
+        )
+    return {
+        **workspace_entitlement_payload(state=state),
+        "hosted_sage_ai": hosted_state,
     }
 
 

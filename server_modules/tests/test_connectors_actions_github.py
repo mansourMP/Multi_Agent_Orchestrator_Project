@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import importlib
 import json
 import unittest
 from unittest.mock import patch
@@ -45,6 +46,11 @@ def _signed_headers(body: bytes, secret: str, *, event_type: str = "push", deliv
 
 
 class GithubWebhookVerificationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        global connectors_actions
+
+        connectors_actions = importlib.import_module("server_modules.connectors_actions")
+
     async def test_github_webhook_rejects_missing_secret_configuration(self):
         body = _body_bytes({"repository": {"full_name": "acme/api"}})
         request = _request_from_body(body, headers=_signed_headers(body, "secret-1"))

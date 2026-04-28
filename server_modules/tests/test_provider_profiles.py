@@ -65,6 +65,52 @@ class ProviderProfilesTests(unittest.TestCase):
         self.assertAlmostEqual(models["deepseek-reasoner"]["input_cost_per_1k_usd"], 0.00028, places=8)
         self.assertAlmostEqual(models["deepseek-reasoner"]["output_cost_per_1k_usd"], 0.00042, places=8)
 
+    def test_ollama_model_catalog_marks_local_models_as_tool_capable(self) -> None:
+        models = {
+            item["id"]: item
+            for item in provider_profiles.provider_model_catalog("ollama")
+        }
+
+        self.assertTrue(models["llama3.2"]["supports_tools"])
+        self.assertIn("Tools", models["llama3.2"]["capability_labels"])
+        self.assertTrue(models["phi3"]["supports_tools"])
+        self.assertIn("Tools", models["phi3"]["capability_labels"])
+
+    def test_workspace_connection_truth_treats_ollama_as_local_runtime_not_workspace_setup(self) -> None:
+        payload = provider_profiles.build_workspace_provider_connection_truth("default")
+        ollama = next(item for item in payload["providers"] if item["id"] == "ollama")
+
+        self.assertEqual(ollama["connection_scope"], "machine")
+        self.assertEqual(ollama["identity_owner"], "local_machine")
+        self.assertEqual(ollama["active_source"], "local_runtime")
+        self.assertTrue(ollama["configured"])
+
+    def test_runtime_truth_treats_ollama_as_local_machine_not_platform_hosted(self) -> None:
+        with patch("server_modules.provider_profiles.ollama_local_status", return_value={"reachable": True, "has_models": True, "models": ["qwen2.5:1.5b"], "error": ""}), patch(
+            "server_modules.provider_profiles.workspace_live_gateway_available",
+            return_value=True,
+        ):
+            payload = provider_profiles.build_provider_runtime_truth("default")
+        ollama = next(item for item in payload["providers"] if item["id"] == "ollama")
+
+        self.assertEqual(ollama["identity_owner"], "local_machine")
+        self.assertEqual(ollama["identity_owner_label"], "Local machine")
+        self.assertEqual(ollama["connection_scope"], "machine")
+        self.assertEqual(ollama["active_source"], "local-ollama")
+        self.assertTrue(ollama["configured"])
+
+    def test_runtime_truth_marks_ollama_gateway_requirement_when_local_gateway_is_offline(self) -> None:
+        with patch("server_modules.provider_profiles.ollama_local_status", return_value={"reachable": True, "has_models": True, "models": ["qwen2.5:1.5b"], "error": ""}), patch(
+            "server_modules.provider_profiles.workspace_live_gateway_available",
+            return_value=False,
+        ):
+            payload = provider_profiles.build_provider_runtime_truth("default")
+
+        ollama = next(item for item in payload["providers"] if item["id"] == "ollama")
+        self.assertEqual(ollama["state"], "configured")
+        self.assertEqual(ollama["issue_code"], "local_gateway_required")
+        self.assertFalse(ollama["usable"])
+
     def test_build_masked_usage_falls_back_to_deepseek_provider_rates(self) -> None:
         usage = provider_profiles.build_masked_usage(
             "deepseek",

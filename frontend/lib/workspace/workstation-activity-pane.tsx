@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Pencil, Pin, Plus, Trash2 } from 'lucide-react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
@@ -31,6 +31,8 @@ type SageMemoryDraft = {
   pinned: boolean;
 };
 
+type MemorySensitivityClass = 'green' | 'yellow' | 'orange' | 'red';
+
 const memoryPaneCache = new Map<string, SageMemorySnapshot>();
 
 const DEFAULT_MEMORY_CATEGORIES: readonly SageMemoryCategoryRecord[] = [
@@ -39,6 +41,17 @@ const DEFAULT_MEMORY_CATEGORIES: readonly SageMemoryCategoryRecord[] = [
   { id: 'app_state', label: 'App state' },
   { id: 'saved_preference', label: 'Saved preferences' },
 ] as const;
+
+const MEMORY_SENSITIVITY_ORDER: readonly MemorySensitivityClass[] = ['green', 'yellow', 'orange', 'red'] as const;
+
+const MEMORY_SENSITIVITY_LABELS: Record<MemorySensitivityClass, string> = {
+  green: 'Green',
+  yellow: 'Yellow',
+  orange: 'Orange',
+  red: 'Red',
+};
+
+const MEMORY_ITEM_LIMIT = 50;
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -122,6 +135,36 @@ function formatMemoryTimestamp(value: string | null): string | null {
   });
 }
 
+function inferMemorySensitivity(entry: WorkstationSageMemoryRecord): MemorySensitivityClass {
+  const metadata = entry.metadata && typeof entry.metadata === 'object'
+    ? entry.metadata as Record<string, unknown>
+    : {};
+  const explicit = readString(
+    entry.sensitivity_class
+    ?? entry.classification
+    ?? metadata.sensitivity_class
+    ?? metadata.sensitivity,
+  ).toLowerCase();
+  if (explicit === 'green' || explicit === 'yellow' || explicit === 'orange' || explicit === 'red') {
+    return explicit;
+  }
+  const category = readString(entry.category).toLowerCase();
+  if (category === 'profile_fact' || category === 'saved_preference') {
+    return 'green';
+  }
+  if (category === 'project_context') {
+    return 'yellow';
+  }
+  if (category === 'app_state') {
+    return 'orange';
+  }
+  const content = `${readString(entry.title)} ${readString(entry.content)}`.toLowerCase();
+  if (/(api key|token|password|secret|credential|ssh|private)/i.test(content)) {
+    return 'red';
+  }
+  return 'yellow';
+}
+
 export function WorkstationActivityPane() {
   const { workspaceId } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
@@ -183,6 +226,15 @@ export function WorkstationActivityPane() {
     () => new Map(snapshot.categories.map((category) => [readString(category.id), readString(category.label)])),
     [snapshot.categories],
   );
+  const groupedMemoryItems = useMemo(() => {
+    const grouped = new Map<MemorySensitivityClass, WorkstationSageMemoryRecord[]>(
+      MEMORY_SENSITIVITY_ORDER.map((sensitivity) => [sensitivity, []]),
+    );
+    snapshot.items.forEach((entry) => {
+      grouped.get(inferMemorySensitivity(entry))?.push(entry);
+    });
+    return grouped;
+  }, [snapshot.items]);
 
   const openCreateMemory = () => {
     setMemoryDraft(defaultMemoryDraft());
@@ -229,10 +281,12 @@ export function WorkstationActivityPane() {
           pinned: memoryDraft.pinned,
         });
       const nextSnapshot = normalizeMemorySnapshot(payload);
-      setSnapshot({
+      const normalizedSnapshot = {
         ...nextSnapshot,
         items: sortMemoryEntries(nextSnapshot.items),
-      });
+      };
+      memoryPaneCache.set(workspaceId, normalizedSnapshot);
+      setSnapshot(normalizedSnapshot);
       setIsMemorySheetOpen(false);
       setMemoryDraft(defaultMemoryDraft(category));
       setStatusMessage(memoryDraft.entryId ? 'Memory corrected.' : 'Memory saved.');
@@ -256,10 +310,12 @@ export function WorkstationActivityPane() {
         pinned: !Boolean(entry.pinned),
       });
       const nextSnapshot = normalizeMemorySnapshot(payload);
-      setSnapshot({
+      const normalizedSnapshot = {
         ...nextSnapshot,
         items: sortMemoryEntries(nextSnapshot.items),
-      });
+      };
+      memoryPaneCache.set(workspaceId, normalizedSnapshot);
+      setSnapshot(normalizedSnapshot);
     } catch (pinError) {
       setError(pinError instanceof Error ? pinError.message : 'Could not update memory pin state.');
     } finally {
@@ -278,10 +334,12 @@ export function WorkstationActivityPane() {
         entryId: pendingDeleteMemoryId,
       });
       const nextSnapshot = normalizeMemorySnapshot(payload);
-      setSnapshot({
+      const normalizedSnapshot = {
         ...nextSnapshot,
         items: sortMemoryEntries(nextSnapshot.items),
-      });
+      };
+      memoryPaneCache.set(workspaceId, normalizedSnapshot);
+      setSnapshot(normalizedSnapshot);
       setPendingDeleteMemoryId(null);
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : 'Could not forget memory.');
@@ -294,7 +352,9 @@ export function WorkstationActivityPane() {
     <WorkstationSurfaceRoot surface="activity">
       <main className="app-memory-minimal-page" data-workstation-surface="memory-minimal">
         <div className="app-memory-minimal-page__header">
-          <div />
+          <div className="app-memory-minimal-page__counter">
+            {`${Math.min(snapshot.items.length, MEMORY_ITEM_LIMIT)}/${MEMORY_ITEM_LIMIT} memories`}
+          </div>
           <button
             type="button"
             className="app-memory-minimal-page__add"
@@ -322,69 +382,63 @@ export function WorkstationActivityPane() {
           />
         ) : (
           <div className="app-memory-minimal-list">
-            {snapshot.items.map((entry) => {
-              const entryId = readString(entry.id);
-              const busy = mutatingMemory === entryId;
-              const categoryLabel = categoryLabels.get(readString(entry.category)) || 'Saved memory';
-              const updatedLabel = formatMemoryTimestamp(readString(entry.updated_at) || readString(entry.created_at) || null);
+            {MEMORY_SENSITIVITY_ORDER.map((sensitivity) => {
+              const items = groupedMemoryItems.get(sensitivity) ?? [];
+              if (items.length === 0) {
+                return null;
+              }
               return (
-                <article key={entryId || `memory-${readString(entry.title)}`} className="app-memory-minimal-entry">
-                  <div className="app-memory-minimal-entry__row">
-                    <div className="app-memory-minimal-entry__copy">
-                      <div className="app-memory-minimal-entry__meta">
-                        <span className="app-memory-minimal-entry__category">{categoryLabel}</span>
-                        {Boolean(entry.pinned) ? (
-                          <span className="app-memory-minimal-entry__badge">Pinned</span>
-                        ) : null}
-                        {updatedLabel ? (
-                          <time className="app-memory-minimal-entry__timestamp" dateTime={readString(entry.updated_at) || readString(entry.created_at) || undefined}>
-                            {updatedLabel}
-                          </time>
-                        ) : null}
-                      </div>
-                      <div className="app-memory-minimal-entry__title">{readString(entry.title) || 'Saved memory'}</div>
-                      <p className="app-memory-minimal-entry__content">{readString(entry.content) || 'No memory content recorded.'}</p>
-                    </div>
-                    <div className="app-memory-minimal-entry__actions">
-                      <button
-                        type="button"
-                        className="app-memory-minimal-entry__action"
-                        disabled={busy}
-                        onClick={() => {
-                          void togglePinned(entry);
-                        }}
-                        aria-label={Boolean(entry.pinned) ? 'Unpin memory' : 'Pin memory'}
-                        title={Boolean(entry.pinned) ? 'Unpin memory' : 'Pin memory'}
-                      >
-                        <Pin size={16} strokeWidth={1.9} aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="app-memory-minimal-entry__action"
-                        disabled={busy}
-                        onClick={() => {
-                          openEditMemory(entry);
-                        }}
-                        aria-label="Edit memory"
-                        title="Edit memory"
-                      >
-                        <Pencil size={16} strokeWidth={1.9} aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="app-memory-minimal-entry__action app-memory-minimal-entry__action--danger"
-                        disabled={busy}
-                        onClick={() => {
-                          setPendingDeleteMemoryId(entryId);
-                        }}
-                        aria-label="Delete memory"
-                        title="Delete memory"
-                      >
-                        <Trash2 size={16} strokeWidth={1.9} aria-hidden="true" />
-                      </button>
-                    </div>
+                <section key={sensitivity} className="app-memory-minimal-group">
+                  <div className="app-memory-minimal-group__label">
+                    <span
+                      className={`app-memory-minimal-group__dot app-memory-minimal-group__dot--${sensitivity}`}
+                      aria-hidden="true"
+                    />
+                    <span>{MEMORY_SENSITIVITY_LABELS[sensitivity]}</span>
+                    <span className="app-memory-minimal-group__count">{items.length}</span>
                   </div>
-                </article>
+                  <div className="app-memory-minimal-group__list">
+                    {items.map((entry) => {
+                      const entryId = readString(entry.id);
+                      const busy = mutatingMemory === entryId;
+                      const categoryLabel = categoryLabels.get(readString(entry.category)) || 'Saved memory';
+                      const updatedLabel = formatMemoryTimestamp(readString(entry.updated_at) || readString(entry.created_at) || null);
+                      const contentLabel = [readString(entry.title), readString(entry.content)]
+                        .filter(Boolean)
+                        .join(' — ');
+                      return (
+                        <div key={entryId || `memory-${readString(entry.title)}`} className="app-memory-minimal-row">
+                          <button
+                            type="button"
+                            className="app-memory-minimal-row__copy"
+                            onClick={() => {
+                              openEditMemory(entry);
+                            }}
+                          >
+                            <span className="app-memory-minimal-row__content" title={contentLabel || 'Saved memory'}>
+                              {contentLabel || 'Saved memory'}
+                            </span>
+                            <span className="app-memory-minimal-row__meta">
+                              {[categoryLabel, updatedLabel].filter(Boolean).join(' · ')}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="app-memory-minimal-row__delete"
+                            disabled={busy}
+                            onClick={() => {
+                              setPendingDeleteMemoryId(entryId);
+                            }}
+                            aria-label="Delete memory"
+                            title="Delete memory"
+                          >
+                            <Trash2 size={16} strokeWidth={1.9} aria-hidden="true" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
               );
             })}
           </div>

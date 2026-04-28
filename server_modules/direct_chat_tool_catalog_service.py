@@ -35,7 +35,7 @@ class DirectChatToolPolicyCallbacks:
 
 
 def provider_supports_direct_tool_calls(provider: str) -> bool:
-    return str(provider or "").strip().lower() == "codex_cli"
+    return bool(str(provider or "").strip())
 
 
 def build_local_direct_chat_tools(availability: Dict[str, Any], *, local_worker_available: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
@@ -87,7 +87,7 @@ def message_requests_browser_tool(message: str, callbacks: DirectChatToolPolicyC
 
 
 def message_can_use_direct_connector_tools(message: str, *, provider: str, tools: List[Dict[str, Any]], callbacks: DirectChatToolPolicyCallbacks) -> bool:
-    if not callbacks.provider_supports_direct_tool_calls(provider) or not tools:
+    if not tools:
         return False
     compact = callbacks.compact_text(message)
     if callbacks.mentions_any(compact, callbacks.google_workspace_keywords):
@@ -122,6 +122,34 @@ def message_requests_local_file_tool(message: str, callbacks: DirectChatToolPoli
     if not compact or callbacks.question_like(compact):
         return False
     if callbacks.mentions_any(compact, callbacks.local_file_keywords):
+        return True
+    listing_tokens = (
+        "list files",
+        "show files",
+        "what files",
+        "which files",
+        "files on my",
+        "files in my",
+        "files in the",
+        "contents of",
+        "folder contents",
+        "directory contents",
+        "directory listing",
+        "list the contents",
+    )
+    location_tokens = (
+        "desktop",
+        "downloads",
+        "documents",
+        "folder",
+        "directory",
+        "repo",
+        "repository",
+        "project root",
+        "current folder",
+        "current directory",
+    )
+    if any(token in compact for token in listing_tokens) and any(token in compact for token in location_tokens):
         return True
     return looks_like_local_path_request(compact) and any(token in compact for token in ("read", "open", "write", "save", "append", "delete"))
 
@@ -163,8 +191,6 @@ def message_can_use_direct_local_tools(message: str, *, provider: str, tools: Li
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
     if message_requests_local_computer_tool(message, callbacks) and any(name.startswith("computer__") for name in tool_names):
         return True
-    if not callbacks.provider_supports_direct_tool_calls(provider):
-        return False
     if message_requests_local_file_tool(message, callbacks) and {"file__read", "file__write"} & tool_names:
         return True
     if message_requests_local_shell_tool(message, callbacks) and "shell__exec" in tool_names:

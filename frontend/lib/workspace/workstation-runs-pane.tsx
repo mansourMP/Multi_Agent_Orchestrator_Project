@@ -1,40 +1,83 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { subscribeWorkstationApprovalResolved } from '@/lib/workspace/workstation-approval-events';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
-import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
+import { useWorkspaceServices, useWorkstationActivityVersion } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
-type RunRecord = Record<string, unknown> & {
-  run_id?: string | null;
-  status?: string | null;
-  result_summary?: string | null;
+type ThreadTurnRecord = Record<string, unknown> & {
+  role?: string | null;
+  content?: string | null;
   created_at?: string | null;
 };
 
-type RunListItem = {
+type ThreadRecord = Record<string, unknown> & {
+  id?: string | null;
+  title?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_turn_at?: string | null;
+  turns?: ThreadTurnRecord[] | null;
+};
+
+type ThreadListItem = {
   id: string;
   preview: string;
   occurredAt: string | null;
 };
 
-const runsPaneCache = new Map<string, RunListItem[]>();
+const ACTIVE_THREAD_STORAGE_PREFIX = 'empyralis.chat.active-thread.v1';
+const HISTORY_PAGE_SIZE = 50;
+const threadsPaneCache = new Map<string, ThreadListItem[]>();
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
-function normalizeRunItems(payload: unknown): RunRecord[] {
+function activeThreadStorageKey(workspaceId: string): string {
+  return `${ACTIVE_THREAD_STORAGE_PREFIX}:${workspaceId}`;
+}
+
+function persistActiveThread(workspaceId: string, threadId: string): void {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+    return;
+  }
+  const normalizedThreadId = readString(threadId);
+  if (!normalizedThreadId) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(activeThreadStorageKey(workspaceId), normalizedThreadId);
+  } catch {
+    // Ignore storage failures in constrained environments.
+  }
+}
+
+function readPersistedActiveThread(workspaceId: string): string | null {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+    return null;
+  }
+  try {
+    const value = window.localStorage.getItem(activeThreadStorageKey(workspaceId));
+    const threadId = readString(value);
+    return threadId || null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeThreadItems(payload: unknown): ThreadRecord[] {
   if (!payload || typeof payload !== 'object') {
     return [];
   }
   const items = (payload as Record<string, unknown>).items;
   return Array.isArray(items)
-    ? items.filter((item): item is RunRecord => Boolean(item) && typeof item === 'object')
+    ? items.filter((item): item is ThreadRecord => Boolean(item) && typeof item === 'object')
     : [];
 }
 
@@ -46,52 +89,39 @@ function parseTimestamp(value: string | null): number {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
-function runPreviewLabel(run: RunRecord): string {
-  const directCandidates = [
-    run.first_user_message,
-    run.message,
-    run.prompt,
-    run.input_preview,
-    run.summary,
-    run.result_summary,
-    run.title,
-  ];
-  for (const candidate of directCandidates) {
-    const value = readString(candidate, '');
-    if (value) {
-      return value;
-    }
-  }
-  const metadata = run.metadata && typeof run.metadata === 'object' ? run.metadata as Record<string, unknown> : {};
-  const metadataCandidates = [
-    metadata.first_user_message,
-    metadata.message,
-    metadata.prompt,
-    metadata.input_preview,
-    metadata.summary,
-  ];
-  for (const candidate of metadataCandidates) {
-    const value = readString(candidate, '');
-    if (value) {
-      return value;
-    }
-  }
-  return 'Sage run';
+function isPlaceholderTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return normalized === '' || normalized === 'new chat' || normalized === 'chat' || normalized === 'primary thread';
 }
 
-function toRunListItems(runs: RunRecord[]): RunListItem[] {
-  return runs
-    .map((run, index) => ({
-      id: readString(run.run_id, `run-${index}`),
-      preview: runPreviewLabel(run),
-      occurredAt: readString(run.created_at) || null,
+function threadPreviewLabel(thread: ThreadRecord): string {
+  const title = readString(thread.title);
+  if (title && !isPlaceholderTitle(title)) {
+    return title;
+  }
+  const turns = Array.isArray(thread.turns) ? thread.turns : [];
+  const firstUserTurn = turns.find((turn) => readString(turn.role).toLowerCase() === 'user');
+  const firstContent = readString(firstUserTurn?.content);
+  if (firstContent) {
+    return firstContent;
+  }
+  return title || 'Conversation';
+}
+
+function toThreadListItems(threads: ThreadRecord[]): ThreadListItem[] {
+  return threads
+    .map((thread, index) => ({
+      id: readString(thread.id, `thread-${index}`),
+      preview: threadPreviewLabel(thread),
+      occurredAt: readString(thread.last_turn_at) || readString(thread.updated_at) || readString(thread.created_at) || null,
     }))
+    .filter((thread) => thread.id && thread.preview)
     .sort((left, right) => parseTimestamp(right.occurredAt) - parseTimestamp(left.occurredAt));
 }
 
-function formatRelativeTime(value: string | null): string {
+function formatHistoryDate(value: string | null): string {
   if (!value) {
-    return 'Just now';
+    return '';
   }
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) {
@@ -110,78 +140,50 @@ function formatRelativeTime(value: string | null): string {
   if (Math.abs(diffDays) < 7) {
     return formatter.format(diffDays, 'day');
   }
-  return new Date(value).toLocaleDateString([], {
+  const diffWeeks = Math.round(diffDays / 7);
+  if (Math.abs(diffWeeks) < 5) {
+    return formatter.format(diffWeeks, 'week');
+  }
+  const date = new Date(parsed);
+  return date.toLocaleDateString([], {
     month: 'short',
     day: 'numeric',
   });
 }
 
-type RunGroupKey = 'today' | 'yesterday' | 'this_week' | 'older';
-
-function resolveRunGroup(value: string | null): { key: RunGroupKey; label: string } {
-  if (!value) {
-    return { key: 'older', label: 'Older' };
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return { key: 'older', label: 'Older' };
-  }
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const diffDays = Math.round((startOfToday.getTime() - startOfDate.getTime()) / 86400000);
-  if (diffDays === 0) {
-    return { key: 'today', label: 'Today' };
-  }
-  if (diffDays === 1) {
-    return { key: 'yesterday', label: 'Yesterday' };
-  }
-  if (diffDays < 7) {
-    return { key: 'this_week', label: 'This Week' };
-  }
-  return { key: 'older', label: 'Older' };
-}
-
-function groupRunsByDate(items: RunListItem[]): Array<{ label: string; items: RunListItem[] }> {
-  const groups = new Map<RunGroupKey, { label: string; items: RunListItem[] }>();
-  items.forEach((item) => {
-    const group = resolveRunGroup(item.occurredAt);
-    const nextGroup = groups.get(group.key) ?? { label: group.label, items: [] };
-    nextGroup.items.push(item);
-    groups.set(group.key, nextGroup);
-  });
-  const order: RunGroupKey[] = ['today', 'yesterday', 'this_week', 'older'];
-  return order
-    .map((key) => groups.get(key))
-    .filter((group): group is { label: string; items: RunListItem[] } => !!group)
-    .filter((group) => group.items.length > 0);
-}
-
 export function WorkstationRunsPane() {
-  const { workspaceId } = useWorkspaceBoundary();
+  const router = useRouter();
+  const { routeManifest, workspaceId } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
-  const streamState = useWorkstationStreamState();
-  const cachedRuns = runsPaneCache.get(workspaceId) ?? null;
-  const [runs, setRuns] = useState<RunListItem[]>(() => cachedRuns ?? []);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(() => cachedRuns === null);
+  const activityVersion = useWorkstationActivityVersion();
+  const cachedThreads = threadsPaneCache.get(workspaceId) ?? null;
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() => readPersistedActiveThread(workspaceId));
+  const [threads, setThreads] = useState<ThreadListItem[]>(() => cachedThreads ?? []);
+  const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
+  const [isLoading, setIsLoading] = useState(() => cachedThreads === null);
   const [error, setError] = useState<string | null>(null);
+
+  const chatHref = useMemo(
+    () => routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/chat`,
+    [routeManifest.routeIndex.chat, workspaceId],
+  );
 
   const refresh = async (showLoading = false) => {
     if (showLoading) {
       setIsLoading(true);
     }
     setError(null);
-    const runsPayload = await services.client.listRuns({ limit: 80 });
-    const nextRuns = toRunListItems(normalizeRunItems(runsPayload));
-    runsPaneCache.set(workspaceId, nextRuns);
-    setRuns(nextRuns);
+    const threadsPayload = await services.client.listThreads({ includeTurns: true, limit: 200 });
+    const nextThreads = toThreadListItems(normalizeThreadItems(threadsPayload));
+    threadsPaneCache.set(workspaceId, nextThreads);
+    setThreads(nextThreads);
+    setVisibleCount(HISTORY_PAGE_SIZE);
     setIsLoading(false);
   };
 
   useEffect(() => {
     let cancelled = false;
-    void refresh(cachedRuns === null).catch((loadError) => {
+    void refresh(cachedThreads === null).catch((loadError) => {
       if (!cancelled) {
         setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
         setIsLoading(false);
@@ -199,30 +201,23 @@ export function WorkstationRunsPane() {
       cancelled = true;
       unsubscribe();
     };
-  }, [cachedRuns, services.client]);
+  }, [cachedThreads, services.client, workspaceId]);
 
   useEffect(() => {
-    if (streamState.activity.version === 0) {
+    if (activityVersion === 0) {
       return;
     }
     void refresh(false).catch((loadError) => {
       setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
       setIsLoading(false);
     });
-  }, [services.client, streamState.activity.version, workspaceId]);
+  }, [activityVersion, workspaceId]);
 
-  useEffect(() => {
-    if (runs.length === 0) {
-      setSelectedRunId(null);
-      return;
-    }
-    if (selectedRunId && runs.some((item) => item.id === selectedRunId)) {
-      return;
-    }
-    setSelectedRunId(runs[0].id);
-  }, [runs, selectedRunId]);
-
-  const groupedRuns = useMemo(() => groupRunsByDate(runs), [runs]);
+  const visibleThreads = useMemo(
+    () => threads.slice(0, visibleCount),
+    [threads, visibleCount],
+  );
+  const hasMoreThreads = visibleCount < threads.length;
 
   return (
     <WorkstationSurfaceRoot surface="runs">
@@ -230,33 +225,43 @@ export function WorkstationRunsPane() {
         {error ? <div className="app-surface-inline-status">{error}</div> : null}
         {isLoading ? (
           <div className="app-stack-3">
-            <SkeletonBlock height="3.5rem" />
-            <SkeletonBlock height="3.5rem" />
-            <SkeletonBlock height="3.5rem" />
+            <SkeletonBlock height="4rem" />
+            <SkeletonBlock height="4rem" />
+            <SkeletonBlock height="4rem" />
           </div>
-        ) : runs.length === 0 ? (
+        ) : threads.length === 0 ? (
           <EmptyPanel
-            title="No runs yet"
-            body="Send a message to Sage to start your first run."
+            title="No conversations yet"
+            body="Send a message to Sage to start your first conversation."
           />
         ) : (
-          <div className="app-runs-minimal-list">
-            {groupedRuns.map((group) => (
-              <section key={group.label} className="app-runs-minimal-group">
-                <div className="app-runs-minimal-group__label">{group.label}</div>
-                {group.items.map((run) => (
-                  <button
-                    key={run.id}
-                    type="button"
-                    className={`app-runs-minimal-row${selectedRunId === run.id ? ' app-runs-minimal-row--selected' : ''}`}
-                    onClick={() => setSelectedRunId(run.id)}
-                  >
-                    <span className="app-runs-minimal-row__preview" title={run.preview}>{run.preview}</span>
-                    <span className="app-runs-minimal-row__time">{formatRelativeTime(run.occurredAt)}</span>
-                  </button>
-                ))}
-              </section>
+          <div className="app-runs-minimal-list app-runs-minimal-list--flat" aria-label="Conversation history">
+            {visibleThreads.map((thread) => (
+              <button
+                key={thread.id}
+                type="button"
+                className={`app-runs-minimal-row app-runs-minimal-row--flat${selectedThreadId === thread.id ? ' app-runs-minimal-row--selected' : ''}`}
+                onClick={() => {
+                  persistActiveThread(workspaceId, thread.id);
+                  setSelectedThreadId(thread.id);
+                  router.push(chatHref);
+                }}
+              >
+                <span className="app-runs-minimal-row__preview" title={thread.preview}>{thread.preview}</span>
+                <span className="app-runs-minimal-row__time">{formatHistoryDate(thread.occurredAt)}</span>
+              </button>
             ))}
+            {hasMoreThreads ? (
+              <button
+                type="button"
+                className="app-runs-minimal-load-more"
+                onClick={() => {
+                  setVisibleCount((current) => Math.min(current + HISTORY_PAGE_SIZE, threads.length));
+                }}
+              >
+                Load more
+              </button>
+            ) : null}
           </div>
         )}
       </main>

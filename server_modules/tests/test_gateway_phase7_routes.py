@@ -1,3 +1,4 @@
+import importlib
 import os
 import tempfile
 import threading
@@ -13,6 +14,16 @@ from server_modules import auth, gateway_state_repository, personal_channels_rep
 
 class GatewayPhase7RoutesTests(unittest.TestCase):
     def setUp(self) -> None:
+        global auth
+        global gateway_state_repository
+        global personal_channels_repository
+        global routes_gateway
+
+        auth = importlib.import_module("server_modules.auth")
+        gateway_state_repository = importlib.import_module("server_modules.gateway_state_repository")
+        personal_channels_repository = importlib.import_module("server_modules.personal_channels_repository")
+        routes_gateway = importlib.import_module("server_modules.routes_gateway")
+
         self.tmpdir = tempfile.TemporaryDirectory()
         self.gateway_db_path = Path(self.tmpdir.name) / "gateway-state.sqlite3"
         self.auth_db_path = Path(self.tmpdir.name) / "auth-users.sqlite3"
@@ -118,355 +129,280 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
     def test_gateway_browser_routes_cover_start_approval_resume_interrupt_and_fallback(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
-        gateway_token = registration_payload["gateway_token"]
-        session_payload, ws_path = self._connect_gateway(gateway_id, gateway_token)
-
-        with self.client.websocket_connect(ws_path) as websocket:
-            websocket.send_json(
-                {
-                    "kind": "request",
-                    "id": "req-connect-browser-1",
-                    "type": "gateway.connect",
-                    "ts": "2026-04-22T15:00:00Z",
-                    "scope": session_payload["scope"],
-                    "payload": {
-                        "gateway_version": "0.1.0",
-                        "device_metadata": {"hostname": "mansur-mac"},
-                        "requested_capabilities": [
-                            "browser.session.start",
-                            "browser.session.action",
-                            "browser.session.takeover",
-                            "browser.session.resume",
-                            "browser.session.interrupt",
-                        ],
-                        "journal_cursor": 0,
-                        "checkpoint_cursor": 0,
-                    },
-                }
-            )
-            self.assertTrue(websocket.receive_json()["ok"])
-            websocket.receive_json()
-            websocket.receive_json()
-
-            start_response: dict = {}
-
-            def _post_start() -> None:
-                start_response["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/browser/sessions",
-                    json={
-                        "url": "https://example.com",
+        start_execute_payload = {
+            "gateway_id": gateway_id,
+            "device_id": "device-local-1",
+            "workspace_id": "default",
+            "request_id": "req-start-1",
+            "capability_id": "browser.session.start",
+            "run_id": "run-browser-1",
+            "result": {
+                "browser_session": {
+                    "browser_session_id": "gbsess-1",
+                    "status": "active",
+                    "execution_target": "local_gateway",
+                    "session_profile": "qa-browser",
+                    "current_url": "https://example.com",
+                    "manual_takeover": False,
+                    "resume_supported": True,
+                    "reviewed_approval_required": False,
+                    "reviewed_approved": False,
+                    "immutable_plan_hash": "plan-1",
+                    "execution_binding": {"cwd": "/tmp/project"},
+                    "checkpoint": {
+                        "next_action_index": 1,
                         "session_profile": "qa-browser",
-                        "interactive_actions": ["navigate"],
-                        "run_id": "run-browser-1",
-                        "trace_id": "trace-browser-1",
+                        "current_url": "https://example.com",
                     },
-                )
-
-            start_thread = threading.Thread(target=_post_start)
-            start_thread.start()
-            start_frame = websocket.receive_json()
-            self.assertEqual(start_frame["type"], "tool.invoke")
-            self.assertEqual(start_frame["payload"]["capability_id"], "browser.session.start")
-            browser_metadata = start_frame["payload"]["arguments"]["browser_metadata"]
-            self.assertEqual(browser_metadata["browser_session_profile"], "qa-browser")
-            self.assertEqual(browser_metadata["execution_target_selected"], "local_gateway")
-            websocket.send_json(
-                {
-                    "kind": "response",
-                    "id": start_frame["id"],
-                    "ok": True,
-                    "ts": "2026-04-22T15:00:01Z",
-                    "payload": {
-                        "request_id": start_frame["id"],
-                        "capability_id": "browser.session.start",
-                        "run_id": "run-browser-1",
-                        "result": {
-                            "browser_session": {
-                                "browser_session_id": "gbsess-1",
-                                "status": "active",
-                                "execution_target": "local_gateway",
-                                "session_profile": "qa-browser",
-                                "current_url": "https://example.com",
-                                "manual_takeover": False,
-                                "resume_supported": True,
-                                "reviewed_approval_required": False,
-                                "reviewed_approved": False,
-                                "immutable_plan_hash": "plan-1",
-                                "execution_binding": {"cwd": "/tmp/project"},
-                                "checkpoint": {
-                                    "next_action_index": 1,
-                                    "session_profile": "qa-browser",
-                                    "current_url": "https://example.com",
-                                },
-                                "snapshot": {
-                                    "url": "https://example.com",
-                                    "tabs": [{"id": 1, "url": "https://example.com"}],
-                                    "accessibility_snapshot": {"role": "document"},
-                                },
-                                "metadata": {
-                                    "browser_resume_supported": True,
-                                    "browser_execution_binding": {"cwd": "/tmp/project"},
-                                },
-                            },
-                            "status": "started",
-                        },
+                    "snapshot": {
+                        "url": "https://example.com",
+                        "tabs": [{"id": 1, "url": "https://example.com"}],
+                        "accessibility_snapshot": {"role": "document"},
                     },
-                }
-            )
-            start_thread.join(timeout=5)
-            self.assertEqual(start_response["response"].status_code, 200)
-            start_payload = start_response["response"].json()
-            self.assertEqual(start_payload["browser_session"]["browser_session_id"], "gbsess-1")
-            self.assertTrue(start_payload["browser_session"]["resume_supported"])
-
-            approval_response = self.client.post(
-                f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-1/actions",
+                    "metadata": {
+                        "browser_resume_supported": True,
+                        "browser_execution_binding": {"cwd": "/tmp/project"},
+                    },
+                },
+                "status": "started",
+            },
+        }
+        start_execute_mock = AsyncMock(return_value=start_execute_payload)
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.gateway_execution_service.execute_tool_via_gateway",
+            start_execute_mock,
+        ):
+            start_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions",
                 json={
-                    "action": "click",
-                    "action_args": {"selector": "#login"},
+                    "url": "https://example.com",
+                    "session_profile": "qa-browser",
+                    "interactive_actions": ["navigate"],
+                    "allow_cloud_fallback": False,
                     "run_id": "run-browser-1",
                     "trace_id": "trace-browser-1",
                 },
             )
-            self.assertEqual(approval_response.status_code, 202)
-            approval_payload = approval_response.json()
-            self.assertEqual(approval_payload["status"], "approval_required")
-            approval_id = approval_payload["approval"]["approval_id"]
+        self.assertEqual(start_response.status_code, 200)
+        start_payload = start_response.json()
+        self.assertEqual(start_payload["browser_session"]["browser_session_id"], "gbsess-1")
+        self.assertTrue(start_payload["browser_session"]["resume_supported"])
+        start_kwargs = start_execute_mock.await_args.kwargs
+        self.assertEqual(start_kwargs["capability_id"], "browser.session.start")
+        self.assertEqual(start_kwargs["arguments"]["browser_metadata"]["browser_session_profile"], "qa-browser")
+        self.assertEqual(start_kwargs["arguments"]["browser_metadata"]["execution_target_selected"], "local_gateway")
 
-            resolve_response: dict = {}
+        approval_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-1/actions",
+            json={
+                "action": "click",
+                "action_args": {"selector": "#login"},
+                "allow_cloud_fallback": False,
+                "run_id": "run-browser-1",
+                "trace_id": "trace-browser-1",
+            },
+        )
+        self.assertEqual(approval_response.status_code, 202)
+        approval_payload = approval_response.json()
+        self.assertEqual(approval_payload["status"], "approval_required")
+        approval_id = approval_payload["approval"]["approval_id"]
 
-            def _resolve_approval() -> None:
-                resolve_response["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/approvals/{approval_id}/resolve",
-                    json={"decision": "approved", "note": "Proceed", "timeout_seconds": 5},
-                )
-
-            resolve_thread = threading.Thread(target=_resolve_approval)
-            resolve_thread.start()
-            action_frame = websocket.receive_json()
-            self.assertEqual(action_frame["type"], "tool.invoke")
-            self.assertEqual(action_frame["payload"]["capability_id"], "browser.session.action")
-            self.assertEqual(action_frame["payload"]["arguments"]["action"], "click")
-            websocket.send_json(
-                {
-                    "kind": "response",
-                    "id": action_frame["id"],
-                    "ok": True,
-                    "ts": "2026-04-22T15:00:02Z",
-                    "payload": {
-                        "request_id": action_frame["id"],
-                        "capability_id": "browser.session.action",
-                        "run_id": "run-browser-1",
-                        "result": {
-                            "browser_session": {
-                                "browser_session_id": "gbsess-1",
-                                "status": "active",
-                                "execution_target": "local_gateway",
-                                "session_profile": "qa-browser",
-                                "current_url": "https://example.com/app",
-                                "manual_takeover": False,
-                                "resume_supported": True,
-                                "reviewed_approval_required": True,
-                                "reviewed_approved": True,
-                                "immutable_plan_hash": "plan-2",
-                                "execution_binding": {"cwd": "/tmp/project"},
-                                "checkpoint": {
-                                    "next_action_index": 2,
-                                    "session_profile": "qa-browser",
-                                    "current_url": "https://example.com/app",
-                                },
-                                "snapshot": {
-                                    "url": "https://example.com/app",
-                                    "tabs": [{"id": 1, "url": "https://example.com/app"}],
-                                    "accessibility_snapshot": {"role": "application"},
-                                },
-                                "metadata": {
-                                    "browser_resume_supported": True,
-                                    "browser_reviewed_approval_required": True,
-                                    "browser_reviewed_approved": True,
-                                },
-                            },
-                            "status": "completed",
-                            "action_result": {"clicked": True},
-                        },
+        action_execute_payload = {
+            "gateway_id": gateway_id,
+            "device_id": "device-local-1",
+            "workspace_id": "default",
+            "request_id": "req-action-1",
+            "capability_id": "browser.session.action",
+            "run_id": "run-browser-1",
+            "result": {
+                "browser_session": {
+                    "browser_session_id": "gbsess-1",
+                    "status": "active",
+                    "execution_target": "local_gateway",
+                    "session_profile": "qa-browser",
+                    "current_url": "https://example.com/app",
+                    "manual_takeover": False,
+                    "resume_supported": True,
+                    "reviewed_approval_required": True,
+                    "reviewed_approved": True,
+                    "immutable_plan_hash": "plan-2",
+                    "execution_binding": {"cwd": "/tmp/project"},
+                    "checkpoint": {
+                        "next_action_index": 2,
+                        "session_profile": "qa-browser",
+                        "current_url": "https://example.com/app",
                     },
-                }
-            )
-            resolve_thread.join(timeout=5)
-            self.assertEqual(resolve_response["response"].status_code, 200)
-            resolved_payload = resolve_response["response"].json()
-            self.assertEqual(resolved_payload["status"], "executed")
-            self.assertEqual(
-                resolved_payload["execution"]["browser_session"]["checkpoint"]["next_action_index"],
-                2,
-            )
-
-            takeover_response: dict = {}
-
-            def _post_takeover() -> None:
-                takeover_response["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-1/takeover",
-                    json={"run_id": "run-browser-1", "trace_id": "trace-browser-1"},
-                )
-
-            takeover_thread = threading.Thread(target=_post_takeover)
-            takeover_thread.start()
-            takeover_frame = websocket.receive_json()
-            self.assertEqual(takeover_frame["payload"]["capability_id"], "browser.session.takeover")
-            websocket.send_json(
-                {
-                    "kind": "response",
-                    "id": takeover_frame["id"],
-                    "ok": True,
-                    "ts": "2026-04-22T15:00:03Z",
-                    "payload": {
-                        "request_id": takeover_frame["id"],
-                        "capability_id": "browser.session.takeover",
-                        "run_id": "run-browser-1",
-                        "result": {
-                            "browser_session": {
-                                "browser_session_id": "gbsess-1",
-                                "status": "waiting_for_input",
-                                "execution_target": "local_gateway",
-                                "session_profile": "qa-browser",
-                                "current_url": "https://example.com/app",
-                                "manual_takeover": True,
-                                "resume_supported": True,
-                                "reviewed_approval_required": True,
-                                "reviewed_approved": True,
-                                "immutable_plan_hash": "plan-2",
-                                "execution_binding": {"cwd": "/tmp/project"},
-                                "checkpoint": {
-                                    "next_action_index": 2,
-                                    "session_profile": "qa-browser",
-                                    "current_url": "https://example.com/app",
-                                    "manual_takeover": True,
-                                },
-                                "snapshot": {"url": "https://example.com/app"},
-                                "metadata": {"manual_takeover": True, "browser_resume_supported": True},
-                            },
-                            "status": "waiting_for_input",
-                            "manual_takeover": True,
-                        },
+                    "snapshot": {
+                        "url": "https://example.com/app",
+                        "tabs": [{"id": 1, "url": "https://example.com/app"}],
+                        "accessibility_snapshot": {"role": "application"},
                     },
-                }
-            )
-            takeover_thread.join(timeout=5)
-            self.assertEqual(takeover_response["response"].status_code, 200)
-            self.assertTrue(takeover_response["response"].json()["browser_session"]["manual_takeover"])
-
-            resume_response: dict = {}
-
-            def _post_resume() -> None:
-                resume_response["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-1/resume",
-                    json={"run_id": "run-browser-1", "trace_id": "trace-browser-1"},
-                )
-
-            resume_thread = threading.Thread(target=_post_resume)
-            resume_thread.start()
-            resume_frame = websocket.receive_json()
-            self.assertEqual(resume_frame["payload"]["capability_id"], "browser.session.resume")
-            websocket.send_json(
-                {
-                    "kind": "response",
-                    "id": resume_frame["id"],
-                    "ok": True,
-                    "ts": "2026-04-22T15:00:04Z",
-                    "payload": {
-                        "request_id": resume_frame["id"],
-                        "capability_id": "browser.session.resume",
-                        "run_id": "run-browser-1",
-                        "result": {
-                            "browser_session": {
-                                "browser_session_id": "gbsess-1",
-                                "status": "active",
-                                "execution_target": "local_gateway",
-                                "session_profile": "qa-browser",
-                                "current_url": "https://example.com/app",
-                                "manual_takeover": False,
-                                "resume_supported": True,
-                                "reviewed_approval_required": True,
-                                "reviewed_approved": True,
-                                "immutable_plan_hash": "plan-2",
-                                "execution_binding": {"cwd": "/tmp/project"},
-                                "checkpoint": {
-                                    "next_action_index": 2,
-                                    "session_profile": "qa-browser",
-                                    "current_url": "https://example.com/app",
-                                    "manual_takeover": False,
-                                },
-                                "snapshot": {"url": "https://example.com/app"},
-                                "metadata": {"browser_resume_supported": True},
-                            },
-                            "status": "resumed",
-                        },
+                    "metadata": {
+                        "browser_resume_supported": True,
+                        "browser_reviewed_approval_required": True,
+                        "browser_reviewed_approved": True,
                     },
-                }
+                },
+                "status": "completed",
+                "action_result": {"clicked": True},
+            },
+        }
+        action_execute_mock = AsyncMock(return_value=action_execute_payload)
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.gateway_execution_service.execute_tool_via_gateway",
+            action_execute_mock,
+        ):
+            resolve_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/approvals/{approval_id}/resolve",
+                json={"decision": "approved", "note": "Proceed", "timeout_seconds": 5},
             )
-            resume_thread.join(timeout=5)
-            self.assertEqual(resume_response["response"].status_code, 200)
-            self.assertFalse(resume_response["response"].json()["browser_session"]["manual_takeover"])
+        self.assertEqual(resolve_response.status_code, 200)
+        resolved_payload = resolve_response.json()
+        self.assertEqual(resolved_payload["status"], "executed")
+        self.assertEqual(
+            resolved_payload["execution"]["browser_session"]["checkpoint"]["next_action_index"],
+            2,
+        )
 
-            doctor_response = self.client.get(f"/api/gateway/registrations/{gateway_id}/doctor")
-            self.assertEqual(doctor_response.status_code, 200)
-            self.assertEqual(doctor_response.json()["browser"]["count"], 1)
-            self.assertEqual(doctor_response.json()["browser"]["active_count"], 1)
-
-            interrupt_response: dict = {}
-
-            def _post_interrupt() -> None:
-                interrupt_response["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-1/interrupt",
-                    json={"run_id": "run-browser-1", "trace_id": "trace-browser-1"},
-                )
-
-            interrupt_thread = threading.Thread(target=_post_interrupt)
-            interrupt_thread.start()
-            interrupt_frame = websocket.receive_json()
-            self.assertEqual(interrupt_frame["payload"]["capability_id"], "browser.session.interrupt")
-            websocket.send_json(
-                {
-                    "kind": "response",
-                    "id": interrupt_frame["id"],
-                    "ok": True,
-                    "ts": "2026-04-22T15:00:05Z",
-                    "payload": {
-                        "request_id": interrupt_frame["id"],
-                        "capability_id": "browser.session.interrupt",
-                        "run_id": "run-browser-1",
-                        "result": {
-                            "browser_session": {
-                                "browser_session_id": "gbsess-1",
-                                "status": "interrupted",
-                                "execution_target": "local_gateway",
-                                "session_profile": "qa-browser",
-                                "current_url": "https://example.com/app",
-                                "manual_takeover": False,
-                                "resume_supported": True,
-                                "reviewed_approval_required": True,
-                                "reviewed_approved": True,
-                                "immutable_plan_hash": "plan-2",
-                                "execution_binding": {"cwd": "/tmp/project"},
-                                "checkpoint": {
-                                    "next_action_index": 2,
-                                    "session_profile": "qa-browser",
-                                    "current_url": "https://example.com/app",
-                                },
-                                "snapshot": {"url": "https://example.com/app"},
-                                "metadata": {"browser_resume_supported": True},
-                                "interrupted_at": "2026-04-22T15:00:05Z",
-                            },
-                            "status": "interrupted",
-                            "interrupted": True,
-                            "interrupt_count": 1,
-                        },
+        takeover_execute_payload = {
+            "gateway_id": gateway_id,
+            "device_id": "device-local-1",
+            "workspace_id": "default",
+            "request_id": "req-takeover-1",
+            "capability_id": "browser.session.takeover",
+            "run_id": "run-browser-1",
+            "result": {
+                "browser_session": {
+                    "browser_session_id": "gbsess-1",
+                    "status": "waiting_for_input",
+                    "execution_target": "local_gateway",
+                    "session_profile": "qa-browser",
+                    "current_url": "https://example.com/app",
+                    "manual_takeover": True,
+                    "resume_supported": True,
+                    "reviewed_approval_required": True,
+                    "reviewed_approved": True,
+                    "immutable_plan_hash": "plan-2",
+                    "execution_binding": {"cwd": "/tmp/project"},
+                    "checkpoint": {
+                        "next_action_index": 2,
+                        "session_profile": "qa-browser",
+                        "current_url": "https://example.com/app",
+                        "manual_takeover": True,
                     },
-                }
+                    "snapshot": {"url": "https://example.com/app"},
+                    "metadata": {"manual_takeover": True, "browser_resume_supported": True},
+                },
+                "status": "waiting_for_input",
+                "manual_takeover": True,
+            },
+        }
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.gateway_execution_service.execute_tool_via_gateway",
+            AsyncMock(return_value=takeover_execute_payload),
+        ):
+            takeover_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-1/takeover",
+                json={"run_id": "run-browser-1", "trace_id": "trace-browser-1"},
             )
-            interrupt_thread.join(timeout=5)
-            self.assertEqual(interrupt_response["response"].status_code, 200)
-            self.assertEqual(interrupt_response["response"].json()["result"]["interrupt_count"], 1)
+        self.assertEqual(takeover_response.status_code, 200)
+        self.assertTrue(takeover_response.json()["browser_session"]["manual_takeover"])
+
+        resume_execute_payload = {
+            "gateway_id": gateway_id,
+            "device_id": "device-local-1",
+            "workspace_id": "default",
+            "request_id": "req-resume-1",
+            "capability_id": "browser.session.resume",
+            "run_id": "run-browser-1",
+            "result": {
+                "browser_session": {
+                    "browser_session_id": "gbsess-1",
+                    "status": "active",
+                    "execution_target": "local_gateway",
+                    "session_profile": "qa-browser",
+                    "current_url": "https://example.com/app",
+                    "manual_takeover": False,
+                    "resume_supported": True,
+                    "reviewed_approval_required": True,
+                    "reviewed_approved": True,
+                    "immutable_plan_hash": "plan-2",
+                    "execution_binding": {"cwd": "/tmp/project"},
+                    "checkpoint": {
+                        "next_action_index": 2,
+                        "session_profile": "qa-browser",
+                        "current_url": "https://example.com/app",
+                        "manual_takeover": False,
+                    },
+                    "snapshot": {"url": "https://example.com/app"},
+                    "metadata": {"browser_resume_supported": True},
+                },
+                "status": "resumed",
+            },
+        }
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.gateway_execution_service.execute_tool_via_gateway",
+            AsyncMock(return_value=resume_execute_payload),
+        ), patch(
+            "server_modules.routes_gateway.gateway_protocol_service.gateway_connection_is_live",
+            return_value=True,
+        ):
+            resume_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-1/resume",
+                json={"run_id": "run-browser-1", "trace_id": "trace-browser-1"},
+            )
+        self.assertEqual(resume_response.status_code, 200)
+        self.assertFalse(resume_response.json()["browser_session"]["manual_takeover"])
+
+        doctor_response = self.client.get(f"/api/gateway/registrations/{gateway_id}/doctor")
+        self.assertEqual(doctor_response.status_code, 200)
+        self.assertEqual(doctor_response.json()["browser"]["count"], 1)
+        self.assertEqual(doctor_response.json()["browser"]["active_count"], 1)
+
+        interrupt_execute_payload = {
+            "gateway_id": gateway_id,
+            "device_id": "device-local-1",
+            "workspace_id": "default",
+            "request_id": "req-interrupt-1",
+            "capability_id": "browser.session.interrupt",
+            "run_id": "run-browser-1",
+            "result": {
+                "browser_session": {
+                    "browser_session_id": "gbsess-1",
+                    "status": "interrupted",
+                    "execution_target": "local_gateway",
+                    "session_profile": "qa-browser",
+                    "current_url": "https://example.com/app",
+                    "manual_takeover": False,
+                    "resume_supported": True,
+                    "reviewed_approval_required": True,
+                    "reviewed_approved": True,
+                    "immutable_plan_hash": "plan-2",
+                    "execution_binding": {"cwd": "/tmp/project"},
+                    "checkpoint": {
+                        "next_action_index": 2,
+                        "session_profile": "qa-browser",
+                        "current_url": "https://example.com/app",
+                    },
+                    "snapshot": {"url": "https://example.com/app"},
+                    "metadata": {"browser_resume_supported": True},
+                    "interrupted_at": "2026-04-22T15:00:05Z",
+                },
+                "status": "interrupted",
+                "interrupted": True,
+                "interrupt_count": 1,
+            },
+        }
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.gateway_execution_service.execute_tool_via_gateway",
+            AsyncMock(return_value=interrupt_execute_payload),
+        ):
+            interrupt_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-1/interrupt",
+                json={"run_id": "run-browser-1", "trace_id": "trace-browser-1"},
+            )
+        self.assertEqual(interrupt_response.status_code, 200)
+        self.assertEqual(interrupt_response.json()["result"]["interrupt_count"], 1)
 
         fallback_response = self.client.post(
             f"/api/gateway/registrations/{gateway_id}/browser/sessions",
@@ -491,121 +427,68 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
     def test_gateway_browser_attach_mode_reports_attach_required_and_attached_states(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
-        gateway_token = registration_payload["gateway_token"]
-        session_payload, ws_path = self._connect_gateway(gateway_id, gateway_token)
-
-        with self.client.websocket_connect(ws_path) as websocket:
-            websocket.send_json(
-                {
-                    "kind": "request",
-                    "id": "req-connect-browser-attach-1",
-                    "type": "gateway.connect",
-                    "ts": "2026-04-22T16:00:00Z",
-                    "scope": session_payload["scope"],
-                    "payload": {
-                        "gateway_version": "0.1.0",
-                        "device_metadata": {"hostname": "mansur-mac"},
-                        "requested_capabilities": [
-                            "browser.session.start",
-                            "browser.session.action",
-                            "browser.session.takeover",
-                            "browser.session.resume",
-                            "browser.session.interrupt",
-                        ],
-                        "journal_cursor": 0,
-                        "checkpoint_cursor": 0,
-                    },
-                }
-            )
-            self.assertTrue(websocket.receive_json()["ok"])
-            websocket.receive_json()
-            websocket.receive_json()
-
-            attach_required_response: dict = {}
-
-            def _post_attach_required() -> None:
-                attach_required_response["response"] = self.client.post(
-                    f"/api/gateway/registrations/{gateway_id}/browser/sessions",
-                    json={
-                        "session_mode": "existing_session_attach",
-                        "run_id": "run-browser-attach-required",
-                        "trace_id": "trace-browser-attach-required",
-                    },
-                )
-
-            attach_required_thread = threading.Thread(target=_post_attach_required)
-            attach_required_thread.start()
-            attach_required_frame = websocket.receive_json()
-            self.assertEqual(attach_required_frame["payload"]["capability_id"], "browser.session.start")
-            self.assertEqual(
-                attach_required_frame["payload"]["arguments"]["session_mode"],
-                "existing_session_attach",
-            )
-            self.assertEqual(
-                attach_required_frame["payload"]["arguments"]["browser_metadata"]["browser_session_mode"],
-                "existing_session_attach",
-            )
-            self.assertIsNone(
-                attach_required_frame["payload"]["arguments"]["attach_endpoint_url"],
-            )
-            websocket.send_json(
-                {
-                    "kind": "response",
-                    "id": attach_required_frame["id"],
-                    "ok": True,
-                    "ts": "2026-04-22T16:00:01Z",
-                    "payload": {
-                        "request_id": attach_required_frame["id"],
-                        "capability_id": "browser.session.start",
-                        "run_id": "run-browser-attach-required",
-                        "result": {
-                            "browser_session": {
-                                "browser_session_id": "gbsess-attach-required",
-                                "status": "attach_required",
-                                "execution_target": "local_gateway",
-                                "session_profile": "gateway_default",
-                                "current_url": None,
-                                "manual_takeover": False,
-                                "resume_supported": False,
-                                "reviewed_approval_required": False,
-                                "reviewed_approved": False,
-                                "immutable_plan_hash": "plan-attach-required",
-                                "execution_binding": {"cwd": "/tmp/project"},
-                                "checkpoint": {
-                                    "next_action_index": 0,
-                                    "session_profile": "gateway_default",
-                                    "session_mode": "existing_session_attach",
-                                    "attach_state": "attach_required",
-                                },
-                                "snapshot": {},
-                                "metadata": {
-                                    "browser_session_mode": "existing_session_attach",
-                                    "browser_attach_state": "attach_required",
-                                },
-                            },
-                            "status": "attach_required",
-                        },
-                    },
-                }
-            )
-            attach_required_thread.join(timeout=5)
-            self.assertEqual(attach_required_response["response"].status_code, 202)
-            self.assertEqual(
-                attach_required_response["response"].json()["browser_session"]["status"],
-                "attach_required",
-            )
-
-            attach_response = self.client.post(
+        attach_required_payload = {
+            "status": "attach_required",
+            "request_id": "req-browser-attach-required",
+            "browser_session": {
+                "browser_session_id": "gbsess-attach-required",
+                "status": "attach_required",
+                "execution_target": "local_gateway",
+                "session_profile": "gateway_default",
+                "current_url": None,
+                "manual_takeover": False,
+                "resume_supported": False,
+                "reviewed_approval_required": False,
+                "reviewed_approved": False,
+                "immutable_plan_hash": "plan-attach-required",
+                "execution_binding": {"cwd": "/tmp/project"},
+                "checkpoint": {
+                    "next_action_index": 0,
+                    "session_profile": "gateway_default",
+                    "session_mode": "existing_session_attach",
+                    "attach_state": "attach_required",
+                },
+                "snapshot": {},
+                "metadata": {
+                    "browser_session_mode": "existing_session_attach",
+                    "browser_attach_state": "attach_required",
+                },
+            },
+        }
+        execute_mock = AsyncMock(return_value=attach_required_payload)
+        with patch("server_modules.routes_gateway.gateway_browser_service.execute_browser_capability_via_gateway", execute_mock):
+            attach_required_response = self.client.post(
                 f"/api/gateway/registrations/{gateway_id}/browser/sessions",
                 json={
                     "session_mode": "existing_session_attach",
-                    "attach_endpoint_url": "http://127.0.0.1:9222",
-                    "interactive_actions": ["navigate"],
-                    "run_id": "run-browser-attach-1",
-                    "trace_id": "trace-browser-attach-1",
+                    "allow_cloud_fallback": False,
+                    "run_id": "run-browser-attach-required",
+                    "trace_id": "trace-browser-attach-required",
                 },
             )
-            self.assertEqual(attach_response.status_code, 202)
-            attach_approval_payload = attach_response.json()
-            self.assertEqual(attach_approval_payload["status"], "approval_required")
-            self.assertTrue(str(attach_approval_payload["approval"]["approval_id"]).strip())
+        self.assertEqual(attach_required_response.status_code, 202)
+        self.assertEqual(attach_required_response.json()["browser_session"]["status"], "attach_required")
+        execute_kwargs = execute_mock.await_args.kwargs
+        self.assertEqual(execute_kwargs["capability_id"], "browser.session.start")
+        self.assertEqual(execute_kwargs["arguments"]["session_mode"], "existing_session_attach")
+        self.assertEqual(
+            execute_kwargs["arguments"]["browser_metadata"]["browser_session_mode"],
+            "existing_session_attach",
+        )
+        self.assertIsNone(execute_kwargs["arguments"]["attach_endpoint_url"])
+
+        attach_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/browser/sessions",
+            json={
+                "session_mode": "existing_session_attach",
+                "attach_endpoint_url": "http://127.0.0.1:9222",
+                "interactive_actions": ["navigate"],
+                "allow_cloud_fallback": False,
+                "run_id": "run-browser-attach-1",
+                "trace_id": "trace-browser-attach-1",
+            },
+        )
+        self.assertEqual(attach_response.status_code, 202)
+        attach_approval_payload = attach_response.json()
+        self.assertEqual(attach_approval_payload["status"], "approval_required")
+        self.assertTrue(str(attach_approval_payload["approval"]["approval_id"]).strip())

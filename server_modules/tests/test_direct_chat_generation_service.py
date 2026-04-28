@@ -32,6 +32,7 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
             clear_direct_tool_loop_state=lambda _session_key: None,
             persist_direct_chat_memory_best_effort=lambda **kwargs: None,
             persist_direct_chat_transcript_best_effort=lambda **kwargs: None,
+            persist_direct_chat_hosted_usage_best_effort=lambda **kwargs: None,
             record_direct_tool_signature=lambda _session_key, _tool_call: False,
             direct_chat_error_reply=lambda error: f"Chat failed: {error}",
             capture_exception=lambda exc: None,
@@ -87,6 +88,69 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["payload"]["reply"], "Hello")
         self.assertEqual(events[-1]["payload"]["provider"], "openai")
 
+    def test_stream_provider_backed_direct_chat_persists_hosted_usage_before_final(self) -> None:
+        recorded: list[dict[str, object]] = []
+        services = self._services(
+            stream_events=[
+                {
+                    "type": "result",
+                    "reply": "Hello",
+                    "usage_masked": {
+                        "usage_accounting": {
+                            "input_tokens": 11,
+                            "output_tokens": 7,
+                            "total_tokens": 18,
+                            "estimated_cost_usd": 0.0012,
+                            "effective_provider": "deepseek",
+                            "effective_model": "deepseek-chat",
+                        }
+                    },
+                    "provider": "deepseek",
+                    "model": "deepseek-chat",
+                    "attempted_providers": "deepseek",
+                    "error": "",
+                    "tool_calls": [],
+                }
+            ]
+        )
+        services.persist_direct_chat_hosted_usage_best_effort = lambda **kwargs: recorded.append(dict(kwargs))
+
+        events = list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=services,
+                context={"provider": "deepseek"},
+                metadata={"provider": "deepseek", "model": "deepseek-chat"},
+                system_prompt="System prompt",
+                normalized_workspace_id="ws-1",
+                normalized_requested_provider="deepseek",
+                normalized_requested_model="deepseek-chat",
+                normalized_reasoning_effort="medium",
+                normalized_thread_id="thread-1",
+                normalized_message="hello",
+                compacted_prior_messages=[],
+                prior_messages_used=False,
+                history_mode="none",
+                connected_systems=[],
+                tool_capabilities=[],
+                availability_payload={"ai_ready": True, "credential_plane": "platform_runtime", "platform_runtime_allowed": True},
+                tools=[],
+                direct_chat_credentials={},
+                proactive_suggestions=["next"],
+                tool_loop_session_key="session-1",
+                fallback_reason=None,
+                session_ctx={"request_id": "req-1"},
+                trace_context=None,
+                resolved_chat_max_iterations=3,
+                direct_tool_result_summary_system_message="Summarize tool results.",
+            )
+        )
+
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["workspace_id"], "ws-1")
+        self.assertEqual(recorded[0]["thread_id"], "thread-1")
+        self.assertEqual(recorded[0]["effective_provider"], "deepseek")
+
     def test_stream_provider_backed_direct_chat_returns_error_reply_on_failure(self) -> None:
         events = list(
             direct_chat_generation_service.stream_provider_backed_direct_chat(
@@ -127,10 +191,121 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(events[-1]["type"], "final")
-        self.assertEqual(events[-1]["payload"]["reply"], "")
-        self.assertEqual(events[-1]["payload"]["interventions"][0]["kind"], "system_error")
-        self.assertEqual(events[-1]["payload"]["interventions"][0]["detail"], "Chat failed: temporary backend error")
+        self.assertEqual(
+            events[-1]["payload"]["reply"],
+            "Sage hit a temporary error while generating the response. Please try again in a moment.",
+        )
+        self.assertEqual(events[-1]["payload"]["interventions"], [])
+        self.assertEqual(events[-1]["payload"]["error"], "provider_generation_failed")
         self.assertEqual(events[-1]["payload"]["attempted_providers"], "openai")
+
+    def test_stream_provider_backed_direct_chat_recovers_from_invalid_non_codex_tool_call(self) -> None:
+        call_count = {"value": 0}
+
+        def _stream(**kwargs):
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                return iter(
+                    [
+                        {
+                            "type": "result",
+                            "reply": "",
+                            "usage_masked": {"provider": "deepseek"},
+                            "provider": "deepseek",
+                            "model": "deepseek-chat",
+                            "attempted_providers": "deepseek",
+                            "error": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "name": "http_request",
+                                    "arguments": {"method": "GET", "url": "file:///Users/test/Desktop"},
+                                }
+                            ],
+                        }
+                    ]
+                )
+            if call_count["value"] == 2:
+                return iter(
+                    [
+                        {
+                            "type": "result",
+                            "reply": "",
+                            "usage_masked": {"provider": "deepseek"},
+                            "provider": "deepseek",
+                            "model": "deepseek-chat",
+                            "attempted_providers": "deepseek",
+                            "error": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-2",
+                                    "name": "shell__exec",
+                                    "arguments": {"command": "ls -la ~/Desktop"},
+                                }
+                            ],
+                        }
+                    ]
+                )
+            return iter(
+                [
+                    {
+                        "type": "result",
+                        "reply": "Desktop files listed.",
+                        "usage_masked": {"provider": "deepseek"},
+                        "provider": "deepseek",
+                        "model": "deepseek-chat",
+                        "attempted_providers": "deepseek",
+                        "error": "",
+                        "tool_calls": [],
+                    }
+                ]
+            )
+
+        services = self._services(stream_events=[])
+        services.generate_chat_reply_stream_with_provider_fallback = _stream
+
+        def _execute_single_direct_tool_call(**kwargs):
+            tool_call = kwargs.get("tool_call") or {}
+            if tool_call.get("name") == "http_request":
+                raise RuntimeError("direct_chat_tool_execution_blocked")
+            return "alpha.txt\nbeta.txt"
+
+        services.execute_single_direct_tool_call = _execute_single_direct_tool_call
+
+        events = list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=services,
+                context={"provider": "deepseek"},
+                metadata={"provider": "deepseek", "model": "deepseek-chat"},
+                system_prompt="System prompt",
+                normalized_workspace_id="default",
+                normalized_requested_provider="deepseek",
+                normalized_requested_model="deepseek-chat",
+                normalized_reasoning_effort="medium",
+                normalized_thread_id="thread-1",
+                normalized_message="List the files on my desktop.",
+                compacted_prior_messages=[],
+                prior_messages_used=False,
+                history_mode="none",
+                connected_systems=[],
+                tool_capabilities=[],
+                availability_payload={"ai_ready": True},
+                tools=[{"name": "shell__exec"}],
+                direct_chat_credentials={},
+                proactive_suggestions=[],
+                tool_loop_session_key="session-1",
+                fallback_reason=None,
+                session_ctx=None,
+                trace_context=None,
+                resolved_chat_max_iterations=4,
+                direct_tool_result_summary_system_message="Summarize tool results.",
+            )
+        )
+
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(events[-1]["payload"]["reply"], "Desktop files listed.")
+        self.assertTrue(any(event.get("type") == "step" and event.get("status") == "error" for event in events))
+        self.assertGreaterEqual(call_count["value"], 3)
 
     def test_stream_provider_backed_direct_chat_applies_health_safety_disclaimer_and_citation_trace(self) -> None:
         trace_context = agent_trace_service.TraceContext(

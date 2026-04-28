@@ -1,5 +1,6 @@
 import importlib
 import queue
+import sys
 import threading
 import unittest
 from pathlib import Path
@@ -380,7 +381,11 @@ class OutboxServiceTests(unittest.TestCase):
             self.assertEqual(channel_events[0]["tenant_id"], "tenant-1")
             self.assertEqual(channel_events[0]["action"], "approval_resolved")
         finally:
-            importlib.reload(runtime_events)
+            module = sys.modules.get(runtime_events.__name__)
+            if module is None:
+                importlib.import_module(runtime_events.__name__)
+            else:
+                importlib.reload(module)
 
 
 if __name__ == "__main__":

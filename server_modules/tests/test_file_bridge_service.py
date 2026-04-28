@@ -1,5 +1,6 @@
 import os
 import tempfile
+import importlib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,6 +9,11 @@ from server_modules import artifact_service, file_bridge_service
 
 
 class FileBridgeServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global artifact_service, file_bridge_service
+        artifact_service = importlib.import_module("server_modules.artifact_service")
+        file_bridge_service = importlib.import_module("server_modules.file_bridge_service")
+
     def test_hosted_secure_export_uses_managed_bridge_root(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             store_root = Path(tempdir) / "object-store"

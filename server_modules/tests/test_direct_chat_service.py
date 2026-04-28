@@ -1,3 +1,4 @@
+import importlib
 import unittest
 from unittest.mock import patch
 
@@ -36,6 +37,22 @@ class _DummyManager:
 
 
 class DirectChatServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global DirectChatExecutionServices
+        global direct_chat_request_signature
+        global direct_chat_stream_key
+        global build_direct_chat_event_producer
+        global build_direct_chat_request_meta
+        global execute_direct_chat_turn_request
+
+        direct_chat_service = importlib.import_module("server_modules.direct_chat_service")
+        DirectChatExecutionServices = direct_chat_service.DirectChatExecutionServices
+        direct_chat_request_signature = direct_chat_service.direct_chat_request_signature
+        direct_chat_stream_key = direct_chat_service.direct_chat_stream_key
+        build_direct_chat_event_producer = direct_chat_service.build_direct_chat_event_producer
+        build_direct_chat_request_meta = direct_chat_service.build_direct_chat_request_meta
+        execute_direct_chat_turn_request = direct_chat_service.execute_direct_chat_turn_request
+
     def test_direct_chat_stream_key_uses_request_signature_fallback(self):
         body = {
             "thread_id": "thread-1",
@@ -172,6 +189,37 @@ class DirectChatServiceTests(unittest.TestCase):
         self.assertEqual(request_meta["agent_turn_request"]["workspace_id"], "default")
         self.assertEqual(request_meta["agent_turn_request"]["session_id"], "thread-1")
         self.assertEqual(request_meta["agent_turn_request"]["message"], "hello")
+
+    def test_build_direct_chat_request_meta_uses_turn_request_runtime_hints(self):
+        turn_request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={
+                "thread_id": "thread-1",
+                "provider": "ollama",
+                "model": "qwen2.5:1.5b",
+                "reasoning_effort": "medium",
+                "max_iterations": 4,
+            },
+            workspace_id="default",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            message="Use the local shell tool",
+        )
+
+        request_meta = build_direct_chat_request_meta(
+            body={"thread_id": "thread-1"},
+            workspace_id="default",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            agent_turn_request=serialize_agent_turn_request(turn_request),
+        )
+
+        self.assertEqual(request_meta["provider"], "ollama")
+        self.assertEqual(request_meta["model"], "qwen2.5:1.5b")
+        self.assertEqual(request_meta["reasoning_effort"], "medium")
+        self.assertEqual(request_meta["max_iterations"], 4)
+        self.assertEqual(request_meta["runtime_options"]["provider"], "ollama")
+        self.assertEqual(request_meta["runtime_options"]["model"], "qwen2.5:1.5b")
 
     def test_build_direct_chat_request_meta_includes_serializable_trace_reference(self):
         turn_request = build_direct_chat_turn_request(

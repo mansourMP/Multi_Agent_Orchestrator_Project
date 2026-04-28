@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
@@ -16,6 +17,10 @@ def _fake_scoped_connection(connection):
 
 
 class AgentTraceRepositorySchemaTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global control_plane_repository
+        control_plane_repository = importlib.import_module("server_modules.control_plane_repository")
+
     def test_schema_sql_includes_trace_tables_and_indexes(self) -> None:
         schema = control_plane_repository.CONTROL_PLANE_SCHEMA_SQL
 
@@ -36,6 +41,10 @@ class AgentTraceRepositorySchemaTests(unittest.TestCase):
 
 
 class AgentTraceRepositoryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        global control_plane_repository
+        control_plane_repository = importlib.import_module("server_modules.control_plane_repository")
+
     async def test_create_trace_and_append_event(self) -> None:
         connection = AsyncMock()
         connection.fetchrow = AsyncMock(

@@ -22,6 +22,7 @@ class DirectChatCallbackFacadeInputs:
     clear_direct_tool_loop_state: Callable[[str], None]
     persist_direct_chat_memory_best_effort: Callable[..., None]
     persist_direct_chat_transcript_best_effort: Callable[..., None]
+    persist_direct_chat_hosted_usage_best_effort: Callable[..., None]
     record_direct_tool_signature: Callable[[str, Dict[str, Any]], bool]
     direct_chat_error_reply: Callable[[str], str]
     capture_exception: Callable[[BaseException], None]
@@ -98,6 +99,7 @@ def build_direct_chat_generation_services(
         clear_direct_tool_loop_state=inputs.clear_direct_tool_loop_state,
         persist_direct_chat_memory_best_effort=inputs.persist_direct_chat_memory_best_effort,
         persist_direct_chat_transcript_best_effort=inputs.persist_direct_chat_transcript_best_effort,
+        persist_direct_chat_hosted_usage_best_effort=inputs.persist_direct_chat_hosted_usage_best_effort,
         record_direct_tool_signature=inputs.record_direct_tool_signature,
         direct_chat_error_reply=inputs.direct_chat_error_reply,
         capture_exception=inputs.capture_exception,

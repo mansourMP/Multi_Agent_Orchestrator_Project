@@ -1,3 +1,4 @@
+import importlib
 from pathlib import Path
 import os
 from unittest.mock import AsyncMock, patch
@@ -6,21 +7,25 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from server_modules import routes_health
+def _routes_health_module():
+    return importlib.import_module("server_modules.routes_health")
 
 
-def _build_app() -> FastAPI:
+def _build_app(routes_health_module) -> FastAPI:
     app = FastAPI()
-    app.include_router(routes_health.router)
+    app.include_router(routes_health_module.router)
     return app
 
 
 @pytest.mark.anyio
-@patch("server_modules.routes_health.runtime_db.postgres_health_status", new_callable=AsyncMock, return_value="connected")
-@patch("server_modules.routes_health.runtime_db.sqlite_health_status", return_value="active")
-async def test_health_db_endpoint_reports_backend_state(mock_sqlite, mock_postgres):
-    with patch.dict(os.environ, {"ORION_API_KEY": "secret"}, clear=False):
-        transport = httpx.ASGITransport(app=_build_app())
+async def test_health_db_endpoint_reports_backend_state():
+    routes_health_module = _routes_health_module()
+    with patch.object(routes_health_module.runtime_db, "postgres_health_status", new=AsyncMock(return_value="connected")) as mock_postgres, patch.object(
+        routes_health_module.runtime_db,
+        "sqlite_health_status",
+        return_value="active",
+    ) as mock_sqlite, patch.dict(os.environ, {"ORION_API_KEY": "secret"}, clear=False):
+        transport = httpx.ASGITransport(app=_build_app(routes_health_module))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.get("/health/db", headers={"X-API-Key": "secret"})
 
@@ -38,6 +43,7 @@ async def test_health_db_endpoint_reports_backend_state(mock_sqlite, mock_postgr
 
 @pytest.mark.anyio
 async def test_public_health_endpoint_redacts_sensitive_runtime_fields():
+    routes_health_module = _routes_health_module()
     sensitive_payload = {
         "ok": True,
         "workspace_ids": ["workspace-1"],
@@ -45,8 +51,8 @@ async def test_public_health_endpoint_redacts_sensitive_runtime_fields():
         "state_file": "/tmp/runtime-state.sqlite3",
         "provider_profile_health": {"providers_by_id": {"openai": {"state": "active"}}},
     }
-    with patch("server_modules.routes_health.core.health", new=AsyncMock(return_value=sensitive_payload)):
-        transport = httpx.ASGITransport(app=_build_app())
+    with patch.object(routes_health_module.core, "health", new=AsyncMock(return_value=sensitive_payload)):
+        transport = httpx.ASGITransport(app=_build_app(routes_health_module))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.get("/health")
 
@@ -55,10 +61,14 @@ async def test_public_health_endpoint_redacts_sensitive_runtime_fields():
 
 
 @pytest.mark.anyio
-@patch("server_modules.routes_health.core.health", new_callable=AsyncMock, return_value={"ok": True, "workspace_ids": ["workspace-1"]})
-async def test_internal_health_endpoint_returns_full_payload(mock_health):
-    with patch.dict(os.environ, {"ORION_API_KEY": "secret"}, clear=False):
-        transport = httpx.ASGITransport(app=_build_app())
+async def test_internal_health_endpoint_returns_full_payload():
+    routes_health_module = _routes_health_module()
+    with patch.object(
+        routes_health_module.core,
+        "health",
+        new=AsyncMock(return_value={"ok": True, "workspace_ids": ["workspace-1"]}),
+    ) as mock_health, patch.dict(os.environ, {"ORION_API_KEY": "secret"}, clear=False):
+        transport = httpx.ASGITransport(app=_build_app(routes_health_module))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.get(
                 "/health/internal",

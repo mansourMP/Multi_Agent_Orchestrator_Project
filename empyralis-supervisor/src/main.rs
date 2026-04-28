@@ -237,6 +237,8 @@ async fn execute_capability(
     context: &execution::ExecutionContext,
 ) -> Result<Value> {
     match request.capability_id.as_str() {
+        "shell.execute" => capabilities::shell::execute(&request.arguments, context),
+        "filesystem.read_write" => capabilities::filesystem::read_write(&request.arguments),
         "screenshot.capture" => capabilities::screenshot::capture(&request.arguments),
         "computer_control.ocr" => capabilities::ocr::read_screen_text(&request.arguments),
         "computer_control.move" => capabilities::control::move_mouse(&request.arguments, context),

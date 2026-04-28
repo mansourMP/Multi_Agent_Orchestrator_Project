@@ -103,6 +103,36 @@ def sync_gateway_personal_channel_state(
     return synced_state
 
 
+def sync_gateway_channel_outbound_result(
+    *,
+    gateway_id: str,
+    payload: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    channel_key = str(payload.get("channel_key") or "").strip()
+    if not channel_key:
+        return None
+    channel_lane_contract_service.assert_personal_gateway_channel(
+        channel_key,
+        str(payload.get("provider") or "").strip() or None,
+    )
+    idempotency_key = str(payload.get("idempotency_key") or "").strip()
+    if not idempotency_key:
+        return None
+    if bool(payload.get("delivered")):
+        return personal_channels_repository.mark_outbound_delivered(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=channel_key,
+            idempotency_key=idempotency_key,
+            external_message_id=str(payload.get("external_message_id") or "").strip() or None,
+            metadata={"dispatch_result": dict(payload or {})},
+        )
+    return personal_channels_repository.get_outbound_message(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        idempotency_key=idempotency_key,
+    )
+
+
 async def handle_gateway_channel_inbound(
     *,
     gateway_id: str,

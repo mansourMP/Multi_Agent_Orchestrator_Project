@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+from server_modules import direct_chat_operator_binding_service
+
 ROOT_DIR = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT_DIR / "server_modules" / "direct_chat_runtime_exports.py"
 if str(ROOT_DIR) not in sys.path:
@@ -61,10 +63,132 @@ def _legacy_fallback_stream(**kwargs):
     return _iterator()
 
 
-operator_chat.generate_chat_reply_stream_with_provider_fallback = _legacy_fallback_stream
+def _rebuild_operator_chat_exports() -> None:
+    operator_chat.globals = globals
+    operator_chat.__dict__.update(
+        direct_chat_operator_binding_service.build_direct_chat_module_export_map_from_namespace(
+            namespace=operator_chat.__dict__,
+            agent_machine_full_trust_enabled_fn=operator_chat.runtime_config.agent_machine_full_trust_enabled,
+            chat_max_iterations_default=operator_chat.CHAT_MAX_ITERATIONS_DEFAULT,
+            chat_max_iterations_ceiling=operator_chat.CHAT_MAX_ITERATIONS_CEILING,
+            compact_text_fn=lambda value: " ".join(str(value or "").split()).strip().lower(),
+            direct_chat_compaction_token_limit=operator_chat.DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
+            execution_markers=operator_chat.EXECUTION_MARKERS,
+            question_openers=operator_chat.QUESTION_OPENERS,
+            direct_run_openers=operator_chat.DIRECT_RUN_OPENERS,
+            workflow_request_markers=operator_chat.WORKFLOW_REQUEST_MARKERS,
+            google_workspace_keywords=operator_chat.GOOGLE_WORKSPACE_KEYWORDS,
+            smtp_keywords=operator_chat.SMTP_KEYWORDS,
+            telegram_keywords=operator_chat.TELEGRAM_KEYWORDS,
+            slack_keywords=operator_chat.SLACK_KEYWORDS,
+            dropbox_keywords=operator_chat.DROPBOX_KEYWORDS,
+            s3_keywords=operator_chat.S3_KEYWORDS,
+            max_context_tool_actions=operator_chat.MAX_CONTEXT_TOOL_ACTIONS,
+            max_context_tool_capabilities=operator_chat.MAX_CONTEXT_TOOL_CAPABILITIES,
+            max_direct_chat_prior_message_chars=operator_chat.MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS,
+            max_direct_chat_prior_messages=operator_chat.MAX_DIRECT_CHAT_PRIOR_MESSAGES,
+            direct_chat_model_preferences=operator_chat._DIRECT_CHAT_MODEL_PREFERENCES,
+            direct_chat_clear_markers=operator_chat._DIRECT_CHAT_CLEAR_MARKERS,
+            direct_tool_loop_state=operator_chat._DIRECT_TOOL_LOOP_STATE,
+            direct_chat_loop_repeat_limit=operator_chat.DIRECT_CHAT_LOOP_REPEAT_LIMIT,
+            parse_json_object_loose_fn=operator_chat.parse_json_object_loose,
+            generate_reply_fn=operator_chat.generate_chat_reply_with_provider_fallback,
+            extraction_prompt=operator_chat._DIRECT_CHAT_MEMORY_EXTRACTION_PROMPT,
+            extraction_system_prompt=operator_chat._DIRECT_CHAT_MEMORY_EXTRACTION_SYSTEM_PROMPT,
+            save_session_transcript_fn=operator_chat.save_session_transcript,
+            system_prefix=operator_chat._DIRECT_CHAT_MEMORY_SYSTEM_PREFIX,
+            workspace_context_dir_fn=operator_chat.workspace_context_dir,
+            memory_suggestion_prompts_fn=lambda workspace_id: operator_chat.memory_service.memory_suggestion_prompts(
+                workspace_id,
+                limit=2,
+            ),
+            direct_chat_run_snapshot_fn=lambda run_id: (
+                getattr(operator_chat, "direct_chat_run_snapshot", operator_chat._direct_chat_run_snapshot)(run_id)
+            ),
+            direct_chat_run_event_to_step_fn=lambda run_id, event: (
+                getattr(operator_chat, "direct_chat_run_event_to_step", operator_chat._direct_chat_run_event_to_step)(run_id, event)
+            ),
+            direct_chat_run_snapshot_to_step_fn=lambda run_id, snapshot: (
+                getattr(operator_chat, "direct_chat_run_snapshot_to_step", operator_chat._direct_chat_run_snapshot_to_step)(run_id, snapshot)
+            ),
+            direct_chat_run_final_payload_fn=lambda **kwargs: (
+                getattr(operator_chat, "direct_chat_run_final_payload", operator_chat._direct_chat_run_final_payload)(**kwargs)
+            ),
+            live_window_seconds=operator_chat.DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS,
+            poll_seconds=operator_chat.DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS,
+            monotonic_fn=operator_chat.time.monotonic,
+            sleep_fn=operator_chat.time.sleep,
+            parse_json_object_loose_support_fn=operator_chat.parse_json_object_loose,
+            direct_chat_tool_policy_callbacks_fn=lambda: operator_chat._direct_chat_tool_policy_callbacks(),
+            direct_chat_routing_policy_callbacks_fn=lambda: operator_chat._direct_chat_routing_policy_callbacks(),
+            capture_exception_fn=operator_chat.sentry_sdk.capture_exception,
+            generate_chat_reply_stream_with_provider_fallback_fn=operator_chat.generate_chat_reply_stream_with_provider_fallback,
+            compact_conversation_history_fn=operator_chat.compact_conversation_history,
+            parse_memory_write_fn=operator_chat.memory_service.parse_no_provider_memory_write,
+            parse_memory_read_fn=operator_chat.memory_service.parse_no_provider_memory_read,
+            handle_memory_request_fn=operator_chat.memory_service.handle_no_provider_memory_request,
+            list_memory_entries_fn=operator_chat.list_memory_entries,
+            get_memory_fn=operator_chat.get_memory,
+            delete_memory_fn=operator_chat.delete_memory,
+            no_provider_reasoning_required_response_fn=operator_chat.no_provider_service.no_provider_reasoning_required_response,
+            supported_providers=list(operator_chat.SUPPORTED_PROVIDERS),
+            complex_task_sequence_markers=operator_chat.COMPLEX_TASK_SEQUENCE_MARKERS,
+            complex_task_outcome_markers=operator_chat.COMPLEX_TASK_OUTCOME_MARKERS,
+            discord_keywords=operator_chat.DISCORD_KEYWORDS,
+            browser_keywords=operator_chat.BROWSER_KEYWORDS,
+            local_file_keywords=operator_chat.LOCAL_FILE_KEYWORDS,
+            local_shell_keywords=operator_chat.LOCAL_SHELL_KEYWORDS,
+            local_screenshot_keywords=operator_chat.LOCAL_SCREENSHOT_KEYWORDS,
+            local_computer_control_keywords=operator_chat.LOCAL_COMPUTER_CONTROL_KEYWORDS,
+            web_lookup_keywords=operator_chat.WEB_LOOKUP_KEYWORDS,
+            http_request_keywords=operator_chat.HTTP_REQUEST_KEYWORDS,
+            image_generation_keywords=operator_chat.IMAGE_GENERATION_KEYWORDS,
+            llm_task_keywords=operator_chat.LLM_TASK_KEYWORDS,
+            llm_task_fn=operator_chat.llm_task,
+            web_search_fn=operator_chat.web_search,
+            web_fetch_fn=operator_chat.web_fetch,
+            search_memory_notebook_fn=operator_chat.search_memory_notebook,
+            get_memory_notebook_excerpt_fn=operator_chat.get_memory_notebook_excerpt,
+            build_operator_system_prompt_fn=operator_chat.build_operator_system_prompt,
+            memory_tool_names=operator_chat._MEMORY_NOTEBOOK_TOOL_NAMES,
+            local_worker_registry=operator_chat.LOCAL_WORKER_REGISTRY,
+            is_worker_online_fn=operator_chat._is_worker_online,
+            resolve_workspace_tool_capabilities_fn=operator_chat.resolve_workspace_tool_capabilities,
+            build_provider_credential_candidates_fn=operator_chat._build_provider_credential_candidates,
+            normalize_auth_mode_fn=operator_chat.normalize_auth_mode,
+            get_claude_code_session_token_fn=operator_chat.get_claude_code_session_token,
+            provider_has_key_fn=operator_chat.provider_has_key,
+            chat_iteration_limit_reply_fn=operator_chat._chat_iteration_limit_reply,
+            safe_positive_int_fn=operator_chat._safe_positive_int,
+        )
+    )
+    public_aliases = {
+        "direct_chat_credentials": "_direct_chat_credentials",
+        "supports_direct_message_native_chat": "_supports_direct_message_native_chat",
+        "execute_single_direct_tool_call": "_execute_single_direct_tool_call",
+        "can_auto_start_run_handoff": "_can_auto_start_run_handoff",
+        "persist_direct_chat_memory_best_effort": "_persist_direct_chat_memory_best_effort",
+        "preferred_provider": "_preferred_provider",
+        "start_direct_chat_run_handoff": "_start_direct_chat_run_handoff",
+        "direct_chat_run_snapshot": "_direct_chat_run_snapshot",
+        "message_can_use_direct_connector_tools": "_message_can_use_direct_connector_tools",
+    }
+    for public_name, private_name in public_aliases.items():
+        if public_name not in operator_chat.__dict__ and private_name in operator_chat.__dict__:
+            operator_chat.__dict__[public_name] = operator_chat.__dict__[private_name]
 
-build_direct_operator_reply = operator_chat.collect_direct_operator_reply
-stream_direct_operator_reply = operator_chat.build_direct_operator_reply
+
+operator_chat.generate_chat_reply_stream_with_provider_fallback = _legacy_fallback_stream
+_rebuild_operator_chat_exports()
+
+def build_direct_operator_reply(**kwargs):
+    _rebuild_operator_chat_exports()
+    return operator_chat.collect_direct_operator_reply(**kwargs)
+
+
+def stream_direct_operator_reply(**kwargs):
+    _rebuild_operator_chat_exports()
+    return operator_chat.build_direct_operator_reply(**kwargs)
 
 
 class OperatorChatTests(unittest.TestCase):
@@ -83,11 +207,18 @@ class OperatorChatTests(unittest.TestCase):
     def setUp(self) -> None:
         self._semantic_model_patch = patch.object(operator_chat.memory_service._workspace_memory_store, "_SEMANTIC_MODEL", False)
         self._semantic_model_patch.start()
+        self._supports_direct_message_patch = patch.object(
+            operator_chat,
+            "supports_direct_message_native_chat",
+            side_effect=lambda provider, credentials: bool(credentials) or bool(operator_chat.provider_has_key(provider)),
+        )
+        self._supports_direct_message_patch.start()
 
     def tearDown(self) -> None:
+        self._supports_direct_message_patch.stop()
         self._semantic_model_patch.stop()
 
-    def test_preferred_provider_maps_openai_oauth_to_codex_cli(self):
+    def test_preferred_provider_keeps_explicit_openai_oauth_selection(self):
         def fake_credentials(_workspace_id, provider):
             if provider == "openai":
                 return {"auth_mode": "oauth_token", "oauth_token": "token"}
@@ -98,14 +229,14 @@ class OperatorChatTests(unittest.TestCase):
         def fake_support(provider, credentials):
             return provider == "codex_cli" and bool(credentials)
 
-        with patch("operator_chat_under_test._direct_chat_credentials", side_effect=fake_credentials):
-            with patch("operator_chat_under_test._supports_direct_message_native_chat", side_effect=fake_support):
+        with patch("operator_chat_under_test.direct_chat_credentials", side_effect=fake_credentials):
+            with patch("operator_chat_under_test.supports_direct_message_native_chat", side_effect=fake_support):
                 provider, credentials = operator_chat._preferred_provider("default", "openai")
 
-        self.assertEqual(provider, "codex_cli")
+        self.assertEqual(provider, "openai")
         self.assertEqual(credentials.get("auth_mode"), "oauth_token")
 
-    def test_preferred_provider_maps_openai_codex_token_to_codex_cli(self):
+    def test_preferred_provider_keeps_explicit_openai_codex_token_selection(self):
         def fake_credentials(_workspace_id, provider):
             if provider == "openai":
                 return {"credential_type": "codex_token", "access_token": "token"}
@@ -116,16 +247,16 @@ class OperatorChatTests(unittest.TestCase):
         def fake_support(provider, credentials):
             return provider == "codex_cli" and bool(credentials)
 
-        with patch("operator_chat_under_test._direct_chat_credentials", side_effect=fake_credentials):
-            with patch("operator_chat_under_test._supports_direct_message_native_chat", side_effect=fake_support):
+        with patch("operator_chat_under_test.direct_chat_credentials", side_effect=fake_credentials):
+            with patch("operator_chat_under_test.supports_direct_message_native_chat", side_effect=fake_support):
                 provider, credentials = operator_chat._preferred_provider("default", "openai")
 
-        self.assertEqual(provider, "codex_cli")
-        self.assertEqual(credentials.get("auth_mode"), "oauth_token")
+        self.assertEqual(provider, "openai")
+        self.assertEqual(credentials.get("credential_type"), "codex_token")
 
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
     @patch(
-        "operator_chat_under_test._execute_single_direct_tool_call",
+        "operator_chat_under_test.execute_single_direct_tool_call",
         return_value="1. Top headline\nURL: https://example.com\nSnippet: Example AI headline",
     )
     @patch(
@@ -150,10 +281,10 @@ class OperatorChatTests(unittest.TestCase):
         self.assertIn("Top headline", payload["reply"])
         self.assertEqual(payload["context_used"]["fallback_reason"], "obvious_direct_tool_execution")
 
-    @patch("operator_chat_under_test._can_auto_start_run_handoff", return_value=False)
+    @patch("operator_chat_under_test.can_auto_start_run_handoff", return_value=False)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    @patch("operator_chat_under_test._persist_direct_chat_memory_best_effort", return_value=None)
-    @patch("operator_chat_under_test._preferred_provider", return_value=("openai", {"api_key": "sk-test"}))
+    @patch("operator_chat_under_test.persist_direct_chat_memory_best_effort", return_value=None)
+    @patch("operator_chat_under_test.preferred_provider", return_value=("openai", {"api_key": "sk-test"}))
     def test_direct_chat_locks_model_call_to_resolved_provider(
         self,
         _preferred_provider,
@@ -192,7 +323,7 @@ class OperatorChatTests(unittest.TestCase):
         self.assertEqual(payload["reply"], "Hello")
         self.assertEqual(payload["provider"], "openai")
 
-    @patch("operator_chat_under_test._can_auto_start_run_handoff", return_value=False)
+    @patch("operator_chat_under_test.can_auto_start_run_handoff", return_value=False)
     @patch("operator_chat_under_test.provider_has_key", return_value=True)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
     def test_streaming_reply_does_not_duplicate_final_chunk(self, _capabilities, _provider_has_key, _handoff):
@@ -242,8 +373,8 @@ class OperatorChatTests(unittest.TestCase):
         self.assertEqual(payload["actions"][0]["label"], "Connect")
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
-    @patch("operator_chat_under_test._can_auto_start_run_handoff", return_value=False)
-    @patch("operator_chat_under_test._message_can_use_direct_connector_tools", return_value=False)
+    @patch("operator_chat_under_test.can_auto_start_run_handoff", return_value=False)
+    @patch("operator_chat_under_test.message_can_use_direct_connector_tools", return_value=False)
     @patch("operator_chat_under_test.provider_has_key", return_value=True)
     @patch(
         "operator_chat_under_test.resolve_workspace_tool_capabilities",
@@ -288,7 +419,7 @@ class OperatorChatTests(unittest.TestCase):
         }],
     )
     def test_obvious_telegram_write_preview_bypasses_ai_ready_gate(self, _capabilities, _provider_has_key, generate_reply):
-        with patch("operator_chat_under_test._message_can_use_direct_connector_tools", return_value=False):
+        with patch("operator_chat_under_test.message_can_use_direct_connector_tools", return_value=False):
             payload = build_direct_operator_reply(
                 message="Send a Telegram message to my test chat saying certification probe one.",
                 workspace_id="default",
@@ -318,7 +449,7 @@ class OperatorChatTests(unittest.TestCase):
         }],
     )
     def test_obvious_google_draft_preview_bypasses_ai_ready_gate(self, _capabilities, _provider_has_key, generate_reply):
-        with patch("operator_chat_under_test._message_can_use_direct_connector_tools", return_value=False):
+        with patch("operator_chat_under_test.message_can_use_direct_connector_tools", return_value=False):
             payload = build_direct_operator_reply(
                 message="Draft an email to myself summarizing today's certification results.",
                 workspace_id="default",
@@ -373,7 +504,7 @@ class OperatorChatTests(unittest.TestCase):
         self.assertEqual(payload["context_used"]["history_mode"], "none")
 
     @patch.dict("operator_chat_under_test.os.environ", {"ORION_AUTH_MODE": "codex"}, clear=False)
-    @patch("operator_chat_under_test._direct_chat_credentials", return_value={})
+    @patch("operator_chat_under_test.direct_chat_credentials", return_value={})
     @patch("operator_chat_under_test.provider_has_key", return_value=False)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
     def test_codex_chat_unavailable_fails_closed(self, _capabilities, _provider_has_key, _direct_chat_credentials):
@@ -385,22 +516,26 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["mode"], "error")
-        self.assertEqual(payload["error"], "no_provider")
-        self.assertEqual(payload["message"], "No AI provider configured")
+        self.assertEqual(payload["mode"], "connect")
         self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["actions"], [{"label": "Connect", "href": "/connect-ai"}])
+        self.assertIntervention(
+            payload,
+            "connect_required",
+            title="Hosted Sage AI is blocked",
+            detail_contains="Hosted Sage AI is disabled",
+        )
         self.assertFalse(payload["context_used"]["provider_overridden"])
-        self.assertTrue(payload["context_used"]["fallback_used"])
-        self.assertEqual(payload["context_used"].get("fallback_reason"), "provider_unavailable")
+        self.assertFalse(payload["context_used"]["fallback_used"])
 
     @patch(
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
         return_value=("Hello from Gemini.", {"provider": "gemini", "model": "gemini-2.0-flash"}, "gemini", ""),
     )
-    @patch("operator_chat_under_test._direct_chat_credentials", return_value={})
+    @patch("operator_chat_under_test.direct_chat_credentials", return_value={})
     @patch("operator_chat_under_test.provider_has_key", side_effect=lambda provider: provider == "gemini")
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    def test_selected_provider_unavailable_uses_next_available_provider(self, _capabilities, _provider_has_key, _direct_chat_credentials, _generate_reply):
+    def test_selected_provider_unavailable_fails_closed(self, _capabilities, _provider_has_key, _direct_chat_credentials, _generate_reply):
         payload = build_direct_operator_reply(
             message="hello",
             workspace_id="default",
@@ -409,10 +544,16 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["mode"], "answer")
-        self.assertEqual(payload["provider"], "gemini")
-        self.assertEqual(payload["context_used"]["effective_provider"], "gemini")
-        self.assertTrue(payload["context_used"]["provider_overridden"])
+        self.assertEqual(payload["mode"], "connect")
+        self.assertEqual(payload["actions"], [{"label": "Connect", "href": "/connect-ai"}])
+        self.assertIntervention(
+            payload,
+            "connect_required",
+            title="Hosted Sage AI is blocked",
+            detail_contains="Hosted Sage AI is disabled",
+        )
+        self.assertIsNone(payload["context_used"]["effective_provider"])
+        self.assertFalse(payload["context_used"]["provider_overridden"])
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
     @patch("operator_chat_under_test.provider_has_key", return_value=True)
@@ -568,14 +709,22 @@ class OperatorChatTests(unittest.TestCase):
         )
 
         self.assertEqual(capability_payload["reply"], plain_payload["reply"])
-        self.assertEqual(capability_payload["mode"], "error")
-        self.assertEqual(plain_payload["mode"], "error")
-        self.assertEqual(capability_payload["error"], "no_provider")
-        self.assertEqual(plain_payload["error"], "no_provider")
-        self.assertEqual(capability_payload["message"], "No AI provider configured")
-        self.assertEqual(plain_payload["message"], "No AI provider configured")
-        self.assertEqual(capability_payload["actions"], [])
-        self.assertEqual(plain_payload["actions"], [])
+        self.assertEqual(capability_payload["mode"], "connect")
+        self.assertEqual(plain_payload["mode"], "connect")
+        self.assertEqual(capability_payload["actions"], [{"label": "Connect", "href": "/connect-ai"}])
+        self.assertEqual(plain_payload["actions"], [{"label": "Connect", "href": "/connect-ai"}])
+        self.assertIntervention(
+            capability_payload,
+            "connect_required",
+            title="Hosted Sage AI is blocked",
+            detail_contains="Hosted Sage AI is disabled",
+        )
+        self.assertIntervention(
+            plain_payload,
+            "connect_required",
+            title="Hosted Sage AI is blocked",
+            detail_contains="Hosted Sage AI is disabled",
+        )
         generate_reply.assert_not_called()
 
     @patch(
@@ -686,9 +835,9 @@ class OperatorChatTests(unittest.TestCase):
             detail_contains="temporary backend error",
         )
 
-    @patch("operator_chat_under_test._direct_chat_run_snapshot")
-    @patch("operator_chat_under_test._start_direct_chat_run_handoff")
-    @patch("operator_chat_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_under_test.direct_chat_run_snapshot")
+    @patch("operator_chat_under_test.start_direct_chat_run_handoff")
+    @patch("operator_chat_under_test.preferred_provider", return_value=("openai", {"api_key": "sk-test"}))
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
     def test_execution_preview_auto_starts_durable_run_handoff(
         self,
@@ -734,8 +883,8 @@ class OperatorChatTests(unittest.TestCase):
         self.assertTrue(events[-1]["payload"]["context_used"]["run_created"])
         start_run_mock.assert_called_once()
 
-    @patch("operator_chat_under_test._start_direct_chat_run_handoff")
-    @patch("operator_chat_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_under_test.start_direct_chat_run_handoff")
+    @patch("operator_chat_under_test.preferred_provider", return_value=("openai", {"api_key": "sk-test"}))
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
     def test_execution_preview_does_not_auto_start_durable_run_for_byok(
         self,
@@ -756,9 +905,9 @@ class OperatorChatTests(unittest.TestCase):
         self.assertFalse(payload["context_used"]["run_created"])
         start_run_mock.assert_not_called()
 
-    @patch("operator_chat_under_test._direct_chat_run_snapshot")
-    @patch("operator_chat_under_test._start_direct_chat_run_handoff")
-    @patch("operator_chat_under_test._preferred_provider", return_value=("codex_cli", {}))
+    @patch("operator_chat_under_test.direct_chat_run_snapshot")
+    @patch("operator_chat_under_test.start_direct_chat_run_handoff")
+    @patch("operator_chat_under_test.preferred_provider", return_value=("codex_cli", {"auth_mode": "oauth_token", "oauth_token": "token"}))
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
     def test_complex_local_task_prefers_durable_run_handoff(
         self,
@@ -790,7 +939,7 @@ class OperatorChatTests(unittest.TestCase):
                 message="Open file /tmp/README.md, then inspect the logs and prepare next steps.",
                 workspace_id="default",
                 requested_model="gpt-5.4",
-                requested_provider="openai",
+                requested_provider="codex_cli",
                 availability={"ai_ready": True, "runtime_ok": True, "connection_mode": "local_companion"},
             )
         )
@@ -803,7 +952,7 @@ class OperatorChatTests(unittest.TestCase):
         start_run_mock.assert_called_once()
 
     @patch("operator_chat_under_test.time.monotonic", side_effect=[0.0, 13.0])
-    @patch("operator_chat_under_test._direct_chat_run_snapshot")
+    @patch("operator_chat_under_test.direct_chat_run_snapshot")
     def test_handoff_stream_emits_snapshot_waiting_for_runtime_step(
         self,
         snapshot_mock,
@@ -847,7 +996,7 @@ class OperatorChatTests(unittest.TestCase):
             detail_contains="waiting for your laptop to become available",
         )
 
-    @patch("operator_chat_under_test._direct_chat_run_snapshot")
+    @patch("operator_chat_under_test.direct_chat_run_snapshot")
     def test_handoff_stream_emits_snapshot_waiting_for_confirmation_step(
         self,
         snapshot_mock,

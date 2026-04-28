@@ -11,6 +11,10 @@ import {
 } from '@/lib/auth/csrf';
 import { controlPlaneBaseUrl } from '@/lib/server/control-plane-base-url';
 
+type ForwardControlPlaneRequestInit = RequestInit & {
+  timeoutMs?: number;
+};
+
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   'connection',
   'content-length',
@@ -130,7 +134,7 @@ function copyForwardableResponseHeaders(response: Response): Headers {
 export async function forwardControlPlaneRequest(
   request: NextRequest,
   upstreamPath: string,
-  init: RequestInit = {},
+  init: ForwardControlPlaneRequestInit = {},
 ): Promise<NextResponse> {
   const csrfFailure = validateBrowserCsrf(request);
   if (csrfFailure) {
@@ -140,6 +144,7 @@ export async function forwardControlPlaneRequest(
   const upstreamUrl = `${controlPlaneBaseUrl()}${upstreamPath}`;
   const headers = new Headers();
   copyForwardableRequestHeaders(request, headers, init.headers);
+  const timeoutMs = Number.isFinite(init.timeoutMs) ? Math.max(1, Number(init.timeoutMs)) : null;
 
   const body =
     init.body !== undefined
@@ -147,17 +152,41 @@ export async function forwardControlPlaneRequest(
       : request.method === 'GET' || request.method === 'HEAD'
         ? undefined
         : await request.text();
+  const controller = timeoutMs === null ? null : new AbortController();
+  const timeoutHandle = controller && timeoutMs !== null
+    ? setTimeout(() => {
+      controller.abort();
+    }, timeoutMs)
+    : null;
 
-  const response = await fetch(upstreamUrl, {
-    method: init.method ?? request.method,
-    cache: 'no-store',
-    redirect: 'manual',
-    headers,
-    body: body === '' ? undefined : body,
-  });
+  try {
+    const response = await fetch(upstreamUrl, {
+      method: init.method ?? request.method,
+      cache: 'no-store',
+      redirect: 'manual',
+      headers,
+      body: body === '' ? undefined : body,
+      signal: controller?.signal,
+    });
 
-  return new NextResponse(response.body, {
-    status: response.status,
-    headers: copyForwardableResponseHeaders(response),
-  });
+    return new NextResponse(response.body, {
+      status: response.status,
+      headers: copyForwardableResponseHeaders(response),
+    });
+  } catch (error) {
+    if (controller && error instanceof Error && error.name === 'AbortError') {
+      return new NextResponse(
+        JSON.stringify({ detail: `Upstream request timed out after ${timeoutMs}ms.` }),
+        {
+          status: 504,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    }
+    throw error;
+  } finally {
+    if (timeoutHandle !== null) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }

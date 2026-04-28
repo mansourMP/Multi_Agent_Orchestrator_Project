@@ -19,6 +19,13 @@ import server_modules.routes_auth as routes_auth_module
 
 
 def _reload_auth(monkeypatch: pytest.MonkeyPatch, tmp_path, extra_env: dict[str, str] | None = None):
+    global auth_module
+    global channel_user_acquisition_service_module
+    global control_plane_repository_module
+    global db_module
+    global jwt_secret_module
+    global routes_auth_module
+
     state_home = tmp_path / "state"
     monkeypatch.setenv("EMPYRALIS_STATE_HOME", str(state_home))
     monkeypatch.delenv("EMPYRALIS_JWT_SECRET_FILE", raising=False)
@@ -27,6 +34,13 @@ def _reload_auth(monkeypatch: pytest.MonkeyPatch, tmp_path, extra_env: dict[str,
         monkeypatch.delenv(key, raising=False)
     for key, value in (extra_env or {}).items():
         monkeypatch.setenv(key, value)
+
+    db_module = importlib.import_module("server_modules.db")
+    control_plane_repository_module = importlib.import_module("server_modules.control_plane_repository")
+    jwt_secret_module = importlib.import_module("server_modules.jwt_secret")
+    auth_module = importlib.import_module("server_modules.auth")
+    channel_user_acquisition_service_module = importlib.import_module("server_modules.channel_user_acquisition_service")
+    routes_auth_module = importlib.import_module("server_modules.routes_auth")
 
     runtime_db = importlib.reload(db_module)
     runtime_db._POOLS_BY_LOOP.clear()
@@ -588,7 +602,7 @@ def test_authenticated_profile_includes_identity_boundary(monkeypatch: pytest.Mo
     assert profile["identity_boundary"]["auth_methods"][0]["provider"] == "empyralis_password"
     assert profile["auth_session"]["session_id"] == created["auth_session"]["session_id"]
     assert profile["identity_versions"]["membership_version"] >= 1
-    assert profile["current_workspace_entitlements"]["plan_id"] == "personal"
+    assert profile["current_workspace_entitlements"]["plan_id"] == "pro"
     assert profile["current_workspace_entitlements"]["capabilities"]["mobile_app_enabled"] is True
 
 

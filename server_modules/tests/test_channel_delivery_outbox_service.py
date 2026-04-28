@@ -1,8 +1,9 @@
 import unittest
 from unittest.mock import patch
+import importlib
 
-from server_modules.connectors.channel_delivery_outbox_service import deliver_channel_run_delivery_outbox_event
-from server_modules.outbox_service import OutboxEvent, OutboxRetryLater
+from server_modules.connectors import channel_delivery_outbox_service
+from server_modules import outbox_service
 
 
 class _TelegramDispatchStub:
@@ -105,8 +106,17 @@ class _ShellStub:
 
 
 class ChannelDeliveryOutboxServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global channel_delivery_outbox_service
+        global outbox_service
+
+        channel_delivery_outbox_service = importlib.import_module(
+            "server_modules.connectors.channel_delivery_outbox_service"
+        )
+        outbox_service = importlib.import_module("server_modules.outbox_service")
+
     def test_telegram_delivery_defers_until_terminal(self) -> None:
-        event = OutboxEvent(
+        event = outbox_service.OutboxEvent(
             event_id="evt-1",
             event_type="channel_run_delivery",
             tenant_id="tenant-1",
@@ -122,13 +132,13 @@ class ChannelDeliveryOutboxServiceTests(unittest.TestCase):
         shell = _ShellStub(telegram_registry=_TelegramRegistryStub(_TelegramDispatchStub({"ready": False, "status": "executing"})))
 
         with patch("server_modules.connectors.channel_delivery_outbox_service._connector_shell", return_value=shell):
-            with self.assertRaises(OutboxRetryLater):
-                deliver_channel_run_delivery_outbox_event(event)
+            with self.assertRaises(outbox_service.OutboxRetryLater):
+                channel_delivery_outbox_service.deliver_channel_run_delivery_outbox_event(event)
 
     def test_whatsapp_delivery_uses_terminal_result(self) -> None:
         dispatch = _WhatsAppDispatchStub({"ready": True, "status": "completed", "summary": "Done"})
         shell = _ShellStub(whatsapp_registry=_WhatsAppRegistryStub(dispatch))
-        event = OutboxEvent(
+        event = outbox_service.OutboxEvent(
             event_id="evt-2",
             event_type="channel_run_delivery",
             tenant_id="tenant-1",
@@ -143,7 +153,7 @@ class ChannelDeliveryOutboxServiceTests(unittest.TestCase):
         )
 
         with patch("server_modules.connectors.channel_delivery_outbox_service._connector_shell", return_value=shell):
-            delivered = deliver_channel_run_delivery_outbox_event(event)
+            delivered = channel_delivery_outbox_service.deliver_channel_run_delivery_outbox_event(event)
 
         self.assertTrue(delivered)
         self.assertEqual(dispatch.calls[0], ("poll", "run-2", 240))
@@ -154,7 +164,7 @@ class ChannelDeliveryOutboxServiceTests(unittest.TestCase):
         dispatch = _TelegramDispatchStub({"ready": True, "status": "completed", "summary": "Done"})
         registry = _TelegramRegistryStub(dispatch)
         shell = _ShellStub(telegram_registry=registry)
-        event = OutboxEvent(
+        event = outbox_service.OutboxEvent(
             event_id="evt-3",
             event_type="channel_run_delivery",
             tenant_id="tenant-1",
@@ -180,7 +190,7 @@ class ChannelDeliveryOutboxServiceTests(unittest.TestCase):
                 "server_modules.run_state_repository.sync_patch_outbox_event_payload",
                 side_effect=lambda event_id, payload_patch: patched.append((event_id, payload_patch)),
             ):
-                delivered = deliver_channel_run_delivery_outbox_event(event)
+                delivered = channel_delivery_outbox_service.deliver_channel_run_delivery_outbox_event(event)
 
         self.assertTrue(delivered)
         self.assertEqual(dispatch.calls, [])

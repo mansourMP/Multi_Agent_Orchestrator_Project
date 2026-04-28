@@ -26,6 +26,7 @@ from server_modules.api_contract import (
     ApiRunListResponse,
     ApiSessionRequest,
     ApiSessionResponse,
+    ApiThreadTurnCreateRequest,
     ApiThreadListResponse,
     ApiThreadRecord,
     build_turn_chat_body,
@@ -1058,6 +1059,76 @@ def register_run_routes(app) -> None:
             owner_user_id = str(record.get("owner_user_id") or "").strip()
             if owner_user_id and request_user_id and owner_user_id != request_user_id:
                 raise HTTPException(status_code=404, detail="Thread not found.")
+        normalized = _history_filtered_thread_record(record, cache={})
+        if not isinstance(normalized, dict):
+            raise HTTPException(status_code=404, detail="Thread not found.")
+        return normalized
+
+    @app.post("/threads/{thread_id}/turns", dependencies=[Depends(member_dependency)], response_model=ApiThreadRecord)
+    async def create_thread_turn(
+        thread_id: str,
+        body: ApiThreadTurnCreateRequest,
+        current_user=Depends(member_dependency),
+    ):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        workspace_id = enforce_workspace_access(
+            current_user,
+            payload.get("workspace_id"),
+            tenant_id=payload.get("tenant_id"),
+            minimum_role="member",
+        )
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        actor = _coerce_dict(payload.get("actor"))
+        if not str(actor.get("id") or "").strip():
+            actor["id"] = str((current_user or {}).get("user_id") or (current_user or {}).get("email") or "anonymous").strip()
+        if not str(actor.get("display_name") or "").strip():
+            actor["display_name"] = str((current_user or {}).get("email") or actor.get("id") or "").strip()
+        channel = str(payload.get("channel") or "web").strip() or "web"
+        request_id = (
+            str(payload.get("client_request_id") or "").strip()
+            or str(payload.get("request_id") or "").strip()
+            or None
+        )
+        metadata = _coerce_dict(payload.get("metadata"))
+        if request_id:
+            metadata.setdefault("client_request_id", request_id)
+            metadata.setdefault("request_id", request_id)
+        owner_user_id = (
+            None
+            if _current_user_is_privileged(current_user)
+            else str(current_user.get("user_id") or "").strip() or None
+        )
+        resolved_thread_id = str(thread_id or "").strip()
+        await thread_service.ensure_master_thread(
+            thread_id=resolved_thread_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+            channel=channel,
+            title=thread_service.build_default_thread_title(str(payload.get("content") or "")),
+            metadata={
+                "source": "runtime_runs_api",
+                "session_id": str(payload.get("session_id") or "").strip() or None,
+            },
+        )
+        await thread_service.record_user_turn(
+            thread_id=resolved_thread_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            session_id=str(payload.get("session_id") or "").strip() or None,
+            actor=actor,
+            content=str(payload.get("content") or ""),
+            runtime_profile_id=str(payload.get("runtime_profile_id") or "").strip() or None,
+            metadata=metadata,
+        )
+        record = await thread_service.get_thread(
+            resolved_thread_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            include_turns=True,
+        )
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Thread not found.")
         normalized = _history_filtered_thread_record(record, cache={})
         if not isinstance(normalized, dict):
             raise HTTPException(status_code=404, detail="Thread not found.")

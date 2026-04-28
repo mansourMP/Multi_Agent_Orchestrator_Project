@@ -1649,7 +1649,7 @@ def create_live_run(
     log_queue_factory: Callable[[], Any] = queue.Queue,
     input_queue_factory: Callable[[], Any] = queue.Queue,
     uuid4_fn: Callable[[], Any] = uuid.uuid4,
-    utcnow_fn: Callable[[], datetime] = datetime.utcnow,
+    utcnow_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> str:
     if create_live_run_initial_fn is None:
@@ -1658,7 +1658,7 @@ def create_live_run(
         record_run_transition_fn = run_state_repository.sync_record_transition
     sync_acp_manager_paths_fn(runtime_db_path=runtime_db_path)
     run_id = str(uuid4_fn())
-    now = utcnow_fn().isoformat() + "Z"
+    now = utcnow_fn().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     started_mono = monotonic_fn()
     log_queue = log_queue_factory()
     run_context = context or {}

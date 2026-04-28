@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
+from http.client import IncompleteRead
 
 from fastapi import HTTPException
 
@@ -106,6 +107,48 @@ class ProviderValidationMessageTests(unittest.TestCase):
         args, kwargs = http_json_request_mock.call_args
         self.assertEqual(args[0], "https://api.anthropic.com/v1/models")
         self.assertNotIn("payload", kwargs)
+
+    @patch("server_modules.provider_profiles.shutil.which", return_value="/usr/bin/curl")
+    @patch("server_modules.provider_profiles._curl_json_request")
+    @patch("server_modules.provider_profiles.http_json_request")
+    def test_anthropic_validate_falls_back_to_curl_on_incomplete_read(
+        self,
+        http_json_request_mock,
+        curl_json_request_mock,
+        _which_mock,
+    ):
+        http_json_request_mock.side_effect = IncompleteRead(b"", 0)
+        curl_json_request_mock.return_value = {
+            "status": 200,
+            "json": {"data": [{"id": "claude-3-7-sonnet-20250219"}]},
+            "text": "",
+        }
+
+        result = provider_profiles.AnthropicAdapter().validate({"api_key": "test-key"})
+
+        self.assertTrue(result["ok"])
+        curl_json_request_mock.assert_called_once()
+
+    @patch("server_modules.provider_profiles.shutil.which", return_value="/usr/bin/curl")
+    @patch("server_modules.provider_profiles._curl_json_request")
+    @patch("server_modules.provider_profiles.http_json_request")
+    def test_anthropic_list_models_falls_back_to_curl_on_incomplete_read(
+        self,
+        http_json_request_mock,
+        curl_json_request_mock,
+        _which_mock,
+    ):
+        http_json_request_mock.side_effect = IncompleteRead(b"", 0)
+        curl_json_request_mock.return_value = {
+            "status": 200,
+            "json": {"data": [{"id": "claude-3-7-sonnet-20250219"}, {"id": "claude-3-5-haiku-20241022"}]},
+            "text": "",
+        }
+
+        models = provider_profiles.AnthropicAdapter().list_models({"api_key": "test-key"})
+
+        self.assertEqual(models, ["claude-3-5-haiku-20241022", "claude-3-7-sonnet-20250219"])
+        curl_json_request_mock.assert_called_once()
 
     @patch("server_modules.provider_profiles._openai_bearer_from_credentials", return_value="token-123")
     @patch("server_modules.provider_profiles.http_json_request")

@@ -423,6 +423,12 @@ class TelegramIngressService:
         profile: Dict[str, Any],
         envelope: Dict[str, Any],
     ) -> Dict[str, Any]:
+        profile = self._build_public_profile(
+            entry=entry,
+            profile=profile,
+            workspace_id=workspace_id,
+            connector_id=connector_id,
+        )
         public_action = self._public_command_action(profile, str(envelope.get("message_text") or ""))
         if isinstance(public_action, dict):
             return self._handle_public_command(

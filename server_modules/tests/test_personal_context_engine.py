@@ -20,8 +20,9 @@ class PersonalContextEngineTests(unittest.IsolatedAsyncioTestCase):
             "status": "active",
             "metadata": {},
         }
-        with patch(
-            "server_modules.personal_context_engine.control_plane_repository.append_personal_context_event",
+        with patch.object(
+            personal_context_engine.control_plane_repository,
+            "append_personal_context_event",
             new=AsyncMock(return_value=persisted),
         ) as append_mock:
             event = await personal_context_engine.publish_event(
@@ -31,10 +32,10 @@ class PersonalContextEngineTests(unittest.IsolatedAsyncioTestCase):
                 event_type="message_awaiting_reply",
                 entity_id="thread-42",
                 payload={"contact_name": "Alex"},
-            )
+        )
 
         self.assertEqual(event["summary"], "Reply is still pending for Alex.")
-        self.assertEqual(event["scope"]["audience"], ["sage"])
+        self.assertEqual(append_mock.await_args.kwargs["scope"]["audience"], ["sage"])
         self.assertEqual(append_mock.await_args.kwargs["priority"], 75)
 
     async def test_specialist_feed_only_sees_explicitly_scoped_events(self):
@@ -68,8 +69,9 @@ class PersonalContextEngineTests(unittest.IsolatedAsyncioTestCase):
                 "metadata": {},
             },
         ]
-        with patch(
-            "server_modules.personal_context_engine.control_plane_repository.list_personal_context_events",
+        with patch.object(
+            personal_context_engine.control_plane_repository,
+            "list_personal_context_events",
             new=AsyncMock(return_value=rows),
         ):
             items = await personal_context_engine.list_events(
@@ -84,8 +86,9 @@ class PersonalContextEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(items[0]["id"], "pctx-specialist")
 
     async def test_sage_context_payload_summarizes_recent_changes(self):
-        with patch(
-            "server_modules.personal_context_engine.list_events",
+        with patch.object(
+            personal_context_engine,
+            "list_events",
             new=AsyncMock(return_value=[
                 {
                     "id": "pctx-1",
@@ -128,8 +131,9 @@ class PersonalContextEngineTests(unittest.IsolatedAsyncioTestCase):
             "status": "active",
             "metadata": {},
         }
-        with patch(
-            "server_modules.personal_context_engine.control_plane_repository.append_personal_context_event",
+        with patch.object(
+            personal_context_engine.control_plane_repository,
+            "append_personal_context_event",
             new=AsyncMock(return_value=persisted),
         ) as append_mock:
             event = await personal_context_engine.publish_event(

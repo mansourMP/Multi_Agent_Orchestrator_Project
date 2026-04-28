@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -33,6 +34,15 @@ class _PassiveQueue:
 class AgentMachineModeTests(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
+        global autopilot_connectors, operator_chat, runtime_config, runtime_runs_api, runs_core, runs_engine, discord_connector, RunStartRequest
+        autopilot_connectors = importlib.import_module("server_modules.connectors.autopilot_runtime_exports")
+        operator_chat = importlib.import_module("server_modules.direct_chat_runtime_exports")
+        runtime_config = importlib.import_module("server_modules.runtime_config")
+        runtime_runs_api = importlib.import_module("server_modules.runtime_runs_api")
+        runs_core = importlib.import_module("server_modules.runs_core")
+        runs_engine = importlib.import_module("server_modules.runs_engine")
+        discord_connector = importlib.import_module("server_modules.connectors.discord_connector")
+        RunStartRequest = importlib.import_module("server_modules.runtime_models").RunStartRequest
         self._run_state_patchers = [
             patch("server_modules.run_state_repository.sync_upsert_live_run", return_value=None),
             patch("server_modules.run_state_repository.sync_delete_live_run", return_value=None),

@@ -205,6 +205,19 @@ class ApiThreadTurnRecord(BaseModel):
     updated_at: Optional[str] = None
 
 
+class ApiThreadTurnCreateRequest(BaseModel):
+    tenant_id: str = "default"
+    workspace_id: str = "default"
+    session_id: Optional[str] = None
+    channel: str = "web"
+    actor: ApiTurnActor = Field(default_factory=ApiTurnActor)
+    content: str
+    runtime_profile_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    request_id: Optional[str] = None
+    client_request_id: Optional[str] = None
+
+
 class ApiThreadRecord(BaseModel):
     id: str
     tenant_id: Optional[str] = None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
+import importlib
 
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -26,6 +27,11 @@ def _request(path: str = "/auth/admin") -> Request:
 
 
 class AuthRoleBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global auth
+
+        auth = importlib.import_module("server_modules.auth")
+
     def test_current_user_role_does_not_promote_auth_admin_to_owner(self) -> None:
         role = auth.current_user_role(
             {

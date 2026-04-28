@@ -415,6 +415,91 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(entry_payload["entries"][0]["front"], "SPA")
         self.assertEqual(state_payload["entries"][0]["back"], "Share Purchase Agreement")
 
+    def test_execute_single_direct_tool_call_routes_safe_local_shell_via_gateway_when_live(self) -> None:
+        callbacks = self._execution_callbacks()
+        callbacks = direct_tool_execution_service.DirectToolExecutionCallbacks(
+            **{
+                **callbacks.__dict__,
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+        with (
+            patch(
+                "server_modules.skills_service._resolve_direct_tool_gateway_id",
+                return_value="gw-1",
+            ),
+            patch(
+                "server_modules.skills_service._execute_direct_tool_via_gateway",
+                return_value={
+                    "gateway_id": "gw-1",
+                    "result": {
+                        "command": "pwd",
+                        "exit_code": 0,
+                        "stdout": "/Users/mansur/Multi_Agent_Orchestrator_Project",
+                        "stderr": "",
+                    },
+                },
+            ) as execute_gateway_mock,
+            patch("server_modules.runs_execution._workflow_execute_local_tool") as local_tool_mock,
+        ):
+            raw = skills_service.execute_single_direct_tool_call(
+                tool_call={"name": "shell__exec", "arguments": {"command": "pwd"}},
+                workspace_id="default",
+                thread_id="thread-1",
+                index=1,
+                session_ctx={"runtime_id": "gw-1"},
+                callbacks=callbacks,
+            )
+
+        self.assertIn("Command completed: pwd", raw)
+        execute_gateway_mock.assert_called_once()
+        local_tool_mock.assert_not_called()
+
+    def test_execute_single_direct_tool_call_routes_file_read_via_gateway_when_live(self) -> None:
+        callbacks = self._execution_callbacks()
+        callbacks = direct_tool_execution_service.DirectToolExecutionCallbacks(
+            **{
+                **callbacks.__dict__,
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+        with (
+            patch(
+                "server_modules.skills_service._resolve_direct_tool_gateway_id",
+                return_value="gw-1",
+            ),
+            patch(
+                "server_modules.skills_service._execute_direct_tool_via_gateway",
+                return_value={
+                    "gateway_id": "gw-1",
+                    "result": {
+                        "mode": "read",
+                        "path": "/Users/mansur/Desktop",
+                        "is_directory": True,
+                        "entries": ["a.txt", "b/"],
+                    },
+                },
+            ) as execute_gateway_mock,
+            patch("server_modules.runs_execution._workflow_execute_local_tool") as local_tool_mock,
+        ):
+            raw = skills_service.execute_single_direct_tool_call(
+                tool_call={"name": "file__read", "arguments": {"path": "/root/Desktop"}},
+                workspace_id="default",
+                thread_id="thread-1",
+                index=1,
+                session_ctx={"runtime_id": "gw-1"},
+                callbacks=callbacks,
+            )
+
+        self.assertIn("Listed directory: /Users/mansur/Desktop", raw)
+        self.assertIn("1. a.txt", raw)
+        execute_gateway_mock.assert_called_once()
+        call_kwargs = execute_gateway_mock.call_args.kwargs
+        self.assertEqual(call_kwargs["capability_id"], "filesystem.read_write")
+        self.assertEqual(call_kwargs["arguments"]["path"], str(Path.home() / "Desktop"))
+        self.assertEqual(call_kwargs["arguments"]["mode"], "read")
+        local_tool_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

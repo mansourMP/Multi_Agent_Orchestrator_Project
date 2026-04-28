@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import importlib
 import itertools
 import queue
 import sys
@@ -69,11 +70,46 @@ class _AutoDelegationPayload:
 
 class GoldenPathSmokeTests(unittest.TestCase):
     def test_golden_path_turn_to_delegation_artifact_activity_and_approval(self) -> None:
+        global activity_ledger_service
+        global notification_service
+        global outbox_service
+        global run_state_repository
+        global run_service
+        global runs_core
+        global runs_delegation
+        global runs_output
+        global runtime_common
+        global runtime_events_api
+        global runtime_run_access_service
+        global runtime_run_approval_service
+        global runtime_run_delegation_service
+        global runtime_runs_api
+        global execute_system_run_start_request_via_turn_runtime
+
+        activity_ledger_service = importlib.import_module("server_modules.activity_ledger_service")
+        notification_service = importlib.import_module("server_modules.notification_service")
+        outbox_service = importlib.import_module("server_modules.outbox_service")
+        run_state_repository = importlib.import_module("server_modules.run_state_repository")
+        run_service = importlib.import_module("server_modules.run_service")
+        runs_core = importlib.import_module("server_modules.runs_core")
+        runs_delegation = importlib.import_module("server_modules.runs_delegation")
+        runs_output = importlib.import_module("server_modules.runs_output")
+        runtime_common = importlib.import_module("server_modules.runtime_common")
+        runtime_events_api = importlib.import_module("server_modules.runtime_events_api")
+        runtime_run_access_service = importlib.import_module("server_modules.runtime_run_access_service")
+        runtime_run_approval_service = importlib.import_module("server_modules.runtime_run_approval_service")
+        runtime_run_delegation_service = importlib.import_module("server_modules.runtime_run_delegation_service")
+        runtime_runs_api = importlib.import_module("server_modules.runtime_runs_api")
+        execute_system_run_start_request_via_turn_runtime = importlib.import_module(
+            "server_modules.turn_runtime"
+        ).execute_system_run_start_request_via_turn_runtime
+
         base_dt = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
         time_counter = itertools.count()
         run_counter = itertools.count(1)
         started_counter = itertools.count(1)
         activity_counter = itertools.count(1)
+        session_id = f"session-{uuid.uuid4().hex[:8]}"
         outbox_events: List[Dict[str, Any]] = []
         channel_events: List[Dict[str, Any]] = []
         notification_rows: List[Dict[str, Any]] = []
@@ -131,7 +167,7 @@ class GoldenPathSmokeTests(unittest.TestCase):
             )
 
         def _custom_create_run(engine: str, context: Optional[dict] = None, *, defer_local_enqueue: bool = False) -> str:
-            run_id = str(uuid.UUID(int=next(run_counter)))
+            run_id = str(uuid.uuid4())
             now_iso = _next_iso()
             context_payload = dict(context or {})
             record = run_service.build_live_run_record(
@@ -282,6 +318,11 @@ class GoldenPathSmokeTests(unittest.TestCase):
 
         def _append_channel_event_item(**kwargs) -> None:
             channel_events.append(dict(kwargs))
+
+        def _discard_repository_call(awaitable, *, operation: str = "") -> None:
+            close_fn = getattr(awaitable, "close", None)
+            if callable(close_fn):
+                close_fn()
 
         async def _append_activity_ledger_event(**kwargs):
             row = dict(kwargs)
@@ -512,7 +553,7 @@ class GoldenPathSmokeTests(unittest.TestCase):
 
         turn_body = {
             "workspace_id": "default",
-            "session_id": "session-1",
+            "session_id": session_id,
             "channel": "web",
             "actor": {"type": "user", "id": "user-1"},
             "message": "Research AI agent orchestration and draft a summary.",
@@ -666,6 +707,33 @@ class GoldenPathSmokeTests(unittest.TestCase):
             stack.enter_context(patch.object(runtime_runs_api.thread_service, "ensure_master_thread", side_effect=_ensure_master_thread))
             stack.enter_context(patch.object(runtime_runs_api.thread_service, "record_user_turn", side_effect=_record_user_turn))
             stack.enter_context(patch.object(runtime_runs_api.thread_service, "record_assistant_turn", side_effect=_record_assistant_turn))
+            stack.enter_context(patch("server_modules.agent_turn.thread_service.ensure_master_thread", side_effect=_ensure_master_thread))
+            stack.enter_context(patch("server_modules.agent_turn.thread_service.record_user_turn", side_effect=_record_user_turn))
+            stack.enter_context(patch("server_modules.agent_turn.thread_service.record_assistant_turn", side_effect=_record_assistant_turn))
+            stack.enter_context(patch("server_modules.agent_turn.agent_trace_service.start_trace", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.agent_turn.agent_trace_service.emit_trace_started", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.agent_turn.agent_trace_service.emit_trace_routed", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.agent_turn.agent_trace_service.emit_trace_failed", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.agent_trace_service.start_trace", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.agent_trace_service.emit_trace_started", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.agent_trace_service.emit_trace_routed", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.agent_trace_service.emit_trace_failed", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.run_service.agent_trace_service.start_trace", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.run_service.agent_trace_service.emit_trace_started", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.run_service.agent_trace_service.emit_trace_routed", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.run_service.agent_trace_service.emit_trace_failed", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.agent_trace_service.control_plane_repository.create_agent_trace", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.control_plane_repository.create_agent_trace", new=AsyncMock(return_value=None)))
+            stack.enter_context(patch("server_modules.run_service._persist_run_repository_snapshot", side_effect=lambda *args, **kwargs: None))
+            stack.enter_context(patch("server_modules.run_service._record_run_repository_transition", side_effect=lambda *args, **kwargs: None))
+            stack.enter_context(patch("server_modules.run_service._archive_run_repository_payload", side_effect=lambda *args, **kwargs: None))
+            stack.enter_context(
+                patch.object(
+                    run_state_repository,
+                    "dispatch_repository_call",
+                    side_effect=_discard_repository_call,
+                )
+            )
             stack.enter_context(
                 patch.object(
                     run_state_repository,
@@ -722,6 +790,13 @@ class GoldenPathSmokeTests(unittest.TestCase):
                     activity_ledger_service.control_plane_repository,
                     "list_activity_ledger_events",
                     side_effect=_list_activity_ledger_events,
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    activity_ledger_service,
+                    "_utc_now_ts",
+                    return_value=base_dt.timestamp(),
                 )
             )
             stack.enter_context(

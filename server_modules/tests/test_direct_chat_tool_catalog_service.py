@@ -32,6 +32,11 @@ def _callbacks() -> service.DirectChatToolPolicyCallbacks:
 
 
 class DirectChatToolCatalogServiceTests(unittest.TestCase):
+    def test_provider_supports_direct_tool_calls_is_provider_agnostic(self) -> None:
+        self.assertTrue(service.provider_supports_direct_tool_calls("anthropic"))
+        self.assertTrue(service.provider_supports_direct_tool_calls("ollama"))
+        self.assertFalse(service.provider_supports_direct_tool_calls(""))
+
     def test_build_local_direct_chat_tools_requires_local_worker(self) -> None:
         self.assertEqual(
             service.build_local_direct_chat_tools({"runtime_ok": False}, local_worker_available=lambda availability: False),
@@ -55,6 +60,16 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         allowed = service.message_can_use_direct_local_tools(
             "Open /tmp/demo.txt",
             provider="codex_cli",
+            tools=[{"name": "file__read"}],
+            callbacks=_callbacks(),
+        )
+
+        self.assertTrue(allowed)
+
+    def test_message_can_use_direct_local_tools_detects_desktop_listing_request(self) -> None:
+        allowed = service.message_can_use_direct_local_tools(
+            "List the files on my desktop.",
+            provider="deepseek",
             tools=[{"name": "file__read"}],
             callbacks=_callbacks(),
         )

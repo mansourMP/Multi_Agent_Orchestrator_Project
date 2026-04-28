@@ -1,3 +1,4 @@
+import importlib
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +11,12 @@ class _DummyRunStartRequest:
 
 
 class DirectChatHandoffFacadeServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        global direct_chat_handoff_facade_service
+        direct_chat_handoff_facade_service = importlib.import_module(
+            "server_modules.direct_chat_handoff_facade_service"
+        )
+
     @patch(
         "server_modules.direct_chat_handoff_facade_service._start_run_dependencies",
         return_value=(lambda request: {"run_id": "run-1", "metadata": request.metadata}, _DummyRunStartRequest),

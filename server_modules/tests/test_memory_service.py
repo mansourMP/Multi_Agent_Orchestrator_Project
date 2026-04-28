@@ -1,3 +1,4 @@
+import importlib
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -9,6 +10,9 @@ from server_modules import memory_service, workspace_context
 
 class MemoryServiceTests(unittest.TestCase):
     def setUp(self) -> None:
+        global memory_service, workspace_context
+        memory_service = importlib.import_module("server_modules.memory_service")
+        workspace_context = importlib.import_module("server_modules.workspace_context")
         self._tmpdir = tempfile.TemporaryDirectory(prefix="memory-service-")
         self.addCleanup(self._tmpdir.cleanup)
         tmp_root = Path(self._tmpdir.name)
@@ -361,10 +365,10 @@ class MemoryServiceTests(unittest.TestCase):
         emit_log_mock.assert_called_once()
 
     def test_direct_chat_workspace_context_text_reads_install_namespace_when_requested(self) -> None:
-        workspace_context.write_workspace_context_file("SOUL.md", "Shared soul.\n")
+        workspace_context.write_workspace_context_file("USER.md", "Shared user profile.\n")
         workspace_context.write_workspace_context_file(
-            "SOUL.md",
-            "Specialist soul.\n",
+            "USER.md",
+            "Specialist user profile.\n",
             workspace_id="default",
             agent_install_id="install-specialist",
         )
@@ -379,23 +383,22 @@ class MemoryServiceTests(unittest.TestCase):
             agent_install_id="install-specialist",
         )
 
-        self.assertIn("Specialist soul.", text)
-        self.assertNotIn("Shared soul.", text)
+        self.assertIn("Specialist user profile.", text)
+        self.assertNotIn("Shared user profile.", text)
         self.assertIn("private value", text)
         self.assertNotIn("shared value", text)
         self.assertIn("Private log entry.", text)
         self.assertNotIn("Shared log entry.", text)
 
     def test_direct_chat_workspace_context_text_collects_context_logs_and_memory(self) -> None:
-        workspace_context.write_workspace_context_file("SOUL.md", "Stay concise.\n")
         workspace_context.write_workspace_context_file("USER.md", "Owner prefers async updates.\n")
         memory_service.save_memory("default", "timezone", "Asia/Shanghai")
         memory_service.save_daily_log("default", "Reviewed the canonical architecture document.")
 
         text = memory_service.direct_chat_workspace_context_text("default", memory_query="timezone")
 
-        self.assertIn("SOUL.md", text)
         self.assertIn("USER.md", text)
+        self.assertIn("MEMORY.md", text)
         self.assertIn("Recent Daily Logs", text)
         self.assertIn("Runtime Memory Facts", text)
         self.assertIn("timezone", text)

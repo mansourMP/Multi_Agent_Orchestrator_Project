@@ -10,9 +10,8 @@ import { WorkstationBillingPane } from '@/lib/workspace/workstation-billing-pane
 import { WorkstationDesktopStatus } from '@/lib/workspace/workstation-desktop-status';
 import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gateway-operator-pane';
 import { WorkstationPlatformAnalyticsPane } from '@/lib/workspace/workstation-platform-analytics-pane';
-import { WorkspaceChannelOperationsConsole } from '@/lib/workspace/workspace-channel-operations-console';
 
-type SettingsSectionId = 'account' | 'devices' | 'channels' | 'usage' | 'billing' | 'privacy';
+type SettingsSectionId = 'account' | 'devices' | 'usage' | 'billing' | 'privacy';
 
 const SETTINGS_SECTIONS: Array<{
   id: SettingsSectionId;
@@ -34,13 +33,6 @@ const SETTINGS_SECTIONS: Array<{
     eyebrow: 'Runtime',
     title: 'Devices',
     description: 'Trusted devices, gateway health, and local runtime readiness.',
-  },
-  {
-    id: 'channels',
-    label: 'Channels',
-    eyebrow: 'Operations',
-    title: 'Channels',
-    description: 'Quick connectors, paired personal lanes, and delivery health.',
   },
   {
     id: 'usage',
@@ -76,7 +68,6 @@ function humanizeToken(value: string): string {
 function isSettingsSectionId(value: string | null): value is SettingsSectionId {
   return value === 'account'
     || value === 'devices'
-    || value === 'channels'
     || value === 'usage'
     || value === 'billing'
     || value === 'privacy';
@@ -201,8 +192,6 @@ export function WorkstationSettingsPane() {
           {selectedSection === 'usage' ? <WorkstationPlatformAnalyticsPane /> : null}
 
           {selectedSection === 'billing' ? <WorkstationBillingPane /> : null}
-
-          {selectedSection === 'channels' ? <WorkspaceChannelOperationsConsole /> : null}
 
           {selectedSection === 'privacy' ? (
             <div className="settings-section-stack">

@@ -1,6 +1,6 @@
 # Pending Tasks
 
-Last verified: 2026-04-22
+Last verified: 2026-04-30
 
 ## Finish Program Snapshot
 
@@ -65,6 +65,43 @@ Environment blockers from this audit:
 - the Nest control-plane sidecar in `/backend` is out of the active local launch path because it still fails to compile; default startup now skips it instead of advertising it as a healthy core service
 
 ## Highest Priority
+
+### 0. Launch Handoff And Repo Hygiene
+
+Partially done on 2026-04-29.
+
+Completed:
+- documented current launch state in `docs/current-state-handoff-2026-04-29.md`
+- documented repo hygiene findings in `docs/repo-hygiene-audit-2026-04-29.md`
+- corrected stale mobile docs that claimed `mobile/app/(workspace)` was active
+- removed product-unreachable trace/detail/provider workspace modules and stale E2E specs
+- corrected the shared mobile route manifest away from non-existent `/(workspace)` paths
+- fixed the E2E harness to use isolated backend/frontend ports and state
+- repaired account-shell hydration, onboarding setup, workspace setup, and Studio deployed-agent E2E coverage for the active UI
+- passed frontend typecheck, frontend production build, Python compile, targeted backend tests, and the targeted active-surface E2E batch
+
+Still needed:
+- run final visual browser sweep in the chosen public-demo workspace
+- confirm the chosen public-demo workspace has one usable provider configured
+- keep generated/local agent artifacts out of release commits
+- decide whether the disabled `trace-preview` route should be deleted or preserved as an internal harness
+
+Update 2026-04-29 late local cert:
+- local DeepSeek Sage browser smoke passed on `ws-1`
+- user message persists immediately, input clears, final answer appears, and no normal-chat trace cards render
+- local no-Postgres mode has an in-memory canonical thread fallback and blank primary thread response
+- current local Gemini credential is quota-blocked; DeepSeek remains the local demo provider
+- production credential vault 500 no longer reproduced in a direct throwaway probe after the Render env fix, but the full production cert exposed a web BFF `IncompleteRead` on normal JSON response streaming; deploy the BFF buffering patch before recertifying production provider save
+
+Update 2026-04-30 production proxy follow-up:
+- production web health returned 200
+- production runtime health returned `{"ok":true}`
+- direct throwaway production credential-vault probe returned 200
+- `frontend/lib/server/control-plane-proxy.ts` now buffers non-SSE responses and streams only `text/event-stream`
+- local typecheck, production frontend build, and `git diff --check` passed after the patch
+- pushed `2ef633ba fix: buffer non-streaming control-plane proxy responses`
+- production web signup returned 200 after deploy
+- full production API cert passed: provider save 200, catalog DeepSeek configured/usable, session 200, user-turn persistence 200, streamed Sage `hello` 200 with final reply and effective provider/model metadata
 
 ### 1. Durable Rendered Demo Completion
 

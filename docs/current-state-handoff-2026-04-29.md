@@ -84,7 +84,7 @@ Latest local certification from this pass:
 - Targeted backend suite for direct chat, provider catalog, credential flow, gateway, and auth: `98 passed`.
 - Targeted E2E batch for approvals, artifacts, workspace setup, and deployed agents: `10 passed`.
 
-Important caveat: this is local and production API certification. Public-demo readiness still needs a final human visual sweep in the chosen demo workspace.
+Important caveat: this is local certification plus production API and browser certification. Use a dedicated demo account outside the repo for the live show; do not store demo credentials in docs.
 
 ## Follow-Up Local Cert - 2026-04-29
 
@@ -107,8 +107,8 @@ Architecture-lane readiness is recorded in `docs/architecture-readiness-2026-04-
 Current architecture verdict:
 
 - Cloud provider path, gateway/local path, web shell, mobile shell, desktop shell, Studio lane, and hosted mini-app lane are implemented.
-- Public-demo certification is narrower: DeepSeek Sage chat is locally certified and the production API golden path is certified. A clean human demo workspace still needs a final visual sweep.
-- Visual certification is now passed for the narrow DeepSeek local demo path. Broader provider/gateway/product surfaces still need their own cert if they are included in the demo.
+- Public-demo certification is narrower than the full platform: Sage chat, provider setup, gateway-offline tool availability, web search, History, Memory, and Integrations are production-certified for the demo path.
+- Visual certification is now passed locally and in production for the narrow Sage public-demo path. Broader Studio, mobile, mini-app, and image-generation demos still need separate certification if included.
 
 ## Continuation Cert - 2026-04-29 23:50 Local
 
@@ -164,4 +164,46 @@ The critical production Sage golden path passed after the web BFF response-buffe
 - Streamed `/api/turn` returned `200` with `trace`, `step`, `chunk`, and `final` events.
 - Final stream metadata reported `effective_provider=deepseek`, `effective_model=deepseek-chat`, and `fallback_used=false`.
 
-Remaining public-demo work is not an API blocker: create or choose the actual demo account/workspace, confirm the provider is configured there, then run the final visual sweep in the browser.
+Remaining public-demo work is operational, not an API blocker: use a dedicated demo account/password stored outside the repo and keep one reliable provider configured before the live show.
+
+## Phase 5/6 Tool Cert Closed - 2026-04-30
+
+Production cloud and gateway tool paths were certified after the production golden path:
+
+- Phase 5 gateway-offline smoke passed with a throwaway production workspace.
+- With zero online gateways, cloud chat remained usable and an explicit web-search request returned the official Ollama URL.
+- Phase 6 gateway pairing passed against production runtime.
+- Production gateway registrations showed one online gateway named `Phase 6 Production Cert Gateway`.
+- With the gateway online and the local supervisor listening on `127.0.0.1:7788`, an explicit local shell request through production returned real `~/Desktop` results from this Mac.
+- The stream returned `step`, `trace`, and `final` events in both Phase 5 and Phase 6.
+
+Important demo caveats:
+
+- Do not demo local shell against a private Desktop. Use a cleaned demo directory or a harmless command if the audience can see the output.
+- Step events exist, but the parsed payload did not expose a literal `tool.started` marker in these two certification scripts. The runtime behavior passed; if the demo depends on exact visual tool labels, do one final browser check.
+- Gateway remains optional for ordinary cloud chat. Basic production Sage chat must not require a gateway.
+
+## Phase 7/8 Visual Cert Closed - 2026-04-30
+
+Production Phase 7/8 passed against `https://empyralis-web.onrender.com` after commit `53e8af9d fix: certify Sage demo surface` was deployed.
+
+- A clean throwaway production demo account/workspace was created: workspace `ws_319c2cee7e4f`.
+- Production provider credential save returned `200`.
+- Provider catalog showed Gemini `configured=true`, `usable=true`, `state=active`, default model `gemini-2.5-flash`, with 38 models.
+- Chat composer rendered cleanly with model/reasoning picker, tools button, gateway-offline runtime pill, textarea, send arrow, and stop square during stream.
+- Model picker rendered provider-backed options including Google Gemini/Gemini Flash options.
+- Tools palette rendered local machine tools as unavailable because gateway was offline, and cloud tools remained available.
+- Sending `hello` cleared the draft immediately, rendered the user message, showed the thinking row, and returned an assistant response with no raw errors.
+- Web-search prompt returned the official Ollama URL.
+- History rendered flat conversation rows.
+- Memory rendered the sensitivity/count surface.
+- Integrations rendered the active provider row and provider picker with BYOK/Hosted distinction.
+- No `Run complete`, `Sage trace`, stack trace, `Not Found`, timeout, or temporary-error text appeared in the visible demo path.
+- No `5xx` API responses were observed in the final production visual sweep.
+
+Final public-demo caveats:
+
+- Do not demo video generation.
+- Only demo image generation if the specific image backend key is configured and verified in the demo workspace.
+- If demoing local tools, start and pair the gateway first and use a cleaned demo directory or harmless command.
+- The live demo account credentials must stay outside git/docs.

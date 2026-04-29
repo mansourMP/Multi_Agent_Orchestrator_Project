@@ -81,10 +81,9 @@ Completed:
 - passed frontend typecheck, frontend production build, Python compile, targeted backend tests, and the targeted active-surface E2E batch
 
 Still needed:
-- run final visual browser sweep in the chosen public-demo workspace
-- confirm the chosen public-demo workspace has one usable provider configured
 - keep generated/local agent artifacts out of release commits
 - decide whether the disabled `trace-preview` route should be deleted or preserved as an internal harness
+- create/store the live public-demo account credentials outside the repo before the event
 
 Update 2026-04-29 late local cert:
 - local DeepSeek Sage browser smoke passed on `ws-1`
@@ -102,6 +101,22 @@ Update 2026-04-30 production proxy follow-up:
 - pushed `2ef633ba fix: buffer non-streaming control-plane proxy responses`
 - production web signup returned 200 after deploy
 - full production API cert passed: provider save 200, catalog DeepSeek configured/usable, session 200, user-turn persistence 200, streamed Sage `hello` 200 with final reply and effective provider/model metadata
+
+Update 2026-04-30 Phase 5/6:
+- production gateway-offline cloud tool smoke passed with a throwaway workspace
+- Gemini BYOK provider save/catalog passed in production for the Phase 5/6 cert workspace
+- explicit web-search prompt returned the official Ollama URL with no gateway online
+- production gateway pairing succeeded and one online gateway registration was visible
+- local supervisor plus production-paired gateway executed the explicit local shell prompt through production
+- final response included real `~/Desktop` output from this Mac
+- remaining work is now operational demo setup, not another backend architecture change
+
+Update 2026-04-30 Phase 7/8:
+- production visual browser sweep passed after `53e8af9d fix: certify Sage demo surface` deployed
+- throwaway production demo workspace `ws_319c2cee7e4f` passed signup, setup completion, provider save, and provider catalog checks
+- Composer, model/reasoning picker, tools palette, gateway-offline status, stop square, chat response, web search, History, Memory, and Integrations passed the production sweep
+- final sweep observed no `5xx` API responses and no visible `Run complete`, `Sage trace`, raw stack, `Not Found`, timeout, or temporary-error text
+- do not store live demo account credentials in this repo; keep them in a password manager or operator notes outside git
 
 ### 1. Durable Rendered Demo Completion
 

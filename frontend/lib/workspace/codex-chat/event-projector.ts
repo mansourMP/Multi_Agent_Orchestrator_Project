@@ -1,0 +1,269 @@
+'use client';
+
+import type {
+  CodexChatEvent,
+  TimelineProjectionEvent,
+} from './cells';
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeStepStatus(value: unknown): 'running' | 'done' | 'error' {
+  const normalized = readString(value).toLowerCase();
+  if (normalized === 'done' || normalized === 'complete' || normalized === 'completed' || normalized === 'success') {
+    return 'done';
+  }
+  if (normalized === 'error' || normalized === 'failed' || normalized === 'failure') {
+    return 'error';
+  }
+  return 'running';
+}
+
+function fileActionLabel(label: string, fallback: string): string {
+  const lower = `${label} ${fallback}`.toLowerCase();
+  if (lower.includes('read')) {
+    return 'Read';
+  }
+  if (lower.includes('write')) {
+    return 'Write';
+  }
+  if (lower.includes('open')) {
+    return 'Open';
+  }
+  if (lower.includes('delete')) {
+    return 'Delete';
+  }
+  return label || fallback || 'Updated';
+}
+
+function isSearchLabel(value: string): boolean {
+  return /search|searched|web/i.test(value);
+}
+
+function isFileLabel(value: string): boolean {
+  return /file|read|write|open|path|desktop|folder/i.test(value);
+}
+
+function isShellLabel(value: string): boolean {
+  return /shell|command|terminal|bash|zsh|exec|run/i.test(value);
+}
+
+function eventId(prefix: string, candidate: unknown, fallbackIndex: number): string {
+  return readString(candidate) || `${prefix}:${fallbackIndex}`;
+}
+
+function projectStepEvent(payload: Record<string, unknown>, fallbackIndex: number): CodexChatEvent[] {
+  const kind = readString(payload.kind).toLowerCase();
+  const id = readString(payload.id) || `${kind || 'step'}:${fallbackIndex}`;
+  const label = readString(payload.label);
+  const detail = readString(payload.detail);
+  const status = normalizeStepStatus(payload.status);
+  const combined = `${label} ${detail}`.trim();
+
+  if (kind === 'thinking') {
+    return [{
+      type: 'reasoning_delta',
+      id: 'reasoning_summary',
+      text: detail || label || 'Thinking',
+      isStreaming: status === 'running',
+    }];
+  }
+
+  if (kind === 'shell' || isShellLabel(combined)) {
+    if (status === 'running') {
+      return [{ type: 'exec_started', id, command: detail || label || 'Running command' }];
+    }
+    return [{ type: 'exec_result', id, status, output: detail || null, exitCode: null }];
+  }
+
+  if (kind === 'file' || isFileLabel(combined)) {
+    return [{
+      type: 'file_change',
+      id,
+      filename: detail || label || 'File',
+      action: fileActionLabel(label, detail),
+      status,
+    }];
+  }
+
+  if (kind === 'search' || isSearchLabel(combined)) {
+    if (status === 'running') {
+      return [{ type: 'web_search_started', id, query: detail || label || 'Search' }];
+    }
+    return [{ type: 'web_search_result', id, query: detail || label || null, status: status === 'error' ? 'error' : 'done', result: detail || null }];
+  }
+
+  if (status === 'running') {
+    return [{ type: 'tool_started', id, name: label || detail || 'Tool' }];
+  }
+  return [{
+    type: 'tool_result',
+    id,
+    name: label || null,
+    status: status === 'error' ? 'error' : 'done',
+    result: detail || null,
+  }];
+}
+
+function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: number): CodexChatEvent[] {
+  const eventType = readString(payload.event_type).toLowerCase();
+  const data = readObject(payload.data);
+  const metadata = readObject(payload.metadata);
+
+  if (eventType === 'trace.started') {
+    return [{
+      type: 'status',
+      id: eventId('trace', payload.trace_id, fallbackIndex),
+      label: 'Started',
+      detail: null,
+      status: 'running',
+    }];
+  }
+
+  if (eventType === 'reasoning.summary.delta') {
+    const delta = readString(data.delta);
+    return delta
+      ? [{ type: 'reasoning_delta', id: 'reasoning_summary', text: delta, isStreaming: true }]
+      : [];
+  }
+
+  if (eventType === 'assistant.message.delta') {
+    // The transport already emits assistant text as chunk events. Trace deltas
+    // are transparency metadata, not a second source of transcript text.
+    return [];
+  }
+
+  if (eventType === 'tool.started') {
+    return [{
+      type: 'tool_started',
+      id: eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex),
+      name: readString(data.tool_name) || readString(data.name) || 'Tool',
+    }];
+  }
+
+  if (eventType === 'tool.result') {
+    const status = readString(data.status).toLowerCase() === 'error' ? 'error' : 'done';
+    return [{
+      type: 'tool_result',
+      id: eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex),
+      name: readString(data.tool_name) || readString(data.name) || null,
+      status,
+      result: readString(data.summary) || readString(data.result) || null,
+    }];
+  }
+
+  if (eventType === 'search.query') {
+    return [{
+      type: 'web_search_started',
+      id: eventId('search', payload.tool_call_id || payload.item_id, fallbackIndex),
+      query: readString(data.query) || 'Search',
+    }];
+  }
+
+  if (eventType === 'search.results') {
+    return [{
+      type: 'web_search_result',
+      id: eventId('search', payload.tool_call_id || payload.item_id, fallbackIndex),
+      query: readString(data.query) || null,
+      status: 'done',
+      result: readString(data.summary) || null,
+    }];
+  }
+
+  if (eventType === 'plan.item.created') {
+    const title = readString(data.title);
+    const summary = readString(data.rationale_summary);
+    const combined = `${title} ${summary}`.toLowerCase();
+    if (combined.includes('search')) {
+      return [{
+        type: 'web_search_started',
+        id: eventId('search-plan', data.item_id, fallbackIndex),
+        query: title || 'Search',
+      }];
+    }
+    if (combined.includes('file') || combined.includes('read') || combined.includes('open')) {
+      return [{
+        type: 'file_change',
+        id: eventId('file-plan', data.item_id, fallbackIndex),
+        filename: title || 'File',
+        action: 'Read',
+        status: 'done',
+      }];
+    }
+  }
+
+  if (eventType.includes('approval')) {
+    return [{
+      type: 'approval_request',
+      id: eventId('approval', data.approval_id || data.id || payload.item_id, fallbackIndex),
+      prompt: readString(data.prompt) || readString(data.message) || 'Approval required',
+    }];
+  }
+
+  return [];
+}
+
+export function projectRawEventToCodexEvents(
+  event: TimelineProjectionEvent,
+  fallbackIndex = 0,
+): CodexChatEvent[] {
+  if (event.type === 'user') {
+    return [{
+      type: 'user',
+      id: `user:${fallbackIndex}`,
+      content: readString(event.payload.content),
+    }];
+  }
+
+  if (event.type === 'step') {
+    return projectStepEvent(readObject(event.payload), fallbackIndex);
+  }
+
+  if (event.type === 'trace') {
+    return projectTraceEvent(readObject(event.payload), fallbackIndex);
+  }
+
+  if (event.type === 'chunk') {
+    const delta = readString(event.payload.delta);
+    return delta
+      ? [{ type: 'assistant_delta', id: 'assistant', delta, provider: null, model: null }]
+      : [];
+  }
+
+  const payload = readObject(event.payload);
+  const metadata = readObject(payload.metadata);
+  const reply = readString(payload.reply) || readString(payload.content) || readString(payload.message);
+  const status = readString(payload.status).toLowerCase();
+  return [{
+    type: 'assistant_final',
+    id: 'assistant',
+    content: reply,
+    isIncomplete: status === 'incomplete' || metadata.incomplete === true,
+    provider: readString(metadata.effective_provider) || readString(metadata.provider) || null,
+    model: readString(metadata.effective_model) || readString(metadata.model) || null,
+  }];
+}
+
+export const codexChatEventInternals = {
+  readObject,
+  readNumber,
+  readString,
+};

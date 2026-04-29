@@ -157,6 +157,7 @@ export function WorkstationRunsPane() {
   const services = useWorkspaceServices();
   const activityVersion = useWorkstationActivityVersion();
   const cachedThreads = threadsPaneCache.get(workspaceId) ?? null;
+  const [hadInitialCache] = useState(() => cachedThreads !== null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() => readPersistedActiveThread(workspaceId));
   const [threads, setThreads] = useState<ThreadListItem[]>(() => cachedThreads ?? []);
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
@@ -183,7 +184,7 @@ export function WorkstationRunsPane() {
 
   useEffect(() => {
     let cancelled = false;
-    void refresh(cachedThreads === null).catch((loadError) => {
+    void refresh(!hadInitialCache).catch((loadError) => {
       if (!cancelled) {
         setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
         setIsLoading(false);
@@ -201,7 +202,7 @@ export function WorkstationRunsPane() {
       cancelled = true;
       unsubscribe();
     };
-  }, [cachedThreads, services.client, workspaceId]);
+  }, [hadInitialCache, services.client, workspaceId]);
 
   useEffect(() => {
     if (activityVersion === 0) {

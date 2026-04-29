@@ -115,6 +115,15 @@ function mergeRecentItems<T extends Record<string, unknown>>(
   return [nextItem, ...deduped].slice(0, maxRecent);
 }
 
+function streamItemStableKey(item: Record<string, unknown>): string | null {
+  const id = String(item.id ?? '').trim();
+  if (id) {
+    return `id:${id}`;
+  }
+  const ts = String(item.updated_at ?? item.created_at ?? item.ts ?? '').trim();
+  return ts ? `ts:${ts}` : null;
+}
+
 function notificationCursor(item: WorkstationNotificationItem): WorkstationStreamCursor {
   return {
     id: String(item.id ?? '').trim() || null,
@@ -270,7 +279,11 @@ export class WorkstationStreamManager {
   private patchState(
     updater: (current: WorkstationStreamState) => WorkstationStreamState,
   ): void {
-    this.state = updater(this.state);
+    const nextState = updater(this.state);
+    if (nextState === this.state) {
+      return;
+    }
+    this.state = nextState;
     this.emit();
   }
 
@@ -385,6 +398,10 @@ export class WorkstationStreamManager {
       const item = payload as WorkstationNotificationItem;
       const cursor = notificationCursor(item);
       this.patchState((current) => {
+        const nextKey = streamItemStableKey(item);
+        if (nextKey && current.notifications.recent.some((entry) => streamItemStableKey(entry) === nextKey)) {
+          return current;
+        }
         const recent = mergeRecentItems(current.notifications.recent, item, this.maxRecent);
         return {
           ...current,
@@ -483,6 +500,10 @@ export class WorkstationStreamManager {
       const item = payload as WorkstationChannelEventItem;
       const cursor = channelCursor(item);
       this.patchState((current) => {
+        const nextKey = streamItemStableKey(item);
+        if (nextKey && current.activity.recent.some((entry) => streamItemStableKey(entry) === nextKey)) {
+          return current;
+        }
         const recent = mergeRecentItems(current.activity.recent, item, this.maxRecent);
         return {
           ...current,

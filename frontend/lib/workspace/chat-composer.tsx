@@ -71,11 +71,13 @@ function compactModelLabel(label: string, fallback: string): string {
     .split('·')
     .map((part) => part.trim())
     .filter(Boolean);
+  const routeSuffixes = new Set(['hosted', 'local', 'workspace key']);
+  const visibleParts = parts.filter((part) => !routeSuffixes.has(part.toLowerCase()));
+  if (visibleParts.length > 0 && visibleParts.length < parts.length) {
+    return visibleParts.join(' · ');
+  }
   if (parts.length >= 2 && parts[0].toLowerCase() === parts[1].toLowerCase()) {
     return parts[0];
-  }
-  if (parts.length >= 2 && parts[1]) {
-    return parts[1];
   }
   return normalized;
 }
@@ -234,103 +236,6 @@ export function ChatComposer({
   return (
     <section data-workstation-chat-composer="root" className="app-chat-composer">
       <form className="app-chat-composer__surface" onSubmit={handleSubmit}>
-        <div className="app-chat-composer__header">
-          <div className="app-chat-composer__runtime" ref={runtimePickerRef}>
-            <button
-              type="button"
-              className={joinClassNames(
-                'app-chat-composer__provider-pill',
-                providerGateVisible && 'app-chat-composer__provider-pill--warning',
-              )}
-              onClick={() => {
-                setToolPaletteOpen(false);
-                setRuntimePickerOpen((current) => !current);
-              }}
-              aria-expanded={runtimePickerOpen}
-              aria-label="Change model and reasoning"
-              title={runtimePillLabel}
-            >
-              <Zap size={13} strokeWidth={2.15} aria-hidden="true" />
-              <span>{runtimePillLabel}</span>
-              <ChevronDown size={13} strokeWidth={2} aria-hidden="true" />
-            </button>
-
-            {runtimePickerOpen ? (
-              <div className="app-chat-composer__runtime-popover" role="dialog" aria-label="Model and reasoning">
-                <div className="app-chat-composer__runtime-section">
-                  <div className="app-chat-composer__runtime-section-title">Intelligence</div>
-                  {reasoningOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => {
-                        onReasoningEffortChange(option.value);
-                        setRuntimePickerOpen(false);
-                      }}
-                      disabled={controlsDisabled || busy || option.disabled}
-                      className={joinClassNames(
-                        'app-chat-composer__runtime-menu-row',
-                        reasoningEffort === option.value && 'app-chat-composer__runtime-menu-row--active',
-                      )}
-                    >
-                      <span>{option.label}</span>
-                      {reasoningEffort === option.value ? <Check size={18} strokeWidth={2.1} aria-hidden="true" /> : null}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="app-chat-composer__runtime-divider" />
-
-                <div className="app-chat-composer__runtime-section">
-                  <div className="app-chat-composer__runtime-section-title">Model</div>
-                  {flatModelOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => {
-                        onModelChange(option.value);
-                        setRuntimePickerOpen(false);
-                      }}
-                      disabled={controlsDisabled || busy || option.disabled}
-                      className={joinClassNames(
-                        'app-chat-composer__runtime-menu-row',
-                        model === option.value && 'app-chat-composer__runtime-menu-row--active',
-                      )}
-                    >
-                      <span>{compactModelLabel(option.label, option.value)}</span>
-                      {model === option.value ? (
-                        <Check size={18} strokeWidth={2.1} aria-hidden="true" />
-                      ) : (
-                        <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="app-chat-composer__runtime-divider" />
-
-                <div className="app-chat-composer__runtime-section">
-                  <button type="button" className="app-chat-composer__runtime-menu-row" disabled>
-                    <span>Speed</span>
-                    <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div
-            className={joinClassNames(
-              'app-chat-composer__status-pill',
-              runtimeStatusTone === 'warning' && 'app-chat-composer__status-pill--warning',
-              runtimeStatusTone === 'success' && 'app-chat-composer__status-pill--success',
-            )}
-          >
-            <span className="app-chat-composer__status-dot" aria-hidden="true" />
-            <span>{runtimeStatusLabel}</span>
-          </div>
-        </div>
-
         <textarea
           ref={textareaRef}
           value={draft}
@@ -357,6 +262,94 @@ export function ChatComposer({
 
         <div className="app-chat-composer__toolbar">
           <div className="app-chat-composer__toolbar-left">
+            <div className="app-chat-composer__runtime" ref={runtimePickerRef}>
+              <button
+                type="button"
+                className={joinClassNames(
+                  'app-chat-composer__provider-pill',
+                  providerGateVisible && 'app-chat-composer__provider-pill--warning',
+                )}
+                onClick={() => {
+                  setToolPaletteOpen(false);
+                  setRuntimePickerOpen((current) => !current);
+                }}
+                aria-expanded={runtimePickerOpen}
+                aria-label="Change model and reasoning"
+                title={runtimePillLabel}
+              >
+                <Zap size={13} strokeWidth={2.15} aria-hidden="true" />
+                <span>{runtimePillLabel}</span>
+                <ChevronDown size={13} strokeWidth={2} aria-hidden="true" />
+              </button>
+
+              {runtimePickerOpen ? (
+                <div className="app-chat-composer__runtime-popover" role="dialog" aria-label="Model and reasoning">
+                  <div className="app-chat-composer__runtime-section">
+                    <div className="app-chat-composer__runtime-section-title">Intelligence</div>
+                    {reasoningOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          onReasoningEffortChange(option.value);
+                          setRuntimePickerOpen(false);
+                        }}
+                        disabled={controlsDisabled || busy || option.disabled}
+                        className={joinClassNames(
+                          'app-chat-composer__runtime-menu-row',
+                          reasoningEffort === option.value && 'app-chat-composer__runtime-menu-row--active',
+                        )}
+                      >
+                        <span>{option.label}</span>
+                        {reasoningEffort === option.value ? <Check size={18} strokeWidth={2.1} aria-hidden="true" /> : null}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="app-chat-composer__runtime-divider" />
+
+                  <div className="app-chat-composer__runtime-section">
+                    <div className="app-chat-composer__runtime-section-title">Model</div>
+                    {flatModelOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          onModelChange(option.value);
+                          setRuntimePickerOpen(false);
+                        }}
+                        disabled={controlsDisabled || busy || option.disabled}
+                        className={joinClassNames(
+                          'app-chat-composer__runtime-menu-row',
+                          model === option.value && 'app-chat-composer__runtime-menu-row--active',
+                        )}
+                      >
+                        <span>{compactModelLabel(option.label, option.value)}</span>
+                        {model === option.value ? (
+                          <Check size={18} strokeWidth={2.1} aria-hidden="true" />
+                        ) : (
+                          <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div
+              className={joinClassNames(
+                'app-chat-composer__status-pill',
+                runtimeStatusTone === 'warning' && 'app-chat-composer__status-pill--warning',
+                runtimeStatusTone === 'success' && 'app-chat-composer__status-pill--success',
+              )}
+            >
+              <span className="app-chat-composer__status-dot" aria-hidden="true" />
+              <span>{runtimeStatusLabel}</span>
+            </div>
+
+            <div className="app-chat-composer__toolbar-divider" />
+
             <div className="app-chat-composer__tools" ref={toolsPickerRef}>
               <button
                 type="button"

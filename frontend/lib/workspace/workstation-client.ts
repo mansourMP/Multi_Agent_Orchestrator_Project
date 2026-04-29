@@ -1361,6 +1361,12 @@ const WRITE_REQUEST_POLICY: WorkstationRequestPolicy = {
   refreshSessionOn401: true,
 };
 
+const CHAT_TURN_PERSIST_REQUEST_POLICY: WorkstationRequestPolicy = {
+  timeoutMs: 60_000,
+  retryCount: 0,
+  refreshSessionOn401: true,
+};
+
 const STREAM_REQUEST_POLICY: WorkstationRequestPolicy = {
   timeoutMs: 120_000,
   retryCount: 0,
@@ -1583,7 +1589,7 @@ export function createWorkstationClient(
           client_request_id: resolvedRequestId,
         }),
       },
-      policy: WRITE_REQUEST_POLICY,
+      policy: CHAT_TURN_PERSIST_REQUEST_POLICY,
     })) as Record<string, unknown>;
   }
 

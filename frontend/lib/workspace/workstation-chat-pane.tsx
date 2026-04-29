@@ -14,16 +14,17 @@ import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib
 import { AppButton, AppNotice } from '@/lib/ui/primitives';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
 import { ChatComposer, type ComposerToolGroup } from '@/lib/workspace/chat-composer';
-import { ChatInlineStateCard } from '@/lib/workspace/chat-inline-state-card';
-import {
-  ChatMessage,
-  type WorkstationChatArtifactReference,
-  type WorkstationChatMessageRecord,
+import type {
+  WorkstationChatArtifactReference,
+  WorkstationChatMessageRecord,
 } from '@/lib/workspace/chat-message';
+import { CodexChatCell, type CodexApprovalAction } from '@/lib/workspace/codex-chat/cell-components';
+import type { CodexTranscriptCell } from '@/lib/workspace/codex-chat/cells';
+import { workstationMessageToCodexCell } from '@/lib/workspace/codex-chat/message-adapter';
 import {
-  projectTimeline,
+  projectCodexTimeline,
   type TimelineProjectionEvent,
-} from '@/lib/workspace/workstation-timeline-projector';
+} from '@/lib/workspace/codex-chat/timeline-reducer';
 import {
   resolveModelContextWindow,
 } from '@/lib/workspace/model-capabilities';
@@ -599,6 +600,17 @@ function buildLiveTraceRecord({
   };
 }
 
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  const tagName = target.tagName.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
+}
+
 function isSyntheticTranscriptMessage(message: WorkstationChatMessageRecord): boolean {
   if (message.role === 'user') {
     return false;
@@ -622,6 +634,16 @@ function isSyntheticTranscriptMessage(message: WorkstationChatMessageRecord): bo
     return true;
   }
   if (normalized === 'sage cannot run that request in this workspace right now.') {
+    return true;
+  }
+  if (
+    normalized === 'sage hit a temporary error while generating the response. please try again in a moment.'
+    || normalized === 'sage took too long to respond. please try again.'
+    || normalized === 'sage is temporarily at capacity. please try again in a moment.'
+    || normalized === "sage couldn't complete that turn."
+    || normalized === 'not found'
+    || normalized === 'thread not found.'
+  ) {
     return true;
   }
   return normalized.includes('local companion')
@@ -854,9 +876,14 @@ function readProviderScopes(provider: ProviderCatalogRecord): string[] {
     .filter(Boolean);
 }
 
-function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): boolean {
+function isCatalogProviderRecord(provider: ProviderCatalogRecord): boolean {
   const providerId = readString(provider.id).toLowerCase();
-  if (!providerId || readString(provider.kind).toLowerCase() !== 'provider' || provider.hidden === true) {
+  const kind = readString(provider.kind).toLowerCase();
+  return Boolean(providerId) && (kind === '' || kind === 'provider') && provider.hidden !== true;
+}
+
+function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): boolean {
+  if (!isCatalogProviderRecord(provider)) {
     return false;
   }
   const scopes = readProviderScopes(provider);
@@ -867,8 +894,7 @@ function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): bo
 }
 
 function isProviderEligibleForWorkspaceDefault(provider: ProviderCatalogRecord): boolean {
-  const providerId = readString(provider.id).toLowerCase();
-  if (!providerId || readString(provider.kind).toLowerCase() !== 'provider' || provider.hidden === true) {
+  if (!isCatalogProviderRecord(provider)) {
     return false;
   }
   const scopes = readProviderScopes(provider);
@@ -1220,29 +1246,6 @@ function createClientTurnRequestId(): string {
     return crypto.randomUUID();
   }
   return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-function createStreamingAssistantMessage(
-  text: string,
-  threadId: string,
-  traceId: string | null,
-): WorkstationChatMessageRecord | null {
-  if (!text) {
-    return null;
-  }
-
-  return {
-    id: `${threadId}:assistant:streaming`,
-    role: 'assistant',
-    content: text,
-    status: 'streaming',
-    createdAt: new Date().toISOString(),
-    runId: null,
-    approvals: [],
-    interventions: [],
-    artifacts: [],
-    metadata: traceId ? { trace_id: traceId } : {},
-  };
 }
 
 function createIncompleteAssistantMessage(
@@ -2392,6 +2395,44 @@ export function WorkstationChatPane() {
     }
   };
 
+  const handleResolveCodexApproval = (approvalId: string, action: CodexApprovalAction) => {
+    void handleResolveApproval(approvalId, action === 'deny' ? 'rejected' : 'approved');
+  };
+
+  useEffect(() => {
+    if (approvals.length === 0 || resolvingApprovalId) {
+      return undefined;
+    }
+    const approval = approvals[0];
+    const approvalId = readString(approval?.approval_id || approval?.id);
+    if (!approvalId) {
+      return undefined;
+    }
+    const handleApprovalShortcut = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || isTextEditingTarget(event.target)) {
+        return;
+      }
+      if (event.key === '1') {
+        event.preventDefault();
+        handleResolveCodexApproval(approvalId, 'allow_once');
+        return;
+      }
+      if (event.key === '2') {
+        event.preventDefault();
+        handleResolveCodexApproval(approvalId, 'allow_session');
+        return;
+      }
+      if (event.key === '3') {
+        event.preventDefault();
+        handleResolveCodexApproval(approvalId, 'deny');
+      }
+    };
+    window.addEventListener('keydown', handleApprovalShortcut);
+    return () => {
+      window.removeEventListener('keydown', handleApprovalShortcut);
+    };
+  }, [approvals, resolvingApprovalId]);
+
   const openCreateMemory = (categoryId?: string) => {
     setMemoryDraft({
       ...defaultSageMemoryDraft(),
@@ -2663,179 +2704,86 @@ export function WorkstationChatPane() {
     };
   }, [activeThreadId, bootstrap.workspace.id]);
 
-  const projectedTimelineRows = useMemo(
-    () => projectTimeline(liveTimelineEvents),
+  const projectedTimelineProjection = useMemo(
+    () => projectCodexTimeline(liveTimelineEvents),
     [liveTimelineEvents],
   );
 
-  const projectedTimelineMessages = useMemo(() => {
-    const threadId = liveTrace?.trace?.thread_id && readString(liveTrace.trace.thread_id)
-      ? String(liveTrace.trace.thread_id)
-      : activeThreadId;
-    return projectedTimelineRows.flatMap((row): WorkstationChatMessageRecord[] => {
-      if (row.kind === 'user') {
-        return [];
-      }
-      if (row.kind === 'assistant') {
-        if (!showProjectedAssistant) {
-          return [];
-        }
-        const message = createStreamingAssistantMessage(
-          row.content,
-          threadId,
-          liveTrace?.traceId ?? null,
-        );
-        if (!message) {
-          return [];
-        }
-        message.status = row.isStreaming ? 'streaming' : (row.isIncomplete ? 'incomplete' : 'completed');
-        message.metadata = {
-          ...message.metadata,
-          incomplete: row.isIncomplete,
-          effective_provider: readString(liveTrace?.trace?.provider),
-          effective_model: readString(liveTrace?.trace?.model),
-        };
-        return [message];
-      }
-      if (row.kind === 'thinking') {
-        return [{
-          id: `${threadId}:thinking:${row.id}`,
-          role: 'assistant',
-          content: row.text,
-          status: row.isStreaming ? 'streaming' : 'completed',
-          createdAt: new Date().toISOString(),
-          runId: null,
-          approvals: [],
-          interventions: [],
-          artifacts: [],
-          metadata: {
-            display_kind: 'thinking_row',
-            thinking_text: row.text,
-            activity_line: row.activityLine,
-            step_streaming: row.isStreaming && !timelineSettled,
-            step_dimmed: timelineSettled,
-          },
-        }];
-      }
-      if (row.kind === 'tool') {
-        return [{
-          id: `${threadId}:tool:${row.id}`,
-          role: 'assistant',
-          content: row.name,
-          status: row.status,
-          createdAt: new Date().toISOString(),
-          runId: null,
-          approvals: [],
-          interventions: [],
-          artifacts: [],
-          metadata: {
-            display_kind: 'tool_row',
-            tool_name: row.name,
-            tool_result: row.result,
-            step_status: row.status,
-            step_dimmed: timelineSettled,
-          },
-        }];
-      }
-      if (row.kind === 'file') {
-        return [{
-          id: `${threadId}:file:${row.id}`,
-          role: 'assistant',
-          content: row.filename,
-          status: 'completed',
-          createdAt: new Date().toISOString(),
-          runId: null,
-          approvals: [],
-          interventions: [],
-          artifacts: [],
-          metadata: {
-            display_kind: 'file_row',
-            filename: row.filename,
-            file_action: row.action,
-            step_dimmed: timelineSettled,
-          },
-        }];
-      }
-      return [{
-        id: `${threadId}:search:${row.id}`,
-        role: 'assistant',
-        content: row.query,
-        status: row.status,
-        createdAt: new Date().toISOString(),
-        runId: null,
-        approvals: [],
-        interventions: [],
-        artifacts: [],
-        metadata: {
-          display_kind: 'search_row',
-          query: row.query,
-          step_status: row.status,
-          step_dimmed: timelineSettled,
-        },
-      }];
-    });
-  }, [
-    activeThreadId,
-    liveTrace?.trace?.model,
-    liveTrace?.trace?.provider,
-    liveTrace?.trace?.thread_id,
-    liveTrace?.traceId,
-    projectedTimelineRows,
-    showProjectedAssistant,
-    timelineSettled,
-  ]);
+  const projectedTimelineCells = projectedTimelineProjection.cells;
 
-  const projectedSystemMessages = useMemo(
-    () => projectedTimelineMessages.filter((message) => {
-      const displayKind = readString(readObject(message.metadata).display_kind);
-      return displayKind === 'thinking_row'
-        || displayKind === 'tool_row'
-        || displayKind === 'file_row'
-        || displayKind === 'search_row';
-    }),
-    [projectedTimelineMessages],
+  const projectedSystemCells = useMemo(
+    () => projectedTimelineCells.filter((cell) => (
+      cell.kind === 'reasoning_summary'
+      || cell.kind === 'exec'
+      || cell.kind === 'tool'
+      || cell.kind === 'web_search'
+      || cell.kind === 'file_change'
+      || cell.kind === 'approval_request'
+      || cell.kind === 'status'
+      || cell.kind === 'error'
+    )),
+    [projectedTimelineCells],
   );
 
-  const pinnedTimelineMessages = isSending ? projectedSystemMessages : [];
+  const projectedAssistantCell = useMemo(
+    () => projectedTimelineCells.find((cell): cell is Extract<CodexTranscriptCell, { kind: 'assistant' }> => cell.kind === 'assistant') ?? null,
+    [projectedTimelineCells],
+  );
 
-  const visibleTranscriptMessages = useMemo(() => {
+  const pinnedTimelineCells = isSending ? projectedSystemCells : [];
+
+  const pendingApprovalCells = useMemo<CodexTranscriptCell[]>(() => (
+    approvals.map((approval, index) => {
+      const approvalId = readString(approval.approval_id || approval.id) || `approval-${index}`;
+      const approvalRecord = approval as Record<string, unknown>;
+      return {
+        id: approvalId,
+        kind: 'approval_request',
+        prompt: readString(approval.prompt) || `Approval ${index + 1}`,
+        actions: ['allow_once', 'allow_session', 'deny'],
+        status: 'waiting',
+        createdAt: readString(approvalRecord.created_at) || null,
+        metadata: {
+          ...approval,
+          approval_id: approvalId,
+        },
+      };
+    })
+  ), [approvals]);
+
+  const visibleTranscriptCells = useMemo(() => {
     const canonicalMessages = thread.messages.filter((message) => !isSyntheticTranscriptMessage(message));
-    const nextMessages = [...canonicalMessages];
+    const nextCells = canonicalMessages.map(workstationMessageToCodexCell);
     if (pendingUserMessage && !canonicalIncludesMessage(canonicalMessages, pendingUserMessage)) {
-      nextMessages.push(pendingUserMessage);
+      nextCells.push(workstationMessageToCodexCell(pendingUserMessage));
     }
-    const trailingMessage = nextMessages[nextMessages.length - 1] ?? null;
-    const trailingDisplayKind = trailingMessage ? readString(readObject(trailingMessage.metadata).display_kind) : '';
-    const scrollableSystemMessages = isSending ? [] : projectedSystemMessages;
-    const shouldInsertStepsBeforeFinalAssistant = scrollableSystemMessages.length > 0
-      && trailingMessage?.role === 'assistant'
-      && trailingDisplayKind !== 'activity_step'
-      && trailingDisplayKind !== 'thinking_row'
-      && trailingDisplayKind !== 'tool_row'
-      && trailingDisplayKind !== 'file_row'
-      && trailingDisplayKind !== 'search_row';
-    if (shouldInsertStepsBeforeFinalAssistant && trailingMessage) {
-      nextMessages.pop();
-      nextMessages.push(...scrollableSystemMessages, trailingMessage);
-    } else if (scrollableSystemMessages.length > 0) {
-      nextMessages.push(...scrollableSystemMessages);
+    const trailingCell = nextCells[nextCells.length - 1] ?? null;
+    const scrollableSystemCells = isSending ? [] : projectedSystemCells;
+    const shouldInsertStepsBeforeFinalAssistant = scrollableSystemCells.length > 0
+      && trailingCell?.kind === 'assistant';
+    if (shouldInsertStepsBeforeFinalAssistant && trailingCell) {
+      nextCells.pop();
+      nextCells.push(...scrollableSystemCells, trailingCell);
+    } else if (scrollableSystemCells.length > 0) {
+      nextCells.push(...scrollableSystemCells);
     }
-    const projectedAssistantMessage = projectedTimelineMessages.find((message) => message.role === 'assistant' && !message.metadata.display_kind);
-    if (projectedAssistantMessage) {
-      nextMessages.push(projectedAssistantMessage);
+    if (showProjectedAssistant && projectedAssistantCell) {
+      nextCells.push(projectedAssistantCell);
     }
-    return nextMessages;
-  }, [isSending, pendingUserMessage, projectedSystemMessages, projectedTimelineMessages, thread.messages]);
+    if (pendingApprovalCells.length > 0) {
+      nextCells.push(...pendingApprovalCells);
+    }
+    return nextCells;
+  }, [isSending, pendingApprovalCells, pendingUserMessage, projectedAssistantCell, projectedSystemCells, showProjectedAssistant, thread.messages]);
 
-  const hasConversationContent = visibleTranscriptMessages.length > 0
+  const hasConversationContent = visibleTranscriptCells.length > 0
     || Boolean(liveTrace);
   const showConversationContext = hasConversationContent || hasEnteredConversationFlow;
   const showFirstImpression = !showConversationContext;
   const showBlankTranscript = !isLoading
-    && visibleTranscriptMessages.length === 0
+    && visibleTranscriptCells.length === 0
     && !liveTrace;
   const latestRun = runs[0];
-  const latestApproval = approvals[0];
   const artifactCount = useMemo(() => countArtifacts(thread.messages), [thread.messages]);
   const assistantTurnCount = useMemo(
     () => thread.messages.filter((message) => message.role !== 'user').length,
@@ -2999,7 +2947,6 @@ export function WorkstationChatPane() {
         label: 'Media',
         items: [
           { id: 'image-generation', label: 'Image generation', detail: 'Available through configured image backends', enabled: true },
-          { id: 'video-creation', label: 'Video creation', detail: 'No video backend configured yet', enabled: false },
         ],
       },
       {
@@ -3220,7 +3167,8 @@ export function WorkstationChatPane() {
     }
     return pills;
   }, [browserGatewayDoctor, gatewayReadinessOnline, selectedProviderContext.providerLabel]);
-  const showContextStrip = true;
+  const showContextStrip = false;
+  const showHeaderReadinessStrip = false;
 
   useEffect(() => {
     let cancelled = false;
@@ -3390,15 +3338,18 @@ export function WorkstationChatPane() {
       });
       return;
     }
+    const resolvedProviderId = readString(selectedProviderContext.providerId) || null;
+    const resolvedModelId = readString(selectedProviderContext.modelId)
+      || (selectedModel === 'default' ? null : selectedModel);
     if (isSmallOllamaSelection(
-      selectedProviderContext.providerId,
-      selectedProviderContext.modelId || selectedModel,
+      resolvedProviderId,
+      resolvedModelId || selectedModel,
       selectedProviderContext.modelLabel || selectedModelOption.label,
     )) {
       const warningKey = [
         'sage-small-ollama-model-warning',
         bootstrap.workspace.id,
-        selectedProviderContext.modelId || selectedModel,
+        resolvedModelId || selectedModel,
       ].join(':');
       try {
         if (window.sessionStorage.getItem(warningKey) !== '1') {
@@ -3506,6 +3457,7 @@ export function WorkstationChatPane() {
       let observedTraceId: string | null = null;
       let observedThreadId = requestedThreadId;
       let terminalTraceSeen = false;
+      let observedFinalReply: string | null = null;
       const onTraceEvent = (traceEvent: WorkstationAgentTraceEvent) => {
         observedTraceId = readString(traceEvent.trace_id) || observedTraceId;
         terminalTraceSeen = terminalTraceSeen || isTerminalTraceEvent(readString(traceEvent.event_type));
@@ -3606,15 +3558,15 @@ export function WorkstationChatPane() {
       };
 
       streamInFlightRef.current = true;
-      const { renewed, response, session: streamedSession } = await services.client.submitTurnStreamWithSessionRetry({
+      const { response, session: streamedSession } = await services.client.submitTurnStreamWithSessionRetry({
         actor,
         threadId: requestedThreadId,
         message: outboundMessage,
         channel: 'web',
         source: 'workstation_chat_pane',
         runtimeTarget: localRuntimeTargetId || 'cloud',
-        provider: selectedProviderContext.providerId,
-        model: selectedModel === 'default' ? null : selectedModel,
+        provider: resolvedProviderId,
+        model: resolvedModelId,
         reasoningEffort,
         existingSession: session,
         clientRequestId,
@@ -3682,7 +3634,10 @@ export function WorkstationChatPane() {
               || readString(event.payload.content)
               || readString(event.payload.message);
             if (finalReply) {
+              observedFinalReply = finalReply;
               setStreamingAssistantText(finalReply);
+              setStatusMessage(null);
+              setSendFailureNotice(null);
             }
             const finalThreadId = readString(event.payload.thread_id);
             if (finalThreadId) {
@@ -3708,9 +3663,10 @@ export function WorkstationChatPane() {
       }
       const normalizedResponse: WorkstationTurnResponse = {
         ...response,
+        reply: readString(response.reply) || observedFinalReply || undefined,
         thread_id: String(response.thread_id ?? observedThreadId ?? requestedThreadId),
-      metadata: responseMetadata,
-    };
+        metadata: responseMetadata,
+      };
       const responseExecutionTarget = readExecutionTarget(responseMetadata);
       const providerFailureIntervention = findProviderFailureIntervention(normalizedResponse.interventions ?? []);
       const nextThreadId = String(normalizedResponse.thread_id ?? requestedThreadId);
@@ -3806,20 +3762,18 @@ export function WorkstationChatPane() {
           session,
         });
       }
+      const hasPendingApprovals = Array.isArray(normalizedResponse.approvals) && normalizedResponse.approvals.length > 0;
+      const needsUserIntervention = Array.isArray(normalizedResponse.interventions)
+        && normalizedResponse.interventions.length > 0
+        && !hasVisibleAssistantReply;
       setStatusMessage(
-        Array.isArray(normalizedResponse.approvals) && normalizedResponse.approvals.length > 0
+        hasPendingApprovals
           ? responseExecutionTarget === 'local_companion'
-            ? 'Turn submitted. Sage is waiting for approval before using the local companion.'
-            : 'Turn submitted. Approval is now pending.'
-          : Array.isArray(normalizedResponse.interventions) && normalizedResponse.interventions.length > 0 && !hasVisibleAssistantReply
-            ? 'Turn submitted. Your input is needed before Sage can continue.'
-            : responseExecutionTarget === 'local_companion'
-              ? 'Turn submitted. Sage routed this work to the local companion.'
-            : responseExecutionTarget === 'cloud'
-              ? 'Turn submitted. Sage is working in cloud mode.'
-            : renewed
-              ? 'Turn submitted after refreshing your session.'
-              : null,
+            ? 'Sage is waiting for approval before using the local companion.'
+            : 'Approval is waiting.'
+          : needsUserIntervention
+            ? 'Sage needs your input before it can continue.'
+            : null,
       );
       setSendFailureNotice(null);
     } catch (error) {
@@ -3930,7 +3884,7 @@ export function WorkstationChatPane() {
               ) : null}
             </div>
           ) : null}
-          {readinessPills.length > 0 ? (
+          {showHeaderReadinessStrip && readinessPills.length > 0 ? (
             <div className="app-chat-readiness-strip" aria-label="Sage readiness">
               {readinessPills.map((pill) => (
                 <button
@@ -3977,22 +3931,26 @@ export function WorkstationChatPane() {
                 </div>
               ) : null}
 
-              {visibleTranscriptMessages.map((message) => (
-                <ChatMessage
-                  key={message.id}
-                  message={message}
+              {visibleTranscriptCells.map((cell, index) => (
+                <CodexChatCell
+                  key={`${cell.kind}:${cell.id}:${index}`}
+                  cell={cell}
+                  resolvingApprovalId={resolvingApprovalId}
+                  onResolveApproval={handleResolveCodexApproval}
                 />
               ))}
             </div>
           </ScrollRegion>
         </section>
 
-        {pinnedTimelineMessages.length > 0 ? (
+        {pinnedTimelineCells.length > 0 ? (
           <div className="app-chat-live-activity-dock" aria-live="polite">
-            {pinnedTimelineMessages.map((message) => (
-              <ChatMessage
-                key={`pinned:${message.id}`}
-                message={message}
+            {pinnedTimelineCells.map((cell, index) => (
+              <CodexChatCell
+                key={`pinned:${cell.kind}:${cell.id}:${index}`}
+                cell={cell}
+                resolvingApprovalId={resolvingApprovalId}
+                onResolveApproval={handleResolveCodexApproval}
               />
             ))}
           </div>
@@ -4008,61 +3966,6 @@ export function WorkstationChatPane() {
               <span>{sendFailureNotice.message}</span>
               {sendFailureNotice.retryable ? <span>Draft kept. Try again when ready.</span> : null}
             </AppNotice>
-          ) : null}
-
-          {approvals.length > 0 ? (
-            <div className="app-chat-inline-state-host">
-              <ChatInlineStateCard
-                tone="warning"
-                eyebrow="Action Required"
-                title={readString(latestApproval?.prompt) || 'Approval required'}
-                meta={localCompanionConnected
-                  ? 'Sage is paused until you decide whether it can continue on this machine.'
-                  : 'Sage is paused until you approve or deny the next step.'}
-                actions={(
-                  <div className="app-chat-inline-state__actions">
-                    {latestApproval && readString(latestApproval.approval_id || latestApproval.id) ? (
-                      <>
-                        <AppButton
-                          type="button"
-                          disabled={Boolean(resolvingApprovalId)}
-                          onClick={() => {
-                            void handleResolveApproval(readString(latestApproval.approval_id || latestApproval.id), 'approved');
-                          }}
-                        >
-                          {resolvingApprovalId ? 'Allowing…' : 'Allow'}
-                        </AppButton>
-                        <AppButton
-                          type="button"
-                          tone="secondary"
-                          disabled={Boolean(resolvingApprovalId)}
-                          onClick={() => {
-                            void handleResolveApproval(readString(latestApproval.approval_id || latestApproval.id), 'rejected');
-                          }}
-                        >
-                          Deny
-                        </AppButton>
-                      </>
-                    ) : null}
-                    <AppButton
-                      type="button"
-                      tone="ghost"
-                      onClick={() => {
-                        setIsApprovalsSheetOpen(true);
-                      }}
-                    >
-                      Review details
-                    </AppButton>
-                  </div>
-                )}
-              >
-                <p className="app-chat-inline-state__body-copy">
-                  {selectedExecutionPlacement === 'local'
-                    ? 'This request needs device or filesystem access. In default-permission mode, Sage stays paused until you make a decision.'
-                    : 'This request is waiting on explicit approval before Sage continues the next action.'}
-                </p>
-              </ChatInlineStateCard>
-            </div>
           ) : null}
 
           {statusMessage ? (

@@ -169,9 +169,18 @@ export async function forwardControlPlaneRequest(
       signal: controller?.signal,
     });
 
-    return new NextResponse(response.body, {
+    const responseHeaders = copyForwardableResponseHeaders(response);
+    const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+    const shouldStreamResponse = contentType.includes('text/event-stream');
+    const responseBody = shouldStreamResponse
+      ? response.body
+      : response.body === null
+        ? null
+        : await response.arrayBuffer();
+
+    return new NextResponse(responseBody, {
       status: response.status,
-      headers: copyForwardableResponseHeaders(response),
+      headers: responseHeaders,
     });
   } catch (error) {
     if (controller && error instanceof Error && error.name === 'AbortError') {

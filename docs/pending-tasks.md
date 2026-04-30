@@ -118,6 +118,15 @@ Update 2026-04-30 Phase 7/8:
 - final sweep observed no `5xx` API responses and no visible `Run complete`, `Sage trace`, raw stack, `Not Found`, timeout, or temporary-error text
 - do not store live demo account credentials in this repo; keep them in a password manager or operator notes outside git
 
+Update 2026-04-30 Phase 9/10:
+- frontend typecheck passed
+- frontend production build passed
+- Python compile for `server_modules` and `scripts` passed
+- targeted backend suite passed with `98 passed`
+- focused browser E2E passed with `8 passed` across auth session, workspace setup, and Sage-first launch
+- production web returned HTTP 200 and production runtime health returned `{"ok":true}`
+- RC is passed for the certified Sage public-demo path; remaining work is operational demo setup and any future surfaces outside the certified scope
+
 ### 1. Durable Rendered Demo Completion
 
 Not done.

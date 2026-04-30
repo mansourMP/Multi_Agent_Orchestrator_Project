@@ -157,6 +157,35 @@ Conclusion: Phase 4 source-level hygiene is improved, but the visual certificati
 4. Do not demo video generation.
 5. Do not demo image generation unless its configured backend key is verified in the live demo workspace.
 
+## Phase 9/10 Final Verification - 2026-04-30
+
+| Check | Status | Evidence | Remaining Risk |
+| --- | --- | --- | --- |
+| Frontend typecheck | Passed | `npm run typecheck --prefix frontend` exited `0`. | None for certified scope. |
+| Frontend production build | Passed | `npm run build --prefix frontend` exited `0`. | None for certified scope. |
+| Python compile | Passed | `venv/bin/python -m compileall server_modules scripts` exited `0`. | None for certified scope. |
+| Targeted backend tests | Passed | Direct chat, runtime, provider, credential, gateway, and auth targeted suite returned `98 passed`. | Two UTC deprecation warnings are cleanup work, not demo blockers. |
+| Auth/workspace/Sage E2E | Passed | Focused Playwright suite returned `8 passed` for auth browser session, workspace setup, and Sage-first launch. | None for certified scope. |
+| Production web health | Passed | `https://empyralis-web.onrender.com` returned HTTP `200`. | Recheck immediately before live demo. |
+| Production runtime health | Passed | `https://empyralis-runtime.onrender.com/health` returned `{"ok":true}`. | Recheck immediately before live demo. |
+
+## Phase 10 Demo Script
+
+Certified live path:
+
+1. Login/signup.
+2. Open Sage.
+3. Show clean composer: model/reasoning picker, runtime pill, tools button, textarea, send arrow.
+4. Ask a normal question.
+5. Show thinking row and assistant response.
+6. Open model picker and show provider-backed model options.
+7. Open tools palette and show gateway-offline degradation: local tools unavailable, cloud tools available.
+8. Run web search with: `Use the web search tool to find the official Ollama homepage URL and return only the URL.`
+9. Optional: pair gateway and show one harmless local-tool command against a clean demo directory.
+10. Optional: show History, Memory, Integrations.
+
+Final verdict: RC PASSED for the certified public-demo Sage scope.
+
 ## Hard Demo Blocks
 
 - A clean production demo workspace does not have one usable provider configured.

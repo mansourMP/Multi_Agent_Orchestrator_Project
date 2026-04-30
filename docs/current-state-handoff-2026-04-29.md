@@ -207,3 +207,30 @@ Final public-demo caveats:
 - Only demo image generation if the specific image backend key is configured and verified in the demo workspace.
 - If demoing local tools, start and pair the gateway first and use a cleaned demo directory or harmless command.
 - The live demo account credentials must stay outside git/docs.
+
+## Phase 9/10 Final Cert - 2026-04-30
+
+Phase 9 final verification passed after the Phase 7/8 production visual cert.
+
+- `npm run typecheck --prefix frontend`: passed.
+- `npm run build --prefix frontend`: passed.
+- `venv/bin/python -m compileall server_modules scripts`: passed.
+- Targeted backend tests passed: `98 passed`, with only two UTC deprecation warnings in `workspace_admin_service.py`.
+- Focused E2E browser smoke passed: `8 passed` for browser auth session, workspace setup, and Sage-first launch.
+- Production web availability check returned HTTP `200`.
+- Production runtime health returned `{"ok":true}`.
+
+Phase 10 demo script is ready for the certified scope:
+
+1. Sign in or sign up with the live demo account.
+2. Open Sage.
+3. Show the clean composer: model/reasoning picker, gateway/runtime pill, tools button, textarea, send arrow.
+4. Send `hello` or a short normal question.
+5. Show the thinking row and assistant response.
+6. Open the model picker and show provider-backed model options.
+7. Open the tools palette and show local tools disabled when gateway is offline while cloud tools remain available.
+8. Run web search with: `Use the web search tool to find the official Ollama homepage URL and return only the URL.`
+9. Optional: pair gateway and run a harmless local-tool demo against a cleaned demo directory.
+10. Optional: show History, Memory, and Integrations.
+
+Final demo verdict: RC PASSED for the certified public-demo scope. Do not expand the live demo into Studio, mobile, mini-apps, video generation, or unverified image generation without a separate cert.

@@ -186,6 +186,8 @@ Certified live path:
 
 Final verdict: RC PASSED for the certified public-demo Sage scope.
 
+Operational runbook: `docs/operations/public-demo-runbook-2026-04-30.md`.
+
 ## Hard Demo Blocks
 
 - A clean production demo workspace does not have one usable provider configured.

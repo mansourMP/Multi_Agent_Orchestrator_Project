@@ -234,3 +234,5 @@ Phase 10 demo script is ready for the certified scope:
 10. Optional: show History, Memory, and Integrations.
 
 Final demo verdict: RC PASSED for the certified public-demo scope. Do not expand the live demo into Studio, mobile, mini-apps, video generation, or unverified image generation without a separate cert.
+
+Operational runbook: `docs/operations/public-demo-runbook-2026-04-30.md`.

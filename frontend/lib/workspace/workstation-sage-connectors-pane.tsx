@@ -1035,7 +1035,7 @@ export function WorkstationSageConnectorsPane({
 
   useEffect(() => {
     let cancelled = false;
-    setIsLoading(cachedState === null);
+    setIsLoading(sageConnectorsPaneCache.get(cacheKey) === null);
     setError(null);
     void loadState()
       .catch((loadError) => {
@@ -1051,7 +1051,7 @@ export function WorkstationSageConnectorsPane({
     return () => {
       cancelled = true;
     };
-  }, [cachedState, loadState]);
+  }, [cacheKey, loadState]);
 
   const localCompanionOnline = useMemo(
     () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'local_companion' && target.online),

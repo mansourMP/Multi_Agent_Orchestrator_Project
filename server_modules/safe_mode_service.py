@@ -151,6 +151,9 @@ def _run_coro_sync(coro: Any) -> Any:
         return asyncio.run(coro)
     except RuntimeError as exc:
         if "asyncio.run() cannot be called from a running event loop" not in str(exc):
+            close = getattr(coro, "close", None)
+            if callable(close):
+                close()
             raise
 
     result: Dict[str, Any] = {}

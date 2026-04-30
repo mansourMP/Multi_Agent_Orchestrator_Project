@@ -478,9 +478,13 @@ def _runtime_notification_query_ids(
     query += " ORDER BY sort_ts DESC, id DESC LIMIT ?"
     params.append(max(1, int(limit or 100)))
 
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(query, tuple(params)).fetchall()
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(query, tuple(params)).fetchall()
+    except sqlite3.Error as exc:
+        LOGGER.warning("Notification runtime store unavailable for query: %s", exc)
+        return []
     return [str(row["id"] or "").strip() for row in rows if str(row["id"] or "").strip()]
 
 
@@ -585,9 +589,13 @@ def _resolve_runtime_notification_cursor(
         clauses.append("trace_id = ?")
         params.append(str(trace_id or "").strip())
     query = "SELECT created_at FROM notifications WHERE " + " AND ".join(clauses) + " LIMIT 1"
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(query, tuple(params)).fetchone()
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(query, tuple(params)).fetchone()
+    except sqlite3.Error as exc:
+        LOGGER.warning("Notification runtime store unavailable for cursor: %s", exc)
+        return None
     if row is None:
         return None
     created_at = str(row["created_at"] or "").strip()

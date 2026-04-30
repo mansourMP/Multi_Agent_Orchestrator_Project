@@ -557,6 +557,30 @@ class NotificationServiceTests(unittest.TestCase):
 
             self.assertEqual(json.loads(event["data"])["id"], "notif-3")
 
+    def test_runtime_notification_queries_degrade_when_runtime_db_is_unavailable(self) -> None:
+        unavailable_db = Path("/tmp/empyralis-missing-runtime-state.sqlite3")
+        with patch(
+            "server_modules.notification_service.sqlite3.connect",
+            side_effect=notification_service.sqlite3.OperationalError("unable to open database file"),
+        ):
+            self.assertEqual(
+                notification_service._runtime_notification_query_ids(
+                    db_path=unavailable_db,
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    limit=1,
+                ),
+                [],
+            )
+            self.assertIsNone(
+                notification_service._resolve_runtime_notification_cursor(
+                    db_path=unavailable_db,
+                    notification_id="notif-1",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

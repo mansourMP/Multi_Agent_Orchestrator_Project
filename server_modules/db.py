@@ -35,7 +35,7 @@ def _truthy_env(value: Any) -> bool:
 
 
 def _allow_database_url_backfill() -> bool:
-    return _resolved_environment() in _LOCAL_ENV_TOKENS
+    return _truthy_env(os.getenv("ORION_LOCAL_RUNTIME_USE_POSTGRES")) and _resolved_environment() in _LOCAL_ENV_TOKENS
 
 
 def durable_runtime_required() -> bool:

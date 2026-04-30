@@ -66,16 +66,16 @@ test.describe('account shell hydration', () => {
   test('hydrates the account shell after login and shows real memberships', async ({ page }) => {
     await loginAsOwner(page);
     await expect(page.locator('[data-workstation-switcher="rail"]')).toBeVisible();
-    await expect(page.locator('[data-workstation-switcher-link="ws-1"]')).toBeVisible();
+    await expect(page.locator('[data-workstation-titlebar="root"]')).toBeVisible();
   });
 
   test('hard refresh on a workspace route preserves the server-hydrated shell session', async ({ page }) => {
     await loginAsOwner(page);
-    await page.goto('/w/ws-1/chat', { waitUntil: 'domcontentloaded' });
+    await page.goto('/w/ws-1/sage', { waitUntil: 'domcontentloaded' });
     await page.reload({ waitUntil: 'domcontentloaded' });
 
     await expect(page.locator('[data-workstation-switcher="rail"]')).toBeVisible();
-    await expect(page.locator('[data-workstation-switcher-link="ws-1"]')).toBeVisible();
+    await expect(page.locator('[data-workstation-titlebar="root"]')).toBeVisible();
   });
 
   test('anonymous users are redirected out of account routes', async ({ page }) => {
@@ -108,6 +108,6 @@ test.describe('account shell hydration', () => {
     await page.getByLabel('Password').fill('password-123');
     await page.getByRole('button', { name: /log in/i }).click();
 
-    await expect(page.locator('[data-workstation-switcher-link="ws-first"]')).toHaveCount(0);
+    await expect(page.locator('a[href^="/w/ws-first/"]')).toHaveCount(0);
   });
 });

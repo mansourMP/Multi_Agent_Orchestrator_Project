@@ -44,6 +44,29 @@ def _current_user(*, workspace_id: str = "ws-1", tenant_id: str = "tenant-1", ro
     }
 
 
+def test_runtime_target_payload_exposes_cloud_computer_as_optional_metered_runtime() -> None:
+    payload = workspace_bootstrap_service._runtime_target_payload(
+        {
+            "target_id": "sage_cloud_computer",
+            "label": "Sage Cloud Computer",
+            "description": "Optional metered cloud computer.",
+            "available": False,
+            "online": False,
+            "healthy": False,
+            "status": "unavailable",
+            "connection_mode": "platform_metered_cloud_computer",
+            "execution_target": "cloud_computer",
+            "default_for_workspace": False,
+            "supports_runtime_modes": ["hosted_secure"],
+        }
+    )
+
+    assert payload["kind"] == "cloud_computer"
+    assert payload["statusLabel"] == "Not enabled"
+    assert payload["trustTier"] == "hosted_cloud_computer"
+    assert "will not allocate a hosted computer automatically" in payload["statusReason"]
+
+
 @pytest.mark.anyio
 async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch: pytest.MonkeyPatch):
     async def fake_get_user_bundle_by_id(user_id: str):
@@ -148,7 +171,7 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
     assert payload["membership"]["role"] == "member"
     assert payload["membership"]["version"] == "7:1712000000"
     assert "chat.write" in payload["membership"]["permissions"]
-    assert payload["entitlements"]["plan"] == "personal"
+    assert payload["entitlements"]["plan"] == "pro"
     assert payload["capabilities"]["mobile_app_enabled"] is True
     assert payload["capabilities"]["channel_pairing_enabled"] is True
     assert payload["runtime"]["deploymentMode"] == "hybrid"

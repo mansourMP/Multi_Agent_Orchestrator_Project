@@ -90,11 +90,16 @@ export function WorkspaceSetupForm({
   const typeId = useId();
   const shellId = useId();
   const routeId = useId();
+  const [isHydrated, setIsHydrated] = useState(false);
   const [values, setValues] = useState<WorkspaceSetupFormValues>(initialValues);
 
   useEffect(() => {
+    setIsHydrated(true);
+  }, []);
+
+  useEffect(() => {
     setValues(initialValues);
-  }, [initialValues]);
+  }, [workspaceId]);
 
   function update<K extends keyof WorkspaceSetupFormValues>(
     key: K,
@@ -127,8 +132,13 @@ export function WorkspaceSetupForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!isHydrated) {
+      return;
+    }
     await onSubmit(values);
   }
+
+  const controlsDisabled = submitting || !isHydrated;
 
   return (
     <form
@@ -151,7 +161,7 @@ export function WorkspaceSetupForm({
             type="text"
             value={values.name}
             onChange={(event) => update('name', event.target.value)}
-            disabled={submitting}
+            disabled={controlsDisabled}
             placeholder="Acme Deal Room"
             required
           />
@@ -163,7 +173,7 @@ export function WorkspaceSetupForm({
             id={typeId}
             value={values.workspaceType}
             onChange={(event) => update('workspaceType', event.target.value as WorkspaceSetupType)}
-            disabled={submitting}
+            disabled={controlsDisabled}
           >
             {WORKSPACE_TYPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -181,7 +191,7 @@ export function WorkspaceSetupForm({
             onChange={(event) =>
               handleShellProfileChange(event.target.value as WorkspaceShellProfileId)
             }
-            disabled={submitting}
+            disabled={controlsDisabled}
           >
             {SHELL_PROFILE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -197,7 +207,7 @@ export function WorkspaceSetupForm({
             id={routeId}
             value={values.defaultRoute}
             onChange={(event) => update('defaultRoute', event.target.value)}
-            disabled={submitting}
+            disabled={controlsDisabled}
           >
             {DEFAULT_ROUTE_OPTIONS.map((option) => (
               <option
@@ -218,7 +228,7 @@ export function WorkspaceSetupForm({
       ) : null}
 
       <div className="app-setup-form__actions">
-        <AppButton type="submit" disabled={submitting}>
+        <AppButton type="submit" disabled={controlsDisabled}>
           {submitting ? 'Saving…' : submitLabel}
         </AppButton>
       </div>

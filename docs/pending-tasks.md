@@ -2,6 +2,23 @@
 
 Last verified: 2026-04-30
 
+## Current Five-Phase Plan - 2026-04-30
+
+Canonical next execution plan:
+- `docs/ai-os-five-phase-execution-plan-2026-04-30.md`
+
+Current decision:
+- Public demo remains Sage-first.
+- Studio and Marketplace are expansion surfaces, not public-demo blockers unless explicitly included.
+- Sage Cloud Computer is a paid premium runtime lane. The backend contract exists now, but live provisioning, tool execution into that runtime, spend UI, and tenant-isolation certification remain future work.
+
+Dense phase order:
+1. Demo reliability and Sage trust surface.
+2. Studio builder and Marketplace seed.
+3. Mini App runtime and package governance.
+4. Sage Cloud Computer MVP.
+5. Billing, privacy, certification, and launch.
+
 ## Finish Program Snapshot
 
 Already implemented platform foundations that should no longer be described as
@@ -17,6 +34,9 @@ future architecture:
 - hosted mini-app contract, hosted manifest route, and bridge route
 - governed marketplace/distribution registration, install, and runtime-event
   routes
+- Sage Cloud Computer runtime contract: `cloud_computer` attachment kind,
+  `sage_cloud_computer` target, trust model, bootstrap status projection,
+  metered entitlement marker, and explicit-selection guard
 
 Current finish-program priorities:
 1. docs truth reconciliation
@@ -126,6 +146,13 @@ Update 2026-04-30 Phase 9/10:
 - focused browser E2E passed with `8 passed` across auth session, workspace setup, and Sage-first launch
 - production web returned HTTP 200 and production runtime health returned `{"ok":true}`
 - RC is passed for the certified Sage public-demo path; remaining work is operational demo setup and any future surfaces outside the certified scope
+
+Update 2026-04-30 Cloud Computer contract:
+- backend runtime contracts now recognize Cloud Computer as a separate optional hosted-computer lane, not as the default cloud runtime
+- generic hosted runs cannot auto-select Cloud Computer; the runtime must be explicitly requested
+- Cloud Computer is surfaced as metered and separate from personal gateway access
+- focused tests passed with `60 passed` and Python compile passed for touched backend files
+- remaining work: provisioner/vendor adapter, Cloud Computer session lifecycle, tool dispatch into the provisioned session, spend UI, and tenant-isolation certification
 
 ### 1. Durable Rendered Demo Completion
 
@@ -324,3 +351,19 @@ The next session should spend time on:
 - UI rebuild on frozen contracts
 - operator surfaces
 - hardening
+
+## 2026-05-01 Update - Studio / Marketplace Demo Surface
+
+Closed in the repo-contained demo lane:
+
+- Studio has a visible custom-agent path via the `Custom Agent` / `Build custom` card.
+- Studio no longer shows a blank right-side panel when no specialist is selected; it shows template purpose, connectors, tools, memory, context, and launch checklist.
+- Marketplace no longer looks empty when the backend has no registered packages; it shows preview-only governed packages with trust, runtime, billing, permissions, and ledger metadata.
+- Marketplace preview packages are intentionally not installable until backend seed records exist.
+- Privacy settings now summarize the main trust boundaries instead of showing three vague cards.
+
+Still pending:
+
+- Replace preview-only Marketplace packages with real seeded backend records and verified install/configure actions.
+- Certify the mobile public URL and Render bootstrap path after the latest deploy.
+- Build Cloud Computer provisioning, spend limits, audit timeline, and tenant-isolation tests before selling hosted computers.

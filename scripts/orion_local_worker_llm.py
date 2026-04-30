@@ -935,6 +935,8 @@ def coerce_requested_model_for_provider(requested_model: Any, provider: str) -> 
         return normalize_anthropic_model(model)
     if pid == "anthropic":
         return normalize_anthropic_model(model)
+    if pid == "deepseek":
+        return model if model in {"deepseek-chat", "deepseek-reasoner"} else default_openai_compatible_model("deepseek")
     return model
 
 
@@ -962,6 +964,20 @@ def resolve_anthropic_api_key(credential_override: Optional[Dict[str, Any]] = No
     if auth_mode in LOCAL_CLI_AUTH_MODES:
         return get_claude_code_session_token()
     return get_anthropic_api_key()
+
+
+def resolve_gemini_api_key(credential_override: Optional[Dict[str, Any]] = None) -> str:
+    override = credential_override if isinstance(credential_override, dict) else {}
+    inline_key = sanitize_bearer_token(
+        override.get("api_key")
+        or override.get("access_token")
+        or override.get("oauth_token")
+        or override.get("token")
+        or ""
+    )
+    if inline_key:
+        return inline_key
+    return get_gemini_api_key()
 
 
 def provider_has_usable_credentials(provider: str, context: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
@@ -1116,6 +1132,61 @@ def _curl_json_request(
     }
 
 
+def _openai_compatible_chat_completion_request(
+    *,
+    base_url: str,
+    api_key: str,
+    payload: Dict[str, Any],
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    url = f"{ensure_trailing_slashless(base_url)}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+        "Connection": "close",
+    }
+    req = urllib.request.Request(
+        url=url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            try:
+                raw_body = response.read()
+            except http.client.IncompleteRead as exc:
+                # A partial chat-completions JSON document is unsafe to parse.
+                # Fall through to the curl transport fallback below.
+                raise exc
+            raw = raw_body.decode("utf-8")
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception as exc:
+        error_text = format_provider_error(exc)
+        if not is_retryable_provider_transport_error(error_text) or not shutil.which("curl"):
+            raise
+        response = _curl_json_request(
+            url,
+            headers=headers,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        status = int(response.get("status") or 0)
+        if status >= 400:
+            raw = " ".join(str(response.get("raw") or "").strip().split())
+            if len(raw) > 320:
+                raw = raw[:320] + "..."
+            raise RuntimeError(f"http_{status}: {raw or 'request_failed'}")
+        parsed = response.get("json") if isinstance(response.get("json"), dict) else {}
+        if not parsed:
+            raw = str(response.get("raw") or "").strip()
+            parsed = parse_json_object_loose(raw) or {}
+        return parsed
+
+
 def _anthropic_messages_request(
     *,
     api_url: str,
@@ -1178,7 +1249,62 @@ def is_retryable_provider_transport_error(error_text: Any) -> bool:
         or "incompleteread" in normalized
         or "connection reset" in normalized
         or "remote end closed" in normalized
+        or "service unavailable" in normalized
+        or "http_429" in normalized
+        or "http_500" in normalized
+        or "http_502" in normalized
+        or "http_503" in normalized
+        or "http_504" in normalized
     )
+
+
+def _gemini_generate_content_request(
+    *,
+    api_url: str,
+    model: str,
+    api_key: str,
+    payload: Dict[str, Any],
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    url = f"{api_url}/models/{urllib.parse.quote_plus(model)}:generateContent?key={urllib.parse.quote_plus(api_key)}"
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+        "Connection": "close",
+    }
+    req = urllib.request.Request(
+        url=url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception as exc:
+        error_text = format_provider_error(exc)
+        if not is_retryable_provider_transport_error(error_text) or not shutil.which("curl"):
+            raise
+        response = _curl_json_request(
+            url,
+            headers=headers,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        status = int(response.get("status") or 0)
+        if status >= 400:
+            raw = " ".join(str(response.get("raw") or "").strip().split())
+            if len(raw) > 320:
+                raw = raw[:320] + "..."
+            raise RuntimeError(f"http_{status}: {raw or 'request_failed'}")
+        parsed = response.get("json") if isinstance(response.get("json"), dict) else {}
+        if not parsed:
+            raw = str(response.get("raw") or "").strip()
+            parsed = parse_json_object_loose(raw) or {}
+        return parsed if isinstance(parsed, dict) else {}
 
 
 def compact_tool_mode_system_prompt(system_prompt: Optional[str]) -> Optional[str]:
@@ -1410,29 +1536,13 @@ def openai_chat_json(
         "response_format": {"type": "json_object"},
         "messages": messages,
     }
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url=f"{base_url}/chat/completions",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Accept-Encoding": "identity",
-            "Connection": "close",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            try:
-                raw_body = response.read()
-            except http.client.IncompleteRead as exc:
-                raw_body = exc.partial or b""
-                if not raw_body:
-                    raise
-            raw = raw_body.decode("utf-8")
-        parsed = json.loads(raw)
+        parsed = _openai_compatible_chat_completion_request(
+            base_url=base_url,
+            api_key=api_key,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
         choices = parsed.get("choices") if isinstance(parsed, dict) else None
         if not isinstance(choices, list) or not choices:
             return None, None, model, "empty_choices"
@@ -1477,29 +1587,13 @@ def openai_chat_text(
         "temperature": temperature,
         "messages": messages,
     }
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url=f"{base_url}/chat/completions",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Accept-Encoding": "identity",
-            "Connection": "close",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            try:
-                raw_body = response.read()
-            except http.client.IncompleteRead as exc:
-                raw_body = exc.partial or b""
-                if not raw_body:
-                    raise
-            raw = raw_body.decode("utf-8")
-        parsed = json.loads(raw)
+        parsed = _openai_compatible_chat_completion_request(
+            base_url=base_url,
+            api_key=api_key,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
         choices = parsed.get("choices") if isinstance(parsed, dict) else None
         if not isinstance(choices, list) or not choices:
             return "", None, model, "empty_choices"
@@ -1600,32 +1694,16 @@ def iter_openai_compatible_chat_events(
         ]
         payload["tool_choice"] = "auto"
         payload["parallel_tool_calls"] = True
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url=f"{base_url}/chat/completions",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Accept-Encoding": "identity",
-            "Connection": "close",
-        },
-    )
     max_attempts = 3 if str(provider or "").strip().lower() == "deepseek" else 1
     last_error = "unknown_error"
     for attempt in range(max_attempts):
         try:
-            with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-                try:
-                    raw_body = response.read()
-                except http.client.IncompleteRead as exc:
-                    raw_body = exc.partial or b""
-                    if not raw_body:
-                        raise
-                raw = raw_body.decode("utf-8")
-            parsed = json.loads(raw)
+            parsed = _openai_compatible_chat_completion_request(
+                base_url=base_url,
+                api_key=api_key,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+            )
             choices = parsed.get("choices") if isinstance(parsed, dict) else None
             if not isinstance(choices, list) or not choices:
                 yield {"type": "error", "error": "empty_choices", "model": model}
@@ -1735,8 +1813,9 @@ def iter_gemini_chat_events(
     prior_messages: Any = None,
     *,
     tools: Any = None,
+    credential_override: Optional[Dict[str, Any]] = None,
 ) -> Iterator[Dict[str, Any]]:
-    api_key = get_gemini_api_key()
+    api_key = resolve_gemini_api_key(credential_override=credential_override)
     if not api_key:
         yield {"type": "error", "error": "missing_api_key", "model": ""}
         return
@@ -1764,16 +1843,14 @@ def iter_gemini_chat_events(
             }
         ]
         payload["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
-    req = urllib.request.Request(
-        url=f"{api_url}/models/{urllib.parse.quote_plus(model)}:generateContent?key={urllib.parse.quote_plus(api_key)}",
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            raw = response.read().decode("utf-8")
-        parsed = json.loads(raw)
+        parsed = _gemini_generate_content_request(
+            api_url=api_url,
+            model=model,
+            api_key=api_key,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
         candidates = parsed.get("candidates") if isinstance(parsed, dict) else None
         first_candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
         content = first_candidate.get("content") if isinstance(first_candidate, dict) else {}
@@ -2480,8 +2557,9 @@ def gemini_chat_text(
     user_prompt: str,
     model_override: Optional[str] = None,
     prior_messages: Any = None,
+    credential_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
-    api_key = get_gemini_api_key()
+    api_key = resolve_gemini_api_key(credential_override=credential_override)
     if not api_key:
         return "", None, "", "missing_api_key"
 
@@ -2496,16 +2574,14 @@ def gemini_chat_text(
     }
     if str(system_prompt or "").strip():
         payload["system_instruction"] = {"parts": [{"text": str(system_prompt).strip()}]}
-    req = urllib.request.Request(
-        url=f"{api_url}/models/{urllib.parse.quote_plus(model)}:generateContent?key={urllib.parse.quote_plus(api_key)}",
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            raw = response.read().decode("utf-8")
-        parsed = json.loads(raw)
+        parsed = _gemini_generate_content_request(
+            api_url=api_url,
+            model=model,
+            api_key=api_key,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
         candidates = parsed.get("candidates") if isinstance(parsed, dict) else None
         texts: list[str] = []
         if isinstance(candidates, list):
@@ -2535,8 +2611,9 @@ def gemini_chat_json(
     user_prompt: str,
     model_override: Optional[str] = None,
     prior_messages: Any = None,
+    credential_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
-    api_key = get_gemini_api_key()
+    api_key = resolve_gemini_api_key(credential_override=credential_override)
     if not api_key:
         return None, None, "", "missing_api_key"
 
@@ -2551,16 +2628,14 @@ def gemini_chat_json(
     }
     if str(system_prompt or "").strip():
         payload["system_instruction"] = {"parts": [{"text": str(system_prompt).strip()}]}
-    req = urllib.request.Request(
-        url=f"{api_url}/models/{urllib.parse.quote_plus(model)}:generateContent?key={urllib.parse.quote_plus(api_key)}",
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-            raw = response.read().decode("utf-8")
-        parsed = json.loads(raw)
+        parsed = _gemini_generate_content_request(
+            api_url=api_url,
+            model=model,
+            api_key=api_key,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
         candidates = parsed.get("candidates") if isinstance(parsed, dict) else None
         texts: list[str] = []
         if isinstance(candidates, list):
@@ -2898,7 +2973,12 @@ def generate_pack_with_provider_fallback(
                 credential_override=credential_override,
             )
         elif provider == "gemini":
-            result, usage, model, provider_error = gemini_chat_json(system_prompt, user_prompt, model_override=provider_model)
+            result, usage, model, provider_error = gemini_chat_json(
+                system_prompt,
+                user_prompt,
+                model_override=provider_model,
+                credential_override=credential_override,
+            )
         elif provider == "ollama":
             result, usage, model, provider_error = ollama_chat_json(system_prompt, user_prompt, model_override=provider_model)
         else:
@@ -3042,6 +3122,7 @@ def generate_chat_reply_with_provider_fallback(
                 user_goal,
                 model_override=provider_model,
                 prior_messages=prior_messages,
+                credential_override=credential_override,
             )
         elif provider == "ollama":
             text, usage, model, provider_error = ollama_chat_text(
@@ -3364,6 +3445,7 @@ def generate_chat_reply_stream_with_provider_fallback(
                         model_override=provider_model,
                         prior_messages=prior_messages,
                         tools=requested_tools,
+                        credential_override=credential_override,
                     ),
                 )
                 if provider_result.get("ok"):
@@ -3387,6 +3469,7 @@ def generate_chat_reply_stream_with_provider_fallback(
                 user_goal,
                 model_override=provider_model,
                 prior_messages=prior_messages,
+                credential_override=credential_override,
             )
         elif provider == "ollama":
             if requested_tools:

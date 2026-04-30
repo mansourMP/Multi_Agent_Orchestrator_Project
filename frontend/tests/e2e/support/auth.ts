@@ -4,7 +4,7 @@ import { expect, type Page } from '@playwright/test';
 async function waitForWorkspaceShell(page: Page, workspaceId: string): Promise<void> {
   for (let attempt = 0; attempt < 6; attempt += 1) {
     try {
-      await page.goto(`/w/${workspaceId}/chat`, { waitUntil: 'domcontentloaded' });
+      await page.goto(`/w/${workspaceId}/sage`, { waitUntil: 'domcontentloaded' });
     } catch (error) {
       if (attempt === 5) {
         throw error;
@@ -13,8 +13,8 @@ async function waitForWorkspaceShell(page: Page, workspaceId: string): Promise<v
       continue;
     }
     const rail = page.locator('[data-workstation-switcher="rail"]');
-    const workspaceLink = page.locator(`[data-workstation-switcher-link="${workspaceId}"]`);
-    if (await rail.count() > 0 && await workspaceLink.count() > 0) {
+    const titlebar = page.locator('[data-workstation-titlebar="root"]');
+    if (await rail.count() > 0 && await titlebar.count() > 0 && page.url().includes(`/w/${workspaceId}/`)) {
       return;
     }
     await page.waitForTimeout(150 * (attempt + 1));
@@ -38,5 +38,5 @@ export async function loginAsOwner(page: Page, workspaceId = 'ws-1'): Promise<vo
   await loginOwnerSession(page);
   await waitForWorkspaceShell(page, workspaceId);
   await expect(page.locator('[data-workstation-switcher="rail"]')).toBeVisible();
-  await expect(page.locator(`[data-workstation-switcher-link="${workspaceId}"]`)).toBeVisible();
+  await expect(page.locator('[data-workstation-titlebar="root"]')).toBeVisible();
 }

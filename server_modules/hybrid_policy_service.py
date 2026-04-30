@@ -387,9 +387,10 @@ def _availability_snapshot(attachments: Iterable[Dict[str, Any]]) -> Dict[str, b
     return {
         "local_online": any(str(item.get("attachment_kind") or "").strip() == "local_companion" and _is_online(item) for item in items),
         "managed_cloud_online": any(str(item.get("attachment_kind") or "").strip() == "managed_cloud" and _is_online(item) for item in items),
+        "cloud_computer_online": any(str(item.get("attachment_kind") or "").strip() == "cloud_computer" and _is_online(item) for item in items),
         "self_hosted_online": any(str(item.get("attachment_kind") or "").strip() == "self_hosted_business_node" and _is_online(item) for item in items),
         "hosted_online": any(
-            str(item.get("attachment_kind") or "").strip() in {"managed_cloud", "self_hosted_business_node"} and _is_online(item)
+            str(item.get("attachment_kind") or "").strip() in {"managed_cloud", "cloud_computer", "self_hosted_business_node"} and _is_online(item)
             for item in items
         ),
     }
@@ -560,12 +561,12 @@ def evaluate_hybrid_runtime_policy(
         placement["required_attachment_kinds"] = (
             ["self_hosted_business_node"]
             if self_hosted_required
-            else ["managed_cloud", "self_hosted_business_node"]
+            else ["managed_cloud", "cloud_computer", "self_hosted_business_node"]
         )
         placement["preferred_attachment_kinds"] = (
-            ["self_hosted_business_node", "managed_cloud"]
+            ["self_hosted_business_node", "managed_cloud", "cloud_computer"]
             if self_hosted_preferred
-            else ["managed_cloud", "self_hosted_business_node"]
+            else ["managed_cloud", "cloud_computer", "self_hosted_business_node"]
         )
     else:
         placement["required_attachment_kinds"] = ["local_companion"]

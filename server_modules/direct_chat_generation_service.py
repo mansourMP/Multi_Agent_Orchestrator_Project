@@ -6,8 +6,10 @@ from typing import Any, Callable, Dict, Iterator, List, Optional
 import uuid
 
 from server_modules import agent_trace_service
+from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_execution_service
 from server_modules import healthguide_safety_service
+from server_modules.direct_chat_context_service import is_public_generation_error_message
 from server_modules.direct_chat_intervention_service import build_intervention
 from server_modules.direct_tool_config_service import run_async_tool_call
 
@@ -252,6 +254,77 @@ def stream_provider_backed_direct_chat(
     )
     if reasoning_started is not None:
         yield reasoning_started
+
+    if direct_chat_tool_catalog_service.message_requests_tool_inventory(normalized_message):
+        inventory_reply = direct_chat_tool_catalog_service.direct_chat_tool_inventory_reply(tools, availability_payload)
+        plan_done = _emit_trace_event(
+            trace_context,
+            event_type="plan.item.updated",
+            data={
+                "item_id": planning_item_id,
+                "status": "done",
+                "summary": "Answered from the active tool catalog.",
+            },
+            persisted=True,
+            item_id=planning_item_id,
+        )
+        if plan_done is not None:
+            yield plan_done
+        yield {"type": "chunk", "delta": inventory_reply}
+        trace_delta = _emit_trace_event(
+            trace_context,
+            event_type="assistant.message.delta",
+            data={
+                "message_id": assistant_message_id,
+                "delta": inventory_reply,
+            },
+            persisted=False,
+        )
+        if trace_delta is not None:
+            yield trace_delta
+        trace_completed = _emit_trace_event(
+            trace_context,
+            event_type="trace.completed",
+            data={
+                "duration_ms": int((time.monotonic() - trace_started_at) * 1000),
+                "final_message_id": assistant_message_id,
+            },
+            persisted=True,
+        )
+        if trace_completed is not None:
+            yield trace_completed
+        _finish_trace(trace_context, outcome="success", final_message_id=assistant_message_id)
+        yield {
+            "type": "final",
+            "payload": {
+                "reply": inventory_reply,
+                "actions": [],
+                "interventions": [],
+                "suggestions": [],
+                "mode": "answer",
+                "usage_masked": {},
+                "provider": actual_provider,
+                "model": actual_model,
+                "attempted_providers": "",
+                "error": "",
+                "context_used": services.build_context_used(
+                    workspace_id=normalized_workspace_id,
+                    requested_provider=normalized_requested_provider,
+                    effective_provider=str(actual_provider or context.get("provider") or "").strip() or None,
+                    requested_model=normalized_requested_model,
+                    effective_model=str(actual_model or "").strip() or None,
+                    reasoning_effort=normalized_reasoning_effort,
+                    connected_systems=connected_systems,
+                    tool_capabilities=tool_capabilities,
+                    prior_messages_used=prior_messages_used,
+                    history_mode=history_mode,
+                    run_created=False,
+                    fallback_used=False,
+                    fallback_reason=fallback_reason,
+                ),
+            },
+        }
+        return
 
     for iteration in range(max_iterations):
         thinking_iteration = iteration + 1
@@ -842,37 +915,7 @@ def stream_provider_backed_direct_chat(
                 _finish_trace(trace_context, outcome="success", final_message_id=assistant_message_id)
                 effective_provider = str(actual_provider or context.get("provider") or "").strip() or None
                 effective_model = str(actual_model or "").strip() or None
-                services.persist_direct_chat_memory_best_effort(
-                    workspace_id=normalized_workspace_id,
-                    provider=effective_provider,
-                    model=effective_model,
-                    credentials=direct_chat_credentials,
-                    reasoning_effort=normalized_reasoning_effort,
-                    prior_messages=compacted_prior_messages,
-                    user_message=normalized_message,
-                    assistant_reply=final_reply,
-                )
-                services.persist_direct_chat_transcript_best_effort(
-                    workspace_id=normalized_workspace_id,
-                    thread_id=normalized_thread_id,
-                    provider=effective_provider,
-                    model=effective_model,
-                    messages=conversation_messages,
-                    user_message=normalized_message,
-                    assistant_reply=final_reply,
-                )
-                services.persist_direct_chat_hosted_usage_best_effort(
-                    workspace_id=normalized_workspace_id,
-                    thread_id=normalized_thread_id,
-                    session_ctx=session_ctx,
-                    availability_payload=availability_payload,
-                    usage_masked=usage_masked,
-                    requested_provider=normalized_requested_provider,
-                    effective_provider=effective_provider,
-                    requested_model=normalized_requested_model,
-                    effective_model=effective_model,
-                )
-                yield {
+                final_payload = {
                     "type": "final",
                     "payload": {
                         "reply": final_reply,
@@ -901,6 +944,39 @@ def stream_provider_backed_direct_chat(
                         ),
                     },
                 }
+                yield final_payload
+                should_persist_final_reply = not is_public_generation_error_message(final_reply)
+                if should_persist_final_reply:
+                    services.persist_direct_chat_memory_best_effort(
+                        workspace_id=normalized_workspace_id,
+                        provider=effective_provider,
+                        model=effective_model,
+                        credentials=direct_chat_credentials,
+                        reasoning_effort=normalized_reasoning_effort,
+                        prior_messages=compacted_prior_messages,
+                        user_message=normalized_message,
+                        assistant_reply=final_reply,
+                    )
+                    services.persist_direct_chat_transcript_best_effort(
+                        workspace_id=normalized_workspace_id,
+                        thread_id=normalized_thread_id,
+                        provider=effective_provider,
+                        model=effective_model,
+                        messages=conversation_messages,
+                        user_message=normalized_message,
+                        assistant_reply=final_reply,
+                    )
+                services.persist_direct_chat_hosted_usage_best_effort(
+                    workspace_id=normalized_workspace_id,
+                    thread_id=normalized_thread_id,
+                    session_ctx=session_ctx,
+                    availability_payload=availability_payload,
+                    usage_masked=usage_masked,
+                    requested_provider=normalized_requested_provider,
+                    effective_provider=effective_provider,
+                    requested_model=normalized_requested_model,
+                    effective_model=effective_model,
+                )
                 services.clear_direct_tool_loop_state(tool_loop_session_key)
                 return
             if event_type == "failure":
@@ -939,20 +1015,6 @@ def stream_provider_backed_direct_chat(
     public_error_code = _public_generation_error_code(llm_error)
     effective_provider = str(actual_provider or context.get("provider") or "").strip() or None
     effective_model = str(actual_model or "").strip() or None
-    if normalized_message and public_error_reply:
-        services.persist_direct_chat_transcript_best_effort(
-            workspace_id=normalized_workspace_id,
-            thread_id=normalized_thread_id,
-            provider=effective_provider,
-            model=effective_model,
-            messages=[
-                *conversation_messages,
-                {"role": "user", "content": normalized_message},
-                {"role": "assistant", "content": public_error_reply},
-            ],
-            user_message=normalized_message,
-            assistant_reply=public_error_reply,
-        )
     trace_failed = _emit_trace_event(
         trace_context,
         event_type="trace.failed",

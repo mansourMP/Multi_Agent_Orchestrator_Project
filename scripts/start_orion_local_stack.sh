@@ -128,17 +128,17 @@ control_plane_database_url() {
 }
 
 runtime_database_url() {
+  local prefer_postgres="${ORION_LOCAL_RUNTIME_USE_POSTGRES:-0}"
+  prefer_postgres="$(printf "%s" "${prefer_postgres}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  if [[ "${prefer_postgres}" == "0" || "${prefer_postgres}" == "false" || "${prefer_postgres}" == "no" || "${prefer_postgres}" == "off" || -z "${prefer_postgres}" ]]; then
+    printf ""
+    return
+  fi
   local raw="${DATABASE_URL:-}"
   local trimmed
   trimmed="$(printf "%s" "${raw}" | tr -d '[:space:]')"
   if [[ -n "${trimmed}" ]]; then
     printf "%s" "${trimmed}"
-    return
-  fi
-  local prefer_postgres="${ORION_LOCAL_RUNTIME_USE_POSTGRES:-auto}"
-  prefer_postgres="$(printf "%s" "${prefer_postgres}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-  if [[ "${prefer_postgres}" == "0" || "${prefer_postgres}" == "false" || "${prefer_postgres}" == "no" || "${prefer_postgres}" == "off" ]]; then
-    printf ""
     return
   fi
   if [[ -f "${ROOT_DIR}/backend/.env" ]]; then

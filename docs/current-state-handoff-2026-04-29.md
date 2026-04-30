@@ -2,6 +2,19 @@
 
 This document is the short handoff for the next implementation session. It records what is active today, what changed in the Codex-style chat pass, and what must not be treated as current product truth.
 
+## Current Strategic Plan - 2026-04-30
+
+The current five-phase product and architecture plan is recorded in `docs/ai-os-five-phase-execution-plan-2026-04-30.md`.
+
+Key decisions:
+
+- Keep the immediate public demo focused on certified Sage paths: signup/login, provider picker, chat, tool transparency, gateway-offline state, web search, and optional local gateway tool demo.
+- Treat Studio as the private B2B specialist builder.
+- Treat Marketplace as governed distribution for packages, mini-apps, providers, templates, and third-party inventory.
+- Include Sage Cloud Computer in the architecture and billing model as a paid premium runtime, but do not make it a public-demo blocker until it has separate security, cost, and browser certification.
+- Keep agent definitions, runs, runtimes, tools, and connectors as separate concepts. An agent should not automatically allocate a virtual computer.
+- Treat mobile/web bootstrap reliability, Studio blank states, Marketplace seeded packages, and Integrations density as the next visible polish risks.
+
 ## Active Product Path
 
 - Web runtime: FastAPI/Python in `server_modules`, composed by `server.py`.
@@ -261,3 +274,44 @@ The frontend auth timeout contract was centralized in `frontend/lib/auth/auth-ti
 - Browser auth timeout text no longer exposes raw millisecond internals.
 
 This is a deploy-time hardening fix only. If Render still returns raw 502/504 after deployment, check Render service logs and instance health; do not rewrite auth unless the runtime log shows an application exception.
+
+## Sage Cloud Computer Contract - 2026-04-30
+
+The architecture now has a backend contract for Sage Cloud Computer, but it is not a live provisioned product yet.
+
+Implemented:
+
+- `runtime_attachment_service` recognizes `cloud_computer` attachments and exposes runtime target `sage_cloud_computer`.
+- `cloud_computer_secure` trust model marks the boundary as a metered hosted computer sandbox with cloud-workspace filesystem only.
+- Workspace bootstrap projects Cloud Computer as `Not enabled` until a workspace has a configured hosted session.
+- Hosted runtime entitlement enforcement reports `enforcement_target=cloud_computer` and `metered_cloud_computer=true` when that explicit target is selected.
+- Tool inventory wording distinguishes Cloud Computer from the user's personal gateway. Cloud Computer can run cloud-side computer tasks only when enabled; personal-device access still requires gateway.
+- Generic hosted runs do not auto-select Cloud Computer. It must be explicitly requested by runtime target, runtime profile, or placement manifest.
+
+Not implemented:
+
+- Cloud browser/sandbox/desktop provisioner.
+- Per-session TTL cleanup and recording/spend UI.
+- Real tool execution dispatch into a provisioned Cloud Computer.
+- Tenant-isolation certification for live hosted browser/sandbox/desktop work.
+
+Verification:
+
+- Focused backend tests passed: `60 passed` across runtime attachments, workspace bootstrap, direct-chat tool catalog, and entitlements.
+- Python compile passed for the touched backend files.
+
+## Studio And Marketplace Demo Surface - 2026-05-01
+
+Studio and Marketplace are now clearer as separate product surfaces:
+
+- Studio is the private specialist builder. It shows square business-template cards and a `Custom Agent` card for users who want to choose everything themselves.
+- When no specialist is selected, Studio's right detail panel now explains the selected/default template, required connectors, suggested tools, memory default, context depth, and launch checklist instead of showing a blank state.
+- Marketplace is the governed distribution surface. When backend marketplace inventory is empty, it renders preview-only governed packages so the page demonstrates trust, runtime, billing, permission, and ledger metadata without pretending those packages are installed.
+- Preview Marketplace packages are marked `Preview` / `Preview only`; real installable inventory still requires backend seed records or third-party package registration.
+- Settings > Privacy now explains the practical trust boundaries: approvals, explicit memory, paired Mac gateway, Cloud Computer boundary, provider credentials, and external-user deletion.
+
+Still not complete:
+
+- Real Marketplace seed records and install/configure paths for those packages.
+- Mobile public URL bootstrap certification after the latest Render deploy.
+- Cloud Computer provisioner, spend meter, recording/audit timeline, and hosted tool dispatch.

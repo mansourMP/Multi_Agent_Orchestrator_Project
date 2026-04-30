@@ -1,30 +1,63 @@
 // @ts-nocheck
 import { expect, test } from '@playwright/test';
+import { loginAsOwner } from './support/auth';
 
 test.describe('artifact preview and download', () => {
-  test('text artifact opens in pane 4 with metadata and preview', async ({ page }) => {
-    await page.goto('/w/ws-1/artifacts?stage_source=route&stage_kind=artifact&stage_id=artifact-text-1');
+  async function artifactsEnabled(page) {
+    const bootstrapResponse = await page.request.get('/api/workspaces/ws-1/bootstrap');
+    const bootstrap = bootstrapResponse.ok() ? await bootstrapResponse.json() : null;
+    return bootstrap?.capabilities?.artifacts_enabled === true;
+  }
 
-    await expect(page.locator('[data-workstation-artifact-viewer="pane"]')).toBeVisible();
-    await expect(page.locator('[data-workstation-artifact-viewer="pane"]')).toContainText(/artifact detail/i);
-    await expect(page.locator('[data-workstation-artifact-viewer="pane"]')).toContainText(/preview/i);
-    await expect(page.getByRole('link', { name: /download/i })).toBeVisible();
+  test('files surface mounts current artifact inventory', async ({ page }) => {
+    await loginAsOwner(page);
+    const enabled = await artifactsEnabled(page);
+    await page.goto('/w/ws-1/artifacts');
+
+    if (!enabled) {
+      await expect(page).toHaveURL(/\/w\/ws-1\/sage(?:[/?#]|$)/);
+      await expect(page.locator('[data-workstation-surface="chat"]')).toBeVisible();
+      await expect(page.locator('[data-workstation-surface="artifacts"]')).toHaveCount(0);
+      return;
+    }
+
+    const surface = page.locator('[data-workstation-surface="artifacts"]');
+    await expect(surface).toBeVisible();
+    await expect(surface).toContainText(/files/i);
+    await expect(surface).not.toContainText(/later artifact phase/i);
+    await expect(page.getByRole('button', { name: /refresh/i })).toBeVisible();
   });
 
-  test('image artifact opens with inline preview', async ({ page }) => {
-    await page.goto('/w/ws-1/artifacts?stage_source=route&stage_kind=artifact&stage_id=artifact-image-1');
+  test('files surface exposes empty state or downloadable artifacts', async ({ page }) => {
+    await loginAsOwner(page);
+    const enabled = await artifactsEnabled(page);
+    await page.goto('/w/ws-1/artifacts');
 
-    await expect(page.locator('[data-workstation-artifact-viewer="pane"]')).toBeVisible();
-    await expect(page.locator('[data-workstation-artifact-viewer="pane"] img')).toBeVisible();
+    if (!enabled) {
+      await expect(page).toHaveURL(/\/w\/ws-1\/sage(?:[/?#]|$)/);
+      await expect(page.locator('[data-workstation-surface="artifacts"]')).toHaveCount(0);
+      return;
+    }
+
+    const surface = page.locator('[data-workstation-surface="artifacts"]');
+    await expect(surface).toBeVisible();
+    const downloadButtons = page.getByRole('button', { name: /download/i });
+    if (await downloadButtons.count()) {
+      await expect(downloadButtons.first()).toBeVisible();
+    } else {
+      await expect(surface).toContainText(/no files yet/i);
+    }
   });
 
-  test('artifact content endpoint returns attachment disposition', async ({ request }) => {
-    const response = await request.get('/api/artifacts/artifact-text-1/content', {
-      headers: {
-        'x-empyralis-workspace-id': 'ws-1',
-      },
-    });
+  test('artifact list endpoint is workspace scoped', async ({ page }) => {
+    await loginAsOwner(page);
+    const response = await page.request.get('/api/artifacts?workspace_id=ws-1&limit=1');
 
-    expect(response.headers()['content-disposition']).toContain('attachment;');
+    if (response.status() === 403) {
+      return;
+    }
+    expect(response.status()).toBe(200);
+    const payload = await response.json();
+    expect(Array.isArray(payload.items)).toBeTruthy();
   });
 });

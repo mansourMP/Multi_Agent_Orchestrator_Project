@@ -4228,6 +4228,61 @@ textarea {
   line-height: 1.35;
 }
 
+.studio-template-detail {
+  display: grid;
+  gap: var(--app-space-4);
+}
+
+.studio-template-detail__icon {
+  width: calc(var(--app-space-10) + 2px);
+  height: calc(var(--app-space-10) + 2px);
+}
+
+.studio-template-detail__copy {
+  display: grid;
+  gap: var(--app-space-2);
+}
+
+.studio-template-detail__title {
+  color: var(--app-text-primary);
+  font-family: var(--app-font-heading);
+  font-size: var(--app-font-24);
+  font-weight: var(--app-weight-bold);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.studio-template-detail__description {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: 1.55;
+}
+
+.studio-template-detail__group {
+  display: grid;
+  gap: var(--app-space-2);
+}
+
+.studio-template-detail__label {
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-11);
+  font-weight: var(--app-weight-semibold);
+  letter-spacing: 0.06em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.studio-template-detail__checklist {
+  display: grid;
+  gap: var(--app-space-2);
+  margin: 0;
+  padding-left: var(--app-space-5);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: 1.5;
+}
+
 .app-studio-shell .deployed-agents-card {
   gap: var(--app-space-2);
   min-height: 0;
@@ -8122,6 +8177,11 @@ textarea {
   color: var(--app-success);
 }
 
+.marketplace-pane__status-badge--preview {
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 78%, var(--app-text-secondary) 8%);
+  color: var(--app-text-secondary);
+}
+
 .marketplace-pane__stat-token {
   background: color-mix(in srgb, var(--bg-surface) 82%, var(--bg-base) 18%);
   color: var(--text-secondary);
@@ -8213,10 +8273,15 @@ textarea {
   background: color-mix(in srgb, var(--app-success) 88%, var(--accent) 12%);
 }
 
+.marketplace-pane__link-button--preview,
 .marketplace-pane__link-button--disabled,
 .marketplace-pane__secondary-button {
   background: color-mix(in srgb, var(--bg-surface) 82%, var(--bg-base) 18%);
   color: var(--text-tertiary);
+}
+
+.marketplace-pane__link-button--preview {
+  cursor: not-allowed;
 }
 
 .marketplace-pane__link-button--disabled {

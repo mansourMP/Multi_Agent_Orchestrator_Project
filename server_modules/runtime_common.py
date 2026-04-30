@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -8,6 +9,7 @@ from pathlib import Path
 import ssl
 import time
 from typing import Any, Dict, Optional
+from urllib import error as urlerror
 from urllib import request as urlrequest
 from urllib.parse import quote_plus, urlencode
 import uuid
@@ -95,6 +97,25 @@ def _parse_utc_ts(raw: Any) -> Optional[datetime]:
         return datetime.fromisoformat(value).astimezone(timezone.utc)
     except Exception:
         return None
+
+
+def _is_retryable_http_transport_error(exc: Exception) -> bool:
+    if isinstance(exc, (http.client.IncompleteRead, ConnectionResetError, TimeoutError, urlerror.URLError)):
+        return True
+    message = str(exc).lower()
+    retryable_markers = (
+        "incompleteread",
+        "incomplete read",
+        "remote end closed connection",
+        "connection reset",
+        "connection aborted",
+        "eof occurred",
+        "unexpected eof",
+        "ssl",
+        "timed out",
+        "timeout",
+    )
+    return any(marker in message for marker in retryable_markers)
 
 
 def _is_control_plane_mutation(request: Request) -> bool:
@@ -396,10 +417,13 @@ def http_json_request(
             "json": parsed,
             "headers": dict(getattr(exc, "headers", {}).items()) if getattr(exc, "headers", None) else {},
         }
-    except Exception:
-        # Telegram's edge occasionally drops urllib TLS sessions in this environment
-        # even though the same request succeeds via curl. Keep the fallback narrow.
-        if "api.telegram.org" not in str(url).lower() or not shutil.which("curl"):
+    except Exception as exc:
+        # Some provider edges occasionally drop urllib TLS sessions in this
+        # environment even though the same request succeeds via curl. Preserve
+        # HTTPError handling above so bad credentials still return provider
+        # status codes; only retry low-level transport failures here.
+        is_telegram = "api.telegram.org" in str(url).lower()
+        if not (is_telegram or _is_retryable_http_transport_error(exc)) or not shutil.which("curl"):
             raise
         command = [
             "curl",
@@ -424,7 +448,7 @@ def http_json_request(
             check=False,
         )
         if completed.returncode != 0:
-            raise
+            raise exc
         raw_output = completed.stdout.decode("utf-8", errors="replace")
         marker = "\n__CODEX_STATUS__:"
         body_text, _, status_text = raw_output.rpartition(marker)

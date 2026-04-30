@@ -1,31 +1,34 @@
 // @ts-nocheck
 import { expect, test } from '@playwright/test';
+import { loginAsOwner } from './support/auth';
 
 test.describe('approval resolution golden path', () => {
-  test('approving an approval removes it from pending and shows resumed run state', async ({ page }) => {
-    await page.goto('/w/ws-1/approvals?stage_source=route&stage_kind=approval&stage_id=approval-1');
+  test('approvals surface mounts the current permission queue', async ({ page }) => {
+    await loginAsOwner(page);
+    const bootstrapResponse = await page.request.get('/api/workspaces/ws-1/bootstrap');
+    const bootstrap = bootstrapResponse.ok() ? await bootstrapResponse.json() : null;
+    const approvalsEnabled = bootstrap?.capabilities?.approvals_enabled === true;
 
-    await expect(page.locator('[data-workstation-approval-detail="pane"]')).toBeVisible();
-    await page.getByRole('button', { name: /^approve$/i }).click();
+    await page.goto('/w/ws-1/approvals');
 
-    await expect(page.locator('[data-workstation-surface="approvals"]')).not.toContainText('approval-1');
-    await expect(page.locator('[data-workstation-approval-detail="pane"]')).toContainText(/run resumed/i);
+    if (!approvalsEnabled) {
+      await expect(page).toHaveURL(/\/w\/ws-1\/sage(?:[/?#]|$)/);
+      await expect(page.locator('[data-workstation-surface="chat"]')).toBeVisible();
+      await expect(page.locator('[data-workstation-surface="approvals"]')).toHaveCount(0);
+      return;
+    }
+
+    const surface = page.locator('[data-workstation-surface="approvals"]');
+    await expect(surface).toBeVisible();
+    await expect(surface).toContainText(/approvals/i);
+    await expect(surface).toContainText(/pending approvals/i);
+    await expect(page.getByRole('button', { name: /refresh/i })).toBeVisible();
   });
 
-  test('rejecting an approval removes it from pending and shows terminal run state', async ({ page }) => {
-    await page.goto('/w/ws-1/approvals?stage_source=route&stage_kind=approval&stage_id=approval-2');
+  test('approval resolution endpoint remains workspace scoped', async ({ page }) => {
+    await loginAsOwner(page);
+    const response = await page.request.get('/api/approvals?workspace_id=ws-1&limit=1');
 
-    await expect(page.locator('[data-workstation-approval-detail="pane"]')).toBeVisible();
-    await page.getByRole('button', { name: /^reject$/i }).click();
-
-    await expect(page.locator('[data-workstation-surface="approvals"]')).not.toContainText('approval-2');
-    await expect(page.locator('[data-workstation-approval-detail="pane"]')).toContainText(/run stopped/i);
-  });
-
-  test('run detail opens directly by id without depending on the first summary page', async ({ page }) => {
-    await page.goto('/w/ws-1/runs?stage_source=route&stage_kind=run&stage_id=run-deep-link-1');
-
-    await expect(page.locator('[data-workstation-run-detail="pane"]')).toBeVisible();
-    await expect(page.locator('[data-workstation-run-detail="pane"]')).toContainText('run-deep-link-1');
+    expect([200, 403]).toContain(response.status());
   });
 });

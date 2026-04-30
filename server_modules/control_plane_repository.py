@@ -27,6 +27,9 @@ EMPYRALIS_STATE_HOME = Path(
 ).expanduser()
 LOCAL_IDENTITY_DB_FILE = (EMPYRALIS_STATE_HOME / "auth" / "users.db").expanduser()
 _LOCAL_IDENTITY_LOCK = threading.Lock()
+_LOCAL_AGENT_THREAD_LOCK = threading.RLock()
+_LOCAL_AGENT_THREADS: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+_LOCAL_AGENT_TURNS: Dict[tuple[str, str, str], List[Dict[str, Any]]] = {}
 
 _CONTROL_PLANE_SESSION_SCOPE_SQL = """
 SELECT
@@ -6583,6 +6586,178 @@ def build_default_thread_title(message: str, *, fallback: str = "New chat") -> s
     return (text[:80].strip() or fallback)[:80]
 
 
+def _local_agent_thread_key(tenant_id: str, workspace_id: str, thread_id: str) -> tuple[str, str, str]:
+    return (
+        _require_scope_token(tenant_id, "tenant_id"),
+        _require_scope_token(workspace_id, "workspace_id"),
+        str(thread_id or "").strip(),
+    )
+
+
+def _clone_local_agent_thread(record: Dict[str, Any], *, include_turns: bool = False) -> Dict[str, Any]:
+    payload = dict(record)
+    key = _local_agent_thread_key(
+        str(payload.get("tenant_id") or ""),
+        str(payload.get("workspace_id") or ""),
+        str(payload.get("id") or ""),
+    )
+    if include_turns:
+        payload["turns"] = [dict(item) for item in _LOCAL_AGENT_TURNS.get(key, [])]
+    return payload
+
+
+def _local_ensure_agent_thread(
+    *,
+    thread_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    owner_user_id: Optional[str],
+    master_agent_install_id: Optional[str],
+    channel: str,
+    title: Optional[str],
+    metadata: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    token = str(thread_id or "").strip()
+    if not token:
+        return None
+    key = _local_agent_thread_key(tenant_id, workspace_id, token)
+    now = _utc_now_iso()
+    with _LOCAL_AGENT_THREAD_LOCK:
+        existing = _LOCAL_AGENT_THREADS.get(key)
+        next_metadata = _decode_json_object(existing.get("metadata") if existing else None)
+        next_metadata.update(_coerce_dict(metadata))
+        if existing is None:
+            record = {
+                "id": token,
+                "tenant_id": key[0],
+                "workspace_id": key[1],
+                "owner_user_id": str(owner_user_id or "").strip() or None,
+                "master_agent_install_id": str(master_agent_install_id or "").strip() or None,
+                "channel": str(channel or "web").strip() or "web",
+                "title": str(title or "").strip() or "New chat",
+                "status": "active",
+                "metadata": next_metadata,
+                "created_at": now,
+                "updated_at": now,
+                "last_turn_at": None,
+            }
+            _LOCAL_AGENT_THREADS[key] = record
+        else:
+            existing["tenant_id"] = key[0]
+            existing["workspace_id"] = key[1]
+            existing["owner_user_id"] = str(owner_user_id or "").strip() or existing.get("owner_user_id") or None
+            existing["master_agent_install_id"] = (
+                str(master_agent_install_id or "").strip() or existing.get("master_agent_install_id") or None
+            )
+            existing["channel"] = str(channel or "web").strip() or "web"
+            if str(existing.get("title") or "").strip() == "New chat":
+                existing["title"] = str(title or "").strip() or "New chat"
+            existing["metadata"] = next_metadata
+            existing["updated_at"] = now
+        return _clone_local_agent_thread(_LOCAL_AGENT_THREADS[key], include_turns=False)
+
+
+def _local_upsert_agent_turn(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    thread_id: str,
+    session_id: Optional[str],
+    role: str,
+    content: str,
+    actor: Optional[Dict[str, Any]],
+    active_agent_install_id: Optional[str],
+    runtime_profile_id: Optional[str],
+    status: str,
+    run_id: Optional[str],
+    approvals: Optional[List[Dict[str, Any]]],
+    interventions: Optional[List[Dict[str, Any]]],
+    metadata: Optional[Dict[str, Any]],
+    request_id: Optional[str],
+    turn_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    key = _local_agent_thread_key(tenant_id, workspace_id, thread_id)
+    now = _utc_now_iso()
+    resolved_role = str(role or "assistant").strip().lower() or "assistant"
+    resolved_request_id = str(request_id or "").strip() or None
+    with _LOCAL_AGENT_THREAD_LOCK:
+        if key not in _LOCAL_AGENT_THREADS:
+            _local_ensure_agent_thread(
+                thread_id=key[2],
+                tenant_id=key[0],
+                workspace_id=key[1],
+                owner_user_id=None,
+                master_agent_install_id=None,
+                channel="web",
+                title=build_default_thread_title(content),
+                metadata={"source": "local_agent_thread_fallback"},
+            )
+        turns = _LOCAL_AGENT_TURNS.setdefault(key, [])
+        existing_turn = None
+        if resolved_request_id:
+            existing_turn = next(
+                (
+                    item
+                    for item in turns
+                    if str(item.get("request_id") or "") == resolved_request_id
+                    and str(item.get("role") or "").lower() == resolved_role
+                ),
+                None,
+            )
+        if existing_turn is None:
+            turn_record = {
+                "id": str(turn_id or uuid.uuid4()).strip() or str(uuid.uuid4()),
+                "tenant_id": key[0],
+                "workspace_id": key[1],
+                "thread_id": key[2],
+                "session_id": str(session_id or "").strip() or None,
+                "request_id": resolved_request_id,
+                "role": resolved_role,
+                "status": str(status or "completed").strip().lower() or "completed",
+                "content": str(content or ""),
+                "run_id": str(run_id or "").strip() or None,
+                "actor": _coerce_dict(actor),
+                "active_agent_install_id": str(active_agent_install_id or "").strip() or None,
+                "runtime_profile_id": str(runtime_profile_id or "").strip() or None,
+                "approvals": list(approvals or []),
+                "interventions": list(interventions or []),
+                "metadata": _coerce_dict(metadata),
+                "created_at": now,
+                "updated_at": now,
+            }
+            turns.append(turn_record)
+        else:
+            existing_turn.update(
+                {
+                    "status": str(status or "completed").strip().lower() or "completed",
+                    "content": str(content or ""),
+                    "run_id": str(run_id or "").strip() or existing_turn.get("run_id") or None,
+                    "actor": _coerce_dict(actor),
+                    "active_agent_install_id": str(active_agent_install_id or "").strip()
+                    or existing_turn.get("active_agent_install_id")
+                    or None,
+                    "runtime_profile_id": str(runtime_profile_id or "").strip()
+                    or existing_turn.get("runtime_profile_id")
+                    or None,
+                    "approvals": list(approvals or []),
+                    "interventions": list(interventions or []),
+                    "metadata": {**_coerce_dict(existing_turn.get("metadata")), **_coerce_dict(metadata)},
+                    "updated_at": now,
+                }
+            )
+            turn_record = existing_turn
+        thread_record = _LOCAL_AGENT_THREADS.get(key)
+        if isinstance(thread_record, dict):
+            thread_record["updated_at"] = now
+            thread_record["last_turn_at"] = now
+            if str(thread_record.get("title") or "") == "New chat" and resolved_role == "user":
+                thread_record["title"] = build_default_thread_title(content)
+        return {
+            "thread": _clone_local_agent_thread(thread_record, include_turns=False) if thread_record else None,
+            "turn": dict(turn_record),
+        }
+
+
 async def ensure_agent_thread(
     *,
     thread_id: str,
@@ -6603,7 +6778,16 @@ async def ensure_agent_thread(
     resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
-            return None
+            return _local_ensure_agent_thread(
+                thread_id=token,
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                owner_user_id=owner_user_id,
+                master_agent_install_id=master_agent_install_id,
+                channel=channel,
+                title=payload_title,
+                metadata=metadata,
+            )
         await connection.execute(
             """
             INSERT INTO agent_threads (
@@ -6752,7 +6936,24 @@ async def upsert_agent_turn(
     resolved_thread_id = str(thread_id or "").strip()
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
-            return None
+            return _local_upsert_agent_turn(
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                thread_id=resolved_thread_id,
+                session_id=session_id,
+                role=role,
+                content=content,
+                actor=actor,
+                active_agent_install_id=active_agent_install_id,
+                runtime_profile_id=runtime_profile_id,
+                status=status,
+                run_id=run_id,
+                approvals=approvals,
+                interventions=interventions,
+                metadata=metadata,
+                request_id=resolved_request_id,
+                turn_id=resolved_turn_id,
+            )
         turn_row = await connection.fetchrow(
             """
             INSERT INTO agent_turns (
@@ -6829,7 +7030,17 @@ async def list_agent_turns(
 ) -> List[Dict[str, Any]]:
     async with _scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         if connection is None:
-            return []
+            key = _local_agent_thread_key(tenant_id, workspace_id, thread_id)
+            with _LOCAL_AGENT_THREAD_LOCK:
+                rows = [dict(item) for item in _LOCAL_AGENT_TURNS.get(key, [])]
+            if active_agent_install_id:
+                resolved_install_id = str(active_agent_install_id or "").strip()
+                rows = [
+                    item
+                    for item in rows
+                    if str(item.get("active_agent_install_id") or "") in {"", resolved_install_id}
+                ]
+            return rows[: max(1, int(limit or 200))]
         resolved_install_id = str(active_agent_install_id or "").strip()
         if resolved_install_id:
             rows = await connection.fetch(
@@ -6878,7 +7089,10 @@ async def get_agent_thread(
 ) -> Optional[Dict[str, Any]]:
     async with _scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         if connection is None:
-            return None
+            key = _local_agent_thread_key(tenant_id, workspace_id, thread_id)
+            with _LOCAL_AGENT_THREAD_LOCK:
+                record = _LOCAL_AGENT_THREADS.get(key)
+                return _clone_local_agent_thread(record, include_turns=include_turns) if isinstance(record, dict) else None
         row = await connection.fetchrow(
             """
             SELECT id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
@@ -6929,7 +7143,19 @@ async def list_agent_threads(
     params.append(max(1, int(limit or 50)))
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
-            return []
+            with _LOCAL_AGENT_THREAD_LOCK:
+                items = [
+                    _clone_local_agent_thread(record, include_turns=include_turns)
+                    for (tenant_key, workspace_key, _thread_key), record in _LOCAL_AGENT_THREADS.items()
+                    if tenant_key == resolved_tenant_id
+                    and workspace_key == resolved_workspace_id
+                    and (not owner_user_id or str(record.get("owner_user_id") or "") == str(owner_user_id or "").strip())
+                ]
+            items.sort(
+                key=lambda item: str(item.get("last_turn_at") or item.get("updated_at") or item.get("created_at") or ""),
+                reverse=True,
+            )
+            return items[: max(1, int(limit or 50))]
         rows = await connection.fetch(
             f"""
             SELECT id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at

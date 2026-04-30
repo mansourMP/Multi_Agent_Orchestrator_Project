@@ -84,6 +84,7 @@ type MarketplaceCardView = {
   openHref: string;
   publisherLabel: string;
   runtimeSurface: string;
+  previewOnly: boolean;
   item: MarketplacePackageRecord;
 };
 
@@ -143,6 +144,190 @@ const DEFAULT_PROVIDER_DRAFT: ProviderComposerDraft = {
   capabilityLabels: '',
   models: '',
 };
+
+const DEMO_MARKETPLACE_PACKAGES: MarketplacePackageRecord[] = [
+  {
+    package_id: 'preview-restaurant-orders',
+    kind: 'app',
+    label: 'Restaurant Orders',
+    description: 'Telegram ordering template with menu lookup, order confirmation, and human escalation.',
+    category: 'Specialist template',
+    verification_status: 'verified',
+    review_state: 'approved',
+    health_state: 'healthy',
+    approval_required: false,
+    preview_only: true,
+    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
+    onboarding: { docs_url: '/docs/studio-marketplace-ux-boundary-2026-04-30.md' },
+    runtime_truth: { surface: 'cloud_worker', policy_posture: 'governed', install_state: 'preview' },
+    billing: {
+      monetization_kind: 'free',
+      revenue_share_bps: 0,
+      accounting_hook: { ledger_key: 'studio.restaurant_orders', hook_kind: 'template_install' },
+    },
+    analytics: { install_count: 0, runtime_event_count: 0 },
+    package: {
+      app_id: 'studio.restaurant_orders',
+      hosted_url: '/w/{workspace_id}/studio?template=restaurant_orders',
+      version: '0.1.0',
+      release_channel: 'preview',
+      permissions: ['telegram:send', 'spreadsheet:read'],
+      allowed_origins: [],
+      bridge_contracts: { messages: ['read', 'write'], catalog: ['read'] },
+    },
+  },
+  {
+    package_id: 'preview-auto-parts-sales',
+    kind: 'app',
+    label: 'Auto Parts Sales',
+    description: 'Qualifies car model, requested part, catalog availability, and next customer action.',
+    category: 'Specialist template',
+    verification_status: 'verified',
+    review_state: 'approved',
+    health_state: 'healthy',
+    approval_required: false,
+    preview_only: true,
+    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
+    onboarding: { docs_url: '/docs/studio-marketplace-ux-boundary-2026-04-30.md' },
+    runtime_truth: { surface: 'cloud_worker', policy_posture: 'governed', install_state: 'preview' },
+    billing: {
+      monetization_kind: 'free',
+      revenue_share_bps: 0,
+      accounting_hook: { ledger_key: 'studio.auto_parts_sales', hook_kind: 'template_install' },
+    },
+    analytics: { install_count: 0, runtime_event_count: 0 },
+    package: {
+      app_id: 'studio.auto_parts_sales',
+      hosted_url: '/w/{workspace_id}/studio?template=auto_parts_sales',
+      version: '0.1.0',
+      release_channel: 'preview',
+      permissions: ['telegram:send', 'spreadsheet:read'],
+      allowed_origins: [],
+      bridge_contracts: { messages: ['read', 'write'], catalog: ['read'] },
+    },
+  },
+  {
+    package_id: 'preview-spreadsheet-catalog',
+    kind: 'app',
+    label: 'Spreadsheet Catalog',
+    description: 'Answers product, SKU, menu, or inventory questions from a trusted spreadsheet.',
+    category: 'Data',
+    verification_status: 'verified',
+    review_state: 'approved',
+    health_state: 'healthy',
+    approval_required: false,
+    preview_only: true,
+    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
+    onboarding: { docs_url: '/docs/studio-marketplace-ux-boundary-2026-04-30.md' },
+    runtime_truth: { surface: 'cloud_worker', policy_posture: 'governed', install_state: 'preview' },
+    billing: {
+      monetization_kind: 'free',
+      revenue_share_bps: 0,
+      accounting_hook: { ledger_key: 'tool.spreadsheet_catalog', hook_kind: 'package_install' },
+    },
+    analytics: { install_count: 0, runtime_event_count: 0 },
+    package: {
+      app_id: 'tool.spreadsheet_catalog',
+      hosted_url: '/w/{workspace_id}/studio?template=spreadsheet_catalog',
+      version: '0.1.0',
+      release_channel: 'preview',
+      permissions: ['spreadsheet:read', 'spreadsheet:append'],
+      allowed_origins: [],
+      bridge_contracts: { spreadsheet: ['read', 'write'] },
+    },
+  },
+  {
+    package_id: 'preview-web-search',
+    kind: 'app',
+    label: 'Web Search',
+    description: 'Lets Sage search the web with audit-visible tool calls and governed usage.',
+    category: 'Tool',
+    verification_status: 'verified',
+    review_state: 'approved',
+    health_state: 'healthy',
+    approval_required: false,
+    preview_only: true,
+    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
+    onboarding: { docs_url: '/docs/studio-marketplace-ux-boundary-2026-04-30.md' },
+    runtime_truth: { surface: 'cloud_tool', policy_posture: 'governed', install_state: 'preview' },
+    billing: {
+      monetization_kind: 'metered',
+      revenue_share_bps: 0,
+      accounting_hook: { ledger_key: 'tool.web_search', hook_kind: 'tool_usage' },
+    },
+    analytics: { install_count: 0, runtime_event_count: 0 },
+    package: {
+      app_id: 'tool.web_search',
+      hosted_url: '/tools/web-search',
+      version: '0.1.0',
+      release_channel: 'preview',
+      permissions: ['web:search'],
+      allowed_origins: [],
+      bridge_contracts: { web: ['search'] },
+    },
+  },
+  {
+    package_id: 'preview-image-generation',
+    kind: 'app',
+    label: 'Image Generation',
+    description: 'Image generation package using configured BYOK or hosted media credits.',
+    category: 'Media',
+    verification_status: 'partner',
+    review_state: 'approved',
+    health_state: 'setup_required',
+    approval_required: false,
+    preview_only: true,
+    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
+    onboarding: { docs_url: '/docs/ai-os-five-phase-execution-plan-2026-04-30.md' },
+    runtime_truth: { surface: 'cloud_tool', policy_posture: 'governed', install_state: 'preview' },
+    billing: {
+      monetization_kind: 'metered',
+      revenue_share_bps: 0,
+      accounting_hook: { ledger_key: 'tool.generate_image', hook_kind: 'tool_usage' },
+    },
+    analytics: { install_count: 0, runtime_event_count: 0 },
+    package: {
+      app_id: 'tool.generate_image',
+      hosted_url: '/tools/generate-image',
+      version: '0.1.0',
+      release_channel: 'preview',
+      permissions: ['media:image_generate'],
+      allowed_origins: [],
+      bridge_contracts: { media: ['image_generate'] },
+    },
+  },
+  {
+    package_id: 'preview-deepseek-provider',
+    kind: 'provider',
+    label: 'DeepSeek Provider',
+    description: 'BYOK model provider package for DeepSeek chat and tool-capable generation.',
+    category: 'Models',
+    verification_status: 'partner',
+    review_state: 'approved',
+    health_state: 'setup_required',
+    approval_required: false,
+    preview_only: true,
+    publisher: { label: 'DeepSeek', website: 'https://platform.deepseek.com' },
+    onboarding: { docs_url: 'https://platform.deepseek.com' },
+    runtime_truth: { surface: 'cloud_model', policy_posture: 'governed', install_state: 'preview' },
+    billing: {
+      monetization_kind: 'byok',
+      revenue_share_bps: 0,
+      accounting_hook: { ledger_key: 'provider.deepseek', hook_kind: 'provider_usage' },
+    },
+    analytics: { install_count: 0, runtime_event_count: 0 },
+    package: {
+      provider_id: 'deepseek',
+      default_model: 'deepseek-chat',
+      auth_modes: ['api_key'],
+      privacy_posture: 'cloud_provider',
+      jurisdiction: 'provider_terms',
+      residency: 'provider_terms',
+      capability_labels: ['chat', 'tools'],
+      models: [{ id: 'deepseek-chat', label: 'DeepSeek Chat' }],
+    },
+  },
+];
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -294,6 +479,7 @@ function buildMarketplaceCardView(item: MarketplacePackageRecord, index: number)
     openHref: readString(runtimeTruth.open_href),
     publisherLabel: readString(publisher.label, 'Unknown publisher'),
     runtimeSurface: readString(runtimeTruth.surface, 'distribution'),
+    previewOnly: readBoolean(item.preview_only),
     item,
   };
 }
@@ -560,9 +746,19 @@ export function MarketplacePane() {
     }
   }
 
+  const displayedItems = useMemo(() => {
+    if (items.length) {
+      return items;
+    }
+    return DEMO_MARKETPLACE_PACKAGES.filter((item) => {
+      const itemKind = readString(item.kind);
+      return kindFilter === 'all' || itemKind === kindFilter;
+    });
+  }, [items, kindFilter]);
+
   const renderedCards = useMemo(
-    () => items.map((item, index) => buildMarketplaceCardView(item, index)),
-    [items],
+    () => displayedItems.map((item, index) => buildMarketplaceCardView(item, index)),
+    [displayedItems],
   );
 
   const selectedPackage = useMemo(() => {
@@ -661,7 +857,11 @@ export function MarketplacePane() {
                 <div className="marketplace-pane__grid">
                   {renderedCards.map((card) => {
                     const installing = installingPackageId === card.id;
-                    const primaryLabel = card.installed ? (card.kind === 'app' ? 'Open app' : 'Open setup') : 'Add to Workspace';
+                    const primaryLabel = card.previewOnly
+                      ? 'Preview only'
+                      : card.installed
+                        ? (card.kind === 'app' ? 'Open app' : 'Open setup')
+                        : 'Add to Workspace';
                     return (
                       <article
                         key={card.id}
@@ -699,6 +899,11 @@ export function MarketplacePane() {
                             <span className={joinClassNames('marketplace-pane__status-badge', `marketplace-pane__status-badge--${card.healthState}`)}>
                               {humanizeToken(card.healthState)}
                             </span>
+                            {card.previewOnly ? (
+                              <span className="marketplace-pane__status-badge marketplace-pane__status-badge--preview">
+                                Preview
+                              </span>
+                            ) : null}
                           </div>
                           <div className="marketplace-pane__stats-row">
                             <span className="marketplace-pane__stat-token">
@@ -750,10 +955,14 @@ export function MarketplacePane() {
                             className={joinClassNames(
                               'marketplace-pane__link-button',
                               card.installed && 'marketplace-pane__link-button--installed',
+                              card.previewOnly && 'marketplace-pane__link-button--preview',
                             )}
-                            disabled={installing || (!card.installed && !card.id)}
+                            disabled={card.previewOnly || installing || (!card.installed && !card.id)}
                             onClick={(event) => {
                               event.stopPropagation();
+                              if (card.previewOnly) {
+                                return;
+                              }
                               if (card.installed && card.openHref) {
                                 router.push(card.openHref);
                                 return;
@@ -788,7 +997,11 @@ export function MarketplacePane() {
                             {humanizeToken(selectedPackage.kind)}
                           </span>
                           <span className="marketplace-pane__category-pill">{selectedPackage.category}</span>
-                          {selectedPackage.installed ? (
+                          {selectedPackage.previewOnly ? (
+                            <span className="marketplace-pane__status-badge marketplace-pane__status-badge--preview">
+                              Preview
+                            </span>
+                          ) : selectedPackage.installed ? (
                             <span className="marketplace-pane__status-badge marketplace-pane__status-badge--installed">
                               Installed
                             </span>
@@ -837,9 +1050,13 @@ export function MarketplacePane() {
                         className={joinClassNames(
                           'marketplace-pane__link-button',
                           selectedPackage.installed && 'marketplace-pane__link-button--installed',
+                          selectedPackage.previewOnly && 'marketplace-pane__link-button--preview',
                         )}
-                        disabled={installingPackageId === selectedPackage.id}
+                        disabled={selectedPackage.previewOnly || installingPackageId === selectedPackage.id}
                         onClick={() => {
+                          if (selectedPackage.previewOnly) {
+                            return;
+                          }
                           if (selectedPackage.installed && selectedPackage.openHref) {
                             router.push(selectedPackage.openHref);
                             return;
@@ -849,9 +1066,11 @@ export function MarketplacePane() {
                       >
                         {installingPackageId === selectedPackage.id
                           ? 'Installing…'
-                          : selectedPackage.installed
-                            ? (selectedPackage.kind === 'app' ? 'Open app' : 'Open setup')
-                            : 'Add to Workspace'}
+                          : selectedPackage.previewOnly
+                            ? 'Preview only'
+                            : selectedPackage.installed
+                              ? (selectedPackage.kind === 'app' ? 'Open app' : 'Open setup')
+                              : 'Add to Workspace'}
                       </button>
                     </div>
 

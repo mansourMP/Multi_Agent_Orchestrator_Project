@@ -217,3 +217,89 @@ def message_can_use_builtin_direct_tools(message: str, *, tools: List[Dict[str, 
     if "llm__task" in tool_names and callbacks.mentions_any(compact, callbacks.llm_task_keywords):
         return True
     return False
+
+
+def message_requests_tool_inventory(message: str) -> bool:
+    compact = " ".join(str(message or "").lower().split())
+    if not compact:
+        return False
+    inventory_phrases = (
+        "what tools do you have",
+        "what tools can you use",
+        "which tools do you have",
+        "which tools can you use",
+        "show me your tools",
+        "list your tools",
+        "available tools",
+        "tools available",
+        "what can you do with tools",
+        "do you have any tools",
+    )
+    return any(phrase in compact for phrase in inventory_phrases)
+
+
+def _tool_group_label(name: str) -> str:
+    normalized = str(name or "").strip()
+    connector = normalized.split("__", 1)[0] if "__" in normalized else normalized
+    if connector in {"file", "shell", "screenshot", "computer", "browser"}:
+        return "Local machine"
+    if connector in {"web", "http"}:
+        return "Web"
+    if connector in {"image"} or normalized == "generate_image":
+        return "Media"
+    if connector in {"telegram_bot", "smtp", "google_workspace", "microsoft_365", "slack", "discord_bot"}:
+        return "Communication"
+    if connector in {"memory", "llm", "sage_service"}:
+        return "Data"
+    return "Other"
+
+
+def _tool_label(tool: Dict[str, Any]) -> str:
+    name = str(tool.get("name") or "").strip()
+    description = str(tool.get("description") or "").strip()
+    if not name:
+        return ""
+    return f"{name} — {description}" if description else name
+
+
+def direct_chat_tool_inventory_reply(tools: List[Dict[str, Any]], availability_payload: Dict[str, Any]) -> str:
+    grouped: Dict[str, List[str]] = {}
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        label = _tool_label(item)
+        if not label:
+            continue
+        grouped.setdefault(_tool_group_label(str(item.get("name") or "")), []).append(label)
+
+    gateway_online = bool(
+        availability_payload.get("local_gateway_online")
+        or availability_payload.get("gateway_online")
+        or availability_payload.get("local_worker_online")
+    )
+    cloud_computer_online = bool(
+        availability_payload.get("cloud_computer_online")
+        or availability_payload.get("cloud_computer_available")
+    )
+    lines = ["These are the tools currently available in this workspace:"]
+    if not grouped:
+        lines.append("")
+        lines.append("- No tools are currently available.")
+    for group in ("Local machine", "Web", "Media", "Communication", "Data", "Other"):
+        entries = sorted(grouped.get(group, []))
+        if not entries:
+            continue
+        lines.append("")
+        lines.append(f"{group}:")
+        lines.extend(f"- {entry}" for entry in entries)
+    lines.append("")
+    if gateway_online:
+        lines.append("Local machine tools are available through the paired gateway.")
+    elif cloud_computer_online:
+        lines.append(
+            "Computer tools are available through Sage Cloud Computer. Personal-device tools still require a paired gateway."
+        )
+    else:
+        lines.append("Local machine tools require the gateway to be online. Sage Cloud Computer can run cloud-side computer tasks only when enabled.")
+    lines.append("Tool availability is based on gateway status, connector state, and workspace policy, not the selected model provider.")
+    return "\n".join(lines).strip()

@@ -758,7 +758,8 @@ def enforce_hosted_runtime_access(
             "hosted_runtime_minutes_monthly": used_minutes,
             "concurrent_hosted_executions": active_hosted,
         },
-        "enforcement_target": "managed_cloud",
+        "enforcement_target": "cloud_computer" if attachment_kind == "cloud_computer" else "managed_cloud",
+        "metered_cloud_computer": attachment_kind == "cloud_computer",
     }
 
 

@@ -6,6 +6,44 @@ from typing import Any, Dict, List, Optional, Set
 from server_modules import skills_service
 
 
+PUBLIC_GENERATION_ERROR_MESSAGES = (
+    "sage hit a temporary error while generating the response. please try again in a moment.",
+    "sage took too long to respond. please try again.",
+    "sage is temporarily at capacity. please try again in a moment.",
+    "thread not found.",
+)
+
+FAILED_PRIOR_MESSAGE_STATUSES = {
+    "aborted",
+    "cancelled",
+    "canceled",
+    "error",
+    "failed",
+    "stopped",
+    "timeout",
+    "timed_out",
+}
+
+
+def is_public_generation_error_message(content: Any) -> bool:
+    normalized = re.sub(r"\s+", " ", str(content or "").strip()).lower()
+    if not normalized:
+        return False
+    if normalized == "not found":
+        return True
+    return any(message in normalized for message in PUBLIC_GENERATION_ERROR_MESSAGES)
+
+
+def should_exclude_prior_message(role: str, content: Any, status: Any = None) -> bool:
+    normalized_role = str(role or "").strip().lower()
+    if normalized_role != "assistant":
+        return False
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status in FAILED_PRIOR_MESSAGE_STATUSES:
+        return True
+    return is_public_generation_error_message(content)
+
+
 def _agent_turn_policy_context(session_ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     context = session_ctx if isinstance(session_ctx, dict) else {}
     request = context.get("agent_turn_request") if isinstance(context.get("agent_turn_request"), dict) else {}
@@ -104,6 +142,8 @@ def normalize_prior_messages(
             continue
         content = re.sub(r"\s+", " ", str(item.get("content") or "").strip())
         if not content:
+            continue
+        if should_exclude_prior_message(role, content, item.get("status")):
             continue
         if len(content) > max_direct_chat_prior_message_chars:
             content = content[: max_direct_chat_prior_message_chars - 1].rstrip() + "…"

@@ -3,8 +3,17 @@ set -eu
 
 cd "$(dirname "$0")/../.."
 
+E2E_STATE_HOME="${EMPYRALIS_E2E_STATE_HOME:-$(mktemp -d "${TMPDIR:-/tmp}/empyralis-e2e-state.XXXXXX")}"
+E2E_BACKEND_PORT="${PLAYWRIGHT_BACKEND_PORT:-8001}"
+E2E_FRONTEND_PORT="${PLAYWRIGHT_FRONTEND_PORT:-3000}"
+mkdir -p "${E2E_STATE_HOME}/auth" "${E2E_STATE_HOME}/runtime" "${E2E_STATE_HOME}/gateway"
+
+export EMPYRALIS_STATE_HOME="${E2E_STATE_HOME}"
+export ORION_RUNTIME_STATE_DB="${E2E_STATE_HOME}/runtime/state.db"
+export EMPYRALIS_GATEWAY_STATE_DB="${E2E_STATE_HOME}/gateway/gateway-state.sqlite3"
 export ORION_PUBLIC_REGISTRATION_ENABLED=1
 export ORION_ADMIN_EMAILS=owner@example.com
+export ORION_AUTH_LOGIN_RATE_LIMIT_PER_MINUTE="${ORION_AUTH_LOGIN_RATE_LIMIT_PER_MINUTE:-1000}"
 
 ./venv/bin/python - <<'PY'
 import asyncio
@@ -64,4 +73,4 @@ async def ensure_workspace(user: dict) -> None:
 asyncio.run(ensure_workspace(ensure_owner_user()))
 PY
 
-exec env FRONTEND_ORIGINS='http://127.0.0.1:3000,http://localhost:3000' ./venv/bin/uvicorn server:app --host 127.0.0.1 --port 8001
+exec env FRONTEND_ORIGINS="http://127.0.0.1:${E2E_FRONTEND_PORT},http://localhost:${E2E_FRONTEND_PORT}" ./venv/bin/uvicorn server:app --host 127.0.0.1 --port "${E2E_BACKEND_PORT}"

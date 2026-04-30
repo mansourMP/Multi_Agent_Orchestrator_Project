@@ -1047,6 +1047,27 @@ def register_run_routes(app) -> None:
             if isinstance(record, dict):
                 break
         if not isinstance(record, dict):
+            if str(thread_id or "").strip() == "primary":
+                for workspace_id, access in workspace_access_map(current_user).items():
+                    tenant_id = str((access or {}).get("tenant_id") or "").strip()
+                    if not tenant_id:
+                        continue
+                    now_iso = _chat_stream_now_iso()
+                    return {
+                        "id": "primary",
+                        "tenant_id": tenant_id,
+                        "workspace_id": workspace_id,
+                        "owner_user_id": None if _current_user_is_privileged(current_user) else str(current_user.get("user_id") or "").strip() or None,
+                        "master_agent_install_id": None,
+                        "channel": "web",
+                        "title": "New chat",
+                        "status": "active",
+                        "metadata": {"source": "empty_primary_thread"},
+                        "created_at": now_iso,
+                        "updated_at": now_iso,
+                        "last_turn_at": None,
+                        "turns": [],
+                    }
             raise HTTPException(status_code=404, detail="Thread not found.")
         enforce_workspace_access(
             current_user,

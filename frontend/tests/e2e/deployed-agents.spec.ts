@@ -49,8 +49,10 @@ function buildProviderCatalog() {
     providers: [
       {
         id: 'openai',
+        kind: 'provider',
         label: 'OpenAI',
         state: 'active',
+        provider_scopes: ['sage_main', 'studio_safe'],
         default_model: 'gpt-4o',
         privacy_posture: 'Managed API with vendor-hosted processing.',
         jurisdiction: 'United States',
@@ -77,8 +79,10 @@ function buildProviderCatalog() {
       },
       {
         id: 'anthropic',
+        kind: 'provider',
         label: 'Anthropic',
         state: 'active',
+        provider_scopes: ['sage_main', 'studio_safe'],
         default_model: 'claude-3-5-sonnet-20241022',
         privacy_posture: 'Managed API or local Claude subscription transport.',
         jurisdiction: 'United States',
@@ -97,8 +101,10 @@ function buildProviderCatalog() {
       },
       {
         id: 'deepseek',
+        kind: 'provider',
         label: 'DeepSeek',
         state: 'configured',
+        provider_scopes: ['sage_main', 'studio_safe'],
         default_model: 'deepseek-chat',
         privacy_posture: 'Managed third-party API.',
         jurisdiction: 'Third-party hosted service',
@@ -125,8 +131,10 @@ function buildProviderCatalog() {
       },
       {
         id: 'ollama',
+        kind: 'provider',
         label: 'Ollama',
         state: 'configured',
+        provider_scopes: ['sage_main', 'studio_safe'],
         default_model: 'llama3.2',
         privacy_posture: 'Local or self-hosted inference on your own machine.',
         jurisdiction: 'Self-hosted / operator-controlled',
@@ -309,7 +317,7 @@ test.describe('deployed agents surface', () => {
 
     await expect(page.getByRole('link', { name: /^studio$/i })).toBeVisible();
     await page.getByRole('link', { name: /^studio$/i }).click();
-    await expect(page).toHaveURL(/\/w\/ws-1\/deployed-agents$/);
+    await expect(page).toHaveURL(/\/w\/ws-1\/studio$/);
     await expect(page.locator('[data-workstation-surface="deployed-agents"]')).toBeVisible();
   });
 
@@ -798,6 +806,15 @@ test.describe('deployed agents surface', () => {
           return;
         }
 
+        if (segments.length === 4 && segments[3] === 'memory' && method === 'GET') {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ items: [], limit: 50, offset: 0, has_more: false }),
+          });
+          return;
+        }
+
         if (segments.length === 6 && segments[3] === 'external-users' && segments[5] === 'delete' && method === 'POST') {
           const externalUserId = segments[4];
           const existing = conversationsByAgent.get(deployedAgentId) ?? buildConversationList(deployedAgentId);
@@ -839,20 +856,26 @@ test.describe('deployed agents surface', () => {
       await route.fallback();
     });
 
-    await page.goto('/w/ws-1/deployed-agents');
+    await page.goto('/w/ws-1/studio');
 
     const surface = page.locator('[data-workstation-surface="deployed-agents"]');
     await expect(surface).toBeVisible();
-    await expect(surface).toContainText(/workspace deployments/i);
+    await expect(surface).toContainText(/start from a specialist template/i);
+    await expect(surface).toContainText(/restaurant orders/i);
+    await expect(surface).toContainText(/auto parts sales/i);
     await expect(surface).toContainText(/store assistant/i);
-    await expect(surface).toContainText(/12 active · 58 msgs \/ 30d/i);
-    await expect(surface).toContainText(/3 conversations/i);
-    await expect(surface).toContainText(/openai · gpt-4o/i);
-    await expect(surface).toContainText(/\$25\.00/);
+    await expect(surface).toContainText(/messages/i);
+    await expect(surface).toContainText(/open/i);
+    await expect(surface).toContainText(/spend/i);
     await expect(surface).toContainText(/\$8\.00/);
-    await expect(page.locator('[data-deployed-agent-analytics="detail"]')).toContainText(/active users \(30d\)/i);
-    await expect(page.locator('[data-deployed-agent-analytics="detail"]')).toContainText(/66\.7%/i);
-    await expect(page.locator('[data-deployed-agent-analytics="detail"]')).toContainText(/open 2 · completed 1/i);
+    await page.getByRole('button', { name: /store assistant/i }).click();
+    await expect(page.getByRole('dialog', { name: /specialist settings/i })).toBeVisible();
+    await page.getByRole('button', { name: /close specialist settings/i }).click();
+    await page.goto('/w/ws-1/inbox');
+    const inboxSurface = page.locator('[data-workstation-surface="deployed-agents"]');
+    await expect(inboxSurface).toContainText(/studio · inbox/i);
+    await expect(inboxSurface).toContainText(/live conversation inbox/i);
+    await expect(inboxSurface).toContainText(/showing 3 of 3 customer sessions/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).toContainText(/customer one/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).toContainText(/customer two/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).toContainText(/customer three/i);
@@ -861,10 +884,10 @@ test.describe('deployed agents surface', () => {
     await expect(page.locator('[data-deployed-agent-transcript="detail"]')).toContainText(/escalation triggered/i);
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: /delete customer data/i }).click();
-    await expect(surface).toContainText(/deleted stored data for customer one/i);
+    await expect(inboxSurface).toContainText(/deleted saved data for customer one/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).not.toContainText(/customer one/i);
     await page.getByLabel(/channel filter/i).selectOption('whatsapp');
-    await expect(surface).toContainText(/showing 1 of 2 customer sessions/i);
+    await expect(inboxSurface).toContainText(/showing 1 of 2 customer sessions/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).toContainText(/customer two/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).not.toContainText(/customer one/i);
     await page.getByLabel(/escalation filter/i).selectOption('escalated');
@@ -872,68 +895,90 @@ test.describe('deployed agents surface', () => {
     await expect(page.locator('[data-deployed-agent-transcript="detail"]')).toContainText(/whatsapp\.send_message/i);
     await expect(page.locator('[data-deployed-agent-transcript="detail"]')).toContainText(/human shipping support/i);
     await page.getByRole('button', { name: /clear filters/i }).click();
-    await expect(surface).toContainText(/showing 2 of 2 customer sessions/i);
+    await expect(inboxSurface).toContainText(/showing 2 of 2 customer sessions/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).not.toContainText(/customer one/i);
 
-    await page.getByRole('button', { name: /create deployed agent/i }).click();
+    await page.goto('/w/ws-1/studio');
+    await page.getByRole('button', { name: /auto parts sales/i }).click();
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toBeVisible();
-    await page.getByLabel(/agent name/i).fill('Returns Concierge');
-    await page.getByLabel(/avatar url/i).fill('https://example.com/returns.png');
-    await page.getByLabel(/persona/i).fill('Returns-focused retail specialist');
-    await page.getByLabel(/system prompt/i).fill('Use return policy and order lookups before escalating.');
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/overview/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/knowledge/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/tools/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/channels/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/memory/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/safety/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/test/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/deploy/i);
+    await page.getByLabel(/specialist name/i).fill('Returns Concierge');
+    await page.getByLabel(/business \/ use case/i).fill('Returns-focused retail specialist');
     await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByLabel(/knowledge references/i).fill('kb://returns\nkb://orders');
+    await page.getByLabel(/knowledge source/i).fill('kb://returns\nkb://orders');
+    await page.locator('[data-deployed-agent-instructions-input="true"]').fill('Use return policy and order lookups before escalating.');
+    await page.getByRole('button', { name: /continue/i }).click();
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/spreadsheet read/i);
     await page.getByRole('button', { name: /continue/i }).click();
     await page.getByLabel(/telegram state/i).selectOption('enabled');
     await page.getByLabel(/telegram connector/i).selectOption('tg-connector-1');
+    await page.getByRole('button', { name: /continue/i }).click();
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/persistent customer memory/i);
+    await page.getByRole('button', { name: /continue/i }).click();
+    await page.getByLabel(/escalation behavior/i).selectOption('standard');
+    await page.getByLabel(/handoff mode/i).selectOption('notify_owner');
+    await page.getByRole('button', { name: /continue/i }).click();
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/draft review/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/tools/i);
     await page.getByRole('button', { name: /continue/i }).click();
     await page.locator('[data-deployed-agent-provider-select="true"]').selectOption('deepseek');
     await page.locator('[data-deployed-agent-model-select="true"]').selectOption('deepseek-reasoner');
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/managed third-party api/i);
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/reasoning, low cost, hosted api/i);
-    await page.getByLabel(/runtime target/i).selectOption('cloud');
+    await page.getByLabel(/run environment/i).selectOption('cloud');
     await page.getByLabel(/billing plan/i).selectOption('free');
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/web search: search public websites for current facts and references\./i);
-    await page.getByRole('button', { name: 'HTTP request', exact: true }).click();
-    await page.getByLabel(/persistent memory/i).selectOption('enabled');
     await page.getByLabel(/daily message limit/i).fill('25');
     await page.getByLabel(/monthly cost cap \(usd\)/i).fill('25');
     await page.getByLabel(/upgrade cta label/i).fill('Continue on Empyralist');
     await page.getByLabel(/upgrade cta url/i).fill('https://app.empyralist.com/signup');
-    await page.getByRole('button', { name: /create draft deployment/i }).scrollIntoViewIfNeeded();
-    await page.getByRole('button', { name: /create draft deployment/i }).click();
+    await page.getByRole('button', { name: /create draft/i }).scrollIntoViewIfNeeded();
+    await page.getByRole('button', { name: /create draft/i }).click();
 
-    await expect(surface).toContainText(/created draft deployment returns concierge/i);
+    await expect(surface).toContainText(/created draft specialist returns concierge/i);
     await expect(surface).toContainText(/returns concierge/i);
-    await expect(surface).toContainText(/deepseek · deepseek reasoner/i);
-    await expect(surface).toContainText(/persistent memory/i);
-    await expect(surface).toContainText(/enabled/i);
-    await expect(page.locator('[data-deployed-agent-conversations="list"]')).toContainText(/customer one/i);
-
-    await page.getByRole('button', { name: /^edit$/i }).click();
-    await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByRole('button', { name: /continue/i }).click();
-    await page.getByRole('button', { name: /continue/i }).click();
-    await expect(page.locator('[data-deployed-agent-provider-select="true"]')).toHaveValue('deepseek');
-    await expect(page.locator('[data-deployed-agent-model-select="true"]')).toHaveValue('deepseek-reasoner');
-    await expect(page.getByLabel(/persistent memory/i)).toHaveValue('enabled');
-    await expect(page.getByLabel(/daily message limit/i)).toHaveValue('25');
-    await expect(page.getByLabel(/monthly cost cap \(usd\)/i)).toHaveValue('25');
-    await expect(page.getByLabel(/upgrade cta label/i)).toHaveValue('Continue on Empyralist');
-    await expect(page.getByLabel(/upgrade cta url/i)).toHaveValue('https://app.empyralist.com/signup');
-    await page.locator('[data-deployed-agent-provider-select="true"]').selectOption('anthropic');
-    await page.locator('[data-deployed-agent-model-select="true"]').selectOption('claude-3-5-sonnet-20241022');
-    await page.getByLabel(/persistent memory/i).selectOption('disabled');
-    await page.getByLabel(/daily message limit/i).fill('30');
-    await page.getByLabel(/monthly cost cap \(usd\)/i).fill('30');
-    await page.getByLabel(/upgrade cta label/i).fill('Unlock more messages');
-    await page.getByLabel(/upgrade cta url/i).fill('https://app.empyralist.com/upgrade');
-    await page.getByRole('button', { name: /save changes/i }).scrollIntoViewIfNeeded();
-    await page.getByRole('button', { name: /save changes/i }).click();
-    await expect(surface).toContainText(/updated returns concierge configuration/i);
-    await expect(surface).toContainText(/anthropic · claude 3\.5 sonnet/i);
-    await expect(surface).toContainText(/persistent memory/i);
-    await expect(surface).toContainText(/disabled/i);
+    await expect(surface).toContainText(/deepseek reasoner/i);
+    const returnsCard = page.locator('button.deployed-agents-card', { hasText: 'Returns Concierge' });
+    await expect(returnsCard).toContainText(/deepseek reasoner/i);
+    await returnsCard.click();
+    const specialistSettings = page.locator('.deployed-agents-overlay');
+    await expect(specialistSettings).toBeVisible();
+    await specialistSettings.getByRole('tab', { name: /memory/i }).click();
+    await expect(specialistSettings).toContainText(/persistent memory/i);
+    await expect(specialistSettings.locator('[role="switch"]').first()).toHaveAttribute('aria-checked', 'true');
+    await specialistSettings.getByRole('tab', { name: /overview/i }).click();
+    await specialistSettings.getByRole('button', { name: /rebind/i }).click();
+    const editWizard = page.locator('[role="dialog"]').filter({ hasText: /edit specialist/i });
+    await editWizard.locator('[data-deployed-agent-wizard-step="memory"]').click();
+    const wizardMemoryToggle = editWizard.locator('.deployed-agents-wizard__memory-toggle [role="switch"]');
+    await expect(wizardMemoryToggle).toHaveAttribute('aria-checked', 'true');
+    await wizardMemoryToggle.click();
+    await editWizard.locator('[data-deployed-agent-wizard-step="deploy"]').click();
+    await expect(editWizard.locator('[data-deployed-agent-provider-select="true"]')).toHaveValue('deepseek');
+    await expect(editWizard.locator('[data-deployed-agent-model-select="true"]')).toHaveValue('deepseek-reasoner');
+    await expect(editWizard.getByLabel(/daily message limit/i)).toHaveValue('25');
+    await expect(editWizard.getByLabel(/monthly cost cap \(usd\)/i)).toHaveValue('25');
+    await expect(editWizard.getByLabel(/upgrade cta label/i)).toHaveValue('Continue on Empyralist');
+    await expect(editWizard.getByLabel(/upgrade cta url/i)).toHaveValue('https://app.empyralist.com/signup');
+    await editWizard.locator('[data-deployed-agent-provider-select="true"]').selectOption('anthropic');
+    await editWizard.locator('[data-deployed-agent-model-select="true"]').selectOption('claude-3-5-sonnet-20241022');
+    await editWizard.getByLabel(/daily message limit/i).fill('30');
+    await editWizard.getByLabel(/monthly cost cap \(usd\)/i).fill('30');
+    await editWizard.getByLabel(/upgrade cta label/i).fill('Unlock more messages');
+    await editWizard.getByLabel(/upgrade cta url/i).fill('https://app.empyralist.com/upgrade');
+    await editWizard.getByRole('button', { name: /^save$/i }).scrollIntoViewIfNeeded();
+    await editWizard.getByRole('button', { name: /^save$/i }).click();
+    await expect(surface).toContainText(/updated returns concierge settings/i);
+    await expect(surface).toContainText(/claude 3\.5 sonnet/i);
+    await specialistSettings.getByRole('tab', { name: /memory/i }).click();
+    await expect(specialistSettings.locator('[role="switch"]').first()).toHaveAttribute('aria-checked', 'false');
+    await specialistSettings.getByRole('tab', { name: /overview/i }).click();
 
     await page.getByRole('button', { name: /^deploy$/i }).click();
     await expect(surface).toContainText(/is now live/i);

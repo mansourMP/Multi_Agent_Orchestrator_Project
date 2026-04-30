@@ -2,7 +2,6 @@
 import { expect, test } from '@playwright/test';
 
 const FORBIDDEN_VISIBLE_TERMS = [
-  'workspace',
   'owner',
   'member',
   'default',

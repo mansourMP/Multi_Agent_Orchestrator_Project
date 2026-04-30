@@ -5,6 +5,7 @@ const workspaceRoot = path.resolve(__dirname, '..');
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   experimental: {
     externalDir: true,
   },

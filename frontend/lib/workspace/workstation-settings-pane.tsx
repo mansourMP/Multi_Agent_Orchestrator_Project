@@ -198,26 +198,50 @@ export function WorkstationSettingsPane() {
               <div className="settings-detail-grid">
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">Approvals</strong>
+                    <strong className="settings-detail-card__title">Action approvals</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Sensitive actions pause for review.
+                    Sage pauses for review before destructive file changes, external sends, purchases, and dangerous shell commands.
                   </p>
                 </article>
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">Memory</strong>
+                    <strong className="settings-detail-card__title">Explicit memory</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Sage memory stays explicit and scoped.
+                    Memory is saved as structured workspace records with sensitivity classes, not hidden chat transcript scraping.
                   </p>
                 </article>
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">Device trust</strong>
+                    <strong className="settings-detail-card__title">This Mac boundary</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Local execution stays on trusted machines.
+                    Local files, browser, clipboard, screenshots, and terminal require an online paired gateway on a trusted device.
+                  </p>
+                </article>
+                <article className="settings-detail-card">
+                  <div className="settings-detail-card__header">
+                    <strong className="settings-detail-card__title">Cloud Computer boundary</strong>
+                  </div>
+                  <p className="settings-detail-card__body">
+                    Hosted computer work is separate from personal-device access and must be explicitly enabled, metered, and audited.
+                  </p>
+                </article>
+                <article className="settings-detail-card">
+                  <div className="settings-detail-card__header">
+                    <strong className="settings-detail-card__title">Provider credentials</strong>
+                  </div>
+                  <p className="settings-detail-card__body">
+                    BYOK credentials are stored in the workspace vault and provider choice should only change the reasoning model.
+                  </p>
+                </article>
+                <article className="settings-detail-card">
+                  <div className="settings-detail-card__header">
+                    <strong className="settings-detail-card__title">External user deletion</strong>
+                  </div>
+                  <p className="settings-detail-card__body">
+                    Studio agents support privacy/delete requests for external channel users, including conversation data and memory.
                   </p>
                 </article>
               </div>

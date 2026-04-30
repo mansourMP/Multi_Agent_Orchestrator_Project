@@ -109,6 +109,17 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertEqual(result["enforcement_target"], "self_hosted")
         self.assertEqual(result["usage_snapshot"]["concurrent_hosted_executions"], 0)
 
+    def test_enforce_hosted_runtime_access_marks_cloud_computer_metering_target(self) -> None:
+        result = entitlements_service.enforce_hosted_runtime_access(
+            workspace={"metadata": {"billing": {"plan": "pro"}}},
+            workspace_id="workspace-1",
+            selected_attachment={"attachment_kind": "cloud_computer"},
+            live_runs_fn=lambda: [],
+        )
+
+        self.assertEqual(result["enforcement_target"], "cloud_computer")
+        self.assertTrue(result["metered_cloud_computer"])
+
     def test_workspace_capability_flags_distinguish_free_and_paid_surfaces(self) -> None:
         free_state = entitlements_service.resolve_workspace_entitlement_state(
             workspace={"metadata": {"billing": {"plan": "free"}}},

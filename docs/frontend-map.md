@@ -7,12 +7,13 @@ This is a strict dumb-UI strategy.
 This document reflects the current active frontend structure.
 It replaces older maps that still referenced deleted roots such as `frontend/components`, `frontend/app/(shell)`, `mobile/src/screens`, and the old mobile `(tabs)` shell.
 
-Mobile stays the daily-use surface with the fixed tab contract:
-- Home
+Mobile stays the daily-use surface. The current mounted Expo tab contract is:
 - Chat
+- Agents
 - Applications
-- Notifications
 - Profile
+- Home
+- Notifications
 
 ### Channel Shells
 
@@ -179,21 +180,22 @@ Current route groups under `mobile/app`:
 - `_layout.tsx`
 - `index.tsx`
 - `(auth)/login.tsx`
-- `(workspace)/_layout.tsx`
-- `(workspace)/index.tsx`
-- `(workspace)/chat.tsx`
-- `(workspace)/runs.tsx`
-- `(workspace)/approvals.tsx`
-- `(workspace)/notifications.tsx`
-- `(workspace)/artifacts.tsx`
-- `(workspace)/account.tsx`
-- `(workspace)/switcher.tsx`
+- `(tabs)/_layout.tsx`
+- `(tabs)/chats/index.tsx`
+- `(tabs)/chats/[id].tsx`
+- `(tabs)/kin/index.tsx`
+- `(tabs)/kin/[id].tsx`
+- `(tabs)/apps/index.tsx`
+- `(tabs)/profile/index.tsx`
+- `(tabs)/home/index.tsx`
+- `(tabs)/inbox/index.tsx`
+- top-level operational screens such as `approvals.tsx`, `artifacts.tsx`, `gateway.tsx`, `integrations.tsx`, `memory.tsx`, `notifications.tsx`, and `settings.tsx`
 
 Notes:
 
-- `(workspace)` is the active native shell.
-- `mobile/app/(tabs)/_layout.tsx` was dead code and has been removed.
-- The current mobile shell still exposes a narrower operational tab set than the canonical 5-destination IA.
+- `(tabs)` is the active native shell today.
+- The shared route manifest is the cross-shell destination contract, but it must not claim routes that are not mounted.
+- The current mobile shell exposes more visible tab labels than the canonical 5-destination IA; this is implementation debt, not a separate product model.
 
 ### Mobile Runtime And Surfaces
 
@@ -235,6 +237,7 @@ These paths are real and active even if they are not the final shape:
 - `frontend/app/preview`
 - `frontend/app/(account)/w/[workspaceId]/trace-preview`
 - legacy route ids such as `workstation`, `applications`, and `admin/*`
+- `mobile/app/(tabs)`
 
 These are implementation facts, not architectural truth.
 Future cleanup should remove or consolidate them without changing the backend contract.

@@ -73,6 +73,8 @@ def _normalized_deployment_mode(raw_mode: Any) -> str:
 def _runtime_target_kind(target_id: str) -> str:
     if target_id == "local_companion":
         return "local_companion"
+    if target_id == "sage_cloud_computer":
+        return "cloud_computer"
     if target_id == "self_host_runtime":
         return "self_host_runtime"
     return "cloud_default"
@@ -89,6 +91,8 @@ def _runtime_target_trust_profile(target: Dict[str, Any]) -> Dict[str, Any]:
         if "privileged_device" in supported_modes:
             return dict(runtime_attachment_service.TRUST_MODEL_MAP.get("privileged_device") or {})
         return dict(runtime_attachment_service.TRUST_MODEL_MAP.get("local_secure") or {})
+    if target_id == "sage_cloud_computer":
+        return dict(runtime_attachment_service.TRUST_MODEL_MAP.get("cloud_computer_secure") or {})
     if target_id == "self_host_runtime":
         return dict(runtime_attachment_service.TRUST_MODEL_MAP.get("self_hosted_business_node") or {})
     return dict(runtime_attachment_service.TRUST_MODEL_MAP.get("hosted_secure") or {})
@@ -102,6 +106,8 @@ def _runtime_target_status_label(target: Dict[str, Any]) -> str:
     if not available:
         if target_id == "local_companion":
             return "Needs pairing"
+        if target_id == "sage_cloud_computer":
+            return "Not enabled"
         if target_id == "self_host_runtime":
             return "Not configured"
         return "Unavailable"
@@ -134,6 +140,14 @@ def _runtime_target_status_reason(target: Dict[str, Any]) -> str:
         if not healthy:
             return "The self-hosted runtime is reachable but needs attention before Sage can trust it."
         return "The self-hosted runtime is ready under the workspace policy boundary."
+    if target_id == "sage_cloud_computer":
+        if not available:
+            return "Sage Cloud Computer is not enabled for this workspace. Sage will not allocate a hosted computer automatically."
+        if not online:
+            return "Sage Cloud Computer is configured but no hosted session is currently available."
+        if not healthy:
+            return "Sage Cloud Computer is reachable but needs attention before hosted computer work can start."
+        return "Sage Cloud Computer is ready as an optional metered runtime. Personal device work still requires a paired gateway."
     if not available:
         return f"{label} is not available for this workspace right now."
     if not online or not healthy:

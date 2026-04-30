@@ -66,6 +66,10 @@ def _cached_model_records(provider_id: str, metadata: Dict[str, Any]) -> List[Di
         model_id = str(raw or "").strip()
         if not model_id or model_id in seen:
             continue
+        if provider_id == "deepseek" and model_id not in known_by_id:
+            # DeepSeek's direct API only accepts its first-party model IDs.
+            # Stale workspace-cached aliases must not replace the static catalog.
+            continue
         seen.add(model_id)
         record = dict(known_by_id.get(model_id) or {})
         record["id"] = model_id
@@ -154,7 +158,7 @@ def resolve_provider_model_selection(
 
     model_catalog = provider_profiles.provider_model_catalog(raw_provider)
     supported_models = {str(item.get("id") or "").strip() for item in model_catalog if str(item.get("id") or "").strip()}
-    if isinstance(cached_models, list):
+    if isinstance(cached_models, list) and raw_provider != "deepseek":
         supported_models.update(
             _normalize_model_token(raw_provider, cached_model)
             for cached_model in cached_models

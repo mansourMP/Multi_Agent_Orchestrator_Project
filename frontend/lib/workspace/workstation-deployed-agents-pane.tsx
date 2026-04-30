@@ -44,9 +44,28 @@ import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
 type WizardMode = 'create' | 'edit';
-type WizardStepId = 'setup' | 'connect' | 'deploy';
+type WizardStepId = 'overview' | 'knowledge' | 'tools' | 'channels' | 'memory' | 'safety' | 'test' | 'deploy';
 type StudioSubview = 'agents' | 'inbox' | 'deploy';
 type SpecialistOverlayTabId = 'overview' | 'tools' | 'memory' | 'connectors' | 'analytics';
+
+type StudioTemplate = {
+  id: string;
+  title: string;
+  category: string;
+  icon: string;
+  outcome: string;
+  description: string;
+  setupTime: string;
+  channelLabel: string;
+  requiredConnectors: string[];
+  defaultName: string;
+  persona: string;
+  systemPrompt: string;
+  knowledgePlaceholder: string;
+  selectedToolIds: string[];
+  memoryEnabled: boolean;
+  contextBudgetPreset: string;
+};
 
 type WizardState = {
   name: string;
@@ -238,19 +257,44 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   description: string;
 }> = [
   {
-    id: 'setup',
-    label: 'Setup',
-    description: 'Set the specialist name, persona, and core behavior in one step.',
+    id: 'overview',
+    label: 'Overview',
+    description: 'Name the specialist and describe the business job in plain language.',
   },
   {
-    id: 'connect',
-    label: 'Connect',
-    description: 'Bind to one Telegram connector and validate readiness.',
+    id: 'knowledge',
+    label: 'Knowledge',
+    description: 'Attach the menu, catalog, FAQ, sheet, or document source this specialist should trust.',
+  },
+  {
+    id: 'tools',
+    label: 'Tools',
+    description: 'Choose the minimum tools this specialist can use for the job.',
+  },
+  {
+    id: 'channels',
+    label: 'Channels',
+    description: 'Bind the exact customer channel when the specialist is ready for live traffic.',
+  },
+  {
+    id: 'memory',
+    label: 'Memory',
+    description: 'Decide whether this specialist remembers customers and how much context it can carry.',
+  },
+  {
+    id: 'safety',
+    label: 'Safety',
+    description: 'Set escalation, restricted-domain handling, and customer limits.',
+  },
+  {
+    id: 'test',
+    label: 'Test',
+    description: 'Review the launch checklist before creating or saving the specialist.',
   },
   {
     id: 'deploy',
     label: 'Deploy',
-    description: 'Choose provider and model, then save or launch when ready.',
+    description: 'Choose provider, model, budget guardrails, then save or launch when ready.',
   },
 ];
 
@@ -359,6 +403,173 @@ const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
     capabilityTags: ['Calendar', 'Events'],
   },
 ];
+
+const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
+  {
+    id: 'restaurant_orders',
+    title: 'Restaurant Orders',
+    category: 'Food service',
+    icon: 'RO',
+    outcome: 'Answers menu questions and confirms orders.',
+    description: 'Telegram ordering specialist for restaurants, cafes, and local kitchens.',
+    setupTime: '5 min setup',
+    channelLabel: 'Telegram',
+    requiredConnectors: ['Telegram bot', 'Menu sheet'],
+    defaultName: 'Restaurant Order Specialist',
+    persona: 'Fast, friendly ordering specialist for a restaurant or cafe.',
+    systemPrompt: 'Answer menu questions, check availability from connected sheets, confirm orders clearly, and escalate uncertain cases to a human.',
+    knowledgePlaceholder: 'Paste a menu PDF, Google Sheet, or daily specials source here.',
+    selectedToolIds: ['spreadsheet_read', 'spreadsheet_append'],
+    memoryEnabled: true,
+    contextBudgetPreset: 'balanced',
+  },
+  {
+    id: 'auto_parts_sales',
+    title: 'Auto Parts Sales',
+    category: 'Retail',
+    icon: 'AP',
+    outcome: 'Qualifies car model, part, and availability.',
+    description: 'Sales assistant for shops that answer many Telegram or WhatsApp customer requests.',
+    setupTime: '7 min setup',
+    channelLabel: 'Telegram / WhatsApp',
+    requiredConnectors: ['Customer channel', 'Parts catalog'],
+    defaultName: 'Auto Parts Specialist',
+    persona: 'Practical sales specialist for an auto-parts shop.',
+    systemPrompt: 'Ask for the car make, model, year, and requested part. Check connected catalogs before answering availability, price, or next steps. Escalate unclear fitment to a human.',
+    knowledgePlaceholder: 'Add spreadsheet://parts-catalog or paste the catalog source customers should be matched against.',
+    selectedToolIds: ['spreadsheet_read', 'http_request'],
+    memoryEnabled: true,
+    contextBudgetPreset: 'balanced',
+  },
+  {
+    id: 'real_estate_leads',
+    title: 'Real Estate Leads',
+    category: 'Sales',
+    icon: 'RE',
+    outcome: 'Captures requirements and books follow-up.',
+    description: 'Lead intake specialist for brokers, agents, and property teams.',
+    setupTime: '6 min setup',
+    channelLabel: 'Telegram / Email',
+    requiredConnectors: ['Lead channel', 'Calendar'],
+    defaultName: 'Real Estate Lead Specialist',
+    persona: 'Calm, concise lead qualification specialist for real estate inquiries.',
+    systemPrompt: 'Ask for location, budget, timing, property type, and contact preference. Summarize qualified leads and schedule follow-up when calendar access is available.',
+    knowledgePlaceholder: 'Paste listing sheet, neighborhood notes, or qualification rules here.',
+    selectedToolIds: ['calendar_write', 'gmail_send', 'spreadsheet_append'],
+    memoryEnabled: true,
+    contextBudgetPreset: 'balanced',
+  },
+  {
+    id: 'support_faq',
+    title: 'Support FAQ',
+    category: 'Customer support',
+    icon: 'SF',
+    outcome: 'Answers common questions and escalates edge cases.',
+    description: 'Support specialist for product, account, delivery, or policy questions.',
+    setupTime: '4 min setup',
+    channelLabel: 'Email / Chat',
+    requiredConnectors: ['FAQ source', 'Support inbox'],
+    defaultName: 'Support FAQ Specialist',
+    persona: 'Clear support specialist that answers from approved knowledge only.',
+    systemPrompt: 'Answer only from approved knowledge sources. Ask clarifying questions when needed and escalate unsupported or account-sensitive issues to a human.',
+    knowledgePlaceholder: 'Paste help center links, policy docs, or faq:// references here.',
+    selectedToolIds: ['web_search', 'http_request', 'gmail_send'],
+    memoryEnabled: false,
+    contextBudgetPreset: 'compact',
+  },
+  {
+    id: 'appointment_booking',
+    title: 'Appointment Booking',
+    category: 'Scheduling',
+    icon: 'AB',
+    outcome: 'Finds a time, confirms, and writes calendar events.',
+    description: 'Booking specialist for salons, clinics, services, and local businesses.',
+    setupTime: '5 min setup',
+    channelLabel: 'Telegram / Email',
+    requiredConnectors: ['Calendar', 'Customer channel'],
+    defaultName: 'Appointment Booking Specialist',
+    persona: 'Polite scheduling specialist that confirms details before booking.',
+    systemPrompt: 'Collect service type, preferred date and time, customer contact details, and confirmation. Write calendar events only after details are clear.',
+    knowledgePlaceholder: 'Add service list, booking rules, and availability source here.',
+    selectedToolIds: ['calendar_write', 'gmail_send'],
+    memoryEnabled: true,
+    contextBudgetPreset: 'balanced',
+  },
+  {
+    id: 'spreadsheet_catalog',
+    title: 'Spreadsheet Catalog Bot',
+    category: 'Catalog',
+    icon: 'SC',
+    outcome: 'Looks up rows and answers from a live catalog.',
+    description: 'Specialist for products, SKUs, menus, inventory, or internal catalogs.',
+    setupTime: '3 min setup',
+    channelLabel: 'Any channel',
+    requiredConnectors: ['Spreadsheet'],
+    defaultName: 'Catalog Specialist',
+    persona: 'Accurate catalog assistant that prefers exact matches and asks when ambiguous.',
+    systemPrompt: 'Use connected spreadsheets as the source of truth. Return exact row details when possible and ask for clarification when there are multiple matches.',
+    knowledgePlaceholder: 'Add sheet://catalog or paste the spreadsheet reference here.',
+    selectedToolIds: ['spreadsheet_read', 'spreadsheet_append'],
+    memoryEnabled: false,
+    contextBudgetPreset: 'compact',
+  },
+  {
+    id: 'telegram_sales',
+    title: 'Telegram Sales Bot',
+    category: 'Sales',
+    icon: 'TS',
+    outcome: 'Responds to inbound leads and captures next action.',
+    description: 'General Telegram sales assistant for SMB customer conversations.',
+    setupTime: '5 min setup',
+    channelLabel: 'Telegram',
+    requiredConnectors: ['Telegram bot', 'Sales notes'],
+    defaultName: 'Telegram Sales Specialist',
+    persona: 'Direct, friendly sales specialist for Telegram customer conversations.',
+    systemPrompt: 'Answer product questions, qualify intent, capture contact details, and escalate high-intent or uncertain cases to a human.',
+    knowledgePlaceholder: 'Paste product pages, pricing notes, or sales sheet references here.',
+    selectedToolIds: ['spreadsheet_read', 'web_search', 'gmail_send'],
+    memoryEnabled: true,
+    contextBudgetPreset: 'balanced',
+  },
+  {
+    id: 'github_triage',
+    title: 'GitHub Triage',
+    category: 'Engineering',
+    icon: 'GT',
+    outcome: 'Summarizes issues and routes work.',
+    description: 'Engineering specialist for issue triage, release notes, and team summaries.',
+    setupTime: '8 min setup',
+    channelLabel: 'GitHub / Email',
+    requiredConnectors: ['GitHub', 'Email'],
+    defaultName: 'GitHub Triage Specialist',
+    persona: 'Precise engineering triage specialist that keeps summaries factual and actionable.',
+    systemPrompt: 'Summarize issues, extract blockers, identify owners when available, and avoid changing code unless explicitly approved.',
+    knowledgePlaceholder: 'Paste repository, issue board, or release-note source references here.',
+    selectedToolIds: ['http_request', 'gmail_send'],
+    memoryEnabled: false,
+    contextBudgetPreset: 'deep',
+  },
+];
+
+const DEFAULT_STUDIO_TEMPLATE = STUDIO_TEMPLATES[0]!;
+const CUSTOM_STUDIO_TEMPLATE: StudioTemplate = {
+  id: 'custom_agent',
+  title: 'Custom Agent',
+  category: 'Blank',
+  icon: '+',
+  outcome: 'Build a private specialist from your own instructions.',
+  description: 'Start with a clean draft when none of the templates match the job.',
+  setupTime: 'Custom setup',
+  channelLabel: 'Choose later',
+  requiredConnectors: ['Choose tools', 'Choose channel'],
+  defaultName: '',
+  persona: '',
+  systemPrompt: '',
+  knowledgePlaceholder: 'Add the trusted sources this specialist should use.',
+  selectedToolIds: ['web_search'],
+  memoryEnabled: false,
+  contextBudgetPreset: 'balanced',
+};
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -594,6 +805,27 @@ function normalizeToolIds(value: unknown): string[] {
   return normalizeLabelList(value)
     .map((item) => item.toLowerCase())
     .filter((item, index, array) => allowed.has(item) && array.indexOf(item) === index);
+}
+
+function studioTemplateById(templateId: string | null | undefined): StudioTemplate {
+  if (templateId === CUSTOM_STUDIO_TEMPLATE.id) {
+    return CUSTOM_STUDIO_TEMPLATE;
+  }
+  return STUDIO_TEMPLATES.find((template) => template.id === templateId) ?? DEFAULT_STUDIO_TEMPLATE;
+}
+
+function applyStudioTemplate(state: WizardState, template: StudioTemplate): WizardState {
+  return {
+    ...state,
+    name: template.defaultName || state.name,
+    persona: template.persona || '',
+    systemPrompt: template.systemPrompt || '',
+    knowledgeSourceText: template.id === CUSTOM_STUDIO_TEMPLATE.id ? '' : state.knowledgeSourceText,
+    selectedToolIds: template.selectedToolIds,
+    memoryEnabled: template.memoryEnabled,
+    contextBudgetPreset: template.contextBudgetPreset,
+    telegramEnabled: template.channelLabel.toLowerCase().includes('telegram'),
+  };
 }
 
 function connectorConnected(connectorIds: string[] | undefined, availableConnectorIds: Set<string>): boolean {
@@ -1231,6 +1463,40 @@ function summarizeStudioErrorMessage(message: string | null): string | null {
   return normalized;
 }
 
+function StudioTemplateCard({
+  template,
+  onSelect,
+  actionLabel = 'Use template',
+}: {
+  template: StudioTemplate;
+  onSelect: (templateId: string) => void;
+  actionLabel?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="studio-template-card"
+      onClick={() => onSelect(template.id)}
+    >
+      <span className="studio-template-card__topline">
+        <span className="studio-template-card__icon" aria-hidden="true">{template.icon}</span>
+        <span className="studio-template-card__setup">{template.setupTime}</span>
+      </span>
+      <span className="studio-template-card__copy">
+        <span className="studio-template-card__category">{template.category}</span>
+        <strong className="studio-template-card__title">{template.title}</strong>
+        <span className="studio-template-card__outcome">{template.outcome}</span>
+      </span>
+      <span className="studio-template-card__tags">
+        {template.requiredConnectors.slice(0, 3).map((connector) => (
+          <span key={connector} className="studio-template-card__tag">{connector}</span>
+        ))}
+      </span>
+      <span className="studio-template-card__action">{actionLabel}</span>
+    </button>
+  );
+}
+
 function DeployedAgentsSkeleton() {
   return (
     <ListDetailColumns
@@ -1300,6 +1566,7 @@ export function WorkstationDeployedAgentsPane({
   const services = useWorkspaceServices();
   const searchParams = useSearchParams();
   const cachedStudioPane = studioPaneCache.get(workspaceId) ?? null;
+  const [hadInitialCache] = useState(() => cachedStudioPane !== null);
   const [currentStudioSubview, setCurrentStudioSubview] = useState<StudioSubview>(initialSubview);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogSnapshot[]>(() => cachedStudioPane?.providerCatalog ?? []);
   const [agents, setAgents] = useState<DeployedAgentRecord[]>(() => cachedStudioPane?.agents ?? []);
@@ -1334,6 +1601,7 @@ export function WorkstationDeployedAgentsPane({
   const [wizardMode, setWizardMode] = useState<WizardMode>('create');
   const [wizardStepIndex, setWizardStepIndex] = useState(0);
   const [wizardState, setWizardState] = useState<WizardState>(() => buildWizardState(null));
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() => DEFAULT_STUDIO_TEMPLATE.id);
   const [isSubmittingWizard, setIsSubmittingWizard] = useState(false);
   const [detailConfigDraft, setDetailConfigDraft] = useState<DetailConfigDraft | null>(null);
   const [isSavingDetailConfig, setIsSavingDetailConfig] = useState(false);
@@ -1384,6 +1652,10 @@ export function WorkstationDeployedAgentsPane({
   const selectedWizardConnector = useMemo(
     () => selectedTelegramReadiness?.connectors.find((item) => item.id === wizardState.telegramConnectorId) ?? null,
     [selectedTelegramReadiness, wizardState.telegramConnectorId],
+  );
+  const selectedStudioTemplate = useMemo(
+    () => studioTemplateById(selectedTemplateId),
+    [selectedTemplateId],
   );
   const filteredConversations = useMemo(
     () => conversations.filter((conversation) => matchesConversationFilters(conversation, conversationFilters)),
@@ -1644,12 +1916,12 @@ export function WorkstationDeployedAgentsPane({
     void refreshAgents();
     const handle = window.setTimeout(() => {
       void refreshProviderCatalog();
-    }, cachedStudioPane ? 120 : 260);
+    }, hadInitialCache ? 120 : 260);
     return () => {
       window.clearTimeout(handle);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cachedStudioPane, services.client]);
+  }, [hadInitialCache, services.client, workspaceId]);
 
   useEffect(() => {
     setCurrentStudioSubview(initialSubview);
@@ -1881,10 +2153,12 @@ export function WorkstationDeployedAgentsPane({
     };
   }, [services.client]);
 
-  function openCreateWizard() {
+  function openCreateWizard(templateId: string = selectedTemplateId) {
+    const template = studioTemplateById(templateId);
     setWizardMode('create');
     setWizardStepIndex(0);
-    setWizardState(applyProviderCatalogDefaults(buildWizardState(null), providerCatalog));
+    setSelectedTemplateId(template.id);
+    setWizardState(applyProviderCatalogDefaults(applyStudioTemplate(buildWizardState(null), template), providerCatalog));
     setIsTelegramSetupOpen(false);
     setIsWizardOpen(true);
     void loadTelegramReadiness();
@@ -2300,45 +2574,65 @@ export function WorkstationDeployedAgentsPane({
             primary={(
               <div className="app-stack-4">
                 {showAgentsIndex ? (
-                  <ListDetailPanel
-                    className="studio-panel studio-panel--roster"
-                    eyebrow="Agents"
-                    title="Specialist roster"
-                    subtitle={`${agents.length} in this workspace, ready to compare by channel, memory, and recent activity.`}
-                    actions={currentStudioSubview === 'agents' ? (
-                      <div className="app-inline-actions app-inline-actions--tight">
-                        <AppButton
-                          type="button"
-                          tone="secondary"
-                          className="deployed-agents-tabbar__refresh"
-                          onClick={() => {
-                            void Promise.all([
-                              refreshProviderCatalog(),
-                              refreshAgents({ preserveSelection: true }),
-                            ]);
-                          }}
-                          aria-label="Refresh studio"
-                          title="Refresh studio"
-                        >
-                          <RefreshCw size={14} strokeWidth={1.9} aria-hidden="true" />
-                        </AppButton>
-                        <AppButton type="button" onClick={openCreateWizard}>
-                          New Specialist
-                        </AppButton>
-                      </div>
-                    ) : undefined}
-                  >
-                    {agents.length === 0 ? (
-                      <EmptyPanel
-                        title="No specialists yet"
-                        body="Create your first specialist, connect the right channel, and take it live from the same Studio flow."
-                        actions={(
-                          <AppButton type="button" onClick={openCreateWizard}>
-                            New Specialist
+                  <>
+                    <ListDetailPanel
+                      className="studio-panel studio-panel--templates"
+                      eyebrow="Templates"
+                      title="Start from a specialist template"
+                      subtitle="Pick the job first. Studio will create a draft and keep tools, memory, channels, and deployment settings behind focused tabs."
+                      actions={currentStudioSubview === 'agents' ? (
+                        <div className="app-inline-actions app-inline-actions--tight">
+                          <AppButton
+                            type="button"
+                            tone="secondary"
+                            className="deployed-agents-tabbar__refresh"
+                            onClick={() => {
+                              void Promise.all([
+                                refreshProviderCatalog(),
+                                refreshAgents({ preserveSelection: true }),
+                              ]);
+                            }}
+                            aria-label="Refresh studio"
+                            title="Refresh studio"
+                          >
+                            <RefreshCw size={14} strokeWidth={1.9} aria-hidden="true" />
                           </AppButton>
-                        )}
-                      />
-                    ) : (
+                        </div>
+                      ) : undefined}
+                    >
+                      <div className="studio-template-grid" data-studio-template-grid="true">
+                        {STUDIO_TEMPLATES.map((template) => (
+                          <StudioTemplateCard
+                            key={template.id}
+                            template={template}
+                            onSelect={openCreateWizard}
+                          />
+                        ))}
+                        <StudioTemplateCard
+                          template={CUSTOM_STUDIO_TEMPLATE}
+                          onSelect={openCreateWizard}
+                          actionLabel="Build custom"
+                        />
+                      </div>
+                    </ListDetailPanel>
+
+                    <ListDetailPanel
+                      className="studio-panel studio-panel--roster"
+                      eyebrow="Agents"
+                      title="My specialists"
+                      subtitle={`${agents.length} in this workspace. Open one to manage overview, tools, memory, channels, and analytics.`}
+                      actions={currentStudioSubview === 'agents' ? (
+                        <AppButton type="button" tone="secondary" onClick={() => openCreateWizard()}>
+                          Blank draft
+                        </AppButton>
+                      ) : undefined}
+                    >
+                      {agents.length === 0 ? (
+                        <EmptyPanel
+                          title="No specialists yet"
+                          body="Choose a template above to create a draft. Provider, model, billing, and marketplace settings stay out of the first step."
+                        />
+                      ) : (
                       <div className="deployed-agents-card-grid">
                         {agents.map((agent, index) => {
                           const agentId = readString(agent.id, `deployed-agent-${index}`);
@@ -2410,8 +2704,9 @@ export function WorkstationDeployedAgentsPane({
                           );
                         })}
                       </div>
-                    )}
-                  </ListDetailPanel>
+                      )}
+                    </ListDetailPanel>
+                  </>
                 ) : null}
 
                 {showReadinessPanel ? (
@@ -2472,10 +2767,52 @@ export function WorkstationDeployedAgentsPane({
                   ) : null}
                 >
                   {!selectedAgent ? (
-                    <EmptyPanel
-                      title="No specialist selected"
-                      body="Choose a specialist to review readiness, tools, memory, and launch settings."
-                    />
+                    <div className="studio-template-detail" data-studio-template-detail="true">
+                      <span className="studio-template-card__icon studio-template-detail__icon" aria-hidden="true">
+                        {selectedStudioTemplate.icon}
+                      </span>
+                      <div className="studio-template-detail__copy">
+                        <span className="studio-template-card__category">{selectedStudioTemplate.category}</span>
+                        <strong className="studio-template-detail__title">{selectedStudioTemplate.title}</strong>
+                        <p className="studio-template-detail__description">{selectedStudioTemplate.description}</p>
+                      </div>
+                      <FormGrid columns="repeat(auto-fit, minmax(10rem, 1fr))">
+                        <FormReadout label="Setup time" value={selectedStudioTemplate.setupTime} />
+                        <FormReadout label="Channel" value={selectedStudioTemplate.channelLabel} />
+                        <FormReadout label="Memory" value={selectedStudioTemplate.memoryEnabled ? 'Enabled by default' : 'Off by default'} />
+                        <FormReadout label="Context" value={humanizeToken(selectedStudioTemplate.contextBudgetPreset, 'Balanced')} />
+                      </FormGrid>
+                      <div className="studio-template-detail__group">
+                        <span className="studio-template-detail__label">Required connectors</span>
+                        <div className="studio-template-card__tags">
+                          {selectedStudioTemplate.requiredConnectors.map((connector) => (
+                            <span key={connector} className="studio-template-card__tag">{connector}</span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="studio-template-detail__group">
+                        <span className="studio-template-detail__label">Suggested tools</span>
+                        <div className="studio-template-card__tags">
+                          {selectedStudioTemplate.selectedToolIds.map((toolId) => (
+                            <span key={toolId} className="studio-template-card__tag">{toolLabel(toolId)}</span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="studio-template-detail__group">
+                        <span className="studio-template-detail__label">Launch checklist</span>
+                        <ul className="studio-template-detail__checklist">
+                          <li>Name the specialist and review the behavior.</li>
+                          <li>Add the trusted source of truth.</li>
+                          <li>Connect the customer channel only when ready.</li>
+                          <li>Test privately before deploying live traffic.</li>
+                        </ul>
+                      </div>
+                      <div className="app-inline-actions app-inline-actions--tight">
+                        <AppButton type="button" onClick={() => openCreateWizard(selectedStudioTemplate.id)}>
+                          {selectedStudioTemplate.id === CUSTOM_STUDIO_TEMPLATE.id ? 'Build custom agent' : 'Use this template'}
+                        </AppButton>
+                      </div>
+                    </div>
                   ) : isLoadingDetail ? (
                     <>
                       <SkeletonBlock height="3rem" />
@@ -3237,8 +3574,12 @@ export function WorkstationDeployedAgentsPane({
 
       <CommandSheet
         open={isWizardOpen}
-        title={wizardMode === 'create' ? 'New Specialist' : 'Edit Specialist'}
-        description="Set the specialist up, connect the customer channel, and review launch settings."
+        title={wizardMode === 'create' ? `New ${selectedStudioTemplate.title}` : 'Edit Specialist'}
+        description={
+          wizardMode === 'create'
+            ? 'Create a draft from a template. Advanced tools, memory, channel, provider, and deploy settings stay in focused steps.'
+            : 'Adjust the specialist configuration, customer channel, and launch settings.'
+        }
         onClose={closeWizard}
           actions={(
             <div className="app-inline-actions">
@@ -3277,84 +3618,218 @@ export function WorkstationDeployedAgentsPane({
           <div data-deployed-agent-wizard="root" className="deployed-agents-wizard">
             <div className="deployed-agents-wizard__steps">
               {DEPLOYED_AGENT_WIZARD_STEPS.map((step, index) => (
-                <div
+                <button
+                  type="button"
                   key={step.id}
                   data-deployed-agent-wizard-step={step.id}
                   className="deployed-agents-wizard__step"
                   data-active={index === wizardStepIndex ? 'true' : 'false'}
+                  disabled={isSubmittingWizard}
+                  onClick={() => setWizardStepIndex(index)}
                 >
                   <span className="deployed-agents-wizard__step-eyebrow">
                     Step {index + 1}
                   </span>
                   <strong className="deployed-agents-wizard__step-title">{step.label}</strong>
-                </div>
+                </button>
               ))}
             </div>
 
             <ModalSection title={wizardStep.label} description={wizardStep.description}>
-              {wizardStep.id === 'setup' ? (
-                <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                  <FormField label="Specialist name" hint="The public restaurant or cafe name customers will see in Telegram.">
-                    <FormInput
-                      value={wizardState.name}
-                      onChange={(event) => setWizardField('name', event.currentTarget.value)}
-                      placeholder="Bluebird Cafe"
-                    />
-                  </FormField>
-                  <FormField label="Avatar URL" hint="Optional public avatar or brand mark.">
-                    <FormInput
-                      value={wizardState.avatar}
-                      onChange={(event) => setWizardField('avatar', event.currentTarget.value)}
-                      placeholder="https://example.com/avatar.png"
-                    />
-                  </FormField>
-                  <FormField label="Persona" hint="Short description of how this ordering specialist should speak and behave.">
-                    <FormTextarea
-                      rows={4}
-                      value={wizardState.persona}
-                      onChange={(event) => setWizardField('persona', event.currentTarget.value)}
-                      placeholder="Fast, friendly Telegram ordering specialist for a cafe or restaurant."
-                    />
-                    <div className="deployed-agents-wizard__memory-toggle">
-                      <div className="sage-tool-row__copy">
-                        <strong className="sage-tool-row__title">Enable persistent memory</strong>
-                        <p className="sage-tool-row__description">Specialist remembers each customer across conversations.</p>
+              {wizardStep.id === 'overview' ? (
+                wizardMode === 'create' ? (
+                  <div className="deployed-agents-wizard__template-layout">
+                    <aside className="deployed-agents-wizard__template-summary">
+                      <span className="studio-template-card__icon deployed-agents-wizard__template-icon" aria-hidden="true">
+                        {selectedStudioTemplate.icon}
+                      </span>
+                      <span className="studio-template-card__category">{selectedStudioTemplate.category}</span>
+                      <strong className="deployed-agents-wizard__template-title">{selectedStudioTemplate.title}</strong>
+                      <p className="deployed-agents-wizard__template-copy">{selectedStudioTemplate.description}</p>
+                      <div className="studio-template-card__tags">
+                        {selectedStudioTemplate.requiredConnectors.map((connector) => (
+                          <span key={connector} className="studio-template-card__tag">{connector}</span>
+                        ))}
                       </div>
-                      <button
-                        type="button"
-                        className={joinClassNames('sage-tool-toggle', wizardState.memoryEnabled && 'sage-tool-toggle--enabled')}
-                        role="switch"
-                        aria-checked={wizardState.memoryEnabled}
-                        onClick={() => setWizardField('memoryEnabled', !wizardState.memoryEnabled)}
-                      >
-                        <span className="sage-tool-toggle__thumb" />
-                      </button>
+                    </aside>
+
+                    <div className="deployed-agents-wizard__quickstart">
+                      <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                        <FormField label="Specialist name" hint="The name your team sees in Studio.">
+                          <FormInput
+                            value={wizardState.name}
+                            onChange={(event) => setWizardField('name', event.currentTarget.value)}
+                            placeholder={selectedStudioTemplate.defaultName}
+                          />
+                        </FormField>
+                        <FormField label="Primary customer channel" hint="You can connect the exact bot or inbox in the next step.">
+                          <FormSelect
+                            value={wizardState.telegramEnabled ? 'telegram' : 'draft'}
+                            onChange={(event) => {
+                              const nextChannel = event.currentTarget.value;
+                              setWizardField('telegramEnabled', nextChannel === 'telegram');
+                            }}
+                          >
+                            <option value="draft">Draft only</option>
+                            <option value="telegram">Telegram bot</option>
+                            <option value="whatsapp" disabled>WhatsApp Business soon</option>
+                            <option value="web_widget" disabled>Web chat soon</option>
+                          </FormSelect>
+                        </FormField>
+                      </FormGrid>
+
+                      <FormField label="Business / use case" hint="Plain language is enough. The template turns it into the specialist behavior.">
+                        <FormTextarea
+                          rows={3}
+                          value={wizardState.persona}
+                          onChange={(event) => setWizardField('persona', event.currentTarget.value)}
+                          placeholder={selectedStudioTemplate.persona}
+                        />
+                      </FormField>
                     </div>
-                    <ContextPresetControl
-                      value={wizardState.contextBudgetPreset}
-                      onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
+                  </div>
+                ) : (
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Specialist name" hint="The public restaurant or cafe name customers will see in Telegram.">
+                      <FormInput
+                        value={wizardState.name}
+                        onChange={(event) => setWizardField('name', event.currentTarget.value)}
+                        placeholder="Bluebird Cafe"
+                      />
+                    </FormField>
+                    <FormField label="Avatar URL" hint="Optional public avatar or brand mark.">
+                      <FormInput
+                        value={wizardState.avatar}
+                        onChange={(event) => setWizardField('avatar', event.currentTarget.value)}
+                        placeholder="https://example.com/avatar.png"
+                      />
+                    </FormField>
+                    <FormField label="Persona" hint="Short description of how this ordering specialist should speak and behave.">
+                      <FormTextarea
+                        rows={4}
+                        value={wizardState.persona}
+                        onChange={(event) => setWizardField('persona', event.currentTarget.value)}
+                        placeholder="Fast, friendly Telegram ordering specialist for a cafe or restaurant."
+                      />
+                      <div className="deployed-agents-wizard__memory-toggle">
+                        <div className="sage-tool-row__copy">
+                          <strong className="sage-tool-row__title">Enable persistent memory</strong>
+                          <p className="sage-tool-row__description">Specialist remembers each customer across conversations.</p>
+                        </div>
+                        <button
+                          type="button"
+                          className={joinClassNames('sage-tool-toggle', wizardState.memoryEnabled && 'sage-tool-toggle--enabled')}
+                          role="switch"
+                          aria-checked={wizardState.memoryEnabled}
+                          onClick={() => setWizardField('memoryEnabled', !wizardState.memoryEnabled)}
+                        >
+                          <span className="sage-tool-toggle__thumb" />
+                        </button>
+                      </div>
+                      <ContextPresetControl
+                        value={wizardState.contextBudgetPreset}
+                        onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
+                      />
+                    </FormField>
+                    <FormField label="Purpose and behavior" hint="Core ordering, menu, and escalation instructions this specialist follows.">
+                      <FormTextarea
+                        rows={6}
+                        value={wizardState.systemPrompt}
+                        onChange={(event) => setWizardField('systemPrompt', event.currentTarget.value)}
+                        placeholder="Answer menu questions, check specials and availability, confirm orders clearly, and escalate edge cases to a human."
+                      />
+                    </FormField>
+                    <FormField label="Knowledge references" hint="Menu PDF or Google Sheet references, one per line.">
+                      <FormTextarea
+                        rows={6}
+                        value={wizardState.knowledgeSourceText}
+                        onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
+                        placeholder={'kb://menu-pdf\nsheet://daily-menu'}
+                      />
+                    </FormField>
+                  </FormGrid>
+                )
+              ) : null}
+
+              {wizardStep.id === 'knowledge' ? (
+                <div className="app-stack-3">
+                  <FormField label="Knowledge source" hint="Paste a sheet, PDF, document, URL, or leave empty and add it later.">
+                    <FormTextarea
+                      rows={5}
+                      value={wizardState.knowledgeSourceText}
+                      onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
+                      placeholder={selectedStudioTemplate.knowledgePlaceholder}
                     />
                   </FormField>
-                  <FormField label="Purpose and behavior" hint="Core ordering, menu, and escalation instructions this specialist follows.">
+                  <FormField label="Instructions" hint="Specific rules this specialist must follow when answering customers.">
                     <FormTextarea
+                      data-deployed-agent-instructions-input="true"
                       rows={6}
                       value={wizardState.systemPrompt}
                       onChange={(event) => setWizardField('systemPrompt', event.currentTarget.value)}
-                      placeholder="Answer menu questions, check specials and availability, confirm orders clearly, and escalate edge cases to a human."
+                      placeholder={selectedStudioTemplate.systemPrompt}
                     />
                   </FormField>
-                  <FormField label="Knowledge references" hint="Menu PDF or Google Sheet references, one per line.">
-                    <FormTextarea
-                      rows={6}
-                      value={wizardState.knowledgeSourceText}
-                      onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
-                      placeholder={'kb://menu-pdf\nsheet://daily-menu'}
-                    />
-                  </FormField>
-                </FormGrid>
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Public intro" hint="Optional customer-facing intro for mini-app or channel entry points.">
+                      <FormTextarea
+                        rows={3}
+                        value={wizardState.welcomeIntro}
+                        onChange={(event) => setWizardField('welcomeIntro', event.currentTarget.value)}
+                        placeholder="Quickly ask questions, check availability, and get help."
+                      />
+                    </FormField>
+                    <FormField label="Core value" hint="One sentence explaining what this specialist does for customers.">
+                      <FormTextarea
+                        rows={3}
+                        value={wizardState.welcomeCoreValue}
+                        onChange={(event) => setWizardField('welcomeCoreValue', event.currentTarget.value)}
+                        placeholder={selectedStudioTemplate.outcome}
+                      />
+                    </FormField>
+                  </FormGrid>
+                </div>
               ) : null}
 
-              {wizardStep.id === 'connect' ? (
+              {wizardStep.id === 'tools' ? (
+                <div className="app-stack-3">
+                  <FormField label="Allowed tools" hint="Keep this narrow. Add only the tools this specialist needs for its job.">
+                    <div className="deployed-agents-wizard__tool-grid">
+                      {STUDIO_TOOL_OPTIONS.map((tool) => {
+                        const selected = wizardState.selectedToolIds.includes(tool.id);
+                        return (
+                          <button
+                            key={tool.id}
+                            type="button"
+                            className={joinClassNames(
+                              'deployed-agents-wizard__tool-card',
+                              selected && 'deployed-agents-wizard__tool-card--selected',
+                            )}
+                            aria-pressed={selected}
+                            onClick={() => {
+                              setWizardState((current) => {
+                                const nextSelectedToolIds = current.selectedToolIds.includes(tool.id)
+                                  ? current.selectedToolIds.filter((item) => item !== tool.id)
+                                  : [...current.selectedToolIds, tool.id];
+                                return {
+                                  ...current,
+                                  selectedToolIds: nextSelectedToolIds,
+                                };
+                              });
+                            }}
+                          >
+                            <span>{selected ? 'Enabled' : 'Disabled'}</span>
+                            <strong>{tool.label}</strong>
+                            <small>{tool.description}</small>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </FormField>
+                </div>
+              ) : null}
+
+              {wizardStep.id === 'channels' ? (
                 <div className="app-stack-3">
                   {selectedTelegramReadiness ? (
                     <StateBanner
@@ -3444,6 +3919,123 @@ export function WorkstationDeployedAgentsPane({
                       label="Webhook status"
                       value={humanizeToken(readRecord(selectedTelegramReadiness?.webhook).status, 'Checking')}
                     />
+                  </FormGrid>
+                </div>
+              ) : null}
+
+              {wizardStep.id === 'memory' ? (
+                <div className="app-stack-3">
+                  <div className="deployed-agents-wizard__memory-toggle deployed-agents-wizard__memory-toggle--panel">
+                    <div className="sage-tool-row__copy">
+                      <strong className="sage-tool-row__title">Persistent customer memory</strong>
+                      <p className="sage-tool-row__description">
+                        Enable this only when the specialist benefits from remembering customers across conversations.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className={joinClassNames('sage-tool-toggle', wizardState.memoryEnabled && 'sage-tool-toggle--enabled')}
+                      role="switch"
+                      aria-checked={wizardState.memoryEnabled}
+                      onClick={() => setWizardField('memoryEnabled', !wizardState.memoryEnabled)}
+                    >
+                      <span className="sage-tool-toggle__thumb" />
+                    </button>
+                  </div>
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <ContextPresetControl
+                      value={wizardState.contextBudgetPreset}
+                      onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
+                    />
+                    <FormField label="Retention" hint="How long reusable memory should be kept.">
+                      <FormSelect
+                        value={wizardState.retentionPreset}
+                        onChange={(event) => setWizardField('retentionPreset', event.currentTarget.value)}
+                      >
+                        <option value="short">Short</option>
+                        <option value="standard">Standard</option>
+                        <option value="long">Long</option>
+                      </FormSelect>
+                    </FormField>
+                  </FormGrid>
+                </div>
+              ) : null}
+
+              {wizardStep.id === 'safety' ? (
+                <div className="app-stack-3">
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Escalation behavior" hint="When the specialist should involve a human.">
+                      <FormSelect
+                        value={wizardState.escalationPreset}
+                        onChange={(event) => setWizardField('escalationPreset', event.currentTarget.value)}
+                      >
+                        <option value="conservative">Escalate early</option>
+                        <option value="standard">Standard</option>
+                        <option value="autonomous">More autonomous</option>
+                      </FormSelect>
+                    </FormField>
+                    <FormField label="Handoff mode" hint="Where human handoff should go.">
+                      <FormSelect
+                        value={wizardState.handoffMode}
+                        onChange={(event) => setWizardField('handoffMode', event.currentTarget.value)}
+                      >
+                        <option value="notify_owner">Notify owner</option>
+                        <option value="pause_thread">Pause customer thread</option>
+                        <option value="summary_only">Create summary only</option>
+                      </FormSelect>
+                    </FormField>
+                  </FormGrid>
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Owner notification destination" hint="Email, Telegram chat, or internal queue for handoff.">
+                      <FormInput
+                        value={wizardState.ownerNotificationDestination}
+                        onChange={(event) => setWizardField('ownerNotificationDestination', event.currentTarget.value)}
+                        placeholder="owner@example.com"
+                      />
+                    </FormField>
+                    <FormField label="Paused message" hint="What customers see when the specialist is paused.">
+                      <FormInput
+                        value={wizardState.pausedMessage}
+                        onChange={(event) => setWizardField('pausedMessage', event.currentTarget.value)}
+                        placeholder="A human will follow up shortly."
+                      />
+                    </FormField>
+                  </FormGrid>
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Sensitive-domain safety" hint="Enable for health, legal, finance, or restricted customer cases.">
+                      <FormSelect
+                        value={wizardState.healthSafetyEnabled ? 'enabled' : 'disabled'}
+                        onChange={(event) => setWizardField('healthSafetyEnabled', event.currentTarget.value === 'enabled')}
+                      >
+                        <option value="disabled">Disabled</option>
+                        <option value="enabled">Enabled</option>
+                      </FormSelect>
+                    </FormField>
+                    <FormField label="Safety assistant name" hint="Optional name used in regulated-domain handoffs.">
+                      <FormInput
+                        value={wizardState.healthSafetyAssistantName}
+                        onChange={(event) => setWizardField('healthSafetyAssistantName', event.currentTarget.value)}
+                        placeholder="Safety reviewer"
+                      />
+                    </FormField>
+                  </FormGrid>
+                </div>
+              ) : null}
+
+              {wizardStep.id === 'test' ? (
+                <div className="app-stack-3">
+                  <StateBanner
+                    tone="neutral"
+                    title="Draft review"
+                    detail="This is the pre-launch checklist. Create the draft, test it privately, then deploy from the specialist detail panel."
+                  />
+                  <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
+                    <FormReadout label="Template" value={selectedStudioTemplate.title} />
+                    <FormReadout label="Specialist name" value={wizardState.name || 'Not named'} />
+                    <FormReadout label="Channel" value={wizardState.telegramEnabled ? 'Telegram enabled' : 'Draft only'} />
+                    <FormReadout label="Knowledge" value={wizardState.knowledgeSourceText.trim() ? 'Source added' : 'Add later'} />
+                    <FormReadout label="Tools" value={`${wizardState.selectedToolIds.length} enabled`} />
+                    <FormReadout label="Memory" value={wizardState.memoryEnabled ? 'Enabled' : 'Disabled'} />
                   </FormGrid>
                 </div>
               ) : null}
@@ -3556,6 +4148,22 @@ export function WorkstationDeployedAgentsPane({
                         onChange={(event) => setWizardField('monthlyCostCapUsd', event.currentTarget.value)}
                         inputMode="decimal"
                         placeholder="25.00"
+                      />
+                    </FormField>
+                  </FormGrid>
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Upgrade CTA label" hint="Required when message limits are active.">
+                      <FormInput
+                        value={wizardState.upgradeCtaLabel}
+                        onChange={(event) => setWizardField('upgradeCtaLabel', event.currentTarget.value)}
+                        placeholder="Continue on Empyralis"
+                      />
+                    </FormField>
+                    <FormField label="Upgrade CTA URL" hint="Where limited users go when they need more messages.">
+                      <FormInput
+                        value={wizardState.upgradeCtaUrl}
+                        onChange={(event) => setWizardField('upgradeCtaUrl', event.currentTarget.value)}
+                        placeholder="https://app.empyralis.com/upgrade"
                       />
                     </FormField>
                   </FormGrid>

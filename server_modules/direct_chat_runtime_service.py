@@ -11,12 +11,14 @@ from server_modules.agent_turn import (
     resolve_agent_turn_request_with_fallback,
 )
 from server_modules import agent_trace_service
+from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_provider_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_response_service
 from server_modules import no_provider_service
 from server_modules import thread_service
+from server_modules.direct_chat_context_service import should_exclude_prior_message
 from server_modules.direct_tool_config_service import run_async_tool_call
 
 
@@ -405,6 +407,8 @@ def _hydrate_prior_messages_from_thread_store(
             continue
         content = str(turn.get("content") or "").strip()
         if not content:
+            continue
+        if should_exclude_prior_message(role, content, turn.get("status")):
             continue
         hydrated.append({"role": role, "content": content})
     if (
@@ -1018,6 +1022,11 @@ def build_direct_operator_reply(
         tools,
         obvious_direct_tool_intent=obvious_direct_tool_intent,
     )
+    generation_tools = (
+        tools
+        if direct_chat_tool_catalog_service.message_requests_tool_inventory(normalized_message)
+        else provider_chat_tools
+    )
     context = {
         "workspace_id": normalized_workspace_id,
         "provider": provider,
@@ -1025,7 +1034,7 @@ def build_direct_operator_reply(
         "source": "chat_direct",
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
-        "tools": provider_chat_tools,
+        "tools": generation_tools,
         "disable_provider_fallback": True,
     }
     metadata = {
@@ -1034,7 +1043,7 @@ def build_direct_operator_reply(
         "source": "chat_direct",
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
-        "tools": provider_chat_tools,
+        "tools": generation_tools,
         "disable_provider_fallback": True,
     }
     if direct_chat_credentials:
@@ -1081,7 +1090,7 @@ def build_direct_operator_reply(
         connected_systems=connected_systems,
         tool_capabilities=tool_capabilities,
         availability_payload=availability_payload,
-        tools=provider_chat_tools,
+        tools=generation_tools,
         direct_chat_credentials=direct_chat_credentials,
         proactive_suggestions=proactive_suggestions,
         tool_loop_session_key=tool_loop_session_key,

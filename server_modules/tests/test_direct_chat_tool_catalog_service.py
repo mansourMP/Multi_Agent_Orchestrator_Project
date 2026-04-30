@@ -104,6 +104,39 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
 
         self.assertTrue(allowed)
 
+    def test_tool_inventory_questions_are_detected(self) -> None:
+        self.assertTrue(service.message_requests_tool_inventory("what tools do you have?"))
+        self.assertTrue(service.message_requests_tool_inventory("List your tools"))
+        self.assertFalse(service.message_requests_tool_inventory("use the web search tool"))
+
+    def test_tool_inventory_reply_uses_actual_tool_list(self) -> None:
+        reply = service.direct_chat_tool_inventory_reply(
+            [
+                {"name": "web__search", "description": "Search the web"},
+                {"name": "file__read", "description": "Read a file"},
+            ],
+            {"runtime_ok": False},
+        )
+
+        self.assertIn("Web:", reply)
+        self.assertIn("web__search", reply)
+        self.assertIn("Local machine:", reply)
+        self.assertIn("file__read", reply)
+        self.assertIn("Local machine tools require the gateway to be online.", reply)
+
+    def test_tool_inventory_reply_distinguishes_cloud_computer_from_personal_gateway(self) -> None:
+        reply = service.direct_chat_tool_inventory_reply(
+            [
+                {"name": "file__read", "description": "Read a file"},
+                {"name": "web__search", "description": "Search the web"},
+            ],
+            {"cloud_computer_online": True, "local_gateway_online": False},
+        )
+
+        self.assertIn("Computer tools are available through Sage Cloud Computer.", reply)
+        self.assertIn("Personal-device tools still require a paired gateway.", reply)
+        self.assertIn("Tool availability is based on gateway status, connector state, and workspace policy", reply)
+
 
 if __name__ == "__main__":
     unittest.main()

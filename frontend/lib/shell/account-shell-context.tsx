@@ -96,12 +96,6 @@ export function AccountShellProvider({
   initialSession = null,
 }: PropsWithChildren<{ initialSession?: AccountShellBootstrap | null }>) {
   const persistedSnapshotRef = useRef<ReturnType<typeof readAccountShellSnapshot> | null>(null);
-  const persistedSnapshotLoadedRef = useRef(false);
-
-  if (!persistedSnapshotLoadedRef.current && typeof window !== 'undefined') {
-    persistedSnapshotRef.current = readAccountShellSnapshot();
-    persistedSnapshotLoadedRef.current = true;
-  }
 
   const [state, dispatch] = useReducer(
     reduceAccountShellState,
@@ -115,7 +109,11 @@ export function AccountShellProvider({
   const pathname = usePathname();
 
   useLayoutEffect(() => {
-    if (!initialSession || persistedSnapshotRef.current?.accountId === initialSession.account.id) {
+    if (
+      !initialSession
+      || !persistedSnapshotRef.current
+      || persistedSnapshotRef.current.accountId === initialSession.account.id
+    ) {
       return;
     }
     clearAccountShellSnapshot();
@@ -123,7 +121,10 @@ export function AccountShellProvider({
   }, [initialSession]);
 
   useEffect(() => {
-    const persistedSnapshot = normalizePersistedSnapshot(persistedSnapshotRef.current, initialSession);
+    const persistedSnapshot = normalizePersistedSnapshot(
+      readAccountShellSnapshot() ?? persistedSnapshotRef.current,
+      initialSession,
+    );
     persistedSnapshotRef.current = persistedSnapshot;
     dispatch({
       type: 'hydrate_session',

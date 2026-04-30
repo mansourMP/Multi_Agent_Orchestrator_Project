@@ -43,6 +43,7 @@ ORION_PUBLIC_REGISTRATION_ENABLED = str(os.getenv("ORION_PUBLIC_REGISTRATION_ENA
 ORION_ADMIN_USER_IDS = {item.strip() for item in str(os.getenv("ORION_ADMIN_USER_IDS", "")).split(",") if item.strip()}
 ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMIN_EMAILS", "")).split(",") if item.strip()}
 ORION_SERVICE_RATE_LIMIT_PER_MINUTE = int(os.getenv("ORION_SERVICE_RATE_LIMIT_PER_MINUTE", "600"))
+ORION_AUTH_LOGIN_RATE_LIMIT_PER_MINUTE = int(os.getenv("ORION_AUTH_LOGIN_RATE_LIMIT_PER_MINUTE", "5"))
 ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE = int(
     os.getenv("ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE", "600")
 )
@@ -4591,7 +4592,7 @@ def limit_login_requests(request: Request) -> None:
         buckets=LOGIN_RATE_LIMIT_BUCKETS,
         lock=LOGIN_RATE_LIMIT_LOCK,
         key=_client_ip(request),
-        limit=5,
+        limit=max(1, int(ORION_AUTH_LOGIN_RATE_LIMIT_PER_MINUTE or 5)),
         profile_name=quota_policy_service.AUTH_LOGIN_PROFILE.name,
     )
 

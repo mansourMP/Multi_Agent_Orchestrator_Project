@@ -73,22 +73,23 @@ Implementation note:
 - Mobile currently uses a native dark palette with its own spacing and radius aliases.
 - Both remain preserved in one canonical source until platform components are migrated.
 
-## ADR-003: Mobile Uses One Workspace Tab Shell, Not A Separate Product Contract
+## ADR-003: Mobile Uses One Tab Shell, Not A Separate Product Contract
 
 Decision:
-The active mobile shell is the Expo route group under [mobile/app/(workspace)](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/app/(workspace)).
-It is route-manifest driven and derives its available tabs from [mobile/src/lib/workspace/workspace-shell.js](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/src/lib/workspace/workspace-shell.js) and [mobile/src/lib/mobile-workspace-surfaces.js](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/src/lib/mobile-workspace-surfaces.js).
+The active mobile shell is the Expo route group under [mobile/app/(tabs)](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/app/(tabs)).
+The shared route manifest still describes the cross-shell destination contract, but the currently mounted mobile shell is the `(tabs)` app route group, not a deleted or future `(workspace)` route group.
 
 Current implementation truth:
 
-- Visible mobile tabs today are `Chat`, `Work`, `Approvals`, `Inbox`, `Artifacts`, and `Account`.
+- Visible mobile tabs today are `Chat`, `Agents`, `Applications`, `Profile`, `Home`, and `Notifications`.
 - `Workspaces` exists as a switcher surface, not a primary visible tab.
-- The deleted `mobile/app/(tabs)/_layout.tsx` file was a stale contract and must not be treated as active architecture.
+- `today` and `spaces` remain hidden tab routes.
 
 Why:
 
 - Mobile is allowed to expose a smaller operational subset than web, but it must remain on the same backend contracts and route-manifest logic.
 - The current tab set is implementation debt relative to the 5-destination IA, not a separate IA.
+- Any future migration to a `(workspace)` route group must be explicit and tested. Until then, docs and manifests must not claim `(workspace)` is mounted.
 
 Boundary:
 

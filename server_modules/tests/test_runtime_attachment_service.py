@@ -330,6 +330,111 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(targets["local_companion"]["connection_mode"], "platform_relay")
         self.assertFalse(targets["local_companion"]["direct_mobile_connection_required"])
 
+    def test_list_workspace_runtime_attachments_maps_cloud_computer_profile(self) -> None:
+        inventory = asyncio.run(
+            runtime_attachment_service.list_workspace_runtime_attachments(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_profiles=[
+                    {
+                        "id": "profile-cloud",
+                        "slug": "empyralis-cloud",
+                        "label": "Empyralis Cloud",
+                        "runtime_class": "cloud_worker",
+                        "status": "active",
+                    },
+                    {
+                        "id": "profile-cloud-computer",
+                        "slug": "sage-cloud-computer",
+                        "label": "Sage Cloud Computer",
+                        "runtime_class": "cloud_computer",
+                        "status": "active",
+                        "runtime_id": "cloud-computer-1",
+                        "supported_capabilities": ["cloud.computer", "browser.automation", "terminal.exec"],
+                    },
+                ],
+                fleet_workers=[
+                    {
+                        "worker_id": "cloud-computer-1",
+                        "runtime_id": "cloud-computer-1",
+                        "runtime_type": "cloud_computer",
+                        "display_name": "Sage Cloud Computer Session",
+                        "online": True,
+                        "status": "idle",
+                        "control_state": "active",
+                        "execution_targets": ["cloud_computer"],
+                        "capabilities": ["cloud.computer", "browser.automation", "terminal.exec"],
+                    }
+                ],
+            )
+        )
+
+        self.assertEqual(inventory["deployment_mode"], "cloud_only")
+        attachments = {item["attachment_kind"]: item for item in inventory["attachments"]}
+        self.assertEqual(attachments["cloud_computer"]["runtime_class"], "cloud_computer")
+        self.assertTrue(attachments["cloud_computer"]["healthy"])
+        self.assertEqual(attachments["cloud_computer"]["trust_model"]["trust_tier"], "hosted_cloud_computer")
+        self.assertTrue(attachments["cloud_computer"]["lifecycle"]["metered"])
+        self.assertTrue(attachments["cloud_computer"]["privacy_posture"]["personal_device_access_requires_gateway"])
+
+    def test_build_workspace_runtime_targets_projects_cloud_computer_as_optional_metered_target(self) -> None:
+        payload = runtime_attachment_service.build_workspace_runtime_targets(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            inventory={
+                "deployment_mode": "cloud_only",
+                "attachments": [
+                    {
+                        "attachment_id": "managed_cloud:profile-cloud",
+                        "attachment_kind": "managed_cloud",
+                        "online": True,
+                        "healthy": True,
+                        "supports_runtime_modes": ["hosted_secure"],
+                    },
+                    {
+                        "attachment_id": "cloud_computer:profile-cloud-computer",
+                        "attachment_kind": "cloud_computer",
+                        "online": True,
+                        "healthy": True,
+                        "supports_runtime_modes": ["hosted_secure"],
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(payload["default_target_id"], "cloud_default")
+        self.assertTrue(payload["routing_contract"]["cloud_computer_requires_explicit_selection"])
+        self.assertTrue(payload["routing_contract"]["cloud_computer_metered"])
+        self.assertFalse(payload["routing_contract"]["agent_definition_allocates_runtime"])
+        targets = {item["target_id"]: item for item in payload["targets"]}
+        self.assertTrue(targets["sage_cloud_computer"]["available"])
+        self.assertTrue(targets["sage_cloud_computer"]["metered"])
+        self.assertTrue(targets["sage_cloud_computer"]["requires_explicit_selection"])
+        self.assertFalse(targets["sage_cloud_computer"]["default_for_workspace"])
+
+    def test_build_workspace_runtime_targets_never_defaults_to_cloud_computer(self) -> None:
+        payload = runtime_attachment_service.build_workspace_runtime_targets(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            inventory={
+                "deployment_mode": "cloud_only",
+                "attachments": [
+                    {
+                        "attachment_id": "cloud_computer:profile-cloud-computer",
+                        "attachment_kind": "cloud_computer",
+                        "online": True,
+                        "healthy": True,
+                        "supports_runtime_modes": ["hosted_secure"],
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(payload["default_target_id"], "cloud_default")
+        targets = {item["target_id"]: item for item in payload["targets"]}
+        self.assertTrue(targets["sage_cloud_computer"]["available"])
+        self.assertFalse(targets["sage_cloud_computer"]["default_for_workspace"])
+
     def test_build_workspace_runtime_targets_projects_self_host_without_identity_fork(self) -> None:
         inventory = {
             "deployment_mode": "self_hosted_business",
@@ -457,6 +562,7 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                     "online": True,
                     "healthy": True,
                     "control_state": "active",
+                    "trust_model": {"trust_tier": "hosted_cloud_computer"},
                 },
                 {
                     "attachment_id": "local_companion:profile-local",
@@ -479,6 +585,7 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                 workspace_id="workspace-1",
                 install=install,
                 inventory=inventory,
+                workspace={"metadata": {"billing": {"plan": "pro"}}},
             )
         )
 
@@ -617,12 +724,112 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                 workspace_id="workspace-1",
                 install=install,
                 inventory=inventory,
+                workspace={"metadata": {"billing": {"plan": "pro"}}},
             )
         )
 
         self.assertEqual(plan["selected_attachment"]["attachment_kind"], "self_hosted_business_node")
         self.assertEqual(plan["execution_target_selected"], "cloud")
         self.assertEqual(plan["entitlements"]["enforcement_target"], "self_hosted")
+
+    def test_resolve_install_runtime_plan_supports_cloud_computer_profile(self) -> None:
+        install = {
+            "runtime_mode": "hosted_secure",
+            "runtime_profile": {
+                "id": "profile-cloud-computer",
+                "slug": "sage-cloud-computer",
+                "runtime_class": "cloud_computer",
+                "runtime_id": "cloud-computer-1",
+            },
+            "agent_definition_version": {
+                "placement_manifest": {
+                    "preferred_runtime_slug": "sage-cloud-computer",
+                    "allowed_runtime_classes": ["cloud_computer"],
+                }
+            },
+        }
+        inventory = {
+            "deployment_mode": "cloud_only",
+            "attachments": [
+                {
+                    "attachment_id": "managed_cloud:profile-cloud",
+                    "attachment_kind": "managed_cloud",
+                    "runtime_class": "cloud_worker",
+                    "runtime_profile_id": "profile-cloud",
+                    "runtime_profile_slug": "empyralis-cloud",
+                    "online": True,
+                    "healthy": True,
+                    "control_state": "active",
+                },
+                {
+                    "attachment_id": "cloud_computer:profile-cloud-computer",
+                    "attachment_kind": "cloud_computer",
+                    "runtime_class": "cloud_computer",
+                    "runtime_profile_id": "profile-cloud-computer",
+                    "runtime_profile_slug": "sage-cloud-computer",
+                    "runtime_id": "cloud-computer-1",
+                    "online": True,
+                    "healthy": True,
+                    "control_state": "active",
+                    "trust_model": {"trust_tier": "hosted_cloud_computer"},
+                },
+            ],
+        }
+
+        plan = asyncio.run(
+            runtime_attachment_service.resolve_install_runtime_plan(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                install=install,
+                inventory=inventory,
+                workspace={"metadata": {"billing": {"plan": "pro"}}},
+            )
+        )
+
+        self.assertEqual(plan["selected_attachment"]["attachment_kind"], "cloud_computer")
+        self.assertEqual(plan["selected_attachment"]["trust_model"]["trust_tier"], "hosted_cloud_computer")
+        self.assertEqual(plan["execution_target_selected"], "cloud_computer")
+
+    def test_resolve_install_runtime_plan_does_not_auto_select_cloud_computer(self) -> None:
+        install = {
+            "runtime_mode": "hosted_secure",
+            "runtime_profile": {
+                "id": "profile-cloud",
+                "slug": "empyralis-cloud",
+                "runtime_class": "cloud_worker",
+                "runtime_id": "runtime-cloud",
+            },
+        }
+        inventory = {
+            "deployment_mode": "cloud_only",
+            "attachments": [
+                {
+                    "attachment_id": "cloud_computer:profile-cloud-computer",
+                    "attachment_kind": "cloud_computer",
+                    "runtime_class": "cloud_computer",
+                    "runtime_profile_id": "profile-cloud-computer",
+                    "runtime_profile_slug": "sage-cloud-computer",
+                    "runtime_id": "cloud-computer-1",
+                    "online": True,
+                    "healthy": True,
+                    "control_state": "active",
+                    "trust_model": {"trust_tier": "hosted_cloud_computer"},
+                },
+            ],
+        }
+
+        with self.assertRaises(runtime_attachment_service.RuntimeAttachmentSelectionError) as ctx:
+            asyncio.run(
+                runtime_attachment_service.resolve_install_runtime_plan(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    install=install,
+                    inventory=inventory,
+                    workspace={"metadata": {"billing": {"plan": "pro"}}},
+                )
+            )
+
+        self.assertEqual(ctx.exception.reason, "no_hosted_runtime_attachment_available")
 
     def test_resolve_install_runtime_plan_keeps_managed_cloud_default_when_self_host_is_optional(self) -> None:
         install = {
@@ -673,13 +880,14 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                 workspace_id="workspace-1",
                 install=install,
                 inventory=inventory,
+                workspace={"metadata": {"billing": {"plan": "pro"}}},
             )
         )
 
         self.assertEqual(plan["selected_attachment"]["attachment_kind"], "managed_cloud")
         self.assertEqual(
             plan["placement_enforcement"]["preferred_attachment_kinds"],
-            ["managed_cloud", "self_hosted_business_node"],
+            ["managed_cloud", "cloud_computer", "self_hosted_business_node"],
         )
 
     def test_resolve_install_runtime_plan_rejects_hosted_quota_exhaustion(self) -> None:
@@ -716,8 +924,8 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         workspace = {
             "metadata": {
                 "billing": {
-                    "plan": "free",
-                    "entitlement_usage": {"hosted_runtime_minutes_monthly": 60},
+                    "plan": "pro",
+                    "entitlement_usage": {"hosted_runtime_minutes_monthly": 1500},
                 }
             }
         }
@@ -890,6 +1098,7 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                 workspace_id="workspace-1",
                 install=install,
                 inventory=inventory,
+                workspace={"metadata": {"billing": {"plan": "pro"}}},
                 policy_context={
                     "requested_memory_layers": ["local_private_memory"],
                     "sync_class": "summary_bridge_only",
@@ -965,6 +1174,7 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                     workspace_id="workspace-1",
                     install=install,
                     inventory=inventory,
+                    workspace={"metadata": {"billing": {"plan": "pro"}}},
                     policy_context={
                         "requested_memory_layers": ["local_private_memory"],
                         "sync_class": "summary_bridge_only",
@@ -1101,7 +1311,7 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(plan["selected_attachment"]["attachment_kind"], "self_hosted_business_node")
         self.assertEqual(
             plan["placement_enforcement"]["preferred_attachment_kinds"],
-            ["self_hosted_business_node", "managed_cloud"],
+            ["self_hosted_business_node", "managed_cloud", "cloud_computer"],
         )
 
     def test_resolve_install_runtime_plan_requires_explicit_opt_in_for_document_sync(self) -> None:
@@ -1177,4 +1387,5 @@ class HybridPolicyServiceTests(unittest.TestCase):
         self.assertEqual(state["effective_sync_class"], "sync_allowed")
         self.assertTrue(state["placement"]["availability"]["local_online"])
         self.assertTrue(state["placement"]["availability"]["managed_cloud_online"])
+        self.assertFalse(state["placement"]["availability"]["cloud_computer_online"])
         self.assertEqual(state["shared_identity"]["sage_identity"], "shared")

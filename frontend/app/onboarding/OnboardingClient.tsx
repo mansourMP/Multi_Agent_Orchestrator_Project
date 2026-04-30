@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import {
@@ -9,7 +9,6 @@ import {
   updateWorkspace,
   type CreateWorkspaceInput,
 } from '@/lib/account/account-workspaces-client';
-import { FirstLaunchPanel } from '@/lib/auth/first-launch-panel';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import {
   sanitizeWorkspaceRoute,
@@ -20,7 +19,6 @@ import {
   WorkspaceSetupForm,
   createDefaultWorkspaceSetupValues,
 } from '@/lib/workspace/workspace-setup-form';
-import { AppButton } from '@/lib/ui/primitives';
 
 function initialValuesForMembership(
   membership: WorkspaceMembershipRecord,
@@ -53,7 +51,6 @@ export function OnboardingClient({
   const { state, actions } = useAccountShell();
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [showSetupForm, setShowSetupForm] = useState(false);
 
   const membership = useMemo(
     () =>
@@ -61,10 +58,6 @@ export function OnboardingClient({
       ?? null,
     [state.workspaceMemberships, targetWorkspaceId],
   );
-
-  useEffect(() => {
-    setShowSetupForm(false);
-  }, [membership?.workspace.id]);
 
   async function handleSubmit(values: CreateWorkspaceInput) {
     if (!membership) {
@@ -131,27 +124,6 @@ export function OnboardingClient({
           </Link>
         </div>
       </main>
-    );
-  }
-
-  if (!showSetupForm) {
-    return (
-      <FirstLaunchPanel
-        primaryAction={(
-          <AppButton
-            type="button"
-            onClick={() => setShowSetupForm(true)}
-            className="app-first-launch__primary"
-          >
-            Set up your personal agent
-          </AppButton>
-        )}
-        secondaryAction={(
-          <Link href="/preview" className="app-first-launch__secondary">
-            Or explore agents by others
-          </Link>
-        )}
-      />
     );
   }
 

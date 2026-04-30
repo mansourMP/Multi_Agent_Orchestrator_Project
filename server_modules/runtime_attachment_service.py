@@ -20,9 +20,10 @@ from server_modules import (
 
 
 SUPPORTED_DEPLOYMENT_MODES = ("cloud_only", "local_only", "hybrid", "self_hosted_business")
-SUPPORTED_ATTACHMENT_KINDS = ("managed_cloud", "local_companion", "self_hosted_business_node")
+SUPPORTED_ATTACHMENT_KINDS = ("managed_cloud", "cloud_computer", "local_companion", "self_hosted_business_node")
 SUPPORTED_RUNTIME_MODES = {"hosted_secure", "local_secure", "privileged_device"}
-SUPPORTED_RUNTIME_TARGET_IDS = ("cloud_default", "local_companion", "self_host_runtime")
+SUPPORTED_RUNTIME_TARGET_IDS = ("cloud_default", "sage_cloud_computer", "local_companion", "self_host_runtime")
+CLOUD_COMPUTER_RUNTIME_CLASSES = {"cloud_computer", "cloud_desktop", "cloud_sandbox", "hosted_cloud_computer"}
 _RUNTIME_ATTACHMENTS_CACHE: Dict[str, Dict[str, Any]] = {}
 _RUNTIME_TARGETS_CACHE: Dict[str, Dict[str, Any]] = {}
 _RUNTIME_CACHE_LIMIT = 128
@@ -34,6 +35,13 @@ TRUST_MODEL_MAP: dict[str, dict[str, Any]] = {
         "host_filesystem_access": "denied_by_default",
         "local_private_memory_access": "cloud_safe_summaries_only",
         "approval_mode": "policy_bound",
+    },
+    "cloud_computer_secure": {
+        "trust_tier": "hosted_cloud_computer",
+        "execution_boundary": "metered_cloud_desktop_sandbox",
+        "host_filesystem_access": "cloud_workspace_volume_only",
+        "local_private_memory_access": "denied_without_gateway",
+        "approval_mode": "policy_bound_plus_destructive_confirmation",
     },
     "local_secure": {
         "trust_tier": "paired_local_scoped",
@@ -66,6 +74,14 @@ RUNTIME_TARGET_DEFINITIONS: dict[str, dict[str, Any]] = {
         "connection_mode": "platform_cloud",
         "product_default": True,
         "description": "Cloud-hosted execution for the workspace. This remains the default product path when cloud is available.",
+    },
+    "sage_cloud_computer": {
+        "label": "Sage Cloud Computer",
+        "attachment_kind": "cloud_computer",
+        "execution_target": "cloud_computer",
+        "connection_mode": "platform_metered_cloud_computer",
+        "product_default": False,
+        "description": "Optional metered cloud computer for browser, terminal, and file work in an isolated hosted workspace. It never replaces the default cloud path automatically.",
     },
     "local_companion": {
         "label": "Local Companion",
@@ -257,7 +273,18 @@ def _normalize_runtime_mode(value: Any) -> str:
 
 def _normalize_runtime_class(value: Any) -> str:
     token = str(value or "").strip().lower()
-    if token in {"cloud_worker", "desktop_companion", "mobile_runtime", "self_hosted_business_node", "self_hosted_worker", "enterprise_node"}:
+    if token in {
+        "cloud_worker",
+        "cloud_computer",
+        "cloud_desktop",
+        "cloud_sandbox",
+        "hosted_cloud_computer",
+        "desktop_companion",
+        "mobile_runtime",
+        "self_hosted_business_node",
+        "self_hosted_worker",
+        "enterprise_node",
+    }:
         return token
     return token or "cloud_worker"
 
@@ -265,19 +292,25 @@ def _normalize_runtime_class(value: Any) -> str:
 def _attachment_kind_for_profile(runtime_profile: Dict[str, Any], worker: Optional[Dict[str, Any]] = None) -> str:
     payload = _coerce_dict(worker)
     runtime_class = _normalize_runtime_class(runtime_profile.get("runtime_class") or payload.get("runtime_class"))
-    runtime_type = str(payload.get("runtime_type") or "").strip().lower()
+    runtime_type = str(payload.get("runtime_type") or runtime_profile.get("runtime_type") or "").strip().lower()
     execution_targets = {
         str(item or "").strip().lower()
-        for item in list(payload.get("execution_targets") or [])
+        for item in list(payload.get("execution_targets") or runtime_profile.get("execution_targets") or [])
         if str(item or "").strip()
     }
     capabilities = {
         str(item or "").strip().lower()
-        for item in list(payload.get("capabilities") or [])
+        for item in list(payload.get("capabilities") or runtime_profile.get("supported_capabilities") or [])
         if str(item or "").strip()
     }
     if runtime_class in {"self_hosted_business_node", "self_hosted_worker", "enterprise_node"}:
         return "self_hosted_business_node"
+    if runtime_class in CLOUD_COMPUTER_RUNTIME_CLASSES:
+        return "cloud_computer"
+    if runtime_type in {"cloud_computer", "cloud_desktop", "cloud_sandbox"}:
+        return "cloud_computer"
+    if "cloud_computer" in execution_targets or "cloud.computer" in capabilities:
+        return "cloud_computer"
     if runtime_class in {"desktop_companion", "mobile_runtime"}:
         return "local_companion"
     if runtime_type in {"local", "local_companion"}:
@@ -298,6 +331,8 @@ def _attachment_support(runtime_kind: str) -> List[str]:
 def _attachment_trust(runtime_kind: str) -> Dict[str, Any]:
     if runtime_kind == "managed_cloud":
         return dict(TRUST_MODEL_MAP["hosted_secure"])
+    if runtime_kind == "cloud_computer":
+        return dict(TRUST_MODEL_MAP["cloud_computer_secure"])
     if runtime_kind == "local_companion":
         return {
             "local_secure": dict(TRUST_MODEL_MAP["local_secure"]),
@@ -365,6 +400,17 @@ def _attachment_lifecycle(runtime_kind: str, worker: Optional[Dict[str, Any]]) -
             "migratable": True,
         }
     payload = _coerce_dict(worker)
+    if runtime_kind == "cloud_computer":
+        return {
+            "pairable": False,
+            "registered": bool(payload),
+            "health_tracked": True,
+            "revocable": True,
+            "detachable": True,
+            "migratable": True,
+            "metered": True,
+            "persistent_volume_opt_in": True,
+        }
     return {
         "pairable": runtime_kind == "local_companion",
         "registered": bool(payload),
@@ -491,9 +537,10 @@ def _merge_gateway_registration_into_attachment(
 def _deployment_mode(attachments: Iterable[Dict[str, Any]]) -> str:
     items = [dict(item) for item in attachments if isinstance(item, dict)]
     has_cloud = any(str(item.get("attachment_kind") or "").strip() == "managed_cloud" for item in items)
+    has_cloud_computer = any(str(item.get("attachment_kind") or "").strip() == "cloud_computer" for item in items)
     has_local = any(str(item.get("attachment_kind") or "").strip() == "local_companion" for item in items)
     has_self_hosted = any(str(item.get("attachment_kind") or "").strip() == "self_hosted_business_node" for item in items)
-    if has_cloud and (has_local or has_self_hosted):
+    if (has_cloud or has_cloud_computer) and (has_local or has_self_hosted):
         return "hybrid"
     if has_self_hosted:
         return "self_hosted_business"
@@ -586,6 +633,8 @@ def build_workspace_runtime_targets(
             "direct_mobile_connection_required": False,
             "workspace_scoped_identity": True,
             "supports_runtime_modes": supports_runtime_modes,
+            "metered": definition["attachment_kind"] == "cloud_computer",
+            "requires_explicit_selection": definition["attachment_kind"] in {"cloud_computer", "self_hosted_business_node"},
         }
         if matching:
             target_payload["sample_attachment_label"] = str(matching[0].get("label") or "").strip() or None
@@ -602,6 +651,9 @@ def build_workspace_runtime_targets(
             "business_default_mode": "cloud_first",
             "business_private_runtime_optional": True,
             "self_host_runtime_requires_explicit_selection": True,
+            "cloud_computer_requires_explicit_selection": True,
+            "cloud_computer_metered": True,
+            "agent_definition_allocates_runtime": False,
             "mobile_entry_mode": "platform_first",
             "direct_mobile_lan_default": False,
             "workspace_scoped_identity": True,
@@ -621,8 +673,33 @@ def _allowed_runtime_classes(install: Dict[str, Any], runtime_mode: str) -> List
     if values:
         return values
     if runtime_mode == "hosted_secure":
-        return ["cloud_worker", "self_hosted_business_node", "self_hosted_worker", "enterprise_node"]
+        return ["cloud_worker", "cloud_computer", "cloud_desktop", "cloud_sandbox", "self_hosted_business_node", "self_hosted_worker", "enterprise_node"]
     return ["desktop_companion", "mobile_runtime"]
+
+
+def _cloud_computer_requested_by_install(install: Dict[str, Any]) -> bool:
+    runtime_profile = install.get("runtime_profile") if isinstance(install.get("runtime_profile"), dict) else {}
+    placement_manifest = _placement_manifest(install)
+    runtime_class = _normalize_runtime_class(runtime_profile.get("runtime_class") or runtime_profile.get("runtime_type"))
+    if runtime_class in CLOUD_COMPUTER_RUNTIME_CLASSES:
+        return True
+    runtime_type = _normalize_runtime_class(runtime_profile.get("runtime_type"))
+    if runtime_type in CLOUD_COMPUTER_RUNTIME_CLASSES:
+        return True
+    allowed_classes = {
+        _normalize_runtime_class(item)
+        for item in list(placement_manifest.get("allowed_runtime_classes") or [])
+        if str(item or "").strip()
+    }
+    if allowed_classes.intersection(CLOUD_COMPUTER_RUNTIME_CLASSES):
+        return True
+    target_tokens = {
+        str(placement_manifest.get("preferred_runtime_slug") or "").strip().lower(),
+        str(placement_manifest.get("preferred_runtime_target_id") or "").strip().lower(),
+        str(placement_manifest.get("runtime_target") or "").strip().lower(),
+        str(placement_manifest.get("execution_target") or "").strip().lower(),
+    }
+    return bool(target_tokens.intersection({"sage_cloud_computer", "sage-cloud-computer", "cloud_computer", "cloud-computer"}))
 
 
 def _matches_requested_machine(attachment: Dict[str, Any], requested_machine_target: str) -> bool:
@@ -671,6 +748,8 @@ def _attachment_from_profile(
     runtime_class = _normalize_runtime_class(profile.get("runtime_class") or payload.get("runtime_class"))
     if runtime_kind == "local_companion" and runtime_class not in {"desktop_companion", "mobile_runtime"}:
         runtime_class = "desktop_companion"
+    elif runtime_kind == "cloud_computer" and runtime_class not in CLOUD_COMPUTER_RUNTIME_CLASSES:
+        runtime_class = "cloud_computer"
     elif runtime_kind == "managed_cloud" and runtime_class in {"desktop_companion", "mobile_runtime"}:
         runtime_class = "cloud_worker"
     runtime_id = str(profile.get("runtime_id") or payload.get("runtime_id") or payload.get("worker_id") or "").strip() or None
@@ -708,7 +787,9 @@ def _attachment_from_profile(
         "privacy_posture": {
             "local_private_memory_supported": runtime_kind == "local_companion",
             "cloud_safe_summary_bridge": True,
-            "cloud_sync_required": runtime_kind == "managed_cloud",
+            "cloud_sync_required": runtime_kind in {"managed_cloud", "cloud_computer"},
+            "personal_device_access_requires_gateway": runtime_kind == "cloud_computer",
+            "persistent_workspace_volume_opt_in": runtime_kind == "cloud_computer",
         },
         "lifecycle": _attachment_lifecycle(runtime_kind, payload),
         "current_run_id": str(payload.get("current_run_id") or "").strip() or None,
@@ -906,7 +987,12 @@ async def list_workspace_runtime_attachments(
 
     attachments.sort(
         key=lambda item: (
-            0 if str(item.get("attachment_kind") or "") == "managed_cloud" else 1,
+            {
+                "managed_cloud": 0,
+                "cloud_computer": 1,
+                "local_companion": 2,
+                "self_hosted_business_node": 3,
+            }.get(str(item.get("attachment_kind") or ""), 4),
             0 if bool(item.get("healthy")) else 1,
             str(item.get("label") or ""),
         )
@@ -919,9 +1005,11 @@ async def list_workspace_runtime_attachments(
         "supported_deployment_modes": list(SUPPORTED_DEPLOYMENT_MODES),
         "attachments": attachments,
         "selection_policy": {
-            "hosted_secure_prefers": ["managed_cloud", "self_hosted_business_node"],
+            "hosted_secure_prefers": ["managed_cloud", "cloud_computer", "self_hosted_business_node"],
             "local_secure_prefers": ["local_companion"],
             "privileged_device_requires": ["local_companion"],
+            "cloud_computer_requires_explicit_selection": True,
+            "cloud_computer_metered": True,
             "shared_sage_identity": True,
             "specialist_scope_required": True,
         },
@@ -1040,6 +1128,11 @@ async def resolve_install_runtime_plan(
     filtered: List[Dict[str, Any]] = []
     requested_attachment_token = str(requested_attachment_id or "").strip()
     requested_machine_token = str(requested_machine_target or "").strip()
+    cloud_computer_explicitly_requested = bool(
+        requested_attachment_token
+        or requested_machine_token
+        or _cloud_computer_requested_by_install(install)
+    )
     for attachment in attachments:
         attachment_kind = str(attachment.get("attachment_kind") or "").strip()
         runtime_class = _normalize_runtime_class(attachment.get("runtime_class"))
@@ -1051,7 +1144,9 @@ async def resolve_install_runtime_plan(
             continue
         if required_attachment_kinds and attachment_kind not in required_attachment_kinds:
             continue
-        if runtime_mode == "hosted_secure" and attachment_kind not in {"managed_cloud", "self_hosted_business_node"}:
+        if runtime_mode == "hosted_secure" and attachment_kind not in {"managed_cloud", "cloud_computer", "self_hosted_business_node"}:
+            continue
+        if attachment_kind == "cloud_computer" and not cloud_computer_explicitly_requested:
             continue
         if runtime_mode in {"local_secure", "privileged_device"} and attachment_kind != "local_companion":
             continue
@@ -1093,14 +1188,16 @@ async def resolve_install_runtime_plan(
             workspace_id=workspace_id,
             selected_attachment=selected,
         )
+        selected_attachment_kind = str(selected.get("attachment_kind") or "").strip()
+        execution_target_selected = "cloud_computer" if selected_attachment_kind == "cloud_computer" else "cloud"
         return {
             "runtime_mode": runtime_mode,
             "deployment_mode": str(runtime_inventory.get("deployment_mode") or "cloud_only"),
             "selected_attachment": selected,
-            "runtime_attachment_kind": str(selected.get("attachment_kind") or "").strip() or None,
+            "runtime_attachment_kind": selected_attachment_kind or None,
             "machine_target": None,
-            "execution_target_selected": "cloud",
-            "selection_reason": "Hosted execution selected a secure cloud/self-hosted runtime attachment.",
+            "execution_target_selected": execution_target_selected,
+            "selection_reason": "Hosted execution selected a secure cloud, cloud-computer, or self-hosted runtime attachment.",
             "privacy_split": {
                 "local_private_memory_stays_local": True,
                 "cloud_safe_summaries_only": True,

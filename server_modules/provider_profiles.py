@@ -1056,6 +1056,8 @@ OPENAI_CODEX_DIRECT_AUTH_ERROR = (
     "This is a Codex OAuth token. Use openai-codex provider or set a direct OpenAI API key."
 )
 PROVIDER_LIVE_PROBE_PROMPT = "Reply with OK. Do not use tools."
+PROVIDER_STATUS_PROBE_TIMEOUT_SECONDS = 2
+LOCAL_SERVICE_STATUS_TIMEOUT_SECONDS = 1
 
 
 def _load_openai_codex_transport():
@@ -2430,7 +2432,7 @@ def build_provider_runtime_truth(
             retry_after_seconds = max(0, int((cooldown_until - now).total_seconds()))
 
         if auth_mode == "local_cli" and provider_id == "anthropic":
-            cli_status = claude_code_cli_status()
+            cli_status = claude_code_cli_status(timeout=PROVIDER_STATUS_PROBE_TIMEOUT_SECONDS)
             if not cli_status.get("available"):
                 _register_provider_path(
                     entry,
@@ -2579,7 +2581,7 @@ def build_provider_runtime_truth(
             source="vault-default-anthropic",
             detail="A saved Anthropic credential exists for this workspace.",
         )
-    claude_status = claude_code_cli_status()
+    claude_status = claude_code_cli_status(timeout=PROVIDER_STATUS_PROBE_TIMEOUT_SECONDS)
     if claude_status.get("available") and claude_status.get("logged_in"):
         _register_provider_path(
             anthropic_entry,
@@ -2646,7 +2648,7 @@ def build_provider_runtime_truth(
             )
 
     ollama_entry = _entry("ollama")
-    ollama_status = ollama_local_status()
+    ollama_status = ollama_local_status(timeout=LOCAL_SERVICE_STATUS_TIMEOUT_SECONDS)
     ollama_gateway_live = workspace_live_gateway_available(requested_workspace_id)
     if ollama_status.get("reachable") and ollama_status.get("has_models") and ollama_gateway_live:
         _register_provider_path(

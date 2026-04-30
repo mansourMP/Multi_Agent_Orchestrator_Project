@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { expect, test } from '@playwright/test';
 
+import { loginAsOwner } from './support/auth';
+
 test.describe('account shell and bootstrap resilience', () => {
   test('public routes still render when account-shell bootstrap fails transiently', async ({ page }) => {
     await page.route('**/api/auth/account-shell', async (route) => {
@@ -16,6 +18,7 @@ test.describe('account shell and bootstrap resilience', () => {
   });
 
   test('requested onboarding workspace fails closed when it is unavailable', async ({ page }) => {
+    await loginAsOwner(page);
     await page.goto('/onboarding?workspaceId=ws-missing');
     await expect(page.getByText(/requested workspace is unavailable/i)).toBeVisible();
     await expect(page).toHaveURL(/\/onboarding\?workspaceId=ws-missing$/);

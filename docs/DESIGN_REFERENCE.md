@@ -775,8 +775,6 @@ The next UI pass should therefore optimize for:
 - `frontend/app/(account)/w/[workspaceId]/WorkspaceSurfacePage.tsx`
 - `frontend/lib/workspace/workstation-kernel-shell.tsx`
 - `frontend/lib/workspace/workstation-settings-pane.tsx`
-- `frontend/lib/workspace/workstation-sage-settings-pane.tsx`
-- `frontend/lib/workspace/workstation-sage-providers-pane.tsx`
 - `frontend/lib/workspace/workstation-sage-tools-pane.tsx`
 - `frontend/lib/workspace/workstation-sage-connectors-pane.tsx`
 - `frontend/lib/workspace/workstation-deployed-agents-pane.tsx`

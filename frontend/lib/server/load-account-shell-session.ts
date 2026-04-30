@@ -3,11 +3,13 @@ import 'server-only';
 import { cache } from 'react';
 import { headers } from 'next/headers';
 
+import {
+  ACCOUNT_SHELL_RETRY_DELAYS_MS,
+  AUTH_ACCOUNT_SHELL_TIMEOUT_MS,
+} from '@/lib/auth/auth-timeouts';
 import type { AccountShellBootstrap } from '@/lib/shell/account-shell-store';
 import { parseAccountShellPayload } from '@/lib/shell/account-shell-payload';
 
-const ACCOUNT_SHELL_TIMEOUT_MS = 4_000;
-const ACCOUNT_SHELL_RETRY_DELAYS_MS = [150, 350, 700] as const;
 const RETRYABLE_ACCOUNT_SHELL_STATUSES = new Set([403, 429, 500, 502, 503, 504]);
 
 export type DegradedAccountShellSession = {
@@ -66,7 +68,7 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
       const controller = new AbortController();
       const timeoutHandle = setTimeout(() => {
         controller.abort();
-      }, ACCOUNT_SHELL_TIMEOUT_MS);
+      }, AUTH_ACCOUNT_SHELL_TIMEOUT_MS);
 
       try {
         const response = await fetch(`${origin}/api/auth/account-shell`, {
@@ -92,7 +94,7 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
       } catch (error) {
         lastStatus = error instanceof Error && error.name === 'AbortError' ? 504 : null;
         lastErrorMessage = error instanceof Error && error.name === 'AbortError'
-          ? `Account shell bootstrap timed out after ${ACCOUNT_SHELL_TIMEOUT_MS}ms.`
+          ? `Account shell bootstrap timed out after ${AUTH_ACCOUNT_SHELL_TIMEOUT_MS}ms.`
           : error instanceof Error ? error.message : 'Account shell bootstrap failed.';
         if (attempt === ACCOUNT_SHELL_RETRY_DELAYS_MS.length) {
           return degradedAccountShellSession(lastStatus, lastErrorMessage);
@@ -109,7 +111,7 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
     return degradedAccountShellSession(
       null,
       error instanceof Error && error.name === 'AbortError'
-        ? `Account shell bootstrap timed out after ${ACCOUNT_SHELL_TIMEOUT_MS}ms.`
+        ? `Account shell bootstrap timed out after ${AUTH_ACCOUNT_SHELL_TIMEOUT_MS}ms.`
         : error instanceof Error ? error.message : 'Account shell bootstrap failed.',
     );
   }

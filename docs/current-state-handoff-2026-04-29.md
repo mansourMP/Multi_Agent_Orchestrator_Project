@@ -236,3 +236,28 @@ Phase 10 demo script is ready for the certified scope:
 Final demo verdict: RC PASSED for the certified public-demo scope. Do not expand the live demo into Studio, mobile, mini-apps, video generation, or unverified image generation without a separate cert.
 
 Operational runbook: `docs/operations/public-demo-runbook-2026-04-30.md`.
+
+## Memory Surface Correction - 2026-04-30
+
+Sage memory is a structured product surface, not a raw Markdown-file UI. The active API is `/api/sage-memory`, backed by workspace-scoped structured records with category, title, content, pinned state, source metadata, timestamps, and history. Markdown can still be used later as an export/notebook/audit format, but the user-facing source of truth should remain structured so sensitivity classes, deletion, filtering, and future cloud/local sync policy stay enforceable.
+
+The Memory tab was corrected to match that product contract:
+
+- Empty state is compact and grouped by sensitivity instead of a large card.
+- Sensitivity groups are always visible: Green, Yellow, Orange, Red.
+- The add-memory control is explicit instead of a bare plus icon.
+- Frontend fallback categories now match backend-supported Sage memory categories.
+- Generic chat/runtime 403 wording is mapped to memory-specific wording before rendering in the Memory tab.
+
+## Auth And Workspace Bootstrap Timeout Hardening - 2026-04-30
+
+Render production showed intermittent service-alert behavior and slow auth/bootstrap responses. A production signup smoke previously completed after the browser's old 12-second auth timeout, causing the UI to show `Authentication request timed out after 12000ms.` even when the backend eventually succeeded. The workspace shell also used a 4-second account-shell proxy/bootstrap timeout, which was too low for Render cold or degraded responses and could surface as `Bootstrap returned 504`.
+
+The frontend auth timeout contract was centralized in `frontend/lib/auth/auth-timeouts.ts`:
+
+- Browser auth requests now allow 30 seconds.
+- Account-shell proxy/bootstrap now allows 10 seconds.
+- Account-shell bootstrap retries use a small bounded retry window.
+- Browser auth timeout text no longer exposes raw millisecond internals.
+
+This is a deploy-time hardening fix only. If Render still returns raw 502/504 after deployment, check Render service logs and instance health; do not rewrite auth unless the runtime log shows an application exception.

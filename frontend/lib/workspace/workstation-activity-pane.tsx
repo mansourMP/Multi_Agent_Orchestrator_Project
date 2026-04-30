@@ -1,11 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
-import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { WorkstationSageMemoryRecord } from '@/lib/workspace/workstation-client';
@@ -36,19 +35,33 @@ type MemorySensitivityClass = 'green' | 'yellow' | 'orange' | 'red';
 const memoryPaneCache = new Map<string, SageMemorySnapshot>();
 
 const DEFAULT_MEMORY_CATEGORIES: readonly SageMemoryCategoryRecord[] = [
-  { id: 'profile_fact', label: 'Profile facts' },
-  { id: 'project_context', label: 'Active work' },
-  { id: 'app_state', label: 'App state' },
-  { id: 'saved_preference', label: 'Saved preferences' },
+  { id: 'work_context', label: 'Work context' },
+  { id: 'personal_context', label: 'Personal context' },
+  { id: 'top_of_mind', label: 'Top of mind' },
+  { id: 'brief_history', label: 'Brief history' },
+  { id: 'earlier_context', label: 'Earlier context' },
+  { id: 'long_term_background', label: 'Long-term background' },
 ] as const;
 
 const MEMORY_SENSITIVITY_ORDER: readonly MemorySensitivityClass[] = ['green', 'yellow', 'orange', 'red'] as const;
 
-const MEMORY_SENSITIVITY_LABELS: Record<MemorySensitivityClass, string> = {
-  green: 'Green',
-  yellow: 'Yellow',
-  orange: 'Orange',
-  red: 'Red',
+const MEMORY_SENSITIVITY_META: Record<MemorySensitivityClass, { label: string; description: string }> = {
+  green: {
+    label: 'Green',
+    description: 'Safe, general context Sage can use freely.',
+  },
+  yellow: {
+    label: 'Yellow',
+    description: 'Sensitive work context Sage should handle carefully.',
+  },
+  orange: {
+    label: 'Orange',
+    description: 'Private personal context with tighter handling.',
+  },
+  red: {
+    label: 'Red',
+    description: 'Restricted facts such as secrets, credentials, or critical data.',
+  },
 };
 
 const MEMORY_ITEM_LIMIT = 50;
@@ -82,7 +95,7 @@ function normalizeMemorySnapshot(payload: unknown): SageMemorySnapshot {
   };
 }
 
-function defaultMemoryDraft(category = 'profile_fact'): SageMemoryDraft {
+function defaultMemoryDraft(category = 'work_context'): SageMemoryDraft {
   return {
     entryId: null,
     category,
@@ -148,21 +161,41 @@ function inferMemorySensitivity(entry: WorkstationSageMemoryRecord): MemorySensi
   if (explicit === 'green' || explicit === 'yellow' || explicit === 'orange' || explicit === 'red') {
     return explicit;
   }
-  const category = readString(entry.category).toLowerCase();
-  if (category === 'profile_fact' || category === 'saved_preference') {
-    return 'green';
-  }
-  if (category === 'project_context') {
-    return 'yellow';
-  }
-  if (category === 'app_state') {
-    return 'orange';
-  }
   const content = `${readString(entry.title)} ${readString(entry.content)}`.toLowerCase();
-  if (/(api key|token|password|secret|credential|ssh|private)/i.test(content)) {
+  if (/(api key|token|password|secret|credential|ssh|private key|recovery code)/i.test(content)) {
     return 'red';
   }
+  const category = readString(entry.category).toLowerCase();
+  if (category === 'work_context' || category === 'profile_fact' || category === 'saved_preference') {
+    return 'green';
+  }
+  if (
+    category === 'top_of_mind'
+    || category === 'brief_history'
+    || category === 'earlier_context'
+    || category === 'long_term_background'
+    || category === 'project_context'
+  ) {
+    return 'yellow';
+  }
+  if (category === 'personal_context' || category === 'app_state') {
+    return 'orange';
+  }
   return 'yellow';
+}
+
+function memoryPaneErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message.trim() : '';
+  if (!message) {
+    return 'Memory is unavailable right now.';
+  }
+  if (message === 'Sage cannot run that request in this workspace right now.') {
+    return 'Memory is unavailable in this workspace.';
+  }
+  if (message === 'The requested item could not be found.') {
+    return 'Memory has not been set up for this workspace yet.';
+  }
+  return message;
 }
 
 export function WorkstationActivityPane() {
@@ -199,7 +232,7 @@ export function WorkstationActivityPane() {
     let cancelled = false;
     void refresh(cachedSnapshot === null).catch((loadError) => {
       if (!cancelled) {
-        setError(loadError instanceof Error ? loadError.message : 'Memory is unavailable right now.');
+        setError(memoryPaneErrorMessage(loadError));
         setIsLoading(false);
       }
     });
@@ -213,7 +246,7 @@ export function WorkstationActivityPane() {
       return;
     }
     void refresh(false).catch((loadError) => {
-      setError(loadError instanceof Error ? loadError.message : 'Memory is unavailable right now.');
+      setError(memoryPaneErrorMessage(loadError));
       setIsLoading(false);
     });
   }, [services.client, streamState.activity.version]);
@@ -244,7 +277,7 @@ export function WorkstationActivityPane() {
   const openEditMemory = (entry: WorkstationSageMemoryRecord) => {
     setMemoryDraft({
       entryId: readString(entry.id) || null,
-      category: readString(entry.category) || 'profile_fact',
+      category: readString(entry.category) || 'work_context',
       title: readString(entry.title),
       content: readString(entry.content),
       pinned: Boolean(entry.pinned),
@@ -352,8 +385,13 @@ export function WorkstationActivityPane() {
     <WorkstationSurfaceRoot surface="activity">
       <main className="app-memory-minimal-page" data-workstation-surface="memory-minimal">
         <div className="app-memory-minimal-page__header">
-          <div className="app-memory-minimal-page__counter">
-            {`${Math.min(snapshot.items.length, MEMORY_ITEM_LIMIT)}/${MEMORY_ITEM_LIMIT} memories`}
+          <div className="app-memory-minimal-page__intro">
+            <div className="app-memory-minimal-page__counter">
+              {`${Math.min(snapshot.items.length, MEMORY_ITEM_LIMIT)}/${MEMORY_ITEM_LIMIT} memories`}
+            </div>
+            <p className="app-memory-minimal-page__description">
+              Structured carry-forward memory, grouped by sensitivity. Save only facts Sage should use later.
+            </p>
           </div>
           <button
             type="button"
@@ -363,6 +401,7 @@ export function WorkstationActivityPane() {
             title="Add memory"
           >
             <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
+            <span>Add memory</span>
           </button>
         </div>
 
@@ -375,30 +414,37 @@ export function WorkstationActivityPane() {
             <SkeletonBlock height="4.25rem" />
             <SkeletonBlock height="4.25rem" />
           </div>
-        ) : snapshot.items.length === 0 ? (
-          <EmptyPanel
-            title="No memory yet"
-            body="Sage will remember things as you work together."
-          />
         ) : (
           <div className="app-memory-minimal-list">
+            {snapshot.items.length === 0 ? (
+              <div className="app-memory-minimal-empty">
+                <strong>No saved memory yet</strong>
+                <span>Add explicit facts, preferences, or context Sage should carry into future conversations.</span>
+              </div>
+            ) : null}
             {MEMORY_SENSITIVITY_ORDER.map((sensitivity) => {
               const items = groupedMemoryItems.get(sensitivity) ?? [];
-              if (items.length === 0) {
-                return null;
-              }
+              const sensitivityMeta = MEMORY_SENSITIVITY_META[sensitivity];
               return (
-                <section key={sensitivity} className="app-memory-minimal-group">
+                <section
+                  key={sensitivity}
+                  className={`app-memory-minimal-group${items.length === 0 ? ' app-memory-minimal-group--empty' : ''}`}
+                >
                   <div className="app-memory-minimal-group__label">
                     <span
                       className={`app-memory-minimal-group__dot app-memory-minimal-group__dot--${sensitivity}`}
                       aria-hidden="true"
                     />
-                    <span>{MEMORY_SENSITIVITY_LABELS[sensitivity]}</span>
+                    <span className="app-memory-minimal-group__copy">
+                      <span className="app-memory-minimal-group__name">{sensitivityMeta.label}</span>
+                      <span className="app-memory-minimal-group__description">{sensitivityMeta.description}</span>
+                    </span>
                     <span className="app-memory-minimal-group__count">{items.length}</span>
                   </div>
                   <div className="app-memory-minimal-group__list">
-                    {items.map((entry) => {
+                    {items.length === 0 ? (
+                      <div className="app-memory-minimal-empty-row">No items</div>
+                    ) : items.map((entry) => {
                       const entryId = readString(entry.id);
                       const busy = mutatingMemory === entryId;
                       const categoryLabel = categoryLabels.get(readString(entry.category)) || 'Saved memory';
@@ -451,7 +497,7 @@ export function WorkstationActivityPane() {
         description="Save only what Sage should carry into future turns."
         onClose={() => {
           setIsMemorySheetOpen(false);
-          setMemoryDraft(defaultMemoryDraft('profile_fact'));
+          setMemoryDraft(defaultMemoryDraft('work_context'));
         }}
         actions={(
           <>
@@ -461,7 +507,7 @@ export function WorkstationActivityPane() {
               disabled={Boolean(mutatingMemory)}
               onClick={() => {
                 setIsMemorySheetOpen(false);
-                setMemoryDraft(defaultMemoryDraft('profile_fact'));
+                setMemoryDraft(defaultMemoryDraft('work_context'));
               }}
             >
               Cancel

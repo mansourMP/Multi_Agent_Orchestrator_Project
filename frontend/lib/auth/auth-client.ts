@@ -1,4 +1,5 @@
 import { buildCookieAuthHeaders } from '@/lib/auth/csrf';
+import { AUTH_REQUEST_TIMEOUT_MS, AUTH_TIMEOUT_MESSAGE } from '@/lib/auth/auth-timeouts';
 
 type AuthRequestOptions = {
   method: 'GET' | 'POST';
@@ -10,8 +11,6 @@ type AwaitBrowserAuthReadyOptions = {
   attempts?: number;
   delayMs?: number;
 };
-
-const AUTH_REQUEST_TIMEOUT_MS = 12_000;
 
 function channelAttributionToken(): string | undefined {
   if (typeof window === 'undefined') {
@@ -52,7 +51,7 @@ async function requestAuth<T>(path: string, options: AuthRequestOptions): Promis
     });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error(`Authentication request timed out after ${AUTH_REQUEST_TIMEOUT_MS}ms.`);
+      throw new Error(AUTH_TIMEOUT_MESSAGE);
     }
     throw error;
   } finally {

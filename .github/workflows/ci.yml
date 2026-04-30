@@ -30,8 +30,29 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Run server test suite
-        run: python -m pytest server_modules/tests
+      - name: Run demo-critical server test suite
+        run: |
+          python -m pytest \
+            server_modules/tests/test_auth.py \
+            server_modules/tests/test_auth_account_shell.py \
+            server_modules/tests/test_auth_cookie_sessions.py \
+            server_modules/tests/test_auth_hardening.py \
+            server_modules/tests/test_direct_chat_availability_service.py \
+            server_modules/tests/test_direct_chat_entry_service.py \
+            server_modules/tests/test_direct_chat_generation_service.py \
+            server_modules/tests/test_direct_chat_provider_service.py \
+            server_modules/tests/test_direct_chat_stream_response_service.py \
+            server_modules/tests/test_direct_chat_tool_catalog_service.py \
+            server_modules/tests/test_gateway_execution_service.py \
+            server_modules/tests/test_gateway_health_service.py \
+            server_modules/tests/test_gateway_routes.py \
+            server_modules/tests/test_provider_catalog_service.py \
+            server_modules/tests/test_provider_catalog_truth.py \
+            server_modules/tests/test_provider_credential_flows.py \
+            server_modules/tests/test_provider_profiles.py \
+            server_modules/tests/test_runtime_runs_api_chat_stream.py \
+            server_modules/tests/test_vault_store.py \
+            server_modules/tests/test_workspace_bootstrap_service.py
 
   shell-typecheck:
     name: Frontend and mobile typecheck

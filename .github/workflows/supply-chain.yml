@@ -30,12 +30,7 @@ jobs:
           path: .
           format: cyclonedx-json
           output-file: artifacts/empyralis-repo.cdx.json
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: empyralis-sbom
-          path: artifacts/empyralis-repo.cdx.json
+          upload-artifact: false
 
       - name: Attest SBOM provenance
         if: ${{ !github.event.repository.private }}

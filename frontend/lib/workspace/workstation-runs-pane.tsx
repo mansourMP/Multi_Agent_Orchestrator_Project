@@ -223,7 +223,7 @@ export function WorkstationRunsPane() {
   return (
     <WorkstationSurfaceRoot surface="runs">
       <main className="app-runs-minimal-page" data-workstation-surface="runs-minimal">
-        {error ? <div className="app-surface-inline-status">{error}</div> : null}
+        {error ? <div className="app-surface-inline-status">Conversations could not refresh. Try again when ready.</div> : null}
         {isLoading ? (
           <div className="app-stack-3">
             <SkeletonBlock height="4rem" />

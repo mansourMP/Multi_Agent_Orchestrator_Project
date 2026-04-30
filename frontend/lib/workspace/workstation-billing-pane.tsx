@@ -102,7 +102,7 @@ export function WorkstationBillingPane() {
         <WorkstationSurfaceNotice>Loading billing summary.</WorkstationSurfaceNotice>
       ) : null}
       {error ? (
-        <WorkstationSurfaceNotice tone="danger">{error}</WorkstationSurfaceNotice>
+        <WorkstationSurfaceNotice tone="danger">Billing could not refresh. Try again when ready.</WorkstationSurfaceNotice>
       ) : null}
       <WorkstationSurfaceStatGrid>
         <WorkstationSurfaceStat

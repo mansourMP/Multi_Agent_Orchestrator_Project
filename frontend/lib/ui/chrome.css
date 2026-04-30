@@ -7,33 +7,34 @@ body[data-emp-theme='dark'] {
   --app-font-heading: var(--font-fraunces), "Fraunces", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --app-font-mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", "Menlo", monospace;
 
-  --app-bg-page: #1A1A1A;
-  --app-surface-1: #242424;
-  --app-surface-2: #2E2E2E;
-  --app-surface-hover: #2E2E2E;
-  --app-surface-inset: #242424;
+  --app-bg-page: #141414;
+  --app-surface-1: #222222;
+  --app-surface-2: #2B2B2B;
+  --app-surface-hover: #2B2B2B;
+  --app-surface-inset: #1B1B1B;
 
-  --app-bg-app: #1A1A1A;
-  --app-bg-canvas: #1A1A1A;
-  --app-bg-shell: #242424;
-  --app-bg-panel: #242424;
-  --app-bg-panel-elevated: #2E2E2E;
-  --app-bg-overlay: #2E2E2E;
+  --app-bg-app: #141414;
+  --app-bg-canvas: #141414;
+  --app-bg-shell: #1B1B1B;
+  --app-bg-panel: #222222;
+  --app-bg-panel-elevated: #2B2B2B;
+  --app-bg-overlay: #2B2B2B;
 
-  --app-border-subtle: rgba(240, 240, 240, 0.08);
-  --app-border-strong: #333333;
-  --app-border-muted: rgba(240, 240, 240, 0.05);
-  --app-border-default: #333333;
-  --app-border-accent: #333333;
+  --app-border-subtle: rgba(240, 240, 240, 0.1);
+  --app-border-strong: #3A3A3A;
+  --app-border-muted: rgba(240, 240, 240, 0.07);
+  --app-border-default: #3A3A3A;
+  --app-border-accent: #3A3A3A;
 
   --app-text-primary: #F0F0F0;
   --app-text-secondary: #888888;
   --app-text-tertiary: rgba(136, 136, 136, 0.72);
-  --app-text-inverse: #1A1A1A;
+  --app-text-inverse: #141414;
 
-  --app-accent: #2E2E2E;
+  --app-accent: #2B2B2B;
   --app-accent-strong: #3A3A3A;
-  --app-accent-muted: rgba(46, 46, 46, 0.72);
+  --app-accent-muted: rgba(43, 43, 43, 0.72);
+  --app-accent-soft: rgba(58, 58, 58, 0.42);
   --app-accent-text: #F0F0F0;
 
   --app-success: #888888;
@@ -153,8 +154,8 @@ body[data-emp-theme='dark'] {
   --app-radius-xl: var(--radius-xl);
   --app-radius-pill: var(--radius-full);
 
-  --app-shadow-subtle: none;
-  --app-shadow-panel: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  --app-shadow-subtle: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  --app-shadow-panel: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 18px 44px -34px rgba(0, 0, 0, 0.62);
   --app-shadow-focus: 0 0 0 2px rgba(255, 255, 255, 0.18);
 
   --app-motion-fast: 120ms;
@@ -166,6 +167,7 @@ body[data-emp-theme='dark'] {
   --app-font-13: var(--font-size-md);
   --app-font-14: var(--font-size-base);
   --app-font-16: var(--font-size-lg);
+  --app-font-18: 18px;
   --app-font-20: var(--font-size-xl);
 
   --app-weight-regular: var(--font-weight-normal);
@@ -190,33 +192,34 @@ body[data-emp-theme='light'],
 body.theme-light {
   color-scheme: light;
 
-  --app-bg-page: #FFFFFF;
-  --app-surface-1: #F5F5F5;
-  --app-surface-2: #EEEEEE;
-  --app-surface-hover: #EEEEEE;
-  --app-surface-inset: #F5F5F5;
+  --app-bg-page: #F7F7F5;
+  --app-surface-1: #FBFBFA;
+  --app-surface-2: #F1F1EE;
+  --app-surface-hover: #F1F1EE;
+  --app-surface-inset: #EFEFEC;
 
-  --app-bg-app: #FFFFFF;
-  --app-bg-canvas: #FFFFFF;
-  --app-bg-shell: #F5F5F5;
-  --app-bg-panel: #F5F5F5;
-  --app-bg-panel-elevated: #EEEEEE;
-  --app-bg-overlay: #EEEEEE;
+  --app-bg-app: #F7F7F5;
+  --app-bg-canvas: #F7F7F5;
+  --app-bg-shell: #EFEFEC;
+  --app-bg-panel: #FBFBFA;
+  --app-bg-panel-elevated: #F1F1EE;
+  --app-bg-overlay: #F1F1EE;
 
-  --app-border-subtle: rgba(17, 17, 17, 0.08);
-  --app-border-strong: #E0E0E0;
-  --app-border-muted: rgba(17, 17, 17, 0.05);
-  --app-border-default: #E0E0E0;
-  --app-border-accent: #E0E0E0;
+  --app-border-subtle: rgba(17, 17, 17, 0.1);
+  --app-border-strong: #D8D8D3;
+  --app-border-muted: rgba(17, 17, 17, 0.07);
+  --app-border-default: #D8D8D3;
+  --app-border-accent: #D8D8D3;
 
   --app-text-primary: #111111;
   --app-text-secondary: #666666;
   --app-text-tertiary: rgba(102, 102, 102, 0.72);
-  --app-text-inverse: #FFFFFF;
+  --app-text-inverse: #F7F7F5;
 
-  --app-accent: #EEEEEE;
-  --app-accent-strong: #E6E6E6;
-  --app-accent-muted: rgba(238, 238, 238, 0.64);
+  --app-accent: #F1F1EE;
+  --app-accent-strong: #D8D8D3;
+  --app-accent-muted: rgba(241, 241, 238, 0.72);
+  --app-accent-soft: rgba(216, 216, 211, 0.46);
   --app-accent-text: #111111;
 
   --app-success: #666666;
@@ -226,8 +229,8 @@ body.theme-light {
   --app-danger: #666666;
   --app-danger-muted: rgba(102, 102, 102, 0.12);
 
-  --app-shadow-subtle: 0 1px 2px rgba(10, 10, 10, 0.04);
-  --app-shadow-panel: 0 1px 2px rgba(10, 10, 10, 0.04), 0 0 0 1px rgba(10, 10, 10, 0.02);
+  --app-shadow-subtle: 0 1px 2px rgba(17, 17, 17, 0.035);
+  --app-shadow-panel: 0 18px 44px -36px rgba(17, 17, 17, 0.2), 0 0 0 1px rgba(17, 17, 17, 0.025);
   --app-shadow-focus: 0 0 0 2px rgba(10, 10, 10, 0.12);
 }
 
@@ -280,15 +283,8 @@ textarea {
   padding: var(--app-space-5);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 66%, transparent);
   border-radius: calc(var(--app-radius-xl) + 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 90%, var(--app-surface-2) 10%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 82%, var(--app-bg-page) 18%) 100%
-    );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 4%, transparent),
-    0 18px 40px color-mix(in srgb, var(--app-bg-page) 88%, transparent);
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
 }
 
 .app-surface-card__header {
@@ -477,14 +473,9 @@ textarea {
 
 .app-button--secondary {
   border-color: color-mix(in srgb, var(--app-border-subtle) 76%, transparent 24%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-surface-2) 18%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 86%, var(--app-bg-page) 14%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   color: var(--app-text-primary);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 4%, transparent);
+  box-shadow: var(--app-shadow-subtle);
 }
 
 .app-button--ghost {
@@ -515,12 +506,7 @@ textarea {
   min-height: 44px;
   border: 1px solid color-mix(in srgb, var(--app-border-subtle) 72%, transparent 28%);
   border-radius: calc(var(--app-radius-lg) + 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-bg-panel) 90%, var(--app-surface-1) 10%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 76%, var(--app-bg-page) 24%) 100%
-    );
+  background: var(--app-bg-panel);
   color: var(--app-text-primary);
   padding: 0 calc(var(--app-space-3) + 2px);
   font-family: var(--app-font-sans);
@@ -543,12 +529,7 @@ textarea {
 .app-field:hover,
 .app-select:hover,
 .app-textarea:hover {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-bg-panel-elevated) 78%, var(--app-surface-2) 22%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 68%, var(--app-accent-soft) 32%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
 }
 
 .app-field:focus,
@@ -576,13 +557,8 @@ textarea {
   padding: var(--app-space-5);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 60%, transparent);
   border-radius: calc(var(--app-radius-xl) - 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-inset) 86%, var(--app-surface-2) 14%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 80%, var(--app-bg-page) 20%) 100%
-    );
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 4%, transparent);
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-subtle);
 }
 
 .app-empty-state__title {
@@ -848,23 +824,13 @@ textarea {
   padding: var(--app-space-3);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 72%, transparent);
   border-radius: calc(var(--app-radius-lg) - 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-inset) 88%, var(--app-surface-2) 12%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 78%, var(--app-bg-page) 22%) 100%
-    );
+  background: var(--app-bg-panel);
   text-align: left;
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 4%, transparent);
 }
 
 .app-data-table__row--selected {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-accent-soft) 34%, var(--app-surface-2) 66%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 72%, var(--app-bg-page) 28%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   border-color: color-mix(in srgb, var(--app-border-strong) 82%, transparent);
 }
 
@@ -873,12 +839,7 @@ textarea {
 }
 
 .app-data-table__row--interactive:hover {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-inset) 72%, var(--app-accent-soft) 28%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 74%, var(--app-bg-page) 26%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
 }
 
 .app-data-table-grid--runs {
@@ -1631,20 +1592,9 @@ textarea {
   width: fit-content;
   max-width: min(100%, 720px);
   padding: 7px 12px;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--border-default) 78%, transparent);
   border-radius: var(--radius-full);
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--bg-elevated) 58%, transparent),
-      color-mix(in srgb, var(--bg-surface) 72%, transparent)
-    ) padding-box,
-    linear-gradient(
-      90deg,
-      transparent,
-      color-mix(in srgb, var(--text-secondary) 28%, transparent),
-      transparent
-    ) border-box;
+  background: var(--app-bg-panel-elevated);
   color: var(--text-secondary);
   font-size: var(--app-font-12);
   line-height: 1.45;
@@ -1668,12 +1618,7 @@ textarea {
   inset: 0;
   opacity: 0;
   pointer-events: none;
-  background: linear-gradient(
-    100deg,
-    transparent 0%,
-    color-mix(in srgb, var(--text-primary) 12%, transparent) 42%,
-    transparent 74%
-  );
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
   transform: translateX(-120%);
 }
 
@@ -2257,8 +2202,8 @@ textarea {
   padding: 12px;
   border: 1px solid var(--border-default);
   border-radius: 24px;
-  background: color-mix(in srgb, var(--bg-surface) 94%, var(--bg-base) 6%);
-  box-shadow: 0 26px 44px -34px color-mix(in srgb, black 26%, transparent);
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
   backdrop-filter: blur(20px);
   overflow: visible;
 }
@@ -2646,7 +2591,7 @@ textarea {
   padding: 8px;
   border: 1px solid color-mix(in srgb, var(--border-default) 76%, transparent);
   border-radius: 18px;
-  background: #4a4a48;
+  background: var(--app-bg-panel-elevated);
   box-shadow: 0 30px 80px -34px rgba(0, 0, 0, 0.72);
 }
 
@@ -3272,12 +3217,7 @@ textarea {
   z-index: 40;
   padding: var(--app-space-3) 0;
   border-right: 1px solid color-mix(in srgb, var(--app-border-subtle) 88%, transparent 12%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-bg-shell) 86%, var(--app-bg-panel) 14%) 0%,
-      color-mix(in srgb, var(--app-bg-shell) 94%, var(--app-surface-inset) 6%) 100%
-    );
+  background: var(--app-bg-shell);
   backdrop-filter: blur(22px);
   box-shadow:
     inset -1px 0 0 color-mix(in srgb, var(--app-border-subtle) 74%, transparent 26%),
@@ -3839,12 +3779,7 @@ textarea {
   position: absolute;
   inset: 8px 9px;
   border-radius: 30px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-bg-panel) 66%, var(--app-bg-panel-elevated) 34%) 0%,
-      color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-panel) 18%) 100%
-    );
+  background: var(--app-bg-panel);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--app-border-subtle) 86%, transparent 14%),
     inset 0 1px 0 color-mix(in srgb, white 22%, transparent 78%),
@@ -4159,15 +4094,8 @@ textarea {
 .app-studio-shell .app-list-detail-panel {
   border-color: color-mix(in srgb, var(--app-border-muted) 66%, transparent);
   border-radius: calc(var(--app-radius-xl) + 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 90%, var(--app-surface-2) 10%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-surface-2) 16%) 100%
-    );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 6%, transparent),
-    0 18px 52px color-mix(in srgb, var(--app-bg-page) 76%, transparent);
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
 }
 
 .app-studio-shell .app-list-detail-panel__header {
@@ -4207,15 +4135,11 @@ textarea {
   padding: var(--app-space-4);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 72%, transparent);
   border-radius: var(--app-radius-xl);
-  background:
-    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--app-text-primary) 8%, transparent) 0, transparent 34%),
-    linear-gradient(180deg, color-mix(in srgb, var(--app-surface-1) 86%, var(--app-surface-2) 14%) 0%, color-mix(in srgb, var(--app-surface-inset) 82%, var(--app-bg-page) 18%) 100%);
+  background: var(--app-bg-panel);
   color: var(--app-text-primary);
   text-align: left;
   cursor: pointer;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 5%, transparent),
-    0 18px 42px color-mix(in srgb, var(--app-bg-page) 84%, transparent);
+  box-shadow: var(--app-shadow-panel);
   transition:
     border-color var(--transition),
     background var(--transition),
@@ -4225,9 +4149,7 @@ textarea {
 
 .app-studio-shell .studio-template-card:hover {
   border-color: color-mix(in srgb, var(--app-border-strong) 60%, transparent);
-  background:
-    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--app-text-primary) 12%, transparent) 0, transparent 34%),
-    linear-gradient(180deg, color-mix(in srgb, var(--app-surface-1) 76%, var(--app-surface-2) 24%) 0%, color-mix(in srgb, var(--app-surface-inset) 70%, var(--app-bg-page) 30%) 100%);
+  background: var(--app-bg-panel-elevated);
   transform: translateY(-2px);
 }
 
@@ -4312,36 +4234,19 @@ textarea {
   padding: var(--app-space-3);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 72%, transparent);
   border-radius: calc(var(--app-radius-xl) - 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 90%, var(--app-surface-2) 10%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 76%, var(--app-bg-page) 24%) 100%
-    );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 5%, transparent),
-    0 12px 28px color-mix(in srgb, var(--app-bg-page) 84%, transparent);
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
 }
 
 .app-studio-shell .deployed-agents-card:hover {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 76%, var(--app-surface-2) 24%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 62%, var(--app-accent-soft) 38%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   border-color: color-mix(in srgb, var(--app-border-strong) 52%, transparent);
   transform: translateY(-2px);
 }
 
 .app-studio-shell .deployed-agents-card--selected {
   border-color: color-mix(in srgb, var(--app-accent) 42%, var(--app-border-strong) 58%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-accent-soft) 46%, var(--app-surface-2) 54%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 70%, var(--app-bg-page) 30%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--app-accent) 28%, transparent),
     0 18px 40px color-mix(in srgb, var(--app-bg-page) 78%, transparent);
@@ -4455,12 +4360,7 @@ textarea {
   padding: calc(var(--app-space-3) + 2px);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 70%, transparent);
   border-radius: calc(var(--app-radius-xl) - 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-inset) 82%, var(--app-surface-2) 18%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 78%, var(--app-bg-page) 22%) 100%
-    );
+  background: var(--app-bg-panel);
 }
 
 .app-studio-shell .deployed-agents-filter-summary {
@@ -4497,26 +4397,14 @@ textarea {
 .studio-integrations-pane .sage-unified-expand {
   border-radius: calc(var(--app-radius-xl) - 2px);
   border-color: color-mix(in srgb, var(--app-border-muted) 66%, transparent);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 88%, var(--app-surface-2) 12%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 82%, var(--app-surface-inset) 18%) 100%
-    );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 5%, transparent),
-    0 10px 26px color-mix(in srgb, var(--app-bg-page) 86%, transparent);
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
 }
 
 .app-studio-shell--channel-operations .app-data-table__row {
   border-radius: calc(var(--app-radius-xl) - 4px);
   border-color: color-mix(in srgb, var(--app-border-muted) 70%, transparent);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-inset) 88%, var(--app-surface-2) 12%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 78%, var(--app-bg-page) 22%) 100%
-    );
+  background: var(--app-bg-panel);
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 4%, transparent);
 }
 
@@ -5427,12 +5315,7 @@ textarea {
 
 .settings-nav__item--active {
   border-color: color-mix(in srgb, var(--app-accent) 28%, var(--app-border-strong) 72%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-accent-soft) 42%, var(--app-surface-2) 58%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 70%, var(--app-bg-panel) 30%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   color: var(--app-text-primary);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--app-accent) 18%, transparent),
@@ -5441,12 +5324,7 @@ textarea {
 
 .settings-nav__item[aria-selected='true'] {
   border-color: color-mix(in srgb, var(--app-accent) 28%, var(--app-border-strong) 72%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-accent-soft) 42%, var(--app-surface-2) 58%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 70%, var(--app-bg-panel) 30%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   color: var(--app-text-primary);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--app-accent) 18%, transparent),
@@ -5484,15 +5362,8 @@ textarea {
   padding: calc(var(--space-lg) + 2px);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 66%, transparent);
   border-radius: calc(var(--app-radius-xl) + 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 90%, var(--app-surface-2) 10%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 82%, var(--app-surface-inset) 18%) 100%
-    );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 5%, transparent),
-    0 16px 34px color-mix(in srgb, var(--app-bg-page) 86%, transparent);
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
 }
 
 .settings-account-card__avatar {
@@ -5573,15 +5444,8 @@ textarea {
   padding: var(--app-space-4);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 68%, transparent);
   border-radius: calc(var(--app-radius-xl) - 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 88%, var(--app-surface-2) 12%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 74%, var(--app-bg-page) 26%) 100%
-    );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 4%, transparent),
-    0 10px 24px color-mix(in srgb, var(--app-bg-page) 88%, transparent);
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
 }
 
 .settings-provider-card--placeholder {
@@ -6159,13 +6023,14 @@ textarea {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: currentColor;
+  background: var(--app-bg-panel-elevated);
   color: var(--text-primary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   overflow: hidden;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-border-subtle) 72%, transparent 28%);
 }
 
 .sage-integration-logo svg {
@@ -6176,70 +6041,70 @@ textarea {
 
 .sage-integration-logo__glyph,
 .sage-integration-logo__emoji {
-  color: #fff;
+  color: currentColor;
   font-size: 13px;
   font-weight: var(--font-weight-semibold);
   line-height: 1;
 }
 
 .sage-integration-logo--openai {
-  color: #111111;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--anthropic {
-  color: #D4A574;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--gemini {
-  color: #6B7CFF;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--mistral {
-  color: #F97316;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--deepseek {
-  color: #14B8A6;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--qwen {
-  color: #1677FF;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--ollama {
-  color: #4B5563;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--telegram {
-  color: #2AABEE;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--whatsapp {
-  color: #25D366;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--gmail {
-  color: #EA4335;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--calendar {
-  color: #4285F4;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--slack {
-  color: #4A154B;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--github {
-  color: #333333;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--notion {
-  color: #000000;
+  color: var(--text-primary);
 }
 
 .sage-integration-logo--microsoft {
-  color: #D83B01;
+  color: var(--text-primary);
 }
 
 .sage-integration-status {
@@ -8010,15 +7875,8 @@ textarea {
 .marketplace-pane .app-list-detail-panel {
   border-radius: calc(var(--app-radius-xl) + 2px);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 64%, transparent);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 90%, var(--app-surface-2) 10%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 82%, var(--app-bg-page) 18%) 100%
-    );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 5%, transparent),
-    0 18px 44px color-mix(in srgb, var(--app-bg-page) 84%, transparent);
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
 }
 
 .marketplace-pane__browse-panel .app-list-detail-panel__body,
@@ -8064,12 +7922,7 @@ textarea {
 
 .marketplace-pane__filter-pill--active {
   border-color: color-mix(in srgb, var(--app-accent) 26%, var(--app-border-strong) 74%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-accent-soft) 42%, var(--app-surface-2) 58%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 68%, var(--app-bg-panel) 32%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   color: var(--app-text-primary);
 }
 
@@ -8086,6 +7939,25 @@ textarea {
   line-height: 1.5;
 }
 
+.marketplace-pane__error-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.marketplace-pane__error-copy strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.35;
+}
+
+.marketplace-pane__error-copy span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .marketplace-pane__grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -8099,28 +7971,16 @@ textarea {
   min-height: 280px;
   padding: 18px;
   border-radius: calc(var(--app-radius-xl) - 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 92%, var(--app-surface-2) 8%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 82%, var(--app-bg-page) 18%) 100%
-    );
+  background: var(--app-bg-panel);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 56%, transparent);
   cursor: pointer;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 4%, transparent),
-    0 12px 28px color-mix(in srgb, var(--app-bg-page) 88%, transparent);
+  box-shadow: var(--app-shadow-panel);
   transition: border-color var(--transition), transform var(--transition), background-color var(--transition);
 }
 
 .marketplace-pane__card:hover {
   border-color: color-mix(in srgb, var(--app-accent) 34%, transparent);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-1) 76%, var(--app-surface-2) 24%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 60%, var(--app-accent-soft) 40%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   transform: translateY(-2px);
 }
 
@@ -8410,16 +8270,9 @@ textarea {
   gap: 14px;
   padding: 18px;
   border-radius: calc(var(--app-radius-xl) + 2px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-accent-soft) 54%, var(--app-surface-2) 46%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 82%, var(--app-surface-inset) 18%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   border: 1px solid color-mix(in srgb, var(--app-accent) 16%, var(--app-border-muted) 84%);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--app-text-primary) 5%, transparent),
-    0 18px 42px color-mix(in srgb, var(--app-bg-page) 84%, transparent);
+  box-shadow: var(--app-shadow-panel);
 }
 
 .marketplace-pane__detail-hero-copy {
@@ -8463,12 +8316,7 @@ textarea {
   padding: 14px;
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 54%, transparent);
   border-radius: calc(var(--app-radius-xl) - 4px);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-surface-inset) 88%, var(--app-surface-2) 12%) 0%,
-      color-mix(in srgb, var(--app-bg-panel) 80%, var(--app-bg-page) 20%) 100%
-    );
+  background: var(--app-bg-panel);
 }
 
 .marketplace-pane__detail-title {
@@ -8551,12 +8399,7 @@ textarea {
 
 .marketplace-pane__composer-tab--active {
   border-color: color-mix(in srgb, var(--app-accent) 26%, var(--app-border-strong) 74%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-accent-soft) 42%, var(--app-surface-2) 58%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 68%, var(--app-bg-panel) 32%) 100%
-    );
+  background: var(--app-bg-panel-elevated);
   color: var(--app-text-primary);
 }
 

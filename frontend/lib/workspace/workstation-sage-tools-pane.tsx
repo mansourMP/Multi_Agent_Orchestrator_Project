@@ -172,7 +172,7 @@ export function WorkstationSageToolsPane({
   return (
     <div className="sage-settings-panel">
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
-      {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
+      {error ? <AppNotice tone="warning">Tool settings could not update. Try again when ready.</AppNotice> : null}
 
       <div className="sage-tool-list" role="list">
         {SAGE_TOOL_DEFINITIONS.map((definition) => {

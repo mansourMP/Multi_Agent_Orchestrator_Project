@@ -69,9 +69,7 @@
   line-height: 1.1;
   letter-spacing: -0.03em;
   margin: 0 0 24px;
-  background: linear-gradient(135deg, #111 0%, #444 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--app-text-primary, #111);
 }
 
 .landing-hero-subtitle {
@@ -296,7 +294,7 @@
 .landing-cta {
   padding: 100px 0;
   text-align: center;
-  background: linear-gradient(135deg, #f8f8f8 0%, #fff 100%);
+  background: var(--app-bg-panel, #FBFBFA);
 }
 
 .landing-cta h2 {

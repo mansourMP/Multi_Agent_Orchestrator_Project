@@ -101,7 +101,7 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
       return <div className={styles.empty}>Loading hosted mini applications…</div>;
     }
     if (error) {
-      return <div className={`${styles.empty} ${styles.error}`}>{error}</div>;
+      return <div className={`${styles.empty} ${styles.error}`}>Mini apps could not refresh. Try again when ready.</div>;
     }
     if (!items.length) {
       return (

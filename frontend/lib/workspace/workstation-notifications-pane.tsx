@@ -194,7 +194,7 @@ export function WorkstationNotificationsPane() {
         ) : null}
         {error ? (
           <StateBanner tone="danger" title="Notification feed is degraded">
-            {error}
+            Refresh notifications when the service is ready.
           </StateBanner>
         ) : null}
 

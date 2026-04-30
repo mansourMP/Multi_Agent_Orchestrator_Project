@@ -106,7 +106,7 @@ export function workstationMessageToCodexCell(message: WorkstationChatMessageRec
     return {
       id: message.id,
       kind: 'error',
-      message: message.content || 'Sage hit a temporary error.',
+      message: message.content || 'The request could not finish. Retry when ready.',
       retryable: metadata.retryable !== false,
       createdAt: message.createdAt,
       metadata,

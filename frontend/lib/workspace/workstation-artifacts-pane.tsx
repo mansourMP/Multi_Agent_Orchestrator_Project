@@ -177,7 +177,7 @@ export function WorkstationArtifactsPane() {
           </WorkstationActionButton>
         )}
       >
-        {error ? <WorkstationSurfaceNotice tone="danger">{error}</WorkstationSurfaceNotice> : null}
+        {error ? <WorkstationSurfaceNotice tone="danger">Artifacts could not refresh. Try again when ready.</WorkstationSurfaceNotice> : null}
 
         <WorkstationSurfaceStatGrid>
           <WorkstationSurfaceStat

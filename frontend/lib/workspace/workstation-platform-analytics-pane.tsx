@@ -149,7 +149,13 @@ export function WorkstationPlatformAnalyticsPane() {
           />
         ) : null}
         {status ? <StateBanner tone="success" title="Updated" detail={status} /> : null}
-        {error ? <StateBanner tone="danger" title={isPlatformAdmin ? 'Platform analytics load failed' : 'Usage load failed'} detail={error} /> : null}
+        {error ? (
+          <StateBanner
+            tone="danger"
+            title={isPlatformAdmin ? 'Platform analytics could not refresh' : 'Usage could not refresh'}
+            detail="Retry when the service is ready."
+          />
+        ) : null}
         {isPlatformAdmin ? (
           <ListDetailColumns
             primary={(

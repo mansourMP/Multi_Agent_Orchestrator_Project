@@ -640,6 +640,9 @@ function isSyntheticTranscriptMessage(message: WorkstationChatMessageRecord): bo
     normalized === 'sage hit a temporary error while generating the response. please try again in a moment.'
     || normalized === 'sage took too long to respond. please try again.'
     || normalized === 'sage is temporarily at capacity. please try again in a moment.'
+    || normalized === 'capacity is busy right now. retry in a moment.'
+    || normalized === 'the request could not finish. retry when ready.'
+    || normalized === 'the request could not connect. retry when ready.'
     || normalized === "sage couldn't complete that turn."
     || normalized === 'not found'
     || normalized === 'thread not found.'
@@ -1750,7 +1753,7 @@ function shouldSuppressBackgroundRefreshNotice(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
-  return /took too long to respond|could not reach the service|temporary service issue/i.test(error.message);
+  return /took too long to respond|could not connect|could not finish|capacity is busy/i.test(error.message);
 }
 
 function memoryCategoryLabel(

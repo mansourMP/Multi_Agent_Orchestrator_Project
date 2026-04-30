@@ -7,6 +7,14 @@ import { FormEvent, Suspense, useState } from 'react';
 import { awaitBrowserAuthReady, login } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
+function authErrorCopy(error: string): string {
+  const normalized = error.toLowerCase();
+  if (normalized.includes('password') || normalized.includes('credential') || normalized.includes('invalid')) {
+    return 'Email or password was not accepted.';
+  }
+  return 'Authentication could not finish. Try again when ready.';
+}
+
 function LoginPageContent() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
@@ -71,7 +79,7 @@ function LoginPageContent() {
             onChange={(event) => setPassword(event.target.value)}
           />
         </label>
-        {error ? <p role="alert" className="app-auth-error">{error}</p> : null}
+        {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
         <AppButton type="submit" disabled={submitting}>
           {submitting ? 'Signing in…' : 'Log in'}
         </AppButton>

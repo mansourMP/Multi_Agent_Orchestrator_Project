@@ -1875,7 +1875,7 @@ export function WorkstationSageConnectorsPane({
   return (
     <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)}>
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
-      {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
+      {error ? <AppNotice tone="warning">Integrations could not refresh. Try again when ready.</AppNotice> : null}
 
       <div className="sage-unified-page">
         {isLoading ? (

@@ -406,7 +406,7 @@ export function WorkstationActivityPane() {
         </div>
 
         {statusMessage ? <div className="app-surface-inline-status">{statusMessage}</div> : null}
-        {error ? <div className="app-surface-inline-status">{error}</div> : null}
+        {error ? <div className="app-surface-inline-status">Memory could not refresh. Try again when ready.</div> : null}
 
         {isLoading ? (
           <div className="app-stack-3">

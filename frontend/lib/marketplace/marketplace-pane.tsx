@@ -363,6 +363,7 @@ export function MarketplacePane() {
   const [composerError, setComposerError] = useState<string | null>(null);
   const [composerStatus, setComposerStatus] = useState<string | null>(null);
   const [submittingComposer, setSubmittingComposer] = useState(false);
+  const [showDeveloperRegistration, setShowDeveloperRegistration] = useState(false);
   const activeRequestControllerRef = useRef<AbortController | null>(null);
 
   const loadMarketplacePackages = useCallback(async (requestedKind: KindFilter) => {
@@ -639,7 +640,10 @@ export function MarketplacePane() {
 
               {error && !loading ? (
                 <div className="marketplace-pane__error">
-                  <span>{error}</span>
+                  <div className="marketplace-pane__error-copy">
+                    <strong>Marketplace could not refresh.</strong>
+                    <span>Check the connection, then retry.</span>
+                  </div>
                   <AppButton type="button" tone="secondary" onClick={() => { void loadMarketplacePackages(kindFilter); }}>
                     Retry
                   </AppButton>
@@ -651,7 +655,7 @@ export function MarketplacePane() {
               ) : renderedCards.length === 0 ? (
                 <EmptyPanel
                   title="No governed packages are registered for this workspace yet."
-                  body="Use the guided onboarding panel to register a third-party provider or hosted app package. They stay governed and reviewable before install."
+                  body="Marketplace is the install and discovery surface. Developer publishing is hidden behind an explicit registration panel."
                 />
               ) : (
                 <div className="marketplace-pane__grid">
@@ -1051,12 +1055,18 @@ export function MarketplacePane() {
                 )}
               </ListDetailPanel>
 
-              <ListDetailPanel
-                className="marketplace-pane__composer-panel"
-                eyebrow="Onboard"
-                title="Register governed package"
-                subtitle="Create a third-party provider or hosted app package from the shell. Registration stays curated and uses the same backend contracts the tests already cover."
-              >
+              {showDeveloperRegistration ? (
+                <ListDetailPanel
+                  className="marketplace-pane__composer-panel"
+                  eyebrow="Developer publishing"
+                  title="Register governed package"
+                  subtitle="Create a third-party provider or hosted app package. This is for operators and developers, not the normal install flow."
+                  actions={(
+                    <AppButton type="button" tone="secondary" onClick={() => setShowDeveloperRegistration(false)}>
+                      Hide
+                    </AppButton>
+                  )}
+                >
                 <div className="marketplace-pane__composer-tabs">
                   {COMPOSER_KINDS.map((kind) => (
                     <button
@@ -1077,7 +1087,14 @@ export function MarketplacePane() {
                   ))}
                 </div>
 
-                {composerError ? <div className="marketplace-pane__error"><span>{composerError}</span></div> : null}
+                {composerError ? (
+                  <div className="marketplace-pane__error">
+                    <div className="marketplace-pane__error-copy">
+                      <strong>Package could not be registered.</strong>
+                      <span>Review the required fields, then try again.</span>
+                    </div>
+                  </div>
+                ) : null}
                 {composerStatus ? <div className="marketplace-pane__notice">{composerStatus}</div> : null}
 
                 {composerKind === 'app' ? (
@@ -1487,6 +1504,23 @@ export function MarketplacePane() {
                   </AppButton>
                 </div>
               </ListDetailPanel>
+              ) : (
+                <ListDetailPanel
+                  className="marketplace-pane__composer-panel marketplace-pane__composer-panel--collapsed"
+                  eyebrow="Developer publishing"
+                  title="Publish a package"
+                  subtitle="Marketplace is for governed distribution. Create specialists in Studio; register third-party apps or providers here only when you are publishing new inventory."
+                >
+                  <p className="marketplace-pane__panel-copy">
+                    Normal users should browse, inspect trust metadata, and add packages to the workspace. Publisher registration is intentionally hidden to keep the Marketplace simple.
+                  </p>
+                  <div className="marketplace-pane__form-actions">
+                    <AppButton type="button" tone="secondary" onClick={() => setShowDeveloperRegistration(true)}>
+                      Show developer registration
+                    </AppButton>
+                  </div>
+                </ListDetailPanel>
+              )}
             </div>
           )}
         />

@@ -25,7 +25,7 @@ export function SkeletonBlock({
         width,
         height,
         borderRadius: radius,
-        background: 'linear-gradient(90deg, color-mix(in srgb, var(--app-bg-panel-elevated) 88%, var(--app-bg-overlay) 12%) 0%, color-mix(in srgb, var(--app-bg-panel) 72%, var(--app-bg-overlay) 28%) 50%, color-mix(in srgb, var(--app-bg-panel-elevated) 88%, var(--app-bg-overlay) 12%) 100%)',
+        background: 'var(--app-bg-panel-elevated)',
         ...style,
       }}
     />

@@ -76,7 +76,7 @@ export function PublicAgentPreviewClient({
           {loading ? (
             <p className="app-auth-subtitle">Loading the public catalog…</p>
           ) : error ? (
-            <p className="app-auth-error" role="alert">{error}</p>
+            <p className="app-auth-error" role="alert">Public catalog could not load. Try again when ready.</p>
           ) : agents.length === 0 ? (
             <p className="app-auth-subtitle">No public agents are available right now.</p>
           ) : (

@@ -205,7 +205,7 @@ export function WorkstationApprovalsPane() {
         )}
       >
         {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
-        {error ? <WorkstationSurfaceNotice tone="danger">{error}</WorkstationSurfaceNotice> : null}
+        {error ? <WorkstationSurfaceNotice tone="danger">Approvals could not refresh. Use Refresh to try again.</WorkstationSurfaceNotice> : null}
 
         <WorkstationSurfaceStatGrid>
           <WorkstationSurfaceStat

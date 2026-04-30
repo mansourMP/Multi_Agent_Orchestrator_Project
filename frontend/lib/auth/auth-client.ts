@@ -64,7 +64,7 @@ async function requestAuth<T>(path: string, options: AuthRequestOptions): Promis
       payload && typeof payload === 'object' && !Array.isArray(payload)
         ? String((payload as Record<string, unknown>).detail || '').trim()
         : '';
-    throw new Error(detail || `Auth request failed with status ${response.status}.`);
+    throw new Error(detail || 'Authentication could not finish. Try again when ready.');
   }
   return payload as T;
 }

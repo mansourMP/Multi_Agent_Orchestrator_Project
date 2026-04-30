@@ -407,7 +407,7 @@ export function HostedMiniAppSurface({
       {loading ? (
         <div className={styles.empty}>Loading hosted mini application…</div>
       ) : error ? (
-        <div className={`${styles.empty} ${styles.error}`}>{error}</div>
+        <div className={`${styles.empty} ${styles.error}`}>Mini app could not load. Try again when ready.</div>
       ) : manifest?.hosted_app?.hosted_url ? (
         <section className={styles.frameShell}>
           <div className={styles.status}>

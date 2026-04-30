@@ -388,7 +388,7 @@ export function WorkstationDeployedAgentAnalyticsPane({
       <div className="deployed-agent-analytics">
         <EmptyPanel
           title="Analytics could not be loaded"
-          body={error}
+          body="Refresh analytics when the service is ready."
           actions={(
             <AppButton type="button" onClick={() => { void loadDashboard({ cursor: null }); }}>
               Retry
@@ -432,7 +432,7 @@ export function WorkstationDeployedAgentAnalyticsPane({
     <div className="deployed-agent-analytics">
       {error ? (
         <div className="deployed-agent-analytics__error">
-          <span>{error}</span>
+          <span>Analytics could not refresh. Try again when ready.</span>
           <AppButton type="button" tone="secondary" onClick={() => { void loadDashboard({ cursor: null }); }}>
             Retry
           </AppButton>

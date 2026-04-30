@@ -6,6 +6,17 @@ import { FormEvent, useEffect, useState } from 'react';
 import { awaitBrowserAuthReady, signup } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
+function authErrorCopy(error: string): string {
+  const normalized = error.toLowerCase();
+  if (normalized.includes('already') || normalized.includes('exists')) {
+    return 'That email is already registered. Log in or use another email.';
+  }
+  if (normalized.includes('password')) {
+    return 'Use a stronger password and try again.';
+  }
+  return 'Authentication could not finish. Try again when ready.';
+}
+
 export default function SignupPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -90,7 +101,7 @@ export default function SignupPage() {
             onChange={(event) => setPassword(event.target.value)}
           />
         </label>
-        {error ? <p role="alert" className="app-auth-error">{error}</p> : null}
+        {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
         <AppButton type="submit" disabled={submitting}>
           {submitting ? 'Creating account…' : 'Sign up'}
         </AppButton>

@@ -1251,7 +1251,7 @@ function extractErrorCode(payload: unknown, detail: unknown, platformError: Reco
 
 function fallbackErrorMessage(status: number): string {
   if (status === 0) {
-    return 'Sage could not reach the service. Please try again.';
+    return 'The request could not connect. Retry when ready.';
   }
   if (status === 401) {
     return 'Your session expired. Sign in again and retry.';
@@ -1260,7 +1260,7 @@ function fallbackErrorMessage(status: number): string {
     return 'Sage cannot run that request in this workspace right now.';
   }
   if (status === 429) {
-    return 'Sage is temporarily at capacity. Please try again in a moment.';
+    return 'Capacity is busy right now. Retry in a moment.';
   }
   if (status === 404) {
     return 'The requested item could not be found.';
@@ -1269,7 +1269,7 @@ function fallbackErrorMessage(status: number): string {
     return 'Session context changed. Retry your message once more.';
   }
   if (status >= 500) {
-    return 'Sage hit a temporary service issue. Please try again.';
+    return 'The request could not finish. Retry when ready.';
   }
   return 'Request failed. Please try again.';
 }
@@ -1392,7 +1392,7 @@ function normalizeTransportFailure(error: unknown): WorkstationClientError {
       : 'The workstation request failed before the server responded.';
   const message = /timed out/i.test(baseMessage)
     ? 'Sage took too long to respond. Please try again.'
-    : 'Sage could not reach the service. Please try again.';
+    : 'The request could not connect. Retry when ready.';
   const code = /timed out/i.test(baseMessage) ? 'request_timeout' : 'transport_failure';
   return new WorkstationClientError(message, 0, null, code, {
     retryable: true,

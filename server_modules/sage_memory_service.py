@@ -12,30 +12,41 @@ from server_modules import workspace_context
 
 
 SAGE_MEMORY_CATEGORY_DEFINITIONS: dict[str, dict[str, str]] = {
-    "work_context": {
-        "label": "Work context",
-        "description": "Current projects, priorities, and work context Sage should keep in mind.",
+    "safe_general": {
+        "label": "Green",
+        "description": "Safe, general context Sage can use freely.",
     },
-    "personal_context": {
-        "label": "Personal context",
-        "description": "Important personal details Sage should remember about you.",
+    "sensitive": {
+        "label": "Yellow",
+        "description": "Sensitive work context Sage should handle carefully.",
     },
-    "top_of_mind": {
-        "label": "Top of mind",
-        "description": "What matters most right now.",
+    "private": {
+        "label": "Orange",
+        "description": "Private personal context with tighter handling.",
     },
-    "brief_history": {
-        "label": "Brief history",
-        "description": "Short recent history that helps Sage keep continuity.",
+    "critical_restricted": {
+        "label": "Red",
+        "description": "Restricted facts such as secrets, credentials, or critical data.",
     },
-    "earlier_context": {
-        "label": "Earlier context",
-        "description": "Older context Sage may still need later.",
-    },
-    "long_term_background": {
-        "label": "Long-term background",
-        "description": "Durable background context Sage should carry forward.",
-    },
+}
+
+SAGE_MEMORY_CATEGORY_ALIASES: dict[str, str] = {
+    "work_context": "safe_general",
+    "profile_fact": "safe_general",
+    "saved_preference": "safe_general",
+    "top_of_mind": "sensitive",
+    "brief_history": "sensitive",
+    "earlier_context": "sensitive",
+    "long_term_background": "sensitive",
+    "project_context": "sensitive",
+    "personal_context": "private",
+    "app_state": "private",
+    "critical": "critical_restricted",
+    "restricted": "critical_restricted",
+    "red": "critical_restricted",
+    "orange": "private",
+    "yellow": "sensitive",
+    "green": "safe_general",
 }
 
 
@@ -91,11 +102,17 @@ def _clip_text(value: Any, *, limit: int = 180) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def _require_category(category: str) -> dict[str, str]:
-    definition = SAGE_MEMORY_CATEGORY_DEFINITIONS.get(_coerce_text(category))
+def _normalize_category(category: str) -> str:
+    raw_category = _coerce_text(category)
+    return SAGE_MEMORY_CATEGORY_ALIASES.get(raw_category, raw_category)
+
+
+def _require_category(category: str) -> tuple[str, dict[str, str]]:
+    normalized_category = _normalize_category(category)
+    definition = SAGE_MEMORY_CATEGORY_DEFINITIONS.get(normalized_category)
     if not definition:
         raise HTTPException(status_code=400, detail="Unsupported Sage memory category.")
-    return definition
+    return normalized_category, definition
 
 
 def _normalize_history(items: Any) -> List[Dict[str, Any]]:
@@ -118,8 +135,7 @@ def _normalize_history(items: Any) -> List[Dict[str, Any]]:
 
 
 def _normalize_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
-    category = _coerce_text(entry.get("category"))
-    definition = _require_category(category)
+    category, definition = _require_category(_coerce_text(entry.get("category")))
     title = _coerce_text(entry.get("title"))
     content = _coerce_text(entry.get("content"))
     if not title:

@@ -22,6 +22,18 @@ class DirectToolApprovalServiceTests(unittest.TestCase):
         self.assertTrue(service.file_write_requires_approval({"path": "/etc/hosts"}))
         self.assertFalse(service.file_write_requires_approval({"path": "/tmp/demo.txt"}))
 
+    def test_file_delete_requires_approval(self) -> None:
+        self.assertTrue(
+            service.approval_required_for_direct_tool(
+                "file",
+                "delete",
+                {"path": "/tmp/demo.txt"},
+                [],
+                compact_text=lambda value: str(value or "").strip().lower(),
+                http_request_requires_approval=lambda method, url: False,
+            )
+        )
+
     def test_http_post_requires_approval(self) -> None:
         self.assertTrue(
             service.approval_required_for_direct_tool(

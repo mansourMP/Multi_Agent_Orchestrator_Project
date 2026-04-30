@@ -958,6 +958,8 @@ def local_direct_tool_requires_approval(
     normalized_action = str(action_id or "").strip().lower()
     if normalized_connector == "shell" and normalized_action == "exec":
         return shell_command_requires_approval(str(arguments.get("command") or ""), compact_text=compact_text)
+    if normalized_connector == "file" and normalized_action in {"delete", "remove", "unlink", "trash"}:
+        return True
     if normalized_connector == "file" and normalized_action == "write":
         return file_write_requires_approval(arguments)
     if normalized_connector == "computer":

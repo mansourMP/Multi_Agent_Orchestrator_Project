@@ -3348,6 +3348,34 @@ textarea {
   line-height: 1.6;
 }
 
+.app-page-message__actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--app-space-2);
+  margin-top: var(--app-space-3);
+}
+
+.app-page-message__button {
+  min-height: 2.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--app-space-4);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-full);
+  background: var(--app-text-primary);
+  color: var(--app-bg-panel);
+  font-size: var(--app-font-13);
+  font-weight: var(--app-weight-semibold);
+  text-decoration: none;
+}
+
+.app-page-message__button--secondary {
+  background: var(--app-bg-raised);
+  color: var(--app-text-primary);
+}
+
 .app-page-shell {
   min-height: 100vh;
   display: grid;

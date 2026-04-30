@@ -13,7 +13,7 @@ class SageMemoryServiceTests(unittest.TestCase):
             with patch("server_modules.sage_memory_service.workspace_context.workspace_scope_dir", return_value=root):
                 payload = sage_memory_service.upsert_memory_entry(
                     workspace_id="workspace-1",
-                    category="personal_context",
+                    category="private",
                     title="Preferred timezone",
                     content="Uses Asia/Shanghai for planning.",
                     pinned=True,
@@ -21,7 +21,7 @@ class SageMemoryServiceTests(unittest.TestCase):
                 )
 
             entry = payload["entry"]
-            self.assertEqual(entry["category"], "personal_context")
+            self.assertEqual(entry["category"], "private")
             self.assertTrue(entry["pinned"])
             self.assertEqual(entry["history"][0]["action"], "saved")
             self.assertTrue((root / "sage_memory.json").exists())
@@ -32,7 +32,7 @@ class SageMemoryServiceTests(unittest.TestCase):
             with patch("server_modules.sage_memory_service.workspace_context.workspace_scope_dir", return_value=root):
                 created = sage_memory_service.upsert_memory_entry(
                     workspace_id="workspace-1",
-                    category="work_context",
+                    category="safe_general",
                     title="Current project",
                     content="Preparing the private beta launch plan.",
                     actor_user_id="user-1",
@@ -41,7 +41,7 @@ class SageMemoryServiceTests(unittest.TestCase):
                 updated = sage_memory_service.upsert_memory_entry(
                     workspace_id="workspace-1",
                     entry_id=entry_id,
-                    category="work_context",
+                    category="safe_general",
                     title="Current project",
                     content="Preparing the Sage private beta launch plan.",
                     actor_user_id="user-2",
@@ -63,14 +63,14 @@ class SageMemoryServiceTests(unittest.TestCase):
             with patch("server_modules.sage_memory_service.workspace_context.workspace_scope_dir", return_value=root):
                 sage_memory_service.upsert_memory_entry(
                     workspace_id="workspace-1",
-                    category="personal_context",
+                    category="private",
                     title="Timezone",
                     content="Uses Asia/Shanghai.",
                     actor_user_id="user-1",
                 )
                 sage_memory_service.upsert_memory_entry(
                     workspace_id="workspace-1",
-                    category="long_term_background",
+                    category="sensitive",
                     title="Status updates",
                     content="Prefers concise next-step updates.",
                     pinned=True,
@@ -79,9 +79,23 @@ class SageMemoryServiceTests(unittest.TestCase):
                 block = sage_memory_service.build_sage_memory_context_block(workspace_id="workspace-1")
 
             self.assertIn("Sage memory", block)
-            self.assertIn("Personal context", block)
-            self.assertIn("Long-term background", block)
+            self.assertIn("Orange", block)
+            self.assertIn("Yellow", block)
             self.assertIn("[pinned]", block)
+
+    def test_legacy_memory_categories_map_to_sensitivity_classes(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "workspace-1"
+            with patch("server_modules.sage_memory_service.workspace_context.workspace_scope_dir", return_value=root):
+                payload = sage_memory_service.upsert_memory_entry(
+                    workspace_id="workspace-1",
+                    category="personal_context",
+                    title="Timezone",
+                    content="Uses Asia/Shanghai.",
+                    actor_user_id="user-1",
+                )
+
+            self.assertEqual(payload["entry"]["category"], "private")
 
 
 if __name__ == "__main__":

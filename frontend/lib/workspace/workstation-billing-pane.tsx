@@ -20,6 +20,8 @@ type BillingSummaryPayload = Record<string, unknown> & {
   portal_available?: boolean;
   account?: Record<string, unknown> | null;
   subscription?: Record<string, unknown> | null;
+  usage?: Record<string, unknown> | null;
+  hosted_sage_ai?: Record<string, unknown> | null;
   plans?: Array<Record<string, unknown>>;
 };
 
@@ -29,6 +31,14 @@ function readText(value: unknown, fallback = 'n/a'): string {
 
 function readBoolean(value: unknown): boolean {
   return value === true;
+}
+
+function readNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function formatUsd(value: unknown): string {
+  return `$${readNumber(value).toFixed(2)}`;
 }
 
 export function WorkstationBillingPane() {
@@ -71,6 +81,12 @@ export function WorkstationBillingPane() {
   const account = summary && typeof summary.account === 'object'
     ? summary.account as Record<string, unknown>
     : {};
+  const usage = summary && typeof summary.usage === 'object'
+    ? summary.usage as Record<string, unknown>
+    : {};
+  const hostedSageAi = summary && typeof summary.hosted_sage_ai === 'object'
+    ? summary.hosted_sage_ai as Record<string, unknown>
+    : {};
   const availablePlans = useMemo(
     () => Array.isArray(summary?.plans) ? summary?.plans as Array<Record<string, unknown>> : [],
     [summary?.plans],
@@ -80,6 +96,9 @@ export function WorkstationBillingPane() {
   const currentPlanLabel = readText(subscription.label ?? bootstrap.entitlements.label, bootstrap.entitlements.label);
   const subscriptionStatus = readText(subscription.status, 'active');
   const currentPeriodEnd = readText(subscription.current_period_end, '');
+  const hostedCreditRemaining = hostedSageAi.monthly_remaining_usd;
+  const hostedCreditCap = hostedSageAi.monthly_cap_usd;
+  const hostedCreditSpent = hostedSageAi.monthly_cost_usd;
 
   const reloadSummary = () => {
     setLoading(true);
@@ -120,7 +139,39 @@ export function WorkstationBillingPane() {
           value={readText(summary?.configured ? 'stripe' : 'offline', 'offline')}
           hint={summary?.configured ? 'Stripe checkout and portal are configured.' : 'Stripe is not configured for this environment.'}
         />
+        <WorkstationSurfaceStat
+          label="Hosted credits"
+          value={formatUsd(hostedCreditRemaining)}
+          hint={`${formatUsd(hostedCreditSpent)} used of ${formatUsd(hostedCreditCap)} this month.`}
+        />
       </WorkstationSurfaceStatGrid>
+      <WorkstationSurfaceCard
+        title="Hosted AI credits"
+        description="Empyralis-hosted model usage for users who do not want to manage API keys."
+      >
+        <WorkstationSurfaceList>
+          <WorkstationSurfaceListItem
+            title="Availability"
+            subtitle={readBoolean(hostedSageAi.allowed) ? 'Available' : 'Not active'}
+            description={readText(hostedSageAi.message, 'Hosted Sage AI is ready for this workspace.')}
+          />
+          <WorkstationSurfaceListItem
+            title="Monthly cap"
+            subtitle={formatUsd(hostedCreditCap)}
+            description="Spend cap before hosted model usage stops for this workspace."
+          />
+          <WorkstationSurfaceListItem
+            title="Monthly usage"
+            subtitle={`${formatUsd(hostedCreditSpent)} spent · ${formatUsd(hostedCreditRemaining)} remaining`}
+            description={`${String(readNumber(usage.hosted_sage_runs_monthly))} hosted Sage runs this month.`}
+          />
+          <WorkstationSurfaceListItem
+            title="Policy"
+            subtitle={readText(hostedSageAi.policy, 'disabled')}
+            description="BYOK providers remain available separately for power users."
+          />
+        </WorkstationSurfaceList>
+      </WorkstationSurfaceCard>
       <WorkstationSurfaceCard
         title="Subscription"
         description="Canonical billing state for this workspace."

@@ -35,12 +35,10 @@ type MemorySensitivityClass = 'green' | 'yellow' | 'orange' | 'red';
 const memoryPaneCache = new Map<string, SageMemorySnapshot>();
 
 const DEFAULT_MEMORY_CATEGORIES: readonly SageMemoryCategoryRecord[] = [
-  { id: 'work_context', label: 'Work context' },
-  { id: 'personal_context', label: 'Personal context' },
-  { id: 'top_of_mind', label: 'Top of mind' },
-  { id: 'brief_history', label: 'Brief history' },
-  { id: 'earlier_context', label: 'Earlier context' },
-  { id: 'long_term_background', label: 'Long-term background' },
+  { id: 'safe_general', label: 'Green' },
+  { id: 'sensitive', label: 'Yellow' },
+  { id: 'private', label: 'Orange' },
+  { id: 'critical_restricted', label: 'Red' },
 ] as const;
 
 const MEMORY_SENSITIVITY_ORDER: readonly MemorySensitivityClass[] = ['green', 'yellow', 'orange', 'red'] as const;
@@ -95,7 +93,7 @@ function normalizeMemorySnapshot(payload: unknown): SageMemorySnapshot {
   };
 }
 
-function defaultMemoryDraft(category = 'work_context'): SageMemoryDraft {
+function defaultMemoryDraft(category = 'safe_general'): SageMemoryDraft {
   return {
     entryId: null,
     category,
@@ -166,6 +164,18 @@ function inferMemorySensitivity(entry: WorkstationSageMemoryRecord): MemorySensi
     return 'red';
   }
   const category = readString(entry.category).toLowerCase();
+  if (category === 'safe_general' || category === 'green') {
+    return 'green';
+  }
+  if (category === 'sensitive' || category === 'yellow') {
+    return 'yellow';
+  }
+  if (category === 'private' || category === 'orange') {
+    return 'orange';
+  }
+  if (category === 'critical_restricted' || category === 'critical' || category === 'red') {
+    return 'red';
+  }
   if (category === 'work_context' || category === 'profile_fact' || category === 'saved_preference') {
     return 'green';
   }
@@ -277,7 +287,7 @@ export function WorkstationActivityPane() {
   const openEditMemory = (entry: WorkstationSageMemoryRecord) => {
     setMemoryDraft({
       entryId: readString(entry.id) || null,
-      category: readString(entry.category) || 'work_context',
+      category: readString(entry.category) || 'safe_general',
       title: readString(entry.title),
       content: readString(entry.content),
       pinned: Boolean(entry.pinned),
@@ -497,7 +507,7 @@ export function WorkstationActivityPane() {
         description="Save only what Sage should carry into future turns."
         onClose={() => {
           setIsMemorySheetOpen(false);
-          setMemoryDraft(defaultMemoryDraft('work_context'));
+          setMemoryDraft(defaultMemoryDraft('safe_general'));
         }}
         actions={(
           <>
@@ -507,7 +517,7 @@ export function WorkstationActivityPane() {
               disabled={Boolean(mutatingMemory)}
               onClick={() => {
                 setIsMemorySheetOpen(false);
-                setMemoryDraft(defaultMemoryDraft('work_context'));
+                setMemoryDraft(defaultMemoryDraft('safe_general'));
               }}
             >
               Cancel

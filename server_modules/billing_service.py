@@ -89,6 +89,77 @@ def _coerce_float(value: Any) -> Optional[float]:
         return None
 
 
+def _workspace_billing_metadata(workspace: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    metadata = _coerce_dict(_coerce_dict(workspace).get("metadata"))
+    admin_defaults = _coerce_dict(metadata.get("admin_defaults"))
+    if isinstance(admin_defaults.get("payload"), dict):
+        admin_defaults = _coerce_dict(admin_defaults.get("payload"))
+    return {
+        **_coerce_dict(metadata.get("entitlements")),
+        **_coerce_dict(metadata.get("billing")),
+        **admin_defaults,
+    }
+
+
+def _hosted_sage_ai_policy(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    return token if token in {"disabled", "owner_opt_in", "enabled_with_cap"} else "owner_opt_in"
+
+
+def _hosted_sage_ai_credit_state(
+    *,
+    effective_plan_id: str,
+    usage: Dict[str, Any],
+    workspace: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    metadata = _workspace_billing_metadata(workspace)
+    plan_allows_hosted_ai = effective_plan_id == "pro"
+    policy = _hosted_sage_ai_policy(metadata.get("hosted_sage_ai_policy"))
+    monthly_cap_usd = _coerce_float(metadata.get("hosted_sage_ai_monthly_cap_usd"))
+    if monthly_cap_usd is None:
+        monthly_cap_usd = 5.0
+    monthly_cap_usd = max(0.0, round(float(monthly_cap_usd), 6))
+    monthly_cost_usd = max(0.0, round(float(usage.get("hosted_sage_cost_usd_monthly") or 0.0), 6))
+    monthly_remaining_usd = max(0.0, round(monthly_cap_usd - monthly_cost_usd, 6))
+
+    if not plan_allows_hosted_ai:
+        reason = "policy_disabled"
+        message = "Empyralis-hosted AI is not included in this workspace plan."
+        allowed = False
+        resolved_policy = "disabled"
+    elif policy == "disabled":
+        reason = "policy_disabled"
+        message = "Hosted Sage AI is disabled for this workspace."
+        allowed = False
+        resolved_policy = policy
+    elif policy == "owner_opt_in":
+        reason = "owner_approval_required"
+        message = "Hosted Sage AI needs owner approval before this workspace can use it."
+        allowed = False
+        resolved_policy = policy
+    elif monthly_cost_usd >= monthly_cap_usd:
+        reason = "cap_reached"
+        message = "Hosted Sage AI monthly cap is reached for this workspace."
+        allowed = False
+        resolved_policy = policy
+    else:
+        reason = None
+        message = None
+        allowed = True
+        resolved_policy = policy
+
+    return {
+        "allowed": allowed,
+        "plan_allows_hosted_ai": plan_allows_hosted_ai,
+        "policy": resolved_policy,
+        "monthly_cap_usd": monthly_cap_usd,
+        "monthly_cost_usd": monthly_cost_usd,
+        "monthly_remaining_usd": monthly_remaining_usd,
+        "reason": reason,
+        "message": message,
+    }
+
+
 def _stripe_secret_key() -> str:
     return str(
         os.getenv("EMPYRALIS_STRIPE_SECRET_KEY")
@@ -382,6 +453,11 @@ def workspace_billing_summary_for_workspace_id(
             ) or []
         ),
     }
+    hosted_sage_ai = _hosted_sage_ai_credit_state(
+        effective_plan_id=effective_plan_id,
+        usage=usage,
+        workspace=resolved_workspace,
+    )
     return {
         "ok": True,
         "workspace_id": str(payload.get("workspace_id") or resolved_workspace.get("workspace_id") or "").strip(),
@@ -423,6 +499,7 @@ def workspace_billing_summary_for_workspace_id(
         "plans": _plan_catalog_summary(effective_plan_id),
         "limits": limits,
         "usage": usage,
+        "hosted_sage_ai": hosted_sage_ai,
     }
 
 

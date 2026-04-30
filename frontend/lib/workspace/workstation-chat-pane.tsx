@@ -1729,7 +1729,7 @@ function hasConnectedConnector(
 function defaultSageMemoryDraft(): SageMemoryDraft {
   return {
     entryId: null,
-    category: 'profile_fact',
+    category: 'safe_general',
     title: '',
     content: '',
     pinned: false,

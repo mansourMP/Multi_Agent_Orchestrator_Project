@@ -56,6 +56,10 @@ export default async function OnboardingPage({
           <p className="app-page-message__meta">
             Reload this page and try again once the workspace shell is back.
           </p>
+          <div className="app-page-message__actions" aria-label="Onboarding recovery actions">
+            <a className="app-page-message__button" href="">Reload</a>
+            <a className="app-page-message__button app-page-message__button--secondary" href="/login">Sign in again</a>
+          </div>
         </div>
       </main>
     );

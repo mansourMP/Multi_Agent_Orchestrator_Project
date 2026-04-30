@@ -26,6 +26,10 @@ export default async function AccountLayout({ children }: { children: ReactNode 
           <p className="app-page-message__meta">
             Reload this page, or sign in again if the problem persists.
           </p>
+          <div className="app-page-message__actions" aria-label="Workspace recovery actions">
+            <a className="app-page-message__button" href="">Reload</a>
+            <a className="app-page-message__button app-page-message__button--secondary" href="/login">Sign in again</a>
+          </div>
         </div>
       </main>
     );

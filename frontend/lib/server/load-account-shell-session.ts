@@ -7,6 +7,7 @@ import {
   ACCOUNT_SHELL_RETRY_DELAYS_MS,
   AUTH_ACCOUNT_SHELL_TIMEOUT_MS,
 } from '@/lib/auth/auth-timeouts';
+import { controlPlaneBaseUrl } from '@/lib/server/control-plane-base-url';
 import type { AccountShellBootstrap } from '@/lib/shell/account-shell-store';
 import { parseAccountShellPayload } from '@/lib/shell/account-shell-payload';
 
@@ -52,15 +53,14 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
     const requestHeaders = await headers();
     const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
     const proto = requestHeaders.get('x-forwarded-proto') ?? 'http';
-    if (!host) {
-      return degradedAccountShellSession(null, 'Cannot resolve request host for account-shell bootstrap.');
-    }
-    const origin = `${proto.split(',')[0].trim() || 'http'}://${host.split(',')[0].trim()}`;
     const forwardHeaders = {
       accept: 'application/json',
       ...(requestHeaders.get('cookie') ? { cookie: requestHeaders.get('cookie') as string } : {}),
       ...(requestHeaders.get('authorization') ? { authorization: requestHeaders.get('authorization') as string } : {}),
+      ...(host ? { 'x-forwarded-host': host.split(',')[0].trim() } : {}),
+      ...(proto ? { 'x-forwarded-proto': proto.split(',')[0].trim() || 'http' } : {}),
     };
+    const accountShellUrl = `${controlPlaneBaseUrl()}/api/v1/auth/account-shell`;
     let lastStatus: number | null = null;
     let lastErrorMessage: string | null = null;
 
@@ -71,7 +71,7 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
       }, AUTH_ACCOUNT_SHELL_TIMEOUT_MS);
 
       try {
-        const response = await fetch(`${origin}/api/auth/account-shell`, {
+        const response = await fetch(accountShellUrl, {
           method: 'GET',
           cache: 'no-store',
           signal: controller.signal,

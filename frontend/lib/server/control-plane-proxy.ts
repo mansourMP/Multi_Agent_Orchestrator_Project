@@ -41,6 +41,8 @@ const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   'upgrade',
 ]);
 
+const BROWSER_AUTH_UPSTREAM_PREFIX = '/api/v1/auth/';
+
 function hasBrowserSessionCookie(request: NextRequest): boolean {
   return Boolean(
     request.cookies.get(AUTH_ACCESS_COOKIE_NAME)
@@ -65,6 +67,46 @@ function validateBrowserCsrf(request: NextRequest): NextResponse | null {
     });
   }
   return null;
+}
+
+function splitCombinedSetCookieHeader(value: string): string[] {
+  const source = String(value || '').trim();
+  if (!source) {
+    return [];
+  }
+  return source.split(/,(?=[^;,]+=)/g).map((item) => item.trim()).filter(Boolean);
+}
+
+function setCookieHeadersContain(headers: Headers, cookieName: string): boolean {
+  const prefix = `${cookieName}=`;
+  const responseHeaders = headers as Headers & {
+    getSetCookie?: () => string[];
+  };
+  const setCookieValues =
+    typeof responseHeaders.getSetCookie === 'function'
+      ? responseHeaders.getSetCookie()
+      : splitCombinedSetCookieHeader(headers.get('set-cookie') || '');
+  return setCookieValues.some((cookie) => cookie.trim().startsWith(prefix));
+}
+
+function shouldEnsureBrowserCsrfCookie(upstreamPath: string, responseHeaders: Headers): boolean {
+  if (!upstreamPath.startsWith(BROWSER_AUTH_UPSTREAM_PREFIX)) {
+    return false;
+  }
+  const hasAuthCookie =
+    setCookieHeadersContain(responseHeaders, AUTH_ACCESS_COOKIE_NAME)
+    || setCookieHeadersContain(responseHeaders, AUTH_REFRESH_COOKIE_NAME);
+  if (!hasAuthCookie) {
+    return false;
+  }
+  return !setCookieHeadersContain(responseHeaders, AUTH_CSRF_COOKIE_NAME);
+}
+
+function generateBrowserCsrfToken(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function copyForwardableRequestHeaders(
@@ -124,7 +166,9 @@ function copyForwardableResponseHeaders(response: Response): Headers {
   } else {
     const setCookieHeader = response.headers.get('set-cookie');
     if (setCookieHeader) {
-      headers.append('set-cookie', setCookieHeader);
+      for (const cookie of splitCombinedSetCookieHeader(setCookieHeader)) {
+        headers.append('set-cookie', cookie);
+      }
     }
   }
 
@@ -178,10 +222,19 @@ export async function forwardControlPlaneRequest(
         ? null
         : await response.arrayBuffer();
 
-    return new NextResponse(responseBody, {
+    const nextResponse = new NextResponse(responseBody, {
       status: response.status,
       headers: responseHeaders,
     });
+    if (shouldEnsureBrowserCsrfCookie(upstreamPath, responseHeaders)) {
+      nextResponse.cookies.set(AUTH_CSRF_COOKIE_NAME, generateBrowserCsrfToken(), {
+        httpOnly: false,
+        secure: request.nextUrl.protocol === 'https:',
+        sameSite: 'lax',
+        path: '/',
+      });
+    }
+    return nextResponse;
   } catch (error) {
     if (controller && error instanceof Error && error.name === 'AbortError') {
       return new NextResponse(

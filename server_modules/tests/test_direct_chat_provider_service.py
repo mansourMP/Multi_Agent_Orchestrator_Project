@@ -44,6 +44,45 @@ class DirectChatProviderServiceTests(unittest.TestCase):
 
         self.assertEqual(credentials, {"auth_mode": "none"})
 
+    def test_supports_direct_message_native_chat_requires_scoped_key_for_cloud_api_providers(self) -> None:
+        for provider in ("deepseek", "qwen", "mistral", "vertex"):
+            with self.subTest(provider=provider):
+                self.assertFalse(
+                    direct_chat_provider_service.supports_direct_message_native_chat(
+                        provider,
+                        {},
+                        provider_has_key_fn=lambda _provider: True,
+                    )
+                )
+                self.assertTrue(
+                    direct_chat_provider_service.supports_direct_message_native_chat(
+                        provider,
+                        {"api_key": "sk-scoped"},
+                        provider_has_key_fn=lambda _provider: False,
+                    )
+                )
+
+    def test_preferred_provider_does_not_use_platform_key_when_hosted_ai_is_filtered(self) -> None:
+        def fake_credentials(_workspace_id: str, _provider: str) -> dict[str, str]:
+            return {}
+
+        provider, credentials = direct_chat_provider_service.preferred_provider(
+            "workspace-a",
+            "",
+            supported_providers=["openai", "anthropic", "gemini", "deepseek", "codex_cli"],
+            direct_chat_credentials_fn=fake_credentials,
+            supports_direct_message_native_chat_fn=lambda provider, credentials: direct_chat_provider_service.supports_direct_message_native_chat(
+                provider,
+                credentials,
+                provider_has_key_fn=lambda key_provider: key_provider == "deepseek",
+            ),
+            credential_auth_mode_fn=lambda _provider, credentials: str((credentials or {}).get("auth_mode") or ""),
+            provider_runtime_usable_fn=lambda _workspace_id, _provider: False,
+        )
+
+        self.assertEqual(provider, "openai")
+        self.assertEqual(credentials, {})
+
     def test_preferred_provider_maps_openai_oauth_to_codex_cli_without_explicit_selection(self) -> None:
         def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:
             if provider == "openai":

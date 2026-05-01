@@ -52,6 +52,8 @@ def supports_direct_message_native_chat(
         )
     if normalized_provider == "gemini":
         return bool(str(payload.get("api_key") or "").strip())
+    if normalized_provider in {"qwen", "deepseek", "mistral", "vertex"}:
+        return bool(str(payload.get("api_key") or "").strip())
     if normalized_provider in {"openai-codex", "codex_cli"}:
         return bool(payload) or provider_has_key_fn("codex_cli")
     return provider_has_key_fn(normalized_provider)

@@ -42,6 +42,52 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function sameOriginAccountShellUrl(host: string | null, proto: string | null): string | null {
+  const normalizedHost = String(host ?? '').split(',')[0].trim();
+  if (!normalizedHost) {
+    return null;
+  }
+  const normalizedProto = String(proto ?? '').split(',')[0].trim() === 'https' ? 'https' : 'http';
+  return `${normalizedProto}://${normalizedHost}/api/auth/account-shell`;
+}
+
+async function fetchSameOriginAccountShellSession(
+  accountShellUrl: string | null,
+  forwardHeaders: HeadersInit,
+): Promise<LoadedAccountShellSession | undefined> {
+  if (!accountShellUrl) {
+    return undefined;
+  }
+
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    controller.abort();
+  }, AUTH_ACCOUNT_SHELL_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(accountShellUrl, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: forwardHeaders,
+    });
+
+    if (response.status === 401) {
+      return null;
+    }
+
+    if (response.ok) {
+      return parseAccountShellPayload(await response.json());
+    }
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+
+  return undefined;
+}
+
 export function isDegradedAccountShellSession(
   session: LoadedAccountShellSession,
 ): session is DegradedAccountShellSession {
@@ -53,6 +99,7 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
     const requestHeaders = await headers();
     const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
     const proto = requestHeaders.get('x-forwarded-proto') ?? 'http';
+    const sameOriginUrl = sameOriginAccountShellUrl(host, proto);
     const forwardHeaders = {
       accept: 'application/json',
       ...(requestHeaders.get('cookie') ? { cookie: requestHeaders.get('cookie') as string } : {}),
@@ -89,6 +136,10 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
         lastStatus = response.status;
         lastErrorMessage = `Account shell request failed with status ${response.status}.`;
         if (!RETRYABLE_ACCOUNT_SHELL_STATUSES.has(response.status) || attempt === ACCOUNT_SHELL_RETRY_DELAYS_MS.length) {
+          const fallbackSession = await fetchSameOriginAccountShellSession(sameOriginUrl, forwardHeaders);
+          if (fallbackSession !== undefined) {
+            return fallbackSession;
+          }
           return degradedAccountShellSession(response.status, lastErrorMessage);
         }
       } catch (error) {
@@ -97,6 +148,10 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
           ? `Account shell bootstrap timed out after ${AUTH_ACCOUNT_SHELL_TIMEOUT_MS}ms.`
           : error instanceof Error ? error.message : 'Account shell bootstrap failed.';
         if (attempt === ACCOUNT_SHELL_RETRY_DELAYS_MS.length) {
+          const fallbackSession = await fetchSameOriginAccountShellSession(sameOriginUrl, forwardHeaders);
+          if (fallbackSession !== undefined) {
+            return fallbackSession;
+          }
           return degradedAccountShellSession(lastStatus, lastErrorMessage);
         }
       } finally {

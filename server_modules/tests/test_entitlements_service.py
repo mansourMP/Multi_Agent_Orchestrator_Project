@@ -220,6 +220,26 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertEqual(hosted["policy"], "enabled_with_cap")
         self.assertEqual(hosted["reason"], None)
 
+    def test_hosted_sage_ai_respects_admin_defaults_billing_plan(self) -> None:
+        state = entitlements_service.resolve_workspace_entitlement_state(
+            workspace={
+                "metadata": {
+                    "admin_defaults": {
+                        "payload": {
+                            "billing_plan": "pro",
+                            "hosted_sage_ai_policy": "enabled_with_cap",
+                            "hosted_sage_ai_monthly_cap_usd": 5.0,
+                        }
+                    }
+                }
+            },
+        )
+        hosted = entitlements_service.hosted_sage_ai_access_state(state=state)
+
+        self.assertEqual(state.plan_id, "pro")
+        self.assertTrue(hosted["allowed"])
+        self.assertEqual(hosted["policy"], "enabled_with_cap")
+
     def test_enforce_hosted_ai_access_rejects_when_cap_reached(self) -> None:
         with self.assertRaises(entitlements_service.EntitlementDeniedError) as ctx:
             entitlements_service.enforce_hosted_ai_access(

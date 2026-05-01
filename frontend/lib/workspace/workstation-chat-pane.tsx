@@ -161,6 +161,8 @@ type GatewayReadinessDoctorPayload = Record<string, unknown> & {
 type SendFailureNotice = {
   message: string;
   retryable: boolean;
+  retryDraft?: string | null;
+  actionTarget?: 'integrations' | null;
 };
 
 type ChatMachineTrust = 'personal' | 'agent';
@@ -956,6 +958,17 @@ function providerRouteSuffix(provider: ProviderCatalogRecord | null | undefined)
   return null;
 }
 
+function providerFailureMessageForProvider(provider: ProviderCatalogRecord | null | undefined): string {
+  const credentialPlane = readString(provider?.credential_plane).toLowerCase();
+  if (credentialPlane === 'workspace_connection') {
+    return "Sage couldn't respond with your provider key. Check the key or quota in Integrations.";
+  }
+  if (credentialPlane === 'platform_runtime') {
+    return "Sage hit a temporary hosted provider issue. Try again or switch model.";
+  }
+  return "Sage couldn't complete that turn. Try again or switch model.";
+}
+
 function modelOptionDisplayLabel(
   option: ChatModelOption,
   providerRecord: ProviderCatalogRecord | null,
@@ -1554,7 +1567,9 @@ function classifyStatusNotice(message: string): {
     return {
       tone: 'warning',
       title: 'Provider attention needed',
-      body: message,
+      body: /api key|credential/i.test(message)
+        ? 'Check your provider key or quota in Integrations.'
+        : 'Sage hit a temporary provider issue. Try again or switch model.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
       actionLabel: 'Open Integrations',
@@ -3338,6 +3353,7 @@ export function WorkstationChatPane() {
       setSendFailureNotice({
         message: 'Connect an AI provider in Integrations before sending.',
         retryable: false,
+        actionTarget: 'integrations',
       });
       return;
     }
@@ -3672,6 +3688,9 @@ export function WorkstationChatPane() {
       };
       const responseExecutionTarget = readExecutionTarget(responseMetadata);
       const providerFailureIntervention = findProviderFailureIntervention(normalizedResponse.interventions ?? []);
+      const providerFailureRecord = providerCatalog.find((provider) =>
+        readString(provider.id).toLowerCase() === readString(responseMetadata.effective_provider || responseMetadata.provider).toLowerCase(),
+      ) ?? selectedProviderRecord;
       const nextThreadId = String(normalizedResponse.thread_id ?? requestedThreadId);
       const nextMessages = (
         persistedThreadState.threadId === nextThreadId && persistedThreadState.messages.length > 0
@@ -3687,7 +3706,7 @@ export function WorkstationChatPane() {
         ? {
             id: `${nextThreadId}:assistant-error:${Date.now()}`,
             role: 'assistant',
-            content: "Sage couldn't respond — provider error. Check your API key in Integrations.",
+            content: providerFailureMessageForProvider(providerFailureRecord),
             status: 'failed',
             createdAt: new Date().toISOString(),
             runId: typeof normalizedResponse.run_id === 'string' ? normalizedResponse.run_id : null,
@@ -3792,6 +3811,7 @@ export function WorkstationChatPane() {
           ? {
               message: 'Response interrupted before completion.',
               retryable: true,
+              retryDraft: outboundMessage,
             }
           : null);
       } else {
@@ -3811,6 +3831,7 @@ export function WorkstationChatPane() {
           retryable: error instanceof WorkstationClientError
             ? error.retryable
             : true,
+          retryDraft: outboundMessage,
         });
       }
       setLiveActivitySteps((current) => settleLiveActivitySteps(current, aborted ? 'done' : 'error'));
@@ -3965,9 +3986,49 @@ export function WorkstationChatPane() {
               tone="warning"
               role="status"
               aria-live="polite"
+              className="app-chat-status-notice"
             >
-              <span>{sendFailureNotice.message}</span>
-              {sendFailureNotice.retryable ? <span>Draft kept. Try again when ready.</span> : null}
+              <div className="app-chat-status-notice__copy">
+                <strong>Action needed</strong>
+                <span>{sendFailureNotice.message}</span>
+              </div>
+              <div className="app-chat-status-notice__actions">
+                {sendFailureNotice.actionTarget === 'integrations' ? (
+                  <AppButton
+                    type="button"
+                    tone="secondary"
+                    onClick={() => {
+                      setSendFailureNotice(null);
+                      router.push(integrationsHref);
+                    }}
+                  >
+                    Open Integrations
+                  </AppButton>
+                ) : null}
+                {sendFailureNotice.retryable ? (
+                  <AppButton
+                    type="button"
+                    tone="secondary"
+                    onClick={() => {
+                      if (sendFailureNotice.retryDraft) {
+                        setDraft(sendFailureNotice.retryDraft);
+                      }
+                      setSendFailureNotice(null);
+                    }}
+                  >
+                    Try again
+                  </AppButton>
+                ) : null}
+                <AppButton
+                  type="button"
+                  tone="ghost"
+                  onClick={() => {
+                    setSendFailureNotice(null);
+                  }}
+                >
+                  Dismiss
+                </AppButton>
+              </div>
             </AppNotice>
           ) : null}
 

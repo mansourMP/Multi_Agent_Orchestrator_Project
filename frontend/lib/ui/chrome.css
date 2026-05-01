@@ -6849,6 +6849,44 @@ textarea {
   background: color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-panel-elevated) 16%);
 }
 
+.sage-hosted-credits {
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 74%, transparent 26%);
+  border-radius: var(--app-radius-lg);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 70%, var(--app-bg-panel) 30%);
+}
+
+.sage-hosted-credits__copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.sage-hosted-credits__title {
+  color: var(--app-text-primary);
+  font-size: 14px;
+  font-weight: var(--app-weight-semibold);
+}
+
+.sage-hosted-credits__meta {
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sage-hosted-credits__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .sage-provider-active__row {
   min-height: 72px;
   display: grid;
@@ -6962,6 +7000,27 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.sage-provider-picker__empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--app-border-muted) 62%, transparent 38%);
+  color: var(--app-text-secondary);
+  font-size: 13px;
+}
+
+.sage-provider-picker__empty button {
+  border: 0;
+  background: transparent;
+  color: var(--app-text-primary);
+  font: inherit;
+  font-weight: var(--app-weight-semibold);
+  cursor: pointer;
 }
 
 .sage-unified-grid {

@@ -66,6 +66,17 @@ type ProviderCardRecord = {
   keyTail: string | null;
 };
 
+type HostedSageAiSnapshot = {
+  allowed: boolean;
+  planAllowsHostedAi: boolean;
+  policy: string;
+  reason: string | null;
+  message: string | null;
+  monthlyCapUsd: number;
+  monthlyCostUsd: number;
+  monthlyRemainingUsd: number;
+};
+
 type ProviderPickerSection = {
   id: 'byok' | 'hosted';
   label: string;
@@ -145,9 +156,21 @@ type SageConnectorsPaneCache = {
   doctor: GatewayDoctorPayload | null;
   whatsappPersonal: PersonalChannelViewPayload | null;
   telegramPersonal: PersonalChannelViewPayload | null;
+  hostedSageAi: HostedSageAiSnapshot;
 };
 
 const sageConnectorsPaneCache = new Map<string, SageConnectorsPaneCache>();
+
+const DEFAULT_HOSTED_SAGE_AI: HostedSageAiSnapshot = {
+  allowed: false,
+  planAllowsHostedAi: false,
+  policy: 'disabled',
+  reason: 'policy_disabled',
+  message: 'Empyralis-hosted AI is not included in this workspace plan.',
+  monthlyCapUsd: 0,
+  monthlyCostUsd: 0,
+  monthlyRemainingUsd: 0,
+};
 
 const FALLBACK_PROVIDER_IDS = [
   'openai',
@@ -239,6 +262,11 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function readNumber(value: unknown, fallback = 0): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function readOptionalString(value: unknown): string | null {
@@ -345,6 +373,56 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
         : [],
     }];
   });
+}
+
+function normalizeHostedSageAi(payload: unknown): HostedSageAiSnapshot {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const hosted = record.hosted_sage_ai && typeof record.hosted_sage_ai === 'object'
+    ? record.hosted_sage_ai as Record<string, unknown>
+    : {};
+  if (!hosted || Object.keys(hosted).length === 0) {
+    return DEFAULT_HOSTED_SAGE_AI;
+  }
+  return {
+    allowed: hosted.allowed === true,
+    planAllowsHostedAi: hosted.plan_allows_hosted_ai === true,
+    policy: readString(hosted.policy, DEFAULT_HOSTED_SAGE_AI.policy),
+    reason: readOptionalString(hosted.reason),
+    message: readOptionalString(hosted.message),
+    monthlyCapUsd: readNumber(hosted.monthly_cap_usd, 0),
+    monthlyCostUsd: readNumber(hosted.monthly_cost_usd, 0),
+    monthlyRemainingUsd: readNumber(hosted.monthly_remaining_usd, 0),
+  };
+}
+
+function formatUsd(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '$0';
+  }
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: value < 1 ? 2 : 0,
+  }).format(value);
+}
+
+function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord | null): string {
+  if (hostedSageAi.allowed && hostedProviderCard) {
+    return `Ready with ${formatUsd(hostedSageAi.monthlyRemainingUsd)} remaining this month.`;
+  }
+  if (hostedSageAi.allowed) {
+    return 'Credits are enabled, but Empyralis hosted runtime is not configured yet.';
+  }
+  if (hostedSageAi.message) {
+    return hostedSageAi.message;
+  }
+  if (hostedSageAi.reason === 'owner_approval_required') {
+    return 'Hosted credits need workspace owner approval before use.';
+  }
+  if (hostedSageAi.reason === 'cap_reached') {
+    return 'Hosted credits are at the monthly cap for this workspace.';
+  }
+  return 'Hosted credits are not active for this workspace.';
 }
 
 function fallbackProviderCatalog(): ProviderSnapshot[] {
@@ -934,6 +1012,7 @@ export function WorkstationSageConnectorsPane({
   const [doctor, setDoctor] = useState<GatewayDoctorPayload | null>(() => cachedState?.doctor ?? null);
   const [whatsappPersonal, setWhatsappPersonal] = useState<PersonalChannelViewPayload | null>(() => cachedState?.whatsappPersonal ?? null);
   const [telegramPersonal, setTelegramPersonal] = useState<PersonalChannelViewPayload | null>(() => cachedState?.telegramPersonal ?? null);
+  const [hostedSageAi, setHostedSageAi] = useState<HostedSageAiSnapshot>(() => cachedState?.hostedSageAi ?? DEFAULT_HOSTED_SAGE_AI);
   const [isLoading, setIsLoading] = useState(() => cachedState === null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -1016,6 +1095,7 @@ export function WorkstationSageConnectorsPane({
       doctor: gatewayPayload.doctor,
       whatsappPersonal: gatewayPayload.whatsappPersonal,
       telegramPersonal: gatewayPayload.telegramPersonal,
+      hostedSageAi: normalizeHostedSageAi(catalogPayload),
     };
     sageConnectorsPaneCache.set(cacheKey, nextState);
     setProviders(nextState.providers);
@@ -1027,6 +1107,7 @@ export function WorkstationSageConnectorsPane({
     setDoctor(nextState.doctor);
     setWhatsappPersonal(nextState.whatsappPersonal);
     setTelegramPersonal(nextState.telegramPersonal);
+    setHostedSageAi(nextState.hostedSageAi);
 
     if (catalogResult.status === 'rejected') {
       throw catalogResult.reason;
@@ -1122,9 +1203,13 @@ export function WorkstationSageConnectorsPane({
 
   const hostedProviderCard = useMemo(
     () => providerCards.find((record) =>
-      record.provider.hostedSageAiPolicy === 'allowed'
+      hostedSageAi.allowed && (
+        record.provider.hostedSageAiPolicy === 'enabled_with_cap'
+        || record.provider.hostedSageAiPolicy === 'allowed'
+        || readString(record.provider.credentialPlane).toLowerCase() === 'platform_runtime'
+      )
       || providerRouteBadge(record)?.label === 'Via Empyralis') ?? null,
-    [providerCards],
+    [hostedSageAi.allowed, providerCards],
   );
 
   const explicitSelectedProfile = useMemo(
@@ -1150,22 +1235,21 @@ export function WorkstationSageConnectorsPane({
     const byokItems = orderedByokIds
       .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
       .filter((record): record is ProviderCardRecord => Boolean(record));
-    const sections: ProviderPickerSection[] = [
-      {
-        id: 'byok',
-        label: 'Your API keys',
-        items: byokItems,
-      },
-    ];
-    if (hostedProviderCard) {
+    const sections: ProviderPickerSection[] = [];
+    if (hostedProviderCard || hostedSageAi.planAllowsHostedAi) {
       sections.push({
         id: 'hosted',
-        label: 'Empyralis hosted',
-        items: [hostedProviderCard],
+        label: 'Use Empyralis credits',
+        items: hostedProviderCard ? [hostedProviderCard] : [],
       });
     }
+    sections.push({
+      id: 'byok',
+      label: 'Use your own API key',
+      items: byokItems,
+    });
     return sections;
-  }, [hostedProviderCard, providerCards]);
+  }, [hostedProviderCard, hostedSageAi.planAllowsHostedAi, providerCards]);
 
   const selectedGateway = useMemo(
     () => gateways.find((gateway) => readString(gateway.gateway_id, '') === readString(selectedGatewayId, '')) ?? null,
@@ -1440,6 +1524,13 @@ export function WorkstationSageConnectorsPane({
       return;
     }
     window.location.assign(`/w/${encodeURIComponent(workspaceId)}/gateway`);
+  }
+
+  function openBillingSettings() {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.location.assign(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`);
   }
 
   function renderProviderCard(record: ProviderCardRecord) {
@@ -1796,12 +1887,17 @@ export function WorkstationSageConnectorsPane({
   }
 
   function renderProviderPickerRow(record: ProviderCardRecord, sectionId: ProviderPickerSection['id']) {
-    const pickerConnected = providerPickerConnected(record, localCompanionOnline);
+    const pickerConnected = sectionId === 'hosted'
+      ? hostedSageAi.allowed
+      : providerPickerConnected(record, localCompanionOnline);
     const isActive = activeProviderCard?.id === record.id;
     const requiresSecret = providerRequiresSecret(record.provider, record.profile);
     const showInlineKey = providerPickerDraftId === record.id && !pickerConnected && requiresSecret;
     const busy = busyCardId === record.id;
     const displayLabel = sectionId === 'hosted' ? 'Empyralis default model' : record.label;
+    const detailLabel = sectionId === 'hosted'
+      ? describeHostedSageAi(hostedSageAi, record)
+      : providerPickerStatusLabel(record, localCompanionOnline);
     return (
       <div key={`${sectionId}:${record.id}`} className="sage-provider-picker__item">
         <button
@@ -1820,7 +1916,7 @@ export function WorkstationSageConnectorsPane({
           />
           <div className="sage-provider-picker__copy">
             <span className="sage-provider-picker__name">{displayLabel}</span>
-            <span className="sage-provider-picker__detail">{providerPickerStatusLabel(record, localCompanionOnline)}</span>
+            <span className="sage-provider-picker__detail">{detailLabel}</span>
           </div>
           <span className={joinClassNames('sage-provider-picker__status-dot', pickerConnected && 'sage-provider-picker__status-dot--connected')} aria-hidden="true" />
           {isActive ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : null}
@@ -1896,6 +1992,35 @@ export function WorkstationSageConnectorsPane({
           isLoading ? renderProviderSkeletons() : (
             <section className="sage-unified-section">
               <p className="sage-unified-section__label">AI Providers</p>
+              <div className="sage-hosted-credits">
+                <div className="sage-hosted-credits__copy">
+                  <strong className="sage-hosted-credits__title">Empyralis credits</strong>
+                  <span className="sage-hosted-credits__meta">
+                    {describeHostedSageAi(hostedSageAi, hostedProviderCard)}
+                  </span>
+                </div>
+                <div className="sage-hosted-credits__actions">
+                  {hostedProviderCard ? (
+                    <AppButton
+                      type="button"
+                      tone="secondary"
+                      disabled={!hostedSageAi.allowed || busyCardId === hostedProviderCard.id}
+                      onClick={() => {
+                        void handleProviderSelect(hostedProviderCard, { hosted: true });
+                      }}
+                    >
+                      Use credits
+                    </AppButton>
+                  ) : null}
+                  <AppButton
+                    type="button"
+                    tone="ghost"
+                    onClick={openBillingSettings}
+                  >
+                    Manage credits
+                  </AppButton>
+                </div>
+              </div>
               <div className="sage-provider-active">
                 <div className="sage-provider-active__row">
                   {activeProviderCard ? (
@@ -1951,7 +2076,7 @@ export function WorkstationSageConnectorsPane({
       <CommandSheet
         open={providerPickerOpen}
         title="Choose provider"
-        description="Pick the provider Sage should use for your chat turns."
+        description="Use Empyralis credits by default, or connect your own API key for direct provider billing."
         onClose={() => {
           setProviderPickerOpen(false);
           setProviderPickerDraftId(null);
@@ -1962,7 +2087,16 @@ export function WorkstationSageConnectorsPane({
             <section key={section.id} className="sage-provider-picker__section">
               <h3 className="sage-provider-picker__section-label">{section.label}</h3>
               <div className="sage-provider-picker__list">
-                {section.items.map((record) => renderProviderPickerRow(record, section.id))}
+                {section.items.length > 0 ? (
+                  section.items.map((record) => renderProviderPickerRow(record, section.id))
+                ) : section.id === 'hosted' ? (
+                  <div className="sage-provider-picker__empty">
+                    <span>{describeHostedSageAi(hostedSageAi, null)}</span>
+                    <button type="button" onClick={openBillingSettings}>
+                      Manage credits
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </section>
           ))}

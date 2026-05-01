@@ -74,7 +74,7 @@ services:
     dockerfilePath: ./frontend/Dockerfile
     plan: starter
     autoDeploy: true
-    healthCheckPath: /
+    healthCheckPath: /healthz
     envVars:
       - key: PORT
         value: "3000"

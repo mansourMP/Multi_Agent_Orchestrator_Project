@@ -20,4 +20,4 @@ COPY --from=build /app/frontend/public ./public
 COPY --from=build /app/frontend/node_modules ./node_modules
 COPY --from=build /app/frontend/package*.json ./
 EXPOSE 3000
-CMD ["sh", "-c", "npm run start -- -H 0.0.0.0 -p ${PORT:-3000}"]
+CMD ["sh", "-c", "exec node node_modules/next/dist/bin/next start -H 0.0.0.0 -p ${PORT:-3000}"]

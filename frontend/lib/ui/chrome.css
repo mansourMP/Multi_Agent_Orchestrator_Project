@@ -3574,14 +3574,16 @@ textarea {
   justify-content: center;
   justify-self: center;
   align-self: center;
-  gap: 12px;
+  gap: var(--app-space-1);
   padding: 0;
   border: 0;
   border-radius: 0 !important;
   background: transparent !important;
   box-shadow: none !important;
   outline: 0;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
 }
 
@@ -3593,13 +3595,13 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
+  min-height: 34px;
   gap: var(--app-space-1);
-  padding: 0 var(--app-space-4);
-  border: 1px solid color-mix(in srgb, var(--app-border-muted) 68%, transparent 32%);
-  border-radius: var(--app-radius-lg);
+  padding: 0 var(--app-space-3);
+  border: 0;
+  border-radius: var(--app-radius-pill);
   font-family: var(--app-font-sans);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: var(--app-font-14);
   font-weight: var(--app-weight-medium);
   line-height: 1;
@@ -3608,10 +3610,8 @@ textarea {
   background: transparent;
   transition:
     background-color var(--transition),
-    border-color var(--transition),
     color var(--transition),
-    transform var(--transition),
-    box-shadow var(--transition);
+    transform var(--transition);
 }
 
 .workstation-titlebar__link-meta {
@@ -3627,22 +3627,15 @@ textarea {
 }
 
 .workstation-titlebar__link:hover {
-  background: color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-panel-elevated) 16%);
-  border-color: color-mix(in srgb, var(--app-border-strong) 74%, transparent 26%);
+  background: color-mix(in srgb, var(--app-bg-raised) 70%, transparent 30%);
   color: var(--text-primary);
   transform: translateY(-1px);
-  box-shadow:
-    var(--app-shadow-panel),
-    0 10px 24px -22px color-mix(in srgb, black 22%, transparent);
 }
 
 .workstation-titlebar__link--active {
-  border-color: color-mix(in srgb, var(--app-border-accent) 22%, transparent 78%);
-  background: color-mix(in srgb, var(--app-bg-panel) 98%, var(--app-bg-panel-elevated) 2%);
+  background: color-mix(in srgb, var(--app-bg-raised) 92%, transparent 8%);
   color: var(--text-primary);
-  box-shadow:
-    0 14px 24px -18px color-mix(in srgb, black 22%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, white 26%, transparent 74%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-border-muted) 72%, transparent);
 }
 
 .workstation-titlebar__actions {
@@ -4081,6 +4074,74 @@ textarea {
   .app-shell-viewport,
   .app-chat-page {
     overflow-x: hidden;
+  }
+}
+
+@media (max-width: 767px) {
+  .workstation-titlebar {
+    min-height: auto;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--app-space-2);
+    padding: var(--app-space-2) max(var(--app-space-3), env(safe-area-inset-right)) var(--app-space-2) max(var(--app-space-3), env(safe-area-inset-left));
+  }
+
+  .workstation-titlebar__brand {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .workstation-titlebar__surface-link {
+    min-height: 28px;
+    padding: 0;
+  }
+
+  .workstation-titlebar__surface {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--app-font-18);
+  }
+
+  .workstation-titlebar__nav {
+    width: 100% !important;
+    max-width: 100%;
+    justify-self: stretch;
+    justify-content: flex-start;
+    padding: 0 0 var(--app-space-1);
+    scroll-padding-inline: var(--app-space-1);
+  }
+
+  .workstation-titlebar__link {
+    min-height: 32px;
+    padding: 0 var(--app-space-2);
+    font-size: var(--app-font-13);
+  }
+
+  .workstation-titlebar__right {
+    position: absolute;
+    top: var(--app-space-2);
+    right: max(var(--app-space-3), env(safe-area-inset-right));
+  }
+
+  .workstation-titlebar__actions {
+    gap: var(--app-space-1);
+  }
+
+  .workstation-titlebar__action {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+  }
+
+  .workstation-layout {
+    padding: var(--app-space-3);
+  }
+
+  .workstation-shell--chat .workstation-layout {
+    padding: 0;
   }
 }
 

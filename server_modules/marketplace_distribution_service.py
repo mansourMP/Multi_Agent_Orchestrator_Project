@@ -21,6 +21,160 @@ POLICY_POSTURES = {"governed", "restricted"}
 MONETIZATION_KINDS = {"free", "metered", "subscription", "revenue_share"}
 
 
+PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
+    {
+        "package_id": "preview-restaurant-orders",
+        "kind": "app",
+        "label": "Restaurant Orders",
+        "description": "Telegram ordering template with menu lookup, order confirmation, and human escalation.",
+        "category": "Specialist template",
+        "publisher": {"publisher_id": "empyralis", "label": "Empyralis", "website": "https://empyralis.dev"},
+        "onboarding": {"docs_url": "/docs/studio-marketplace-ux-boundary-2026-04-30.md"},
+        "verification_status": "verified",
+        "review_state": "approved",
+        "health_state": "healthy",
+        "policy_posture": "governed",
+        "billing": {
+            "monetization_kind": "free",
+            "accounting_hook": {"ledger_key": "studio.restaurant_orders", "hook_kind": "template_install"},
+        },
+        "app": {
+            "app_id": "studio.restaurant_orders",
+            "hosted_url": "/w/{workspace_id}/studio?template=restaurant_orders",
+            "version": "0.1.0",
+            "release_channel": "preview",
+            "permissions": ["telegram:send", "spreadsheet:read"],
+            "bridge_contracts": {"messages": ["read", "write"], "catalog": ["read"]},
+        },
+    },
+    {
+        "package_id": "preview-auto-parts-sales",
+        "kind": "app",
+        "label": "Auto Parts Sales",
+        "description": "Qualifies car model, requested part, catalog availability, and next customer action.",
+        "category": "Specialist template",
+        "publisher": {"publisher_id": "empyralis", "label": "Empyralis", "website": "https://empyralis.dev"},
+        "onboarding": {"docs_url": "/docs/studio-marketplace-ux-boundary-2026-04-30.md"},
+        "verification_status": "verified",
+        "review_state": "approved",
+        "health_state": "healthy",
+        "policy_posture": "governed",
+        "billing": {
+            "monetization_kind": "free",
+            "accounting_hook": {"ledger_key": "studio.auto_parts_sales", "hook_kind": "template_install"},
+        },
+        "app": {
+            "app_id": "studio.auto_parts_sales",
+            "hosted_url": "/w/{workspace_id}/studio?template=auto_parts_sales",
+            "version": "0.1.0",
+            "release_channel": "preview",
+            "permissions": ["telegram:send", "spreadsheet:read"],
+            "bridge_contracts": {"messages": ["read", "write"], "catalog": ["read"]},
+        },
+    },
+    {
+        "package_id": "preview-spreadsheet-catalog",
+        "kind": "app",
+        "label": "Spreadsheet Catalog",
+        "description": "Answers product, SKU, menu, or inventory questions from a trusted spreadsheet.",
+        "category": "Data",
+        "publisher": {"publisher_id": "empyralis", "label": "Empyralis", "website": "https://empyralis.dev"},
+        "onboarding": {"docs_url": "/docs/studio-marketplace-ux-boundary-2026-04-30.md"},
+        "verification_status": "verified",
+        "review_state": "approved",
+        "health_state": "healthy",
+        "policy_posture": "governed",
+        "billing": {
+            "monetization_kind": "free",
+            "accounting_hook": {"ledger_key": "tool.spreadsheet_catalog", "hook_kind": "package_install"},
+        },
+        "app": {
+            "app_id": "tool.spreadsheet_catalog",
+            "hosted_url": "/w/{workspace_id}/studio?template=spreadsheet_catalog",
+            "version": "0.1.0",
+            "release_channel": "preview",
+            "permissions": ["spreadsheet:read", "spreadsheet:append"],
+            "bridge_contracts": {"spreadsheet": ["read", "write"]},
+        },
+    },
+    {
+        "package_id": "preview-web-search",
+        "kind": "app",
+        "label": "Web Search",
+        "description": "Lets Sage search the web with audit-visible tool calls and governed usage.",
+        "category": "Tool",
+        "publisher": {"publisher_id": "empyralis", "label": "Empyralis", "website": "https://empyralis.dev"},
+        "onboarding": {"docs_url": "/docs/studio-marketplace-ux-boundary-2026-04-30.md"},
+        "verification_status": "verified",
+        "review_state": "approved",
+        "health_state": "healthy",
+        "policy_posture": "governed",
+        "billing": {
+            "monetization_kind": "metered",
+            "accounting_hook": {"ledger_key": "tool.web_search", "hook_kind": "tool_usage"},
+        },
+        "app": {
+            "app_id": "tool.web_search",
+            "hosted_url": "/tools/web-search",
+            "version": "0.1.0",
+            "release_channel": "preview",
+            "permissions": ["web:search"],
+            "bridge_contracts": {"web": ["search"]},
+        },
+    },
+    {
+        "package_id": "preview-image-generation",
+        "kind": "app",
+        "label": "Image Generation",
+        "description": "Image generation package using configured BYOK or hosted media credits.",
+        "category": "Media",
+        "publisher": {"publisher_id": "empyralis", "label": "Empyralis", "website": "https://empyralis.dev"},
+        "onboarding": {"docs_url": "/docs/ai-os-five-phase-execution-plan-2026-04-30.md"},
+        "verification_status": "partner",
+        "review_state": "approved",
+        "health_state": "setup_required",
+        "policy_posture": "governed",
+        "billing": {
+            "monetization_kind": "metered",
+            "accounting_hook": {"ledger_key": "tool.generate_image", "hook_kind": "tool_usage"},
+        },
+        "app": {
+            "app_id": "tool.generate_image",
+            "hosted_url": "/tools/generate-image",
+            "version": "0.1.0",
+            "release_channel": "preview",
+            "permissions": ["media:image_generate"],
+            "bridge_contracts": {"media": ["image_generate"]},
+        },
+    },
+    {
+        "package_id": "preview-deepseek-provider",
+        "kind": "provider",
+        "label": "DeepSeek Provider",
+        "description": "BYOK model provider package for DeepSeek chat and tool-capable generation.",
+        "category": "Models",
+        "publisher": {"publisher_id": "deepseek", "label": "DeepSeek", "website": "https://platform.deepseek.com"},
+        "onboarding": {"docs_url": "https://platform.deepseek.com"},
+        "verification_status": "partner",
+        "review_state": "approved",
+        "health_state": "setup_required",
+        "policy_posture": "governed",
+        "billing": {
+            "monetization_kind": "free",
+            "accounting_hook": {"ledger_key": "provider.deepseek", "hook_kind": "provider_usage"},
+        },
+        "provider": {
+            "provider_id": "marketplace_deepseek_preview",
+            "default_model": "deepseek-chat",
+            "auth_modes": ["api_key"],
+            "privacy_posture": "Cloud provider. User supplies key or uses platform-hosted credits where available.",
+            "capability_labels": ["chat", "tools"],
+            "models": [{"id": "deepseek-chat", "label": "DeepSeek Chat", "supports_tools": True}],
+        },
+    },
+]
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -314,6 +468,26 @@ def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _preview_marketplace_packages() -> Dict[str, Dict[str, Any]]:
+    packages: Dict[str, Dict[str, Any]] = {}
+    for payload in PREVIEW_MARKETPLACE_PACKAGES:
+        try:
+            package = _normalize_package_payload(payload)
+        except ValueError:
+            continue
+        package["preview_only"] = True
+        package["install_target"] = "preview"
+        package["analytics"] = {
+            "install_count": 0,
+            "runtime_event_count": 0,
+            "last_install_at": None,
+            "last_runtime_at": None,
+        }
+        package["updated_at"] = "preview"
+        packages[str(package.get("package_id") or "").strip()] = package
+    return packages
+
+
 def _ensure_app_registry_exports() -> None:
     required = ("ORION_APP_REGISTRY_FILE", "_safe_read_json", "_safe_write_json", "_utc_now_iso")
     if all(hasattr(app_registry_api, name) for name in required):
@@ -446,6 +620,7 @@ def _public_package_payload(workspace_id: str, package: Dict[str, Any], install:
         "health_state": str(package.get("health_state") or "").strip(),
         "policy_posture": str(package.get("policy_posture") or "").strip(),
         "approval_required": bool(package.get("approval_required")),
+        "preview_only": bool(package.get("preview_only")),
         "install_target": str(package.get("install_target") or "").strip(),
         "billing": _coerce_dict(package.get("billing")),
         "analytics": {
@@ -466,8 +641,11 @@ def list_marketplace_packages(workspace_id: str, *, kind: Optional[str] = None) 
     normalized_workspace_id = _normalize_workspace_id(workspace_id)
     state = _safe_read_state(normalized_workspace_id)
     requested_kind = str(kind or "").strip().lower()
+    source_packages = state.get("packages", {})
+    if not source_packages:
+        source_packages = _preview_marketplace_packages()
     items: List[Dict[str, Any]] = []
-    for package_id, entry in sorted(state.get("packages", {}).items()):
+    for package_id, entry in sorted(source_packages.items()):
         if not isinstance(entry, dict):
             continue
         if requested_kind and str(entry.get("kind") or "").strip().lower() != requested_kind:

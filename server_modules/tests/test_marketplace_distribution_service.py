@@ -26,6 +26,21 @@ def _patch_app_registry(monkeypatch, tmp_path):
     monkeypatch.setattr(app_registry_api, "_utc_now_iso", lambda: "2026-04-22T00:00:00Z", raising=False)
 
 
+def test_empty_marketplace_returns_preview_packages(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+
+    payload = marketplace_distribution_service.list_marketplace_packages("ws-empty")
+    provider_payload = marketplace_distribution_service.list_marketplace_packages("ws-empty", kind="provider")
+
+    assert payload["count"] >= 6
+    assert all(item["preview_only"] is True for item in payload["items"])
+    package_ids = {item["package_id"] for item in payload["items"]}
+    assert "preview-restaurant-orders" in package_ids
+    assert "preview-deepseek-provider" in package_ids
+    assert provider_payload["count"] == 1
+    assert provider_payload["items"][0]["package_id"] == "preview-deepseek-provider"
+
+
 def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
     _patch_app_registry(monkeypatch, tmp_path)
@@ -65,6 +80,9 @@ def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypa
     )
 
     assert registered["package_id"] == "weather-lab.console"
+    listed = marketplace_distribution_service.list_marketplace_packages("ws-1")
+    assert listed["count"] == 1
+    assert listed["items"][0]["preview_only"] is False
     installed = marketplace_distribution_service.install_marketplace_package(
         "ws-1",
         package_id="weather-lab.console",

@@ -5,7 +5,7 @@ Status: current implementation tracker
 
 ## Current Launch Verdict
 
-The web Sage public-demo path is certified for launch-demo scope after the 2026-05-01 production cert pass. Phone web is HTTP-certified against the production workspace routes. Native mobile, Tauri desktop companion, Cloud Computer, and Marketplace publishing remain separate certification lanes.
+The web Sage public-demo path is certified for launch-demo scope after the 2026-05-01 production cert pass. Phone web is HTTP-certified against the production workspace routes after onboarding is completed. Native mobile, Tauri desktop companion, Cloud Computer, and Marketplace publishing remain separate certification lanes.
 
 ## Implemented Or Contract-Ready
 
@@ -16,7 +16,7 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Chat send failures now render as actionable notices with Retry, Open Integrations, or Dismiss instead of text-only dead banners.
 - Gateway offline state is part of the runtime/tool truth model.
 - Studio has square templates and a custom-agent path.
-- Marketplace has governed preview packages and hides developer publishing behind an explicit panel.
+- Marketplace has governed preview packages from the backend when a workspace has no registered packages, and hides developer publishing behind an explicit panel.
 - Memory is modeled as structured sensitivity classes, with Markdown suitable as import/export rather than canonical runtime state.
 - Cloud Computer has a backend/runtime contract but no live provisioner.
 - Tauri has a desktop shell and update hooks, and is now documented as the local companion lane.
@@ -36,13 +36,15 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Tauri certification: pairing, local tool execution, supervisor health, approval flow, signed release.
 - Cloud Computer MVP: cloud browser, sandbox, TTL cleanup, spend meter, audit timeline, artifact egress.
 - Billing and hosted AI credits: checkout/live Stripe operations, purchase/credit refill UX, and post-demo plan packaging.
-- Marketplace backend seed: installable packages with permissions, pricing, publisher, and trust metadata.
+- Marketplace paid-beta seed: installable packages with permissions, pricing, publisher, and trust metadata. Launch demo preview packages are display-only.
 
 ## Verification Added On 2026-05-01
 
 - Production deployed commits:
   - `a5eb6160f fix: restart unfinished Sage streams on retry`
   - `7434a9184 fix: honor admin billing plan for hosted Sage`
+  - `11fe59843 docs: update launch certification status`
+  - `ab7ee89e6 fix: close billing and tool audit launch gaps`
 - Production workspace onboarding patch returned HTTP 200 and set `setupCompleted=true`, `requiresOnboarding=false`, `defaultRoute=/w/ws_a0d8b6b56e11/sage`.
 - Production iPhone-user-agent route smoke returned HTTP 200 for account shell, Sage, Chat, Activity, Integrations, Studio, and Marketplace.
 - Production provider catalog now reports hosted Sage AI `allowed=true`, `plan_allows_hosted_ai=true`, `policy=enabled_with_cap`; DeepSeek and Anthropic report `configured=true`, `usable=true`.
@@ -58,6 +60,19 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Phase 7 billing closeout added regression coverage that admin-default hosted-credit billing plans project correctly into billing summary without upgrading normal free workspaces.
 - Phase 8 audit closeout added regression coverage that direct tool actions emit started/completed or started/failed audit events and redact obvious secrets from audit summaries.
 - Phase 9 Cloud Computer contract remains verified by runtime attachment tests: Cloud Computer is optional, metered, explicitly selected, never the workspace default, and Full Access remains local-companion-only.
+
+## Production Smoke Added After `ab7ee89e6`
+
+- Fresh production workspace `ws_f006330bd7cb` was created through public signup and account shell.
+- Provider catalog on that workspace reported Anthropic and DeepSeek as `configured=true`, `usable=true`; Gemini remained unconfigured; Ollama remained gateway-required.
+- Billing summary on that workspace reported hosted Sage AI `allowed=true`, `policy=enabled_with_cap`, effective plan `pro`, monthly cap `5.0`, and remaining `5.0`.
+- POST `/api/sessions` returned HTTP 200 and created session `af709dc051f14cd28cb44506249f4c36`.
+- A direct DeepSeek `hello` stream emitted trace, step, chunk, and final events. Final metadata reported `provider=deepseek`, `model=deepseek-chat`, `context_used.effective_provider=deepseek`, and `provider_overridden=false`.
+- Ten consecutive production DeepSeek turns passed with exact replies `pong 1` through `pong 10`.
+- Thread persistence confirmed one cloud-canonical thread with `turn_count=22` and alternating user/assistant roles.
+- After onboarding completion, iPhone-user-agent route smoke returned HTTP 200 for `/w/ws_f006330bd7cb/chat` and `/w/ws_f006330bd7cb/integrations`.
+- Surface API checks passed for tool policy and structured Sage memory.
+- Marketplace API initially returned zero packages on a fresh workspace. The launch patch now returns backend preview packages when no registered marketplace packages exist; these are marked `preview_only=true` and remain display-only in the UI.
 
 ## Hard Rules
 

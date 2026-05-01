@@ -2,12 +2,15 @@
 
 ## Current Verdict
 
-The public Sage demo path is close, with production chat already certified against DeepSeek after a warm start. The remaining hard line is deployment and visual/mobile verification of the latest shell reliability fixes. Cloud Computer is contract-ready only; it is not a live demo feature.
+The public Sage demo path is certified for web after the latest production DeepSeek smoke. The remaining hard line is deploying the final Marketplace preview seed patch and running one real-device visual/mobile sweep. Cloud Computer is contract-ready only; it is not a live demo feature.
 
 ## Certified In This Pass
 
 - Production provider catalog: DeepSeek showed `configured=true`, `usable=true`, and default model `deepseek-chat`.
 - Production Sage chat: 10 direct runtime turns and 10 public web turns returned trace, step, chunk, and final events with non-empty replies after one transient Render 502 retry.
+- Fresh production workspace smoke after the billing/audit closeout created a session, streamed one DeepSeek hello turn with truthful final metadata, then passed ten exact `pong` replies with no stream failure.
+- Production history persisted the fresh cert thread with 22 turns and alternating user/assistant roles.
+- Production phone route-level smoke returned HTTP 200 for chat and integrations after onboarding completion.
 - Frontend shell reliability: account-shell bootstrap now calls the runtime directly from SSR instead of proxying through the public web app.
 - Mobile/public dead screens: account and onboarding degraded states now provide Reload and Sign in again actions.
 - Memory runtime model: Sage memory categories are structured as Green, Yellow, Orange, and Red classes, with legacy category aliases preserved.
@@ -24,6 +27,7 @@ The public Sage demo path is close, with production chat already certified again
 - Thinking/tool transparency cells, pending-message preservation, and stop-button behavior by source/test verification.
 - Studio template grid and focused setup sheet.
 - Marketplace as governed install/discovery surface with seed packages and hidden developer publishing.
+- Marketplace backend preview packages for empty workspaces. Preview packages are display-only and marked `preview_only=true`.
 - Gateway-offline status and local-tool availability by catalog contract.
 
 ## Do Not Demo Yet
@@ -50,3 +54,4 @@ Deploy the scoped RC patch, then run a final browser and phone sweep:
 3. Send 10 messages.
 4. Verify no 500/504 shell page, no disappearing messages, no false timeout banner, no raw service error.
 5. Open Studio, Marketplace, History, Memory, and Integrations in light and dark mode.
+6. Confirm Marketplace shows preview packages on an empty workspace and does not expose Marketplace publishing as a normal-user flow.

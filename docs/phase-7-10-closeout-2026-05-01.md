@@ -71,6 +71,7 @@ Certified on 2026-05-01:
 - Fresh production workspace cert after `ab7ee89e6`: hosted Sage AI allowed, DeepSeek and Anthropic usable, one DeepSeek hello stream with truthful final metadata, ten exact `pong` replies, and persisted cloud thread history.
 - Phone route-level cert after onboarding completion: iPhone-user-agent requests returned HTTP 200 for the production chat and integrations routes.
 - Marketplace blank-state gap fixed for launch demo: empty workspaces now receive backend preview packages marked `preview_only=true`, while installable Marketplace publishing remains a paid-beta lane.
+- Marketplace deployment check after `98b367fae`: fresh production workspace `ws_fa1dde68c31e` returned six preview packages from the public web API.
 - Frontend typecheck and build.
 - Python compile and targeted backend tests.
 
@@ -83,7 +84,5 @@ Required before public sharing:
 
 ## Remaining Next Phase After This Closeout
 
-- Push the marketplace preview seed patch and wait for Render to deploy it.
-- Recheck production Marketplace on a fresh or empty workspace and confirm preview cards render instead of the blank package state.
 - Run one real-device phone visual sweep, not only HTTP route checks.
 - If the real phone sweep passes, move to the public demo script. If it fails, fix only the specific shell/mobile blocker.

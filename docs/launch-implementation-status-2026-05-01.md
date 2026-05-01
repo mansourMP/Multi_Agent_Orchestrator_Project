@@ -45,6 +45,7 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
   - `7434a9184 fix: honor admin billing plan for hosted Sage`
   - `11fe59843 docs: update launch certification status`
   - `ab7ee89e6 fix: close billing and tool audit launch gaps`
+  - `98b367fae fix: seed marketplace preview packages for demo`
 - Production workspace onboarding patch returned HTTP 200 and set `setupCompleted=true`, `requiresOnboarding=false`, `defaultRoute=/w/ws_a0d8b6b56e11/sage`.
 - Production iPhone-user-agent route smoke returned HTTP 200 for account shell, Sage, Chat, Activity, Integrations, Studio, and Marketplace.
 - Production provider catalog now reports hosted Sage AI `allowed=true`, `plan_allows_hosted_ai=true`, `policy=enabled_with_cap`; DeepSeek and Anthropic report `configured=true`, `usable=true`.
@@ -73,6 +74,13 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - After onboarding completion, iPhone-user-agent route smoke returned HTTP 200 for `/w/ws_f006330bd7cb/chat` and `/w/ws_f006330bd7cb/integrations`.
 - Surface API checks passed for tool policy and structured Sage memory.
 - Marketplace API initially returned zero packages on a fresh workspace. The launch patch now returns backend preview packages when no registered marketplace packages exist; these are marked `preview_only=true` and remain display-only in the UI.
+
+## Production Smoke Added After `98b367fae`
+
+- Production runtime `/health` returned `{"ok":true}`.
+- Fresh production account creation succeeded for the Marketplace deployment check.
+- Fresh production workspace `ws_fa1dde68c31e` returned six Marketplace packages from `/api/workspaces/ws_fa1dde68c31e/marketplace/packages`.
+- All six returned packages were backend preview packages with `preview_only=true` and `install_target=preview`: Restaurant Orders, Auto Parts Sales, Spreadsheet Catalog, Web Search, Image Generation, and DeepSeek Provider.
 
 ## Hard Rules
 

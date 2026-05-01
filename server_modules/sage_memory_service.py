@@ -13,22 +13,24 @@ from server_modules import workspace_context
 
 SAGE_MEMORY_CATEGORY_DEFINITIONS: dict[str, dict[str, str]] = {
     "safe_general": {
-        "label": "Green",
+        "label": "Safe",
         "description": "Safe, general context Sage can use freely.",
     },
     "sensitive": {
-        "label": "Yellow",
+        "label": "Sensitive",
         "description": "Sensitive work context Sage should handle carefully.",
     },
     "private": {
-        "label": "Orange",
+        "label": "Private",
         "description": "Private personal context with tighter handling.",
     },
     "critical_restricted": {
-        "label": "Red",
+        "label": "Critical",
         "description": "Restricted facts such as secrets, credentials, or critical data.",
     },
 }
+
+SAGE_MEMORY_ENTRY_LIMIT = 50
 
 SAGE_MEMORY_CATEGORY_ALIASES: dict[str, str] = {
     "work_context": "safe_general",
@@ -209,6 +211,8 @@ def _entry_categories(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _summary(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "total_count": len(entries),
+        "max_count": SAGE_MEMORY_ENTRY_LIMIT,
+        "remaining_count": max(0, SAGE_MEMORY_ENTRY_LIMIT - len(entries)),
         "pinned_count": sum(1 for entry in entries if bool(entry.get("pinned"))),
         "category_counts": {
             category: sum(1 for entry in entries if entry.get("category") == category)
@@ -277,6 +281,8 @@ def upsert_memory_entry(
         )
         entries[matched_index] = normalized
     else:
+        if len(entries) >= SAGE_MEMORY_ENTRY_LIMIT:
+            raise HTTPException(status_code=409, detail="Sage memory limit reached.")
         normalized = _normalize_entry(
             {
                 "id": resolved_entry_id or None,
@@ -371,7 +377,12 @@ def delete_memory_entry(
     }
 
 
-def build_sage_memory_context_block(*, workspace_id: str, limit_per_category: int = 3) -> str:
+def build_sage_memory_context_block(
+    *,
+    workspace_id: str,
+    limit_per_category: int = 3,
+    include_restricted: bool = False,
+) -> str:
     state = _read_state(workspace_id)
     entries = list(state.get("entries") or [])
     if not entries:
@@ -381,6 +392,10 @@ def build_sage_memory_context_block(*, workspace_id: str, limit_per_category: in
     for category, definition in SAGE_MEMORY_CATEGORY_DEFINITIONS.items():
         category_entries = [item for item in entries if item.get("category") == category][: max(1, int(limit_per_category))]
         if not category_entries:
+            continue
+        if category == "critical_restricted" and not include_restricted:
+            lines.append(f"{definition['label']}")
+            lines.append("- Restricted memory exists but is withheld from model context.")
             continue
         lines.append(f"{definition['label']}")
         for item in category_entries:

@@ -423,7 +423,7 @@ def execute_single_direct_tool_call(
         workspace_id=workspace_id,
         run_id=run_id,
         detail=tool_name or None,
-        metadata={**audit_metadata, "result_summary": _compact_trace_text(result)},
+        metadata={**audit_metadata, "result_summary": _redact_audit_summary(result)},
         idempotency_key=f"direct_tool.completed:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}",
     )
     return result

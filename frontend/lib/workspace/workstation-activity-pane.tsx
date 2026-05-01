@@ -35,29 +35,29 @@ type MemorySensitivityClass = 'green' | 'yellow' | 'orange' | 'red';
 const memoryPaneCache = new Map<string, SageMemorySnapshot>();
 
 const DEFAULT_MEMORY_CATEGORIES: readonly SageMemoryCategoryRecord[] = [
-  { id: 'safe_general', label: 'Green' },
-  { id: 'sensitive', label: 'Yellow' },
-  { id: 'private', label: 'Orange' },
-  { id: 'critical_restricted', label: 'Red' },
+  { id: 'safe_general', label: 'Safe' },
+  { id: 'sensitive', label: 'Sensitive' },
+  { id: 'private', label: 'Private' },
+  { id: 'critical_restricted', label: 'Critical' },
 ] as const;
 
 const MEMORY_SENSITIVITY_ORDER: readonly MemorySensitivityClass[] = ['green', 'yellow', 'orange', 'red'] as const;
 
 const MEMORY_SENSITIVITY_META: Record<MemorySensitivityClass, { label: string; description: string }> = {
   green: {
-    label: 'Green',
+    label: 'Safe',
     description: 'Safe, general context Sage can use freely.',
   },
   yellow: {
-    label: 'Yellow',
+    label: 'Sensitive',
     description: 'Sensitive work context Sage should handle carefully.',
   },
   orange: {
-    label: 'Orange',
+    label: 'Private',
     description: 'Private personal context with tighter handling.',
   },
   red: {
-    label: 'Red',
+    label: 'Critical',
     description: 'Restricted facts such as secrets, credentials, or critical data.',
   },
 };

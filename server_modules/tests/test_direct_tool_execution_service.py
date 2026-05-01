@@ -141,6 +141,38 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertIn("[redacted-secret]", summary)
         self.assertNotIn("sk-secret123456", summary)
 
+    def test_execute_single_direct_tool_call_redacts_audit_result_summary(self) -> None:
+        callbacks = _callbacks()
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(callbacks),
+                "build_direct_local_tool_config": lambda connector_id, action_id, arguments: (
+                    "read",
+                    {"connector": connector_id, "action": action_id},
+                ),
+            }
+        )
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ) as emit_audit, patch(
+            "server_modules.skills_service._execute_safe_direct_local_tool_call",
+            return_value="token=sk-secret123456",
+        ):
+            service.execute_single_direct_tool_call(
+                tool_call={
+                    "name": "shell_exec",
+                    "arguments": {"command": "echo ok"},
+                },
+                workspace_id="workspace-1",
+                thread_id="thread-1",
+                callbacks=callbacks,
+            )
+
+        completed = emit_audit.call_args_list[1].kwargs["metadata"]["result_summary"]
+        self.assertIn("[redacted-secret]", completed)
+        self.assertNotIn("sk-secret123456", completed)
+
     def test_execute_single_direct_tool_call_emits_failed_audit_event(self) -> None:
         callbacks = _callbacks()
 

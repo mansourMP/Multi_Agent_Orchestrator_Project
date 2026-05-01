@@ -79,9 +79,55 @@ class SageMemoryServiceTests(unittest.TestCase):
                 block = sage_memory_service.build_sage_memory_context_block(workspace_id="workspace-1")
 
             self.assertIn("Sage memory", block)
-            self.assertIn("Orange", block)
-            self.assertIn("Yellow", block)
+            self.assertIn("Private", block)
+            self.assertIn("Sensitive", block)
             self.assertIn("[pinned]", block)
+
+    def test_critical_memory_is_withheld_from_default_context(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "workspace-1"
+            with patch("server_modules.sage_memory_service.workspace_context.workspace_scope_dir", return_value=root):
+                sage_memory_service.upsert_memory_entry(
+                    workspace_id="workspace-1",
+                    category="critical_restricted",
+                    title="Production API key",
+                    content="sk-secret123456",
+                    actor_user_id="user-1",
+                )
+                default_block = sage_memory_service.build_sage_memory_context_block(workspace_id="workspace-1")
+                restricted_block = sage_memory_service.build_sage_memory_context_block(
+                    workspace_id="workspace-1",
+                    include_restricted=True,
+                )
+
+            self.assertIn("Critical", default_block)
+            self.assertIn("withheld from model context", default_block)
+            self.assertNotIn("sk-secret123456", default_block)
+            self.assertIn("sk-secret123456", restricted_block)
+
+    def test_upsert_memory_entry_enforces_workspace_memory_limit(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "workspace-1"
+            with patch("server_modules.sage_memory_service.workspace_context.workspace_scope_dir", return_value=root):
+                for index in range(sage_memory_service.SAGE_MEMORY_ENTRY_LIMIT):
+                    sage_memory_service.upsert_memory_entry(
+                        workspace_id="workspace-1",
+                        category="safe_general",
+                        title=f"Memory {index}",
+                        content=f"Content {index}",
+                        actor_user_id="user-1",
+                    )
+
+                with self.assertRaises(Exception) as context:
+                    sage_memory_service.upsert_memory_entry(
+                        workspace_id="workspace-1",
+                        category="safe_general",
+                        title="Overflow",
+                        content="Should not persist.",
+                        actor_user_id="user-1",
+                    )
+
+            self.assertEqual(getattr(context.exception, "status_code", None), 409)
 
     def test_legacy_memory_categories_map_to_sensitivity_classes(self):
         with tempfile.TemporaryDirectory() as tempdir:

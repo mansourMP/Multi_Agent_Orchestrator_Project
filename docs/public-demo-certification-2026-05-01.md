@@ -22,6 +22,7 @@ The public Sage demo path is certified for web after the latest production DeepS
 - Execution mode contract: Default, Approvals, Autopilot, and Full Access are now separated at runtime-target level; Full Access is local-companion-only.
 - Screenshot transparency contract: screenshot/image artifact trace events now have first-class chat cells for phone/web audit visibility.
 - MCP trust metadata: MCP tools now expose permission manifests with risk, scopes, allowed modes, cost class, and audit event type.
+- Direct chat trust metadata: built-in, local, browser, HTTP, and connector tools now expose the same permission manifest shape for Marketplace/Studio/tool transparency.
 
 ## Demo-Safe Surfaces
 
@@ -46,6 +47,7 @@ The public Sage demo path is certified for web after the latest production DeepS
 - `venv/bin/python -m compileall server_modules scripts`
 - `venv/bin/python -m pytest server_modules/tests/test_sage_memory_service.py server_modules/tests/test_direct_tool_approval_service.py server_modules/tests/test_policy_service.py server_modules/tests/test_billing_service.py server_modules/tests/test_entitlements_service.py server_modules/tests/test_direct_chat_hosted_usage_service.py`
 - `venv/bin/python -m pytest server_modules/tests/test_runtime_attachment_service.py server_modules/tests/test_workspace_bootstrap_service.py server_modules/tests/test_direct_chat_tool_catalog_service.py`
+- `venv/bin/python -m pytest server_modules/tests/test_skills_service.py server_modules/tests/test_direct_chat_tool_catalog_service.py server_modules/tests/test_mcp_registry_service.py`
 
 ## Production Route Smoke After Account-Shell Fallback
 

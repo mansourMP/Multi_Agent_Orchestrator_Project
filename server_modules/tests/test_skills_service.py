@@ -232,6 +232,15 @@ class SkillsServiceTests(unittest.TestCase):
         )
 
         self.assertEqual([item["name"] for item in connector_tools], ["slack__post_message"])
+        slack_post = connector_tools[0]
+        self.assertEqual(slack_post["connector_id"], "slack")
+        self.assertEqual(slack_post["action_id"], "post_message")
+        self.assertEqual(slack_post["capability_id"], "connector.action.write")
+        self.assertEqual(slack_post["action_class"], "write")
+        self.assertTrue(slack_post["requires_approval"])
+        self.assertEqual(slack_post["permission_manifest"]["scopes"], ["connector.action.write", "slack:post_message"])
+        self.assertEqual(slack_post["permission_manifest"]["allowed_runtime_modes"], ["hosted_secure", "local_secure"])
+        self.assertEqual(slack_post["permission_manifest"]["audit_event_type"], "direct_tool.slack.post_message")
         self.assertTrue(any(item["name"] == "file__read" for item in local_tools))
         self.assertTrue(any(item["name"] == "computer__click" for item in local_tools))
         file_read = next(item for item in local_tools if item["name"] == "file__read")
@@ -239,9 +248,29 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(file_read["capability_id"], "filesystem.read")
         self.assertEqual(file_read["risk_level"], "medium")
         self.assertTrue(file_read["requires_approval"])
+        self.assertEqual(file_read["action_class"], "read")
+        self.assertEqual(file_read["permission_manifest"]["scopes"], ["filesystem.read"])
+        self.assertEqual(file_read["permission_manifest"]["allowed_runtime_modes"], ["local_secure"])
+        self.assertEqual(file_read["permission_manifest"]["audit_event_type"], "direct_tool.file.read")
         self.assertEqual(computer_click["capability_id"], "computer_control.click")
         self.assertEqual(computer_click["risk_level"], "critical")
         self.assertTrue(computer_click["requires_approval"])
+        self.assertEqual(computer_click["permission_manifest"]["allowed_runtime_modes"], ["privileged_device"])
+
+    def test_builtin_tool_registry_keeps_browser_schema_and_permission_manifest(self) -> None:
+        tools = skills_service.build_builtin_direct_chat_tools()
+
+        browser_navigate = next(item for item in tools if item["name"] == "browser__navigate")
+        http_request = next(item for item in tools if item["name"] == "http_request")
+
+        self.assertEqual(browser_navigate["capability_id"], "browser_automation.interactive")
+        self.assertIn("url", browser_navigate["parameters"]["properties"])
+        self.assertEqual(browser_navigate["permission_manifest"]["scopes"], ["browser_automation.interactive"])
+        self.assertEqual(browser_navigate["permission_manifest"]["allowed_runtime_modes"], ["local_secure", "hosted_secure"])
+        self.assertEqual(browser_navigate["permission_manifest"]["audit_event_type"], "direct_tool.browser.navigate")
+        self.assertEqual(http_request["capability_id"], "http_request")
+        self.assertTrue(http_request["requires_approval"])
+        self.assertEqual(http_request["permission_manifest"]["cost_class"], "external")
 
     def test_tool_registry_resolves_local_and_http_action_availability(self) -> None:
         self.assertTrue(skills_service.tool_write_action_available("file", "read", []))

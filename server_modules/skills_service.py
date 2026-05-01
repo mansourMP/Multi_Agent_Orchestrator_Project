@@ -7,7 +7,7 @@ import re
 from typing import Any, Dict, List
 import uuid
 
-from server_modules.capability_registry import resolve_capability
+from server_modules.capability_registry import resolve_capability, workflow_tool_capability_id
 
 
 @dataclass(slots=True)
@@ -300,13 +300,144 @@ def resolve_workspace_capability_payloads(
 
 def _tool_payload_from_descriptor(descriptor: ToolDescriptor) -> Dict[str, Any]:
     contract = resolve_capability(descriptor.capability_id)
+    risk_level = contract.risk_level if contract is not None else str(descriptor.risk_level or "medium").strip() or "medium"
+    requires_approval = bool(contract.requires_approval) if contract is not None else bool(descriptor.requires_approval)
+    permission_manifest = _permission_manifest_for_tool(
+        connector_id=descriptor.connector_id,
+        action_id=descriptor.action_id,
+        capability_id=descriptor.capability_id,
+        risk_level=risk_level,
+        requires_approval=requires_approval,
+        requires_runtime=descriptor.requires_runtime,
+        contract=contract,
+    )
     return {
         "name": descriptor.tool_name,
         "description": descriptor.description,
+        "label": descriptor.label,
+        "connector_id": descriptor.connector_id,
+        "action_id": descriptor.action_id,
         "capability_id": descriptor.capability_id or None,
-        "risk_level": (contract.risk_level if contract is not None else str(descriptor.risk_level or "medium").strip() or "medium"),
-        "requires_approval": bool(contract.requires_approval) if contract is not None else bool(descriptor.requires_approval),
+        "risk_level": risk_level,
+        "requires_approval": requires_approval,
+        "action_class": permission_manifest["action_class"],
+        "allowed_runtime_modes": permission_manifest["allowed_runtime_modes"],
+        "cost_class": permission_manifest["cost_class"],
+        "audit_event_type": permission_manifest["audit_event_type"],
+        "permission_manifest": permission_manifest,
         "parameters": descriptor.parameters if isinstance(descriptor.parameters, dict) else {},
+    }
+
+
+def _action_class_for_tool(connector_id: str, action_id: str) -> str:
+    connector = str(connector_id or "").strip().lower()
+    action = str(action_id or "").strip().lower()
+    read_actions = {
+        "capture",
+        "fetch",
+        "get",
+        "get_page_state",
+        "list",
+        "list_state",
+        "observe",
+        "ocr",
+        "read",
+        "screenshot",
+        "search",
+        "switch_tab",
+        "extract_text",
+    }
+    write_actions = {
+        "append",
+        "click",
+        "create",
+        "create_entry",
+        "download_file",
+        "fill",
+        "generate",
+        "move",
+        "new_tab",
+        "post",
+        "send",
+        "speak",
+        "type",
+        "update",
+        "update_profile",
+        "upload",
+        "write",
+    }
+    execute_actions = {"applescript", "exec", "execute", "execute_js", "hotkey", "key", "pdf", "request"}
+    if action in execute_actions or connector == "shell":
+        return "execute"
+    if action in write_actions:
+        return "write"
+    if action in read_actions:
+        return "read"
+    return "write" if connector in {"telegram_bot", "smtp", "slack", "discord_bot"} else "read"
+
+
+def _cost_class_for_tool(connector_id: str, action_id: str) -> str:
+    connector = str(connector_id or "").strip().lower()
+    if connector in {"image", "llm"}:
+        return "metered"
+    if connector in {"web", "http", "browser"}:
+        return "external"
+    if connector in {"telegram_bot", "smtp", "google_workspace", "microsoft_365", "slack", "discord_bot", "dropbox", "s3"}:
+        return "external"
+    return "standard"
+
+
+def _runtime_modes_for_tool(
+    *,
+    requires_runtime: bool,
+    risk_level: str,
+    contract: Any,
+) -> List[str]:
+    allowed_environments = list(getattr(contract, "allowed_environments", []) or [])
+    if not allowed_environments:
+        allowed_environments = ["local_companion"] if requires_runtime else ["hosted", "local_companion"]
+    modes: List[str] = []
+    for environment in allowed_environments:
+        token = str(environment or "").strip().lower()
+        if token in {"hosted", "cloud", "cloud_computer"} and "hosted_secure" not in modes:
+            modes.append("hosted_secure")
+        if token == "local_companion":
+            local_mode = "privileged_device" if str(risk_level or "").strip().lower() == "critical" else "local_secure"
+            if local_mode not in modes:
+                modes.append(local_mode)
+    return modes or ["hosted_secure", "local_secure"]
+
+
+def _permission_manifest_for_tool(
+    *,
+    connector_id: str,
+    action_id: str,
+    capability_id: Any,
+    extra_scopes: List[str] | None = None,
+    risk_level: str,
+    requires_approval: bool,
+    requires_runtime: bool,
+    contract: Any,
+) -> Dict[str, Any]:
+    connector = str(connector_id or "").strip()
+    action = str(action_id or "").strip()
+    capability_token = str(capability_id or "").strip()
+    scopes = [capability_token] if capability_token else []
+    scopes.extend(str(scope or "").strip() for scope in list(extra_scopes or []))
+    if not scopes:
+        scopes.append(f"{connector}:{action}")
+    return {
+        "action_class": _action_class_for_tool(connector, action),
+        "risk_level": str(risk_level or "medium").strip() or "medium",
+        "scopes": [scope for scope in scopes if scope],
+        "requires_approval": bool(requires_approval),
+        "allowed_runtime_modes": _runtime_modes_for_tool(
+            requires_runtime=requires_runtime,
+            risk_level=risk_level,
+            contract=contract,
+        ),
+        "cost_class": _cost_class_for_tool(connector, action),
+        "audit_event_type": f"direct_tool.{connector}.{action}".strip("."),
     }
 
 
@@ -549,6 +680,7 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="http",
             action_id="request",
             description="Make a generic HTTP request and return status, headers, and body.",
+            capability_id="http_request",
             parameters={
                 "type": "object",
                 "properties": {
@@ -645,20 +777,132 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
                 "required": ["service_id", "entry"],
             },
         ),
-        ToolDescriptor("browser__navigate", "Browser navigate", "browser", "navigate", "Open a URL in the backend browser engine.", {"type": "object", "properties": {"url": {"type": "string", "description": "The URL to open."}}, "required": ["url"]}),
-        ToolDescriptor("browser__screenshot", "Browser screenshot", "browser", "screenshot", "Capture a screenshot from the backend browser engine.", {"type": "object", "properties": {"selector": {"type": "string", "description": "Optional CSS/XPath/text selector."}}}),
-        ToolDescriptor("browser__observe", "Browser observe", "browser", "observe", "Return the current browser page state plus a screenshot for vision-style reasoning.", {"type": "object", "properties": {}}),
-        ToolDescriptor("browser__click", "Browser click", "browser", "click", "Click an element in the backend browser engine.", {"type": "object", "properties": {"selector": {"type": "string", "description": "CSS, XPath, or visible text selector."}}, "required": ["selector"]}),
-        ToolDescriptor("browser__fill", "Browser fill", "browser", "fill", "Fill an input in the backend browser engine.", {"type": "object", "properties": {"selector": {"type": "string"}, "value": {"type": "string"}}, "required": ["selector", "value"]}),
-        ToolDescriptor("browser__extract_text", "Browser extract text", "browser", "extract_text", "Extract readable text from the current page or a selected element.", {"type": "object", "properties": {"selector": {"type": "string"}}}),
-        ToolDescriptor("browser__get_page_state", "Browser get page state", "browser", "get_page_state", "Return the current page title, URL, text preview, and interactive elements.", {"type": "object", "properties": {}}),
-        ToolDescriptor("browser__execute_js", "Browser execute js", "browser", "execute_js", "Execute JavaScript in the active browser tab.", {"type": "object", "properties": {"script": {"type": "string"}}, "required": ["script"]}),
-        ToolDescriptor("browser__new_tab", "Browser new tab", "browser", "new_tab", "Open a new browser tab.", {"type": "object", "properties": {"url": {"type": "string"}}}),
-        ToolDescriptor("browser__switch_tab", "Browser switch tab", "browser", "switch_tab", "Switch to another browser tab.", {"type": "object", "properties": {"tab_id": {"type": "integer"}}, "required": ["tab_id"]}),
-        ToolDescriptor("browser__download_file", "Browser download file", "browser", "download_file", "Download a file through the backend browser engine.", {"type": "object", "properties": {"url": {"type": "string"}, "save_path": {"type": "string"}}, "required": ["url"]}),
-        ToolDescriptor("browser__start_intercept", "Browser start intercept", "browser", "start_intercept", "Start capturing browser network responses matching a URL pattern.", {"type": "object", "properties": {"url_pattern": {"type": "string"}}}),
-        ToolDescriptor("browser__stop_intercept", "Browser stop intercept", "browser", "stop_intercept", "Stop browser network interception and return the captured responses.", {"type": "object", "properties": {}}),
-        ToolDescriptor("browser__pdf", "Browser pdf", "browser", "pdf", "Print the current browser page to PDF.", {"type": "object", "properties": {"output_path": {"type": "string"}}}),
+        ToolDescriptor(
+            tool_name="browser__navigate",
+            label="Browser navigate",
+            connector_id="browser",
+            action_id="navigate",
+            description="Open a URL in the backend browser engine.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"url": {"type": "string", "description": "The URL to open."}}, "required": ["url"]},
+        ),
+        ToolDescriptor(
+            tool_name="browser__screenshot",
+            label="Browser screenshot",
+            connector_id="browser",
+            action_id="screenshot",
+            description="Capture a screenshot from the backend browser engine.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"selector": {"type": "string", "description": "Optional CSS/XPath/text selector."}}},
+        ),
+        ToolDescriptor(
+            tool_name="browser__observe",
+            label="Browser observe",
+            connector_id="browser",
+            action_id="observe",
+            description="Return the current browser page state plus a screenshot for vision-style reasoning.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {}},
+        ),
+        ToolDescriptor(
+            tool_name="browser__click",
+            label="Browser click",
+            connector_id="browser",
+            action_id="click",
+            description="Click an element in the backend browser engine.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"selector": {"type": "string", "description": "CSS, XPath, or visible text selector."}}, "required": ["selector"]},
+        ),
+        ToolDescriptor(
+            tool_name="browser__fill",
+            label="Browser fill",
+            connector_id="browser",
+            action_id="fill",
+            description="Fill an input in the backend browser engine.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"selector": {"type": "string"}, "value": {"type": "string"}}, "required": ["selector", "value"]},
+        ),
+        ToolDescriptor(
+            tool_name="browser__extract_text",
+            label="Browser extract text",
+            connector_id="browser",
+            action_id="extract_text",
+            description="Extract readable text from the current page or a selected element.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"selector": {"type": "string"}}},
+        ),
+        ToolDescriptor(
+            tool_name="browser__get_page_state",
+            label="Browser get page state",
+            connector_id="browser",
+            action_id="get_page_state",
+            description="Return the current page title, URL, text preview, and interactive elements.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {}},
+        ),
+        ToolDescriptor(
+            tool_name="browser__execute_js",
+            label="Browser execute js",
+            connector_id="browser",
+            action_id="execute_js",
+            description="Execute JavaScript in the active browser tab.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"script": {"type": "string"}}, "required": ["script"]},
+        ),
+        ToolDescriptor(
+            tool_name="browser__new_tab",
+            label="Browser new tab",
+            connector_id="browser",
+            action_id="new_tab",
+            description="Open a new browser tab.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"url": {"type": "string"}}},
+        ),
+        ToolDescriptor(
+            tool_name="browser__switch_tab",
+            label="Browser switch tab",
+            connector_id="browser",
+            action_id="switch_tab",
+            description="Switch to another browser tab.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"tab_id": {"type": "integer"}}, "required": ["tab_id"]},
+        ),
+        ToolDescriptor(
+            tool_name="browser__download_file",
+            label="Browser download file",
+            connector_id="browser",
+            action_id="download_file",
+            description="Download a file through the backend browser engine.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"url": {"type": "string"}, "save_path": {"type": "string"}}, "required": ["url"]},
+        ),
+        ToolDescriptor(
+            tool_name="browser__start_intercept",
+            label="Browser start intercept",
+            connector_id="browser",
+            action_id="start_intercept",
+            description="Start capturing browser network responses matching a URL pattern.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"url_pattern": {"type": "string"}}},
+        ),
+        ToolDescriptor(
+            tool_name="browser__stop_intercept",
+            label="Browser stop intercept",
+            connector_id="browser",
+            action_id="stop_intercept",
+            description="Stop browser network interception and return the captured responses.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {}},
+        ),
+        ToolDescriptor(
+            tool_name="browser__pdf",
+            label="Browser pdf",
+            connector_id="browser",
+            action_id="pdf",
+            description="Print the current browser page to PDF.",
+            capability_id="browser_automation.interactive",
+            parameters={"type": "object", "properties": {"output_path": {"type": "string"}}},
+        ),
     ]
 
 
@@ -689,10 +933,45 @@ def build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Dic
             if not tool_name or tool_name in seen:
                 continue
             seen.add(tool_name)
+            capability_id = workflow_tool_capability_id(
+                "connector_action",
+                {
+                    "connector": connector_id,
+                    "action_id": action,
+                },
+            )
+            contract = resolve_capability(capability_id)
+            risk_level = contract.risk_level if contract is not None else str(cap.get("risk_level") or "medium").strip() or "medium"
+            requires_approval = (
+                bool(contract.requires_approval)
+                if contract is not None
+                else capability_payload_requires_approval_for_action(cap, action)
+            )
+            permission_manifest = _permission_manifest_for_tool(
+                connector_id=connector_id,
+                action_id=action,
+                capability_id=capability_id,
+                extra_scopes=[f"{connector_id}:{action}"],
+                risk_level=risk_level,
+                requires_approval=requires_approval,
+                requires_runtime=False,
+                contract=contract,
+            )
             tools.append(
                 {
                     "name": tool_name,
                     "description": f"Execute {action} on {label}",
+                    "label": f"{label} {action.replace('_', ' ')}",
+                    "connector_id": connector_id,
+                    "action_id": action,
+                    "capability_id": capability_id,
+                    "risk_level": risk_level,
+                    "requires_approval": requires_approval,
+                    "action_class": permission_manifest["action_class"],
+                    "allowed_runtime_modes": permission_manifest["allowed_runtime_modes"],
+                    "cost_class": permission_manifest["cost_class"],
+                    "audit_event_type": permission_manifest["audit_event_type"],
+                    "permission_manifest": permission_manifest,
                     "parameters": {
                         "type": "object",
                         "properties": {"input": {"type": "string", "description": "The input for this action"}},

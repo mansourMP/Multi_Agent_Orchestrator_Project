@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules import security_audit_service
 from server_modules import skills_service
 
 
@@ -191,6 +192,24 @@ def _compact_trace_text(value: Any, limit: int = 240) -> str:
     return f"{text[: max(0, limit - 1)].rstrip()}…"
 
 
+def _redact_audit_summary(value: Any) -> str:
+    text = _compact_trace_text(value)
+    if not text:
+        return ""
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "[redacted-secret]", text)
+    text = re.sub(
+        r"(?i)\b(api[_-]?key|token|secret|password)\s*=\s*[^\s&]+",
+        lambda match: f"{match.group(1)}=[redacted-secret]",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\b(authorization:\s*bearer)\s+[^\s]+",
+        lambda match: f"{match.group(1)} [redacted-secret]",
+        text,
+    )
+    return text
+
+
 def _infer_trace_capability_id(connector_id: str, action_id: str) -> Optional[str]:
     normalized_connector = str(connector_id or "").strip().lower()
     normalized_action = str(action_id or "").strip().lower()
@@ -318,18 +337,96 @@ def execute_single_direct_tool_call(
     session_ctx: Optional[Dict[str, Any]] = None,
     callbacks: DirectToolExecutionCallbacks,
 ) -> str:
-    return skills_service.execute_single_direct_tool_call(
-        tool_call=tool_call,
+    session_metadata = session_ctx if isinstance(session_ctx, dict) else {}
+    tool_name = str(tool_call.get("name") or "").strip()
+    try:
+        connector_id, action_id = callbacks.parse_tool_name(tool_name)
+    except Exception:
+        connector_id, action_id = "", ""
+    try:
+        arguments = callbacks.tool_arguments_payload(tool_call.get("arguments"))
+    except Exception:
+        arguments = {}
+    argument_payload = arguments if isinstance(arguments, dict) else {}
+    tenant_id = str(
+        session_metadata.get("tenant_id")
+        or (
+            session_metadata.get("agent_turn_request", {}).get("tenant_id")
+            if isinstance(session_metadata.get("agent_turn_request"), dict)
+            else ""
+        )
+        or ""
+    ).strip() or None
+    run_id = str(
+        session_metadata.get("request_id")
+        or session_metadata.get("client_request_id")
+        or ""
+    ).strip() or None
+    audit_metadata = {
+        "tool_name": tool_name or None,
+        "connector_id": str(connector_id or "").strip() or None,
+        "action_id": str(action_id or "").strip() or None,
+        "thread_id": str(thread_id or "").strip() or None,
+        "provider": str(provider or "").strip() or None,
+        "model": str(model or "").strip() or None,
+        "argument_keys": sorted(str(key) for key in argument_payload.keys()),
+        "argument_summary": _redact_audit_summary(
+            argument_payload.get("command")
+            or argument_payload.get("path")
+            or argument_payload.get("file_path")
+            or argument_payload.get("url")
+            or argument_payload.get("query")
+            or argument_payload.get("prompt")
+            or ""
+        )
+        or None,
+    }
+    security_audit_service.emit_security_audit_event(
+        action="direct_tool.started",
+        status="started",
+        tenant_id=tenant_id,
         workspace_id=workspace_id,
-        thread_id=thread_id,
-        index=index,
-        provider=provider,
-        model=model,
-        credentials=credentials,
-        reasoning_effort=reasoning_effort,
-        session_ctx=session_ctx,
-        callbacks=callbacks,
+        run_id=run_id,
+        detail=tool_name or None,
+        metadata=audit_metadata,
+        idempotency_key=f"direct_tool.started:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}",
     )
+    try:
+        result = skills_service.execute_single_direct_tool_call(
+            tool_call=tool_call,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            index=index,
+            provider=provider,
+            model=model,
+            credentials=credentials,
+            reasoning_effort=reasoning_effort,
+            session_ctx=session_ctx,
+            callbacks=callbacks,
+        )
+    except Exception as exc:
+        security_audit_service.emit_security_audit_event(
+            action="direct_tool.failed",
+            status="failed",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            detail=type(exc).__name__,
+            metadata={**audit_metadata, "error_type": type(exc).__name__},
+            idempotency_key=f"direct_tool.failed:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}",
+        )
+        raise
+    security_audit_service.emit_security_audit_event(
+        action="direct_tool.completed",
+        status="success",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        detail=tool_name or None,
+        metadata={**audit_metadata, "result_summary": _compact_trace_text(result)},
+        idempotency_key=f"direct_tool.completed:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}",
+    )
+    return result
 
 
 def execute_direct_tool_calls(

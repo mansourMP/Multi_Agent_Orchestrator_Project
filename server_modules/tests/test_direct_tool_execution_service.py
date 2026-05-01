@@ -80,6 +80,88 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(get_raw)["path"], "MEMORY.md")
         self.assertEqual(json.loads(get_raw)["from_line"], 2)
 
+    def test_execute_single_direct_tool_call_emits_audit_events(self) -> None:
+        callbacks = _callbacks()
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ) as emit_audit:
+            raw = service.execute_single_direct_tool_call(
+                tool_call={"name": "memory_search", "arguments": {"query": "timezone", "max_results": 3}},
+                workspace_id="workspace-1",
+                thread_id="thread-1",
+                callbacks=callbacks,
+                session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                provider="deepseek",
+                model="deepseek-chat",
+            )
+
+        self.assertEqual(json.loads(raw)["results"][0]["query"], "timezone")
+        self.assertEqual([call.kwargs["action"] for call in emit_audit.call_args_list], [
+            "direct_tool.started",
+            "direct_tool.completed",
+        ])
+        started = emit_audit.call_args_list[0].kwargs
+        self.assertEqual(started["tenant_id"], "tenant-1")
+        self.assertEqual(started["workspace_id"], "workspace-1")
+        self.assertEqual(started["run_id"], "req-1")
+        self.assertEqual(started["metadata"]["connector_id"], "memory")
+        self.assertEqual(started["metadata"]["action_id"], "search")
+        self.assertEqual(started["metadata"]["provider"], "deepseek")
+
+    def test_execute_single_direct_tool_call_redacts_audit_argument_summary(self) -> None:
+        callbacks = _callbacks()
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(callbacks),
+                "build_direct_local_tool_config": lambda connector_id, action_id, arguments: (
+                    "read",
+                    {"connector": connector_id, "action": action_id},
+                ),
+            }
+        )
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ) as emit_audit, patch(
+            "server_modules.skills_service._execute_safe_direct_local_tool_call",
+            return_value="ok",
+        ):
+            service.execute_single_direct_tool_call(
+                tool_call={
+                    "name": "shell_exec",
+                    "arguments": {"command": "curl -H 'Authorization: Bearer sk-secret123456' https://example.com"},
+                },
+                workspace_id="workspace-1",
+                thread_id="thread-1",
+                callbacks=callbacks,
+            )
+
+        summary = emit_audit.call_args_list[0].kwargs["metadata"]["argument_summary"]
+        self.assertIn("[redacted-secret]", summary)
+        self.assertNotIn("sk-secret123456", summary)
+
+    def test_execute_single_direct_tool_call_emits_failed_audit_event(self) -> None:
+        callbacks = _callbacks()
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ) as emit_audit:
+            with self.assertRaises(RuntimeError):
+                service.execute_single_direct_tool_call(
+                    tool_call={"name": "http_request", "arguments": {"url": "https://example.com"}},
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                )
+
+        self.assertEqual([call.kwargs["action"] for call in emit_audit.call_args_list], [
+            "direct_tool.started",
+            "direct_tool.failed",
+        ])
+        self.assertEqual(emit_audit.call_args_list[1].kwargs["metadata"]["error_type"], "RuntimeError")
+
     def test_execute_single_direct_tool_call_handles_sage_service_tools(self) -> None:
         callbacks = _callbacks()
         callbacks = service.DirectToolExecutionCallbacks(

@@ -20,6 +20,8 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Memory is modeled as structured sensitivity classes, with Markdown suitable as import/export rather than canonical runtime state.
 - Cloud Computer has a backend/runtime contract but no live provisioner.
 - Tauri has a desktop shell and update hooks, and is now documented as the local companion lane.
+- Billing summary now uses the same hosted-credit plan truth as provider routing when workspace admin defaults explicitly enable hosted Sage AI.
+- Direct tool execution now emits best-effort `direct_tool.started`, `direct_tool.completed`, and `direct_tool.failed` security audit events with common key/token/password patterns redacted from summaries.
 
 ## Remaining Demo-Critical Work
 
@@ -33,7 +35,7 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Native mobile certification: login, provider picker, chat, history, memory, tools, approvals, gateway status.
 - Tauri certification: pairing, local tool execution, supervisor health, approval flow, signed release.
 - Cloud Computer MVP: cloud browser, sandbox, TTL cleanup, spend meter, audit timeline, artifact egress.
-- Billing and hosted AI credits: usage ledger, credit balance, spend caps, plan enforcement.
+- Billing and hosted AI credits: checkout/live Stripe operations, purchase/credit refill UX, and post-demo plan packaging.
 - Marketplace backend seed: installable packages with permissions, pricing, publisher, and trust metadata.
 
 ## Verification Added On 2026-05-01
@@ -53,6 +55,9 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Targeted backend tests passed: 79 tests across memory, approvals, policy, billing, entitlements, hosted usage, runtime attachment, workspace bootstrap, and tool catalog.
 - Focused Playwright E2E passed: 10 tests across launch Sage-first, account shell bootstrap resilience, non-scaffold surface sweep, workstation reconciliation, and deployed-agent surface.
 - Production unauthenticated health passed: web returned HTTP 200 and runtime `/health` returned `{"ok":true}`.
+- Phase 7 billing closeout added regression coverage that admin-default hosted-credit billing plans project correctly into billing summary without upgrading normal free workspaces.
+- Phase 8 audit closeout added regression coverage that direct tool actions emit started/completed or started/failed audit events and redact obvious secrets from audit summaries.
+- Phase 9 Cloud Computer contract remains verified by runtime attachment tests: Cloud Computer is optional, metered, explicitly selected, never the workspace default, and Full Access remains local-companion-only.
 
 ## Hard Rules
 

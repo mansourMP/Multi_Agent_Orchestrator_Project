@@ -101,6 +101,18 @@ def _workspace_billing_metadata(workspace: Optional[Dict[str, Any]]) -> Dict[str
     }
 
 
+def _explicit_workspace_billing_plan_id(workspace: Optional[Dict[str, Any]]) -> Optional[str]:
+    metadata = _workspace_billing_metadata(workspace)
+    hosted_policy = _hosted_sage_ai_policy(metadata.get("hosted_sage_ai_policy"))
+    if hosted_policy != "enabled_with_cap":
+        return None
+    for key in ("billing_plan", "plan", "plan_id", "plan_tier"):
+        raw = metadata.get(key)
+        if str(raw or "").strip():
+            return normalize_billing_plan_id(raw)
+    return None
+
+
 def _hosted_sage_ai_policy(value: Any) -> str:
     token = str(value or "").strip().lower()
     return token if token in {"disabled", "owner_opt_in", "enabled_with_cap"} else "owner_opt_in"
@@ -421,6 +433,9 @@ def workspace_billing_summary_for_workspace_id(
     account = _coerce_dict(payload.get("account"))
     subscription = _coerce_dict(payload.get("subscription"))
     effective_plan_id = _subscription_effective_plan(subscription)
+    workspace_plan_id = _explicit_workspace_billing_plan_id(resolved_workspace)
+    if workspace_plan_id and effective_plan_id == DEFAULT_BILLING_PLAN_ID:
+        effective_plan_id = workspace_plan_id
     tenant_id = str(payload.get("tenant_id") or resolved_workspace.get("tenant_id") or "").strip() or None
     usage_summary = run_async_tool_call(
         control_plane_repository.summarize_workspace_billing_usage(

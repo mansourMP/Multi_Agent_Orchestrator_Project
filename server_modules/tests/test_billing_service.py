@@ -85,6 +85,40 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 8.0)
         self.assertEqual(summary["hosted_sage_ai"]["monthly_remaining_usd"], 8.0)
 
+    def test_billing_summary_honors_admin_defaults_billing_plan(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            with patch.object(control_plane_repository, "LOCAL_IDENTITY_DB_FILE", root / "users.db"), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ):
+                asyncio.run(
+                    control_plane_repository.update_workspace_profile(
+                        workspace_id,
+                        {
+                            "metadata": {
+                                "admin_defaults": {
+                                    "payload": {
+                                        "billing_plan": "pro",
+                                        "hosted_sage_ai_policy": "enabled_with_cap",
+                                        "hosted_sage_ai_monthly_cap_usd": 12.0,
+                                    }
+                                }
+                            },
+                        },
+                    )
+                )
+                summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
+
+        self.assertEqual(summary["subscription"]["plan_id"], "free")
+        self.assertEqual(summary["subscription"]["effective_plan_id"], "pro")
+        self.assertEqual(summary["limits"]["max_specialists"], 3)
+        self.assertTrue(summary["hosted_sage_ai"]["allowed"])
+        self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 12.0)
+
     def test_checkout_session_uses_configured_plan_price_and_records_pending_state(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

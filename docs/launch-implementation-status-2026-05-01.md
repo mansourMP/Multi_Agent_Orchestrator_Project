@@ -96,6 +96,12 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Post-fix bad-string scan across the route artifacts found no `Workspace shell is temporarily unavailable`, `Bootstrap returned`, `Bad Gateway`, `Authentication request timed out`, `Sage hit a temporary service issue`, or `Sage took too long` text.
 - Marketplace API for the same workspace returned six preview packages, marked `preview_only=true` and `install_target=preview`.
 
+## Verification Added After `118ee9727`
+
+- Direct chat trust metadata now covers built-in, local, browser, HTTP, and connector tools with a consistent permission manifest.
+- Browser tool descriptors were corrected so schemas remain callable while carrying `browser_automation.interactive` trust metadata.
+- Broader phase 7-9 targeted backend suite passed: 103 tests across billing, entitlements, provider catalog, runtime attachment, workspace bootstrap, tool catalog, direct skills/tool manifests, and MCP registry.
+
 ## Hard Rules
 
 - Provider choice changes reasoning model only; it must not change tool truth.

@@ -61,6 +61,13 @@ The public Sage demo path is certified for web after the latest production DeepS
 - Bad-string scan across the post-fallback route artifacts found none of: `Workspace shell is temporarily unavailable`, `Bootstrap returned`, `Bad Gateway`, `Authentication request timed out`, `Sage hit a temporary service issue`, or `Sage took too long`.
 - Marketplace API returned six preview packages for the same workspace.
 
+## Local Verification After Direct Tool Manifest Patch
+
+- Commit: `118ee9727 fix: expose direct tool permission manifests`.
+- `venv/bin/python -m compileall server_modules/skills_service.py server_modules/tests/test_skills_service.py` passed.
+- `venv/bin/python -m pytest server_modules/tests/test_skills_service.py server_modules/tests/test_direct_chat_tool_catalog_service.py server_modules/tests/test_mcp_registry_service.py` passed with 32 tests.
+- Broader phase 7-9 targeted backend suite passed with 103 tests across billing, entitlements, provider catalog, runtime attachment, workspace bootstrap, tool catalog, skills/tool manifests, and MCP registry.
+
 ## Next Required Action
 
 Run one final human browser and phone visual sweep:

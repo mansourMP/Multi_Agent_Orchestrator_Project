@@ -108,6 +108,45 @@ class SessionManagerTests(unittest.TestCase):
         self.assertEqual(turns[0]["status"], "completed")
         self.assertEqual(turns[0]["final_payload"]["reply"], "Done: count functions")
 
+    def test_completed_turn_with_same_request_id_replays_without_reexecution(self):
+        calls = {"count": 0}
+
+        def counting_executor(*, session_ctx, message, request_meta):
+            calls["count"] += 1
+            yield from _final_executor(
+                session_ctx=session_ctx,
+                message=message,
+                request_meta=request_meta,
+            )
+
+        first = self.manager.run_turn(
+            session_id="session-1",
+            actor_key="actor-1",
+            workspace_id="workspace-a",
+            user_id="user-1",
+            message="first attempt",
+            request_meta={"request_id": "req-1"},
+            turn_executor=counting_executor,
+        )
+        second_events = list(
+            self.manager.iter_turn_events(
+                session_id="session-1",
+                actor_key="actor-1",
+                workspace_id="workspace-a",
+                user_id="user-1",
+                message="retry after edge failure",
+                request_meta={"request_id": "req-1"},
+                turn_executor=counting_executor,
+            )
+        )
+
+        self.assertEqual(first["reply"], "Done: first attempt")
+        self.assertEqual(calls["count"], 1)
+        self.assertEqual(len(second_events), 1)
+        self.assertEqual(second_events[0]["type"], "final")
+        self.assertEqual(second_events[0]["payload"]["reply"], "Done: first attempt")
+        self.assertTrue(second_events[0]["metadata"]["replayed"])
+
     def test_run_turn_hydrates_prior_messages_from_session_history(self):
         first = self.manager.run_turn(
             session_id="session-1",

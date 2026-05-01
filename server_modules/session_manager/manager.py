@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, Iterator, Optional
 from server_modules.runtime_state_store import (
     delete_runtime_session,
     get_runtime_session,
+    get_runtime_session_turn,
     init_runtime_state_db,
     list_runtime_session_turns,
     list_runtime_sessions,
@@ -117,6 +118,24 @@ class EmpyralisSessionManager:
             if assistant_reply:
                 prior_messages.append({"role": "assistant", "content": assistant_reply})
         return prior_messages
+
+    def _completed_turn_replay_event(self, turn_id: str) -> Optional[Dict[str, Any]]:
+        existing_turn = get_runtime_session_turn(self.db_path, turn_id)
+        if not isinstance(existing_turn, dict):
+            return None
+        if str(existing_turn.get("status") or "").strip() != "completed":
+            return None
+        final_payload = existing_turn.get("final_payload")
+        if not isinstance(final_payload, dict) or not final_payload:
+            return None
+        return {
+            "type": "final",
+            "payload": dict(final_payload),
+            "metadata": {
+                "replayed": True,
+                "request_id": str(existing_turn.get("request_id") or turn_id).strip() or turn_id,
+            },
+        }
 
     def _build_runtime_handle(
         self,
@@ -232,6 +251,10 @@ class EmpyralisSessionManager:
                 meta["prior_messages"] = hydrated_prior_messages
         request_id = str(meta.get("request_id") or meta.get("client_request_id") or uuid.uuid4().hex).strip()
         turn_id = str(meta.get("turn_id") or request_id or uuid.uuid4().hex).strip() or uuid.uuid4().hex
+        replay_event = self._completed_turn_replay_event(turn_id)
+        if replay_event is not None:
+            yield replay_event
+            return
         runtime_options = dict(meta.get("runtime_options") or {})
         now_iso = _utc_now_iso()
         session = self.ensure_session(
@@ -245,6 +268,10 @@ class EmpyralisSessionManager:
         )
         actor_token = str(session.get("actor_key") or actor_key or session_id).strip() or session_id
         with self.actor_queue.claim(actor_token):
+            replay_event = self._completed_turn_replay_event(turn_id)
+            if replay_event is not None:
+                yield replay_event
+                return
             session = self.ensure_session(
                 session_id=session_id,
                 actor_key=actor_token,

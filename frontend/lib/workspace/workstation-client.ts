@@ -1373,6 +1373,14 @@ const STREAM_REQUEST_POLICY: WorkstationRequestPolicy = {
   refreshSessionOn401: true,
 };
 
+const STREAM_TRANSPORT_RETRY_STATUSES = new Set([502, 503, 504]);
+const STREAM_TRANSPORT_RETRY_CODES = new Set([
+  'request_timeout',
+  'stream_incomplete',
+  'transport_failure',
+]);
+const MAX_STREAM_TRANSPORT_RETRIES = 1;
+
 function resolveRequestPolicy(
   init: RequestInit | undefined,
   policy: WorkstationRequestPolicy | undefined,
@@ -1383,6 +1391,22 @@ function resolveRequestPolicy(
     ...base,
     ...(policy ?? {}),
   };
+}
+
+function shouldRetryTurnStreamFailure(error: unknown, attempt: number): boolean {
+  if (attempt >= MAX_STREAM_TRANSPORT_RETRIES) {
+    return false;
+  }
+  if (!(error instanceof WorkstationClientError)) {
+    return false;
+  }
+  if (error.code === 'stream_aborted') {
+    return false;
+  }
+  if (STREAM_TRANSPORT_RETRY_STATUSES.has(error.status)) {
+    return true;
+  }
+  return Boolean(error.code && STREAM_TRANSPORT_RETRY_CODES.has(error.code));
 }
 
 function normalizeTransportFailure(error: unknown): WorkstationClientError {
@@ -2833,57 +2857,71 @@ export function createWorkstationClient(
         forceNew: false,
         existingSession,
       });
+      let streamTransportRetryCount = 0;
 
-      try {
-        const response = await submitTurnStream({
-          actor,
-          sessionId: String(session.session_id),
-          threadId,
-          message,
-          channel,
-          source,
-          runtimeTarget,
-          machineTarget,
-          provider,
-          model,
-          reasoningEffort,
-          policyContext,
-          onEvent,
-          clientRequestId,
-          abortHandle,
-        });
-        return { response, session, renewed: false };
-      } catch (error) {
-        if (!(error instanceof WorkstationClientError) || error.status !== 409) {
+      while (true) {
+        try {
+          const response = await submitTurnStream({
+            actor,
+            sessionId: String(session.session_id),
+            threadId,
+            message,
+            channel,
+            source,
+            runtimeTarget,
+            machineTarget,
+            provider,
+            model,
+            reasoningEffort,
+            policyContext,
+            onEvent,
+            clientRequestId,
+            abortHandle,
+          });
+          return { response, session, renewed: false };
+        } catch (error) {
+          if (error instanceof WorkstationClientError && error.status === 409) {
+            session = await createSession({
+              actor,
+              threadId,
+              channel,
+              source,
+              forceNew: true,
+              existingSession: null,
+            });
+            try {
+              const response = await submitTurnStream({
+                actor,
+                sessionId: String(session.session_id),
+                threadId,
+                message,
+                channel,
+                source,
+                runtimeTarget,
+                machineTarget,
+                provider,
+                model,
+                reasoningEffort,
+                policyContext,
+                onEvent,
+                clientRequestId,
+                abortHandle,
+              });
+              return { response, session, renewed: true };
+            } catch (renewedError) {
+              if (shouldRetryTurnStreamFailure(renewedError, streamTransportRetryCount)) {
+                streamTransportRetryCount += 1;
+                continue;
+              }
+              throw renewedError;
+            }
+          }
+          if (shouldRetryTurnStreamFailure(error, streamTransportRetryCount)) {
+            streamTransportRetryCount += 1;
+            continue;
+          }
           throw error;
         }
-
-        session = await createSession({
-          actor,
-          threadId,
-          channel,
-          source,
-          forceNew: true,
-          existingSession: null,
-        });
-        const response = await submitTurnStream({
-          actor,
-          sessionId: String(session.session_id),
-          threadId,
-          message,
-          channel,
-          source,
-          runtimeTarget,
-          machineTarget,
-          provider,
-          model,
-          reasoningEffort,
-          policyContext,
-          onEvent,
-          clientRequestId,
-          abortHandle,
-        });
-        return { response, session, renewed: true };
       }
     },
     resolveApproval: ({ approvalId, payload, runId }) =>

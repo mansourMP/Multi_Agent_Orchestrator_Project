@@ -2,6 +2,12 @@
 
 Last verified: 2026-04-30
 
+Update 2026-05-01 launch companion/status:
+- added `docs/tauri-desktop-companion-contract-2026-05-01.md` to lock Tauri as the local desktop companion/gateway lane, not a second Sage brain
+- added `docs/launch-implementation-status-2026-05-01.md` to separate web Sage demo readiness from native mobile, Tauri, Cloud Computer, billing, and Marketplace publishing certification lanes
+- account-shell and onboarding degraded states now use client-side recovery controls for mobile-safe Reload and Sign in again actions
+- public demo remains web Sage first; native mobile and Tauri are optional follow-up cert tracks unless explicitly included in the demo
+
 ## Current Five-Phase Plan - 2026-04-30
 
 Canonical next execution plan:

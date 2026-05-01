@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 
+import { ShellRecoveryActions } from '@/app/(account)/ShellRecoveryActions';
 import { OnboardingClient } from '@/app/onboarding/OnboardingClient';
 import {
   isDegradedAccountShellSession,
@@ -50,16 +51,12 @@ export default async function OnboardingPage({
         <div className="app-page-message__content">
           <h1 className="app-page-message__title">Onboarding is temporarily unavailable</h1>
           <p className="app-page-message__body">
-            Empyralis could not load the account shell required to finish workspace setup.
-            {session.errorStatus ? ` Bootstrap returned ${session.errorStatus}.` : ''}
+            Empyralis could not load the account shell required to finish workspace setup. This can happen during a deploy or service warm-up.
           </p>
           <p className="app-page-message__meta">
             Reload this page and try again once the workspace shell is back.
           </p>
-          <div className="app-page-message__actions" aria-label="Onboarding recovery actions">
-            <a className="app-page-message__button" href="">Reload</a>
-            <a className="app-page-message__button app-page-message__button--secondary" href="/login">Sign in again</a>
-          </div>
+          <ShellRecoveryActions label="Onboarding recovery actions" />
         </div>
       </main>
     );

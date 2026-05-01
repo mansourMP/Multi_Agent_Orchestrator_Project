@@ -3366,9 +3366,16 @@ textarea {
   border-radius: var(--app-radius-full);
   background: var(--app-text-primary);
   color: var(--app-bg-panel);
+  cursor: pointer;
+  font-family: inherit;
   font-size: var(--app-font-13);
   font-weight: var(--app-weight-semibold);
   text-decoration: none;
+}
+
+.app-page-message__button:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .app-page-message__button--secondary {

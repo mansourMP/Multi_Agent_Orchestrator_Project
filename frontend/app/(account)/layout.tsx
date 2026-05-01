@@ -6,6 +6,7 @@ import {
   isDegradedAccountShellSession,
   loadAccountShellSession,
 } from '@/lib/server/load-account-shell-session';
+import { ShellRecoveryActions } from '@/app/(account)/ShellRecoveryActions';
 
 export default async function AccountLayout({ children }: { children: ReactNode }) {
   const session = await loadAccountShellSession();
@@ -20,16 +21,12 @@ export default async function AccountLayout({ children }: { children: ReactNode 
         <div className="app-page-message__content">
           <h1 className="app-page-message__title">Workspace shell is temporarily unavailable</h1>
           <p className="app-page-message__body">
-            Empyralis could not load your account shell right now.
-            {session.errorStatus ? ` Bootstrap returned ${session.errorStatus}.` : ''}
+            Empyralis could not load your account shell right now. This can happen during a deploy or service warm-up.
           </p>
           <p className="app-page-message__meta">
             Reload this page, or sign in again if the problem persists.
           </p>
-          <div className="app-page-message__actions" aria-label="Workspace recovery actions">
-            <a className="app-page-message__button" href="">Reload</a>
-            <a className="app-page-message__button app-page-message__button--secondary" href="/login">Sign in again</a>
-          </div>
+          <ShellRecoveryActions label="Workspace recovery actions" />
         </div>
       </main>
     );

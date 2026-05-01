@@ -5,11 +5,13 @@ Status: current implementation tracker
 
 ## Current Launch Verdict
 
-The web Sage public-demo path is certified for launch-demo scope after the 2026-05-01 production cert pass. Phone web is HTTP-certified against the production workspace routes after onboarding is completed. Native mobile, Tauri desktop companion, Cloud Computer, and Marketplace publishing remain separate certification lanes.
+The web Sage public-demo path is certified for launch-demo scope after the 2026-05-01 production cert pass. Phone web is HTTP-certified against the production workspace routes after onboarding is completed. The headless local companion path is certified for a governed local shell/file demo. Native mobile, signed Tauri desktop release, Cloud Computer, and Marketplace publishing remain separate certification lanes.
 
 ## Implemented Or Contract-Ready
 
 - Production provider truth and Sage chat are certified with DeepSeek on the current production deployment.
+- Local companion run polling is repaired: `/runs/{run_id}` now accepts the full route callback bundle, including browser checkpoint/session callbacks, instead of returning 500 during local task polling.
+- Headless local companion execution is certified with a governed `shell.execute` run against `/Users/mansur/Desktop`, using `local_root` read grants and artifact-backed output.
 - Hosted Sage AI entitlement now honors workspace admin-default `billing_plan`, so the routing page and provider catalog use the same plan/policy source.
 - Integrations now presents the normal-user path first: Empyralis credits, then BYOK. Hosted-credit provider failures are app-level messages; BYOK failures point to provider key/quota setup without exposing raw provider dumps.
 - Chat uses Codex-style transcript cells for thinking, tool, approval, screenshot/artifact, and assistant output.
@@ -34,7 +36,7 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 ## Remaining Product Work
 
 - Native mobile certification: login, provider picker, chat, history, memory, tools, approvals, gateway status.
-- Tauri certification: pairing, local tool execution, supervisor health, approval flow, signed release.
+- Tauri certification: pairing, supervisor health, approval flow, signed release, and a packaged lifecycle around the already-certified headless local companion path.
 - Cloud Computer MVP: cloud browser, sandbox, TTL cleanup, spend meter, audit timeline, artifact egress.
 - Billing and hosted AI credits: checkout/live Stripe operations, purchase/credit refill UX, and post-demo plan packaging.
 - Marketplace paid-beta seed: installable packages with permissions, pricing, publisher, and trust metadata. Launch demo preview packages are display-only.
@@ -114,6 +116,17 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Tool policy API returned HTTP 200 with six enabled policy rows: Web Search, HTTP Requests, Gmail, Calendar, File Access, and Code Execution.
 - Credential vault list returned HTTP 200 with zero saved credentials on the fresh workspace.
 - Marketplace API returned HTTP 200 with six preview packages: Auto Parts Sales, DeepSeek Provider, Image Generation, Restaurant Orders, Spreadsheet Catalog, and Web Search.
+
+## Local Companion Smoke Added On 2026-05-01
+
+- Local runtime and frontend restarted successfully with Postgres-backed runtime persistence and `ORION_LOCAL_COMPANION_ROOT=/Users/mansur`.
+- Local runtime `/health` returned `{"ok":true}`.
+- Local worker registered one healthy direct-runtime worker with capabilities: `browser_automation.interactive`, `filesystem.read_write`, `shell.execute`, `screenshot.capture`, and `local.worker`.
+- Before the fix, polling a local run through `/runs/{run_id}` returned HTTP 500 because `build_run_detail_response()` rejected route-level browser checkpoint/session callbacks.
+- Regression fix: `server_modules/runtime_run_query_service.py` now accepts the full run-detail callback bundle; `server_modules/tests/test_runtime_run_query_service.py` covers route-bundle compatibility.
+- Targeted regression test passed: `venv/bin/python -m pytest server_modules/tests/test_runtime_run_query_service.py` with 11 tests.
+- Local shell demo run completed: run `ae209a0b-e559-482f-81c0-92229106cc34` executed `ls -1 /Users/mansur/Desktop` through `shell.execute`, returned real Desktop output, and wrote a command log artifact.
+- Verification commands passed after the fix: `npm run typecheck --prefix frontend`, `npm run build --prefix frontend`, `venv/bin/python -m compileall server_modules scripts`, and `venv/bin/python -m pytest server_modules/tests/test_runtime_run_query_service.py server_modules/tests/test_routes_mini_apps.py server_modules/tests/test_mini_apps_service.py`.
 
 ## Hard Rules
 

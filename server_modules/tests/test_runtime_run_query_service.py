@@ -152,6 +152,33 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
         self.assertEqual(payload["safe_context"], {"redacted": True})
         self.assertEqual(payload["pending_confirmation"], {"approval_id": "approval-1"})
 
+    def test_build_run_detail_response_accepts_route_callback_bundle(self):
+        payload = runtime_run_query_service.build_run_detail_response(
+            "run-1",
+            current_user={"auth_type": "api_key"},
+            runs={"run-1": {"context": {"metadata": {"owner_user_id": "user-1"}}}},
+            get_live_run_fn=lambda run_id: None,
+            get_replay_payload=lambda run_id: {},
+            serialize_run_snapshot=lambda run_id, run: {"run_id": run_id},
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            can_view_sensitive_run_payload=lambda current_user: False,
+            limited_run_context_view=lambda context: {},
+            build_delegation_summary=lambda snapshot, child_runs: {},
+            find_run_relationships=lambda run_id, snapshot: (None, []),
+            resolve_run_connector_binding=lambda snapshot: {},
+            redact_sensitive=lambda context: {},
+            limited_result_data_view_fn=lambda value: None,
+            limited_node_states_view_fn=lambda value: None,
+            trim_memory_trace_fn=lambda value: None,
+            get_pending_confirmation_fn=lambda run: None,
+            build_archived_run_detail_response=lambda **kwargs: {"archived": True},
+            build_live_run_detail_response=lambda **kwargs: {"archived": False},
+            build_run_browser_checkpoint_payload=lambda **kwargs: {"checkpoint": True},
+            build_run_browser_session_payload=lambda **kwargs: {"session": True},
+        )
+
+        self.assertFalse(payload["archived"])
+
     def test_build_run_browser_checkpoint_response_uses_archived_payload_builder(self):
         payload = runtime_run_query_service.build_run_browser_checkpoint_response(
             "run-1",

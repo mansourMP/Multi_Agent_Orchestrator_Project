@@ -168,6 +168,8 @@ def build_run_detail_response(
     get_pending_confirmation_fn: Callable[[dict[str, Any]], Any],
     build_archived_run_detail_response: Callable[..., dict[str, Any]],
     build_live_run_detail_response: Callable[..., dict[str, Any]],
+    build_run_browser_checkpoint_payload: Callable[..., dict[str, Any]] | None = None,
+    build_run_browser_session_payload: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     resolved = _resolve_run_detail_source(
         run_id,

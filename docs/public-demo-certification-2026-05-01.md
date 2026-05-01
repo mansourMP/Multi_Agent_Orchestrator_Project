@@ -2,7 +2,7 @@
 
 ## Current Verdict
 
-The public Sage demo path is certified for web after the latest production DeepSeek smoke. The Marketplace preview seed patch is deployed and verified. The account-shell fallback patch is deployed and route-level mobile smoke now reaches the shell instead of the dead workspace-unavailable page. The remaining hard line is one real-device visual/mobile sweep. Cloud Computer is contract-ready only; it is not a live demo feature.
+The public Sage demo path is certified for web after the latest production DeepSeek smoke. The Marketplace preview seed patch is deployed and verified. The account-shell fallback patch is deployed and route-level mobile smoke now reaches the shell instead of the dead workspace-unavailable page. The headless local companion path is certified for an optional local shell/file demo. The remaining hard line is one real-device visual/mobile sweep. Cloud Computer is contract-ready only; it is not a live demo feature.
 
 ## Certified In This Pass
 
@@ -32,6 +32,7 @@ The public Sage demo path is certified for web after the latest production DeepS
 - Marketplace as governed install/discovery surface with seed packages and hidden developer publishing.
 - Marketplace backend preview packages for empty workspaces. Preview packages are display-only and marked `preview_only=true`.
 - Gateway-offline status and local-tool availability by catalog contract.
+- Optional headless local companion shell/file demo after the 2026-05-01 run-detail polling fix.
 
 ## Do Not Demo Yet
 
@@ -67,6 +68,15 @@ The public Sage demo path is certified for web after the latest production DeepS
 - `venv/bin/python -m compileall server_modules/skills_service.py server_modules/tests/test_skills_service.py` passed.
 - `venv/bin/python -m pytest server_modules/tests/test_skills_service.py server_modules/tests/test_direct_chat_tool_catalog_service.py server_modules/tests/test_mcp_registry_service.py` passed with 32 tests.
 - Broader phase 7-9 targeted backend suite passed with 103 tests across billing, entitlements, provider catalog, runtime attachment, workspace bootstrap, tool catalog, skills/tool manifests, and MCP registry.
+
+## Local Companion Verification After Run Polling Fix
+
+- Fixed `build_run_detail_response()` so `/runs/{run_id}` accepts the same browser checkpoint/session callbacks passed by the route registry.
+- `venv/bin/python -m pytest server_modules/tests/test_runtime_run_query_service.py` passed with 11 tests.
+- Local stack restarted with `ORION_LOCAL_COMPANION_ROOT=/Users/mansur` and Postgres-backed runtime persistence.
+- Local worker was healthy with `shell.execute`, `filesystem.read_write`, `screenshot.capture`, `browser_automation.interactive`, and `local.worker`.
+- Local run `ae209a0b-e559-482f-81c0-92229106cc34` completed through `shell.execute`, ran `ls -1 /Users/mansur/Desktop`, returned real Desktop output, and persisted a command-log artifact.
+- Post-fix verification passed: frontend typecheck, frontend production build, Python compile, runtime run-query tests, mini-app route tests, and mini-app service tests.
 
 ## Production Route/API Smoke After Tool Manifest Patch
 

@@ -10,6 +10,8 @@ import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
 import {
+  WORKSPACE_NAV_DESTINATIONS,
+  buildWorkspaceRouteHref,
   getWorkspaceNavRouteDefinition,
   type WorkspaceNavDestinationId,
   type WorkspaceRouteId,
@@ -129,6 +131,22 @@ export function WorkstationKernelShell({
             </Link>
           )) : null}
         />
+        <nav className="workstation-mobile-destination-nav" aria-label="Workspace sections">
+          {WORKSPACE_NAV_DESTINATIONS.map((destination) => (
+            <Link
+              key={destination.id}
+              href={buildWorkspaceRouteHref(workspaceId, destination.defaultRouteId)}
+              prefetch
+              aria-current={activeDestinationId === destination.id ? 'page' : undefined}
+              className={joinClassNames(
+                'workstation-mobile-destination-nav__link',
+                activeDestinationId === destination.id && 'workstation-mobile-destination-nav__link--active',
+              )}
+            >
+              {destination.label}
+            </Link>
+          ))}
+        </nav>
       </div>
       <div className="workstation-shell__body" data-workstation-main-pane="content-body">
         <div

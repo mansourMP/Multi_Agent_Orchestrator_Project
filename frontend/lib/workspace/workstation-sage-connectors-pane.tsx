@@ -75,6 +75,10 @@ type HostedSageAiSnapshot = {
   monthlyCapUsd: number;
   monthlyCostUsd: number;
   monthlyRemainingUsd: number;
+  creditsPerUsd: number;
+  monthlyCreditCap: number;
+  monthlyCreditsUsed: number;
+  monthlyCreditsRemaining: number;
 };
 
 type ProviderPickerSection = {
@@ -170,6 +174,10 @@ const DEFAULT_HOSTED_SAGE_AI: HostedSageAiSnapshot = {
   monthlyCapUsd: 0,
   monthlyCostUsd: 0,
   monthlyRemainingUsd: 0,
+  creditsPerUsd: 1000,
+  monthlyCreditCap: 0,
+  monthlyCreditsUsed: 0,
+  monthlyCreditsRemaining: 0,
 };
 
 const FALLBACK_PROVIDER_IDS = [
@@ -267,6 +275,11 @@ function readString(value: unknown, fallback = ''): string {
 function readNumber(value: unknown, fallback = 0): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readInteger(value: unknown, fallback = 0): number {
+  const parsed = readNumber(value, fallback);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : fallback;
 }
 
 function readOptionalString(value: unknown): string | null {
@@ -383,15 +396,23 @@ function normalizeHostedSageAi(payload: unknown): HostedSageAiSnapshot {
   if (!hosted || Object.keys(hosted).length === 0) {
     return DEFAULT_HOSTED_SAGE_AI;
   }
+  const monthlyCapUsd = readNumber(hosted.monthly_cap_usd, 0);
+  const monthlyCostUsd = readNumber(hosted.monthly_cost_usd, 0);
+  const monthlyRemainingUsd = readNumber(hosted.monthly_remaining_usd, 0);
+  const creditsPerUsd = readInteger(hosted.credits_per_usd, 1000);
   return {
     allowed: hosted.allowed === true,
     planAllowsHostedAi: hosted.plan_allows_hosted_ai === true,
     policy: readString(hosted.policy, DEFAULT_HOSTED_SAGE_AI.policy),
     reason: readOptionalString(hosted.reason),
     message: readOptionalString(hosted.message),
-    monthlyCapUsd: readNumber(hosted.monthly_cap_usd, 0),
-    monthlyCostUsd: readNumber(hosted.monthly_cost_usd, 0),
-    monthlyRemainingUsd: readNumber(hosted.monthly_remaining_usd, 0),
+    monthlyCapUsd,
+    monthlyCostUsd,
+    monthlyRemainingUsd,
+    creditsPerUsd,
+    monthlyCreditCap: readInteger(hosted.monthly_credit_cap, monthlyCapUsd * creditsPerUsd),
+    monthlyCreditsUsed: readInteger(hosted.monthly_credits_used, monthlyCostUsd * creditsPerUsd),
+    monthlyCreditsRemaining: readInteger(hosted.monthly_credits_remaining, monthlyRemainingUsd * creditsPerUsd),
   };
 }
 
@@ -406,9 +427,15 @@ function formatUsd(value: number): string {
   }).format(value);
 }
 
+function formatCredits(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 0,
+  }).format(Math.max(0, Math.round(Number.isFinite(value) ? value : 0)));
+}
+
 function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord | null): string {
   if (hostedSageAi.allowed && hostedProviderCard) {
-    return `Ready with ${formatUsd(hostedSageAi.monthlyRemainingUsd)} remaining this month.`;
+    return `Ready with ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} credits remaining this month.`;
   }
   if (hostedSageAi.allowed) {
     return 'Credits are enabled, but Empyralis hosted runtime is not configured yet.';

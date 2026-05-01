@@ -46,6 +46,7 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(summary["limits"]["max_specialists"], 1)
         self.assertEqual(summary["usage"]["specialists_in_use"], 0)
         self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 5.0)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 5000)
         self.assertFalse(summary["hosted_sage_ai"]["allowed"])
         self.assertEqual(summary["hosted_sage_ai"]["reason"], "policy_disabled")
 
@@ -84,6 +85,8 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
         self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 8.0)
         self.assertEqual(summary["hosted_sage_ai"]["monthly_remaining_usd"], 8.0)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 8000)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credits_remaining"], 8000)
 
     def test_billing_summary_honors_admin_defaults_billing_plan(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -118,6 +121,7 @@ class BillingServiceTests(unittest.TestCase):
         self.assertTrue(summary["hosted_sage_ai"]["allowed"])
         self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
         self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 12.0)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 12000)
 
     def test_checkout_session_uses_configured_plan_price_and_records_pending_state(self):
         with tempfile.TemporaryDirectory() as tempdir:

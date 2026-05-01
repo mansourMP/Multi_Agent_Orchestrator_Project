@@ -4078,6 +4078,30 @@ textarea {
 }
 
 @media (max-width: 767px) {
+  .app-shell-frame {
+    grid-template-columns: minmax(0, 1fr);
+    height: 100dvh;
+  }
+
+  .app-shell-frame__sidebar {
+    display: none;
+  }
+
+  .app-shell-frame__kernel {
+    grid-column: 1 / -1;
+  }
+
+  .app-shell-viewport {
+    padding: var(--app-space-2);
+  }
+
+  .workstation-shell__topbar {
+    position: sticky;
+    top: 0;
+    padding-top: env(safe-area-inset-top);
+    background: color-mix(in srgb, var(--app-bg-page) 96%, transparent) !important;
+  }
+
   .workstation-titlebar {
     min-height: auto;
     height: auto;
@@ -4087,8 +4111,7 @@ textarea {
   }
 
   .workstation-titlebar__brand {
-    min-width: 0;
-    width: 100%;
+    display: none;
   }
 
   .workstation-titlebar__surface-link {
@@ -4107,6 +4130,7 @@ textarea {
   .workstation-titlebar__nav {
     width: 100% !important;
     max-width: 100%;
+    min-width: 0;
     justify-self: stretch;
     justify-content: flex-start;
     padding: 0 0 var(--app-space-1);
@@ -4114,15 +4138,14 @@ textarea {
   }
 
   .workstation-titlebar__link {
+    flex: 0 0 auto;
     min-height: 32px;
     padding: 0 var(--app-space-2);
     font-size: var(--app-font-13);
   }
 
   .workstation-titlebar__right {
-    position: absolute;
-    top: var(--app-space-2);
-    right: max(var(--app-space-3), env(safe-area-inset-right));
+    display: none;
   }
 
   .workstation-titlebar__actions {
@@ -4137,11 +4160,114 @@ textarea {
   }
 
   .workstation-layout {
-    padding: var(--app-space-3);
+    padding: var(--app-space-2);
   }
 
   .workstation-shell--chat .workstation-layout {
     padding: 0;
+  }
+
+  .app-chat-page {
+    min-height: 100dvh;
+    padding-inline: max(var(--app-space-2), env(safe-area-inset-left)) max(var(--app-space-2), env(safe-area-inset-right));
+  }
+
+  .app-chat-composer {
+    width: 100%;
+    padding: var(--app-space-2) 0 calc(var(--app-space-2) + env(safe-area-inset-bottom));
+  }
+
+  .app-chat-composer__surface {
+    min-height: 116px;
+    padding: var(--app-space-3);
+    border-radius: 22px;
+  }
+
+  .app-chat-composer__textarea {
+    min-height: 52px;
+    padding-inline: 4px;
+  }
+
+  .app-chat-composer__toolbar {
+    gap: var(--app-space-2);
+  }
+
+  .app-chat-composer__toolbar-left,
+  .app-chat-composer__footer-group {
+    max-width: calc(100vw - 96px);
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .app-chat-composer__toolbar-left::-webkit-scrollbar,
+  .app-chat-composer__footer-group::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-chat-composer__toolbar-divider {
+    display: none;
+  }
+
+  .app-chat-composer__provider-pill {
+    max-width: min(64vw, 260px);
+  }
+
+  .app-chat-composer__tools-popover,
+  .app-chat-composer__runtime-popover {
+    width: min(340px, calc(100vw - 24px));
+    max-height: min(72dvh, 520px);
+    overflow-y: auto;
+  }
+
+  .sage-unified-grid,
+  .sage-unified-grid--2,
+  .sage-unified-grid--4 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sage-hosted-credits,
+  .sage-provider-active__row {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+  }
+
+  .sage-hosted-credits__actions,
+  .sage-provider-active__row .app-button {
+    width: 100%;
+  }
+
+  .sage-provider-picker__row,
+  .sage-provider-picker__empty {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .sage-provider-picker__inline-key {
+    padding-left: 0;
+  }
+
+  .sage-provider-picker__inline-actions {
+    display: grid;
+  }
+
+  .marketplace-pane .app-list-detail-columns,
+  .marketplace-pane .app-list-detail-columns--split,
+  .app-studio-shell .app-list-detail-columns,
+  .app-studio-shell .app-list-detail-columns--split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-page-message {
+    min-height: 100dvh;
+    padding: max(var(--app-space-6), env(safe-area-inset-top)) var(--app-space-4) max(var(--app-space-6), env(safe-area-inset-bottom));
+  }
+
+  .app-page-message__actions {
+    display: grid;
+  }
+
+  .app-page-message__button {
+    width: 100%;
   }
 }
 

@@ -41,6 +41,21 @@ function formatUsd(value: unknown): string {
   return `$${readNumber(value).toFixed(2)}`;
 }
 
+function formatCredits(value: unknown): string {
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 0,
+  }).format(Math.max(0, Math.round(readNumber(value))));
+}
+
+function hostedCreditValue(hostedSageAi: Record<string, unknown>, usdKey: string, creditKey: string): number {
+  const explicitCredits = readNumber(hostedSageAi[creditKey], Number.NaN);
+  if (Number.isFinite(explicitCredits)) {
+    return explicitCredits;
+  }
+  const creditsPerUsd = readNumber(hostedSageAi.credits_per_usd, 1000);
+  return readNumber(hostedSageAi[usdKey]) * creditsPerUsd;
+}
+
 export function WorkstationBillingPane() {
   const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
@@ -96,9 +111,10 @@ export function WorkstationBillingPane() {
   const currentPlanLabel = readText(subscription.label ?? bootstrap.entitlements.label, bootstrap.entitlements.label);
   const subscriptionStatus = readText(subscription.status, 'active');
   const currentPeriodEnd = readText(subscription.current_period_end, '');
-  const hostedCreditRemaining = hostedSageAi.monthly_remaining_usd;
   const hostedCreditCap = hostedSageAi.monthly_cap_usd;
-  const hostedCreditSpent = hostedSageAi.monthly_cost_usd;
+  const hostedCreditsRemaining = hostedCreditValue(hostedSageAi, 'monthly_remaining_usd', 'monthly_credits_remaining');
+  const hostedCreditsCap = hostedCreditValue(hostedSageAi, 'monthly_cap_usd', 'monthly_credit_cap');
+  const hostedCreditsUsed = hostedCreditValue(hostedSageAi, 'monthly_cost_usd', 'monthly_credits_used');
 
   const reloadSummary = () => {
     setLoading(true);
@@ -141,8 +157,8 @@ export function WorkstationBillingPane() {
         />
         <WorkstationSurfaceStat
           label="Hosted credits"
-          value={formatUsd(hostedCreditRemaining)}
-          hint={`${formatUsd(hostedCreditSpent)} used of ${formatUsd(hostedCreditCap)} this month.`}
+          value={formatCredits(hostedCreditsRemaining)}
+          hint={`${formatCredits(hostedCreditsUsed)} used of ${formatCredits(hostedCreditsCap)} this month.`}
         />
       </WorkstationSurfaceStatGrid>
       <WorkstationSurfaceCard
@@ -157,12 +173,12 @@ export function WorkstationBillingPane() {
           />
           <WorkstationSurfaceListItem
             title="Monthly cap"
-            subtitle={formatUsd(hostedCreditCap)}
-            description="Spend cap before hosted model usage stops for this workspace."
+            subtitle={`${formatCredits(hostedCreditsCap)} credits`}
+            description={`Hard cap before hosted model usage stops for this workspace. Internal ceiling: ${formatUsd(hostedCreditCap)}.`}
           />
           <WorkstationSurfaceListItem
             title="Monthly usage"
-            subtitle={`${formatUsd(hostedCreditSpent)} spent · ${formatUsd(hostedCreditRemaining)} remaining`}
+            subtitle={`${formatCredits(hostedCreditsUsed)} used · ${formatCredits(hostedCreditsRemaining)} remaining`}
             description={`${String(readNumber(usage.hosted_sage_runs_monthly))} hosted Sage runs this month.`}
           />
           <WorkstationSurfaceListItem

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { notFound, redirect } from 'next/navigation';
 
 import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
+import { ShellRecoveryActions } from '@/app/(account)/ShellRecoveryActions';
 import { loadAccountShellSessionSafely } from '@/lib/server/load-account-shell-session';
 import { resolvePrimaryReadyWorkspaceId } from '@/lib/shell/workspace-membership-model';
 import {
@@ -12,6 +13,8 @@ import { DesktopStartupScreen } from '@/lib/workspace/desktop-startup-screen';
 import { WorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { WorkstationKernelShell } from '@/lib/workspace/workstation-kernel-shell';
 import { WorkstationShellFrame } from '@/lib/workspace/workstation-shell-frame';
+
+const RECOVERABLE_BOOTSTRAP_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 export default async function WorkspaceRouteLayout({
   children,
@@ -34,6 +37,22 @@ export default async function WorkspaceRouteLayout({
       }
       if (error.status === 404) {
         notFound();
+      }
+      if (RECOVERABLE_BOOTSTRAP_STATUSES.has(error.status)) {
+        return (
+          <main className="app-page-message app-page-message--workspace-bootstrap">
+            <div className="app-page-message__content">
+              <h1 className="app-page-message__title">Workspace is warming up</h1>
+              <p className="app-page-message__body">
+                Sage could not load this workspace yet. This usually clears after a deploy or service restart.
+              </p>
+              <p className="app-page-message__meta">
+                Reload the workspace, or sign in again if it keeps happening.
+              </p>
+              <ShellRecoveryActions label="Workspace recovery actions" />
+            </div>
+          </main>
+        );
       }
     }
     throw error;

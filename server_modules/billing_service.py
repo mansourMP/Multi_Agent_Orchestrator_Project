@@ -22,6 +22,7 @@ DEFAULT_BILLING_PLAN_ID = "free"
 STRIPE_PROVIDER = "stripe"
 STRIPE_API_BASE = "https://api.stripe.com/v1"
 STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300
+HOSTED_SAGE_AI_CREDITS_PER_USD = 1000
 
 PLAN_LABELS: Dict[str, str] = {
     "free": "Free",
@@ -118,6 +119,22 @@ def _hosted_sage_ai_policy(value: Any) -> str:
     return token if token in {"disabled", "owner_opt_in", "enabled_with_cap"} else "owner_opt_in"
 
 
+def _hosted_sage_ai_credit_fields(
+    *,
+    monthly_cap_usd: float,
+    monthly_cost_usd: float,
+    monthly_remaining_usd: float,
+) -> Dict[str, Any]:
+    credits_per_usd = HOSTED_SAGE_AI_CREDITS_PER_USD
+    return {
+        "credit_unit": "credits",
+        "credits_per_usd": credits_per_usd,
+        "monthly_credit_cap": int(round(float(monthly_cap_usd or 0.0) * credits_per_usd)),
+        "monthly_credits_used": int(round(float(monthly_cost_usd or 0.0) * credits_per_usd)),
+        "monthly_credits_remaining": int(round(float(monthly_remaining_usd or 0.0) * credits_per_usd)),
+    }
+
+
 def _hosted_sage_ai_credit_state(
     *,
     effective_plan_id: str,
@@ -133,6 +150,11 @@ def _hosted_sage_ai_credit_state(
     monthly_cap_usd = max(0.0, round(float(monthly_cap_usd), 6))
     monthly_cost_usd = max(0.0, round(float(usage.get("hosted_sage_cost_usd_monthly") or 0.0), 6))
     monthly_remaining_usd = max(0.0, round(monthly_cap_usd - monthly_cost_usd, 6))
+    credit_fields = _hosted_sage_ai_credit_fields(
+        monthly_cap_usd=monthly_cap_usd,
+        monthly_cost_usd=monthly_cost_usd,
+        monthly_remaining_usd=monthly_remaining_usd,
+    )
 
     if not plan_allows_hosted_ai:
         reason = "policy_disabled"
@@ -167,6 +189,7 @@ def _hosted_sage_ai_credit_state(
         "monthly_cap_usd": monthly_cap_usd,
         "monthly_cost_usd": monthly_cost_usd,
         "monthly_remaining_usd": monthly_remaining_usd,
+        **credit_fields,
         "reason": reason,
         "message": message,
     }

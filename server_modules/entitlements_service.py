@@ -94,6 +94,7 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
 HOSTED_SAGE_AI_POLICIES = {"disabled", "owner_opt_in", "enabled_with_cap"}
 DEFAULT_HOSTED_SAGE_AI_POLICY = "owner_opt_in"
 DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 5.0
+HOSTED_SAGE_AI_CREDITS_PER_USD = 1000
 
 
 class EntitlementError(RuntimeError):
@@ -175,6 +176,22 @@ def _coerce_non_negative_float(value: Any, default: float) -> float:
     if parsed < 0:
         return 0.0
     return float(parsed)
+
+
+def _hosted_sage_ai_credit_fields(
+    *,
+    monthly_cap_usd: float,
+    monthly_cost_usd: float,
+    monthly_remaining_usd: float,
+) -> Dict[str, Any]:
+    credits_per_usd = HOSTED_SAGE_AI_CREDITS_PER_USD
+    return {
+        "credit_unit": "credits",
+        "credits_per_usd": credits_per_usd,
+        "monthly_credit_cap": int(round(float(monthly_cap_usd or 0.0) * credits_per_usd)),
+        "monthly_credits_used": int(round(float(monthly_cost_usd or 0.0) * credits_per_usd)),
+        "monthly_credits_remaining": int(round(float(monthly_remaining_usd or 0.0) * credits_per_usd)),
+    }
 
 
 def _normalize_hosted_sage_ai_policy(value: Any) -> str:
@@ -391,6 +408,11 @@ def hosted_sage_ai_access_state(
     )
     monthly_cost_usd = _coerce_non_negative_float(usage.get("hosted_sage_cost_usd_monthly"), 0.0)
     remaining_usd = max(0.0, round(monthly_cap_usd - monthly_cost_usd, 6))
+    credit_fields = _hosted_sage_ai_credit_fields(
+        monthly_cap_usd=monthly_cap_usd,
+        monthly_cost_usd=monthly_cost_usd,
+        monthly_remaining_usd=remaining_usd,
+    )
 
     if not plan_allows_hosted_ai:
         return {
@@ -400,6 +422,7 @@ def hosted_sage_ai_access_state(
             "monthly_cap_usd": monthly_cap_usd,
             "monthly_cost_usd": monthly_cost_usd,
             "monthly_remaining_usd": remaining_usd,
+            **credit_fields,
             "reason": "policy_disabled",
             "message": "Empyralis-hosted AI is not included in this workspace plan.",
         }
@@ -411,6 +434,7 @@ def hosted_sage_ai_access_state(
             "monthly_cap_usd": monthly_cap_usd,
             "monthly_cost_usd": monthly_cost_usd,
             "monthly_remaining_usd": remaining_usd,
+            **credit_fields,
             "reason": "policy_disabled",
             "message": "Hosted Sage AI is disabled for this workspace.",
         }
@@ -422,6 +446,7 @@ def hosted_sage_ai_access_state(
             "monthly_cap_usd": monthly_cap_usd,
             "monthly_cost_usd": monthly_cost_usd,
             "monthly_remaining_usd": remaining_usd,
+            **credit_fields,
             "reason": "owner_approval_required",
             "message": "Hosted Sage AI needs owner approval before this workspace can use it.",
         }
@@ -433,6 +458,7 @@ def hosted_sage_ai_access_state(
             "monthly_cap_usd": monthly_cap_usd,
             "monthly_cost_usd": monthly_cost_usd,
             "monthly_remaining_usd": remaining_usd,
+            **credit_fields,
             "reason": "cap_reached",
             "message": "Hosted Sage AI monthly cap is reached for this workspace.",
         }
@@ -443,6 +469,7 @@ def hosted_sage_ai_access_state(
         "monthly_cap_usd": monthly_cap_usd,
         "monthly_cost_usd": monthly_cost_usd,
         "monthly_remaining_usd": remaining_usd,
+        **credit_fields,
         "reason": None,
         "message": None,
     }
@@ -475,6 +502,9 @@ def workspace_capability_flags(
         "hosted_sage_ai_monthly_cap_usd": float(hosted_state.get("monthly_cap_usd") or 0.0),
         "hosted_sage_ai_monthly_cost_usd": float(hosted_state.get("monthly_cost_usd") or 0.0),
         "hosted_sage_ai_monthly_remaining_usd": float(hosted_state.get("monthly_remaining_usd") or 0.0),
+        "hosted_sage_ai_monthly_credit_cap": int(hosted_state.get("monthly_credit_cap") or 0),
+        "hosted_sage_ai_monthly_credits_used": int(hosted_state.get("monthly_credits_used") or 0),
+        "hosted_sage_ai_monthly_credits_remaining": int(hosted_state.get("monthly_credits_remaining") or 0),
         "hosted_sage_ai_reason": hosted_state.get("reason"),
         "mobile_app_enabled": bool(entitlements.get("mobile_app_enabled")),
         "mobile_push_enabled": bool(entitlements.get("mobile_push_enabled")),

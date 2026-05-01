@@ -252,7 +252,7 @@ CAPABILITY_REGISTRY: Dict[str, CapabilityContract] = {
         requires_approval=True,
         reversible=True,
         required_os_permissions=["screen_recording"],
-        allowed_environments=["local_companion"],
+        allowed_environments=["local_companion", "cloud_computer"],
         artifact_outputs=["image/png"],
     ),
     "computer_control.ocr": _contract(

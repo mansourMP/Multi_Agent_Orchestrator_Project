@@ -30,6 +30,8 @@ MCP_SERVER_REGISTRY_FILE = Path(
 ).expanduser()
 _SUPPORTED_RUNTIME_MODES = {"hosted_secure", "local_secure", "privileged_device"}
 _SUPPORTED_ACTION_CLASSES = {"read", "write", "execute"}
+_SUPPORTED_RISK_LEVELS = {"low", "medium", "high", "critical"}
+_SUPPORTED_COST_CLASSES = {"free", "standard", "metered", "external"}
 _DANGEROUS_TOKENS = {"delete", "remove", "destroy", "drop", "truncate", "reset", "shutdown"}
 _ARGUMENT_KEY_CANDIDATES = ("arguments", "args", "input", "payload")
 
@@ -83,6 +85,26 @@ def _normalize_runtime_modes(value: Any) -> List[str]:
 def _normalize_action_class(value: Any) -> str:
     token = str(value or "read").strip().lower() or "read"
     return token if token in _SUPPORTED_ACTION_CLASSES else "read"
+
+
+def _risk_level_for_action(action_class: str) -> str:
+    if action_class == "execute":
+        return "critical"
+    if action_class == "write":
+        return "medium"
+    return "low"
+
+
+def _normalize_risk_level(value: Any, *, action_class: str) -> str:
+    token = str(value or "").strip().lower()
+    if token in _SUPPORTED_RISK_LEVELS:
+        return token
+    return _risk_level_for_action(action_class)
+
+
+def _normalize_cost_class(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    return token if token in _SUPPORTED_COST_CLASSES else "standard"
 
 
 def _normalize_input_schema(value: Any) -> Dict[str, Any]:
@@ -158,16 +180,36 @@ def _normalize_tool_payload(raw: Dict[str, Any], *, server_id: str) -> Dict[str,
         if compact not in normalized_scopes:
             normalized_scopes.append(compact)
     trigger_terms = [token.lower() for token in _normalize_list_of_strings(raw.get("trigger_terms"))]
+    action_class = _normalize_action_class(raw.get("action_class"))
+    risk_level = _normalize_risk_level(raw.get("risk_level"), action_class=action_class)
+    permission_scopes = _normalize_list_of_strings(raw.get("permission_scopes")) or list(normalized_scopes)
+    requires_approval = bool(raw.get("requires_approval")) or risk_level in {"high", "critical"}
+    allowed_runtime_modes = _normalize_runtime_modes(raw.get("allowed_runtime_modes"))
+    cost_class = _normalize_cost_class(raw.get("cost_class"))
+    audit_event_type = str(raw.get("audit_event_type") or f"mcp.tool.{action_class}").strip() or f"mcp.tool.{action_class}"
     return {
         "name": name,
         "label": label[:160],
         "description": str(raw.get("description") or "").strip()[:500],
         "input_schema": _normalize_input_schema(raw.get("input_schema")),
-        "action_class": _normalize_action_class(raw.get("action_class")),
+        "action_class": action_class,
+        "risk_level": risk_level,
         "connector_scopes": normalized_scopes,
+        "permission_scopes": permission_scopes,
         "trigger_terms": trigger_terms,
-        "allowed_runtime_modes": _normalize_runtime_modes(raw.get("allowed_runtime_modes")),
-        "requires_approval": bool(raw.get("requires_approval")),
+        "allowed_runtime_modes": allowed_runtime_modes,
+        "requires_approval": requires_approval,
+        "audit_event_type": audit_event_type,
+        "cost_class": cost_class,
+        "permission_manifest": {
+            "action_class": action_class,
+            "risk_level": risk_level,
+            "scopes": permission_scopes,
+            "requires_approval": requires_approval,
+            "allowed_runtime_modes": allowed_runtime_modes,
+            "cost_class": cost_class,
+            "audit_event_type": audit_event_type,
+        },
         "enabled": bool(raw.get("enabled", True)),
     }
 

@@ -188,6 +188,45 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     }];
   }
 
+  if (eventType === 'browser.screenshot' || eventType === 'screenshot.captured') {
+    const artifactId = readString(data.artifact_id)
+      || readString(data.artifactId)
+      || readString(metadata.artifact_id)
+      || null;
+    const caption = readString(data.caption)
+      || readString(data.description)
+      || readString(data.summary)
+      || 'Screenshot captured';
+    return [{
+      type: 'screenshot_captured',
+      id: eventId('screenshot', artifactId || payload.item_id || payload.tool_call_id, fallbackIndex),
+      caption,
+      artifactId,
+      width: readNumber(data.width),
+      height: readNumber(data.height),
+      status: readString(data.status).toLowerCase() === 'error' ? 'error' : 'done',
+    }];
+  }
+
+  if (eventType === 'artifact.created') {
+    const mimeType = readString(data.mime_type) || readString(data.mimeType);
+    if (mimeType.startsWith('image/')) {
+      const artifactId = readString(data.artifact_id)
+        || readString(data.artifactId)
+        || readString(payload.item_id)
+        || null;
+      return [{
+        type: 'screenshot_captured',
+        id: eventId('artifact', artifactId || payload.item_id, fallbackIndex),
+        caption: readString(data.title) || readString(data.label) || 'Image artifact captured',
+        artifactId,
+        width: readNumber(data.width),
+        height: readNumber(data.height),
+        status: 'done',
+      }];
+    }
+  }
+
   if (eventType === 'plan.item.created') {
     const title = readString(data.title);
     const summary = readString(data.rationale_summary);

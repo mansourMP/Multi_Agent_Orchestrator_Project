@@ -7,6 +7,7 @@ import type {
   CodexExecCell,
   CodexFileChangeCell,
   CodexReasoningSummaryCell,
+  CodexScreenshotCell,
   CodexTimelineProjection,
   CodexTranscriptCell,
   CodexWebSearchCell,
@@ -137,6 +138,7 @@ function dimSystemCells(cells: CodexTranscriptCell[]): CodexTranscriptCell[] {
       || cell.kind === 'tool'
       || cell.kind === 'web_search'
       || cell.kind === 'file_change'
+      || cell.kind === 'screenshot'
       || cell.kind === 'status'
     ) {
       return { ...cell, dimmed: true };
@@ -423,6 +425,33 @@ function applyCodexEvent(
         ...current,
         filename: event.filename || current.filename,
         action: event.action || current.action,
+        status: event.status,
+      }),
+    );
+    return { activeCell: cell, streamStatus: event.status === 'error' ? 'error' : 'streaming' };
+  }
+
+  if (event.type === 'screenshot_captured') {
+    const cell = updateCell<CodexScreenshotCell>(
+      cells,
+      indexById,
+      event.id,
+      () => ({
+        id: event.id,
+        kind: 'screenshot',
+        caption: event.caption,
+        artifactId: event.artifactId,
+        width: event.width,
+        height: event.height,
+        status: event.status,
+        createdAt: nowIso(),
+      }),
+      (current) => ({
+        ...current,
+        caption: event.caption || current.caption,
+        artifactId: event.artifactId || current.artifactId,
+        width: event.width ?? current.width,
+        height: event.height ?? current.height,
         status: event.status,
       }),
     );

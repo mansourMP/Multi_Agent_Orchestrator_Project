@@ -73,6 +73,15 @@ export type CodexFileChangeCell = CodexCellBase & {
   status: 'running' | 'done' | 'error';
 };
 
+export type CodexScreenshotCell = CodexCellBase & {
+  kind: 'screenshot';
+  caption: string;
+  artifactId: string | null;
+  width: number | null;
+  height: number | null;
+  status: 'done' | 'error';
+};
+
 export type CodexApprovalRequestCell = CodexCellBase & {
   kind: 'approval_request';
   prompt: string;
@@ -101,6 +110,7 @@ export type CodexTranscriptCell =
   | CodexToolCell
   | CodexWebSearchCell
   | CodexFileChangeCell
+  | CodexScreenshotCell
   | CodexApprovalRequestCell
   | CodexStatusCell
   | CodexErrorCell;
@@ -136,6 +146,7 @@ export type CodexChatEvent =
   | { type: 'web_search_started'; id: string; query: string }
   | { type: 'web_search_result'; id: string; query: string | null; status: 'done' | 'error'; result: string | null }
   | { type: 'file_change'; id: string; filename: string; action: string; status: 'running' | 'done' | 'error' }
+  | { type: 'screenshot_captured'; id: string; caption: string; artifactId: string | null; width: number | null; height: number | null; status: 'done' | 'error' }
   | { type: 'approval_request'; id: string; prompt: string }
   | { type: 'status'; id: string; label: string; detail: string | null; status: 'idle' | 'running' | 'done' | 'error' }
   | { type: 'error'; id: string; message: string; retryable: boolean };

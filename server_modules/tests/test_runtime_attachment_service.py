@@ -329,6 +329,9 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(targets["cloud_default"]["status"], "live")
         self.assertEqual(targets["local_companion"]["connection_mode"], "platform_relay")
         self.assertFalse(targets["local_companion"]["direct_mobile_connection_required"])
+        local_modes = {item["id"]: item for item in targets["local_companion"]["execution_modes"]}
+        self.assertTrue(local_modes["full_access"]["available"])
+        self.assertTrue(local_modes["full_access"]["requires_owner_approval"])
 
     def test_list_workspace_runtime_attachments_maps_cloud_computer_profile(self) -> None:
         inventory = asyncio.run(
@@ -411,6 +414,10 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertTrue(targets["sage_cloud_computer"]["metered"])
         self.assertTrue(targets["sage_cloud_computer"]["requires_explicit_selection"])
         self.assertFalse(targets["sage_cloud_computer"]["default_for_workspace"])
+        cloud_modes = {item["id"]: item for item in targets["sage_cloud_computer"]["execution_modes"]}
+        self.assertTrue(cloud_modes["autopilot"]["available"])
+        self.assertFalse(cloud_modes["full_access"]["available"])
+        self.assertEqual(payload["routing_contract"]["full_access_scope"], "local_companion_only")
 
     def test_build_workspace_runtime_targets_never_defaults_to_cloud_computer(self) -> None:
         payload = runtime_attachment_service.build_workspace_runtime_targets(

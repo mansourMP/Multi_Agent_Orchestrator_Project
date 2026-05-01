@@ -14,6 +14,9 @@ The public Sage demo path is close, with production chat already certified again
 - Hosted AI credits surface: billing summary exposes hosted Sage AI policy, cap, usage, and remaining balance for BYOK-free users.
 - Approval policy: local file delete/remove/unlink/trash now requires approval.
 - Cloud Computer contract: `sage_cloud_computer` remains explicit, paid, non-default, metered, and separate from the personal gateway.
+- Execution mode contract: Default, Approvals, Autopilot, and Full Access are now separated at runtime-target level; Full Access is local-companion-only.
+- Screenshot transparency contract: screenshot/image artifact trace events now have first-class chat cells for phone/web audit visibility.
+- MCP trust metadata: MCP tools now expose permission manifests with risk, scopes, allowed modes, cost class, and audit event type.
 
 ## Demo-Safe Surfaces
 
@@ -26,6 +29,7 @@ The public Sage demo path is close, with production chat already certified again
 ## Do Not Demo Yet
 
 - Full Cloud Computer/hosted desktop. The runtime contract exists, but there is no real provisioner, cloud browser session, sandbox lifecycle, spend meter enforcement, or artifact egress flow certified for users.
+- Full native phone certification. Source-level mobile controls exist, but the final physical phone sweep must still be run against production after deploy.
 - Video generation. It is intentionally out of scope.
 - Marketplace developer publishing as a normal-user flow. It must stay behind explicit developer mode.
 

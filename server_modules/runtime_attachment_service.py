@@ -12,6 +12,7 @@ from server_modules import (
     control_plane_repository,
     entitlements_service,
     execution_sandbox_service,
+    execution_mode_policy,
     gateway_state_repository,
     hybrid_policy_service,
     memory_service,
@@ -610,6 +611,12 @@ def build_workspace_runtime_targets(
                 if str(mode or "").strip()
             }
         )
+        execution_modes = execution_mode_policy.mode_contract_for_target(target_id)
+        if not matching:
+            execution_modes = [
+                {**mode, "available": False}
+                for mode in execution_modes
+            ]
         target_payload = {
             "target_id": target_id,
             "label": definition["label"],
@@ -633,6 +640,7 @@ def build_workspace_runtime_targets(
             "direct_mobile_connection_required": False,
             "workspace_scoped_identity": True,
             "supports_runtime_modes": supports_runtime_modes,
+            "execution_modes": execution_modes,
             "metered": definition["attachment_kind"] == "cloud_computer",
             "requires_explicit_selection": definition["attachment_kind"] in {"cloud_computer", "self_hosted_business_node"},
         }
@@ -658,6 +666,7 @@ def build_workspace_runtime_targets(
             "direct_mobile_lan_default": False,
             "workspace_scoped_identity": True,
             "supports_self_host_without_identity_fork": True,
+            **execution_mode_policy.routing_contract_summary(),
         },
     }
 

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { type ReactNode, useMemo, useState } from 'react';
 import {
   Brain,
+  Camera,
   Check,
   ChevronRight,
   CircleAlert,
@@ -407,6 +408,21 @@ export function FileChangeCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
   );
 }
 
+export function ScreenshotCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'screenshot' }> }) {
+  const sizeLabel = cell.width && cell.height ? ` · ${cell.width}x${cell.height}` : '';
+  return (
+    <SystemInlineRow
+      icon={cell.status === 'done'
+        ? <Camera size={14} strokeWidth={1.9} />
+        : <CircleAlert size={14} strokeWidth={2} />}
+      primary={cell.caption || 'Screenshot'}
+      secondary={cell.status === 'done' ? `Captured${sizeLabel}` : 'Failed'}
+      state={cell.status}
+      dimmed={cell.dimmed === true}
+    />
+  );
+}
+
 export function ApprovalCell({
   cell,
   resolvingApprovalId,
@@ -521,6 +537,8 @@ export function CodexChatCell({
       return <WebSearchCell cell={cell} />;
     case 'file_change':
       return <FileChangeCell cell={cell} />;
+    case 'screenshot':
+      return <ScreenshotCell cell={cell} />;
     case 'approval_request':
       return (
         <ApprovalCell

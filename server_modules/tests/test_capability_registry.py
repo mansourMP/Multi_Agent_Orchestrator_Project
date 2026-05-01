@@ -19,6 +19,9 @@ class CapabilityRegistryTests(unittest.TestCase):
         assert contract is not None
         self.assertEqual(contract.capability_id, "screenshot.capture")
         self.assertEqual(contract.display_name, "Capture Screenshot")
+        self.assertIn("local_companion", contract.allowed_environments)
+        self.assertIn("cloud_computer", contract.allowed_environments)
+        self.assertEqual(contract.artifact_outputs, ["image/png"])
 
     def test_resolve_capability_returns_none_for_missing_capability(self) -> None:
         self.assertIsNone(resolve_capability("missing.capability"))

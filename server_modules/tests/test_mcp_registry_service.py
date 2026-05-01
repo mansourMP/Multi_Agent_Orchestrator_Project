@@ -47,6 +47,10 @@ class McpRegistryServiceTests(unittest.TestCase):
 
         self.assertEqual(record["id"], "inventory-feed")
         self.assertEqual(record["tools"][0]["name"], "lookup_stock")
+        self.assertEqual(record["tools"][0]["risk_level"], "low")
+        self.assertEqual(record["tools"][0]["cost_class"], "standard")
+        self.assertEqual(record["tools"][0]["permission_manifest"]["action_class"], "read")
+        self.assertFalse(record["tools"][0]["permission_manifest"]["requires_approval"])
 
         servers = mcp_registry_service.list_workspace_mcp_servers("workspace-1")
         self.assertEqual(servers[0]["tool_count"], 1)
@@ -96,6 +100,34 @@ class McpRegistryServiceTests(unittest.TestCase):
         self.assertEqual(result["reply"], "SKU-1 is in stock.")
         self.assertEqual(result["mcp"]["arguments"], {"sku": "SKU-1"})
         self.assertEqual(result["mcp"]["server_id"], "inventory-feed")
+
+    def test_upsert_exposes_trust_metadata_for_execute_tools(self) -> None:
+        record = mcp_registry_service.upsert_workspace_mcp_server(
+            workspace_id="workspace-1",
+            server_id="shell-tools",
+            label="Shell Tools",
+            transport="streamable_http",
+            endpoint="https://example.com/mcp",
+            tools=[
+                {
+                    "name": "run_shell",
+                    "label": "Run Shell",
+                    "description": "Run a local command.",
+                    "action_class": "execute",
+                    "connector_scopes": ["terminal"],
+                    "allowed_runtime_modes": ["privileged_device"],
+                    "cost_class": "metered",
+                }
+            ],
+            metadata={},
+        )
+
+        tool = record["tools"][0]
+        self.assertEqual(tool["risk_level"], "critical")
+        self.assertTrue(tool["requires_approval"])
+        self.assertEqual(tool["audit_event_type"], "mcp.tool.execute")
+        self.assertEqual(tool["permission_manifest"]["cost_class"], "metered")
+        self.assertEqual(tool["permission_manifest"]["allowed_runtime_modes"], ["privileged_device"])
 
 
 if __name__ == "__main__":

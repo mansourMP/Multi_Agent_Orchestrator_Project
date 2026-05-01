@@ -86,6 +86,39 @@ class DirectChatStreamResponseServiceTests(unittest.TestCase):
         self.assertIsInstance(payload, JSONResponse)
         self.assertEqual(payload.status_code, 409)
 
+    def test_preflights_new_session_even_when_persisted_state_exists(self):
+        started = {}
+
+        async def _execute_agent_turn_request(**kwargs):
+            return {
+                "workspace_id": "default",
+                "session_key": "session-1",
+                "thread_id": "thread-1",
+                "client_request_id": "req-1",
+                "producer": lambda: iter([{"type": "final", "payload": {"error": "no_provider"}}]),
+            }
+
+        services = self._services(
+            execute_agent_turn_request=_execute_agent_turn_request,
+            get_chat_stream_state=lambda db_path, key: {"status": "retryable"},
+            get_or_create_chat_stream_session=lambda *args, **kwargs: {"producer_started": False},
+            extract_direct_chat_error_response=lambda event: {"error": "no_provider", "message": "No AI provider configured"},
+            start_chat_stream_producer=lambda session, producer: started.setdefault("called", True),
+        )
+
+        payload = asyncio.run(
+            build_direct_chat_stream_response(
+                current_user={"user_id": "user-1"},
+                body={"message": "hello"},
+                last_event_id=None,
+                services=services,
+            )
+        )
+
+        self.assertIsInstance(payload, JSONResponse)
+        self.assertEqual(payload.status_code, 409)
+        self.assertNotIn("called", started)
+
     def test_returns_streaming_response_for_live_stream(self):
         started = {}
         session = {"producer_started": False}

@@ -130,7 +130,6 @@ async def build_agent_turn_stream_response(
     )
     producer = execution["producer"]
 
-    existing_state = services.get_chat_stream_state(services.chat_stream_state_db_path(), session_key)
     session = services.get_or_create_chat_stream_session(
         session_key,
         thread_id=thread_id,
@@ -145,7 +144,7 @@ async def build_agent_turn_stream_response(
         request_id=client_request_id,
     )
     session["metadata"] = session_metadata
-    if not bool(session.get("producer_started")) and not isinstance(existing_state, dict):
+    if not bool(session.get("producer_started")):
         producer_iter = producer()
         try:
             first_event = next(producer_iter)

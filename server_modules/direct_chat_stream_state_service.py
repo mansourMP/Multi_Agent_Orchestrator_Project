@@ -177,6 +177,38 @@ def chat_stream_replay_payload_from_state(state: dict[str, Any]) -> dict[str, An
     )
 
 
+def _has_replayable_final_payload(state: dict[str, Any]) -> bool:
+    final_payload = state.get("final_payload")
+    if not isinstance(final_payload, dict) or not final_payload:
+        return False
+    if str(final_payload.get("kind") or "").strip() == "terminal_error":
+        return False
+    if str(final_payload.get("terminal_error") or "").strip():
+        return False
+    if str(final_payload.get("error") or "").strip() and not str(final_payload.get("reply") or "").strip():
+        return False
+    return True
+
+
+def _mark_stream_state_retryable(
+    state: dict[str, Any],
+    *,
+    db_path: Any,
+    upsert_state: Callable[[Any, dict[str, Any]], None],
+    now_iso: Callable[[], str],
+    reason: str,
+) -> None:
+    metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+    metadata["retryable_reason"] = reason
+    metadata["previous_status"] = str(state.get("status") or "").strip() or None
+    state["metadata"] = metadata
+    state["status"] = "retryable"
+    state["error_text"] = ""
+    state["final_payload"] = {}
+    state["updated_at"] = now_iso()
+    upsert_state(db_path, state)
+
+
 def build_chat_stream_replay_session(
     key: str,
     *,
@@ -239,21 +271,26 @@ def load_replayable_chat_stream_session(
         return None
     status = str(state.get("status") or "").strip().lower()
     if status == "active":
-        state["status"] = "interrupted"
-        state["error_text"] = (
-            str(state.get("error_text") or "").strip()
-            or "Chat stream was interrupted because the live producer is no longer running."
+        _mark_stream_state_retryable(
+            state,
+            db_path=db_path,
+            upsert_state=upsert_state,
+            now_iso=now_iso,
+            reason="active_state_without_live_producer",
         )
-        state["updated_at"] = now_iso()
-        state["last_event_seq"] = max(1, int(state.get("last_event_seq") or 0) + 1)
-        state["final_payload"] = interrupted_final_payload(
-            str(state.get("partial_text") or ""),
-            str(state.get("error_text") or ""),
-        )
-        upsert_state(db_path, state)
-        metrics_inc("chat_stream_interrupted", 1)
-        status = "interrupted"
+        metrics_inc("chat_stream_restarted_unfinished", 1)
+        return None
     if status not in {"completed", "interrupted", "error"}:
+        return None
+    if status in {"interrupted", "error"} and not _has_replayable_final_payload(state):
+        _mark_stream_state_retryable(
+            state,
+            db_path=db_path,
+            upsert_state=upsert_state,
+            now_iso=now_iso,
+            reason=f"{status}_state_without_replayable_final",
+        )
+        metrics_inc("chat_stream_restarted_unfinished", 1)
         return None
     if status == "completed":
         metrics_inc("chat_stream_replayed_completed", 1)

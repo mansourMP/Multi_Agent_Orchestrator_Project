@@ -114,6 +114,7 @@ RUNTIME_METRICS: Dict[str, float] = {
     "hitl_wait_sum_ms": 0,
     "hitl_wait_count": 0,
     "chat_stream_interrupted": 0,
+    "chat_stream_restarted_unfinished": 0,
     "chat_stream_replayed_completed": 0,
     "chat_stream_replayed_interrupted": 0,
 }

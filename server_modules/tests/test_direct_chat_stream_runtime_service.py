@@ -211,6 +211,74 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(session["key"], "session-1")
         self.assertEqual(session["state"]["status"], "completed")
 
+    def test_build_replayable_chat_stream_session_loader_restarts_orphaned_active_state(self):
+        upserts = []
+        metrics = []
+        loader = runtime_service.build_replayable_chat_stream_session_loader(
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            get_state=lambda db_path, key: {
+                "session_id": key,
+                "status": "active",
+                "last_event_seq": 2,
+                "partial_text": "",
+                "final_payload": {},
+            },
+            upsert_state=lambda db_path, payload: upserts.append((db_path, payload.copy())),
+            metrics_inc=lambda key, amount: metrics.append((key, amount)),
+            now_iso=lambda: "2026-04-05T00:00:00Z",
+            interrupted_final_payload=lambda partial_text, error_text: (_ for _ in ()).throw(
+                AssertionError("orphaned active streams must restart, not replay terminal errors")
+            ),
+            build_replay_session=lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("orphaned active streams must not build replay sessions")
+            ),
+        )
+
+        session = loader(
+            "session-1",
+            thread_id="thread-1",
+            request_id="req-1",
+            workspace_id="default",
+        )
+
+        self.assertIsNone(session)
+        self.assertEqual(upserts[0][0], Path("/tmp/state.db"))
+        self.assertEqual(upserts[0][1]["status"], "retryable")
+        self.assertEqual(upserts[0][1]["final_payload"], {})
+        self.assertEqual(upserts[0][1]["metadata"]["retryable_reason"], "active_state_without_live_producer")
+        self.assertIn(("chat_stream_restarted_unfinished", 1), metrics)
+
+    def test_build_replayable_chat_stream_session_loader_restarts_terminal_error_state(self):
+        upserts = []
+        loader = runtime_service.build_replayable_chat_stream_session_loader(
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            get_state=lambda db_path, key: {
+                "session_id": key,
+                "status": "error",
+                "last_event_seq": 1,
+                "partial_text": "",
+                "final_payload": {"kind": "terminal_error", "reply": "", "error": "chat_stream_interrupted"},
+            },
+            upsert_state=lambda db_path, payload: upserts.append(payload.copy()),
+            metrics_inc=lambda key, amount: None,
+            now_iso=lambda: "2026-04-05T00:00:00Z",
+            interrupted_final_payload=lambda partial_text, error_text: {"reply": "Interrupted"},
+            build_replay_session=lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("terminal error streams must restart, not replay")
+            ),
+        )
+
+        session = loader(
+            "session-1",
+            thread_id="thread-1",
+            request_id="req-1",
+            workspace_id="default",
+        )
+
+        self.assertIsNone(session)
+        self.assertEqual(upserts[0]["status"], "retryable")
+        self.assertEqual(upserts[0]["metadata"]["retryable_reason"], "error_state_without_replayable_final")
+
     def test_build_initialize_chat_stream_runtime_state_fn_binds_db_path_and_runtime_callbacks(self):
         calls = []
         initialize = runtime_service.build_initialize_chat_stream_runtime_state_fn(

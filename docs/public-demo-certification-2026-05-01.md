@@ -2,7 +2,7 @@
 
 ## Current Verdict
 
-The public Sage demo path is certified for web after the latest production DeepSeek smoke. The Marketplace preview seed patch is deployed and verified. The remaining hard line is one real-device visual/mobile sweep. Cloud Computer is contract-ready only; it is not a live demo feature.
+The public Sage demo path is certified for web after the latest production DeepSeek smoke. The Marketplace preview seed patch is deployed and verified. The account-shell fallback patch is deployed and route-level mobile smoke now reaches the shell instead of the dead workspace-unavailable page. The remaining hard line is one real-device visual/mobile sweep. Cloud Computer is contract-ready only; it is not a live demo feature.
 
 ## Certified In This Pass
 
@@ -13,6 +13,7 @@ The public Sage demo path is certified for web after the latest production DeepS
 - Production phone route-level smoke returned HTTP 200 for chat and integrations after onboarding completion.
 - Production Marketplace deployment check returned six backend preview packages on a fresh workspace; all were `preview_only=true`.
 - Frontend shell reliability: account-shell bootstrap now calls the runtime directly from SSR instead of proxying through the public web app.
+- Mobile/public shell recovery: if direct runtime account-shell bootstrap fails from SSR, the shell retries the same-origin `/api/auth/account-shell` BFF path with forwarded cookies before rendering a recovery state.
 - Mobile/public dead screens: account and onboarding degraded states now provide Reload and Sign in again actions.
 - Memory runtime model: Sage memory categories are structured as Green, Yellow, Orange, and Red classes, with legacy category aliases preserved.
 - Hosted AI credits surface: billing summary exposes hosted Sage AI policy, cap, usage, and remaining balance for BYOK-free users.
@@ -46,9 +47,21 @@ The public Sage demo path is certified for web after the latest production DeepS
 - `venv/bin/python -m pytest server_modules/tests/test_sage_memory_service.py server_modules/tests/test_direct_tool_approval_service.py server_modules/tests/test_policy_service.py server_modules/tests/test_billing_service.py server_modules/tests/test_entitlements_service.py server_modules/tests/test_direct_chat_hosted_usage_service.py`
 - `venv/bin/python -m pytest server_modules/tests/test_runtime_attachment_service.py server_modules/tests/test_workspace_bootstrap_service.py server_modules/tests/test_direct_chat_tool_catalog_service.py`
 
+## Production Route Smoke After Account-Shell Fallback
+
+- Deployed commit: `702fd105d fix: recover account shell bootstrap through bff`.
+- Runtime health: `https://empyralis-runtime.onrender.com/health` returned `{"ok":true}`.
+- Fresh mobile-user-agent signup created workspace `ws_f5616c7efafa`.
+- Onboarding patch returned HTTP 200 and marked setup complete.
+- `/api/auth/account-shell` returned HTTP 200 through the public web BFF with the same mobile cookie jar.
+- `/w/ws_f5616c7efafa/chat` returned HTTP 200 and rendered the workstation shell with the Sage composer, `Gateway offline`, and `Tools`.
+- `/w/ws_f5616c7efafa/integrations`, `/w/ws_f5616c7efafa/marketplace`, and `/w/ws_f5616c7efafa/studio` returned HTTP 200.
+- Bad-string scan across the post-fallback route artifacts found none of: `Workspace shell is temporarily unavailable`, `Bootstrap returned`, `Bad Gateway`, `Authentication request timed out`, `Sage hit a temporary service issue`, or `Sage took too long`.
+- Marketplace API returned six preview packages for the same workspace.
+
 ## Next Required Action
 
-Run a final browser and phone sweep:
+Run one final human browser and phone visual sweep:
 
 1. Production signup/login/account shell.
 2. Production Sage with DeepSeek selected.

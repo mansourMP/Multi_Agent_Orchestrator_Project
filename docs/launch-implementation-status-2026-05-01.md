@@ -46,6 +46,7 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
   - `11fe59843 docs: update launch certification status`
   - `ab7ee89e6 fix: close billing and tool audit launch gaps`
   - `98b367fae fix: seed marketplace preview packages for demo`
+  - `702fd105d fix: recover account shell bootstrap through bff`
 - Production workspace onboarding patch returned HTTP 200 and set `setupCompleted=true`, `requiresOnboarding=false`, `defaultRoute=/w/ws_a0d8b6b56e11/sage`.
 - Production iPhone-user-agent route smoke returned HTTP 200 for account shell, Sage, Chat, Activity, Integrations, Studio, and Marketplace.
 - Production provider catalog now reports hosted Sage AI `allowed=true`, `plan_allows_hosted_ai=true`, `policy=enabled_with_cap`; DeepSeek and Anthropic report `configured=true`, `usable=true`.
@@ -81,6 +82,17 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Fresh production account creation succeeded for the Marketplace deployment check.
 - Fresh production workspace `ws_fa1dde68c31e` returned six Marketplace packages from `/api/workspaces/ws_fa1dde68c31e/marketplace/packages`.
 - All six returned packages were backend preview packages with `preview_only=true` and `install_target=preview`: Restaurant Orders, Auto Parts Sales, Spreadsheet Catalog, Web Search, Image Generation, and DeepSeek Provider.
+
+## Production Smoke Added After `702fd105d`
+
+- Production runtime `/health` returned `{"ok":true}` and production web returned HTTP 200 after the account-shell fallback deploy.
+- Fresh production mobile-user-agent signup succeeded for workspace `ws_f5616c7efafa`; onboarding patch returned HTTP 200 with `setupCompleted=true`, `requiresOnboarding=false`, and default route `/w/ws_f5616c7efafa/chat`.
+- The same mobile cookie jar loaded `/api/auth/account-shell` through the public web BFF with HTTP 200.
+- Before the fix, direct workspace route rendering returned a shell-unavailable recovery page even though BFF account-shell succeeded.
+- After the fix, `/w/ws_f5616c7efafa/chat` rendered the workstation shell with `data-workstation-surface="chat"`, composer placeholder `Message Sage...`, `Gateway offline`, and `Tools`.
+- Post-fix mobile route smoke returned HTTP 200 for chat, integrations, marketplace, and studio.
+- Post-fix bad-string scan across the route artifacts found no `Workspace shell is temporarily unavailable`, `Bootstrap returned`, `Bad Gateway`, `Authentication request timed out`, `Sage hit a temporary service issue`, or `Sage took too long` text.
+- Marketplace API for the same workspace returned six preview packages, marked `preview_only=true` and `install_target=preview`.
 
 ## Hard Rules
 

@@ -19,7 +19,7 @@ The public Sage demo path is certified for web after the latest production DeepS
 - Hosted AI credits surface: billing summary exposes hosted Sage AI policy, cap, usage, and remaining balance for BYOK-free users.
 - Approval policy: local file delete/remove/unlink/trash now requires approval.
 - Cloud Computer contract: `sage_cloud_computer` remains explicit, paid, non-default, metered, and separate from the personal gateway.
-- Execution mode contract: Default, Approvals, Autopilot, and Full Access are now separated at runtime-target level; Full Access is local-companion-only.
+- Execution mode contract: user-facing modes are Default and Full Access. Full Access is local-companion-only; internal connector autonomy remains policy-governed and is not exposed as a separate mode.
 - Screenshot transparency contract: screenshot/image artifact trace events now have first-class chat cells for phone/web audit visibility.
 - MCP trust metadata: MCP tools now expose permission manifests with risk, scopes, allowed modes, cost class, and audit event type.
 - Direct chat trust metadata: built-in, local, browser, HTTP, and connector tools now expose the same permission manifest shape for Marketplace/Studio/tool transparency.

@@ -2,282 +2,194 @@
 
 Date: 2026-05-01
 
-This document is the durable handoff for the current launch plan. It merges the public demo path with the long-term AI OS architecture: Sage, hosted credits, BYOK, local gateway, Tauri companion, mobile, Studio, Marketplace, Mini Apps, privacy, and Cloud Computer.
+This is the canonical launch plan. It merges the demo path with the long-term AI OS architecture: Sage, hosted credits, BYOK, local gateway, phone web, Studio, Marketplace, Mini Apps, privacy, and the later Cloud Computer runtime.
 
-## Product Rule
+## Product Rules
 
-Normal users should not need to understand API keys.
-
-- Default path: Use Empyralis credits.
-- Advanced path: Use your own API key.
+- Normal users should not need to understand API keys.
+- Default path: use Empyralis credits.
+- Advanced path: use your own API key.
+- Hosted credits keep provider keys server-side, enforce spend caps server-side, and ledger every hosted turn.
 - BYOK remains available for power users and businesses that want direct provider billing.
-- Hosted credits must keep provider keys server-side, enforce spend caps server-side, and ledger every hosted turn.
+- Empyralis-hosted provider errors must be polished app-level errors only. BYOK provider setup/runtime errors can be shown in safe form, without stack traces, secrets, transport dumps, or raw internal exceptions.
 
-## Provider Error Policy
+## Runtime Decision
 
-- Empyralis hosted credits: never expose raw provider/API errors to users. Show polished app-level messages only, for example: "Sage hit a temporary provider issue. Try again or switch model."
-- BYOK: provider-specific setup/runtime errors may be shown in safe form, for example: "DeepSeek quota reached" or "Check your API key." Do not show stack traces, secrets, transport dumps, or raw internal exceptions.
-- Internal logs may keep raw details with request id, workspace id, provider, and trace id for debugging.
+Use both headless execution and visual transparency.
 
-## Launch-Critical Phases
+- Headless Gateway: primary execution layer for files, shell, browser automation, clipboard, screenshots, Telegram, and local tool dispatch.
+- Visual Session: transparency layer for screenshots, progress rows, and later optional live WebRTC viewing.
+- Do not use pure remote desktop as the primary automation engine. Pixel clicking is fragile; tool APIs are the reliable layer.
+- Cloud Computer is a separate paid runtime for when the user's computer is offline. It is deferred for launch.
 
-### Phase 1 - Public Demo Hardening
+## Phase 1 - Public Demo Hardening
 
-Production Sage must load every time. Verify production signup/login, account shell, Sage bootstrap, provider catalog, and actionable empty states.
+Production web must load on desktop and phone. Fix Render 500/502/504, shell bootstrap, provider catalog, and dead screens.
 
-Exit gate: no 500/504, no raw bootstrap text, no dead shell screen.
+Exit gate: production Sage opens reliably with no raw bootstrap text and no dead shell screen.
 
-### Phase 2 - Hosted Credits + BYOK Provider UX
+## Phase 2 - Hosted Credits + BYOK
 
-Make provider setup understandable for non-technical users.
+Default path is Empyralis free credits. Advanced path is user API key. Add hard usage limits before model calls.
 
-- Default CTA: Use Empyralis credits.
-- Advanced CTA: Use your own API key.
-- Provider picker and Integrations must clearly separate hosted credits from BYOK.
-- Billing/credits UI must show balance, cap, used amount, and policy.
+Exit gate: a normal user can chat without knowing what an API key is, and hosted usage cannot create uncontrolled spend.
 
-Exit gate: a non-technical user can start Sage without knowing what an API key is.
+## Phase 3 - Production Sage Smoke
 
-### Phase 3 - Production Sage Smoke
+Run 10 messages on production. Verify no disappearing messages, clean thinking row, stop square, truthful provider metadata, and no raw provider errors.
 
-Use a clean demo workspace with hosted credits enabled or one reliable BYOK provider configured. Send 10 messages.
+Exit gate: Sage is demo-safe.
 
-Verify:
+## Phase 4 - Chat Surface + Transparency
 
-- User message appears immediately.
-- Input clears immediately.
-- Assistant response appears.
-- Thinking row appears.
-- Stop square works.
-- Provider metadata is truthful.
-- No timeout/raw-error banners.
+Show inline cells for Thinking, Searching web, Reading file, Running shell, Sending Telegram, Waiting for approval, Screenshot/artifact, and final assistant output. "What can you do?" must answer from the backend tool catalog.
 
-Exit gate: production Sage is demo-safe.
+Exit gate: Sage feels transparent and not fake.
 
-### Phase 4 - Chat Surface Finalization
+## Phase 5 - Phone Web Cert
 
-Sage chat must use committed transcript plus active turn projection.
+Phone browser must support signup/login, Sage chat, model picker, credits/BYOK setup, gateway status, tools, approvals, History, Memory, Integrations, Studio, Marketplace, Gateway, and Settings.
 
-Required transcript cells:
+Exit gate: phone user can command Sage without opening a laptop and can still reach non-chat product surfaces.
 
-- user
-- assistant
-- reasoning summary
-- tool
-- web search
-- file
-- shell/exec
-- screenshot/artifact
-- approval
-- status
-- error
+## Phase 6 - Headless Gateway Contract
 
-Rules:
+The gateway is the core device-control layer.
 
-- Canonical refresh must never wipe pending user messages or active streaming output.
-- Tool/file/search/shell rows render inline.
-- "What tools do you have?" answers from backend tool catalog, not model hallucination.
-- No debug cards like Run complete, Sage trace, stack traces, or text-only temporary-error banners.
-- Stop square and Escape abort preserve partial output.
+Build or lock:
 
-Exit gate: 20-message local and production runs pass with no flicker, dropped messages, false timeout banner, or fake tool list.
+- One gateway identity per device.
+- Outbound WSS only.
+- Revocable pairing token.
+- Device states: Offline, Online, Degraded, Supervisor unhealthy.
+- Tools exposed by manifest only.
+- No inbound ports required.
 
-### Phase 5 - Phone Web Cert
+Exit gate: website shows This Mac only when gateway is online; cloud chat still works when the local computer is offline.
 
-Phone browser is part of the public web launch.
+## Phase 7 - Install UX
 
-Verify:
+Do not expose WSS/gateway language to normal users.
 
-- Signup/login.
-- Sage chat.
-- Provider picker.
-- Hosted credits/BYOK setup.
-- Runtime pill: Cloud, This Mac, or Gateway offline.
-- Tools palette.
-- Approvals.
-- History.
-- Memory.
-- Integrations.
-- Recovery actions.
+UX:
 
-Exit gate: phone user can complete a Sage chat without shell-unavailable dead screens.
+- Connect this computer.
+- Install Empyralis Companion.
+- Pair this Mac.
+- Permission checklist: Files, Screen Recording, Accessibility, Browser, Clipboard, Terminal.
 
-### Phase 6 - Final Launch Cert
+Exit gate: a non-developer can understand what must be installed and which local permissions are needed. Packaged Mac installer is the next production packaging gate.
 
-Run:
+## Phase 8 - Permission Modes
 
-- Frontend typecheck.
-- Frontend production build.
-- Python compile.
-- Targeted backend tests.
-- Production auth smoke.
-- Production provider save/catalog smoke.
-- 10-message Sage smoke.
-- Phone browser smoke.
-- Gateway offline smoke.
-- Optional gateway online local-tool demo.
-- Studio/Marketplace visual sweep.
+Expose only two user-facing modes.
 
-Exit gate: no raw errors, no disappearing messages, no blank dead screens.
+- Default: safe tools run automatically; risky actions ask approval.
+- Full Access: broad local access for the paired user-owned computer session only.
 
-## Follow-On Product Phases
+Full Access remains governed:
 
-### Phase 7 - Tauri Desktop Companion
+- Local companion only.
+- Explicit owner approval.
+- Audited.
+- Revocable.
+- Stop button still works.
+- Secrets are redacted from user-visible logs.
+- Never applies to Cloud Computer.
 
-Tauri is the local companion/gateway app, not a second product brain.
+Exit gate: user understands what Sage can do before enabling local power.
 
-It owns:
+## Phase 9 - Gateway Visual Transparency
 
-- Pairing.
-- Gateway/supervisor lifecycle.
-- Local permissions.
-- Tray/logs.
-- Revoke access.
+Headless tools remain primary. Visual is the trust layer.
 
-It reuses:
+Build:
 
-- Cloud account.
-- Provider catalog.
-- Tool catalog.
-- Audit events.
-- Approval policy.
+- Screenshot rows.
+- "Sage clicked X".
+- "Reading file".
+- "Running shell".
+- "Sending Telegram".
+- Optional periodic screenshots for long local/desktop tasks.
+- Later: live WebRTC view.
 
-Exit gate: user pairs Mac, sees This Mac, runs local file/shell task, approves risky actions, and can revoke.
+Exit gate: user sees what happened without reading logs.
 
-### Phase 8 - Studio + Marketplace + Mini Apps
+## Phase 10 - Studio + Marketplace + Mini Apps
 
-Studio creates and manages private agents. Marketplace installs governed templates, tools, providers, and mini-apps.
+Studio creates/manages private specialists. Marketplace installs governed templates, tools, providers, and mini-apps.
 
-Studio templates:
+For demo:
 
-- Restaurant Orders
-- Auto Parts Sales
-- Real Estate Leads
-- Support FAQ
-- Appointment Booking
-- Spreadsheet Catalog Bot
-- Custom Agent
-
-Setup sheet tabs:
-
-- Overview
-- Knowledge
-- Tools
-- Channels
-- Memory
-- Safety
-- Test
-- Deploy
-
-Marketplace packages must show publisher, permissions, pricing, runtime, data access, and trust state. Developer publishing stays hidden behind developer mode.
+- Studio templates: Restaurant Orders, Auto Parts Sales, Real Estate Leads, Support FAQ, Appointment Booking, Spreadsheet Catalog Bot, Custom Agent.
+- Marketplace preview only.
+- Developer publishing hidden by default.
 
 Exit gate: normal users understand create vs install.
 
-### Phase 9 - History, Memory, Storage
+## Phase 11 - History, Memory, Storage
 
-History is cloud-canonical. Local, Tauri, and mobile storage are encrypted caches only.
+History is cloud-canonical. Local, phone, Tauri, and future native stores are encrypted caches. Memory is structured: Safe, Sensitive, Private, Critical.
 
-Memory runtime truth is structured:
+Exit gate: history follows the user across devices without unlimited storage risk.
 
-- Safe
-- Sensitive
-- Private
-- Critical
+## Phase 12 - Privacy/Security Cert
 
-Markdown can remain import/export format, not runtime truth.
+Verify:
 
-Add retention, export/delete, workspace wipe, artifact TTL, per-plan storage caps, and separate audit storage for tool/action events.
+- Gateway tokens are revocable.
+- Secrets never hit frontend logs.
+- Dangerous shell requires approval in Default mode.
+- File write/delete requires approval in Default mode.
+- External send requires approval in Default mode.
+- Tool outputs redact obvious secrets.
+- Every local action creates an audit event.
+- Gateway offline disables local tools immediately.
 
-Exit gate: cross-device continuity works and storage cannot grow unbounded.
+Exit gate: local-device automation is powerful but not scary.
 
-### Phase 10 - Credits, Billing, Hosted AI
+## Phase 13 - Cross-Platform Companion
 
-Complete the Manus-style credit system.
+Deferred for launch.
 
-Required:
+Order:
 
-- Hosted credits for Sage/provider usage.
-- BYOK fallback.
-- Usage by provider, model, tool, runtime, image generation, Studio agent, and future Cloud Computer.
-- Credit balance.
-- Spend cap.
-- Plan limits.
-- Usage ledger UI.
-- Server-side quota enforcement.
-- Billing events with workspace, actor, provider/model/runtime/tool, units, cost/credit amount, and trace/run id.
+- Mac first: Tauri + LaunchAgent.
+- Windows second: signed tray/service.
+- Linux third: AppImage/deb/rpm, with Wayland caveats.
 
-Exit gate: user can pay inside Empyralis instead of buying API credits elsewhere.
+Exit gate: do not promise platforms until each has real certification.
 
-### Phase 11 - Privacy, Security, Approvals
+## Phase 14 - Cloud Computer MVP
 
-Every tool action creates an audit event.
+Deferred.
 
-Execution modes:
+Start with:
 
-- Default
-- Approvals
-- Autopilot
-- Full Access
-
-Full Access is local-companion-only. Cloud Computer uses metered Autopilot sandbox, not Full Access.
-
-Approval required for:
-
-- Delete/write file.
-- External send.
-- Purchase.
-- Dangerous shell.
-- Connector side effects.
-
-MCP/tools/connectors require permission manifests with risk, scopes, runtime modes, approval rules, cost class, and audit event type.
-
-Exit gate: user can see what Sage did, approve risky actions, revoke access, and trust that tools/packages are policy-governed.
-
-### Phase 12 - Cloud Computer MVP
-
-Start with Cloud Browser plus ephemeral Linux sandbox, not full streamed desktop.
-
-Required:
-
-- Session create.
-- Heartbeat.
-- Idle timeout.
+- Cloud browser.
+- Ephemeral Linux sandbox.
 - TTL cleanup.
-- Artifacts.
-- Logs.
-- Tool dispatch.
 - Spend meter.
-- Hard cap.
 - Audit timeline.
-- Screenshot/artifact rows.
+- Artifacts/screenshots.
 
-Exit gate: user can pay for Sage to run web/code/file tasks in hosted compute while Mac is offline.
+Exit gate: user can pay for Sage to work when the local computer is offline.
 
-## What To Demo
+## Phase 15 - Final Launch Cert
 
-Demo:
+Run:
 
-- Signup/login.
-- Sage chat.
-- Hosted credits or configured BYOK provider.
-- Provider/model picker.
-- Thinking/tool transparency.
-- Web search.
-- History.
-- Memory.
-- Integrations.
+- Typecheck/build.
+- Python compile.
+- Production auth.
+- Provider save/catalog.
+- 10-message Sage.
+- Phone browser smoke.
+- Gateway online/offline.
+- Studio/Marketplace visual sweep.
+- Credits/quota enforcement.
 
-Optional:
-
-- Tauri/gateway local file or shell.
-- Studio template creation.
-
-Do not demo until certified:
-
-- Cloud Computer.
-- Native mobile app.
-- Video generation.
-- Marketplace publishing.
+Exit gate: no raw errors, no disappearing messages, no blank dead screens.
 
 ## Current Dirty Files Outside Release Scope
 
@@ -287,3 +199,4 @@ Do not include unless explicitly chosen:
 - `mobile/app/(tabs)/_layout.tsx`
 - `mobile/package-lock.json`
 - `.gemini/`
+- `docs/READ THIS MD FILE!!!.md`

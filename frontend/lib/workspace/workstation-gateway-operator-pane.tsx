@@ -200,23 +200,23 @@ function sortBrowserSessions(items: GatewayBrowserSessionRecord[]): GatewayBrows
 
 function summarizeWhatsappState(state: PersonalChannelStateRecord | null | undefined): string {
   if (!state) {
-    return 'Gateway has not reported WhatsApp personal state yet.';
+    return 'The local companion has not reported WhatsApp personal state yet.';
   }
   if (state.qr_code) {
-    return 'QR token is ready on the paired gateway.';
+    return 'QR token is ready on the paired computer.';
   }
   if (String(state.status ?? '').trim().toLowerCase() === 'connected') {
     const linkedName = readString(state.linked_name, '');
     const linkedJid = readString(state.linked_jid, '');
     const linkedLabel = linkedName || linkedJid || 'Linked account';
-    return `${linkedLabel} is connected on the gateway.`;
+    return `${linkedLabel} is connected on the paired computer.`;
   }
   return `WhatsApp personal is ${humanizeToken(state.status, 'Idle')}.`;
 }
 
 function summarizeTelegramState(state: PersonalChannelStateRecord | null | undefined): string {
   if (!state) {
-    return 'Gateway has not reported Telegram personal state yet.';
+    return 'The local companion has not reported Telegram personal state yet.';
   }
   if (state.login_hint) {
     return 'Telegram is waiting for a login code or confirmation.';
@@ -226,7 +226,7 @@ function summarizeTelegramState(state: PersonalChannelStateRecord | null | undef
     const linkedUsername = readString(state.linked_username, '');
     const linkedPhone = readString(state.linked_phone, '');
     const linkedLabel = linkedName || linkedUsername || linkedPhone || 'Linked account';
-    return `${linkedLabel} is connected on the gateway.`;
+    return `${linkedLabel} is connected on the paired computer.`;
   }
   return `Telegram personal is ${humanizeToken(state.status, 'Idle')}.`;
 }
@@ -268,9 +268,45 @@ function detectGatewayPlatform(): string {
   return 'macos';
 }
 
+const GATEWAY_SETUP_STEPS = [
+  {
+    title: 'Install Empyralis Companion',
+    description: 'The companion keeps the local engine running in the background. The terminal command below is the current launch setup path.',
+  },
+  {
+    title: 'Pair this computer',
+    description: 'Pairing creates one revocable device identity. The cloud never needs inbound access to your machine.',
+  },
+  {
+    title: 'Grant local permissions only when needed',
+    description: 'Files, browser, screenshots, clipboard, and terminal access stay controlled by this paired device.',
+  },
+] as const;
+
+const GATEWAY_PERMISSION_CHECKLIST = [
+  'Files',
+  'Browser',
+  'Screenshots',
+  'Clipboard',
+  'Terminal',
+] as const;
+
+const GATEWAY_MODE_SUMMARIES = [
+  {
+    title: 'Default',
+    subtitle: 'Recommended',
+    description: 'Sage can use safe tools automatically. Risky actions still pause for approval before they touch your computer or send anything externally.',
+  },
+  {
+    title: 'Full Access',
+    subtitle: 'This computer only',
+    description: 'Sage can continue inside your paired computer with broad local access for the session. It is still audited, revocable, and never applies to hosted cloud computers.',
+  },
+] as const;
+
 function gatewayConnectionSummary(gateways: GatewayRegistrationRecord[]): string {
   if (gateways.length === 0) {
-    return 'No gateways paired';
+    return 'No computers connected';
   }
   const onlineCount = gateways.filter((gateway) =>
     String(gateway.connection_status ?? gateway.status ?? '').trim().toLowerCase() === 'online',
@@ -471,7 +507,7 @@ export function WorkstationGatewayOperatorPane({
       if (cancelled) {
         return;
       }
-      setErrorMessage(error instanceof Error ? error.message : 'Gateway registrations are unavailable right now.');
+      setErrorMessage(error instanceof Error ? error.message : 'Connected computers are unavailable right now.');
       setLoadingRegistrations(false);
     });
     return () => {
@@ -493,7 +529,7 @@ export function WorkstationGatewayOperatorPane({
       if (cancelled) {
         return;
       }
-      setErrorMessage(error instanceof Error ? error.message : 'Gateway state is unavailable right now.');
+      setErrorMessage(error instanceof Error ? error.message : 'Device connection state is unavailable right now.');
       setLoadingGatewayDetail(false);
     });
     const intervalId = window.setInterval(() => {
@@ -501,7 +537,7 @@ export function WorkstationGatewayOperatorPane({
         if (cancelled) {
           return;
         }
-        setErrorMessage(error instanceof Error ? error.message : 'Gateway state is unavailable right now.');
+        setErrorMessage(error instanceof Error ? error.message : 'Device connection state is unavailable right now.');
       });
     }, 15_000);
     return () => {
@@ -530,10 +566,10 @@ export function WorkstationGatewayOperatorPane({
         },
       );
       setPairingIntent(payload);
-      setStatusMessage('Gateway pairing token is ready. Run the command below on this device to pair and connect the local gateway.');
+      setStatusMessage('Computer pairing is ready. Run the command below on this device to connect it to Sage.');
       await refreshRegistrations(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Could not create a gateway pairing token.');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not create a computer pairing token.');
     } finally {
       setBusyActionKey(null);
     }
@@ -557,19 +593,19 @@ export function WorkstationGatewayOperatorPane({
           body: JSON.stringify({
             decision,
             note: decision === 'approved'
-              ? 'Approved from the gateway operator surface.'
-              : 'Rejected from the gateway operator surface.',
+              ? 'Approved from the device connection page.'
+              : 'Rejected from the device connection page.',
           }),
         },
       );
       setStatusMessage(
         decision === 'approved'
-          ? 'Gateway approval accepted and the blocked work resumed.'
-          : 'Gateway approval rejected and the blocked work stopped.',
+          ? 'Permission accepted and the blocked work resumed.'
+          : 'Permission rejected and the blocked work stopped.',
       );
       await refreshGatewayDetail(selectedGatewayId, false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Could not resolve the gateway approval.');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not resolve the local permission request.');
     } finally {
       setBusyActionKey(null);
     }
@@ -599,10 +635,10 @@ export function WorkstationGatewayOperatorPane({
             run_id: `gateway-operator-${action}-${Date.now().toString(36)}`,
             trace_id: `gateway-operator-${action}-${Date.now().toString(36)}`,
             note: action === 'interrupt'
-              ? 'Interrupted from the gateway operator surface.'
+              ? 'Interrupted from the device connection page.'
               : action === 'takeover'
-                ? 'Takeover requested from the gateway operator surface.'
-                : 'Resume requested from the gateway operator surface.',
+                ? 'Takeover requested from the device connection page.'
+                : 'Resume requested from the device connection page.',
           }),
         },
       );
@@ -610,7 +646,7 @@ export function WorkstationGatewayOperatorPane({
       setStatusMessage(`${humanizeToken(action)} request sent. Browser status: ${resultStatus}.`);
       await refreshGatewayDetail(selectedGatewayId, false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Could not control the gateway browser session.');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not control the local browser session.');
     } finally {
       setBusyActionKey(null);
     }
@@ -641,12 +677,19 @@ export function WorkstationGatewayOperatorPane({
   const showChannelsSection = initialSection === 'all' || initialSection === 'channels';
   const showApprovalsSection = initialSection === 'all' || initialSection === 'approvals';
   const showActivitySection = initialSection === 'all' || initialSection === 'activity';
+  const pairingDeviceLabel = pairingDraft.platform === 'macos'
+    ? 'Mac'
+    : pairingDraft.platform === 'windows'
+      ? 'Windows PC'
+      : pairingDraft.platform === 'linux'
+        ? 'Linux computer'
+        : 'computer';
 
   return (
     <div className="gateway-operator-pane app-stack-3">
       <WorkstationSurfaceCard
-        title="Gateway Operator"
-        description="Pair trusted devices, inspect personal channels, and manage the governed local browser lane without leaving the shell."
+        title="Connect this computer"
+        description="Use a trusted local computer when Sage needs your files, browser, screenshots, clipboard, terminal, or personal channels."
         actions={(
           <WorkstationActionButton
             type="button"
@@ -657,7 +700,7 @@ export function WorkstationGatewayOperatorPane({
               void refreshRegistrations(true)
                 .then(() => (selectedGatewayId ? refreshGatewayDetail(selectedGatewayId, false, true) : undefined))
                 .catch((error) => {
-                  setErrorMessage(error instanceof Error ? error.message : 'Could not refresh gateway operator state.');
+                  setErrorMessage(error instanceof Error ? error.message : 'Could not refresh device connection state.');
                 });
             }}
           >
@@ -670,14 +713,14 @@ export function WorkstationGatewayOperatorPane({
 
         <WorkstationSurfaceStatGrid>
           <WorkstationSurfaceStat
-            label="Gateways"
+            label="Connected computers"
             value={gatewayConnectionSummary(gateways)}
             hint="Trusted local runtime edges in this workspace"
           />
           <WorkstationSurfaceStat
             label="Doctor"
             value={<DataBadge tone={doctorStatusDisplay.tone}>{doctorStatusDisplay.label}</DataBadge>}
-            hint="Selected gateway health posture"
+            hint="Selected computer health posture"
           />
           <WorkstationSurfaceStat
             label="Pending approvals"
@@ -692,8 +735,49 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceStatGrid>
 
         <FormSection
-          title="Pair a new gateway"
-          description="Create a short-lived pairing token for the device that will run empyralis-gateway."
+          title="How local control works"
+          description="Sage uses a headless local companion for reliable work. Screenshots and activity rows are the transparency layer, not the only execution method."
+        >
+          <WorkstationSurfaceList>
+            {GATEWAY_SETUP_STEPS.map((step, index) => (
+              <WorkstationSurfaceListItem
+                key={step.title}
+                title={`${index + 1}. ${step.title}`}
+                description={step.description}
+              />
+            ))}
+          </WorkstationSurfaceList>
+          <div className="app-inline-actions app-inline-actions--tight app-inline-actions--wrap">
+            {GATEWAY_PERMISSION_CHECKLIST.map((permission) => (
+              <DataBadge key={permission} tone="neutral">{permission}</DataBadge>
+            ))}
+          </div>
+        </FormSection>
+
+        <FormSection
+          title="Permission modes"
+          description="The product exposes two clear choices. Default is safe for normal use; Full Access is only for a paired user-owned computer."
+        >
+          <WorkstationSurfaceList>
+            {GATEWAY_MODE_SUMMARIES.map((mode) => (
+              <WorkstationSurfaceListItem
+                key={mode.title}
+                title={mode.title}
+                subtitle={mode.subtitle}
+                description={mode.description}
+                actions={(
+                  <DataBadge tone={mode.title === 'Default' ? 'success' : 'warning'}>
+                    {mode.title === 'Default' ? 'Safe default' : 'Owner approved'}
+                  </DataBadge>
+                )}
+              />
+            ))}
+          </WorkstationSurfaceList>
+        </FormSection>
+
+        <FormSection
+          title={`Pair this ${pairingDeviceLabel}`}
+          description="Create a short-lived pairing token for the local companion on this trusted computer."
         >
           <FormGrid columns="repeat(2, minmax(0, 1fr))">
             <FormField label="Device label" hint="Human-readable name shown in operator surfaces.">
@@ -718,18 +802,18 @@ export function WorkstationGatewayOperatorPane({
               type="button"
               disabled={busyActionKey === 'pairing'}
               onClick={() => {
-                void handleCreatePairingIntent();
-              }}
-            >
-              {busyActionKey === 'pairing' ? 'Creating token…' : 'Create pairing token'}
+              void handleCreatePairingIntent();
+            }}
+          >
+              {busyActionKey === 'pairing' ? 'Creating pairing…' : `Pair this ${pairingDeviceLabel}`}
             </WorkstationActionButton>
           </div>
         </FormSection>
 
         {pairingIntent ? (
           <FormSection
-            title="Finish on this Mac"
-            description="Copy one command, paste it into Terminal, and press Return. No manual token copying required."
+            title={`Finish on this ${pairingDeviceLabel}`}
+            description="Copy one command, paste it into Terminal, and press Return. This is the launch setup path until the packaged companion download is published."
             className="gateway-pairing-command-section"
           >
             <FormGrid>
@@ -754,7 +838,7 @@ export function WorkstationGatewayOperatorPane({
               <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
                 <div className="gateway-pairing-command-card__copy">
                   <strong>Run on this Mac</strong>
-                  <span>Use this if the Gateway app is not already connected.</span>
+                  <span>Use this if Empyralis Companion is not already connected.</span>
                 </div>
                 <div className="app-inline-actions app-inline-actions--tight">
                   <WorkstationActionButton
@@ -769,7 +853,7 @@ export function WorkstationGatewayOperatorPane({
                   <WorkstationActionButton
                     type="button"
                     onClick={() => {
-                      void copyToClipboard('Gateway command', gatewayPairingCommand(pairingIntent.pairing_token));
+                      void copyToClipboard('Companion command', gatewayPairingCommand(pairingIntent.pairing_token));
                     }}
                   >
                     Copy command
@@ -784,11 +868,11 @@ export function WorkstationGatewayOperatorPane({
         ) : null}
 
         {loadingRegistrations && !registrationsTimedOut ? (
-          <WorkstationSurfaceNotice tone="neutral">Loading registered gateways…</WorkstationSurfaceNotice>
+          <WorkstationSurfaceNotice tone="neutral">Loading connected computers…</WorkstationSurfaceNotice>
         ) : gateways.length === 0 ? (
           <EmptyPanel
-            title="No gateways paired yet"
-            body="Create a pairing token, open the local gateway on the target device, and finish registration there."
+            title="No computers connected yet"
+            body="Pair this computer when you want Sage to use local files, browser sessions, screenshots, clipboard, terminal, or personal channels."
           />
         ) : (
           <WorkstationSurfaceList>
@@ -824,15 +908,15 @@ export function WorkstationGatewayOperatorPane({
 
       {selectedGateway && showStatusSection ? (
         <WorkstationSurfaceCard
-          title="Gateway health"
-          description="Doctor state, trust posture, checkpoint readiness, and browser attach truth for the selected gateway."
+          title="Device health"
+          description="Trust posture, readiness, and browser attach truth for the selected computer."
         >
           {loadingGatewayDetail ? (
-            <WorkstationSurfaceNotice tone="neutral">Refreshing gateway doctor state…</WorkstationSurfaceNotice>
+            <WorkstationSurfaceNotice tone="neutral">Refreshing local device diagnostics…</WorkstationSurfaceNotice>
           ) : null}
 
           <FormGrid>
-            <FormReadout label="Gateway" value={readString(selectedGateway.display_name, String(selectedGateway.gateway_id ?? ''))} />
+            <FormReadout label="Computer" value={readString(selectedGateway.display_name, String(selectedGateway.gateway_id ?? ''))} />
             <FormReadout label="Status" value={<DataBadge tone={statusTone(doctorStatus)}>{humanizeToken(doctorStatus, 'Unknown')}</DataBadge>} />
             <FormReadout label="Platform" value={humanizeToken(selectedGateway.platform, 'Unknown')} />
             <FormReadout label="Trust state" value={humanizeToken(selectedGateway.device_trust_state, 'Unknown')} />
@@ -953,8 +1037,8 @@ export function WorkstationGatewayOperatorPane({
             </WorkstationSurfaceList>
           ) : (
             <EmptyPanel
-              title="Doctor has no checks yet"
-              body="Pair and connect the gateway to populate health, checkpoint, and personal channel status."
+              title="No device checks yet"
+              body="Pair and connect this computer to populate health, checkpoint, and personal channel status."
             />
           )}
         </WorkstationSurfaceCard>
@@ -963,7 +1047,7 @@ export function WorkstationGatewayOperatorPane({
       {selectedGateway && showChannelsSection ? (
         <WorkstationSurfaceCard
           title="Personal channel state"
-          description="Current login, linked identity, and recent activity for the gateway-backed personal WhatsApp and Telegram lanes."
+          description="Current login, linked identity, and recent activity for personal WhatsApp and Telegram on this computer."
         >
           <WorkstationSurfaceList>
             <WorkstationSurfaceListItem
@@ -995,7 +1079,7 @@ export function WorkstationGatewayOperatorPane({
             {telegram?.state?.login_hint ? (
               <FormReadout
                 label="Telegram login hint"
-                value={readString(telegram.state.login_hint, 'Waiting for gateway login confirmation.')}
+                value={readString(telegram.state.login_hint, 'Waiting for local companion confirmation.')}
               />
             ) : null}
           </WorkstationSurfaceList>
@@ -1004,12 +1088,12 @@ export function WorkstationGatewayOperatorPane({
 
       {selectedGateway && showApprovalsSection ? (
         <WorkstationSurfaceCard
-          title="Gateway approvals"
+          title="Permission requests"
           description="Resolve risky local actions without leaving the product shell."
         >
           {pendingApprovals.length === 0 ? (
             <EmptyPanel
-              title="No gateway approvals waiting"
+              title="No permission requests waiting"
               body="Risky local actions will appear here with explicit approve and reject controls."
             />
           ) : (
@@ -1022,7 +1106,7 @@ export function WorkstationGatewayOperatorPane({
                 return (
                   <WorkstationSurfaceListItem
                     key={approvalId}
-                    title={humanizeToken(approval.capability_id, 'Gateway approval')}
+                    title={humanizeToken(approval.capability_id, 'Local permission request')}
                     subtitle={`${approvalId} · Run ${readString(approval.run_id, 'unlinked')}`}
                     description={readString(approval.note, 'Approval required before Sage can continue on the paired device.')}
                     actions={(
@@ -1062,13 +1146,13 @@ export function WorkstationGatewayOperatorPane({
 
       {selectedGateway && showActivitySection ? (
         <WorkstationSurfaceCard
-          title="Gateway activity"
+          title="Device activity"
           description="Inspect governed browser sessions and recent local browser activity without dropping into raw APIs."
         >
           {browserItems.length === 0 ? (
             <EmptyPanel
-              title="No gateway activity tracked"
-              body="Once the gateway starts or attaches a browser session, it will appear here with governed control actions."
+              title="No device activity tracked"
+              body="Once the local companion starts or attaches a browser session, it will appear here with governed control actions."
             />
           ) : (
             <WorkstationSurfaceList>

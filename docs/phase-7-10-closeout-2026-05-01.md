@@ -1,5 +1,7 @@
 # Phase 7-10 Closeout
 
+Superseded numbering note: the canonical launch sequence is now the 15-phase plan in `docs/launch-ai-os-master-plan-2026-05-01.md`. This file remains as evidence from the 2026-05-01 closeout pass, not the active phase-numbering source.
+
 Date: 2026-05-01
 
 This note records the current state of the remaining launch phases after the 2026-05-01 closeout pass.
@@ -48,7 +50,7 @@ Implemented:
 
 - Backend runtime target contract recognizes `sage_cloud_computer`.
 - Cloud Computer is optional, metered, explicitly selected, never default.
-- Full Access is unavailable on Cloud Computer; metered Autopilot is the intended mode.
+- Full Access is unavailable on Cloud Computer; a metered sandbox policy is the intended hosted-runtime mode.
 - Runtime attachment tests verify Cloud Computer availability, trust tier, lifecycle metering, and local-device privacy boundary.
 
 Not implemented:

@@ -584,7 +584,7 @@ function providerNeedsGateway(providerId: string): boolean {
 
 function providerPickerStatusLabel(record: ProviderCardRecord, localCompanionOnline: boolean): string {
   if (providerNeedsGateway(record.provider.id) && !localCompanionOnline) {
-    return 'Requires local gateway';
+    return 'Requires connected computer';
   }
   return record.connected ? 'Connected' : 'Not configured';
 }
@@ -653,7 +653,7 @@ function describeProviderCard(record: ProviderCardRecord, localCompanionOnline: 
   const modelCount = record.provider.models.length;
   const authMode = readString(record.profile?.auth_mode).replace(/_/g, ' ');
   if (record.provider.id === 'ollama' && !localCompanionOnline) {
-    return 'Unavailable — requires local gateway';
+    return 'Unavailable — connect this computer first';
   }
   if (record.connected) {
     if (record.provider.defaultModel) {
@@ -753,11 +753,11 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
 } {
   if (!gateway) {
     return {
-      statusLabel: 'Needs Gateway',
+      statusLabel: 'Connect computer',
       statusTone: 'warning',
-      detail: 'Pair this device so Sage can use your personal channels and browser.',
-      summary: 'Sage needs one paired local gateway before it can act as you from this device.',
-      nextStep: 'Open Gateway and pair this device.',
+      detail: 'Pair this computer so Sage can use your personal channels and browser.',
+      summary: 'Sage needs one paired local companion before it can act through this computer.',
+      nextStep: 'Open the device connection page and pair this computer.',
     };
   }
   const connectionStatus = readString(gateway.connection_status || gateway.status).toLowerCase();
@@ -767,16 +767,16 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Connected',
       statusTone: 'connected',
       detail: 'This device is paired and online for Sage.',
-      summary: 'Gateway is online and ready for personal channels, browser access, and local approvals.',
+      summary: 'The paired computer is online and ready for personal channels, browser access, and local approvals.',
       nextStep: null,
     };
   }
   return {
     statusLabel: 'Needs attention',
     statusTone: 'danger',
-    detail: 'This device is paired, but the gateway is offline or degraded.',
-    summary: 'Open Gateway to reconnect the local runtime and clear device health issues.',
-    nextStep: 'Open Gateway to reconnect or inspect health.',
+    detail: 'This computer is paired, but the local companion is offline or degraded.',
+    summary: 'Open the device connection page to reconnect the local runtime and clear device health issues.',
+    nextStep: 'Open the device connection page to reconnect or inspect health.',
   };
 }
 
@@ -789,11 +789,11 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
 } {
   if (!gateway) {
     return {
-      statusLabel: 'Needs Gateway',
+      statusLabel: 'Connect computer',
       statusTone: 'warning',
-      detail: 'Pair this device before Sage can use your browser.',
-      summary: 'Signed-in sites, localhost pages, and your real browser session stay behind the gateway.',
-      nextStep: 'Open Gateway and pair this device first.',
+      detail: 'Pair this computer before Sage can use your browser.',
+      summary: 'Signed-in sites, localhost pages, and your real browser session stay on the paired computer.',
+      nextStep: 'Open the device connection page and pair this computer first.',
     };
   }
   const gatewayOnline = readString(gateway.connection_status || gateway.status).toLowerCase() === 'online';
@@ -801,9 +801,9 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Needs attention',
       statusTone: 'danger',
-      detail: 'This device is paired, but Gateway is offline.',
-      summary: 'Localhost pages, signed-in sites, and private browser sessions only work while the paired gateway is online.',
-      nextStep: 'Open Gateway to reconnect this device first.',
+      detail: 'This computer is paired, but the local companion is offline.',
+      summary: 'Localhost pages, signed-in sites, and private browser sessions only work while the paired computer is online.',
+      nextStep: 'Open the device connection page to reconnect this computer first.',
     };
   }
   const browserRecord = doctor && typeof doctor.browser === 'object' ? doctor.browser as Record<string, unknown> : {};
@@ -823,20 +823,20 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Approval needed',
       statusTone: 'warning',
       detail: 'Signed-in browser attach is waiting for approval.',
-      summary: 'Public web search can stay in cloud, but your private browser sessions stay on this device and need Gateway approval first.',
-      nextStep: 'Open Gateway to review browser approvals.',
+      summary: 'Public web search can stay in cloud, but your private browser sessions stay on this device and need approval from the paired computer first.',
+      nextStep: 'Open the device connection page to review browser approvals.',
     };
   }
   if (attachedCount > 0 && attachStatus === 'pass') {
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: 'Your signed-in browser is attached through Gateway.',
+      detail: 'Your signed-in browser is attached through the local companion.',
       summary: readString(
         browserAttachRecord.summary,
-        'Gateway is ready to use your existing signed-in browser session on this device.',
+        'The local companion is ready to use your existing signed-in browser session on this computer.',
       ),
-      nextStep: 'Open Gateway to inspect browser sessions or interrupt attach.',
+      nextStep: 'Open the device connection page to inspect browser sessions or interrupt attach.',
     };
   }
   if (attachFailedCount > 0 || attachStatus === 'fail') {
@@ -844,8 +844,8 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Needs attention',
       statusTone: 'danger',
       detail: readString(browserAttachRecord.summary, 'Existing-session browser attach failed.'),
-      summary: 'Gateway could not attach to your signed-in browser session. Localhost and private sites stay unavailable until attach recovers.',
-      nextStep: 'Open Gateway to retry browser attach or inspect the failure.',
+      summary: 'The local companion could not attach to your signed-in browser session. Localhost and private sites stay unavailable until attach recovers.',
+      nextStep: 'Open the device connection page to retry browser attach or inspect the failure.',
     };
   }
   if (attachCount > 0 && pendingAttachCount > 0) {
@@ -853,17 +853,17 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Needs attention',
       statusTone: 'warning',
       detail: readString(browserAttachRecord.summary, 'Existing-session browser attach is configured but not ready yet.'),
-      summary: 'Gateway knows about your browser attach flow, but it still needs a reachable local browser session before Sage can use it.',
-      nextStep: 'Open Gateway to finish browser attach.',
+      summary: 'The local companion knows about your browser attach flow, but it still needs a reachable local browser session before Sage can use it.',
+      nextStep: 'Open the device connection page to finish browser attach.',
     };
   }
   if (activeCount > 0 && status === 'pass') {
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: 'Gateway has a governed browser session ready.',
-      summary: `${readString(browserRecord.summary, 'Browser access is ready on this device.')} Localhost pages and private sessions still stay behind Gateway.`,
-      nextStep: 'Open Gateway to review governed browser sessions.',
+      detail: 'The local companion has a governed browser session ready.',
+      summary: `${readString(browserRecord.summary, 'Browser access is ready on this computer.')} Localhost pages and private sessions still stay on the paired computer.`,
+      nextStep: 'Open the device connection page to review governed browser sessions.',
     };
   }
   if (activeCount === 0 && status === 'pass') {
@@ -871,16 +871,16 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Not connected',
       statusTone: 'neutral',
       detail: 'No browser session is active yet.',
-      summary: 'Gateway is online and ready. Use Gateway when you want Sage to browse localhost, signed-in sites, or any other private browser state from this device.',
-      nextStep: 'Open Gateway to start or attach a browser session.',
+      summary: 'The local companion is online and ready. Use the device connection page when you want Sage to browse localhost, signed-in sites, or any other private browser state from this computer.',
+      nextStep: 'Open the device connection page to start or attach a browser session.',
     };
   }
   return {
     statusLabel: 'Needs attention',
     statusTone: status === 'warn' ? 'warning' : 'danger',
     detail: readString(browserRecord.summary, 'Browser access needs attention.'),
-    summary: 'Browser session health, localhost access, and signed-in session approvals all stay in Gateway.',
-    nextStep: 'Open Gateway to resolve browser session state.',
+    summary: 'Browser session health, localhost access, and signed-in session approvals all stay on the paired computer.',
+    nextStep: 'Open the device connection page to resolve browser session state.',
   };
 }
 
@@ -893,11 +893,11 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
 } {
   if (!gateway) {
     return {
-      statusLabel: 'Needs Gateway',
+      statusLabel: 'Connect computer',
       statusTone: 'warning',
-      detail: 'Pair this device before Sage can use your WhatsApp.',
-      summary: 'Personal WhatsApp stays on your device and routes through the paired gateway.',
-      nextStep: 'Open Gateway and pair this device first.',
+      detail: 'Pair this computer before Sage can use your WhatsApp.',
+      summary: 'Personal WhatsApp stays on your device and routes through the paired local companion.',
+      nextStep: 'Open the device connection page and pair this computer first.',
     };
   }
   const state = payload?.state && typeof payload.state === 'object' ? payload.state : null;
@@ -909,8 +909,8 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Not connected',
       statusTone: 'neutral',
       detail: 'Your WhatsApp is not linked yet.',
-      summary: 'Open Gateway to finish the personal WhatsApp login flow for Sage.',
-      nextStep: 'Open Gateway to start WhatsApp login.',
+      summary: 'Open the device connection page to finish the personal WhatsApp login flow for Sage.',
+      nextStep: 'Open the device connection page to start WhatsApp login.',
     };
   }
   if (status === 'connected') {
@@ -918,7 +918,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Connected',
       statusTone: 'connected',
       detail: linkedLabel ? `${linkedLabel} is linked on this device.` : 'Your WhatsApp is linked on this device.',
-      summary: 'Sage can reply through your personal WhatsApp from the paired gateway.',
+      summary: 'Sage can reply through your personal WhatsApp from the paired local companion.',
       nextStep: null,
     };
   }
@@ -927,25 +927,25 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Waiting for QR/login',
       statusTone: 'warning',
       detail: 'WhatsApp is waiting for a QR scan or pairing code step.',
-      summary: 'Finish the personal WhatsApp login flow in Gateway.',
-      nextStep: 'Open Gateway to complete QR or pairing code login.',
+      summary: 'Finish the personal WhatsApp login flow on the device connection page.',
+      nextStep: 'Open the device connection page to complete QR or pairing code login.',
     };
   }
   if (['connecting', 'reconnecting', 'resuming'].includes(status)) {
     return {
       statusLabel: 'Reconnecting',
       statusTone: 'warning',
-      detail: 'WhatsApp is reconnecting on the gateway.',
-      summary: 'Sage will use your WhatsApp again after the gateway session recovers.',
-      nextStep: 'Open Gateway if reconnect does not recover.',
+      detail: 'WhatsApp is reconnecting on the paired computer.',
+      summary: 'Sage will use your WhatsApp again after the local companion recovers.',
+      nextStep: 'Open the device connection page if reconnect does not recover.',
     };
   }
   return {
     statusLabel: 'Needs attention',
     statusTone: 'danger',
     detail: `Your WhatsApp is ${status.replace(/_/g, ' ')}.`,
-    summary: 'Open Gateway to inspect the personal WhatsApp session on this device.',
-    nextStep: 'Open Gateway to inspect WhatsApp state.',
+    summary: 'Open the device connection page to inspect the personal WhatsApp session on this computer.',
+    nextStep: 'Open the device connection page to inspect WhatsApp state.',
   };
 }
 
@@ -958,11 +958,11 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
 } {
   if (!gateway) {
     return {
-      statusLabel: 'Needs Gateway',
+      statusLabel: 'Connect computer',
       statusTone: 'warning',
-      detail: 'Pair this device before Sage can use your Telegram.',
-      summary: 'Personal Telegram stays on your device and routes through the paired gateway.',
-      nextStep: 'Open Gateway and pair this device first.',
+      detail: 'Pair this computer before Sage can use your Telegram.',
+      summary: 'Personal Telegram stays on your device and routes through the paired local companion.',
+      nextStep: 'Open the device connection page and pair this computer first.',
     };
   }
   const state = payload?.state && typeof payload.state === 'object' ? payload.state : null;
@@ -973,8 +973,8 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Not connected',
       statusTone: 'neutral',
       detail: 'Your Telegram is not linked yet.',
-      summary: 'Open Gateway to finish the personal Telegram login flow for Sage.',
-      nextStep: 'Open Gateway to start Telegram login.',
+      summary: 'Open the device connection page to finish the personal Telegram login flow for Sage.',
+      nextStep: 'Open the device connection page to start Telegram login.',
     };
   }
   if (status === 'connected') {
@@ -982,7 +982,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Connected',
       statusTone: 'connected',
       detail: linkedLabel ? `${linkedLabel} is linked on this device.` : 'Your Telegram is linked on this device.',
-      summary: 'Sage can reply through your personal Telegram from the paired gateway.',
+      summary: 'Sage can reply through your personal Telegram from the paired local companion.',
       nextStep: null,
     };
   }
@@ -991,25 +991,25 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Waiting for QR/login',
       statusTone: 'warning',
       detail: 'Telegram is waiting for a login code or confirmation.',
-      summary: 'Finish the personal Telegram login flow in Gateway.',
-      nextStep: 'Open Gateway to complete Telegram login.',
+      summary: 'Finish the personal Telegram login flow on the device connection page.',
+      nextStep: 'Open the device connection page to complete Telegram login.',
     };
   }
   if (['connecting', 'reconnecting', 'resuming'].includes(status)) {
     return {
       statusLabel: 'Reconnecting',
       statusTone: 'warning',
-      detail: 'Telegram is reconnecting on the gateway.',
-      summary: 'Sage will use your Telegram again after the gateway session recovers.',
-      nextStep: 'Open Gateway if reconnect does not recover.',
+      detail: 'Telegram is reconnecting on the paired computer.',
+      summary: 'Sage will use your Telegram again after the local companion recovers.',
+      nextStep: 'Open the device connection page if reconnect does not recover.',
     };
   }
   return {
     statusLabel: 'Needs attention',
     statusTone: 'danger',
     detail: `Your Telegram is ${status.replace(/_/g, ' ')}.`,
-    summary: 'Open Gateway to inspect the personal Telegram session on this device.',
-    nextStep: 'Open Gateway to inspect Telegram state.',
+    summary: 'Open the device connection page to inspect the personal Telegram session on this computer.',
+    nextStep: 'Open the device connection page to inspect Telegram state.',
   };
 }
 
@@ -1429,7 +1429,7 @@ export function WorkstationSageConnectorsPane({
 
   async function handleProviderSelect(record: ProviderCardRecord, { hosted = false }: { hosted?: boolean } = {}) {
     if (providerNeedsGateway(record.provider.id) && !localCompanionOnline) {
-      setError(`${record.label} requires the local gateway before it can be selected.`);
+      setError(`${record.label} requires a connected local computer before it can be selected.`);
       return;
     }
     if (!hosted && !providerPickerConnected(record, localCompanionOnline) && providerRequiresSecret(record.provider, record.profile)) {
@@ -1814,11 +1814,11 @@ export function WorkstationSageConnectorsPane({
             type="button"
             onClick={openGatewaySurface}
           >
-            {record.statusLabel === 'Needs Gateway'
-              ? 'Pair this device'
+            {record.statusLabel === 'Connect computer'
+              ? 'Connect this computer'
               : record.id === 'browser'
                 ? 'Open browser sessions'
-                : 'Open Gateway'}
+                : 'Open device connection'}
           </AppButton>
           <button
             type="button"

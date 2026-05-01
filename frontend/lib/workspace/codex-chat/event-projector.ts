@@ -66,6 +66,70 @@ function isShellLabel(value: string): boolean {
   return /shell|command|terminal|bash|zsh|exec|run/i.test(value);
 }
 
+function isShellToolName(toolName: string, command: string): boolean {
+  if (command.trim()) {
+    return true;
+  }
+  return /shell|command|terminal|bash|zsh|exec/i.test(toolName);
+}
+
+function toolInputRecord(data: Record<string, unknown>): Record<string, unknown> {
+  const candidates = [
+    data.input,
+    data.arguments,
+    data.args,
+    data.parameters,
+  ];
+  for (const candidate of candidates) {
+    const record = readObject(candidate);
+    if (Object.keys(record).length > 0) {
+      return record;
+    }
+  }
+  return {};
+}
+
+function toolResultText(data: Record<string, unknown>): string | null {
+  return readString(data.summary)
+    || readString(data.result)
+    || readString(data.output)
+    || readString(data.text)
+    || null;
+}
+
+function toolDisplayName(rawName: string): string {
+  const normalized = rawName
+    .replace(/[_:.-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const lower = normalized.toLowerCase();
+  if (!lower) {
+    return 'Using tool';
+  }
+  if (lower.includes('telegram')) {
+    return lower.includes('send') ? 'Sending Telegram' : 'Using Telegram';
+  }
+  if (lower.includes('whatsapp')) {
+    return lower.includes('send') ? 'Sending WhatsApp' : 'Using WhatsApp';
+  }
+  if (lower.includes('gmail') || lower.includes('email') || lower.includes('mail')) {
+    return lower.includes('send') ? 'Sending email' : 'Using email';
+  }
+  if (lower.includes('image')) {
+    return 'Generating image';
+  }
+  if (lower.includes('browser')) {
+    if (lower.includes('click')) {
+      return 'Clicking browser';
+    }
+    if (lower.includes('type')) {
+      return 'Typing in browser';
+    }
+    return 'Using browser';
+  }
+  return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function eventId(prefix: string, candidate: unknown, fallbackIndex: number): string {
   return readString(candidate) || `${prefix}:${fallbackIndex}`;
 }
@@ -152,21 +216,86 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   }
 
   if (eventType === 'tool.started') {
+    const toolName = readString(data.tool_name) || readString(data.name) || 'Tool';
+    const input = toolInputRecord(data);
+    const command = readString(input.command) || readString(input.cmd) || readString(data.command);
+    const query = readString(input.query) || readString(data.query);
+    const path = readString(input.path) || readString(input.file_path) || readString(input.filename) || readString(data.path);
+    const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
+    const combined = `${toolName} ${command} ${query} ${path}`;
+    if (isShellToolName(toolName, command)) {
+      return [{
+        type: 'exec_started',
+        id,
+        command: command || 'Running shell',
+      }];
+    }
+    if (isFileLabel(combined)) {
+      return [{
+        type: 'file_change',
+        id,
+        filename: path || readString(input.name) || 'File',
+        action: fileActionLabel(toolName, path || 'Reading'),
+        status: 'running',
+      }];
+    }
+    if (isSearchLabel(combined)) {
+      return [{
+        type: 'web_search_started',
+        id,
+        query: query || 'Searching web',
+      }];
+    }
     return [{
       type: 'tool_started',
-      id: eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex),
-      name: readString(data.tool_name) || readString(data.name) || 'Tool',
+      id,
+      name: toolDisplayName(toolName),
     }];
   }
 
   if (eventType === 'tool.result') {
     const status = readString(data.status).toLowerCase() === 'error' ? 'error' : 'done';
+    const toolName = readString(data.tool_name) || readString(data.name) || 'Tool';
+    const input = toolInputRecord(data);
+    const command = readString(input.command) || readString(input.cmd) || readString(data.command);
+    const query = readString(input.query) || readString(data.query);
+    const path = readString(input.path) || readString(input.file_path) || readString(input.filename) || readString(data.path);
+    const result = toolResultText(data);
+    const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
+    const combined = `${toolName} ${command} ${query} ${path}`;
+    if (isShellToolName(toolName, command)) {
+      return [{
+        type: 'exec_result',
+        id,
+        status,
+        output: result,
+        exitCode: readNumber(data.exit_code),
+      }];
+    }
+    if (isFileLabel(combined)) {
+      return [{
+        type: 'file_change',
+        id,
+        filename: path || readString(input.name) || 'File',
+        action: fileActionLabel(toolName, path || 'Read'),
+        status,
+      }];
+    }
+    if (isSearchLabel(combined)) {
+      return [{
+        type: 'web_search_result',
+        id,
+        query: query || null,
+        status,
+        result,
+      }];
+    }
     return [{
       type: 'tool_result',
-      id: eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex),
-      name: readString(data.tool_name) || readString(data.name) || null,
+      id,
+      name: toolDisplayName(toolName),
       status,
-      result: readString(data.summary) || readString(data.result) || null,
+      result,
     }];
   }
 

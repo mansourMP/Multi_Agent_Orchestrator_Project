@@ -13,12 +13,10 @@ Sage is a cloud-first agent with optional runtime power from a paired physical d
 
 ## Execution Modes
 
-- `Default`: obvious low-risk tools can run; destructive actions and external sends require approval.
-- `Approvals`: Sage asks before tools touching private data, external channels, or execution surfaces.
-- `Autopilot`: Sage can continue a task in an isolated or policy-scoped runtime. Destructive actions remain gated.
-- `Full Access`: only for `local_companion`. This means elevated access to the user's physical machine for the session and always requires explicit owner approval.
+- `Default`: obvious low-risk tools can run; destructive actions, dangerous shell, file write/delete, connector side effects, and external sends require approval.
+- `Full Access`: only for `local_companion`. This means broad access to the user's paired physical computer for the session and always requires explicit owner approval.
 
-Cloud Computer does not use `Full Access`. It uses `Autopilot` inside a metered sandbox with TTL cleanup, spend controls, artifacts, and audit events. This keeps the distinction clear: physical computer power is owner-approved; cloud computer power is sandboxed and billed.
+Full Access still has hard guardrails: audit events, revocation, stop/abort, and secret redaction. Cloud Computer does not use physical-machine Full Access. When Cloud Computer ships, it runs inside a metered sandbox with TTL cleanup, spend controls, artifacts, and audit events. This keeps the distinction clear: physical computer power is owner-approved; cloud computer power is sandboxed and billed.
 
 ## Transparency Requirements
 

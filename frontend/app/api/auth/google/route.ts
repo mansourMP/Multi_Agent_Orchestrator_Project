@@ -8,12 +8,13 @@ import {
   googleOAuthConfigured,
   googleOAuthRedirectUri,
   isAllowedAuthOrigin,
+  requestOrigin,
 } from '@/lib/server/google-oauth';
 
 export const dynamic = 'force-dynamic';
 
 function authErrorRedirect(request: NextRequest, error: string): NextResponse {
-  const url = new URL('/login', request.url);
+  const url = new URL('/login', requestOrigin(request));
   url.searchParams.set('error', error);
   return NextResponse.redirect(url);
 }

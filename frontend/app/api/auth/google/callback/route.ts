@@ -24,7 +24,7 @@ type GoogleTokenPayload = {
 };
 
 function redirectWithError(request: NextRequest, error: string): NextResponse {
-  const url = new URL('/login', request.url);
+  const url = new URL('/login', requestOrigin(request));
   url.searchParams.set('error', error);
   const response = NextResponse.redirect(url);
   response.cookies.delete(GOOGLE_OAUTH_STATE_COOKIE);
@@ -127,7 +127,7 @@ export async function GET(request: NextRequest) {
     if (!upstream.ok) {
       return redirectWithError(request, 'google_auth_failed');
     }
-    const response = NextResponse.redirect(new URL('/', request.url));
+    const response = NextResponse.redirect(new URL('/', requestOrigin(request)));
     appendUpstreamCookies(response, upstream.headers);
     response.cookies.delete(GOOGLE_OAUTH_STATE_COOKIE);
     return response;

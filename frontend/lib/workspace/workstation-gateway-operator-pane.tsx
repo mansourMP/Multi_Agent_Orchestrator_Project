@@ -106,6 +106,18 @@ type PairingDraft = {
   platform: string;
 };
 
+type ChannelDraft = {
+  phoneNumber: string;
+  apiId: string;
+  apiHash: string;
+  loginCode: string;
+  password: string;
+  remoteJid: string;
+  text: string;
+};
+
+type ChannelKind = 'whatsapp' | 'telegram';
+
 type GatewayOperatorSection = 'all' | 'status' | 'channels' | 'approvals' | 'activity';
 
 function buildQueryString(params: Record<string, string | number | null | undefined>): string {
@@ -341,6 +353,18 @@ function gatewayCapabilityLabels(gateway: GatewayRegistrationRecord | null): str
   return out.sort((left, right) => left.localeCompare(right));
 }
 
+function defaultChannelDraft(text: string): ChannelDraft {
+  return {
+    phoneNumber: '',
+    apiId: '',
+    apiHash: '',
+    loginCode: '',
+    password: '',
+    remoteJid: '',
+    text,
+  };
+}
+
 export function WorkstationGatewayOperatorPane({
   initialSection = 'all',
 }: {
@@ -368,6 +392,10 @@ export function WorkstationGatewayOperatorPane({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [busyActionKey, setBusyActionKey] = useState<string | null>(null);
+  const [channelDrafts, setChannelDrafts] = useState<Record<ChannelKind, ChannelDraft>>({
+    whatsapp: defaultChannelDraft('Empyralis gateway test from this computer.'),
+    telegram: defaultChannelDraft('Empyralis gateway test from this computer.'),
+  });
 
   const selectedGateway = useMemo(
     () =>
@@ -379,6 +407,14 @@ export function WorkstationGatewayOperatorPane({
     () => gatewayCapabilityLabels(selectedGateway),
     [selectedGateway],
   );
+  const selectedCapabilitySet = useMemo(
+    () => new Set(selectedGatewayCapabilities),
+    [selectedGatewayCapabilities],
+  );
+  const whatsappConfigureAvailable = selectedCapabilitySet.has('channel.whatsapp.personal.configure');
+  const whatsappOutboundAvailable = selectedCapabilitySet.has('channel.whatsapp.personal.outbound');
+  const telegramConfigureAvailable = selectedCapabilitySet.has('channel.telegram.personal.configure');
+  const telegramOutboundAvailable = selectedCapabilitySet.has('channel.telegram.personal.outbound');
 
   const pendingApprovals = useMemo(
     () => sortGatewayApprovals(Array.isArray(approvals?.items) ? approvals?.items : []),
@@ -669,6 +705,137 @@ export function WorkstationGatewayOperatorPane({
       await refreshRegistrations(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not revoke this computer.');
+    } finally {
+      setBusyActionKey(null);
+    }
+  }
+
+  function updateChannelDraft(channel: ChannelKind, patch: Partial<ChannelDraft>) {
+    setChannelDrafts((current) => ({
+      ...current,
+      [channel]: {
+        ...current[channel],
+        ...patch,
+      },
+    }));
+  }
+
+  async function handleConfigureWhatsApp() {
+    if (!selectedGatewayId) {
+      return;
+    }
+    const draft = channelDrafts.whatsapp;
+    if (!draft.phoneNumber.trim()) {
+      setErrorMessage('Enter the WhatsApp phone number before requesting pairing.');
+      return;
+    }
+    setBusyActionKey('channel:whatsapp:setup');
+    setErrorMessage(null);
+    try {
+      await requestPayload<Record<string, unknown>>(
+        `/api/personal-channels/whatsapp/gateways/${encodeURIComponent(selectedGatewayId)}/setup`,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            phone_number: draft.phoneNumber.trim(),
+          }),
+        },
+      );
+      setStatusMessage('WhatsApp pairing requested. Check the channel state for QR or pairing-code instructions.');
+      await refreshGatewayDetail(selectedGatewayId, false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'WhatsApp pairing could not be requested.');
+    } finally {
+      setBusyActionKey(null);
+    }
+  }
+
+  async function handleConfigureTelegram() {
+    if (!selectedGatewayId) {
+      return;
+    }
+    const draft = channelDrafts.telegram;
+    const apiId = Number.parseInt(draft.apiId.trim(), 10);
+    const payload: Record<string, unknown> = {};
+    if (Number.isFinite(apiId)) {
+      payload.api_id = apiId;
+    }
+    if (draft.apiHash.trim()) {
+      payload.api_hash = draft.apiHash.trim();
+    }
+    if (draft.phoneNumber.trim()) {
+      payload.phone_number = draft.phoneNumber.trim();
+    }
+    if (draft.loginCode.trim()) {
+      payload.login_code = draft.loginCode.trim();
+    }
+    if (draft.password.trim()) {
+      payload.password = draft.password.trim();
+    }
+    if (Object.keys(payload).length === 0) {
+      setErrorMessage('Enter Telegram API details, phone number, or login code before requesting setup.');
+      return;
+    }
+    setBusyActionKey('channel:telegram:setup');
+    setErrorMessage(null);
+    try {
+      await requestPayload<Record<string, unknown>>(
+        `/api/personal-channels/telegram/gateways/${encodeURIComponent(selectedGatewayId)}/setup`,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+      setStatusMessage('Telegram setup requested. Check the channel state for login-code or confirmation instructions.');
+      await refreshGatewayDetail(selectedGatewayId, false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Telegram setup could not be requested.');
+    } finally {
+      setBusyActionKey(null);
+    }
+  }
+
+  async function handleSendChannelTest(channel: ChannelKind) {
+    if (!selectedGatewayId) {
+      return;
+    }
+    const draft = channelDrafts[channel];
+    if (!draft.remoteJid.trim() || !draft.text.trim()) {
+      setErrorMessage(`Enter a ${channel === 'whatsapp' ? 'WhatsApp' : 'Telegram'} recipient and test message first.`);
+      return;
+    }
+    const endpointChannel = channel === 'whatsapp' ? 'whatsapp' : 'telegram';
+    const actionKey = `channel:${channel}:send-test`;
+    setBusyActionKey(actionKey);
+    setErrorMessage(null);
+    try {
+      await requestPayload<Record<string, unknown>>(
+        `/api/personal-channels/${endpointChannel}/gateways/${encodeURIComponent(selectedGatewayId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            remote_jid: draft.remoteJid.trim(),
+            text: draft.text.trim(),
+            idempotency_key: `gateway-operator-${channel}-${Date.now().toString(36)}`,
+          }),
+        },
+      );
+      setStatusMessage(`${channel === 'whatsapp' ? 'WhatsApp' : 'Telegram'} test message dispatched through this computer.`);
+      await refreshGatewayDetail(selectedGatewayId, false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'The channel test message could not be sent.');
     } finally {
       setBusyActionKey(null);
     }
@@ -1184,6 +1351,139 @@ export function WorkstationGatewayOperatorPane({
               />
             ) : null}
           </WorkstationSurfaceList>
+          <FormSection
+            title="WhatsApp setup and test"
+            description="Request local WhatsApp pairing on this computer, then send a controlled test message through the user-owned session."
+          >
+            <FormGrid columns="repeat(2, minmax(0, 1fr))">
+              <FormField label="Phone number" hint="Used only by the local companion to request WhatsApp pairing.">
+                <FormInput
+                  value={channelDrafts.whatsapp.phoneNumber}
+                  onChange={(event) => updateChannelDraft('whatsapp', { phoneNumber: event.currentTarget.value })}
+                  placeholder="8618657105303"
+                />
+              </FormField>
+              <FormField label="Recipient JID" hint="Example: 8618657105303@s.whatsapp.net">
+                <FormInput
+                  value={channelDrafts.whatsapp.remoteJid}
+                  onChange={(event) => updateChannelDraft('whatsapp', { remoteJid: event.currentTarget.value })}
+                  placeholder="recipient@s.whatsapp.net"
+                />
+              </FormField>
+              <FormField label="Test message" hint="This is sent through the paired device and audited.">
+                <FormInput
+                  value={channelDrafts.whatsapp.text}
+                  onChange={(event) => updateChannelDraft('whatsapp', { text: event.currentTarget.value })}
+                />
+              </FormField>
+              <FormReadout
+                label="Logout/revoke"
+                value="Use Revoke access for this computer to immediately disable WhatsApp local tools."
+              />
+            </FormGrid>
+            <div className="settings-action-row">
+              <WorkstationActionButton
+                type="button"
+                tone="secondary"
+                disabled={!whatsappConfigureAvailable || busyActionKey === 'channel:whatsapp:setup'}
+                onClick={() => {
+                  void handleConfigureWhatsApp();
+                }}
+              >
+                {busyActionKey === 'channel:whatsapp:setup' ? 'Requesting…' : 'Request pairing'}
+              </WorkstationActionButton>
+              <WorkstationActionButton
+                type="button"
+                disabled={!whatsappOutboundAvailable || busyActionKey === 'channel:whatsapp:send-test'}
+                onClick={() => {
+                  void handleSendChannelTest('whatsapp');
+                }}
+              >
+                {busyActionKey === 'channel:whatsapp:send-test' ? 'Sending…' : 'Send test'}
+              </WorkstationActionButton>
+            </div>
+          </FormSection>
+          <FormSection
+            title="Telegram setup and test"
+            description="Configure the local Telegram session on this computer, then send a controlled test message through the user-owned session."
+          >
+            <FormGrid columns="repeat(2, minmax(0, 1fr))">
+              <FormField label="API ID" hint="Telegram app API ID for this user-owned session.">
+                <FormInput
+                  type="number"
+                  value={channelDrafts.telegram.apiId}
+                  onChange={(event) => updateChannelDraft('telegram', { apiId: event.currentTarget.value })}
+                  placeholder="123456"
+                />
+              </FormField>
+              <FormField label="API hash" hint="Stored only by the local companion configuration path.">
+                <FormInput
+                  type="password"
+                  value={channelDrafts.telegram.apiHash}
+                  onChange={(event) => updateChannelDraft('telegram', { apiHash: event.currentTarget.value })}
+                  placeholder="Telegram API hash"
+                />
+              </FormField>
+              <FormField label="Phone number" hint="Used by Telegram login on this computer.">
+                <FormInput
+                  value={channelDrafts.telegram.phoneNumber}
+                  onChange={(event) => updateChannelDraft('telegram', { phoneNumber: event.currentTarget.value })}
+                  placeholder="+8618657105303"
+                />
+              </FormField>
+              <FormField label="Login code" hint="Enter only when Telegram asks for a code.">
+                <FormInput
+                  value={channelDrafts.telegram.loginCode}
+                  onChange={(event) => updateChannelDraft('telegram', { loginCode: event.currentTarget.value })}
+                />
+              </FormField>
+              <FormField label="2FA password" hint="Optional. Required only for Telegram accounts with 2FA enabled.">
+                <FormInput
+                  type="password"
+                  value={channelDrafts.telegram.password}
+                  onChange={(event) => updateChannelDraft('telegram', { password: event.currentTarget.value })}
+                />
+              </FormField>
+              <FormField label="Recipient ID" hint="Telegram user, chat, or channel id understood by the local companion.">
+                <FormInput
+                  value={channelDrafts.telegram.remoteJid}
+                  onChange={(event) => updateChannelDraft('telegram', { remoteJid: event.currentTarget.value })}
+                  placeholder="123456789"
+                />
+              </FormField>
+              <FormField label="Test message" hint="This is sent through the paired device and audited.">
+                <FormInput
+                  value={channelDrafts.telegram.text}
+                  onChange={(event) => updateChannelDraft('telegram', { text: event.currentTarget.value })}
+                />
+              </FormField>
+              <FormReadout
+                label="Logout/revoke"
+                value="Use Revoke access for this computer to immediately disable Telegram local tools."
+              />
+            </FormGrid>
+            <div className="settings-action-row">
+              <WorkstationActionButton
+                type="button"
+                tone="secondary"
+                disabled={!telegramConfigureAvailable || busyActionKey === 'channel:telegram:setup'}
+                onClick={() => {
+                  void handleConfigureTelegram();
+                }}
+              >
+                {busyActionKey === 'channel:telegram:setup' ? 'Requesting…' : 'Request setup'}
+              </WorkstationActionButton>
+              <WorkstationActionButton
+                type="button"
+                disabled={!telegramOutboundAvailable || busyActionKey === 'channel:telegram:send-test'}
+                onClick={() => {
+                  void handleSendChannelTest('telegram');
+                }}
+              >
+                {busyActionKey === 'channel:telegram:send-test' ? 'Sending…' : 'Send test'}
+              </WorkstationActionButton>
+            </div>
+          </FormSection>
         </WorkstationSurfaceCard>
       ) : null}
 

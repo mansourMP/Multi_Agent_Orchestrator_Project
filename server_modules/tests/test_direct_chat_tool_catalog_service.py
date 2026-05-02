@@ -105,6 +105,8 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         self.assertTrue(allowed)
 
     def test_tool_inventory_questions_are_detected(self) -> None:
+        self.assertTrue(service.message_requests_tool_inventory("what can you do?"))
+        self.assertTrue(service.message_requests_tool_inventory("what capabilities do you have?"))
         self.assertTrue(service.message_requests_tool_inventory("what tools do you have?"))
         self.assertTrue(service.message_requests_tool_inventory("List your tools"))
         self.assertFalse(service.message_requests_tool_inventory("use the web search tool"))

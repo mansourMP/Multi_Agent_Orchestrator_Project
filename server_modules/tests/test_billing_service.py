@@ -46,8 +46,8 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(summary["limits"]["max_specialists"], 3)
         self.assertEqual(summary["usage"]["specialists_in_use"], 0)
         self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
-        self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 0.25)
-        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 250)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 0.5)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 500)
         self.assertTrue(summary["hosted_sage_ai"]["allowed"])
         self.assertEqual(summary["hosted_sage_ai"]["reason"], None)
 

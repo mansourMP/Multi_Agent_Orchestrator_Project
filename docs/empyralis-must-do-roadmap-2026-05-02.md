@@ -251,6 +251,17 @@ Exit gate:
 
 - A new user can chat without API keys, and a hard cap prevents runaway cost.
 
+Current status:
+
+- New local accounts default to Empyralis-hosted AI with a `$0.50` monthly cap.
+- Operators can override the defaults with
+  `EMPYRALIS_NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD` and
+  `EMPYRALIS_DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD`.
+- Billing shows hosted credits, dollar cap, monthly usage, and an owner-editable
+  workspace cap. Integrations shows the remaining credits and cap beside the
+  `Use Empyralis credits` path.
+- BYOK remains the advanced provider path.
+
 ### Phase 3: Gateway Connect UX
 
 Goal: non-developers can connect their own computer.
@@ -295,6 +306,18 @@ Exit gate:
 - User understands which channels are local-device powered and can test/revoke
   them without reading logs.
 
+Current status:
+
+- The backend exposes WhatsApp and Telegram personal gateway status, setup, and
+  outbound-message routes.
+- The Gateway/Device page shows linked identity, QR/login hints, recent message
+  counts, channel setup forms, and audited send-test controls.
+- Manual setup/send actions emit security audit events without storing message
+  bodies or Telegram secrets in audit metadata.
+- Per-channel logout is not exposed until the companion supports real channel
+  logout. Current reliable revoke path is device revocation, which immediately
+  disables all local channel tools for that computer.
+
 ### Phase 5: Capability Truth And Chat Transparency
 
 Goal: Sage never lies about what it can do.
@@ -320,6 +343,13 @@ Exit gate:
 
 - User can see what Sage is doing and why something is unavailable.
 
+Current status:
+
+- `What can you do?`, capability questions, and tool inventory questions are
+  answered from the active backend tool/gateway availability catalog.
+- The reply explicitly distinguishes paired gateway tools from Sage Cloud
+  Computer and states that provider choice does not change the tool surface.
+
 ### Phase 6: Local Device Demo Cert
 
 Goal: prove the moat live.
@@ -335,6 +365,14 @@ Run:
 Exit gate:
 
 - "Sage can use my computer from my phone" is proven end-to-end.
+
+Current status:
+
+- Live gateway evidence exists in local `.orion-stack` cert journals with
+  filesystem, shell, screenshot, browser, WhatsApp, and Telegram capabilities
+  reported over outbound gateway heartbeats.
+- Remaining cert for launch is an actual phone/browser run against the current
+  production environment with the gateway online.
 
 ### Phase 7: Studio Builder
 
@@ -366,6 +404,13 @@ Build/fix:
 Exit gate:
 
 - A normal business owner can create/test/deploy a specialist from a template.
+
+Current status:
+
+- Studio has square templates for the launch specialist jobs plus a custom-agent
+  path.
+- Marketplace has preview packages and keeps developer publishing hidden behind
+  an explicit developer registration action.
 
 ### Phase 8: Marketplace And Mini-App Boundary
 

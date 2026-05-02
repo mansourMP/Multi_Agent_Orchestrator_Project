@@ -435,7 +435,7 @@ function formatCredits(value: number): string {
 
 function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord | null): string {
   if (hostedSageAi.allowed && hostedProviderCard) {
-    return `Ready with ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} credits remaining this month.`;
+    return `Ready with ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} credits remaining this month (${formatUsd(hostedSageAi.monthlyCapUsd)} cap).`;
   }
   if (hostedSageAi.allowed) {
     return 'Credits are enabled, but Empyralis hosted runtime is not configured yet.';

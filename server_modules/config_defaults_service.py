@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import FrozenSet
 
 
@@ -16,7 +17,23 @@ DEFAULT_ESCALATION_PRESET = "standard"
 DEFAULT_HANDOFF_MODE = "notify_owner"
 DEFAULT_HEALTH_SAFETY_ASSISTANT_NAME = "HealthGuide"
 DEFAULT_HOSTED_SAGE_AI_POLICY = "owner_opt_in"
-DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 5.0
+
+
+def _env_non_negative_float(name: str, fallback: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return float(fallback)
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return float(fallback)
+    return max(0.0, parsed)
+
+
+DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = _env_non_negative_float(
+    "EMPYRALIS_DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD",
+    0.50,
+)
 
 
 def config_schema_version() -> int:

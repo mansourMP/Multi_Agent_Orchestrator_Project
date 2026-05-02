@@ -7,7 +7,12 @@ from pydantic import BaseModel, Field
 
 from server_modules.auth import enforce_workspace_access
 from server_modules.runtime_common import require_api_key
-from server_modules import channel_lane_contract_service, gateway_state_repository, personal_channels_service
+from server_modules import (
+    channel_lane_contract_service,
+    gateway_state_repository,
+    personal_channels_service,
+    security_audit_service,
+)
 
 
 router = APIRouter()
@@ -53,6 +58,36 @@ def _require_accessible_gateway_registration(
     return registration
 
 
+def _emit_personal_channel_audit(
+    *,
+    action: str,
+    status: str,
+    registration: dict,
+    current_user,
+    gateway_id: str,
+    channel_key: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
+) -> None:
+    security_audit_service.emit_security_audit_event(
+        action=action,
+        status=status,
+        tenant_id=str(registration.get("tenant_id") or "").strip() or None,
+        workspace_id=str(registration.get("workspace_id") or "").strip() or None,
+        current_user=current_user if isinstance(current_user, dict) else None,
+        channel=channel_key,
+        machine_id=str(gateway_id or "").strip() or None,
+        detail=detail,
+        metadata={
+            "gateway_id": str(gateway_id or "").strip(),
+            "channel_key": channel_key,
+            **dict(metadata or {}),
+        },
+        idempotency_key=idempotency_key,
+    )
+
+
 @router.get("/personal-channels/whatsapp/gateways/{gateway_id}")
 async def get_whatsapp_personal_gateway_status(
     request: Request,
@@ -87,14 +122,41 @@ async def configure_whatsapp_personal_gateway(
         minimum_role="member",
     )
     try:
-        return await personal_channels_service.configure_whatsapp_personal_gateway(
+        result = await personal_channels_service.configure_whatsapp_personal_gateway(
             gateway_id=gateway_id,
             registration=registration,
             phone_number=body.phone_number,
             custom_pairing_code=body.custom_pairing_code,
         )
+        _emit_personal_channel_audit(
+            action="personal_channel.whatsapp.configure",
+            status="success",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key="whatsapp_personal",
+            detail="WhatsApp personal channel setup was requested for a paired gateway.",
+            metadata={
+                "has_phone_number": bool(str(body.phone_number or "").strip()),
+                "has_custom_pairing_code": bool(str(body.custom_pairing_code or "").strip()),
+            },
+        )
+        return result
     except ValueError as exc:
         detail = str(exc)
+        _emit_personal_channel_audit(
+            action="personal_channel.whatsapp.configure",
+            status="denied",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key="whatsapp_personal",
+            detail=detail,
+            metadata={
+                "has_phone_number": bool(str(body.phone_number or "").strip()),
+                "has_custom_pairing_code": bool(str(body.custom_pairing_code or "").strip()),
+            },
+        )
         status_code = 409 if "not currently connected" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
@@ -118,7 +180,7 @@ async def send_whatsapp_personal_message(
     if resolved_workspace_id != str(registration.get("workspace_id") or "").strip():
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
     try:
-        return await personal_channels_service.send_whatsapp_personal_message(
+        result = await personal_channels_service.send_whatsapp_personal_message(
             gateway_id=gateway_id,
             registration=registration,
             remote_jid=body.remote_jid,
@@ -126,8 +188,39 @@ async def send_whatsapp_personal_message(
             idempotency_key=body.idempotency_key,
             reply_to_external_message_id=body.reply_to_external_message_id,
         )
+        _emit_personal_channel_audit(
+            action="personal_channel.whatsapp.send",
+            status="success",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key="whatsapp_personal",
+            detail="A WhatsApp personal test or manual message was dispatched through the paired gateway.",
+            metadata={
+                "remote_jid": body.remote_jid,
+                "text_length": len(body.text),
+                "has_reply_target": bool(body.reply_to_external_message_id),
+            },
+            idempotency_key=f"personal_channel.whatsapp.send:{gateway_id}:{body.idempotency_key}",
+        )
+        return result
     except ValueError as exc:
         detail = str(exc)
+        _emit_personal_channel_audit(
+            action="personal_channel.whatsapp.send",
+            status="denied",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key="whatsapp_personal",
+            detail=detail,
+            metadata={
+                "remote_jid": body.remote_jid,
+                "text_length": len(body.text),
+                "has_reply_target": bool(body.reply_to_external_message_id),
+            },
+            idempotency_key=f"personal_channel.whatsapp.send.denied:{gateway_id}:{body.idempotency_key}",
+        )
         status_code = 409 if "not currently connected" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
@@ -166,7 +259,7 @@ async def configure_telegram_personal_gateway(
         minimum_role="member",
     )
     try:
-        return await personal_channels_service.configure_telegram_personal_gateway(
+        result = await personal_channels_service.configure_telegram_personal_gateway(
             gateway_id=gateway_id,
             registration=registration,
             api_id=body.api_id,
@@ -175,8 +268,41 @@ async def configure_telegram_personal_gateway(
             login_code=body.login_code,
             password=body.password,
         )
+        _emit_personal_channel_audit(
+            action="personal_channel.telegram.configure",
+            status="success",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key="telegram_personal",
+            detail="Telegram personal channel setup was requested for a paired gateway.",
+            metadata={
+                "has_api_id": body.api_id is not None,
+                "has_api_hash": bool(str(body.api_hash or "").strip()),
+                "has_phone_number": bool(str(body.phone_number or "").strip()),
+                "has_login_code": bool(str(body.login_code or "").strip()),
+                "has_password": bool(str(body.password or "").strip()),
+            },
+        )
+        return result
     except ValueError as exc:
         detail = str(exc)
+        _emit_personal_channel_audit(
+            action="personal_channel.telegram.configure",
+            status="denied",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key="telegram_personal",
+            detail=detail,
+            metadata={
+                "has_api_id": body.api_id is not None,
+                "has_api_hash": bool(str(body.api_hash or "").strip()),
+                "has_phone_number": bool(str(body.phone_number or "").strip()),
+                "has_login_code": bool(str(body.login_code or "").strip()),
+                "has_password": bool(str(body.password or "").strip()),
+            },
+        )
         status_code = 409 if "not currently connected" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
@@ -200,7 +326,7 @@ async def send_telegram_personal_message(
     if resolved_workspace_id != str(registration.get("workspace_id") or "").strip():
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
     try:
-        return await personal_channels_service.send_telegram_personal_message(
+        result = await personal_channels_service.send_telegram_personal_message(
             gateway_id=gateway_id,
             registration=registration,
             remote_jid=body.remote_jid,
@@ -208,7 +334,38 @@ async def send_telegram_personal_message(
             idempotency_key=body.idempotency_key,
             reply_to_external_message_id=body.reply_to_external_message_id,
         )
+        _emit_personal_channel_audit(
+            action="personal_channel.telegram.send",
+            status="success",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key="telegram_personal",
+            detail="A Telegram personal test or manual message was dispatched through the paired gateway.",
+            metadata={
+                "remote_jid": body.remote_jid,
+                "text_length": len(body.text),
+                "has_reply_target": bool(body.reply_to_external_message_id),
+            },
+            idempotency_key=f"personal_channel.telegram.send:{gateway_id}:{body.idempotency_key}",
+        )
+        return result
     except ValueError as exc:
         detail = str(exc)
+        _emit_personal_channel_audit(
+            action="personal_channel.telegram.send",
+            status="denied",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key="telegram_personal",
+            detail=detail,
+            metadata={
+                "remote_jid": body.remote_jid,
+                "text_length": len(body.text),
+                "has_reply_target": bool(body.reply_to_external_message_id),
+            },
+            idempotency_key=f"personal_channel.telegram.send.denied:{gateway_id}:{body.idempotency_key}",
+        )
         status_code = 409 if "not currently connected" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc

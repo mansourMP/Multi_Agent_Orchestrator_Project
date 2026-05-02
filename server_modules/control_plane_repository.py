@@ -20,7 +20,23 @@ from server_modules import db as runtime_db
 
 LOGGER = logging.getLogger(__name__)
 NEW_ACCOUNT_HOSTED_SAGE_AI_POLICY = "enabled_with_cap"
-NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 0.25
+
+
+def _env_non_negative_float(name: str, fallback: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return float(fallback)
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return float(fallback)
+    return max(0.0, parsed)
+
+
+NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = _env_non_negative_float(
+    "EMPYRALIS_NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD",
+    0.50,
+)
 
 _SCHEMA_READY = False
 _SCHEMA_LOCK: asyncio.Lock = asyncio.Lock()

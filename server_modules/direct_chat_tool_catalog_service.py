@@ -224,6 +224,11 @@ def message_requests_tool_inventory(message: str) -> bool:
     if not compact:
         return False
     inventory_phrases = (
+        "what can you do",
+        "what are your capabilities",
+        "what capabilities do you have",
+        "show me your capabilities",
+        "list your capabilities",
         "what tools do you have",
         "what tools can you use",
         "which tools do you have",

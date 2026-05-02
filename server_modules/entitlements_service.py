@@ -93,8 +93,24 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
 
 HOSTED_SAGE_AI_POLICIES = {"disabled", "owner_opt_in", "enabled_with_cap"}
 DEFAULT_HOSTED_SAGE_AI_POLICY = "owner_opt_in"
-DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 5.0
 HOSTED_SAGE_AI_CREDITS_PER_USD = 1000
+
+
+def _env_non_negative_float(name: str, fallback: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return float(fallback)
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return float(fallback)
+    return max(0.0, parsed)
+
+
+DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = _env_non_negative_float(
+    "EMPYRALIS_DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD",
+    0.50,
+)
 
 
 class EntitlementError(RuntimeError):

@@ -5,6 +5,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import {
+  FormField,
+  FormGrid,
+  FormInput,
+} from '@/lib/ui/form-controls';
+import {
   WorkstationActionButton,
   WorkstationSurfaceCard,
   WorkstationSurfaceList,
@@ -64,6 +69,8 @@ export function WorkstationBillingPane() {
   const [error, setError] = useState<string | null>(null);
   const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
   const [portalPending, setPortalPending] = useState(false);
+  const [creditCapDraft, setCreditCapDraft] = useState('0.50');
+  const [creditCapPending, setCreditCapPending] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,10 +118,14 @@ export function WorkstationBillingPane() {
   const currentPlanLabel = readText(subscription.label ?? bootstrap.entitlements.label, bootstrap.entitlements.label);
   const subscriptionStatus = readText(subscription.status, 'active');
   const currentPeriodEnd = readText(subscription.current_period_end, '');
-  const hostedCreditCap = hostedSageAi.monthly_cap_usd;
+  const hostedCreditCap = readNumber(hostedSageAi.monthly_cap_usd, 0);
   const hostedCreditsRemaining = hostedCreditValue(hostedSageAi, 'monthly_remaining_usd', 'monthly_credits_remaining');
   const hostedCreditsCap = hostedCreditValue(hostedSageAi, 'monthly_cap_usd', 'monthly_credit_cap');
   const hostedCreditsUsed = hostedCreditValue(hostedSageAi, 'monthly_cost_usd', 'monthly_credits_used');
+
+  useEffect(() => {
+    setCreditCapDraft(hostedCreditCap.toFixed(2));
+  }, [hostedCreditCap]);
 
   const reloadSummary = () => {
     setLoading(true);
@@ -128,6 +139,32 @@ export function WorkstationBillingPane() {
         setSummary(null);
         setError(loadError instanceof Error ? loadError.message : 'Billing summary is unavailable.');
         setLoading(false);
+      });
+  };
+
+  const saveHostedCreditCap = () => {
+    const parsed = Number.parseFloat(creditCapDraft);
+    const nextCap = Number.isFinite(parsed) ? Math.max(0, parsed) : Number.NaN;
+    if (!Number.isFinite(nextCap)) {
+      setError('Enter a valid hosted credit cap.');
+      return;
+    }
+    setCreditCapPending(true);
+    setError(null);
+    void services.client.updateWorkspaceRouting({
+      adminDefaults: {
+        hosted_sage_ai_policy: nextCap > 0 ? 'enabled_with_cap' : 'disabled',
+        hosted_sage_ai_monthly_cap_usd: Number(nextCap.toFixed(2)),
+      },
+    })
+      .then(() => {
+        reloadSummary();
+      })
+      .catch((saveError) => {
+        setError(saveError instanceof Error ? saveError.message : 'Hosted credit cap could not be saved.');
+      })
+      .finally(() => {
+        setCreditCapPending(false);
       });
   };
 
@@ -177,6 +214,11 @@ export function WorkstationBillingPane() {
             description={`Hard cap before hosted model usage stops for this workspace. Internal ceiling: ${formatUsd(hostedCreditCap)}.`}
           />
           <WorkstationSurfaceListItem
+            title="Owner spend control"
+            subtitle={`${formatUsd(hostedCreditCap)} monthly ceiling`}
+            description="Edit this before sharing the public demo. The server enforces the cap before hosted model calls; BYOK users bill their own provider."
+          />
+          <WorkstationSurfaceListItem
             title="Monthly usage"
             subtitle={`${formatCredits(hostedCreditsUsed)} used · ${formatCredits(hostedCreditsRemaining)} remaining`}
             description={`${String(readNumber(usage.hosted_sage_runs_monthly))} hosted Sage runs this month.`}
@@ -187,6 +229,26 @@ export function WorkstationBillingPane() {
             description="BYOK providers remain available separately for power users."
           />
         </WorkstationSurfaceList>
+        <FormGrid columns="minmax(0, 1fr) auto">
+          <FormField label="Monthly hosted AI cap" hint="USD. Use 0.50 for the launch free-credit budget. Set 0 to disable hosted AI for this workspace.">
+            <FormInput
+              type="number"
+              min="0"
+              step="0.01"
+              value={creditCapDraft}
+              onChange={(event) => setCreditCapDraft(event.currentTarget.value)}
+            />
+          </FormField>
+          <div className="settings-action-row">
+            <WorkstationActionButton
+              type="button"
+              disabled={creditCapPending}
+              onClick={saveHostedCreditCap}
+            >
+              {creditCapPending ? 'Saving…' : 'Save cap'}
+            </WorkstationActionButton>
+          </div>
+        </FormGrid>
       </WorkstationSurfaceCard>
       <WorkstationSurfaceCard
         title="Subscription"

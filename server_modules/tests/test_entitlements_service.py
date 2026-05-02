@@ -200,7 +200,7 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertFalse(hosted["allowed"])
         self.assertEqual(hosted["policy"], "owner_opt_in")
         self.assertEqual(hosted["reason"], "owner_approval_required")
-        self.assertEqual(hosted["monthly_credit_cap"], 5000)
+        self.assertEqual(hosted["monthly_credit_cap"], 500)
 
     def test_hosted_sage_ai_enabled_with_cap_allows_when_under_cap(self) -> None:
         state = entitlements_service.resolve_workspace_entitlement_state(

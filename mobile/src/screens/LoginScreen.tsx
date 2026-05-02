@@ -52,6 +52,7 @@ export default function LoginScreen() {
       androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || undefined,
       iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined,
       webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
+      selectAccount: true,
       scopes: ["openid", "email", "profile"],
     }),
     [],
@@ -63,13 +64,21 @@ export default function LoginScreen() {
     googleConfig.webClientId,
   );
 
-  const [request, response, promptAsync] = Google.useAuthRequest(googleConfig);
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    ...googleConfig,
+    clientId:
+      googleConfig.iosClientId ||
+      googleConfig.androidClientId ||
+      googleConfig.webClientId ||
+      "mobile-google-sign-in-disabled",
+  });
 
   useEffect(() => {
     if (response?.type === "success") {
       const { authentication } = response;
-      if (authentication?.idToken) {
-        void handleGoogle(authentication.idToken);
+      const idToken = authentication?.idToken || response.params?.id_token;
+      if (idToken) {
+        void handleGoogle(idToken);
       }
     }
     // OAuth responses should be handled once per provider callback, not retriggered by local saving state changes.

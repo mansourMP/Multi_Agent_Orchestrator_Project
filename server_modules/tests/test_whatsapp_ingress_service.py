@@ -237,7 +237,7 @@ class WhatsAppIngressServiceTests(unittest.TestCase):
             def create_channel_deletion_request(self, **kwargs):
                 return {"id": "privacy-1", **kwargs}
 
-            def append_privacy_policy_line(self, text, *, include_delete_hint=False):
+            def append_privacy_policy_line(self, text, *, include_delete_hint=False, **kwargs):
                 return f"{text}\n\nPrivacy: https://example.com/privacy"
 
             def privacy_policy_message(self, *, deployed_agent_name=None, include_delete_hint=True):

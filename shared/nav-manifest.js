@@ -73,7 +73,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     id: 'runs',
     label: 'Tasks',
     segment: 'runs',
-    legacySegments: ['work'],
+    legacySegments: ['work', 'history'],
     destinationId: 'sage',
     web: {
       hiddenFromNavigation: true,
@@ -140,6 +140,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     id: 'activity',
     label: 'Memory',
     segment: 'activity',
+    legacySegments: ['memory'],
     destinationId: 'sage',
     web: {
       hiddenFromNavigation: true,

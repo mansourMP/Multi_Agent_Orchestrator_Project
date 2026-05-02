@@ -38,6 +38,16 @@ NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = _env_non_negative_float(
     0.50,
 )
 
+
+def _new_workspace_billing_metadata() -> Dict[str, Any]:
+    return {
+        "billing": {
+            "plan_id": "personal",
+            "hosted_sage_ai_policy": NEW_ACCOUNT_HOSTED_SAGE_AI_POLICY,
+            "hosted_sage_ai_monthly_cap_usd": NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD,
+        }
+    }
+
 _SCHEMA_READY = False
 _SCHEMA_LOCK: asyncio.Lock = asyncio.Lock()
 EMPYRALIS_STATE_HOME = Path(
@@ -2381,16 +2391,7 @@ async def create_local_password_account(
     workspace_name = f"{display_label or email_prefix}'s Workspace".strip()
     auth_identity_id = str(uuid.uuid4())
     membership_id = str(uuid.uuid4())
-    workspace_metadata = _workspace_shell_metadata(
-        {
-            "billing": {
-                "plan_id": "personal",
-                "hosted_sage_ai_policy": NEW_ACCOUNT_HOSTED_SAGE_AI_POLICY,
-                "hosted_sage_ai_monthly_cap_usd": NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD,
-            }
-        },
-        setup_completed=False,
-    )
+    workspace_metadata = _workspace_shell_metadata(_new_workspace_billing_metadata(), setup_completed=False)
 
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
@@ -2584,7 +2585,7 @@ async def ensure_workspace_membership(
                         ) VALUES (
                             ?, ?, COALESCE((SELECT name FROM workspace_registry WHERE workspace_id = ?), ?),
                             COALESCE((SELECT workspace_type FROM workspace_registry WHERE workspace_id = ?), 'personal'),
-                            COALESCE((SELECT metadata_json FROM workspace_registry WHERE workspace_id = ?), '{}'),
+                            COALESCE((SELECT metadata_json FROM workspace_registry WHERE workspace_id = ?), ?),
                             COALESCE((SELECT created_at FROM workspace_registry WHERE workspace_id = ?), ?),
                             ?
                         )
@@ -2596,6 +2597,7 @@ async def ensure_workspace_membership(
                             resolved_workspace_id,
                             resolved_workspace_id,
                             resolved_workspace_id,
+                            _to_json(_new_workspace_billing_metadata(), default={}),
                             resolved_workspace_id,
                             created_at_ts,
                             created_at_ts,
@@ -2666,7 +2668,7 @@ async def ensure_workspace_membership(
                 """
                 INSERT INTO workspaces (
                     id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, 'shared', 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
+                ) VALUES ($1, $2, $3, $4, $5, 'shared', 'active', $6, $7::jsonb, $8::timestamptz, $8::timestamptz)
                 ON CONFLICT (workspace_id) DO NOTHING
                 """,
                 resolved_workspace_id,
@@ -2675,6 +2677,7 @@ async def ensure_workspace_membership(
                 _slugify(resolved_workspace_id, resolved_workspace_id),
                 resolved_workspace_id,
                 resolved_user_id,
+                _to_json(_new_workspace_billing_metadata(), default={}),
                 created_at,
             )
 
@@ -3149,8 +3152,9 @@ async def update_workspace_profile(workspace_id: str, updates: Dict[str, Any]) -
             updates.get("workspace_type"),
             default=str(existing_record.get("workspace_type") or "personal"),
         )
+        existing_metadata = _decode_json_object(existing_record.get("metadata"))
         next_metadata = _coerce_dict(updates.get("metadata")) if "metadata" in updates else _workspace_shell_metadata(
-            _coerce_dict(existing_record.get("metadata")),
+            existing_metadata,
             preferred_shell_profile=updates.get("preferred_shell_profile")
             if "preferred_shell_profile" in updates
             else None,

@@ -51,6 +51,34 @@ class BillingServiceTests(unittest.TestCase):
         self.assertTrue(summary["hosted_sage_ai"]["allowed"])
         self.assertEqual(summary["hosted_sage_ai"]["reason"], None)
 
+    def test_new_google_workspace_defaults_to_capped_hosted_credits(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = "ws_google_default"
+            with patch.object(control_plane_repository, "LOCAL_IDENTITY_DB_FILE", root / "users.db"), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ):
+                asyncio.run(
+                    control_plane_repository.ensure_workspace_membership(
+                        user_id="google-user-1",
+                        email="google-owner@example.com",
+                        display_name="Google Owner",
+                        tenant_id="tenant_google_default",
+                        workspace_id=workspace_id,
+                        role="owner",
+                        provider="google",
+                        subject="google-subject-1",
+                    )
+                )
+                summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
+
+        self.assertEqual(summary["subscription"]["effective_plan_id"], "pro")
+        self.assertTrue(summary["hosted_sage_ai"]["allowed"])
+        self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 500)
+
     def test_billing_summary_exposes_hosted_ai_credit_state_for_paid_workspace(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

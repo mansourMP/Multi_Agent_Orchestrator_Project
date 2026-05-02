@@ -15,6 +15,9 @@ Implementation note, 2026-05-02:
   companion remain follow-up cert lanes.
 - The latest polish pass tightened phone navigation, top tabs, and Integrations
   tool-row alignment without changing provider or gateway routing.
+- Gateway Connect now exposes selected-device capability manifests and a
+  server-side revoke action in the web/phone operator surface. Pairing still
+  uses the developer terminal setup path until the packaged companion exists.
 
 ## Executive Decision
 
@@ -224,8 +227,9 @@ Exit gate:
 
 Current status:
 
-- Partially complete. Web production chat passed API smoke; phone browser still
-  needs final live cert after deploy.
+- Current production cert passed in a phone-width browser: signup, onboarding,
+  Sage shell tabs, Marketplace route, and Studio route loaded without bootstrap
+  dead screens.
 - Recoverable workspace bootstrap states are actionable, not raw stack text.
 - Phone navigation must remain horizontally reachable across Sage, Studio,
   Marketplace, Gateway, Settings, and Sage sub-tabs.
@@ -265,6 +269,12 @@ Exit gate:
 
 - User can pair a Mac from web/phone and see `This Mac online` only when the
   gateway is truly connected.
+
+Current status:
+
+- Partially complete. Pairing, connection truth, capability manifest display,
+  and revocation are wired. The remaining launch gap is packaging: normal users
+  still need a friendly companion installer instead of a repo checkout command.
 
 ### Phase 4: Gateway Channel Setup
 

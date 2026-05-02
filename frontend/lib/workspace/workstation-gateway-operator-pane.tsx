@@ -30,6 +30,7 @@ type GatewayRegistrationRecord = Record<string, unknown> & {
   status?: string | null;
   connection_status?: string | null;
   device_trust_state?: string | null;
+  capabilities?: unknown;
   last_seen_at?: string | null;
 };
 
@@ -248,7 +249,7 @@ function gatewayPairingCommand(token: unknown): string {
     return 'Pairing token unavailable';
   }
   return [
-    'cd /Users/mansur/Multi_Agent_Orchestrator_Project/empyralis-gateway',
+    'cd /path/to/Multi_Agent_Orchestrator_Project/empyralis-gateway',
     'npm run build',
     `EMPYRALIS_GATEWAY_API_URL=http://127.0.0.1:8001/api EMPYRALIS_GATEWAY_PAIRING_TOKEN=${pairingToken} npm start`,
   ].join('\n');
@@ -325,6 +326,21 @@ function doctorDisplayStatus(status: unknown): { label: string; tone: 'neutral' 
   return { label: 'Unknown', tone: 'neutral' };
 }
 
+function gatewayCapabilityLabels(gateway: GatewayRegistrationRecord | null): string[] {
+  const values = Array.isArray(gateway?.capabilities) ? gateway?.capabilities : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const label = readString(value, '');
+    if (!label || seen.has(label)) {
+      continue;
+    }
+    seen.add(label);
+    out.push(label);
+  }
+  return out.sort((left, right) => left.localeCompare(right));
+}
+
 export function WorkstationGatewayOperatorPane({
   initialSection = 'all',
 }: {
@@ -357,6 +373,11 @@ export function WorkstationGatewayOperatorPane({
     () =>
       gateways.find((gateway) => String(gateway.gateway_id ?? '').trim() === String(selectedGatewayId ?? '').trim()) ?? null,
     [gateways, selectedGatewayId],
+  );
+
+  const selectedGatewayCapabilities = useMemo(
+    () => gatewayCapabilityLabels(selectedGateway),
+    [selectedGateway],
   );
 
   const pendingApprovals = useMemo(
@@ -606,6 +627,48 @@ export function WorkstationGatewayOperatorPane({
       await refreshGatewayDetail(selectedGatewayId, false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not resolve the local permission request.');
+    } finally {
+      setBusyActionKey(null);
+    }
+  }
+
+  async function handleRevokeGateway() {
+    if (!selectedGatewayId || !selectedGateway) {
+      return;
+    }
+    const deviceLabel = readString(selectedGateway.display_name, 'this computer');
+    const confirmed = window.confirm(
+      `Revoke ${deviceLabel}? Sage will stop using this computer until it is paired again.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setBusyActionKey(`revoke:${selectedGatewayId}`);
+    setErrorMessage(null);
+    try {
+      await requestPayload<Record<string, unknown>>(
+        `/api/gateway/registrations/${encodeURIComponent(selectedGatewayId)}/revoke`,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            reason: 'Revoked from the device connection page.',
+          }),
+        },
+      );
+      setStatusMessage(`${deviceLabel} revoked. Local tools from that computer are now unavailable.`);
+      setSelectedGatewayId(null);
+      setDoctor(null);
+      setWhatsapp(null);
+      setTelegram(null);
+      setApprovals(null);
+      setBrowserSessions(null);
+      await refreshRegistrations(false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not revoke this computer.');
     } finally {
       setBusyActionKey(null);
     }
@@ -928,6 +991,44 @@ export function WorkstationGatewayOperatorPane({
             <FormReadout label="Quota state" value={<DataBadge tone={statusTone(readRecord(doctor?.quota).status)}>{quotaStatus.status}</DataBadge>} />
             <FormReadout label="Approvals waiting" value={String(approvalsPendingCount)} />
           </FormGrid>
+
+          <FormSection
+            title="Capability manifest"
+            description="These are the local actions this paired computer declares to the cloud. Sage should use this manifest as truth instead of guessing."
+          >
+            {selectedGatewayCapabilities.length > 0 ? (
+              <div className="app-inline-actions app-inline-actions--tight app-inline-actions--wrap">
+                {selectedGatewayCapabilities.map((capability) => (
+                  <DataBadge key={capability} tone="neutral">
+                    {humanizeToken(capability, capability)}
+                  </DataBadge>
+                ))}
+              </div>
+            ) : (
+              <EmptyPanel
+                title="No capabilities reported yet"
+                body="The companion has not published a local tool manifest for this computer."
+              />
+            )}
+          </FormSection>
+
+          <FormSection
+            title="Revoke this computer"
+            description="Revocation is immediate and server-side. The computer must be paired again before Sage can use its local tools or personal channels."
+          >
+            <div className="settings-action-row">
+              <WorkstationActionButton
+                type="button"
+                tone="danger"
+                disabled={busyActionKey === `revoke:${selectedGatewayId}`}
+                onClick={() => {
+                  void handleRevokeGateway();
+                }}
+              >
+                {busyActionKey === `revoke:${selectedGatewayId}` ? 'Revoking…' : 'Revoke access'}
+              </WorkstationActionButton>
+            </div>
+          </FormSection>
 
           {(readRecord(doctor?.checkpoint).status || readRecord(doctor?.browser).status || readRecord(doctor?.specialists).status || readRecord(doctor?.providers).status || readRecord(doctor?.quota).status) ? (
             <WorkstationSurfaceList>

@@ -128,6 +128,18 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Local shell demo run completed: run `ae209a0b-e559-482f-81c0-92229106cc34` executed `ls -1 /Users/mansur/Desktop` through `shell.execute`, returned real Desktop output, and wrote a command log artifact.
 - Verification commands passed after the fix: `npm run typecheck --prefix frontend`, `npm run build --prefix frontend`, `venv/bin/python -m compileall server_modules scripts`, and `venv/bin/python -m pytest server_modules/tests/test_runtime_run_query_service.py server_modules/tests/test_routes_mini_apps.py server_modules/tests/test_mini_apps_service.py`.
 
+## Phase 6/7 Local Cert Added On 2026-05-02
+
+- Fresh gateway pairing intent succeeded locally for Phase 6/7, then the gateway connected as `gateway_809b6844-5c4c-44df-87ae-aba5e75aa2d8`.
+- Gateway doctor passed active registration, trusted device, live websocket session, fresh heartbeat, resumable checkpoint, and no pending approvals.
+- Real gateway tool execution passed through the local supervisor for `shell.execute`, `filesystem.read_write`, and `screenshot.capture`.
+- Existing-session browser attach returned the correct `attach_required` local gateway state.
+- Risky desktop action approval was created for `computer_control.type` without executing the action.
+- Gateway offline behavior was verified: local tool execution returned retryable `409` while the cloud runtime remained healthy.
+- Gateway reconnect was verified with the same persisted state directory and gateway identity; gateway events showed two `gateway.connect` and two `gateway.hello` records.
+- WhatsApp and Telegram channel surfaces returned truthful not-linked states. Real outbound channel send remains blocked until a linked account and safe recipient are provided.
+- Studio/Marketplace targeted e2e passed: `npm run test:e2e:deployed-agents --prefix frontend` with 3 tests passing.
+
 ## Hard Rules
 
 - Provider choice changes reasoning model only; it must not change tool truth.

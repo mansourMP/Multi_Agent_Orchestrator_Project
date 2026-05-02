@@ -368,10 +368,25 @@ Exit gate:
 
 Current status:
 
-- Live gateway evidence exists in local `.orion-stack` cert journals with
-  filesystem, shell, screenshot, browser, WhatsApp, and Telegram capabilities
-  reported over outbound gateway heartbeats.
-- Remaining cert for launch is an actual phone/browser run against the current
+- Local live cert passed on 2026-05-02 against a fresh paired gateway:
+  `gateway_809b6844-5c4c-44df-87ae-aba5e75aa2d8`.
+- The gateway connected over outbound WSS, reported 32 capabilities, passed
+  doctor checks for active registration, trusted device, live session, fresh
+  heartbeat, resumable checkpoint, and no pending approvals.
+- Supervisor-backed local actions passed through the gateway:
+  `shell.execute` (`pwd`), `filesystem.read_write` (read `docs/`), and
+  `screenshot.capture` (primary monitor metadata returned).
+- Browser session start returned the correct local `attach_required` state for
+  an existing-session attach without falling back to fake cloud execution.
+- Risky desktop action approval was created for `computer_control.type`.
+- Gateway offline was verified: local tool execution returned retryable `409`
+  `Gateway is not currently connected`, while the cloud runtime stayed healthy.
+- Reconnect was verified with the same state directory and gateway identity;
+  events showed two `gateway.connect` and two `gateway.hello` records.
+- WhatsApp and Telegram personal channels surfaced truthful not-linked states:
+  WhatsApp `disconnected`; Telegram `authorization_required`. No outbound
+  channel send is certified until a real linked account/recipient is provided.
+- Remaining launch cert is a real physical-phone run against the public
   production environment with the gateway online.
 
 ### Phase 7: Studio Builder
@@ -407,10 +422,17 @@ Exit gate:
 
 Current status:
 
-- Studio has square templates for the launch specialist jobs plus a custom-agent
-  path.
-- Marketplace has preview packages and keeps developer publishing hidden behind
-  an explicit developer registration action.
+- Studio has square templates for the launch specialist jobs plus a Custom
+  Agent path.
+- Marketplace has six preview packages from the backend when no registered
+  inventory exists: Restaurant Orders, Auto Parts Sales, Spreadsheet Catalog,
+  Web Search, Image Generation, and DeepSeek Provider.
+- Marketplace preview packages carry publisher, verification/review, health,
+  billing hook, runtime truth, permission, and preview-only metadata.
+- Developer publishing remains hidden behind the explicit
+  `Show developer registration` action.
+- Targeted Phase 7 e2e passed on 2026-05-02:
+  `npm run test:e2e:deployed-agents --prefix frontend` with 3 tests passing.
 
 ### Phase 8: Marketplace And Mini-App Boundary
 

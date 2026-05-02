@@ -23,6 +23,10 @@ type GoogleTokenPayload = {
   error_description?: string;
 };
 
+function logGoogleAuthFailure(message: string, metadata: Record<string, unknown> = {}): void {
+  console.error('[auth/google/callback]', message, metadata);
+}
+
 function redirectWithError(request: NextRequest, error: string): NextResponse {
   const url = new URL('/login', requestOrigin(request));
   url.searchParams.set('error', error);
@@ -125,13 +129,21 @@ export async function GET(request: NextRequest) {
     const idToken = await exchangeGoogleCodeForIdToken(request, code);
     const upstream = await loginWithGoogleIdentityToken(request, idToken, cookieState.acquisitionToken);
     if (!upstream.ok) {
+      const upstreamText = await upstream.text().catch(() => '');
+      logGoogleAuthFailure('Backend provider login failed.', {
+        status: upstream.status,
+        detail: upstreamText.slice(0, 300),
+      });
       return redirectWithError(request, 'google_auth_failed');
     }
     const response = NextResponse.redirect(new URL('/', requestOrigin(request)));
     appendUpstreamCookies(response, upstream.headers);
     response.cookies.delete(GOOGLE_OAUTH_STATE_COOKIE);
     return response;
-  } catch {
+  } catch (error) {
+    logGoogleAuthFailure('Google OAuth callback failed.', {
+      message: error instanceof Error ? error.message : 'unknown',
+    });
     return redirectWithError(request, 'google_auth_failed');
   }
 }

@@ -40,15 +40,16 @@ class BillingServiceTests(unittest.TestCase):
                 summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
 
         self.assertEqual(summary["subscription"]["plan_id"], "free")
-        self.assertEqual(summary["subscription"]["effective_plan_id"], "free")
+        self.assertEqual(summary["subscription"]["effective_plan_id"], "pro")
         self.assertEqual(summary["subscription"]["status"], "active")
         self.assertEqual([item["plan_id"] for item in summary["plans"]], ["free", "pro"])
-        self.assertEqual(summary["limits"]["max_specialists"], 1)
+        self.assertEqual(summary["limits"]["max_specialists"], 3)
         self.assertEqual(summary["usage"]["specialists_in_use"], 0)
-        self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 5.0)
-        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 5000)
-        self.assertFalse(summary["hosted_sage_ai"]["allowed"])
-        self.assertEqual(summary["hosted_sage_ai"]["reason"], "policy_disabled")
+        self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 0.25)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 250)
+        self.assertTrue(summary["hosted_sage_ai"]["allowed"])
+        self.assertEqual(summary["hosted_sage_ai"]["reason"], None)
 
     def test_billing_summary_exposes_hosted_ai_credit_state_for_paid_workspace(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -158,7 +159,7 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(payload["checkout_session_id"], "cs_test_123")
         self.assertEqual(summary["subscription"]["plan_id"], "pro")
         self.assertEqual(summary["subscription"]["status"], "checkout_pending")
-        self.assertEqual(summary["subscription"]["effective_plan_id"], "free")
+        self.assertEqual(summary["subscription"]["effective_plan_id"], "pro")
         request_args = stripe_request.call_args[0]
         self.assertEqual(request_args[0], "/checkout/sessions")
         self.assertEqual(request_args[1]["line_items[0][price]"], "price_pro_123")

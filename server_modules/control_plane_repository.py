@@ -19,6 +19,8 @@ from server_modules import db as runtime_db
 
 
 LOGGER = logging.getLogger(__name__)
+NEW_ACCOUNT_HOSTED_SAGE_AI_POLICY = "enabled_with_cap"
+NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 0.25
 
 _SCHEMA_READY = False
 _SCHEMA_LOCK: asyncio.Lock = asyncio.Lock()
@@ -2364,7 +2366,13 @@ async def create_local_password_account(
     auth_identity_id = str(uuid.uuid4())
     membership_id = str(uuid.uuid4())
     workspace_metadata = _workspace_shell_metadata(
-        {"billing": {"plan_id": "personal"}},
+        {
+            "billing": {
+                "plan_id": "personal",
+                "hosted_sage_ai_policy": NEW_ACCOUNT_HOSTED_SAGE_AI_POLICY,
+                "hosted_sage_ai_monthly_cap_usd": NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD,
+            }
+        },
         setup_completed=False,
     )
 

@@ -3,11 +3,20 @@
 import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
 
-import { awaitBrowserAuthReady, signup } from '@/lib/auth/auth-client';
+import { awaitBrowserAuthReady, googleLogin, signup } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 function authErrorCopy(error: string): string {
   const normalized = error.toLowerCase();
+  if (normalized.includes('google_not_configured')) {
+    return 'Google sign-in is not configured for this environment yet.';
+  }
+  if (normalized.includes('google_origin_not_allowed')) {
+    return 'Google sign-in is restricted to approved Empyralis domains.';
+  }
+  if (normalized.includes('google_state_invalid') || normalized.includes('google_auth_failed')) {
+    return 'Google sign-in could not finish. Try again or use email.';
+  }
   if (normalized.includes('already') || normalized.includes('exists')) {
     return 'That email is already registered. Log in or use another email.';
   }
@@ -42,6 +51,10 @@ export default function SignupPage() {
     const params = new URLSearchParams(window.location.search);
     setChannelAttribution(String(params.get('channel_attribution') || '').trim());
     setAgent(String(params.get('agent') || '').trim());
+    const providerError = String(params.get('error') || '').trim();
+    if (providerError) {
+      setError(providerError);
+    }
   }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -70,6 +83,21 @@ export default function SignupPage() {
               ? 'Create an Empyralis account to continue from Telegram.'
               : 'Create an Empyralis account.'}
           </p>
+        </div>
+        <div className="app-auth-provider-stack">
+          <AppButton
+            type="button"
+            tone="secondary"
+            onClick={() => googleLogin()}
+            disabled={submitting || !isHydrated}
+          >
+            Continue with Google
+          </AppButton>
+          <div className="app-auth-divider">
+            <span aria-hidden="true" />
+            <span>or</span>
+            <span aria-hidden="true" />
+          </div>
         </div>
         <label className="app-auth-field">
           <span className="app-auth-field__label">Name</span>

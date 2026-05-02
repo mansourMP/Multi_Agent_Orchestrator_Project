@@ -147,6 +147,16 @@ export async function logout(): Promise<Record<string, unknown> | null> {
   });
 }
 
+export function googleLogin(): void {
+  const params = new URLSearchParams();
+  const attribution = channelAttributionToken();
+  if (attribution) {
+    params.set('channel_attribution', attribution);
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : '';
+  window.location.href = `/api/auth/google${query}`;
+}
+
 export async function me(): Promise<Record<string, unknown> | null> {
   return requestAuth<Record<string, unknown> | null>('/api/auth/me', {
     method: 'GET',

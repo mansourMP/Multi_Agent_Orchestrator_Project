@@ -4,11 +4,20 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { FormEvent, Suspense, useEffect, useState } from 'react';
 
-import { awaitBrowserAuthReady, login } from '@/lib/auth/auth-client';
+import { awaitBrowserAuthReady, googleLogin, login } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 function authErrorCopy(error: string): string {
   const normalized = error.toLowerCase();
+  if (normalized.includes('google_not_configured')) {
+    return 'Google sign-in is not configured for this environment yet.';
+  }
+  if (normalized.includes('google_origin_not_allowed')) {
+    return 'Google sign-in is restricted to approved Empyralis domains.';
+  }
+  if (normalized.includes('google_state_invalid') || normalized.includes('google_auth_failed')) {
+    return 'Google sign-in could not finish. Try again or use email.';
+  }
   if (normalized.includes('password') || normalized.includes('credential') || normalized.includes('invalid')) {
     return 'Email or password was not accepted.';
   }
@@ -24,6 +33,7 @@ function LoginPageContent() {
   const [isHydrated, setIsHydrated] = useState(false);
   const agentParam = String(searchParams.get('agent') || '').trim();
   const channelAttribution = String(searchParams.get('channel_attribution') || '').trim();
+  const providerError = String(searchParams.get('error') || '').trim();
   const signupSearchParams = new URLSearchParams();
   if (agentParam) {
     signupSearchParams.set('agent', agentParam);
@@ -37,7 +47,10 @@ function LoginPageContent() {
 
   useEffect(() => {
     setIsHydrated(true);
-  }, []);
+    if (providerError) {
+      setError(providerError);
+    }
+  }, [providerError]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -61,6 +74,21 @@ function LoginPageContent() {
           <span className="app-auth-kicker">Empyralis</span>
           <h1 className="app-auth-title">Log in</h1>
           <p className="app-auth-subtitle">Use your Empyralis account to continue.</p>
+        </div>
+        <div className="app-auth-provider-stack">
+          <AppButton
+            type="button"
+            tone="secondary"
+            onClick={() => googleLogin()}
+            disabled={submitting || !isHydrated}
+          >
+            Continue with Google
+          </AppButton>
+          <div className="app-auth-divider">
+            <span aria-hidden="true" />
+            <span>or</span>
+            <span aria-hidden="true" />
+          </div>
         </div>
         <label className="app-auth-field">
           <span className="app-auth-field__label">Email</span>

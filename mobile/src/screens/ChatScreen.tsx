@@ -11,6 +11,7 @@ import {
   PanResponder,
   Pressable,
   StyleSheet,
+  TouchableOpacity,
 } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
@@ -136,6 +137,86 @@ function formatChatTimestamp(timestamp?: number) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function humanizeToken(value: string) {
+  return value
+    .split(/[_\-.]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function collectMemoryFacts(value: unknown, limit = 3): string[] {
+  const facts: string[] = [];
+  const pushFact = (candidate: unknown) => {
+    if (facts.length >= limit) return;
+    const text = String(candidate ?? "").replace(/\s+/g, " ").trim();
+    if (!text || facts.includes(text)) return;
+    facts.push(text.length > 96 ? `${text.slice(0, 93)}...` : text);
+  };
+  const visit = (candidate: unknown) => {
+    if (facts.length >= limit || candidate == null) return;
+    if (typeof candidate === "string" || typeof candidate === "number" || typeof candidate === "boolean") {
+      pushFact(candidate);
+      return;
+    }
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) visit(item);
+      return;
+    }
+    if (typeof candidate === "object") {
+      for (const [key, item] of Object.entries(candidate as Record<string, unknown>)) {
+        if (facts.length >= limit) break;
+        if (typeof item === "string") {
+          pushFact(`${humanizeToken(key)}: ${item}`);
+        } else {
+          visit(item);
+        }
+      }
+    }
+  };
+  visit(value);
+  return facts;
+}
+
+function buildTransparencyCards(payload: {
+  actions?: unknown[];
+  interventions?: unknown[];
+}): AgentPayload[] {
+  const cards: AgentPayload[] = [];
+  const pushCard = (title: string, detail?: string) => {
+    const cleanTitle = title.trim();
+    const cleanDetail = String(detail || "").trim();
+    if (!cleanTitle || cards.some((item) => item.speech === cleanTitle && item.source === cleanDetail)) return;
+    cards.push({
+      intent: "assistant",
+      messageType: "tool",
+      speech: cleanTitle,
+      source: cleanDetail || undefined,
+    });
+  };
+
+  for (const item of Array.isArray(payload.interventions) ? payload.interventions : []) {
+    const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    const title = String(record.title || record.label || record.kind || "").trim();
+    const detail = String(record.detail || record.summary || record.message || "").trim();
+    if (title) {
+      pushCard(title, detail);
+    }
+  }
+
+  for (const item of Array.isArray(payload.actions) ? payload.actions : []) {
+    const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    const kind = String(record.kind || "").trim();
+    if (!kind || kind === "approval_required") continue;
+    const label = String(record.label || "").trim() || humanizeToken(kind);
+    const target = String(record.connector || record.href || record.goal || "").trim();
+    pushCard(label, target);
+  }
+
+  return cards.slice(0, 4);
+}
+
 export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScreenProps) {
   const theme = useTheme();
   const router = useRouter();
@@ -239,6 +320,13 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
   const channelRole = activeSession?.runtimeRole || activeAgent.runtimeRole || (requestedAgentId ? "specialist" : "private-assistant");
   const activeProvider = requestedAgentId ? String(activeAgent.provider || "").trim() : "";
   const activeModel = requestedAgentId ? String(activeAgent.model || "").trim() : "";
+  const memoryFacts = useMemo(
+    () => collectMemoryFacts([
+      chatContextQuery.data?.unifiedMemory?.summary,
+      chatContextQuery.data?.personalContext?.summary,
+    ]),
+    [chatContextQuery.data?.personalContext?.summary, chatContextQuery.data?.unifiedMemory?.summary],
+  );
 
   const scrollToBottom = React.useCallback((animated = true) => {
     requestAnimationFrame(() => {
@@ -437,6 +525,10 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         speech: hasStructuredCards ? "" : (payload.reply || streamedReply || ""),
       });
 
+      for (const card of buildTransparencyCards(payload)) {
+        addMessage(currentSessionId, card);
+      }
+
       const approvalAction = payload.actions.find(
         (action) =>
           action.kind === "approval_required" &&
@@ -559,6 +651,38 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
 
   const renderMessage = ({ item, index }: { item: AgentPayload; index: number }) => {
     const isUser = item.intent === "user";
+
+    if (item.messageType === "tool") {
+      return (
+        <View
+          style={{
+            marginHorizontal: SPACING.md,
+            marginVertical: 2,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <Ionicons name="checkmark-circle-outline" size={18} color={theme.colors.textSecondary} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text numberOfLines={1} style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+              {item.speech}
+            </Text>
+            {item.source ? (
+              <Text numberOfLines={1} style={{ marginTop: 2, fontSize: 12, color: theme.colors.textSecondary }}>
+                {item.source}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      );
+    }
 
     if (item.messageType === "approval" && item.approval) {
       return (
@@ -838,6 +962,38 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           data={messages}
           keyExtractor={(_, i) => i.toString()}
           renderItem={renderMessage}
+          ListHeaderComponent={memoryFacts.length > 0 ? (
+            <View
+              style={{
+                marginHorizontal: SPACING.md,
+                marginTop: 4,
+                marginBottom: 8,
+                borderRadius: 18,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                gap: 8,
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  Memory capsule
+                </Text>
+                <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/memory")}>
+                  <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                    Edit
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              {memoryFacts.map((fact) => (
+                <Text key={fact} numberOfLines={2} style={{ fontSize: 12.5, color: theme.colors.textSecondary, lineHeight: 18 }}>
+                  {fact}
+                </Text>
+              ))}
+            </View>
+          ) : null}
           ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
           keyboardShouldPersistTaps="handled"
           onContentSizeChange={() => scrollToBottom()}

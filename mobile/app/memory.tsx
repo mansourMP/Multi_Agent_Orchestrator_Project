@@ -15,18 +15,20 @@ import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 type MemoryLayerMeta = {
   category: SageMemoryCategory;
   title: string;
+  classLabel: "Safe" | "Sensitive" | "Private" | "Critical";
+  classColor: string;
 };
 
 type MemoryLayerValues = Record<SageMemoryCategory, string>;
 type MemoryLayerEntries = Partial<Record<SageMemoryCategory, SageMemoryItem>>;
 
 const MEMORY_LAYERS: MemoryLayerMeta[] = [
-  { category: "work_context", title: "Work context" },
-  { category: "personal_context", title: "Personal context" },
-  { category: "top_of_mind", title: "Top of mind" },
-  { category: "brief_history", title: "Brief history" },
-  { category: "earlier_context", title: "Earlier context" },
-  { category: "long_term_background", title: "Long-term background" },
+  { category: "work_context", title: "Work context", classLabel: "Safe", classColor: "#15803D" },
+  { category: "personal_context", title: "Personal context", classLabel: "Private", classColor: "#C2410C" },
+  { category: "top_of_mind", title: "Top of mind", classLabel: "Sensitive", classColor: "#A16207" },
+  { category: "brief_history", title: "Brief history", classLabel: "Safe", classColor: "#15803D" },
+  { category: "earlier_context", title: "Earlier context", classLabel: "Sensitive", classColor: "#A16207" },
+  { category: "long_term_background", title: "Long-term background", classLabel: "Critical", classColor: "#B91C1C" },
 ];
 
 const EMPTY_MEMORY: MemoryLayerValues = {
@@ -233,9 +235,23 @@ export default function MemoryScreen() {
                 borderBottomColor: theme.colors.border,
               }}
             >
-              <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-                {layer.title}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <Text style={{ flex: 1, fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                  {layer.title}
+                </Text>
+                <View
+                  style={{
+                    paddingHorizontal: 9,
+                    paddingVertical: 5,
+                    borderRadius: 999,
+                    backgroundColor: `${layer.classColor}1A`,
+                  }}
+                >
+                  <Text style={{ fontSize: 11, fontFamily: "DMSans_700Bold", color: layer.classColor }}>
+                    {layer.classLabel}
+                  </Text>
+                </View>
+              </View>
 
               {isEditing ? (
                 <TextInput

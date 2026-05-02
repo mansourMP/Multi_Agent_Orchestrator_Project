@@ -15,9 +15,7 @@ const existingEas =
 
 const config: ExpoConfig = {
   ...baseConfig,
-  runtimeVersion: {
-    policy: "appVersion",
-  },
+  runtimeVersion: "0.1.0",
   updates: {
     enabled: true,
     checkAutomatically: "ON_LOAD",

@@ -8,9 +8,59 @@ import { ScrollView, Text, View } from "react-native";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { ActionButton } from "@/src/components/system/ActionButton";
 import { MotionPressable } from "@/src/components/system/MotionPressable";
-import { useMobileConnectors, useMobileMachines, useMobileOverviewData, usePrimaryGatewayDoctor } from "@/src/lib/mobile-data";
+import {
+  useMobileBillingSummary,
+  useMobileConnectors,
+  useMobileMachines,
+  useMobileOverviewData,
+  usePrimaryGatewayDoctor,
+} from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
+
+function readNumber(value: unknown, fallback = 0) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+}
+
+function formatCredits(value: unknown) {
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0,
+  }).format(Math.max(0, Math.round(readNumber(value))));
+}
+
+function resolveHostedCredits(payload: unknown) {
+  const root = payload && typeof payload === "object" ? payload as Record<string, any> : {};
+  const hosted = root.hosted_sage_ai && typeof root.hosted_sage_ai === "object"
+    ? root.hosted_sage_ai as Record<string, unknown>
+    : {};
+  const creditsPerUsd = Math.max(1, readNumber(hosted.credits_per_usd, 1000));
+  const cap = readNumber(
+    hosted.monthly_credit_cap,
+    readNumber(hosted.monthly_cap_usd) * creditsPerUsd,
+  );
+  const used = readNumber(
+    hosted.monthly_credits_used,
+    readNumber(hosted.monthly_cost_usd) * creditsPerUsd,
+  );
+  const remaining = readNumber(
+    hosted.monthly_credits_remaining,
+    readNumber(hosted.monthly_remaining_usd, Math.max(0, cap - used)) * creditsPerUsd,
+  );
+  return {
+    allowed: hosted.allowed === true,
+    cap: Math.max(0, cap),
+    used: Math.max(0, used),
+    remaining: Math.max(0, remaining),
+    policy: typeof hosted.policy === "string" ? hosted.policy : "",
+  };
+}
 
 export function ProfileScreen() {
   const theme = useTheme();
@@ -20,6 +70,7 @@ export function ProfileScreen() {
   const machinesQuery = useMobileMachines();
   const overview = useMobileOverviewData();
   const gatewayDoctor = usePrimaryGatewayDoctor();
+  const billingQuery = useMobileBillingSummary();
   const appVersion = Constants.expoConfig?.version || Constants.nativeAppVersion || "0.1.0";
   const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
   const connectorCount = (connectorsQuery.data ?? []).filter((item) => item.connected || item.runtime_usable).length;
@@ -28,8 +79,16 @@ export function ProfileScreen() {
   const approvalCount = overview.approvals.length;
   const gatewayDoctorStatus = String(gatewayDoctor.doctor?.status ?? "").trim().toLowerCase();
   const gatewayDoctorApprovals = Number((gatewayDoctor.doctor?.approvals as { pending_count?: number } | undefined)?.pending_count ?? 0);
+  const hostedCredits = resolveHostedCredits(billingQuery.data);
+  const hostedCreditPercent = hostedCredits.cap > 0
+    ? Math.min(100, Math.max(0, (hostedCredits.used / hostedCredits.cap) * 100))
+    : 0;
   const usageSummary = connected
-    ? `${overview.runs.length} run${overview.runs.length === 1 ? "" : "s"} · ${overview.artifacts.length} output${overview.artifacts.length === 1 ? "" : "s"} · ${connectorCount} connected app${connectorCount === 1 ? "" : "s"}`
+    ? billingQuery.isLoading
+      ? "Checking hosted credits and runtime usage..."
+      : hostedCredits.cap > 0
+        ? `${formatCredits(hostedCredits.remaining)} credits left · ${formatCredits(hostedCredits.used)}/${formatCredits(hostedCredits.cap)} used this month`
+        : `${overview.runs.length} run${overview.runs.length === 1 ? "" : "s"} · ${overview.artifacts.length} output${overview.artifacts.length === 1 ? "" : "s"} · ${connectorCount} connected app${connectorCount === 1 ? "" : "s"}`
     : "Connect your personal runtime to see live runs, outputs, and linked apps.";
   const gatewaySummary = !connected
     ? "Connect your private runtime and pair a device."
@@ -128,6 +187,72 @@ export function ProfileScreen() {
         </Text>
         <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
           Workspace {session?.workspaceId || "default"} · Version {appVersion}
+        </Text>
+      </View>
+
+      <View
+        style={{
+          marginTop: 14,
+          paddingHorizontal: 18,
+          paddingVertical: 16,
+          borderRadius: 24,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+          backgroundColor: "#F3F4F6",
+          gap: 10,
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 14 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary }}>
+              Runtime fuel
+            </Text>
+            <Text style={{ marginTop: 4, fontSize: 20, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+              {connected && hostedCredits.cap > 0
+                ? `${formatCredits(hostedCredits.remaining)} credits left`
+                : connected
+                  ? "Credits not active"
+                  : "Connect workspace"}
+            </Text>
+          </View>
+          <View
+            style={{
+              paddingHorizontal: 10,
+              paddingVertical: 6,
+              borderRadius: 999,
+              backgroundColor: "#FFFFFF",
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+            }}
+          >
+            <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary }}>
+              {billingQuery.isFetching ? "Syncing" : hostedCredits.allowed ? "Ready" : "Limited"}
+            </Text>
+          </View>
+        </View>
+        <View
+          style={{
+            height: 8,
+            borderRadius: 999,
+            backgroundColor: "#E5E7EB",
+            overflow: "hidden",
+          }}
+        >
+          <View
+            style={{
+              width: `${hostedCreditPercent}%`,
+              height: "100%",
+              borderRadius: 999,
+              backgroundColor: "#111827",
+            }}
+          />
+        </View>
+        <Text style={{ fontSize: 12.5, lineHeight: 18, color: theme.colors.textSecondary }}>
+          {connected && hostedCredits.cap > 0
+            ? `${formatCredits(hostedCredits.used)} used of ${formatCredits(hostedCredits.cap)} monthly credits. BYOK users spend through their own provider.`
+            : connected
+              ? "Hosted credits are unavailable for this workspace. You can still use connected providers or your own API key."
+              : "Sign in and connect your workspace to see monthly usage."}
         </Text>
       </View>
 

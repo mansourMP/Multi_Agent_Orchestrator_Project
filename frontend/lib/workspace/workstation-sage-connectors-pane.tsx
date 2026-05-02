@@ -416,17 +416,6 @@ function normalizeHostedSageAi(payload: unknown): HostedSageAiSnapshot {
   };
 }
 
-function formatUsd(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) {
-    return '$0';
-  }
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: value < 1 ? 2 : 0,
-  }).format(value);
-}
-
 function formatCredits(value: number): string {
   return new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 0,
@@ -435,7 +424,7 @@ function formatCredits(value: number): string {
 
 function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord | null): string {
   if (hostedSageAi.allowed && hostedProviderCard) {
-    return `Ready with ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} credits remaining this month (${formatUsd(hostedSageAi.monthlyCapUsd)} cap).`;
+    return `Ready with ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} of ${formatCredits(hostedSageAi.monthlyCreditCap)} credits remaining this month.`;
   }
   if (hostedSageAi.allowed) {
     return 'Credits are enabled, but Empyralis hosted runtime is not configured yet.';

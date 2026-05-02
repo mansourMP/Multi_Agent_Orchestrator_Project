@@ -206,6 +206,22 @@ export type MobileAuthProvidersResponse = {
   apple?: { enabled?: boolean } | null;
 };
 
+export type MobileBillingSummaryResponse = {
+  hosted_sage_ai?: {
+    allowed?: boolean | null;
+    policy?: string | null;
+    message?: string | null;
+    monthly_credit_cap?: number | null;
+    monthly_credits_used?: number | null;
+    monthly_credits_remaining?: number | null;
+    monthly_cap_usd?: number | null;
+    monthly_cost_usd?: number | null;
+    monthly_remaining_usd?: number | null;
+    credits_per_usd?: number | null;
+  } | null;
+  usage?: Record<string, unknown> | null;
+};
+
 export type SageMemoryCategory =
   | "work_context"
   | "personal_context"
@@ -866,6 +882,16 @@ export const mobileApi = {
       throw new Error(typeof payload?.detail === "string" ? payload.detail : "Could not load account shell.");
     }
     return payload;
+  },
+  getBillingSummary(session: MobileSession) {
+    const workspaceId = requireSessionWorkspaceId(session, "load hosted credits");
+    return fetchSessionJson<MobileBillingSummaryResponse>(
+      session,
+      `/billing/summary?workspace_id=${encodeURIComponent(workspaceId)}`,
+      {
+        fallback: "Could not load hosted credits.",
+      },
+    );
   },
   async listSageMemory(session: MobileSession) {
     const baseUrl = normalizeServerUrl(session.runtimeUrl);

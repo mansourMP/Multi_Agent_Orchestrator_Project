@@ -23,6 +23,22 @@ Implementation note, 2026-05-02:
 - Security audit emission now redacts obvious provider keys, bearer tokens,
   gateway pairing tokens, cookies, credentials, and nested authorization fields
   before events are stored or streamed.
+- Web Google sign-in is now a real OAuth bridge through the Next auth route and
+  backend `/auth/provider-login` token verification. Production must set
+  `EMPYRALIS_AUTH_ALLOWED_ORIGINS` and Google web OAuth credentials before this
+  button is considered certified.
+- Hosted-credit UI should show credits only to normal users. Internal USD caps
+  remain implementation detail for provider cost control.
+- Native mobile launch scope is command-center focused: Chat, Agents,
+  Applications, and Profile stay visible; Home/Notifications remain hidden.
+  Chat now has a small Memory Capsule and compact transparency rows for
+  structured actions/interventions.
+- Native mobile Profile now reads `/billing/summary` and shows a credits-only
+  Runtime fuel card. It intentionally hides dollar/cost language from normal
+  users while still relying on server-side hosted-credit caps.
+- Mobile Memory keeps the existing runtime buckets but displays sensitivity
+  classes (`Safe`, `Sensitive`, `Private`, `Critical`) so users understand what
+  kind of fact they are editing.
 
 ## Executive Decision
 

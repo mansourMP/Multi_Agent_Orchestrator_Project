@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Text, TextInput, TouchableOpacity, View } from "react-native";
 import { router } from "expo-router";
 import * as AppleAuthentication from "expo-apple-authentication";
+import * as Google from "expo-auth-session/providers/google";
+import * as WebBrowser from "expo-web-browser";
 
 import { MobileScreen } from "@/src/components/MobileScreen";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
@@ -17,7 +19,9 @@ import { ensureMobileDeviceId } from "@/src/lib/mobile-engine";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
-type SignInProvider = "apple" | "password";
+WebBrowser.maybeCompleteAuthSession();
+
+type SignInProvider = "apple" | "google" | "password";
 
 function formatLoginError(error: unknown) {
   const message = error instanceof Error ? error.message : "We could not sign you in.";
@@ -42,6 +46,35 @@ export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const hasRuntimeUrl = Boolean(runtimeUrl);
+
+  const googleConfig = useMemo(
+    () => ({
+      androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || undefined,
+      iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined,
+      webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
+      scopes: ["openid", "email", "profile"],
+    }),
+    [],
+  );
+
+  const hasGoogleIds = Boolean(
+    googleConfig.androidClientId ||
+    googleConfig.iosClientId ||
+    googleConfig.webClientId,
+  );
+
+  const [request, response, promptAsync] = Google.useAuthRequest(googleConfig);
+
+  useEffect(() => {
+    if (response?.type === "success") {
+      const { authentication } = response;
+      if (authentication?.idToken) {
+        void handleGoogle(authentication.idToken);
+      }
+    }
+    // OAuth responses should be handled once per provider callback, not retriggered by local saving state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [response]);
 
   useEffect(() => {
     if (session?.runtimeKey) {
@@ -89,6 +122,11 @@ export default function LoginScreen() {
   const appleEnabled = useMemo(
     () => Boolean(appleAvailable && providers?.apple?.enabled && hasRuntimeUrl),
     [appleAvailable, providers?.apple?.enabled, hasRuntimeUrl],
+  );
+
+  const googleEnabled = useMemo(
+    () => Boolean(providers?.google?.enabled && hasRuntimeUrl && hasGoogleIds),
+    [providers?.google?.enabled, hasRuntimeUrl, hasGoogleIds],
   );
 
   const finishLogin = async (login: MobileAuthLoginResponse) => {
@@ -181,6 +219,28 @@ export default function LoginScreen() {
         setSavingProvider(null);
         return;
       }
+      setError(formatLoginError(nextError));
+    } finally {
+      setSavingProvider(null);
+    }
+  };
+
+  const handleGoogle = async (idToken: string) => {
+    if (savingProvider) return;
+    setSavingProvider("google");
+    setError(null);
+    try {
+      const deviceId = await ensureMobileDeviceId(session?.deviceId);
+      const login = await mobileApi.loginWithProvider({
+        runtimeUrl,
+        provider: "google",
+        identityToken: idToken,
+        deviceId,
+        deviceName: "iPhone",
+        devicePlatform: "ios",
+      });
+      await finishLogin(login);
+    } catch (nextError) {
       setError(formatLoginError(nextError));
     } finally {
       setSavingProvider(null);
@@ -290,6 +350,34 @@ export default function LoginScreen() {
               {savingProvider === "password" ? "Signing in..." : "Sign in"}
             </Text>
           </TouchableOpacity>
+          {googleEnabled ? (
+            <View style={{ gap: 10 }}>
+              <Text style={{ color: theme.colors.textMuted, fontSize: 12, lineHeight: 18 }}>
+                Or continue with Google
+              </Text>
+              <TouchableOpacity
+                activeOpacity={0.86}
+                onPress={() => {
+                  void promptAsync();
+                }}
+                disabled={savingProvider !== null || !request}
+                style={{
+                  height: 50,
+                  borderRadius: 18,
+                  backgroundColor: "#FFFFFF",
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: (savingProvider !== null || !request) ? 0.72 : 1,
+                }}
+              >
+                <Text style={{ color: "#000000", fontSize: 15, fontFamily: "DMSans_700Bold" }}>
+                  {savingProvider === "google" ? "Signing in..." : "Sign in with Google"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
           {appleEnabled ? (
             <View style={{ gap: 10 }}>
               <Text style={{ color: theme.colors.textMuted, fontSize: 12, lineHeight: 18 }}>
@@ -306,7 +394,7 @@ export default function LoginScreen() {
           ) : null}
           {loadingProviders ? (
             <Text style={{ color: theme.colors.textMuted, fontSize: 13, lineHeight: 19 }}>
-              Checking Apple sign-in...
+              Checking sign-in options...
             </Text>
           ) : null}
           {savingProvider ? (

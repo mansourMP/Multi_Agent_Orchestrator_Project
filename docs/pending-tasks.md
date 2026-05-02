@@ -1,6 +1,14 @@
 # Pending Tasks
 
-Last verified: 2026-04-30
+Last verified: 2026-05-02
+
+Update 2026-05-02 canonical roadmap:
+- added `docs/empyralis-must-do-roadmap-2026-05-02.md` as the current launch-to-beta execution roadmap
+- it supersedes the scattered 12/15-phase planning threads for practical execution order
+- it keeps the current decision: web/phone-first Sage, hosted credits by default, BYOK advanced, local gateway as the moat, Studio for B2B specialists, Marketplace for governed installs, Cloud Computer deferred
+- added `docs/openclaw-gateway-comparison-2026-05-02.md` to capture the OpenClaw code review and explain why Empyralis should use a cloud-brain plus local-gateway pattern rather than official WhatsApp Cloud API or pure remote desktop as the default
+- latest polish pass tightened phone navigation, top tab density, and Integrations tool-row alignment; provider routing and gateway routing were intentionally not changed
+- remaining launch-critical cert: final production phone browser pass after Render deploy, plus one visual sweep for Sage, History, Memory, Integrations, Studio, Marketplace, and Gateway offline/online states
 
 Update 2026-05-01 launch companion/status:
 - added `docs/tauri-desktop-companion-contract-2026-05-01.md` to lock Tauri as the local desktop companion/gateway lane, not a second Sage brain

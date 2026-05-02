@@ -3567,9 +3567,7 @@ textarea {
   width: auto !important;
   max-width: max-content;
   min-width: auto;
-  display: inline-grid;
-  grid-auto-flow: column;
-  grid-auto-columns: max-content;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   justify-self: center;
@@ -3584,6 +3582,8 @@ textarea {
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
 
@@ -3608,6 +3608,7 @@ textarea {
   white-space: nowrap;
   text-decoration: none;
   background: transparent;
+  box-shadow: none;
   transition:
     background-color var(--transition),
     color var(--transition),
@@ -3627,15 +3628,17 @@ textarea {
 }
 
 .workstation-titlebar__link:hover {
-  background: color-mix(in srgb, var(--app-bg-raised) 70%, transparent 30%);
+  background: color-mix(in srgb, var(--app-bg-raised) 52%, transparent 48%);
   color: var(--text-primary);
   transform: translateY(-1px);
 }
 
 .workstation-titlebar__link--active {
-  background: color-mix(in srgb, var(--app-bg-raised) 92%, transparent 8%);
+  background: color-mix(in srgb, var(--app-bg-raised) 72%, transparent 28%);
   color: var(--text-primary);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-border-muted) 72%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--app-border-muted) 54%, transparent),
+    0 10px 20px -22px color-mix(in srgb, black 24%, transparent);
 }
 
 .workstation-titlebar__actions {
@@ -4112,6 +4115,9 @@ textarea {
     overflow-x: auto;
     padding: 0 max(var(--app-space-3), env(safe-area-inset-right)) var(--app-space-2) max(var(--app-space-3), env(safe-area-inset-left));
     border-bottom: 1px solid color-mix(in srgb, var(--app-border-muted) 72%, transparent);
+    scroll-padding-inline: max(var(--app-space-3), env(safe-area-inset-left));
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
     scrollbar-width: none;
   }
 
@@ -4121,24 +4127,24 @@ textarea {
 
   .workstation-mobile-destination-nav__link {
     flex: 0 0 auto;
-    min-height: 34px;
+    min-height: 32px;
     display: inline-flex;
     align-items: center;
-    padding: 0 var(--app-space-3);
-    border: 1px solid color-mix(in srgb, var(--app-border-muted) 64%, transparent);
+    padding: 0 var(--app-space-2);
+    border: 1px solid transparent;
     border-radius: var(--app-radius-full);
-    background: color-mix(in srgb, var(--app-bg-panel) 70%, var(--app-bg-raised) 30%);
+    background: transparent;
     color: var(--app-text-secondary);
-    font-size: var(--app-font-13);
-    font-weight: var(--app-weight-semibold);
+    font-size: var(--app-font-12);
+    font-weight: var(--app-weight-medium);
     text-decoration: none;
     white-space: nowrap;
   }
 
   .workstation-mobile-destination-nav__link--active {
-    background: var(--app-text-primary);
-    border-color: var(--app-text-primary);
-    color: var(--app-bg-panel);
+    background: color-mix(in srgb, var(--app-bg-raised) 72%, transparent 28%);
+    border-color: color-mix(in srgb, var(--app-border-muted) 58%, transparent);
+    color: var(--app-text-primary);
   }
 
   .workstation-titlebar {
@@ -4174,6 +4180,8 @@ textarea {
     justify-content: flex-start;
     padding: 0 0 var(--app-space-1);
     scroll-padding-inline: var(--app-space-1);
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
   }
 
   .workstation-titlebar__link {
@@ -5888,12 +5896,18 @@ textarea {
   border-bottom: 0;
 }
 
-.sage-provider-row__summary,
-.sage-tool-row {
+.sage-provider-row__summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-lg);
+}
+
+.sage-tool-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-lg);
+  row-gap: var(--space-sm);
 }
 
 .sage-provider-row__identity,
@@ -5972,13 +5986,16 @@ textarea {
 .sage-tool-row__actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-sm);
   flex-wrap: wrap;
 }
 
 .sage-tool-row__blocked {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-xs);
   color: var(--text-tertiary);
   font-size: var(--font-size-sm);
@@ -8967,6 +8984,26 @@ textarea {
   .marketplace-pane__detail-grid,
   .marketplace-pane__field-grid--triple {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .sage-tool-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: var(--app-space-4);
+  }
+
+  .sage-tool-row__identity {
+    align-items: flex-start;
+  }
+
+  .sage-tool-row__description {
+    font-size: var(--app-font-13);
+  }
+
+  .sage-tool-row__blocked {
+    justify-content: flex-start;
+    padding-left: calc(36px + var(--space-md));
   }
 }
 

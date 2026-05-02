@@ -302,7 +302,7 @@ def preferred_provider(
         if supports_direct_message_native_chat_fn(normalized_requested, requested_credentials):
             return normalized_requested, requested_credentials
         return normalized_requested, requested_credentials
-    for provider in ("anthropic", "deepseek", "openai", "gemini"):
+    for provider in ("deepseek", "anthropic", "openai", "gemini"):
         credentials = direct_chat_credentials_fn(normalized_workspace_id, provider)
         if provider == "openai":
             credential_type = str(credentials.get("credential_type") or "").strip().lower()

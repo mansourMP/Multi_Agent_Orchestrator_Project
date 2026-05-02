@@ -18,6 +18,11 @@ Implementation note, 2026-05-02:
 - Gateway Connect now exposes selected-device capability manifests and a
   server-side revoke action in the web/phone operator surface. Pairing still
   uses the developer terminal setup path until the packaged companion exists.
+- Sage memory now exposes first-class storage-policy, export, and owner-only
+  wipe APIs. Runtime memory remains structured; Markdown is export/import only.
+- Security audit emission now redacts obvious provider keys, bearer tokens,
+  gateway pairing tokens, cookies, credentials, and nested authorization fields
+  before events are stored or streamed.
 
 ## Executive Decision
 
@@ -480,6 +485,23 @@ Exit gate:
 
 - User can trust history/memory and storage cannot grow unbounded.
 
+Current status:
+
+- Memory runtime is structured into Safe, Sensitive, Private, and Critical
+  classes with legacy category aliases normalized into those classes.
+- Workspace memory is capped at 50 entries and Critical memory is withheld from
+  default model context unless explicitly requested by trusted server code.
+- `/api/sage-memory/storage-policy` exposes the cloud-canonical authority,
+  structured runtime format, encrypted-cache-only local policy, entry cap,
+  remaining capacity, category counts, and export/delete/wipe capabilities.
+- `/api/sage-memory/export` returns structured JSON plus Markdown for user
+  export/import workflows. The export route requires member access and audits
+  counts only, not memory content.
+- `/api/sage-memory/wipe` requires owner access and the confirmation phrase
+  `WIPE SAGE MEMORY`, then clears workspace memory and audits the deleted
+  count.
+- Targeted memory governance tests passed on 2026-05-02.
+
 ### Phase 10: Security And Abuse Cert
 
 Goal: powerful automation is trustworthy.
@@ -500,6 +522,20 @@ Build/fix:
 Exit gate:
 
 - Local-device automation is powerful but not scary.
+
+Current status:
+
+- Gateway revocation, local approval creation, gateway offline disabling, and
+  local tool execution audit paths are launch-certified for the paired Mac demo.
+- Personal channel setup/send-test routes emit security audit events without
+  storing message bodies or Telegram secrets in audit metadata.
+- Security audit metadata is now sanitized centrally before emission. Sensitive
+  keys and obvious secret strings are redacted recursively, including provider
+  keys, bearer headers, gateway pairing tokens, GitHub/OpenAI/Google/Slack-style
+  secrets, cookies, and credential fields.
+- Targeted security redaction tests passed on 2026-05-02.
+- Still not complete for paid beta: full abuse/rate-limit cert, tenant-isolation
+  suite, external pentest, and marketplace package-review operations.
 
 ### Phase 11: Cloud Computer Later
 

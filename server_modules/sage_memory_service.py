@@ -31,6 +31,7 @@ SAGE_MEMORY_CATEGORY_DEFINITIONS: dict[str, dict[str, str]] = {
 }
 
 SAGE_MEMORY_ENTRY_LIMIT = 50
+SAGE_MEMORY_WIPE_CONFIRMATION = "WIPE SAGE MEMORY"
 
 SAGE_MEMORY_CATEGORY_ALIASES: dict[str, str] = {
     "work_context": "safe_general",
@@ -240,6 +241,121 @@ def list_sage_memory(*, workspace_id: str) -> Dict[str, Any]:
         "summary": _summary(entries),
         "updated_at": state.get("updated_at"),
         "memory_context": build_sage_memory_context_block(workspace_id=workspace_id),
+    }
+
+
+def sage_memory_storage_policy(*, workspace_id: str) -> Dict[str, Any]:
+    state = _read_state(workspace_id)
+    entries = list(state.get("entries") or [])
+    summary = _summary(entries)
+    return {
+        "authority": "cloud_canonical",
+        "runtime_format": "structured_classes",
+        "markdown_format": "import_export_only",
+        "local_cache_policy": "encrypted_cache_only",
+        "max_entries": SAGE_MEMORY_ENTRY_LIMIT,
+        "used_entries": summary["total_count"],
+        "remaining_entries": summary["remaining_count"],
+        "categories": _entry_categories(entries),
+        "capabilities": {
+            "list": True,
+            "create": True,
+            "update": True,
+            "delete": True,
+            "export": True,
+            "workspace_wipe": True,
+        },
+        "retention": {
+            "memory": "kept until user deletes or wipes workspace memory",
+            "markdown": "export/import format only, not runtime authority",
+            "artifact_ttl": "managed separately by artifact retention policy",
+            "audit_log": "stored separately from assistant transcript and memory",
+        },
+        "updated_at": state.get("updated_at"),
+    }
+
+
+def _memory_export_markdown(*, workspace_id: str, entries: List[Dict[str, Any]], updated_at: Any) -> str:
+    lines: List[str] = [
+        "# Sage Memory Export",
+        "",
+        f"- Workspace: {workspace_id}",
+        f"- Exported at: {_utc_now_iso()}",
+        f"- Memory updated at: {_coerce_text(updated_at) or 'never'}",
+        f"- Runtime authority: structured classes in Empyralis cloud",
+        "",
+    ]
+    for category, definition in SAGE_MEMORY_CATEGORY_DEFINITIONS.items():
+        category_entries = [entry for entry in entries if entry.get("category") == category]
+        lines.append(f"## {definition['label']}")
+        lines.append("")
+        if not category_entries:
+            lines.append("_No entries._")
+            lines.append("")
+            continue
+        for entry in category_entries:
+            pinned = " pinned" if bool(entry.get("pinned")) else ""
+            lines.append(f"### {_coerce_text(entry.get('title'))}{pinned}")
+            lines.append("")
+            lines.append(_coerce_text(entry.get("content")))
+            lines.append("")
+            lines.append(f"- ID: {_coerce_text(entry.get('id'))}")
+            lines.append(f"- Updated: {_coerce_text(entry.get('updated_at'))}")
+            lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def export_sage_memory(*, workspace_id: str) -> Dict[str, Any]:
+    payload = list_sage_memory(workspace_id=workspace_id)
+    entries = list(payload.get("items") or [])
+    policy = sage_memory_storage_policy(workspace_id=workspace_id)
+    return {
+        "export_type": "sage_memory",
+        "workspace_id": workspace_id,
+        "exported_at": _utc_now_iso(),
+        "items": entries,
+        "categories": payload.get("categories") or [],
+        "summary": payload.get("summary") or {},
+        "storage_policy": policy,
+        "markdown": _memory_export_markdown(
+            workspace_id=workspace_id,
+            entries=entries,
+            updated_at=payload.get("updated_at"),
+        ),
+    }
+
+
+def wipe_sage_memory(
+    *,
+    workspace_id: str,
+    actor_user_id: Optional[str] = None,
+    confirm: str,
+) -> Dict[str, Any]:
+    if _coerce_text(confirm) != SAGE_MEMORY_WIPE_CONFIRMATION:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Confirmation phrase required: {SAGE_MEMORY_WIPE_CONFIRMATION}",
+        )
+    state = _read_state(workspace_id)
+    entries = list(state.get("entries") or [])
+    deleted_count = len(entries)
+    previous_updated_at = state.get("updated_at")
+    wiped_state = {
+        "version": int(state.get("version") or 1),
+        "updated_at": _utc_now_iso(),
+        "entries": [],
+        "last_wipe": {
+            "actor_user_id": _coerce_text(actor_user_id) or None,
+            "occurred_at": _utc_now_iso(),
+            "deleted_count": deleted_count,
+        },
+    }
+    _save_state(workspace_id, wiped_state)
+    return {
+        "deleted_count": deleted_count,
+        "previous_updated_at": previous_updated_at,
+        **list_sage_memory(workspace_id=workspace_id),
+        "storage_policy": sage_memory_storage_policy(workspace_id=workspace_id),
     }
 
 

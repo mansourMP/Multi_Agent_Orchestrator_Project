@@ -140,6 +140,17 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - WhatsApp and Telegram channel surfaces returned truthful not-linked states. Real outbound channel send remains blocked until a linked account and safe recipient are provided.
 - Studio/Marketplace targeted e2e passed: `npm run test:e2e:deployed-agents --prefix frontend` with 3 tests passing.
 
+## Phase 9/10 Governance Added On 2026-05-02
+
+- Sage memory now has explicit governance endpoints: storage policy, structured export with Markdown, and owner-only workspace memory wipe.
+- Memory runtime remains structured into Safe, Sensitive, Private, and Critical classes. Markdown is only import/export format, not runtime truth.
+- Workspace memory remains capped at 50 entries, with storage-policy output exposing used/remaining capacity and category counts.
+- Memory export requires member access and emits a security audit event with counts only, not memory content.
+- Memory wipe requires owner access plus the confirmation phrase `WIPE SAGE MEMORY`, then emits a security audit event with deleted count only.
+- Security audit metadata is sanitized centrally before emission. Nested provider keys, bearer tokens, gateway pairing tokens, cookies, credentials, and common secret patterns are redacted before audit storage/streaming.
+- Targeted governance suite passed: `venv/bin/python -m pytest server_modules/tests/test_sage_memory_service.py server_modules/tests/test_sage_memory_api.py server_modules/tests/test_security_audit_service.py` with 15 tests passing.
+- Python compile passed after the governance patch: `venv/bin/python -m compileall server_modules scripts`.
+
 ## Hard Rules
 
 - Provider choice changes reasoning model only; it must not change tool truth.

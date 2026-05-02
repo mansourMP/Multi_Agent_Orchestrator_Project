@@ -99,6 +99,11 @@ class SageMemoryEntryPinRequest(BaseModel):
     pinned: bool = True
 
 
+class SageMemoryWipeRequest(BaseModel):
+    workspace_id: str
+    confirm: str
+
+
 class AgentCreate(BaseModel):
     path: Optional[str] = None
     workspace_id: Optional[str] = None

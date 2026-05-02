@@ -143,6 +143,53 @@ class SageMemoryServiceTests(unittest.TestCase):
 
             self.assertEqual(payload["entry"]["category"], "private")
 
+    def test_export_memory_returns_structured_payload_and_markdown(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "workspace-1"
+            with patch("server_modules.sage_memory_service.workspace_context.workspace_scope_dir", return_value=root):
+                sage_memory_service.upsert_memory_entry(
+                    workspace_id="workspace-1",
+                    category="safe_general",
+                    title="Launch focus",
+                    content="Keep the public demo web-first.",
+                    actor_user_id="user-1",
+                )
+                payload = sage_memory_service.export_sage_memory(workspace_id="workspace-1")
+
+            self.assertEqual(payload["export_type"], "sage_memory")
+            self.assertEqual(payload["summary"]["total_count"], 1)
+            self.assertEqual(payload["storage_policy"]["authority"], "cloud_canonical")
+            self.assertIn("Launch focus", payload["markdown"])
+            self.assertIn("structured classes", payload["markdown"])
+
+    def test_wipe_memory_requires_confirmation_and_clears_entries(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "workspace-1"
+            with patch("server_modules.sage_memory_service.workspace_context.workspace_scope_dir", return_value=root):
+                sage_memory_service.upsert_memory_entry(
+                    workspace_id="workspace-1",
+                    category="private",
+                    title="Timezone",
+                    content="Uses Asia/Shanghai.",
+                    actor_user_id="user-1",
+                )
+                with self.assertRaises(Exception) as context:
+                    sage_memory_service.wipe_sage_memory(
+                        workspace_id="workspace-1",
+                        actor_user_id="user-1",
+                        confirm="wipe",
+                    )
+                wiped = sage_memory_service.wipe_sage_memory(
+                    workspace_id="workspace-1",
+                    actor_user_id="user-1",
+                    confirm=sage_memory_service.SAGE_MEMORY_WIPE_CONFIRMATION,
+                )
+
+            self.assertEqual(getattr(context.exception, "status_code", None), 400)
+            self.assertEqual(wiped["deleted_count"], 1)
+            self.assertEqual(wiped["summary"]["total_count"], 0)
+            self.assertEqual(wiped["storage_policy"]["used_entries"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

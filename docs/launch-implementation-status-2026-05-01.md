@@ -147,9 +147,11 @@ The web Sage public-demo path is certified for launch-demo scope after the 2026-
 - Workspace memory remains capped at 50 entries, with storage-policy output exposing used/remaining capacity and category counts.
 - Memory export requires member access and emits a security audit event with counts only, not memory content.
 - Memory wipe requires owner access plus the confirmation phrase `WIPE SAGE MEMORY`, then emits a security audit event with deleted count only.
+- The Memory page now surfaces storage authority/capacity, export, and wipe actions for web/phone users.
 - Security audit metadata is sanitized centrally before emission. Nested provider keys, bearer tokens, gateway pairing tokens, cookies, credentials, and common secret patterns are redacted before audit storage/streaming.
 - Targeted governance suite passed: `venv/bin/python -m pytest server_modules/tests/test_sage_memory_service.py server_modules/tests/test_sage_memory_api.py server_modules/tests/test_security_audit_service.py` with 15 tests passing.
 - Python compile passed after the governance patch: `venv/bin/python -m compileall server_modules scripts`.
+- Frontend typecheck and build passed after the Memory page governance controls were wired.
 
 ## Hard Rules
 

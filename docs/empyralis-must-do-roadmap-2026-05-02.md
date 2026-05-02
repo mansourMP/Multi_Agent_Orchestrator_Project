@@ -500,6 +500,9 @@ Current status:
 - `/api/sage-memory/wipe` requires owner access and the confirmation phrase
   `WIPE SAGE MEMORY`, then clears workspace memory and audits the deleted
   count.
+- The Memory page shows cloud-canonical storage authority, used/available
+  memory capacity, export, and wipe controls so this is visible on web/phone,
+  not API-only.
 - Targeted memory governance tests passed on 2026-05-02.
 
 ### Phase 10: Security And Abuse Cert

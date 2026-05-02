@@ -548,6 +548,9 @@ export type WorkstationClientPaths = {
   notifications: (limit?: number) => string;
   activity: (limit?: number) => string;
   sageMemory: string;
+  sageMemoryStoragePolicy: string;
+  sageMemoryExport: string;
+  sageMemoryWipe: string;
   sageMemoryEntries: string;
   sageMemoryEntry: (entryId: string) => string;
   sageMemoryPin: (entryId: string) => string;
@@ -683,6 +686,9 @@ export type WorkstationClient = {
   }) => Promise<Record<string, unknown> | null>;
   listActivityTimeline: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
   listSageMemory: () => Promise<Record<string, unknown>>;
+  getSageMemoryStoragePolicy: () => Promise<Record<string, unknown>>;
+  exportSageMemory: () => Promise<Record<string, unknown>>;
+  wipeSageMemory: (options: { confirm: string }) => Promise<Record<string, unknown>>;
   createSageMemoryEntry: (options: {
     category: string;
     title: string;
@@ -1066,6 +1072,11 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/activity/timeline${buildQueryString({ workspace_id: workspaceId, limit })}`,
     sageMemory:
       `/api/sage-memory${buildQueryString({ workspace_id: workspaceId })}`,
+    sageMemoryStoragePolicy:
+      `/api/sage-memory/storage-policy${buildQueryString({ workspace_id: workspaceId })}`,
+    sageMemoryExport:
+      `/api/sage-memory/export${buildQueryString({ workspace_id: workspaceId })}`,
+    sageMemoryWipe: '/api/sage-memory/wipe',
     sageMemoryEntries: '/api/sage-memory/entries',
     sageMemoryEntry: (entryId) =>
       `/api/sage-memory/entries/${encodeURIComponent(entryId)}`,
@@ -2079,6 +2090,29 @@ export function createWorkstationClient(
       requestJson<Record<string, unknown>>({
         path: paths.sageMemory,
         policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getSageMemoryStoragePolicy: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageMemoryStoragePolicy,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    exportSageMemory: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageMemoryExport,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    wipeSageMemory: ({ confirm }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageMemoryWipe,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            confirm,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     createSageMemoryEntry: ({ category, title, content, pinned = false }) =>
       requestJson<Record<string, unknown>>({

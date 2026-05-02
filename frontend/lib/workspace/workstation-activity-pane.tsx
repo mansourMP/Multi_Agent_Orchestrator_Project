@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Download, Plus, Trash2 } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
@@ -20,6 +20,13 @@ type SageMemoryCategoryRecord = {
 type SageMemorySnapshot = {
   items: WorkstationSageMemoryRecord[];
   categories: SageMemoryCategoryRecord[];
+};
+
+type SageMemoryStoragePolicy = Record<string, unknown> & {
+  authority?: string | null;
+  max_entries?: number | null;
+  used_entries?: number | null;
+  remaining_entries?: number | null;
 };
 
 type SageMemoryDraft = {
@@ -63,9 +70,15 @@ const MEMORY_SENSITIVITY_META: Record<MemorySensitivityClass, { label: string; d
 };
 
 const MEMORY_ITEM_LIMIT = 50;
+const SAGE_MEMORY_WIPE_CONFIRMATION = 'WIPE SAGE MEMORY';
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function readNumber(value: unknown, fallback = 0): number {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
 }
 
 function normalizeMemorySnapshot(payload: unknown): SageMemorySnapshot {
@@ -217,17 +230,22 @@ export function WorkstationActivityPane() {
   const [isLoading, setIsLoading] = useState(() => cachedSnapshot === null);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [storagePolicy, setStoragePolicy] = useState<SageMemoryStoragePolicy | null>(null);
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultMemoryDraft());
   const [mutatingMemory, setMutatingMemory] = useState<string | null>(null);
   const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<string | null>(null);
+  const [pendingWipeMemory, setPendingWipeMemory] = useState(false);
 
   const refresh = async (showLoading = false) => {
     if (showLoading) {
       setIsLoading(true);
     }
     setError(null);
-    const payload = await services.client.listSageMemory();
+    const [payload, policyPayload] = await Promise.all([
+      services.client.listSageMemory(),
+      services.client.getSageMemoryStoragePolicy().catch(() => null),
+    ]);
     const nextSnapshot = normalizeMemorySnapshot(payload);
     const normalizedSnapshot = {
       ...nextSnapshot,
@@ -235,6 +253,9 @@ export function WorkstationActivityPane() {
     };
     memoryPaneCache.set(workspaceId, normalizedSnapshot);
     setSnapshot(normalizedSnapshot);
+    if (policyPayload && typeof policyPayload === 'object') {
+      setStoragePolicy(policyPayload as SageMemoryStoragePolicy);
+    }
     setIsLoading(false);
   };
 
@@ -278,6 +299,9 @@ export function WorkstationActivityPane() {
     });
     return grouped;
   }, [snapshot.items]);
+  const memoryLimit = readNumber(storagePolicy?.max_entries, MEMORY_ITEM_LIMIT) || MEMORY_ITEM_LIMIT;
+  const memoryUsed = readNumber(storagePolicy?.used_entries, snapshot.items.length);
+  const memoryAuthorityLabel = readString(storagePolicy?.authority).replace(/_/g, ' ') || 'cloud canonical';
 
   const openCreateMemory = () => {
     setMemoryDraft(defaultMemoryDraft());
@@ -391,28 +415,114 @@ export function WorkstationActivityPane() {
     }
   };
 
+  const exportMemory = async () => {
+    if (mutatingMemory || snapshot.items.length === 0) {
+      return;
+    }
+    setMutatingMemory('export');
+    setStatusMessage(null);
+    try {
+      const payload = await services.client.exportSageMemory();
+      const markdown = readString(payload.markdown);
+      const content = markdown || JSON.stringify(payload, null, 2);
+      const extension = markdown ? 'md' : 'json';
+      const blob = new Blob([content], {
+        type: markdown ? 'text/markdown;charset=utf-8' : 'application/json;charset=utf-8',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `sage-memory-${workspaceId}.${extension}`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setStatusMessage('Memory export prepared.');
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : 'Could not export memory.');
+    } finally {
+      setMutatingMemory(null);
+    }
+  };
+
+  const confirmWipeMemory = async () => {
+    if (mutatingMemory || snapshot.items.length === 0) {
+      return;
+    }
+    setMutatingMemory('wipe');
+    setStatusMessage(null);
+    try {
+      const payload = await services.client.wipeSageMemory({
+        confirm: SAGE_MEMORY_WIPE_CONFIRMATION,
+      });
+      const nextSnapshot = normalizeMemorySnapshot(payload);
+      const normalizedSnapshot = {
+        ...nextSnapshot,
+        items: sortMemoryEntries(nextSnapshot.items),
+      };
+      memoryPaneCache.set(workspaceId, normalizedSnapshot);
+      setSnapshot(normalizedSnapshot);
+      setPendingWipeMemory(false);
+      if (payload.storage_policy && typeof payload.storage_policy === 'object') {
+        setStoragePolicy(payload.storage_policy as SageMemoryStoragePolicy);
+      }
+      setStatusMessage('Workspace memory wiped.');
+    } catch (wipeError) {
+      setError(wipeError instanceof Error ? wipeError.message : 'Could not wipe memory.');
+    } finally {
+      setMutatingMemory(null);
+    }
+  };
+
   return (
     <WorkstationSurfaceRoot surface="activity">
       <main className="app-memory-minimal-page" data-workstation-surface="memory-minimal">
         <div className="app-memory-minimal-page__header">
           <div className="app-memory-minimal-page__intro">
             <div className="app-memory-minimal-page__counter">
-              {`${Math.min(snapshot.items.length, MEMORY_ITEM_LIMIT)}/${MEMORY_ITEM_LIMIT} memories`}
+              {`${Math.min(memoryUsed, memoryLimit)}/${memoryLimit} memories · ${memoryAuthorityLabel}`}
             </div>
             <p className="app-memory-minimal-page__description">
               Structured carry-forward memory, grouped by sensitivity. Save only facts Sage should use later.
             </p>
           </div>
-          <button
-            type="button"
-            className="app-memory-minimal-page__add"
-            onClick={openCreateMemory}
-            aria-label="Add memory"
-            title="Add memory"
-          >
-            <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
-            <span>Add memory</span>
-          </button>
+          <div className="app-memory-minimal-page__actions">
+            <button
+              type="button"
+              className="app-memory-minimal-page__add"
+              onClick={() => {
+                void exportMemory();
+              }}
+              disabled={Boolean(mutatingMemory) || snapshot.items.length === 0}
+              aria-label="Export memory"
+              title="Export memory"
+            >
+              <Download size={16} strokeWidth={1.9} aria-hidden="true" />
+              <span>Export</span>
+            </button>
+            <button
+              type="button"
+              className="app-memory-minimal-page__add app-memory-minimal-page__add--danger"
+              onClick={() => {
+                setPendingWipeMemory(true);
+              }}
+              disabled={Boolean(mutatingMemory) || snapshot.items.length === 0}
+              aria-label="Wipe memory"
+              title="Wipe memory"
+            >
+              <Trash2 size={16} strokeWidth={1.9} aria-hidden="true" />
+              <span>Wipe</span>
+            </button>
+            <button
+              type="button"
+              className="app-memory-minimal-page__add"
+              onClick={openCreateMemory}
+              disabled={Boolean(mutatingMemory)}
+              aria-label="Add memory"
+              title="Add memory"
+            >
+              <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
+              <span>Add memory</span>
+            </button>
+          </div>
         </div>
 
         {statusMessage ? <div className="app-surface-inline-status">{statusMessage}</div> : null}
@@ -604,6 +714,19 @@ export function WorkstationActivityPane() {
         }}
         onCancel={() => {
           setPendingDeleteMemoryId(null);
+        }}
+      />
+      <ConfirmDialog
+        open={pendingWipeMemory}
+        title="Wipe all memory?"
+        body="This removes all explicit Sage carry-forward memory in this workspace. Chat history and audit events are not deleted by this action."
+        confirmLabel="Wipe memory"
+        busy={mutatingMemory === 'wipe'}
+        onConfirm={() => {
+          void confirmWipeMemory();
+        }}
+        onCancel={() => {
+          setPendingWipeMemory(false);
         }}
       />
     </WorkstationSurfaceRoot>

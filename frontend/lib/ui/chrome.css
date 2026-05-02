@@ -6749,6 +6749,14 @@ textarea {
   line-height: 1.45;
 }
 
+.app-memory-minimal-page__actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .app-memory-minimal-page__add {
   min-height: 32px;
   padding: 0 12px;
@@ -6770,6 +6778,15 @@ textarea {
   border-color: color-mix(in srgb, var(--app-border-subtle) 88%, transparent 12%);
   background: color-mix(in srgb, var(--app-bg-panel-elevated) 74%, var(--app-bg-panel) 26%);
   color: var(--text-primary);
+}
+
+.app-memory-minimal-page__add--danger:hover {
+  color: var(--app-danger);
+}
+
+.app-memory-minimal-page__add:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
 }
 
 .app-memory-minimal-group {

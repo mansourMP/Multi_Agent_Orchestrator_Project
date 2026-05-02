@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { FormEvent, Suspense, useState } from 'react';
+import { FormEvent, Suspense, useEffect, useState } from 'react';
 
 import { awaitBrowserAuthReady, login } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
@@ -21,6 +21,7 @@ function LoginPageContent() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
   const agentParam = String(searchParams.get('agent') || '').trim();
   const channelAttribution = String(searchParams.get('channel_attribution') || '').trim();
   const signupSearchParams = new URLSearchParams();
@@ -33,6 +34,10 @@ function LoginPageContent() {
   const signupHref = signupSearchParams.size > 0
     ? `/signup?${signupSearchParams.toString()}`
     : '/signup';
+
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -51,7 +56,7 @@ function LoginPageContent() {
 
   return (
     <main className="app-auth-page">
-      <form onSubmit={handleSubmit} className="app-auth-card app-auth-form">
+      <form method="post" onSubmit={handleSubmit} className="app-auth-card app-auth-form">
         <div className="app-auth-header">
           <span className="app-auth-kicker">Empyralis</span>
           <h1 className="app-auth-title">Log in</h1>
@@ -80,7 +85,7 @@ function LoginPageContent() {
           />
         </label>
         {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
-        <AppButton type="submit" disabled={submitting}>
+        <AppButton type="submit" disabled={submitting || !isHydrated}>
           {submitting ? 'Signing in…' : 'Log in'}
         </AppButton>
         <p className="app-auth-footer">

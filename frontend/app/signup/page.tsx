@@ -23,6 +23,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
   const [channelAttribution, setChannelAttribution] = useState('');
   const [agent, setAgent] = useState('');
   const loginSearchParams = new URLSearchParams();
@@ -37,6 +38,7 @@ export default function SignupPage() {
     : '/login';
 
   useEffect(() => {
+    setIsHydrated(true);
     const params = new URLSearchParams(window.location.search);
     setChannelAttribution(String(params.get('channel_attribution') || '').trim());
     setAgent(String(params.get('agent') || '').trim());
@@ -59,7 +61,7 @@ export default function SignupPage() {
 
   return (
     <main className="app-auth-page">
-      <form onSubmit={handleSubmit} className="app-auth-card app-auth-form">
+      <form method="post" onSubmit={handleSubmit} className="app-auth-card app-auth-form">
         <div className="app-auth-header">
           <span className="app-auth-kicker">Empyralis</span>
           <h1 className="app-auth-title">Sign up</h1>
@@ -102,7 +104,7 @@ export default function SignupPage() {
           />
         </label>
         {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
-        <AppButton type="submit" disabled={submitting}>
+        <AppButton type="submit" disabled={submitting || !isHydrated}>
           {submitting ? 'Creating account…' : 'Sign up'}
         </AppButton>
         <p className="app-auth-footer">

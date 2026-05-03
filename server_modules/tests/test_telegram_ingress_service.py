@@ -125,6 +125,7 @@ class TelegramIngressServiceTests(unittest.TestCase):
             record_channel_event=overrides.pop("record_channel_event", _record_channel_event),
             guided_setup_handler=overrides.pop("guided_setup_handler", lambda **kwargs: {"handled": False}),
             send_message=overrides.pop("send_message", lambda *args, **kwargs: messages.append((args, kwargs)) or "sent-1"),
+            send_chat_action=overrides.pop("send_chat_action", lambda *args, **kwargs: None),
             run_dispatch_service=lambda: run_dispatch,
             action_service=lambda: action_service,
             run_action_service=lambda: run_action_service,

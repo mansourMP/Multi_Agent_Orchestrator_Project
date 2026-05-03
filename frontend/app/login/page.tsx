@@ -15,6 +15,12 @@ function authErrorCopy(error: string): string {
   if (normalized.includes('google_origin_not_allowed')) {
     return 'Google sign-in is restricted to approved Empyralis domains.';
   }
+  if (normalized.includes('google_runtime_not_configured')) {
+    return 'Google sign-in is not fully enabled on the runtime yet. Use email for now.';
+  }
+  if (normalized.includes('google_rate_limited')) {
+    return 'Too many Google sign-in attempts. Wait a minute, then try again.';
+  }
   if (normalized.includes('google_state_invalid') || normalized.includes('google_auth_failed')) {
     return 'Google sign-in could not finish. Try again or use email.';
   }

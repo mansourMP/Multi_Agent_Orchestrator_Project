@@ -100,6 +100,61 @@ def test_google_oauth_flow(monkeypatch: pytest.MonkeyPatch, tmp_path):
     assert auth.verify_token(created["token"]) == created["user"]["id"]
 
 
+def test_google_identity_claims_fail_closed_without_runtime_audience(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    for key in (
+        "GOOGLE_AUDIENCES",
+        "GOOGLE_AUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_WEB_CLIENT_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth._validate_external_identity_claims(
+            "google",
+            {
+                "iss": "https://accounts.google.com",
+                "aud": "web-client.apps.googleusercontent.com",
+                "sub": "google-user-1",
+                "email": "user@example.com",
+                "email_verified": True,
+                "exp": 4_102_444_800,
+            },
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Google authentication is not configured."
+
+
+def test_google_identity_claims_accept_configured_runtime_audience(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(
+        monkeypatch,
+        tmp_path,
+        {"GOOGLE_AUDIENCES": "web-client.apps.googleusercontent.com"},
+    )
+
+    subject, email, name, avatar_url = auth._validate_external_identity_claims(
+        "google",
+        {
+            "iss": "https://accounts.google.com",
+            "aud": "web-client.apps.googleusercontent.com",
+            "sub": "google-user-1",
+            "email": "user@example.com",
+            "email_verified": True,
+            "name": "Google User",
+            "picture": "https://example.com/avatar.png",
+            "exp": 4_102_444_800,
+        },
+    )
+
+    assert subject == "google-user-1"
+    assert email == "user@example.com"
+    assert name == "Google User"
+    assert avatar_url == "https://example.com/avatar.png"
+
+
 def test_login_external_user_creates_mobile_session(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
     monkeypatch.setattr(auth.entitlements_service, "enforce_mobile_app_access", lambda **kwargs: kwargs.get("workspace"))

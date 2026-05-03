@@ -48,6 +48,21 @@ function appendUpstreamCookies(target: NextResponse, sourceHeaders: Headers): vo
   }
 }
 
+function backendGoogleAuthErrorCode(status: number, detail: string): string {
+  const normalized = detail.toLowerCase();
+  if (status === 429) {
+    return 'google_rate_limited';
+  }
+  if (
+    normalized.includes('authentication is not configured')
+    || normalized.includes('audience')
+    || normalized.includes('unsupported authentication provider')
+  ) {
+    return 'google_runtime_not_configured';
+  }
+  return 'google_auth_failed';
+}
+
 async function exchangeGoogleCodeForIdToken(request: NextRequest, code: string): Promise<string> {
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
@@ -134,7 +149,7 @@ export async function GET(request: NextRequest) {
         status: upstream.status,
         detail: upstreamText.slice(0, 300),
       });
-      return redirectWithError(request, 'google_auth_failed');
+      return redirectWithError(request, backendGoogleAuthErrorCode(upstream.status, upstreamText));
     }
     const response = NextResponse.redirect(new URL('/', requestOrigin(request)));
     appendUpstreamCookies(response, upstream.headers);

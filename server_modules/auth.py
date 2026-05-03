@@ -381,7 +381,11 @@ def _validate_external_identity_claims(
         if email and str(email_verified).strip().lower() not in {"true", "1"}:
             raise HTTPException(status_code=401, detail="Google account email is not verified.")
     allowed_audiences = _configured_provider_audiences(normalized_provider)
-    if allowed_audiences and audience and audience not in set(allowed_audiences):
+    if normalized_provider in {"apple", "google"} and not allowed_audiences:
+        raise HTTPException(status_code=503, detail=f"{normalized_provider.title()} authentication is not configured.")
+    if normalized_provider in {"apple", "google"} and not audience:
+        raise HTTPException(status_code=401, detail="Identity token audience is missing.")
+    if audience not in set(allowed_audiences):
         raise HTTPException(status_code=401, detail="Identity token audience is invalid.")
     return subject, email, name, avatar_url
 

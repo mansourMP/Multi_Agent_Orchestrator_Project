@@ -45,7 +45,7 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertEqual(credentials, {"auth_mode": "none"})
 
     def test_supports_direct_message_native_chat_requires_scoped_key_for_cloud_api_providers(self) -> None:
-        for provider in ("deepseek", "qwen", "mistral", "vertex"):
+        for provider in ("deepseek", "qwen", "mistral", "vertex", "ollama_cloud"):
             with self.subTest(provider=provider):
                 self.assertFalse(
                     direct_chat_provider_service.supports_direct_message_native_chat(
@@ -61,6 +61,9 @@ class DirectChatProviderServiceTests(unittest.TestCase):
                         provider_has_key_fn=lambda _provider: False,
                     )
                 )
+
+    def test_provider_display_name_includes_ollama_cloud(self) -> None:
+        self.assertEqual(direct_chat_provider_service.provider_display_name("ollama_cloud"), "Ollama Cloud")
 
     def test_preferred_provider_does_not_use_platform_key_when_hosted_ai_is_filtered(self) -> None:
         def fake_credentials(_workspace_id: str, _provider: str) -> dict[str, str]:
@@ -126,6 +129,27 @@ class DirectChatProviderServiceTests(unittest.TestCase):
 
         self.assertEqual(provider, "gemini")
         self.assertEqual(credentials, {"api_key": "sk-gem"})
+
+    def test_preferred_provider_uses_ollama_cloud_when_primary_hosted_providers_are_missing(self) -> None:
+        def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:
+            if provider == "ollama_cloud":
+                return {"api_key": "ollama-cloud-key"}
+            if provider == "anthropic":
+                return {"api_key": "sk-ant"}
+            return {}
+
+        provider, credentials = direct_chat_provider_service.preferred_provider(
+            "workspace-a",
+            "",
+            supported_providers=["openai", "anthropic", "gemini", "deepseek", "ollama_cloud", "codex_cli"],
+            direct_chat_credentials_fn=fake_credentials,
+            supports_direct_message_native_chat_fn=lambda _provider, creds: bool(creds),
+            credential_auth_mode_fn=lambda _provider, creds: str((creds or {}).get("auth_mode") or ""),
+            provider_runtime_usable_fn=lambda _workspace_id, _provider: False,
+        )
+
+        self.assertEqual(provider, "ollama_cloud")
+        self.assertEqual(credentials, {"api_key": "ollama-cloud-key"})
 
     def test_preferred_provider_maps_openai_oauth_to_codex_cli_without_explicit_selection(self) -> None:
         def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:

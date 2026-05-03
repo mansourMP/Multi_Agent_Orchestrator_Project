@@ -184,6 +184,7 @@ const FALLBACK_PROVIDER_IDS = [
   'deepseek',
   'gemini',
   'openai',
+  'ollama_cloud',
   'anthropic',
   'openai-codex',
   'vertex',
@@ -199,6 +200,7 @@ const FALLBACK_PROVIDER_LABELS: Record<string, string> = {
   gemini: 'Google Gemini',
   vertex: 'Google Vertex AI',
   deepseek: 'DeepSeek',
+  ollama_cloud: 'Ollama Cloud',
   mistral: 'Mistral',
   qwen: 'Qwen',
   ollama: 'Ollama',
@@ -212,6 +214,7 @@ const PROVIDER_IMAGE_BY_ID: Record<string, string> = {
   vertex: '/integrations/gemini.jpg',
   mistral: '/integrations/mistral.png',
   deepseek: '/integrations/deepseek.jpg',
+  ollama_cloud: '/integrations/ollama.png',
   qwen: '/integrations/qwen.png',
   ollama: '/integrations/ollama.png',
 };
@@ -1258,7 +1261,7 @@ export function WorkstationSageConnectorsPane({
   }, [explicitSelectedProfile, hostedProviderCard, localCompanionOnline, providerCards]);
 
   const providerPickerSections = useMemo<ProviderPickerSection[]>(() => {
-    const orderedByokIds = ['deepseek', 'gemini', 'openai', 'anthropic', 'mistral', 'qwen', 'vertex', 'ollama', 'openai-codex'];
+    const orderedByokIds = ['deepseek', 'gemini', 'openai', 'ollama_cloud', 'anthropic', 'mistral', 'qwen', 'vertex', 'ollama', 'openai-codex'];
     const byokItems = orderedByokIds
       .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
       .filter((record): record is ProviderCardRecord => Boolean(record));

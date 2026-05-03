@@ -26,6 +26,7 @@ _DEFAULT_ALLOWED_PROVIDER_IDS = (
     "xai",
     "azure_openai",
     "deepseek",
+    "ollama_cloud",
 )
 
 _PROVIDER_HOST_ALLOWLISTS: dict[str, tuple[str, ...]] = {
@@ -40,6 +41,7 @@ _PROVIDER_HOST_ALLOWLISTS: dict[str, tuple[str, ...]] = {
     "groq": ("api.groq.com",),
     "openai": ("api.openai.com",),
     "openrouter": ("openrouter.ai", "api.openrouter.ai"),
+    "ollama_cloud": ("ollama.com",),
     "xai": ("api.x.ai",),
 }
 

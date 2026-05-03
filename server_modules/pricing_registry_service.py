@@ -98,6 +98,10 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
         "phi3": {"input": None, "output": None, "source": "local_runtime"},
         "llama3.2": {"input": None, "output": None, "source": "local_runtime"},
     },
+    "ollama_cloud": {
+        "gpt-oss:120b": {"input": None, "output": None, "source": "https://docs.ollama.com/cloud"},
+        "gpt-oss:20b": {"input": None, "output": None, "source": "https://docs.ollama.com/cloud"},
+    },
     "qwen": {
         "qwen-turbo": {
             "input": round(0.3 * QWEN_USD_PER_CNY, 6),
@@ -142,6 +146,7 @@ PROVIDER_FALLBACK_USD_PER_1K: Dict[str, Dict[str, Any]] = {
     "deepseek": {"input": 0.00028, "output": 0.00042, "source": "https://api-docs.deepseek.com/quick_start/pricing/"},
     "mistral": {"input": 0.0, "output": 0.0, "source": "https://docs.mistral.ai/models/"},
     "ollama": {"input": 0.0, "output": 0.0, "source": "local_runtime"},
+    "ollama_cloud": {"input": 0.0, "output": 0.0, "source": "https://docs.ollama.com/cloud"},
     "local_companion": {"input": 0.0, "output": 0.0, "source": "local_runtime"},
     "orion": {"input": 0.0, "output": 0.0, "source": "internal_runtime"},
 }

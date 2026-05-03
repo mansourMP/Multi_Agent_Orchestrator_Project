@@ -356,6 +356,7 @@ WORKSPACE_USER_FACING_AI_PROVIDERS = {
     "qwen",
     "deepseek",
     "mistral",
+    "ollama_cloud",
 }
 
 
@@ -488,6 +489,19 @@ PROVIDER_CATALOG = {
         "provider_scopes": ["sage_personal", "local_only"],
         "note": "Local Ollama endpoint on this machine. No credential is required.",
     },
+    "ollama_cloud": {
+        "label": "Ollama Cloud",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "API Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "gpt-oss:120b",
+        "base_url": "https://ollama.com",
+        "models": ["gpt-oss:120b", "gpt-oss:20b"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
+        "note": "Direct Ollama cloud API key. This is separate from local Ollama running through the paired computer.",
+    },
 }
 
 PROVIDER_GOVERNANCE_CATALOG = {
@@ -562,6 +576,14 @@ PROVIDER_GOVERNANCE_CATALOG = {
         "enterprise_risk_note": "Operational risk shifts to the operator because patching, logging, and perimeter controls are self-managed.",
         "capability_labels": ["Local", "Self-hosted", "Offline-capable", "Tools"],
         "local_self_hosted_compatible": True,
+    },
+    "ollama_cloud": {
+        "privacy_posture": "Managed Ollama-hosted API using a workspace or runtime API key.",
+        "jurisdiction": "Provider-managed cloud regions",
+        "residency": "Provider-managed cloud regions.",
+        "enterprise_risk_note": "Treat as a managed third-party inference API; keep local-only data on the gateway unless the user explicitly selects this cloud provider.",
+        "capability_labels": ["Hosted API", "Tools", "Ollama"],
+        "local_self_hosted_compatible": False,
     },
 }
 
@@ -862,6 +884,26 @@ PROVIDER_MODEL_CATALOG = {
             "capability_labels": ["Local", "Self-hosted", "Tools"],
         },
     },
+    "ollama_cloud": {
+        "gpt-oss:120b": {
+            "label": "GPT OSS 120B (Ollama Cloud)",
+            "context_window_tokens": 128000,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Hosted API", "Reasoning", "Tools"],
+        },
+        "gpt-oss:20b": {
+            "label": "GPT OSS 20B (Ollama Cloud)",
+            "context_window_tokens": 128000,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": False,
+            "capability_labels": ["Hosted API", "Fast", "Tools"],
+        },
+    },
 }
 
 
@@ -960,7 +1002,7 @@ def normalize_provider_model_id(
         token = token.split("/", 1)[1]
     elif provider_id == "vertex" and token.startswith("vertex_ai/"):
         token = token.split("/", 1)[1]
-    elif provider_id in {"qwen", "deepseek", "mistral", "ollama"} and "/" in token:
+    elif provider_id in {"qwen", "deepseek", "mistral", "ollama", "ollama_cloud"} and "/" in token:
         provider_token, model_token = token.split("/", 1)
         if normalize_provider_id(provider_token) == provider_id:
             token = model_token.strip()
@@ -1359,6 +1401,86 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         raise RuntimeError(f"{self.provider_label} response did not include text content.")
 
 
+class OllamaCloudAdapter(ProviderAdapter):
+    provider_id = "ollama_cloud"
+
+    def _base_url(self, credentials: Dict[str, Any]) -> str:
+        entry = provider_catalog_entry(self.provider_id)
+        base_url = str(credentials.get("base_url") or entry.get("base_url") or "https://ollama.com").strip().rstrip("/")
+        if not base_url:
+            raise RuntimeError("Ollama Cloud base URL is not configured.")
+        return base_url
+
+    def _headers(self, credentials: Dict[str, Any], *, include_content_type: bool = False) -> Dict[str, str]:
+        token = str(
+            credentials.get("api_key")
+            or credentials.get("access_token")
+            or credentials.get("oauth_token")
+            or credentials.get("token")
+            or ""
+        ).strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        if not token:
+            raise RuntimeError("Ollama Cloud api_key is required.")
+        headers = {"Authorization": f"Bearer {token}"}
+        if include_content_type:
+            headers["Content-Type"] = "application/json"
+        return headers
+
+    @staticmethod
+    def _message_text(payload: Dict[str, Any]) -> str:
+        message = payload.get("message") if isinstance(payload, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        return str(content or "").strip()
+
+    def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        res = http_json_request(f"{self._base_url(credentials)}/api/tags", headers=self._headers(credentials))
+        return _validation_result("Ollama Cloud", res)
+
+    def list_models(self, credentials: Dict[str, Any]) -> List[str]:
+        res = http_json_request(f"{self._base_url(credentials)}/api/tags", headers=self._headers(credentials))
+        body = res.get("json") if isinstance(res.get("json"), dict) else {}
+        items = body.get("models") if isinstance(body.get("models"), list) else []
+        models: List[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("name") or item.get("model") or "").strip()
+            if model_id:
+                models.append(model_id)
+        if models:
+            return sorted(set(models))
+        entry = provider_catalog_entry(self.provider_id)
+        return [str(item).strip() for item in entry.get("models", []) if str(item).strip()]
+
+    def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
+        messages: List[Dict[str, str]] = []
+        if str(system_prompt or "").strip():
+            messages.append({"role": "system", "content": str(system_prompt).strip()})
+        messages.append({"role": "user", "content": str(user_input or "").strip()})
+        payload: Dict[str, Any] = {
+            "model": str(model or "").strip() or str(provider_catalog_entry(self.provider_id).get("default_model") or "gpt-oss:120b"),
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": 0.2},
+        }
+        res = http_json_request(
+            f"{self._base_url(credentials)}/api/chat",
+            method="POST",
+            headers=self._headers(credentials, include_content_type=True),
+            payload=payload,
+            timeout=60,
+        )
+        body = res.get("json")
+        if not isinstance(body, dict):
+            raise RuntimeError("Ollama Cloud returned invalid response.")
+        text = self._message_text(body)
+        if text:
+            return text
+        raise RuntimeError("Ollama Cloud response did not include text content.")
+
+
 def _urlsafe_b64decode(value: str) -> bytes:
     padding = "=" * (-len(value) % 4)
     return base64.urlsafe_b64decode((value + padding).encode("utf-8"))
@@ -1717,6 +1839,7 @@ PROVIDER_ADAPTERS: Dict[str, ProviderAdapter] = {
     "deepseek": OpenAICompatibleAdapter("deepseek", "DeepSeek"),
     "mistral": OpenAICompatibleAdapter("mistral", "Mistral"),
     "ollama": OpenAICompatibleAdapter("ollama", "Ollama", requires_auth=False),
+    "ollama_cloud": OllamaCloudAdapter(),
 }
 
 # Approximate token pricing per 1K tokens; used only for masked telemetry.
@@ -2095,6 +2218,23 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
                 }
             )
             seen_labels.add("env-mistral")
+
+    if canonical_provider == "ollama_cloud":
+        env_key = str(
+            os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_API_KEY")
+            or os.getenv("OLLAMA_API_KEY")
+            or ""
+        ).strip()
+        if env_key and "env-ollama-cloud" not in seen_labels:
+            candidates.append(
+                {
+                    "source": "env",
+                    "credentials": {"api_key": env_key},
+                    "profile_id": None,
+                    "label": "env-ollama-cloud",
+                }
+            )
+            seen_labels.add("env-ollama-cloud")
 
     if canonical_provider == "ollama" and "local-ollama" not in seen_labels:
         candidates.append(
@@ -2623,13 +2763,14 @@ def build_provider_runtime_truth(
             issue_code="gemini_cli_oauth_incomplete",
         )
 
-    for provider_id in ("vertex", "qwen", "deepseek", "mistral"):
+    for provider_id in ("vertex", "qwen", "deepseek", "mistral", "ollama_cloud"):
         entry = _entry(provider_id)
         env_var = {
             "vertex": "",
             "qwen": str(os.getenv("ORION_LOCAL_WORKER_QWEN_API_KEY") or os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or "").strip(),
             "deepseek": str(os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or "").strip(),
             "mistral": str(os.getenv("ORION_LOCAL_WORKER_MISTRAL_API_KEY") or os.getenv("MISTRAL_API_KEY") or "").strip(),
+            "ollama_cloud": str(os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_API_KEY") or os.getenv("OLLAMA_API_KEY") or "").strip(),
         }.get(provider_id, "")
         if env_var:
             _register_provider_path(

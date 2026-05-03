@@ -52,7 +52,7 @@ def supports_direct_message_native_chat(
         )
     if normalized_provider == "gemini":
         return bool(str(payload.get("api_key") or "").strip())
-    if normalized_provider in {"qwen", "deepseek", "mistral", "vertex"}:
+    if normalized_provider in {"qwen", "deepseek", "mistral", "vertex", "ollama_cloud"}:
         return bool(str(payload.get("api_key") or "").strip())
     if normalized_provider in {"openai-codex", "codex_cli"}:
         return bool(payload) or provider_has_key_fn("codex_cli")
@@ -303,7 +303,7 @@ def preferred_provider(
             return normalized_requested, requested_credentials
         return normalized_requested, requested_credentials
     # Launch preference: keep Anthropic optional and prefer DeepSeek/Gemini/OpenAI first.
-    for provider in ("deepseek", "gemini", "openai", "anthropic"):
+    for provider in ("deepseek", "gemini", "openai", "ollama_cloud", "anthropic"):
         credentials = direct_chat_credentials_fn(normalized_workspace_id, provider)
         if provider == "openai":
             credential_type = str(credentials.get("credential_type") or "").strip().lower()
@@ -336,6 +336,8 @@ def provider_display_name(provider: str) -> str:
         return "Gemini"
     if normalized == "ollama":
         return "Ollama"
+    if normalized == "ollama_cloud":
+        return "Ollama Cloud"
     return normalized or "AI"
 
 

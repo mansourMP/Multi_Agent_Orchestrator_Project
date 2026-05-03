@@ -27,7 +27,7 @@ from server_modules.agent_turn import (
 )
 from server_modules.usage_reporting import build_usage_record
 
-SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama", "qwen", "deepseek", "mistral")
+SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama", "ollama_cloud", "qwen", "deepseek", "mistral")
 LOCAL_CLI_AUTH_MODES = {"local_cli", "local_subscription", "subscription_cli", "claude_code_cli"}
 AUTH_SCOPE_ERROR_MARKERS = (
     "api.responses.write",
@@ -768,6 +768,14 @@ def get_mistral_api_key() -> str:
     ).strip()
 
 
+def get_ollama_cloud_api_key() -> str:
+    return (
+        os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_API_KEY")
+        or os.getenv("OLLAMA_API_KEY")
+        or ""
+    ).strip()
+
+
 def ollama_service_status() -> Dict[str, Any]:
     base_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OLLAMA_URL") or "http://127.0.0.1:11434")
     req = urllib.request.Request(
@@ -817,6 +825,8 @@ def provider_has_key(provider: str) -> bool:
         return bool(get_gemini_api_key())
     if pid == "ollama":
         return ollama_enabled()
+    if pid == "ollama_cloud":
+        return bool(get_ollama_cloud_api_key())
     if pid == "qwen":
         return bool(get_qwen_api_key())
     if pid == "deepseek":
@@ -902,6 +912,8 @@ def resolve_requested_model(context: Dict[str, Any], metadata: Dict[str, Any], p
         return (os.getenv("ORION_LOCAL_WORKER_GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
     if pid == "ollama":
         return (os.getenv("ORION_LOCAL_WORKER_OLLAMA_MODEL") or "llama3.1:8b").strip() or "llama3.1:8b"
+    if pid == "ollama_cloud":
+        return (os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_MODEL") or "gpt-oss:120b").strip() or "gpt-oss:120b"
     if pid == "qwen":
         return (os.getenv("ORION_LOCAL_WORKER_QWEN_MODEL") or "qwen-turbo").strip() or "qwen-turbo"
     if pid == "deepseek":
@@ -937,6 +949,8 @@ def coerce_requested_model_for_provider(requested_model: Any, provider: str) -> 
         return normalize_anthropic_model(model)
     if pid == "deepseek":
         return model if model in {"deepseek-chat", "deepseek-reasoner"} else default_openai_compatible_model("deepseek")
+    if pid == "ollama_cloud":
+        return model or ((os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_MODEL") or "gpt-oss:120b").strip() or "gpt-oss:120b")
     return model
 
 
@@ -1010,7 +1024,7 @@ def provider_has_usable_credentials(provider: str, context: Dict[str, Any], meta
     if pid == "gemini":
         inline_key = sanitize_bearer_token(inline_credentials.get("api_key") or "")
         return bool(inline_key) or provider_has_key("gemini")
-    if pid in {"qwen", "deepseek", "mistral"}:
+    if pid in {"qwen", "deepseek", "mistral", "ollama_cloud"}:
         inline_key = sanitize_bearer_token(
             inline_credentials.get("api_key")
             or inline_credentials.get("access_token")
@@ -2775,6 +2789,232 @@ def ollama_chat_json(
         return None, None, model, format_provider_error(exc)
 
 
+def resolve_ollama_cloud_api_key(credential_override: Optional[Dict[str, Any]] = None) -> str:
+    override = credential_override if isinstance(credential_override, dict) else {}
+    inline_key = sanitize_bearer_token(
+        override.get("api_key")
+        or override.get("access_token")
+        or override.get("oauth_token")
+        or override.get("token")
+        or ""
+    )
+    if inline_key:
+        return inline_key
+    return get_ollama_cloud_api_key()
+
+
+def resolve_ollama_cloud_base_url(credential_override: Optional[Dict[str, Any]] = None) -> str:
+    override = credential_override if isinstance(credential_override, dict) else {}
+    return ensure_trailing_slashless(
+        override.get("base_url")
+        or os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_URL")
+        or "https://ollama.com"
+    )
+
+
+def default_ollama_cloud_model() -> str:
+    return (os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_MODEL") or "gpt-oss:120b").strip() or "gpt-oss:120b"
+
+
+def ollama_cloud_missing_key_error() -> str:
+    return "No Ollama Cloud API key configured. Add one from the AI accounts page."
+
+
+def ollama_cloud_headers(api_key: str) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {sanitize_bearer_token(api_key)}",
+        "Content-Type": "application/json",
+    }
+
+
+def _ollama_cloud_chat_payload(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    *,
+    model: str,
+    prior_messages: Any = None,
+    response_format: Optional[str] = None,
+    tools: Any = None,
+) -> Dict[str, Any]:
+    temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
+    num_predict = max(
+        128,
+        to_int(
+            os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_NUM_PREDICT"),
+            to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 700),
+        ),
+    )
+    payload: Dict[str, Any] = {
+        "model": model,
+        "stream": False,
+        "messages": _build_openai_compatible_messages(user_prompt, prior_messages=prior_messages),
+        "options": {"temperature": temperature, "num_predict": num_predict},
+    }
+    if str(system_prompt or "").strip():
+        payload["system"] = str(system_prompt).strip()
+    if response_format:
+        payload["format"] = response_format
+    tool_specs = _tool_spec_items(tools)
+    if tool_specs:
+        payload["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": item["name"],
+                    "description": item["description"],
+                    "parameters": item["parameters"],
+                },
+            }
+            for item in tool_specs
+        ]
+    return payload
+
+
+def _ollama_cloud_chat_request(
+    payload: Dict[str, Any],
+    *,
+    api_key: str,
+    base_url: str,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    req = urllib.request.Request(
+        url=f"{base_url}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers=ollama_cloud_headers(api_key),
+    )
+    with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+        raw = response.read().decode("utf-8")
+    parsed = json.loads(raw)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def ollama_cloud_chat_text(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+    *,
+    credential_override: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    api_key = resolve_ollama_cloud_api_key(credential_override)
+    if not api_key:
+        return "", None, "", ollama_cloud_missing_key_error()
+
+    model = (str(model_override or "").strip() or default_ollama_cloud_model()).strip() or default_ollama_cloud_model()
+    base_timeout = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_TIMEOUT_SECONDS"), base_timeout))
+    base_url = resolve_ollama_cloud_base_url(credential_override)
+    payload = _ollama_cloud_chat_payload(system_prompt, user_prompt, model=model, prior_messages=prior_messages)
+    try:
+        parsed = _ollama_cloud_chat_request(
+            payload,
+            api_key=api_key,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+        )
+        message = parsed.get("message") if isinstance(parsed, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            return "", None, model, "empty_content"
+        usage = {
+            "prompt_eval_count": to_int(parsed.get("prompt_eval_count"), 0),
+            "eval_count": to_int(parsed.get("eval_count"), 0),
+        }
+        return content.strip(), usage, model, ""
+    except Exception as exc:
+        return "", None, model, format_provider_error(exc)
+
+
+def ollama_cloud_chat_json(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+    *,
+    credential_override: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
+    api_key = resolve_ollama_cloud_api_key(credential_override)
+    if not api_key:
+        return None, None, "", ollama_cloud_missing_key_error()
+
+    model = (str(model_override or "").strip() or default_ollama_cloud_model()).strip() or default_ollama_cloud_model()
+    base_timeout = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_TIMEOUT_SECONDS"), base_timeout))
+    base_url = resolve_ollama_cloud_base_url(credential_override)
+    payload = _ollama_cloud_chat_payload(system_prompt, user_prompt, model=model, prior_messages=prior_messages, response_format="json")
+    try:
+        parsed = _ollama_cloud_chat_request(
+            payload,
+            api_key=api_key,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+        )
+        message = parsed.get("message") if isinstance(parsed, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            return None, None, model, "empty_content"
+        result = parse_json_object_loose(content)
+        if not isinstance(result, dict):
+            return None, None, model, "invalid_json_content"
+        usage = {
+            "prompt_eval_count": to_int(parsed.get("prompt_eval_count"), 0),
+            "eval_count": to_int(parsed.get("eval_count"), 0),
+        }
+        return result, usage, model, ""
+    except Exception as exc:
+        return None, None, model, format_provider_error(exc)
+
+
+def iter_ollama_cloud_chat_events(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+    *,
+    credential_override: Optional[Dict[str, Any]] = None,
+    tools: Any = None,
+) -> Iterator[Dict[str, Any]]:
+    api_key = resolve_ollama_cloud_api_key(credential_override)
+    if not api_key:
+        yield {"type": "error", "error": ollama_cloud_missing_key_error(), "model": ""}
+        return
+
+    model = (str(model_override or "").strip() or default_ollama_cloud_model()).strip() or default_ollama_cloud_model()
+    base_timeout = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_TIMEOUT_SECONDS"), base_timeout))
+    base_url = resolve_ollama_cloud_base_url(credential_override)
+    payload = _ollama_cloud_chat_payload(system_prompt, user_prompt, model=model, prior_messages=prior_messages, tools=tools)
+    try:
+        parsed = _ollama_cloud_chat_request(
+            payload,
+            api_key=api_key,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+        )
+        message = parsed.get("message") if isinstance(parsed, dict) else None
+        tool_calls = _normalize_openai_function_call(message)
+        final_text = _extract_openai_message_text(message)
+        if final_text:
+            yield {"type": "delta", "delta": final_text, "model": model}
+        usage = {
+            "prompt_eval_count": to_int(parsed.get("prompt_eval_count"), 0),
+            "eval_count": to_int(parsed.get("eval_count"), 0),
+        }
+        if final_text or tool_calls:
+            yield {
+                "type": "done",
+                "text": final_text,
+                "usage": usage,
+                "model": model,
+                "tool_calls": tool_calls,
+            }
+            return
+        yield {"type": "error", "error": "empty_content", "model": model}
+    except Exception as exc:
+        yield {"type": "error", "error": format_provider_error(exc), "model": model}
+
+
 def build_usage_masked(provider: str, model: str, input_tokens: int, output_tokens: int, total_tokens: int) -> Dict[str, Any]:
     return build_usage_record(
         provider,
@@ -2815,11 +3055,12 @@ def build_usage_masked_from_provider(provider: str, usage: Optional[Dict[str, An
         completion_tokens = to_int(source.get("candidatesTokenCount"), 0)
         total_tokens = to_int(source.get("totalTokenCount"), prompt_tokens + completion_tokens)
         return build_usage_masked(pid, model or "gemini-2.0-flash", prompt_tokens, completion_tokens, total_tokens)
-    if pid == "ollama":
+    if pid in {"ollama", "ollama_cloud"}:
         prompt_tokens = to_int(source.get("prompt_eval_count"), 0)
         completion_tokens = to_int(source.get("eval_count"), 0)
         total_tokens = prompt_tokens + completion_tokens
-        return build_usage_masked(pid, model or "llama3.1:8b", prompt_tokens, completion_tokens, total_tokens)
+        fallback_model = "llama3.1:8b" if pid == "ollama" else default_ollama_cloud_model()
+        return build_usage_masked(pid, model or fallback_model, prompt_tokens, completion_tokens, total_tokens)
     return build_usage_masked(pid or "local_companion", model or "unknown-model", 0, 0, 0)
 
 
@@ -2981,6 +3222,13 @@ def generate_pack_with_provider_fallback(
             )
         elif provider == "ollama":
             result, usage, model, provider_error = ollama_chat_json(system_prompt, user_prompt, model_override=provider_model)
+        elif provider == "ollama_cloud":
+            result, usage, model, provider_error = ollama_cloud_chat_json(
+                system_prompt,
+                user_prompt,
+                model_override=provider_model,
+                credential_override=credential_override,
+            )
         else:
             continue
         if isinstance(result, dict):
@@ -3130,6 +3378,14 @@ def generate_chat_reply_with_provider_fallback(
                 user_goal,
                 model_override=provider_model,
                 prior_messages=prior_messages,
+            )
+        elif provider == "ollama_cloud":
+            text, usage, model, provider_error = ollama_cloud_chat_text(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                prior_messages=prior_messages,
+                credential_override=credential_override,
             )
         else:
             continue
@@ -3504,6 +3760,42 @@ def generate_chat_reply_stream_with_provider_fallback(
                 user_goal,
                 model_override=provider_model,
                 prior_messages=prior_messages,
+            )
+        elif provider == "ollama_cloud":
+            if requested_tools:
+                provider_result = run_tool_capable_provider_with_prompt_fallback(
+                    system_prompt=system_prompt,
+                    stream_factory=lambda prompt_variant: iter_ollama_cloud_chat_events(
+                        prompt_variant,
+                        user_goal,
+                        model_override=provider_model,
+                        prior_messages=prior_messages,
+                        credential_override=credential_override,
+                        tools=requested_tools,
+                    ),
+                )
+                if provider_result.get("ok"):
+                    for delta in list(provider_result.get("deltas") or []):
+                        yield {"type": "chunk", "delta": str(delta)}
+                    yield {
+                        "type": "result",
+                        "reply": str(provider_result.get("text") or ""),
+                        "usage_masked": build_usage_masked_from_provider("ollama_cloud", provider_result.get("usage"), str(provider_result.get("model") or provider_model or "").strip() or provider_model),
+                        "provider": "ollama_cloud",
+                        "model": str(provider_result.get("model") or provider_model or "").strip() or provider_model,
+                        "attempted_providers": attempted_str,
+                        "error": "",
+                        "tool_calls": provider_result.get("tool_calls") if isinstance(provider_result.get("tool_calls"), list) else [],
+                    }
+                    return
+                last_error = f"ollama_cloud generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
+                continue
+            text, usage, model, provider_error = ollama_cloud_chat_text(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                prior_messages=prior_messages,
+                credential_override=credential_override,
             )
         else:
             continue

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -75,6 +76,40 @@ class ProviderProfilesTests(unittest.TestCase):
         self.assertIn("Tools", models["llama3.2"]["capability_labels"])
         self.assertTrue(models["phi3"]["supports_tools"])
         self.assertIn("Tools", models["phi3"]["capability_labels"])
+
+    def test_ollama_cloud_is_api_key_provider_not_local_runtime(self) -> None:
+        entry = provider_profiles.provider_catalog_entry("ollama_cloud")
+        governance = provider_profiles.provider_governance_entry("ollama_cloud")
+
+        self.assertEqual(entry["label"], "Ollama Cloud")
+        self.assertEqual(entry["default_auth_mode"], "api_key")
+        self.assertEqual(entry["base_url"], "https://ollama.com")
+        self.assertIn("workspace_api", entry["provider_scopes"])
+        self.assertNotIn("local_only", entry["provider_scopes"])
+        self.assertFalse(governance["local_self_hosted_compatible"])
+        self.assertIsInstance(provider_profiles.PROVIDER_ADAPTERS["ollama_cloud"], provider_profiles.OllamaCloudAdapter)
+
+    def test_ollama_cloud_model_catalog_marks_hosted_models_as_tool_capable(self) -> None:
+        models = {
+            item["id"]: item
+            for item in provider_profiles.provider_model_catalog("ollama_cloud")
+        }
+
+        self.assertTrue(models["gpt-oss:120b"]["supports_tools"])
+        self.assertTrue(models["gpt-oss:120b"]["supports_reasoning"])
+        self.assertIn("Hosted API", models["gpt-oss:120b"]["capability_labels"])
+        self.assertTrue(models["gpt-oss:20b"]["supports_tools"])
+
+    def test_runtime_truth_marks_ollama_cloud_env_as_platform_runtime(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_API_KEY": "ollama-cloud-test"}, clear=False):
+            payload = provider_profiles.build_provider_runtime_truth("default")
+
+        ollama_cloud = next(item for item in payload["providers"] if item["id"] == "ollama_cloud")
+        self.assertEqual(ollama_cloud["identity_owner"], "platform_account")
+        self.assertEqual(ollama_cloud["connection_scope"], "runtime")
+        self.assertEqual(ollama_cloud["active_source"], "env-ollama_cloud")
+        self.assertTrue(ollama_cloud["configured"])
+        self.assertTrue(ollama_cloud["usable"])
 
     def test_workspace_connection_truth_treats_ollama_as_local_runtime_not_workspace_setup(self) -> None:
         payload = provider_profiles.build_workspace_provider_connection_truth("default")

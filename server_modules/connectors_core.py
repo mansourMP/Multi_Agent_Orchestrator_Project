@@ -1,3 +1,5 @@
+import os
+
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
@@ -437,6 +439,13 @@ async def probe_provider(
             )
             if env_key:
                 credentials = {"api_key": env_key}
+    elif provider_id == "ollama_cloud":
+        try:
+            credentials = resolve_default_vault_credential("ollama_cloud", workspace_id)
+        except Exception:
+            env_key = str(os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_API_KEY") or os.getenv("OLLAMA_API_KEY") or "").strip()
+            if env_key:
+                credentials = {"api_key": env_key}
 
     if not credentials:
         raise HTTPException(status_code=400, detail="No credential available for this provider.")
@@ -497,6 +506,13 @@ async def get_provider_models(
             )
             if key:
                 credentials = _openai_env_credentials(key, source)
+    elif provider_id == "ollama_cloud":
+        try:
+            credentials = resolve_default_vault_credential("ollama_cloud", workspace_id)
+        except Exception:
+            env_key = str(os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_API_KEY") or os.getenv("OLLAMA_API_KEY") or "").strip()
+            if env_key:
+                credentials = {"api_key": env_key}
 
     if not credentials:
         raise HTTPException(status_code=400, detail="No credential available for this provider.")

@@ -181,12 +181,12 @@ const DEFAULT_HOSTED_SAGE_AI: HostedSageAiSnapshot = {
 };
 
 const FALLBACK_PROVIDER_IDS = [
-  'openai',
-  'openai-codex',
-  'anthropic',
-  'gemini',
-  'vertex',
   'deepseek',
+  'gemini',
+  'openai',
+  'anthropic',
+  'openai-codex',
+  'vertex',
   'mistral',
   'qwen',
   'ollama',
@@ -1217,16 +1217,27 @@ export function WorkstationSageConnectorsPane({
     };
   }), [credentials, localCompanionOnline, profiles, providerModelOverrides, providers]);
 
-  const hostedProviderCard = useMemo(
-    () => providerCards.find((record) =>
+  const hostedProviderCard = useMemo(() => {
+    const isHostedEligible = (record: ProviderCardRecord): boolean => (
       hostedSageAi.allowed && (
         record.provider.hostedSageAiPolicy === 'enabled_with_cap'
         || record.provider.hostedSageAiPolicy === 'allowed'
         || readString(record.provider.credentialPlane).toLowerCase() === 'platform_runtime'
       )
-      || providerRouteBadge(record)?.label === 'Via Empyralis') ?? null,
-    [hostedSageAi.allowed, providerCards],
-  );
+    ) || providerRouteBadge(record)?.label === 'Via Empyralis';
+    const hostedEligibleCards = providerCards.filter(isHostedEligible);
+    if (hostedEligibleCards.length === 0) {
+      return null;
+    }
+    const launchHostedPriority = ['deepseek', 'gemini', 'openai', 'anthropic'];
+    for (const providerId of launchHostedPriority) {
+      const preferred = hostedEligibleCards.find((record) => record.provider.id === providerId);
+      if (preferred) {
+        return preferred;
+      }
+    }
+    return hostedEligibleCards[0] ?? null;
+  }, [hostedSageAi.allowed, providerCards]);
 
   const explicitSelectedProfile = useMemo(
     () => sortProfiles(profiles).find((profile) =>
@@ -1247,7 +1258,7 @@ export function WorkstationSageConnectorsPane({
   }, [explicitSelectedProfile, hostedProviderCard, localCompanionOnline, providerCards]);
 
   const providerPickerSections = useMemo<ProviderPickerSection[]>(() => {
-    const orderedByokIds = ['anthropic', 'openai', 'gemini', 'deepseek', 'mistral', 'qwen', 'vertex', 'ollama', 'openai-codex'];
+    const orderedByokIds = ['deepseek', 'gemini', 'openai', 'anthropic', 'mistral', 'qwen', 'vertex', 'ollama', 'openai-codex'];
     const byokItems = orderedByokIds
       .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
       .filter((record): record is ProviderCardRecord => Boolean(record));

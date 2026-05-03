@@ -260,10 +260,17 @@ function gatewayPairingCommand(token: unknown): string {
   if (!pairingToken) {
     return 'Pairing token unavailable';
   }
+  const apiUrl = (() => {
+    if (typeof window === 'undefined') {
+      return 'http://127.0.0.1:8001/api';
+    }
+    const origin = String(window.location.origin || '').trim().replace(/\/+$/, '');
+    return origin ? `${origin}/api` : 'http://127.0.0.1:8001/api';
+  })();
   return [
     'cd /path/to/Multi_Agent_Orchestrator_Project/empyralis-gateway',
     'npm run build',
-    `EMPYRALIS_GATEWAY_API_URL=http://127.0.0.1:8001/api EMPYRALIS_GATEWAY_PAIRING_TOKEN=${pairingToken} npm start`,
+    `EMPYRALIS_GATEWAY_API_URL=${apiUrl} EMPYRALIS_GATEWAY_PAIRING_TOKEN=${pairingToken} npm start`,
   ].join('\n');
 }
 

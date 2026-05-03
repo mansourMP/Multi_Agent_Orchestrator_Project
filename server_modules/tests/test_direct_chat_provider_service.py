@@ -104,6 +104,29 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertEqual(provider, "deepseek")
         self.assertEqual(credentials, {"api_key": "sk-deepseek"})
 
+    def test_preferred_provider_prefers_gemini_before_openai_and_anthropic_when_deepseek_missing(self) -> None:
+        def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:
+            if provider == "gemini":
+                return {"api_key": "sk-gem"}
+            if provider == "openai":
+                return {"api_key": "sk-openai"}
+            if provider == "anthropic":
+                return {"api_key": "sk-ant"}
+            return {}
+
+        provider, credentials = direct_chat_provider_service.preferred_provider(
+            "workspace-a",
+            "",
+            supported_providers=["openai", "anthropic", "gemini", "deepseek", "codex_cli"],
+            direct_chat_credentials_fn=fake_credentials,
+            supports_direct_message_native_chat_fn=lambda _provider, creds: bool(creds),
+            credential_auth_mode_fn=lambda _provider, creds: str((creds or {}).get("auth_mode") or ""),
+            provider_runtime_usable_fn=lambda _workspace_id, _provider: False,
+        )
+
+        self.assertEqual(provider, "gemini")
+        self.assertEqual(credentials, {"api_key": "sk-gem"})
+
     def test_preferred_provider_maps_openai_oauth_to_codex_cli_without_explicit_selection(self) -> None:
         def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:
             if provider == "openai":

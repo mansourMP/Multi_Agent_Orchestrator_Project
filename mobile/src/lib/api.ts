@@ -246,6 +246,56 @@ export type SageMemoryResponse = {
   items: SageMemoryItem[];
 };
 
+export type SageMemoryStoragePolicyResponse = {
+  workspace_id?: string;
+  updated_at?: string;
+  authority?: string;
+  runtime_format?: string;
+  markdown_format?: string;
+  local_cache_policy?: string;
+  max_entries?: number;
+  used_entries?: number;
+  remaining_entries?: number;
+  retention?: Record<string, unknown> | null;
+};
+
+export type SageMemoryExportResponse = {
+  workspace_id?: string;
+  exported_at?: string;
+  export_type?: string;
+  markdown?: string;
+  items?: SageMemoryItem[];
+  summary?: Record<string, unknown> | null;
+  storage_policy?: SageMemoryStoragePolicyResponse | null;
+};
+
+export type SageMemoryWipeResponse = {
+  workspace_id?: string;
+  deleted_count?: number;
+  updated_at?: string;
+  previous_updated_at?: string | null;
+  items?: SageMemoryItem[];
+  storage_policy?: SageMemoryStoragePolicyResponse | null;
+};
+
+export type MobileThreadHistoryItem = {
+  id: string;
+  title?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_turn_at?: string | null;
+  turns?: Array<{
+    role?: string | null;
+    content?: string | null;
+    created_at?: string | null;
+  }>;
+};
+
+export type MobileThreadHistoryResponse = {
+  items: MobileThreadHistoryItem[];
+  total: number;
+};
+
 export type MobileScheduleRecord = {
   id: string;
   name: string;
@@ -914,6 +964,73 @@ export const mobileApi = {
     }
     return (await response.json().catch(() => null)) as SageMemoryResponse;
   },
+  async getSageMemoryStoragePolicy(session: MobileSession) {
+    const baseUrl = normalizeServerUrl(session.runtimeUrl);
+    const query = session.workspaceId
+      ? `?workspace_id=${encodeURIComponent(session.workspaceId)}`
+      : "";
+    let response: Response;
+    try {
+      response = await performSessionFetch(session, `${baseUrl}/api/sage-memory/storage-policy${query}`, {
+        method: "GET",
+      });
+    } catch (error) {
+      if (error instanceof MobileAuthExpiredError) {
+        throw error;
+      }
+      throw new Error(error instanceof TypeError ? formatNetworkError(baseUrl) : "Could not load memory policy.");
+    }
+    if (!response.ok) {
+      throw new Error(await readResponseErrorMessage(response, "Could not load memory policy."));
+    }
+    return (await response.json().catch(() => null)) as SageMemoryStoragePolicyResponse;
+  },
+  async exportSageMemory(session: MobileSession) {
+    const baseUrl = normalizeServerUrl(session.runtimeUrl);
+    const query = session.workspaceId
+      ? `?workspace_id=${encodeURIComponent(session.workspaceId)}`
+      : "";
+    let response: Response;
+    try {
+      response = await performSessionFetch(session, `${baseUrl}/api/sage-memory/export${query}`, {
+        method: "GET",
+      });
+    } catch (error) {
+      if (error instanceof MobileAuthExpiredError) {
+        throw error;
+      }
+      throw new Error(error instanceof TypeError ? formatNetworkError(baseUrl) : "Could not export memory.");
+    }
+    if (!response.ok) {
+      throw new Error(await readResponseErrorMessage(response, "Could not export memory."));
+    }
+    return (await response.json().catch(() => null)) as SageMemoryExportResponse;
+  },
+  async wipeSageMemory(session: MobileSession, confirmation = "WIPE SAGE MEMORY") {
+    const baseUrl = normalizeServerUrl(session.runtimeUrl);
+    let response: Response;
+    try {
+      response = await performSessionFetch(session, `${baseUrl}/api/sage-memory/wipe`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspace_id: requireSessionWorkspaceId(session, "wipe memory"),
+          confirm: confirmation,
+        }),
+      });
+    } catch (error) {
+      if (error instanceof MobileAuthExpiredError) {
+        throw error;
+      }
+      throw new Error(error instanceof TypeError ? formatNetworkError(baseUrl) : "Could not wipe memory.");
+    }
+    if (!response.ok) {
+      throw new Error(await readResponseErrorMessage(response, "Could not wipe memory."));
+    }
+    return (await response.json().catch(() => null)) as SageMemoryWipeResponse;
+  },
   async createSageMemoryEntry(
     session: MobileSession,
     request: {
@@ -1009,6 +1126,24 @@ export const mobileApi = {
       throw new Error(await readResponseErrorMessage(response, "Could not remove Sage memory."));
     }
     return (await response.json().catch(() => null)) as SageMemoryResponse & { deleted?: SageMemoryItem };
+  },
+  async listCloudThreads(session: MobileSession, options?: { includeTurns?: boolean; limit?: number }) {
+    const includeTurns = options?.includeTurns !== false;
+    const limit = Number(options?.limit || 100);
+    const runtimeClient = buildMobileRuntimeClient(session);
+    const payload = await runtimeClient.listThreads({
+      include_turns: includeTurns,
+      limit: Number.isFinite(limit) ? Math.max(1, Math.min(limit, 200)) : 100,
+    }) as unknown;
+    const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+    const itemsRaw = Array.isArray(record.items) ? record.items : [];
+    const items = itemsRaw
+      .filter((item) => item && typeof item === "object")
+      .map((item) => item as MobileThreadHistoryItem);
+    return {
+      items,
+      total: Number(record.total || items.length || 0),
+    } as MobileThreadHistoryResponse;
   },
   async respondChat(
     session: MobileSession,

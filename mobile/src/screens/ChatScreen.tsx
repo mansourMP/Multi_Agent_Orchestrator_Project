@@ -32,7 +32,7 @@ import { AgentPayload } from "@/src/components/Renderer";
 import { ActionButton } from "@/src/components/system/ActionButton";
 import { MotionPressable } from "@/src/components/system/MotionPressable";
 import { buildAgentThreadFromInstall, getPrimaryAgent } from "@/src/lib/agents";
-import { MobileAuthExpiredError, mobileApi } from "@/src/lib/api";
+import { MobileAuthExpiredError, mobileApi, type MobileThreadHistoryItem } from "@/src/lib/api";
 import { useMobileChatContext, usePrimaryGatewayDoctor } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
 import { useChatStore } from "@/src/stores/chatStore";
@@ -137,6 +137,31 @@ function formatChatTimestamp(timestamp?: number) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function parseCloudTimestamp(value?: string | null): number {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function isPlaceholderThreadTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return normalized === "" || normalized === "new chat" || normalized === "chat" || normalized === "primary thread";
+}
+
+function cloudThreadPreview(item: MobileThreadHistoryItem): string {
+  const title = String(item.title || "").trim();
+  if (title && !isPlaceholderThreadTitle(title)) {
+    return title;
+  }
+  const turns = Array.isArray(item.turns) ? item.turns : [];
+  const firstUserTurn = turns.find((turn) => String(turn?.role || "").trim().toLowerCase() === "user");
+  const firstContent = String(firstUserTurn?.content || "").trim();
+  if (firstContent) {
+    return firstContent;
+  }
+  return "Conversation";
+}
+
 function humanizeToken(value: string) {
   return value
     .split(/[_\-.]+/)
@@ -239,6 +264,9 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
   const [failedMessageIndex, setFailedMessageIndex] = useState<number | null>(null);
   const [, setRunActivity] = useState<string[]>([]);
   const [historyVisible, setHistoryVisible] = useState(false);
+  const [cloudHistory, setCloudHistory] = useState<MobileThreadHistoryItem[]>([]);
+  const [cloudHistoryLoading, setCloudHistoryLoading] = useState(false);
+  const [cloudHistoryError, setCloudHistoryError] = useState<string | null>(null);
   const { banner, showBanner } = useTransientBanner();
   const sage = getPrimaryAgent();
   const messagesListRef = useRef<FlatList<AgentPayload>>(null);
@@ -318,6 +346,38 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
   const messages = activeSession?.messages || [];
   const lastMessageSpeech = messages[messages.length - 1]?.speech || "";
   const channelRole = activeSession?.runtimeRole || activeAgent.runtimeRole || (requestedAgentId ? "specialist" : "private-assistant");
+
+  const loadCloudHistory = React.useCallback(async () => {
+    if (!session?.runtimeUrl || !session.runtimeKey || !embeddedMode) {
+      return;
+    }
+    setCloudHistoryLoading(true);
+    setCloudHistoryError(null);
+    try {
+      const payload = await mobileApi.listCloudThreads(session, { includeTurns: true, limit: 100 });
+      const sortedItems = [...payload.items].sort(
+        (left, right) =>
+          parseCloudTimestamp(right.last_turn_at || right.updated_at || right.created_at)
+          - parseCloudTimestamp(left.last_turn_at || left.updated_at || left.created_at),
+      );
+      setCloudHistory(sortedItems);
+    } catch (error) {
+      if (error instanceof MobileAuthExpiredError) {
+        setCloudHistoryError("Session expired. Sign in again to load cloud history.");
+      } else {
+        setCloudHistoryError(error instanceof Error ? error.message : "Could not load cloud history.");
+      }
+    } finally {
+      setCloudHistoryLoading(false);
+    }
+  }, [embeddedMode, session]);
+
+  useEffect(() => {
+    if (!historyVisible) {
+      return;
+    }
+    void loadCloudHistory();
+  }, [historyVisible, loadCloudHistory]);
   const activeProvider = requestedAgentId ? String(activeAgent.provider || "").trim() : "";
   const activeModel = requestedAgentId ? String(activeAgent.model || "").trim() : "";
   const memoryFacts = useMemo(
@@ -1165,6 +1225,85 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                     Start a new chat and it will appear here.
                   </Text>
                 )}
+                <View style={{ marginTop: 16, gap: 8 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                    <Text style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary }}>
+                      Cloud history
+                    </Text>
+                    <MotionPressable
+                      onPress={() => {
+                        triggerDrawerHaptic();
+                        void loadCloudHistory();
+                      }}
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 16,
+                        borderWidth: 1,
+                        borderColor: theme.colors.border,
+                        backgroundColor: theme.colors.card,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Ionicons name="refresh" size={16} color={theme.colors.textSecondary} />
+                    </MotionPressable>
+                  </View>
+                  {cloudHistoryLoading ? (
+                    <Text style={{ fontSize: 12.5, lineHeight: 18, color: theme.colors.textSecondary }}>
+                      Loading cloud history...
+                    </Text>
+                  ) : null}
+                  {cloudHistoryError ? (
+                    <Text style={{ fontSize: 12.5, lineHeight: 18, color: "#C2413B" }}>
+                      {cloudHistoryError}
+                    </Text>
+                  ) : null}
+                  {!cloudHistoryLoading && !cloudHistoryError && cloudHistory.length === 0 ? (
+                    <Text style={{ fontSize: 12.5, lineHeight: 18, color: theme.colors.textSecondary }}>
+                      No cloud conversations yet.
+                    </Text>
+                  ) : null}
+                  {!cloudHistoryLoading && cloudHistory.length > 0 ? (
+                    <View style={{ gap: 4 }}>
+                      {cloudHistory.slice(0, 8).map((item) => {
+                        const preview = cloudThreadPreview(item);
+                        const occurredAt = item.last_turn_at || item.updated_at || item.created_at;
+                        return (
+                          <View
+                            key={String(item.id || `thread-${preview}`)}
+                            style={{
+                              paddingVertical: 8,
+                              paddingHorizontal: 10,
+                              borderRadius: 10,
+                              borderWidth: 1,
+                              borderColor: theme.colors.border,
+                              backgroundColor: "transparent",
+                            }}
+                          >
+                            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                              <Text
+                                style={{ flex: 1, fontSize: 12.5, fontFamily: "DMSans_700Bold", color: theme.colors.text }}
+                                numberOfLines={1}
+                              >
+                                {preview}
+                              </Text>
+                              <Text style={{ fontSize: 11, color: theme.colors.textSecondary }}>
+                                {occurredAt ? new Date(occurredAt).toLocaleDateString() : ""}
+                              </Text>
+                            </View>
+                            <Text
+                              style={{ marginTop: 2, fontSize: 11.5, lineHeight: 16, color: theme.colors.textSecondary }}
+                              numberOfLines={1}
+                            >
+                              Thread {String(item.id || "").trim() || "unknown"}
+                            </Text>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  ) : null}
+                </View>
               </LegacyAnimated.View>
             </View>
           </Modal>

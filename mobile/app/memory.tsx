@@ -2,12 +2,13 @@ import React from "react";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 import {
   mobileApi,
   type SageMemoryCategory,
   type SageMemoryItem,
+  type SageMemoryStoragePolicyResponse,
 } from "@/src/lib/api";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
@@ -73,6 +74,9 @@ export default function MemoryScreen() {
   const [memoryValues, setMemoryValues] = React.useState<MemoryLayerValues>(EMPTY_MEMORY);
   const [draftValues, setDraftValues] = React.useState<MemoryLayerValues>(EMPTY_MEMORY);
   const [memoryEntries, setMemoryEntries] = React.useState<MemoryLayerEntries>(createEmptyEntries());
+  const [storagePolicy, setStoragePolicy] = React.useState<SageMemoryStoragePolicyResponse | null>(null);
+  const [isExporting, setIsExporting] = React.useState(false);
+  const [isWiping, setIsWiping] = React.useState(false);
   const [status, setStatus] = React.useState<{ kind: "error" | "success"; message: string } | null>(null);
 
   const loadMemory = React.useCallback(async () => {
@@ -86,11 +90,15 @@ export default function MemoryScreen() {
 
     setLoading(true);
     try {
-      const payload = await mobileApi.listSageMemory(session);
+      const [payload, policyPayload] = await Promise.all([
+        mobileApi.listSageMemory(session),
+        mobileApi.getSageMemoryStoragePolicy(session),
+      ]);
       const mapped = mapItemsToLayers(Array.isArray(payload.items) ? payload.items : []);
       setMemoryValues(mapped.values);
       setDraftValues(mapped.values);
       setMemoryEntries(mapped.entries);
+      setStoragePolicy(policyPayload);
       setStatus(null);
     } catch (error) {
       setStatus({
@@ -111,6 +119,77 @@ export default function MemoryScreen() {
     setDraftValues(memoryValues);
     setIsEditing(true);
     setStatus(null);
+  };
+
+  const exportMemory = async () => {
+    if (!session?.runtimeUrl || !session.runtimeKey || isExporting) {
+      return;
+    }
+    setIsExporting(true);
+    setStatus(null);
+    try {
+      const payload = await mobileApi.exportSageMemory(session);
+      const entryCount = Number((payload.summary as { total_count?: unknown } | null)?.total_count || 0);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setStatus({
+        kind: "success",
+        message: `Memory export is ready (${entryCount} entries).`,
+      });
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not export memory.",
+      });
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const confirmWipe = () => {
+    if (!session?.runtimeUrl || !session.runtimeKey || isWiping) {
+      return;
+    }
+    Alert.alert(
+      "Wipe Sage memory?",
+      "This removes all saved memory entries for this workspace.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Wipe",
+          style: "destructive",
+          onPress: () => {
+            void wipeMemory();
+          },
+        },
+      ],
+    );
+  };
+
+  const wipeMemory = async () => {
+    if (!session?.runtimeUrl || !session.runtimeKey || isWiping) {
+      return;
+    }
+    setIsWiping(true);
+    setStatus(null);
+    try {
+      const payload = await mobileApi.wipeSageMemory(session);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setIsEditing(false);
+      setStatus({
+        kind: "success",
+        message: `Memory wiped (${Number(payload.deleted_count || 0)} entries removed).`,
+      });
+      await loadMemory();
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not wipe memory.",
+      });
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setIsWiping(false);
+    }
   };
 
   const cancelEditing = async () => {
@@ -200,6 +279,28 @@ export default function MemoryScreen() {
       <View style={{ marginTop: 4, marginBottom: 16 }}>
         <Text style={{ fontSize: 30, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>Memory</Text>
       </View>
+
+      {storagePolicy ? (
+        <View
+          style={{
+            marginBottom: 12,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            gap: 6,
+          }}
+        >
+          <Text style={{ fontSize: 13.5, color: theme.colors.textSecondary }}>
+            Cloud-canonical · Encrypted cache only
+          </Text>
+          <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>
+            {Number(storagePolicy.used_entries || 0)} / {Number(storagePolicy.max_entries || 50)} entries used
+          </Text>
+        </View>
+      ) : null}
 
       <View
         style={{
@@ -340,22 +441,65 @@ export default function MemoryScreen() {
           </TouchableOpacity>
         </View>
       ) : (
-        <TouchableOpacity
-          activeOpacity={0.86}
-          disabled={loading}
-          onPress={() => void beginEditing()}
-          style={{
-            marginTop: 16,
-            height: 48,
-            borderRadius: 18,
-            backgroundColor: theme.colors.accent,
-            alignItems: "center",
-            justifyContent: "center",
-            opacity: loading ? 0.6 : 1,
-          }}
-        >
-          <Text style={{ color: "#FFFFFF", fontSize: 14, fontWeight: "700" }}>Edit memory</Text>
-        </TouchableOpacity>
+        <View style={{ marginTop: 16, gap: 10 }}>
+          <TouchableOpacity
+            activeOpacity={0.86}
+            disabled={loading}
+            onPress={() => void beginEditing()}
+            style={{
+              height: 48,
+              borderRadius: 18,
+              backgroundColor: theme.colors.accent,
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: loading ? 0.6 : 1,
+            }}
+          >
+            <Text style={{ color: "#FFFFFF", fontSize: 14, fontWeight: "700" }}>Edit memory</Text>
+          </TouchableOpacity>
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <TouchableOpacity
+              activeOpacity={0.86}
+              disabled={loading || isExporting}
+              onPress={() => void exportMemory()}
+              style={{
+                flex: 1,
+                height: 44,
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: loading || isExporting ? 0.6 : 1,
+              }}
+            >
+              <Text style={{ color: theme.colors.text, fontSize: 13.5, fontWeight: "700" }}>
+                {isExporting ? "Exporting…" : "Export"}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.86}
+              disabled={loading || isWiping}
+              onPress={confirmWipe}
+              style={{
+                flex: 1,
+                height: 44,
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: loading || isWiping ? 0.6 : 1,
+              }}
+            >
+              <Text style={{ color: "#C2413B", fontSize: 13.5, fontWeight: "700" }}>
+                {isWiping ? "Wiping…" : "Wipe"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       )}
     </ScrollView>
   );

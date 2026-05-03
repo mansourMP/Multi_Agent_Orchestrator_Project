@@ -466,7 +466,7 @@ function summarizeLiveTraceStep(liveTrace: LiveTraceState | null): {
     }
     if (eventType === 'trace.completed') {
       return {
-        label: readString(data.summary) || readString(data.outcome) || 'Run complete',
+        label: readString(data.summary) || readString(data.outcome) || 'Completed task',
         state: 'complete',
       };
     }
@@ -1714,7 +1714,7 @@ function normalizeConnectorVaultRecords(payload: unknown): VaultCredentialRecord
 
 function toolPolicyEnabled(policy: SageToolPolicyRecord[], key: string): boolean {
   const record = policy.find((item) => item.key === key);
-  return record ? record.enabled : true;
+  return record ? record.enabled : false;
 }
 
 function hasConnectedConnector(
@@ -1993,7 +1993,7 @@ function resolvePersistedSelectedModelId({
 }
 
 export function WorkstationChatPane() {
-  const { bootstrap, routeManifest } = useWorkspaceBoundary();
+  const { bootstrap, routeManifest, hasCapability } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const activityVersion = useWorkstationActivityVersion();
   const activityConnectionState = useWorkstationStreamSelector((state) => state.activity.connectionState);
@@ -2935,19 +2935,25 @@ export function WorkstationChatPane() {
     const localReason = gatewayToolingOnline ? 'Available through the paired gateway' : 'Requires local gateway';
     const emailAvailable = hasConnectedConnector(connectorCredentials, ['google_workspace', 'smtp', 'microsoft_365']);
     const telegramAvailable = hasConnectedConnector(connectorCredentials, ['telegram_bot']);
+    const telegramChannelEnabled = hasCapability('telegram_channel_enabled');
+    const whatsappChannelEnabled = hasCapability('whatsapp_channel_enabled');
     const spreadsheetAvailable = hasConnectedConnector(connectorCredentials, ['google_workspace', 'microsoft_365']);
     const webSearchEnabled = toolPolicyEnabled(toolPolicy, 'web_search');
     const fetchEnabled = toolPolicyEnabled(toolPolicy, 'http_request');
     const fileEnabled = toolPolicyEnabled(toolPolicy, 'file_access');
     const codeEnabled = toolPolicyEnabled(toolPolicy, 'code_execution');
+    const browserStatus = readString(readObject(browserGatewayDoctor?.browser).status).toLowerCase();
+    const browserEnabled = gatewayToolingOnline && browserStatus !== 'fail';
+    const telegramSendEnabled = gatewayToolingOnline && (telegramAvailable || telegramChannelEnabled);
+    const whatsappSendEnabled = gatewayToolingOnline && whatsappChannelEnabled;
     return [
       {
         id: 'local-machine',
         label: 'Local machine',
         items: [
           { id: 'files', label: 'Files', detail: fileEnabled ? localReason : 'Blocked by workspace policy', enabled: gatewayToolingOnline && fileEnabled },
-          { id: 'browser', label: 'Browser', detail: localReason, enabled: gatewayToolingOnline },
-          { id: 'screenshot', label: 'Screenshot', detail: localReason, enabled: gatewayToolingOnline },
+          { id: 'browser', label: 'Browser', detail: browserEnabled ? localReason : 'Browser attach is not ready', enabled: browserEnabled },
+          { id: 'screenshot', label: 'Screenshot', detail: browserEnabled ? localReason : 'Browser attach is not ready', enabled: browserEnabled },
           { id: 'clipboard', label: 'Clipboard', detail: localReason, enabled: gatewayToolingOnline },
           { id: 'terminal', label: 'Terminal', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: gatewayToolingOnline && codeEnabled },
         ],
@@ -2961,17 +2967,25 @@ export function WorkstationChatPane() {
         ],
       },
       {
-        id: 'media',
-        label: 'Media',
-        items: [
-          { id: 'image-generation', label: 'Image generation', detail: 'Available through configured image backends', enabled: true },
-        ],
-      },
-      {
         id: 'communication',
         label: 'Communication',
         items: [
-          { id: 'telegram-send', label: 'Telegram send', detail: telegramAvailable ? 'Telegram connector is active' : 'Connect Telegram first', enabled: telegramAvailable },
+          {
+            id: 'telegram-send',
+            label: 'Telegram send',
+            detail: telegramSendEnabled
+              ? 'Available through your paired gateway'
+              : (telegramChannelEnabled ? 'Connect your gateway to send Telegram messages' : 'Telegram channel is disabled in this workspace'),
+            enabled: telegramSendEnabled,
+          },
+          {
+            id: 'whatsapp-send',
+            label: 'WhatsApp send',
+            detail: whatsappSendEnabled
+              ? 'Available through your paired gateway'
+              : (whatsappChannelEnabled ? 'Connect your gateway to send WhatsApp messages' : 'WhatsApp channel is disabled in this workspace'),
+            enabled: whatsappSendEnabled,
+          },
           { id: 'email-send', label: 'Email', detail: emailAvailable ? 'Email connector is active' : 'Connect email first', enabled: emailAvailable },
         ],
       },
@@ -2984,7 +2998,7 @@ export function WorkstationChatPane() {
         ],
       },
     ];
-  }, [connectorCredentials, gatewayToolingOnline, toolPolicy]);
+  }, [browserGatewayDoctor, connectorCredentials, gatewayToolingOnline, hasCapability, toolPolicy]);
   const integrationsHref = useMemo(
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],

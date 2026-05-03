@@ -28,7 +28,9 @@ function originOf(value: string): string | null {
 
 export function googleOAuthClientId(): string {
   return String(
-    process.env.GOOGLE_OAUTH_CLIENT_ID
+    process.env.GOOGLE_AUTH_CLIENT_ID
+      || process.env.GOOGLE_AUTH_WEB_CLIENT_ID
+      || process.env.GOOGLE_OAUTH_CLIENT_ID
       || process.env.GOOGLE_WEB_CLIENT_ID
       || process.env.GOOGLE_CLIENT_ID
       || '',
@@ -37,7 +39,9 @@ export function googleOAuthClientId(): string {
 
 export function googleOAuthClientSecret(): string {
   return String(
-    process.env.GOOGLE_OAUTH_CLIENT_SECRET
+    process.env.GOOGLE_AUTH_CLIENT_SECRET
+      || process.env.GOOGLE_AUTH_WEB_CLIENT_SECRET
+      || process.env.GOOGLE_OAUTH_CLIENT_SECRET
       || process.env.GOOGLE_WEB_CLIENT_SECRET
       || process.env.GOOGLE_CLIENT_SECRET
       || '',

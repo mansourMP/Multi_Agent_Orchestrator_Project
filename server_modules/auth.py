@@ -219,6 +219,7 @@ def _configured_provider_audiences(provider: str) -> list[str]:
     if normalized_provider == "google":
         env_keys = (
             "GOOGLE_AUDIENCES",
+            "GOOGLE_AUTH_CLIENT_ID",
             "GOOGLE_OAUTH_CLIENT_ID",
             "GOOGLE_CLIENT_ID",
             "GOOGLE_IOS_CLIENT_ID",

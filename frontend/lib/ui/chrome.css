@@ -7,6 +7,13 @@ body[data-emp-theme='dark'] {
   --app-font-heading: var(--font-fraunces), "Fraunces", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --app-font-mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", "Menlo", monospace;
 
+  --z-dropdown: 10;
+  --z-sticky: 30;
+  --z-sidebar: 40;
+  --z-overlay: 50;
+  --z-modal: 100;
+  --z-toast: 200;
+
   --app-bg-page: #141414;
   --app-surface-1: #222222;
   --app-surface-2: #2B2B2B;
@@ -574,6 +581,86 @@ textarea {
   color: var(--app-text-secondary);
   font-size: var(--app-font-13);
   line-height: 1.5;
+}
+
+.app-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  padding: var(--app-space-5);
+  background: color-mix(in srgb, var(--app-bg-page) 70%, transparent);
+  backdrop-filter: blur(20px);
+  overflow: auto;
+}
+
+.app-overlay--modal {
+  place-items: center;
+}
+
+.app-overlay--drawer {
+  justify-items: end;
+}
+
+.app-overlay__surface {
+  width: min(100%, 720px);
+  max-height: 90vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--app-space-4);
+  border: 1px solid color-mix(in srgb, var(--app-border-strong) 72%, transparent);
+  border-radius: calc(var(--app-radius-xl) + 4px);
+  background: var(--app-bg-panel);
+  box-shadow: 0 34px 110px -52px color-mix(in srgb, black 72%, transparent);
+  overflow: hidden;
+}
+
+.app-overlay__surface--drawer {
+  width: min(100%, 440px);
+  min-height: min(100%, 720px);
+}
+
+.app-overlay__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+  padding: var(--app-space-5) var(--app-space-5) 0;
+}
+
+.app-overlay__copy {
+  min-width: 0;
+  display: grid;
+  gap: var(--app-space-1);
+}
+
+.app-overlay__title {
+  margin: 0;
+  color: var(--app-text-primary);
+  font-size: var(--app-font-18);
+  font-weight: var(--app-weight-bold);
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+}
+
+.app-overlay__description {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: 1.5;
+}
+
+.app-overlay__actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-space-2);
+}
+
+.app-overlay__body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 var(--app-space-5) var(--app-space-5);
 }
 
 .app-typography-eyebrow {
@@ -2390,7 +2477,7 @@ textarea {
   position: absolute;
   left: 0;
   bottom: calc(100% + 10px);
-  z-index: 50;
+  z-index: var(--z-overlay);
   width: min(352px, calc(100vw - 40px));
   display: grid;
   gap: 12px;
@@ -2645,7 +2732,7 @@ textarea {
   position: absolute;
   left: 0;
   bottom: calc(100% + 10px);
-  z-index: 50;
+  z-index: var(--z-overlay);
   width: min(292px, calc(100vw - 40px));
   display: block;
   padding: 8px;
@@ -3274,7 +3361,7 @@ textarea {
   min-height: 100dvh;
   position: fixed;
   inset: 0 auto 0 0;
-  z-index: 40;
+  z-index: var(--z-sidebar);
   padding: var(--app-space-3) 0;
   border-right: 1px solid color-mix(in srgb, var(--app-border-subtle) 88%, transparent 12%);
   background: var(--app-bg-shell);
@@ -4060,7 +4147,7 @@ textarea {
 .workstation-shell__topbar {
   position: sticky;
   top: 0;
-  z-index: 30;
+  z-index: var(--z-sticky);
   min-width: 0;
   padding: 0;
   border-bottom: 0;
@@ -4945,7 +5032,7 @@ textarea {
 .desktop-startup-screen {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: var(--z-toast);
   display: grid;
   place-items: center;
   padding: var(--app-space-4);
@@ -7835,7 +7922,7 @@ textarea {
   left: var(--app-shell-sidebar-width);
   right: 0;
   bottom: 0;
-  z-index: 50;
+  z-index: var(--z-overlay);
   background: var(--bg-base);
   overflow: auto;
 }

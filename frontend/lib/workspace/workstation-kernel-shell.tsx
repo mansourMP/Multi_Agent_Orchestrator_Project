@@ -21,7 +21,7 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
   sage: [],
   studio: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
   gateway: ['gateway', 'channels', 'gatewayApprovals', 'gatewayActivity'],
-  marketplace: [],
+  marketplace: ['marketplace'],
   settings: ['settings'],
 };
 

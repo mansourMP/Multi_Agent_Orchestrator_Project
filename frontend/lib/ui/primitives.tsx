@@ -9,6 +9,7 @@ import type {
   SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from 'react';
+import { useEffect } from 'react';
 
 import { MotionPressButton, MotionSurfaceRow } from '@/lib/ui/motion';
 
@@ -193,6 +194,116 @@ export function AppEmptyState({
       <div className="app-empty-state__title">{title}</div>
       <div className="app-empty-state__body">{body}</div>
       {actions}
+    </div>
+  );
+}
+
+type AppOverlayBaseProps = PropsWithChildren<{
+  open: boolean;
+  title?: string;
+  description?: string;
+  actions?: ReactNode;
+  className?: string;
+  onOpenChange: (open: boolean) => void;
+}>;
+
+function useDismissableOverlay(open: boolean, onOpenChange: (open: boolean) => void) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onOpenChange(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onOpenChange, open]);
+}
+
+function AppOverlayHeader({
+  title,
+  description,
+  actions,
+}: {
+  title?: string;
+  description?: string;
+  actions?: ReactNode;
+}) {
+  if (!title && !description && !actions) {
+    return null;
+  }
+
+  return (
+    <div className="app-overlay__header">
+      <div className="app-overlay__copy">
+        {title ? <h2 className="app-overlay__title">{title}</h2> : null}
+        {description ? <p className="app-overlay__description">{description}</p> : null}
+      </div>
+      {actions ? <div className="app-overlay__actions">{actions}</div> : null}
+    </div>
+  );
+}
+
+export function AppModal({
+  open,
+  title,
+  description,
+  actions,
+  children,
+  className,
+  onOpenChange,
+}: AppOverlayBaseProps) {
+  useDismissableOverlay(open, onOpenChange);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="app-overlay app-overlay--modal" role="presentation" onMouseDown={() => onOpenChange(false)}>
+      <section
+        aria-modal="true"
+        className={joinClassNames('app-overlay__surface app-overlay__surface--modal', className)}
+        role="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <AppOverlayHeader title={title} description={description} actions={actions} />
+        <div className="app-overlay__body">{children}</div>
+      </section>
+    </div>
+  );
+}
+
+export function AppDrawer({
+  open,
+  title,
+  description,
+  actions,
+  children,
+  className,
+  onOpenChange,
+}: AppOverlayBaseProps) {
+  useDismissableOverlay(open, onOpenChange);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="app-overlay app-overlay--drawer" role="presentation" onMouseDown={() => onOpenChange(false)}>
+      <aside
+        aria-modal="true"
+        className={joinClassNames('app-overlay__surface app-overlay__surface--drawer', className)}
+        role="dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <AppOverlayHeader title={title} description={description} actions={actions} />
+        <div className="app-overlay__body">{children}</div>
+      </aside>
     </div>
   );
 }

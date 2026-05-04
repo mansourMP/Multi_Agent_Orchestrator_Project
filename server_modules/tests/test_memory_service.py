@@ -229,6 +229,51 @@ class MemoryServiceTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in items], ["shared", "install-a"])
 
+    def test_agent_memory_namespace_denies_cross_agent_reads(self) -> None:
+        workspace_context.write_workspace_context_file(
+            "USER.md",
+            "Agent A private profile.",
+            workspace_id="default",
+            agent_install_id="install-a",
+        )
+        workspace_context.write_workspace_context_file(
+            "USER.md",
+            "Agent B private profile.",
+            workspace_id="default",
+            agent_install_id="install-b",
+        )
+        memory_service.save_memory("default", "agent_a_secret", "Agent A private memory.", agent_install_id="install-a")
+        memory_service.save_memory("default", "agent_b_fact", "Agent B private memory.", agent_install_id="install-b")
+        memory_service.save_daily_log("default", "Agent A private log.", agent_install_id="install-a")
+        memory_service.save_daily_log("default", "Agent B private log.", agent_install_id="install-b")
+
+        agent_b_entries = memory_service.list_memory_entries("default", agent_install_id="install-b")
+        agent_b_memory = memory_service.get_memory("default", agent_install_id="install-b")
+        agent_b_search = memory_service.semantic_search(
+            "default",
+            "private",
+            agent_install_id="install-b",
+        )
+        agent_b_logs = memory_service.get_recent_logs("default", days=7, agent_install_id="install-b")
+        agent_b_context = memory_service.direct_chat_workspace_context_text(
+            "default",
+            memory_query="private",
+            agent_install_id="install-b",
+        )
+
+        self.assertEqual([entry["key"] for entry in agent_b_entries], ["agent_b_fact"])
+        self.assertIn("Agent B private memory.", agent_b_memory)
+        self.assertNotIn("Agent A private memory.", agent_b_memory)
+        self.assertTrue(all(item["key"] == "agent_b_fact" for item in agent_b_search))
+        self.assertIn("Agent B private log.", agent_b_logs)
+        self.assertNotIn("Agent A private log.", agent_b_logs)
+        self.assertIn("Agent B private profile.", agent_b_context)
+        self.assertIn("Agent B private memory.", agent_b_context)
+        self.assertIn("Agent B private log.", agent_b_context)
+        self.assertNotIn("Agent A private profile.", agent_b_context)
+        self.assertNotIn("Agent A private memory.", agent_b_context)
+        self.assertNotIn("Agent A private log.", agent_b_context)
+
     def test_hydrate_run_memory_context_uses_canonical_memory_service_search(self) -> None:
         run = {
             "logs": object(),

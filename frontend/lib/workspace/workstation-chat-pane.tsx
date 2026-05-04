@@ -2104,6 +2104,11 @@ export function WorkstationChatPane() {
     pendingUserMessageRef.current = pendingUserMessage;
   }, [pendingUserMessage]);
 
+  const updatePendingUserMessage = useCallback((message: WorkstationChatMessageRecord | null) => {
+    pendingUserMessageRef.current = message;
+    setPendingUserMessage(message);
+  }, []);
+
   useEffect(() => {
     streamingAssistantTextRef.current = streamingAssistantText;
   }, [streamingAssistantText]);
@@ -2255,7 +2260,7 @@ export function WorkstationChatPane() {
 
     const pendingMessage = pendingUserMessageRef.current;
     if (pendingMessage && canonicalIncludesMessage(mergedThread.messages, pendingMessage)) {
-      setPendingUserMessage(null);
+      updatePendingUserMessage(null);
     }
   };
 
@@ -2596,7 +2601,7 @@ export function WorkstationChatPane() {
     const nextThreadId = `thread-${Date.now()}`;
     setDraft('');
     setStatusMessage(null);
-    setPendingUserMessage(null);
+    updatePendingUserMessage(null);
     setStreamingAssistantText('');
     setShowProjectedAssistant(false);
     setTimelineSettled(false);
@@ -3429,7 +3434,7 @@ export function WorkstationChatPane() {
     streamAbortHandleRef.current = streamAbortHandle;
     setStatusMessage(null);
     setSendFailureNotice(null);
-    setPendingUserMessage(pendingMessage);
+    updatePendingUserMessage(pendingMessage);
     setStreamingAssistantText('');
     setShowProjectedAssistant(true);
     setTimelineSettled(false);

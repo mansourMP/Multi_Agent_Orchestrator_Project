@@ -502,8 +502,14 @@ export function ErrorCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind:
   const actionHref = typeof cell.metadata?.action_href === 'string' ? cell.metadata.action_href : '';
   const actionLabel = typeof cell.metadata?.action_label === 'string' ? cell.metadata.action_label : '';
   return (
-    <article data-chat-role="assistant" className="app-chat-transcript-error">
-      <span>{cell.message}</span>
+    <article data-chat-role="system" className="app-chat-transcript-error">
+      <span className="app-chat-transcript-error__icon" aria-hidden="true">
+        <CircleAlert size={14} strokeWidth={1.9} />
+      </span>
+      <div className="app-chat-transcript-error__copy">
+        <strong>Provider attention needed</strong>
+        <span>{cell.message}</span>
+      </div>
       {actionHref && actionLabel ? (
         <Link href={actionHref} className="app-chat-transcript-error__link">
           {actionLabel}

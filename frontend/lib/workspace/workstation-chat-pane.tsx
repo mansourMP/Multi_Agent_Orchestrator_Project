@@ -960,13 +960,18 @@ function providerRouteSuffix(provider: ProviderCatalogRecord | null | undefined)
 
 function providerFailureMessageForProvider(provider: ProviderCatalogRecord | null | undefined): string {
   const credentialPlane = readString(provider?.credential_plane).toLowerCase();
+  const providerId = readString(provider?.id).toLowerCase();
+  const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
+  if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
+    return `${providerLabel} needs a connected local runtime before it can answer. Connect this computer or switch to hosted credits/API key in Integrations.`;
+  }
   if (credentialPlane === 'workspace_connection') {
-    return "Sage couldn't respond with your provider key. Check the key or quota in Integrations.";
+    return 'Your provider key needs attention. Check the key, quota, or selected model in Integrations.';
   }
   if (credentialPlane === 'platform_runtime') {
-    return "Sage hit a temporary hosted provider issue. Try again or switch model.";
+    return 'The hosted provider is temporarily unavailable. Try again or switch model.';
   }
-  return "Sage couldn't complete that turn. Try again or switch model.";
+  return 'The selected provider is not available right now. Switch model or open Integrations.';
 }
 
 function modelOptionDisplayLabel(
@@ -3836,16 +3841,24 @@ export function WorkstationChatPane() {
         const rawMessage = error instanceof WorkstationClientError || error instanceof Error
           ? error.message
           : 'Could not send this message.';
+        const normalizedRawMessage = rawMessage.toLowerCase();
+        const providerNeedsAttention = normalizedRawMessage.includes('provider')
+          || normalizedRawMessage.includes('credential')
+          || normalizedRawMessage.includes('api key')
+          || normalizedRawMessage.includes('ollama')
+          || normalizedRawMessage.includes('selected for chat')
+          || normalizedRawMessage.includes('not available');
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
           ? 'Could not send this message.'
-          : rawMessage.includes('provider') || rawMessage.includes('credential')
-            ? "Sage couldn't complete that response."
+          : providerNeedsAttention
+            ? 'The selected provider is not ready. Switch to hosted credits/API key, connect the required local runtime, or choose another model in Integrations.'
             : rawMessage;
         setSendFailureNotice({
           message: noticeMessage,
           retryable: error instanceof WorkstationClientError
             ? error.retryable
             : true,
+          actionTarget: providerNeedsAttention ? 'integrations' : null,
           retryDraft: outboundMessage,
         });
       }

@@ -1458,16 +1458,54 @@ textarea {
 
 .app-chat-transcript-error {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.125rem 0;
+  align-items: flex-start;
+  gap: 10px;
+  width: fit-content;
+  max-width: min(100%, 680px);
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 84%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 88%, transparent);
   font-size: var(--app-font-13);
   line-height: 1.4;
+  color: var(--text-secondary);
+  box-shadow: 0 18px 42px -34px color-mix(in srgb, black 44%, transparent);
+}
+
+.app-chat-transcript-error__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 74%, transparent);
+  border-radius: var(--radius-full);
   color: var(--text-tertiary);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+}
+
+.app-chat-transcript-error__copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.app-chat-transcript-error__copy strong {
+  color: var(--text-primary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+}
+
+.app-chat-transcript-error__copy span {
+  color: var(--text-secondary);
 }
 
 .app-chat-transcript-error__link {
-  color: inherit;
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
   text-decoration: underline;
   text-underline-offset: 0.16em;
 }

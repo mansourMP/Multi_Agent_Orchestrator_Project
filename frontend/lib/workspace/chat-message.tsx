@@ -432,10 +432,16 @@ export function ChatMessage({
   if (displayKind === 'provider_error') {
     return (
       <article
-        data-chat-role="assistant"
+        data-chat-role="system"
         className="app-chat-transcript-error"
       >
-        <span>{text}</span>
+        <span className="app-chat-transcript-error__icon" aria-hidden="true">
+          <CircleAlert size={14} strokeWidth={1.9} />
+        </span>
+        <div className="app-chat-transcript-error__copy">
+          <strong>Provider attention needed</strong>
+          <span>{text}</span>
+        </div>
         {actionHref && actionLabel ? (
           <Link href={actionHref} className="app-chat-transcript-error__link">
             {actionLabel}

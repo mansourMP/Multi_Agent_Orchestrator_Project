@@ -2081,6 +2081,7 @@ export function WorkstationChatPane() {
   const pendingUserMessageRef = useRef<WorkstationChatMessageRecord | null>(pendingUserMessage);
   const streamingAssistantTextRef = useRef(streamingAssistantText);
   const liveActivityStepsRef = useRef<LiveActivityStepState[]>(liveActivitySteps);
+  const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
   const streamInFlightRef = useRef(false);
@@ -3365,9 +3366,10 @@ export function WorkstationChatPane() {
 
   const sendMessage = async () => {
     const outboundMessage = draft.trim();
-    if (!outboundMessage || isSending) {
+    if (!outboundMessage || isSending || submitInFlightRef.current) {
       return;
     }
+    submitInFlightRef.current = true;
     if (!activeProviderSummary.connected) {
       setHasEnteredConversationFlow(true);
       setSendFailureNotice({
@@ -3375,6 +3377,7 @@ export function WorkstationChatPane() {
         retryable: false,
         actionTarget: 'integrations',
       });
+      submitInFlightRef.current = false;
       return;
     }
     const resolvedProviderId = readString(selectedProviderContext.providerId) || null;
@@ -3864,6 +3867,7 @@ export function WorkstationChatPane() {
       }
       setLiveActivitySteps((current) => settleLiveActivitySteps(current, aborted ? 'done' : 'error'));
     } finally {
+      submitInFlightRef.current = false;
       streamInFlightRef.current = false;
       streamAbortHandleRef.current = null;
       streamAbortRequestedRef.current = false;

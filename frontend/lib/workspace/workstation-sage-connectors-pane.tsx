@@ -170,7 +170,7 @@ const DEFAULT_HOSTED_SAGE_AI: HostedSageAiSnapshot = {
   planAllowsHostedAi: false,
   policy: 'disabled',
   reason: 'policy_disabled',
-  message: 'Empyralis-hosted AI is not included in this workspace plan.',
+  message: 'Credits are not active yet. Add credits or use your own API key.',
   monthlyCapUsd: 0,
   monthlyCostUsd: 0,
   monthlyRemainingUsd: 0,
@@ -432,16 +432,16 @@ function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProvider
   if (hostedSageAi.allowed) {
     return `${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left · hosted runtime not configured`;
   }
-  if (hostedSageAi.message) {
-    return hostedSageAi.message;
-  }
   if (hostedSageAi.reason === 'owner_approval_required') {
-    return 'Hosted credits need workspace owner approval before use.';
+    return 'Credits need workspace owner approval before use.';
   }
   if (hostedSageAi.reason === 'cap_reached') {
-    return 'Hosted credits are at the monthly cap for this workspace.';
+    return '0 credits left this month. Add credits or use your own API key.';
   }
-  return 'Hosted credits are not active for this workspace.';
+  if (hostedSageAi.monthlyCreditCap > 0) {
+    return `${formatCredits(Math.max(0, hostedSageAi.monthlyCreditsRemaining))} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left`;
+  }
+  return 'Credits are not active yet. Add credits or use your own API key.';
 }
 
 function hostedCreditUsageLabel(hostedSageAi: HostedSageAiSnapshot): string {
@@ -584,6 +584,13 @@ function providerCredentialPlaceholder(provider: ProviderSnapshot): string {
 
 function providerNeedsGateway(providerId: string): boolean {
   return providerId === 'ollama' || providerId === 'openai-codex';
+}
+
+function providerIsLocalOnly(record: ProviderCardRecord | null): boolean {
+  if (!record) {
+    return false;
+  }
+  return record.provider.localOnly === true || providerNeedsGateway(record.provider.id);
 }
 
 function providerPickerStatusLabel(record: ProviderCardRecord, localCompanionOnline: boolean): string {
@@ -1264,11 +1271,14 @@ export function WorkstationSageConnectorsPane({
   const activeProviderCard = useMemo(() => {
     const explicitProviderId = readString(explicitSelectedProfile?.provider).toLowerCase();
     if (explicitProviderId) {
-      return providerCards.find((record) => record.provider.id === explicitProviderId) ?? null;
+      const explicitCard = providerCards.find((record) => record.provider.id === explicitProviderId) ?? null;
+      if (explicitCard && (!providerIsLocalOnly(explicitCard) || providerPickerConnected(explicitCard, localCompanionOnline))) {
+        return explicitCard;
+      }
     }
-    return providerCards.find((record) => record.provider.active)
+    return providerCards.find((record) => record.provider.active && (!providerIsLocalOnly(record) || providerPickerConnected(record, localCompanionOnline)))
       ?? hostedProviderCard
-      ?? providerCards.find((record) => providerPickerConnected(record, localCompanionOnline))
+      ?? providerCards.find((record) => providerPickerConnected(record, localCompanionOnline) && !providerIsLocalOnly(record))
       ?? null;
   }, [explicitSelectedProfile, hostedProviderCard, localCompanionOnline, providerCards]);
 

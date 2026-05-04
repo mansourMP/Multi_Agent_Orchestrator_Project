@@ -442,7 +442,7 @@ def hosted_sage_ai_access_state(
             "monthly_remaining_usd": remaining_usd,
             **credit_fields,
             "reason": "policy_disabled",
-            "message": "Empyralis-hosted AI is not included in this workspace plan.",
+            "message": "Credits are not active yet. Add credits or use your own API key.",
         }
     if policy == "disabled":
         return {

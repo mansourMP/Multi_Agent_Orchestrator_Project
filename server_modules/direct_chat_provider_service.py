@@ -394,7 +394,10 @@ def provider_unavailable_response(
             build_intervention(
                 "connect_required",
                 f"{label} is not available",
-                detail=f"{label} is selected for chat but is not available right now.",
+                detail=(
+                    f"{label} is selected for chat but is not available right now. "
+                    "Connect this computer, switch to Empyralis credits, or add your own API key."
+                ),
                 severity="warning",
                 status="waiting",
                 code="provider_unavailable",

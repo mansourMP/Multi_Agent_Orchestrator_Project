@@ -143,9 +143,9 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertTrue(paid_flags["artifacts_enabled"])
         self.assertTrue(paid_flags["priority_sync_enabled"])
         self.assertEqual(paid_flags["max_specialists"], 3)
-        self.assertFalse(paid_flags["hosted_ai_enabled"])
-        self.assertEqual(paid_flags["hosted_sage_ai_policy"], "owner_opt_in")
-        self.assertEqual(paid_flags["hosted_sage_ai_reason"], "owner_approval_required")
+        self.assertTrue(paid_flags["hosted_ai_enabled"])
+        self.assertEqual(paid_flags["hosted_sage_ai_policy"], "enabled_with_cap")
+        self.assertEqual(paid_flags["hosted_sage_ai_reason"], None)
 
     def test_enforce_specialist_slot_access_rejects_free_workspace_after_one_specialist(self) -> None:
         with self.assertRaises(entitlements_service.EntitlementQuotaExceededError) as ctx:
@@ -191,15 +191,15 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertFalse(payload["capabilities"]["approvals_enabled"])
         self.assertEqual(payload["capabilities"]["history_window_days"], 7)
 
-    def test_hosted_sage_ai_defaults_to_owner_opt_in_for_paid_plan(self) -> None:
+    def test_hosted_sage_ai_defaults_to_capped_credits_for_paid_plan(self) -> None:
         state = entitlements_service.resolve_workspace_entitlement_state(
             workspace={"metadata": {"billing": {"plan": "pro"}}},
         )
         hosted = entitlements_service.hosted_sage_ai_access_state(state=state)
 
-        self.assertFalse(hosted["allowed"])
-        self.assertEqual(hosted["policy"], "owner_opt_in")
-        self.assertEqual(hosted["reason"], "owner_approval_required")
+        self.assertTrue(hosted["allowed"])
+        self.assertEqual(hosted["policy"], "enabled_with_cap")
+        self.assertEqual(hosted["reason"], None)
         self.assertEqual(hosted["monthly_credit_cap"], 500)
 
     def test_hosted_sage_ai_enabled_with_cap_allows_when_under_cap(self) -> None:

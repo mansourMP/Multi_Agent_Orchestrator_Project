@@ -16,7 +16,7 @@ DEFAULT_RETENTION_PRESET = "standard"
 DEFAULT_ESCALATION_PRESET = "standard"
 DEFAULT_HANDOFF_MODE = "notify_owner"
 DEFAULT_HEALTH_SAFETY_ASSISTANT_NAME = "HealthGuide"
-DEFAULT_HOSTED_SAGE_AI_POLICY = "owner_opt_in"
+DEFAULT_HOSTED_SAGE_AI_POLICY = "enabled_with_cap"
 
 
 def _env_non_negative_float(name: str, fallback: float) -> float:

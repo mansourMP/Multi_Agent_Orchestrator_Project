@@ -427,10 +427,10 @@ function formatCredits(value: number): string {
 
 function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord | null): string {
   if (hostedSageAi.allowed && hostedProviderCard) {
-    return `Ready with ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} of ${formatCredits(hostedSageAi.monthlyCreditCap)} credits remaining this month.`;
+    return `${hostedProviderCard.label} hosted by Empyralis · ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left`;
   }
   if (hostedSageAi.allowed) {
-    return 'Credits are enabled, but Empyralis hosted runtime is not configured yet.';
+    return `${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left · hosted runtime not configured`;
   }
   if (hostedSageAi.message) {
     return hostedSageAi.message;
@@ -442,6 +442,18 @@ function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProvider
     return 'Hosted credits are at the monthly cap for this workspace.';
   }
   return 'Hosted credits are not active for this workspace.';
+}
+
+function hostedCreditUsageLabel(hostedSageAi: HostedSageAiSnapshot): string {
+  if (hostedSageAi.monthlyCreditCap <= 0) {
+    return 'No credit cap configured';
+  }
+  return `${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left`;
+}
+
+function hostedProviderDetailLabel(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord): string {
+  const modelLabel = providerActiveModelLabel(hostedProviderCard);
+  return `${hostedProviderCard.label} · ${modelLabel} · ${hostedCreditUsageLabel(hostedSageAi)}`;
 }
 
 function fallbackProviderCatalog(): ProviderSnapshot[] {
@@ -1261,7 +1273,7 @@ export function WorkstationSageConnectorsPane({
   }, [explicitSelectedProfile, hostedProviderCard, localCompanionOnline, providerCards]);
 
   const providerPickerSections = useMemo<ProviderPickerSection[]>(() => {
-    const orderedByokIds = ['deepseek', 'gemini', 'openai', 'ollama_cloud', 'anthropic', 'mistral', 'qwen', 'vertex', 'ollama', 'openai-codex'];
+    const orderedByokIds = ['deepseek', 'gemini', 'openai', 'ollama_cloud'];
     const byokItems = orderedByokIds
       .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
       .filter((record): record is ProviderCardRecord => Boolean(record));
@@ -1917,22 +1929,24 @@ export function WorkstationSageConnectorsPane({
   }
 
   function renderProviderPickerRow(record: ProviderCardRecord, sectionId: ProviderPickerSection['id']) {
+    const isHostedSection = sectionId === 'hosted';
     const pickerConnected = sectionId === 'hosted'
       ? hostedSageAi.allowed
       : providerPickerConnected(record, localCompanionOnline);
-    const isActive = activeProviderCard?.id === record.id;
+    const isActive = activeProviderCard?.id === record.id && (!isHostedSection || !explicitSelectedProfile);
     const requiresSecret = providerRequiresSecret(record.provider, record.profile);
-    const showInlineKey = providerPickerDraftId === record.id && !pickerConnected && requiresSecret;
+    const showInlineKey = !isHostedSection && providerPickerDraftId === record.id && !pickerConnected && requiresSecret;
     const busy = busyCardId === record.id;
     const displayLabel = sectionId === 'hosted' ? 'Empyralis default model' : record.label;
     const detailLabel = sectionId === 'hosted'
-      ? describeHostedSageAi(hostedSageAi, record)
+      ? hostedProviderDetailLabel(hostedSageAi, record)
       : providerPickerStatusLabel(record, localCompanionOnline);
     return (
-      <div key={`${sectionId}:${record.id}`} className="sage-provider-picker__item">
+      <div key={`${sectionId}:${record.id}`} className={joinClassNames('sage-provider-picker__item', isHostedSection && 'sage-provider-picker__item--hosted')}>
         <button
           type="button"
-          className={joinClassNames('sage-provider-picker__row', isActive && 'sage-provider-picker__row--active')}
+          className={joinClassNames('sage-provider-picker__row', isHostedSection && 'sage-provider-picker__row--hosted', isActive && 'sage-provider-picker__row--active')}
+          disabled={isHostedSection && !hostedSageAi.allowed}
           onClick={() => {
             void handleProviderSelect(record, { hosted: sectionId === 'hosted' });
           }}
@@ -1948,6 +1962,9 @@ export function WorkstationSageConnectorsPane({
             <span className="sage-provider-picker__name">{displayLabel}</span>
             <span className="sage-provider-picker__detail">{detailLabel}</span>
           </div>
+          {isHostedSection ? (
+            <span className="sage-provider-picker__pill">Use credits</span>
+          ) : null}
           <span className={joinClassNames('sage-provider-picker__status-dot', pickerConnected && 'sage-provider-picker__status-dot--connected')} aria-hidden="true" />
           {isActive ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : null}
         </button>
@@ -2028,6 +2045,14 @@ export function WorkstationSageConnectorsPane({
                   <span className="sage-hosted-credits__meta">
                     {describeHostedSageAi(hostedSageAi, hostedProviderCard)}
                   </span>
+                  {hostedSageAi.monthlyCreditCap > 0 ? (
+                    <progress
+                      className="sage-hosted-credits__meter"
+                      value={Math.max(0, Math.min(hostedSageAi.monthlyCreditsRemaining, hostedSageAi.monthlyCreditCap))}
+                      max={hostedSageAi.monthlyCreditCap}
+                      aria-label={hostedCreditUsageLabel(hostedSageAi)}
+                    />
+                  ) : null}
                 </div>
                 <div className="sage-hosted-credits__actions">
                   {hostedProviderCard ? (

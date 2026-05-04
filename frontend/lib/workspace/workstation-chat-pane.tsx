@@ -895,6 +895,9 @@ function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): bo
   if (scopes.length > 0 && !scopes.includes('sage_personal')) {
     return false;
   }
+  if (provider.local_only === true) {
+    return provider.usable === true;
+  }
   return provider.usable === true || provider.active === true;
 }
 
@@ -908,6 +911,9 @@ function isProviderEligibleForWorkspaceDefault(provider: ProviderCatalogRecord):
   }
   const state = readString(provider.state).toLowerCase();
   if (provider.usable === true || provider.active === true) {
+    if (provider.local_only === true) {
+      return provider.usable === true;
+    }
     return true;
   }
   return state === 'configured';
@@ -963,7 +969,7 @@ function providerFailureMessageForProvider(provider: ProviderCatalogRecord | nul
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected local runtime before it can answer. Connect this computer or switch to hosted credits/API key in Integrations.`;
+    return `${providerLabel} is local-only and needs a connected computer. Connect this computer, or switch to Empyralis credits / your own API key in Integrations.`;
   }
   if (credentialPlane === 'workspace_connection') {
     return 'Your provider key needs attention. Check the key, quota, or selected model in Integrations.';

@@ -430,6 +430,13 @@ export function ChatMessage({
   }
 
   if (displayKind === 'provider_error') {
+    const lowerText = text.toLowerCase();
+    const providerNoticeText = lowerText.includes('ollama')
+      || lowerText.includes('selected provider')
+      || lowerText.includes('selected for chat')
+      || lowerText.includes('local-only')
+      ? 'Choose Empyralis credits, add a provider key, or connect the required local runtime.'
+      : text;
     return (
       <article
         data-chat-role="system"
@@ -440,7 +447,7 @@ export function ChatMessage({
         </span>
         <div className="app-chat-transcript-error__copy">
           <strong>Provider attention needed</strong>
-          <span>{text}</span>
+          <span>{providerNoticeText}</span>
         </div>
         {actionHref && actionLabel ? (
           <Link href={actionHref} className="app-chat-transcript-error__link">

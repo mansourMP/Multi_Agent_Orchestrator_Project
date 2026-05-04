@@ -1,10 +1,10 @@
-import { notFound } from 'next/navigation';
+import { redirect } from 'next/navigation';
 
 export default async function WorkspaceAdminPlatformPage({
   params,
 }: {
   params: Promise<{ workspaceId: string }>;
 }) {
-  await params;
-  notFound();
+  const { workspaceId } = await params;
+  redirect(`/w/${encodeURIComponent(workspaceId)}/settings?section=usage`);
 }

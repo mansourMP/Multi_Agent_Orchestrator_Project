@@ -668,9 +668,11 @@ function isProviderRuntimeGateMessage(message: string): boolean {
   return (
     normalized.includes('is selected for chat but is not available right now')
     || normalized.includes('is local-only and needs a connected computer')
+    || normalized.includes('needs a connected computer')
     || normalized.includes('the selected provider is not ready')
     || normalized.includes('the selected provider is not available right now')
     || normalized.includes('connect this computer, switch to empyralis credits')
+    || normalized.includes('required local runtime')
   );
 }
 
@@ -1016,7 +1018,7 @@ function providerFailureMessageForProvider(provider: ProviderCatalogRecord | nul
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} is local-only and needs a connected computer. Connect this computer, or switch to Empyralis credits / your own API key in Integrations.`;
+    return `${providerLabel} needs a connected computer. Connect this computer, use Empyralis credits, or add your own API key in Integrations.`;
   }
   if (credentialPlane === 'workspace_connection') {
     return 'Your provider key needs attention. Check the key, quota, or selected model in Integrations.';
@@ -1624,13 +1626,13 @@ function classifyStatusNotice(message: string): {
       actionLabel: null,
     };
   }
-  if (/provider error|api key|credential/i.test(message)) {
+  if (isProviderRuntimeGateMessage(message) || /provider error|api key|credential|ollama/i.test(message)) {
     return {
       tone: 'warning',
       title: 'Provider attention needed',
       body: /api key|credential/i.test(message)
         ? 'Check your provider key or quota in Integrations.'
-        : 'Sage hit a temporary provider issue. Try again or switch model.',
+        : 'Choose Empyralis credits, add a provider key, or connect the required local runtime.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
       actionLabel: 'Open Integrations',
@@ -3854,6 +3856,7 @@ export function WorkstationChatPane() {
         });
       }
       const hasPendingApprovals = Array.isArray(normalizedResponse.approvals) && normalizedResponse.approvals.length > 0;
+      const hasProviderFailure = Boolean(providerFailureIntervention);
       const needsUserIntervention = Array.isArray(normalizedResponse.interventions)
         && normalizedResponse.interventions.length > 0
         && !hasVisibleAssistantReply;
@@ -3862,7 +3865,7 @@ export function WorkstationChatPane() {
           ? responseExecutionTarget === 'local_companion'
             ? 'Sage is waiting for approval before using the local companion.'
             : 'Approval is waiting.'
-          : needsUserIntervention
+          : needsUserIntervention && !hasProviderFailure
             ? 'Sage needs your input before it can continue.'
             : null,
       );

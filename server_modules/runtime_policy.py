@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, json, time, uuid, queue, re, hashlib, sys, threading
+import os, json, time, uuid, queue, re, hashlib, sys, threading, shlex
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set
 from pathlib import Path
@@ -156,6 +156,8 @@ SAFE_SHELL_RISKY_MARKERS = (
     "npm install",
     "npm uninstall",
 )
+PYTHON_RAW_EXECUTION_FLAGS = ("-c", "-m")
+PIP_MUTATING_SUBCOMMANDS = ("install", "uninstall", "download", "wheel")
 
 
 def _iter_raw_shell_operations(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -194,8 +196,20 @@ def _is_safe_raw_shell_command(operation: Dict[str, Any]) -> bool:
         return False
     if any(marker in compact for marker in SAFE_SHELL_RISKY_MARKERS):
         return False
-    first_token = compact.split(" ", 1)[0]
+    try:
+        parts = [part.lower() for part in shlex.split(command)]
+    except ValueError:
+        return False
+    if not parts:
+        return False
+    first_token = parts[0]
     if first_token not in SAFE_SHELL_COMMANDS:
+        return False
+    if first_token in {"python", "python3", "py"}:
+        for part in parts[1:]:
+            if any(part == flag or part.startswith(flag) for flag in PYTHON_RAW_EXECUTION_FLAGS):
+                return False
+    if first_token in {"pip", "pip3"} and any(part in PIP_MUTATING_SUBCOMMANDS for part in parts[1:]):
         return False
     if first_token == "py":
         return compact.startswith("py -3") or compact == "py"

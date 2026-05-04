@@ -501,6 +501,13 @@ export function StatusCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind
 export function ErrorCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'error' }> }) {
   const actionHref = typeof cell.metadata?.action_href === 'string' ? cell.metadata.action_href : '';
   const actionLabel = typeof cell.metadata?.action_label === 'string' ? cell.metadata.action_label : '';
+  const lowerMessage = cell.message.toLowerCase();
+  const message = lowerMessage.includes('ollama')
+    || lowerMessage.includes('selected provider')
+    || lowerMessage.includes('selected for chat')
+    || lowerMessage.includes('local-only')
+    ? 'Choose Empyralis credits, add a provider key, or connect the required local runtime.'
+    : cell.message;
   return (
     <article data-chat-role="system" className="app-chat-transcript-error">
       <span className="app-chat-transcript-error__icon" aria-hidden="true">
@@ -508,7 +515,7 @@ export function ErrorCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind:
       </span>
       <div className="app-chat-transcript-error__copy">
         <strong>Provider attention needed</strong>
-        <span>{cell.message}</span>
+        <span>{message}</span>
       </div>
       {actionHref && actionLabel ? (
         <Link href={actionHref} className="app-chat-transcript-error__link">

@@ -887,8 +887,35 @@ function isCatalogProviderRecord(provider: ProviderCatalogRecord): boolean {
   return Boolean(providerId) && (kind === '' || kind === 'provider') && provider.hidden !== true;
 }
 
+const LAUNCH_CHAT_PROVIDER_PRIORITY = ['deepseek', 'gemini', 'openai', 'ollama_cloud', 'ollama'] as const;
+const LAUNCH_CHAT_PROVIDER_IDS = new Set<string>(LAUNCH_CHAT_PROVIDER_PRIORITY);
+
+function chatProviderPriority(provider: ProviderCatalogRecord): number {
+  const providerId = readString(provider.id).toLowerCase();
+  const index = LAUNCH_CHAT_PROVIDER_PRIORITY.indexOf(providerId as typeof LAUNCH_CHAT_PROVIDER_PRIORITY[number]);
+  return index >= 0 ? index : LAUNCH_CHAT_PROVIDER_PRIORITY.length;
+}
+
+function isLaunchChatProvider(provider: ProviderCatalogRecord): boolean {
+  const providerId = readString(provider.id).toLowerCase();
+  return LAUNCH_CHAT_PROVIDER_IDS.has(providerId);
+}
+
+function sortLaunchChatProviders(providers: ProviderCatalogRecord[]): ProviderCatalogRecord[] {
+  return [...providers].sort((left, right) => {
+    const priorityDelta = chatProviderPriority(left) - chatProviderPriority(right);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return (readString(left.label) || readString(left.id)).localeCompare(readString(right.label) || readString(right.id));
+  });
+}
+
 function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): boolean {
   if (!isCatalogProviderRecord(provider)) {
+    return false;
+  }
+  if (!isLaunchChatProvider(provider)) {
     return false;
   }
   const scopes = readProviderScopes(provider);
@@ -903,6 +930,9 @@ function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): bo
 
 function isProviderEligibleForWorkspaceDefault(provider: ProviderCatalogRecord): boolean {
   if (!isCatalogProviderRecord(provider)) {
+    return false;
+  }
+  if (!isLaunchChatProvider(provider)) {
     return false;
   }
   const scopes = readProviderScopes(provider);
@@ -922,7 +952,7 @@ function isProviderEligibleForWorkspaceDefault(provider: ProviderCatalogRecord):
 function workspaceDefaultModelOption(
   providers: ProviderCatalogRecord[] = [],
 ): ChatModelOption {
-  const workspaceDefaultProvider = providers.find(isProviderEligibleForWorkspaceDefault) ?? null;
+  const workspaceDefaultProvider = sortLaunchChatProviders(providers.filter(isProviderEligibleForWorkspaceDefault))[0] ?? null;
   return {
     id: 'default',
     label: 'Auto route',
@@ -1013,7 +1043,7 @@ function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
   const providers = Array.isArray(record.providers)
     ? record.providers.filter((item): item is ProviderCatalogRecord => Boolean(item) && typeof item === 'object')
     : [];
-  const connectedProviders = providers.filter(isProviderEligibleForModelSelector);
+  const connectedProviders = sortLaunchChatProviders(providers.filter(isProviderEligibleForModelSelector));
 
   if (connectedProviders.length === 0) {
     return [disconnectedModelOption()];
@@ -1891,8 +1921,8 @@ function resolveProviderModelContext({
   modelId: string | null;
   modelLabel: string | null;
 } {
-  const availableProviders = providers.filter(isProviderEligibleForModelSelector);
-  const workspaceDefaultProviders = providers.filter(isProviderEligibleForWorkspaceDefault);
+  const availableProviders = sortLaunchChatProviders(providers.filter(isProviderEligibleForModelSelector));
+  const workspaceDefaultProviders = sortLaunchChatProviders(providers.filter(isProviderEligibleForWorkspaceDefault));
   const normalizedSelectedProviderId = readString(selectedProviderId);
 
   const findModelInProvider = (provider: ProviderCatalogRecord, modelId: string) => {
@@ -2863,27 +2893,25 @@ export function WorkstationChatPane() {
     },
     [modelOptions, selectedModel],
   );
+  const effectiveSelectedModel = useMemo(
+    () => modelOptions.some((option) => option.id === selectedModel)
+      ? selectedModel
+      : selectedModelOption.id,
+    [modelOptions, selectedModel, selectedModelOption.id],
+  );
   const selectedProviderContext = useMemo(
     () => resolveProviderModelContext({
       providers: providerCatalog,
-      selectedModelId: selectedModel,
+      selectedModelId: effectiveSelectedModel,
       selectedModelLabel: selectedModelOption.label,
       selectedProviderId: selectedModelOption.providerId,
     }),
-    [providerCatalog, selectedModel, selectedModelOption.label, selectedModelOption.providerId],
+    [effectiveSelectedModel, providerCatalog, selectedModelOption.label, selectedModelOption.providerId],
   );
   const activeProviderSummary = useMemo(() => {
     const providerLabelById = new Map(
       providerCatalog.map((provider) => [readString(provider.id), readString(provider.label) || readString(provider.id)] as const),
     );
-    const assistantMessages = [...thread.messages].reverse();
-    const latestAssistantWithProvider = assistantMessages.find((message) => {
-      if (message.role === 'user') {
-        return false;
-      }
-      const metadata = readObject(message.metadata);
-      return Boolean(readString(metadata.effective_provider) || readString(metadata.provider));
-    }) ?? null;
     const liveProviderId = readString(liveTrace?.trace?.provider);
     const liveModelId = readString(liveTrace?.trace?.model);
     if (liveProviderId) {
@@ -2892,18 +2920,6 @@ export function WorkstationChatPane() {
         label: liveModelId ? `${label} · ${liveModelId}` : label,
         connected: true,
       };
-    }
-    if (latestAssistantWithProvider) {
-      const metadata = readObject(latestAssistantWithProvider.metadata);
-      const providerId = readString(metadata.effective_provider) || readString(metadata.provider);
-      const modelId = readString(metadata.effective_model) || readString(metadata.model);
-      if (providerId) {
-        const label = providerLabelById.get(providerId) || providerId;
-        return {
-          label: modelId ? `${label} · ${modelId}` : label,
-          connected: true,
-        };
-      }
     }
     if (selectedProviderContext.providerLabel) {
       return {
@@ -2923,7 +2939,6 @@ export function WorkstationChatPane() {
     providerCatalog,
     selectedProviderContext.modelLabel,
     selectedProviderContext.providerLabel,
-    thread.messages,
   ]);
   const selectedProviderRecord = useMemo(
     () => providerCatalog.find((provider) => readString(provider.id) === readString(selectedProviderContext.providerId)) ?? null,
@@ -3045,7 +3060,7 @@ export function WorkstationChatPane() {
   );
   const composerModelOptions = useMemo(
     () => {
-      const connectedProviders = providerCatalog.filter(isProviderEligibleForModelSelector);
+      const connectedProviders = sortLaunchChatProviders(providerCatalog.filter(isProviderEligibleForModelSelector));
       const providerById = new Map(
         providerCatalog.map((provider) => [readString(provider.id), provider] as const),
       );
@@ -3393,16 +3408,16 @@ export function WorkstationChatPane() {
     }
     const resolvedProviderId = readString(selectedProviderContext.providerId) || null;
     const resolvedModelId = readString(selectedProviderContext.modelId)
-      || (selectedModel === 'default' ? null : selectedModel);
+      || (effectiveSelectedModel === 'default' ? null : effectiveSelectedModel);
     if (isSmallOllamaSelection(
       resolvedProviderId,
-      resolvedModelId || selectedModel,
+      resolvedModelId || effectiveSelectedModel,
       selectedProviderContext.modelLabel || selectedModelOption.label,
     )) {
       const warningKey = [
         'sage-small-ollama-model-warning',
         bootstrap.workspace.id,
-        resolvedModelId || selectedModel,
+        resolvedModelId || effectiveSelectedModel,
       ].join(':');
       try {
         if (window.sessionStorage.getItem(warningKey) !== '1') {
@@ -4132,7 +4147,7 @@ export function WorkstationChatPane() {
           }
         }}
         targetLabel={composerTargetLabel}
-        model={selectedModel}
+        model={effectiveSelectedModel}
         modelOptions={composerModelOptions}
         onModelChange={handleModelChange}
         reasoningEffort={reasoningEffort}

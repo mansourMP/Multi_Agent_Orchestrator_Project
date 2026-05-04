@@ -3,8 +3,9 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { FormEvent, Suspense, useEffect, useState } from 'react';
+import { Apple, ArrowRight, Globe, Lock, Mail } from 'lucide-react';
 
-import { awaitBrowserAuthReady, googleLogin, login } from '@/lib/auth/auth-client';
+import { awaitBrowserAuthReady, googleLogin, listAuthProviders, login, type AuthProviderOptions } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 function authErrorCopy(error: string): string {
@@ -37,6 +38,11 @@ function LoginPageContent() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [providers, setProviders] = useState<AuthProviderOptions>({
+    email: { enabled: true },
+    google: { enabled: true },
+    apple: { enabled: false },
+  });
   const agentParam = String(searchParams.get('agent') || '').trim();
   const channelAttribution = String(searchParams.get('channel_attribution') || '').trim();
   const providerError = String(searchParams.get('error') || '').trim();
@@ -56,6 +62,21 @@ function LoginPageContent() {
     if (providerError) {
       setError(providerError);
     }
+    void listAuthProviders()
+      .then((payload) => {
+        setProviders({
+          email: { enabled: payload?.email?.enabled !== false },
+          google: { enabled: payload?.google?.enabled === true },
+          apple: { enabled: false },
+        });
+      })
+      .catch(() => {
+        setProviders({
+          email: { enabled: true },
+          google: { enabled: true },
+          apple: { enabled: false },
+        });
+      });
   }, [providerError]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -75,57 +96,109 @@ function LoginPageContent() {
 
   return (
     <main className="app-auth-page">
-      <form method="post" onSubmit={handleSubmit} className="app-auth-card app-auth-form">
-        <div className="app-auth-header">
-          <span className="app-auth-kicker">Empyralis</span>
-          <h1 className="app-auth-title">Log in</h1>
-          <p className="app-auth-subtitle">Use your Empyralis account to continue.</p>
-        </div>
-        <div className="app-auth-provider-stack">
-          <AppButton
-            type="button"
-            tone="secondary"
-            onClick={() => googleLogin()}
-            disabled={submitting || !isHydrated}
-          >
-            Continue with Google
-          </AppButton>
-          <div className="app-auth-divider">
-            <span aria-hidden="true" />
-            <span>or</span>
-            <span aria-hidden="true" />
+      <div className="app-auth-shell">
+        <section className="app-auth-hero" aria-label="Empyralis sign in overview">
+          <div className="app-auth-hero__badge">Empyralis</div>
+          <div className="app-auth-hero__copy">
+            <h1 className="app-auth-hero__title">One account. One clean control surface.</h1>
+            <p className="app-auth-hero__body">
+              Use Google or email to open Sage, your connected apps, and your private assistants without setup noise.
+            </p>
           </div>
-        </div>
-        <label className="app-auth-field">
-          <span className="app-auth-field__label">Email</span>
-          <AppInput
-            autoComplete="email"
-            name="email"
-            type="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-        </label>
-        <label className="app-auth-field">
-          <span className="app-auth-field__label">Password</span>
-          <AppInput
-            autoComplete="current-password"
-            name="password"
-            type="password"
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
-        {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
-        <AppButton type="submit" disabled={submitting || !isHydrated}>
-          {submitting ? 'Signing in…' : 'Log in'}
-        </AppButton>
-        <p className="app-auth-footer">
-          Need an account? <Link href={signupHref}>Sign up</Link>
-        </p>
-      </form>
+          <div className="app-auth-hero__rail">
+            <div className="app-auth-hero__point">
+              <strong>Google</strong>
+              <span>Fastest path for launch.</span>
+            </div>
+            <div className="app-auth-hero__point">
+              <strong>Email</strong>
+              <span>Fallback that always stays available.</span>
+            </div>
+            <div className="app-auth-hero__point">
+              <strong>Apple</strong>
+              <span>Reserved for the next auth pass, not faked today.</span>
+            </div>
+          </div>
+        </section>
+        <form method="post" onSubmit={handleSubmit} className="app-auth-card app-auth-card--elevated app-auth-form">
+          <div className="app-auth-header">
+            <span className="app-auth-kicker">Welcome back</span>
+            <h2 className="app-auth-title">Log in</h2>
+            <p className="app-auth-subtitle">Use Google, Apple, or your Empyralis email account.</p>
+          </div>
+          <div className="app-auth-provider-stack">
+            <div className="app-auth-social-grid">
+              <AppButton
+                type="button"
+                tone="secondary"
+                className="app-auth-social"
+                onClick={() => googleLogin()}
+                disabled={submitting || !isHydrated || providers.google?.enabled !== true}
+              >
+                <Globe size={16} aria-hidden="true" />
+                <span>Continue with Google</span>
+              </AppButton>
+              <AppButton
+                type="button"
+                tone="secondary"
+                className="app-auth-social"
+                disabled
+                aria-disabled="true"
+                title="Apple sign-in is not enabled on the web app yet."
+              >
+                <Apple size={16} aria-hidden="true" />
+                <span>Apple soon</span>
+              </AppButton>
+            </div>
+            {providers.google?.enabled !== true ? (
+              <p className="app-auth-provider-note">Google sign-in is unavailable here right now. Use email below.</p>
+            ) : null}
+            <div className="app-auth-divider">
+              <span aria-hidden="true" />
+              <span>or continue with email</span>
+              <span aria-hidden="true" />
+            </div>
+          </div>
+          <label className="app-auth-field">
+            <span className="app-auth-field__label">Email</span>
+            <span className="app-auth-input-shell">
+              <Mail className="app-auth-input-shell__icon" size={16} aria-hidden="true" />
+              <AppInput
+                autoComplete="email"
+                name="email"
+                type="email"
+                required
+                value={email}
+                className="app-auth-input"
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </span>
+          </label>
+          <label className="app-auth-field">
+            <span className="app-auth-field__label">Password</span>
+            <span className="app-auth-input-shell">
+              <Lock className="app-auth-input-shell__icon" size={16} aria-hidden="true" />
+              <AppInput
+                autoComplete="current-password"
+                name="password"
+                type="password"
+                required
+                value={password}
+                className="app-auth-input"
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </span>
+          </label>
+          {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
+          <AppButton type="submit" disabled={submitting || !isHydrated} className="app-auth-submit">
+            <span>{submitting ? 'Signing in…' : 'Continue'}</span>
+            <ArrowRight size={16} aria-hidden="true" />
+          </AppButton>
+          <p className="app-auth-footer">
+            Need an account? <Link href={signupHref}>Sign up</Link>
+          </p>
+        </form>
+      </div>
     </main>
   );
 }

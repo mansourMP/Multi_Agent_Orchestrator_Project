@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
+import { Apple, ArrowRight, Globe, Lock, Mail, User } from 'lucide-react';
 
-import { awaitBrowserAuthReady, googleLogin, signup } from '@/lib/auth/auth-client';
+import { awaitBrowserAuthReady, googleLogin, listAuthProviders, signup, type AuthProviderOptions } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 function authErrorCopy(error: string): string {
@@ -39,6 +40,11 @@ export default function SignupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [providers, setProviders] = useState<AuthProviderOptions>({
+    email: { enabled: true },
+    google: { enabled: true },
+    apple: { enabled: false },
+  });
   const [channelAttribution, setChannelAttribution] = useState('');
   const [agent, setAgent] = useState('');
   const loginSearchParams = new URLSearchParams();
@@ -61,6 +67,21 @@ export default function SignupPage() {
     if (providerError) {
       setError(providerError);
     }
+    void listAuthProviders()
+      .then((payload) => {
+        setProviders({
+          email: { enabled: payload?.email?.enabled !== false },
+          google: { enabled: payload?.google?.enabled === true },
+          apple: { enabled: false },
+        });
+      })
+      .catch(() => {
+        setProviders({
+          email: { enabled: true },
+          google: { enabled: true },
+          apple: { enabled: false },
+        });
+      });
   }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -80,71 +101,127 @@ export default function SignupPage() {
 
   return (
     <main className="app-auth-page">
-      <form method="post" onSubmit={handleSubmit} className="app-auth-card app-auth-form">
-        <div className="app-auth-header">
-          <span className="app-auth-kicker">Empyralis</span>
-          <h1 className="app-auth-title">Sign up</h1>
-          <p className="app-auth-subtitle">
-            {channelAttribution
-              ? 'Create an Empyralis account to continue from Telegram.'
-              : 'Create an Empyralis account.'}
-          </p>
-        </div>
-        <div className="app-auth-provider-stack">
-          <AppButton
-            type="button"
-            tone="secondary"
-            onClick={() => googleLogin()}
-            disabled={submitting || !isHydrated}
-          >
-            Continue with Google
-          </AppButton>
-          <div className="app-auth-divider">
-            <span aria-hidden="true" />
-            <span>or</span>
-            <span aria-hidden="true" />
+      <div className="app-auth-shell">
+        <section className="app-auth-hero" aria-label="Empyralis sign up overview">
+          <div className="app-auth-hero__badge">Empyralis</div>
+          <div className="app-auth-hero__copy">
+            <h1 className="app-auth-hero__title">Start simple, then expand into connected work.</h1>
+            <p className="app-auth-hero__body">
+              Create one account for Sage, Build, Discover, and your connected apps. Keep the surface clean from day one.
+            </p>
           </div>
-        </div>
-        <label className="app-auth-field">
-          <span className="app-auth-field__label">Name</span>
-          <AppInput
-            autoComplete="name"
-            name="name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-        <label className="app-auth-field">
-          <span className="app-auth-field__label">Email</span>
-          <AppInput
-            autoComplete="email"
-            name="email"
-            type="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-        </label>
-        <label className="app-auth-field">
-          <span className="app-auth-field__label">Password</span>
-          <AppInput
-            autoComplete="new-password"
-            name="password"
-            type="password"
-            minLength={8}
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
-        {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
-        <AppButton type="submit" disabled={submitting || !isHydrated}>
-          {submitting ? 'Creating account…' : 'Sign up'}
-        </AppButton>
-        <p className="app-auth-footer">
-          Already have an account? <Link href={loginHref}>Log in</Link>
-        </p>
-      </form>
+          <div className="app-auth-hero__rail">
+            <div className="app-auth-hero__point">
+              <strong>Chat first</strong>
+              <span>Fresh accounts land directly in Sage.</span>
+            </div>
+            <div className="app-auth-hero__point">
+              <strong>Cheap default AI</strong>
+              <span>Empyralis credits stay the normal path.</span>
+            </div>
+            <div className="app-auth-hero__point">
+              <strong>Connected apps later</strong>
+              <span>Add Google, Telegram, or your computer when ready.</span>
+            </div>
+          </div>
+        </section>
+        <form method="post" onSubmit={handleSubmit} className="app-auth-card app-auth-card--elevated app-auth-form">
+          <div className="app-auth-header">
+            <span className="app-auth-kicker">Create account</span>
+            <h2 className="app-auth-title">Sign up</h2>
+            <p className="app-auth-subtitle">
+              {channelAttribution
+                ? 'Create an Empyralis account to continue from Telegram.'
+                : 'Use Google, Apple, or your Empyralis email account.'}
+            </p>
+          </div>
+          <div className="app-auth-provider-stack">
+            <div className="app-auth-social-grid">
+              <AppButton
+                type="button"
+                tone="secondary"
+                className="app-auth-social"
+                onClick={() => googleLogin()}
+                disabled={submitting || !isHydrated || providers.google?.enabled !== true}
+              >
+                <Globe size={16} aria-hidden="true" />
+                <span>Continue with Google</span>
+              </AppButton>
+              <AppButton
+                type="button"
+                tone="secondary"
+                className="app-auth-social"
+                disabled
+                aria-disabled="true"
+                title="Apple sign-in is not enabled on the web app yet."
+              >
+                <Apple size={16} aria-hidden="true" />
+                <span>Apple soon</span>
+              </AppButton>
+            </div>
+            {providers.google?.enabled !== true ? (
+              <p className="app-auth-provider-note">Google sign-up is unavailable here right now. Use email below.</p>
+            ) : null}
+            <div className="app-auth-divider">
+              <span aria-hidden="true" />
+              <span>or continue with email</span>
+              <span aria-hidden="true" />
+            </div>
+          </div>
+          <label className="app-auth-field">
+            <span className="app-auth-field__label">Name</span>
+            <span className="app-auth-input-shell">
+              <User className="app-auth-input-shell__icon" size={16} aria-hidden="true" />
+              <AppInput
+                autoComplete="name"
+                name="name"
+                value={name}
+                className="app-auth-input"
+                onChange={(event) => setName(event.target.value)}
+              />
+            </span>
+          </label>
+          <label className="app-auth-field">
+            <span className="app-auth-field__label">Email</span>
+            <span className="app-auth-input-shell">
+              <Mail className="app-auth-input-shell__icon" size={16} aria-hidden="true" />
+              <AppInput
+                autoComplete="email"
+                name="email"
+                type="email"
+                required
+                value={email}
+                className="app-auth-input"
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </span>
+          </label>
+          <label className="app-auth-field">
+            <span className="app-auth-field__label">Password</span>
+            <span className="app-auth-input-shell">
+              <Lock className="app-auth-input-shell__icon" size={16} aria-hidden="true" />
+              <AppInput
+                autoComplete="new-password"
+                name="password"
+                type="password"
+                minLength={8}
+                required
+                value={password}
+                className="app-auth-input"
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </span>
+          </label>
+          {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
+          <AppButton type="submit" disabled={submitting || !isHydrated} className="app-auth-submit">
+            <span>{submitting ? 'Creating account…' : 'Create account'}</span>
+            <ArrowRight size={16} aria-hidden="true" />
+          </AppButton>
+          <p className="app-auth-footer">
+            Already have an account? <Link href={loginHref}>Log in</Link>
+          </p>
+        </form>
+      </div>
     </main>
   );
 }

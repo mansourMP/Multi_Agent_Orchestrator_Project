@@ -12,7 +12,7 @@ test.describe('browser auth session', () => {
     await page.getByLabel('Name').fill('Owner Example');
     await page.getByLabel('Email').fill(signupEmail);
     await page.getByLabel('Password').fill('password-123');
-    await page.getByRole('button', { name: /sign up/i }).click();
+    await page.getByRole('button', { name: /create account/i }).click();
     const postedSignupRequest = await signupRequest;
     expect(JSON.parse(postedSignupRequest.postData() || '{}').acquisition_token).toBe('tg-signup-token');
 
@@ -30,7 +30,7 @@ test.describe('browser auth session', () => {
     ));
     await page.getByLabel('Email').fill('owner@example.com');
     await page.getByLabel('Password').fill('password-123');
-    await page.getByRole('button', { name: /log in/i }).click();
+    await page.getByRole('button', { name: /^continue$/i }).click();
     const postedLoginRequest = await loginRequest;
     expect(JSON.parse(postedLoginRequest.postData() || '{}').acquisition_token).toBe('tg-login-token');
 
@@ -44,7 +44,7 @@ test.describe('browser auth session', () => {
     await page.goto('/login');
     await page.getByLabel('Email').fill('owner@example.com');
     await page.getByLabel('Password').fill('password-123');
-    await page.getByRole('button', { name: /log in/i }).click();
+    await page.getByRole('button', { name: /^continue$/i }).click();
     await page.waitForURL(/\/(w\/|onboarding|$)/);
 
     const response = await page.request.post('/api/auth/logout');
@@ -55,7 +55,7 @@ test.describe('browser auth session', () => {
     await page.goto('/login');
     await page.getByLabel('Email').fill('owner@example.com');
     await page.getByLabel('Password').fill('password-123');
-    await page.getByRole('button', { name: /log in/i }).click();
+    await page.getByRole('button', { name: /^continue$/i }).click();
     await page.waitForURL(/\/(w\/|onboarding|$)/);
 
     const csrfCookie = (await page.context().cookies()).find(

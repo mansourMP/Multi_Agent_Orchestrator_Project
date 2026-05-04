@@ -12,6 +12,12 @@ type AwaitBrowserAuthReadyOptions = {
   delayMs?: number;
 };
 
+export type AuthProviderOptions = {
+  email?: { enabled?: boolean } | null;
+  google?: { enabled?: boolean } | null;
+  apple?: { enabled?: boolean } | null;
+};
+
 function channelAttributionToken(): string | undefined {
   if (typeof window === 'undefined') {
     return undefined;
@@ -159,6 +165,12 @@ export function googleLogin(): void {
 
 export async function me(): Promise<Record<string, unknown> | null> {
   return requestAuth<Record<string, unknown> | null>('/api/auth/me', {
+    method: 'GET',
+  });
+}
+
+export async function listAuthProviders(): Promise<AuthProviderOptions> {
+  return requestAuth<AuthProviderOptions>('/api/auth/providers', {
     method: 'GET',
   });
 }

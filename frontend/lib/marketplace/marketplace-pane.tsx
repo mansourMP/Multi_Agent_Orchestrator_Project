@@ -484,6 +484,79 @@ function buildMarketplaceCardView(item: MarketplacePackageRecord, index: number)
   };
 }
 
+function isDeprecatedMarketplacePackage(
+  item: MarketplacePackageRecord,
+  packagePayload: Record<string, unknown>,
+  runtimeTruth: Record<string, unknown>,
+): boolean {
+  return (
+    readBoolean(item.deprecated)
+    || readBoolean(packagePayload.deprecated)
+    || readString(item.deprecated_at) !== ''
+    || readString(packagePayload.deprecated_at) !== ''
+    || readString(runtimeTruth.lifecycle).toLowerCase() === 'deprecated'
+  );
+}
+
+function marketplaceLifecycleLabel(
+  item: MarketplacePackageRecord,
+  packagePayload: Record<string, unknown>,
+  runtimeTruth: Record<string, unknown>,
+): string {
+  if (isDeprecatedMarketplacePackage(item, packagePayload, runtimeTruth)) {
+    return 'Deprecated';
+  }
+  if (readBoolean(item.preview_only) || readString(packagePayload.release_channel).toLowerCase() === 'preview') {
+    return 'Preview';
+  }
+  return 'Active';
+}
+
+function marketplacePrimaryActionLabel(card: MarketplaceCardView): string {
+  if (card.previewOnly) {
+    return 'Preview only';
+  }
+  if (card.installed) {
+    return card.kind === 'app' ? 'Open app' : 'Open setup';
+  }
+  return card.kind === 'app' ? 'Install app' : 'Add AI model';
+}
+
+function summarizeInstallReadiness(
+  card: MarketplaceCardView,
+  details: {
+    permissionList: string[];
+    providerAuthModes: string[];
+    appBridgeContracts: [string, unknown][];
+    packagePayload: Record<string, unknown>;
+    runtimeTruth: Record<string, unknown>;
+    item: MarketplacePackageRecord;
+  },
+): string[] {
+  const lines: string[] = [];
+  lines.push(card.approvalRequired ? 'Needs your OK before install' : 'No install approval required');
+  lines.push(card.kind === 'app' ? 'Opens in Discover after install' : 'Appears in AI Model setup after install');
+  if (card.kind === 'app') {
+    if (details.permissionList.length > 0) {
+      lines.push(`Uses ${details.permissionList.slice(0, 3).map(humanizeToken).join(', ')}`);
+    } else {
+      lines.push('No extra app permissions declared');
+    }
+    if (details.appBridgeContracts.length > 0) {
+      lines.push('Can talk to Sage through a governed app bridge');
+    }
+  } else {
+    const authModes = details.providerAuthModes.length > 0 ? details.providerAuthModes : ['api_key'];
+    lines.push(`Sign-in uses ${authModes.map(humanizeToken).join(' or ')}`);
+    const defaultModel = readString(details.packagePayload.default_model);
+    if (defaultModel) {
+      lines.push(`Default AI model: ${defaultModel}`);
+    }
+  }
+  lines.push(`Lifecycle: ${marketplaceLifecycleLabel(details.item, details.packagePayload, details.runtimeTruth)}`);
+  return lines;
+}
+
 function MarketplaceSkeleton() {
   return (
     <div className="marketplace-pane__grid">
@@ -780,6 +853,7 @@ export function MarketplacePane() {
     const packagePayload = readRecord(item.package);
     const accountingHook = readRecord(billing.accounting_hook);
     return {
+      item,
       publisher,
       onboarding,
       billing,
@@ -810,8 +884,8 @@ export function MarketplacePane() {
           primary={(
             <ListDetailPanel
               className="marketplace-pane__browse-panel"
-              title="Install governed apps and AI models"
-              subtitle="Discover is for adding governed packages. Build is where you create private assistants."
+              title="Install apps, templates, and AI models"
+              subtitle="Discover is for adding governed packages. Build is where you create and manage private assistants."
             >
               <div className="marketplace-pane__filters">
                 <div className="marketplace-pane__filter-row">
@@ -830,7 +904,7 @@ export function MarketplacePane() {
                   ))}
                 </div>
                 <p className="marketplace-pane__panel-copy">
-                  Every package shows verification, review, billing, and runtime details before install.
+                  Every package shows trust, access, billing, and runtime details before you install it.
                 </p>
               </div>
 
@@ -857,11 +931,7 @@ export function MarketplacePane() {
                 <div className="marketplace-pane__grid">
                   {renderedCards.map((card) => {
                     const installing = installingPackageId === card.id;
-                    const primaryLabel = card.previewOnly
-                      ? 'Preview only'
-                      : card.installed
-                        ? (card.kind === 'app' ? 'Open app' : 'Open setup')
-                        : 'Add to Workspace';
+                    const primaryLabel = marketplacePrimaryActionLabel(card);
                     return (
                       <article
                         key={card.id}
@@ -986,7 +1056,7 @@ export function MarketplacePane() {
                 className="marketplace-pane__detail-panel"
                 eyebrow={selectedPackage ? humanizeToken(selectedPackage.kind) : 'Details'}
                 title={selectedPackage?.name || 'Select an app or model'}
-                subtitle={selectedPackage ? selectedPackage.description : 'Choose a package to review trust, permissions, and install details.'}
+                subtitle={selectedPackage ? selectedPackage.description : 'Choose a package to review trust, access, and install details.'}
               >
                 {selectedPackage && selectedDetails ? (
                   <div className="marketplace-pane__detail-stack">
@@ -997,6 +1067,9 @@ export function MarketplacePane() {
                             {humanizeToken(selectedPackage.kind)}
                           </span>
                           <span className="marketplace-pane__category-pill">{selectedPackage.category}</span>
+                          <span className="marketplace-pane__status-badge marketplace-pane__status-badge--approved">
+                            {marketplaceLifecycleLabel(selectedDetails.item, selectedDetails.packagePayload, selectedDetails.runtimeTruth)}
+                          </span>
                           {selectedPackage.previewOnly ? (
                             <span className="marketplace-pane__status-badge marketplace-pane__status-badge--preview">
                               Preview
@@ -1066,12 +1139,20 @@ export function MarketplacePane() {
                       >
                         {installingPackageId === selectedPackage.id
                           ? 'Installing…'
-                          : selectedPackage.previewOnly
-                            ? 'Preview only'
-                            : selectedPackage.installed
-                              ? (selectedPackage.kind === 'app' ? 'Open app' : 'Open setup')
-                              : 'Add to Workspace'}
+                          : marketplacePrimaryActionLabel(selectedPackage)}
                       </button>
+                    </div>
+
+                    <div className="marketplace-pane__detail-group">
+                      <strong className="marketplace-pane__detail-title">Before you install</strong>
+                      <p className="marketplace-pane__panel-copy">
+                        Discover adds governed packages to this workspace. Build stays for private assistants you create yourself.
+                      </p>
+                      <div className="marketplace-pane__token-row">
+                        {summarizeInstallReadiness(selectedPackage, selectedDetails).map((token) => (
+                          <span key={token} className="marketplace-pane__stat-token">{token}</span>
+                        ))}
+                      </div>
                     </div>
 
                     <div className="marketplace-pane__detail-group">
@@ -1102,6 +1183,54 @@ export function MarketplacePane() {
                           <span className="marketplace-pane__detail-value">{humanizeToken(readString(selectedDetails.runtimeTruth.surface, 'distribution'))}</span>
                         </div>
                       </div>
+                    </div>
+
+                    <div className="marketplace-pane__detail-group">
+                      <strong className="marketplace-pane__detail-title">Version and lifecycle</strong>
+                      <div className="marketplace-pane__detail-grid">
+                        <div className="marketplace-pane__detail-item">
+                          <span className="marketplace-pane__detail-label">Lifecycle</span>
+                          <span className="marketplace-pane__detail-value">
+                            {marketplaceLifecycleLabel(selectedDetails.item, selectedDetails.packagePayload, selectedDetails.runtimeTruth)}
+                          </span>
+                        </div>
+                        <div className="marketplace-pane__detail-item">
+                          <span className="marketplace-pane__detail-label">Version</span>
+                          <span className="marketplace-pane__detail-value">
+                            {readString(selectedDetails.packagePayload.version, readString(selectedDetails.packagePayload.default_model, 'Not provided'))}
+                          </span>
+                        </div>
+                        <div className="marketplace-pane__detail-item">
+                          <span className="marketplace-pane__detail-label">Release channel</span>
+                          <span className="marketplace-pane__detail-value">
+                            {readString(selectedDetails.packagePayload.release_channel, 'stable')}
+                          </span>
+                        </div>
+                        <div className="marketplace-pane__detail-item">
+                          <span className="marketplace-pane__detail-label">Replacement</span>
+                          <span className="marketplace-pane__detail-value">
+                            {readString(
+                              selectedDetails.packagePayload.successor_package_id
+                              || selectedDetails.packagePayload.replacement_package_id
+                              || selectedDetails.runtimeTruth.successor_package_id,
+                              'Not provided',
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                      {readString(
+                        selectedDetails.packagePayload.deprecation_reason
+                        || selectedDetails.runtimeTruth.deprecation_reason
+                        || selectedDetails.item.deprecation_reason,
+                      ) ? (
+                        <p className="marketplace-pane__panel-copy">
+                          {readString(
+                            selectedDetails.packagePayload.deprecation_reason
+                            || selectedDetails.runtimeTruth.deprecation_reason
+                            || selectedDetails.item.deprecation_reason,
+                          )}
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className="marketplace-pane__detail-group">
@@ -1728,10 +1857,10 @@ export function MarketplacePane() {
                   className="marketplace-pane__composer-panel marketplace-pane__composer-panel--collapsed"
                   eyebrow="Developer publishing"
                   title="Publish a package"
-                  subtitle="Discover is for governed distribution. Create assistants in Build; only open this when publishing package inventory."
+                  subtitle="Discover is for installation. Build is for creating assistants. Only open this if you are publishing package inventory."
                 >
                   <p className="marketplace-pane__panel-copy">
-                    Normal users should browse, inspect trust metadata, and add packages to the workspace. Publisher registration is intentionally hidden to keep the Marketplace simple.
+                    Normal users should browse, inspect trust metadata, and install packages. Publisher registration is intentionally hidden to keep Discover simple.
                   </p>
                   <div className="marketplace-pane__form-actions">
                     <AppButton type="button" tone="secondary" onClick={() => setShowDeveloperRegistration(true)}>

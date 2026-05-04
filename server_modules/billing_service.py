@@ -23,6 +23,7 @@ STRIPE_PROVIDER = "stripe"
 STRIPE_API_BASE = "https://api.stripe.com/v1"
 STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300
 HOSTED_SAGE_AI_CREDITS_PER_USD = 1000
+DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 0.5
 
 PLAN_LABELS: Dict[str, str] = {
     "free": "Free",
@@ -119,6 +120,11 @@ def _hosted_sage_ai_policy(value: Any) -> str:
     return token if token in {"disabled", "owner_opt_in", "enabled_with_cap"} else "owner_opt_in"
 
 
+def _plan_allows_hosted_ai(effective_plan_id: str) -> bool:
+    plan_id = normalize_billing_plan_id(effective_plan_id)
+    return plan_id in {"free", "pro"}
+
+
 def _hosted_sage_ai_credit_fields(
     *,
     monthly_cap_usd: float,
@@ -142,11 +148,11 @@ def _hosted_sage_ai_credit_state(
     workspace: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     metadata = _workspace_billing_metadata(workspace)
-    plan_allows_hosted_ai = effective_plan_id == "pro"
+    plan_allows_hosted_ai = _plan_allows_hosted_ai(effective_plan_id)
     policy = _hosted_sage_ai_policy(metadata.get("hosted_sage_ai_policy"))
     monthly_cap_usd = _coerce_float(metadata.get("hosted_sage_ai_monthly_cap_usd"))
     if monthly_cap_usd is None:
-        monthly_cap_usd = 5.0
+        monthly_cap_usd = DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD
     monthly_cap_usd = max(0.0, round(float(monthly_cap_usd), 6))
     monthly_cost_usd = max(0.0, round(float(usage.get("hosted_sage_cost_usd_monthly") or 0.0), 6))
     monthly_remaining_usd = max(0.0, round(monthly_cap_usd - monthly_cost_usd, 6))
@@ -158,7 +164,7 @@ def _hosted_sage_ai_credit_state(
 
     if not plan_allows_hosted_ai:
         reason = "policy_disabled"
-        message = "Empyralis-hosted AI is not included in this workspace plan."
+        message = "Credits are not active yet. Add credits or use your own API key."
         allowed = False
         resolved_policy = "disabled"
     elif policy == "disabled":
@@ -473,7 +479,7 @@ def workspace_billing_summary_for_workspace_id(
     limits = {
         "max_specialists": 1 if effective_plan_id == "free" else 3,
         "hosted_runtime_minutes_monthly": 0 if effective_plan_id == "free" else 1500,
-        "hosted_ai_enabled": effective_plan_id == "pro",
+        "hosted_ai_enabled": _plan_allows_hosted_ai(effective_plan_id),
         "priority_sync_enabled": effective_plan_id == "pro",
         "local_gateway_enabled": True,
         "mini_apps_unlimited": True,

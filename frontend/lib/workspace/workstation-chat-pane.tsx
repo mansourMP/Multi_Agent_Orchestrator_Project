@@ -1086,6 +1086,7 @@ function providerFailureActionsForProvider(
     return [
       { label: 'Manage credits', target: 'integrations' },
       { label: 'Add API key', target: 'integrations' },
+      { label: 'Choose AI Model', target: 'integrations' },
     ];
   }
   return [{ label: 'Choose AI Model', target: 'integrations' }];
@@ -1101,6 +1102,38 @@ function providerFailureNoticeForProvider(
     retryable: false,
     actions: providerFailureActionsForProvider(provider, text),
   };
+}
+
+function providerReadyForChat(
+  provider: ProviderCatalogRecord | null | undefined,
+  {
+    gatewayToolingOnline,
+  }: {
+    gatewayToolingOnline: boolean;
+  },
+): boolean {
+  if (!provider || typeof provider !== 'object') {
+    return false;
+  }
+  const providerId = readString(provider.id).toLowerCase();
+  const credentialPlane = readString(provider.credential_plane).toLowerCase();
+  const state = readString(provider.state).toLowerCase();
+  const localOnly = providerId === 'ollama'
+    || providerId === 'openai-codex'
+    || provider.local_only === true
+    || credentialPlane === 'local_runtime';
+
+  if (localOnly) {
+    return gatewayToolingOnline && provider.usable === true;
+  }
+  if (credentialPlane === 'platform_runtime') {
+    return provider.platform_runtime_allowed !== false
+      && (provider.usable === true || provider.active === true || state === 'configured');
+  }
+  return provider.workspace_connected === true
+    || provider.usable === true
+    || provider.active === true
+    || state === 'configured';
 }
 
 function modelOptionDisplayLabel(
@@ -1449,6 +1482,15 @@ function canonicalIncludesMessage(
     message.role === candidate.role
     && readString(message.content) === normalizedContent,
   );
+}
+
+function projectedAssistantLooksSynthetic(
+  cell: Extract<CodexTranscriptCell, { kind: 'assistant' }> | null,
+): boolean {
+  if (!cell) {
+    return false;
+  }
+  return isProviderRuntimeGateMessage(readString(cell.content));
 }
 
 function createActivityStepMessage(
@@ -2235,6 +2277,16 @@ export function WorkstationChatPane() {
   }, []);
 
   useEffect(() => {
+    if (!pendingUserMessage) {
+      return;
+    }
+    const canonicalMessages = thread.messages.filter((message) => !isSyntheticTranscriptMessage(message));
+    if (canonicalIncludesMessage(canonicalMessages, pendingUserMessage)) {
+      updatePendingUserMessage(null);
+    }
+  }, [pendingUserMessage, thread.messages, updatePendingUserMessage]);
+
+  useEffect(() => {
     streamingAssistantTextRef.current = streamingAssistantText;
   }, [streamingAssistantText]);
 
@@ -2888,7 +2940,10 @@ export function WorkstationChatPane() {
   );
 
   const projectedAssistantCell = useMemo(
-    () => projectedTimelineCells.find((cell): cell is Extract<CodexTranscriptCell, { kind: 'assistant' }> => cell.kind === 'assistant') ?? null,
+    () => {
+      const candidate = projectedTimelineCells.find((cell): cell is Extract<CodexTranscriptCell, { kind: 'assistant' }> => cell.kind === 'assistant') ?? null;
+      return projectedAssistantLooksSynthetic(candidate) ? null : candidate;
+    },
     [projectedTimelineCells],
   );
 
@@ -3007,6 +3062,14 @@ export function WorkstationChatPane() {
     }),
     [effectiveSelectedModel, providerCatalog, selectedModelOption.label, selectedModelOption.providerId],
   );
+  const selectedProviderRecord = useMemo(
+    () => providerCatalog.find((provider) => readString(provider.id) === readString(selectedProviderContext.providerId)) ?? null,
+    [providerCatalog, selectedProviderContext.providerId],
+  );
+  const gatewayToolingOnline = useMemo(
+    () => gatewayReadinessOnline,
+    [gatewayReadinessOnline],
+  );
   const activeProviderSummary = useMemo(() => {
     const providerLabelById = new Map(
       providerCatalog.map((provider) => [readString(provider.id), readString(provider.label) || readString(provider.id)] as const),
@@ -3020,12 +3083,24 @@ export function WorkstationChatPane() {
         connected: true,
       };
     }
+    const selectedProviderLabel = selectedProviderContext.modelLabel
+      ? `${selectedProviderContext.providerLabel} · ${selectedProviderContext.modelLabel}`
+      : readString(selectedProviderContext.providerLabel);
+    if (selectedProviderRecord) {
+      const ready = providerReadyForChat(selectedProviderRecord, {
+        gatewayToolingOnline,
+      });
+      return {
+        label: ready
+          ? selectedProviderLabel
+          : `${selectedProviderLabel} · setup needed`,
+        connected: ready,
+      };
+    }
     if (selectedProviderContext.providerLabel) {
       return {
-        label: selectedProviderContext.modelLabel
-          ? `${selectedProviderContext.providerLabel} · ${selectedProviderContext.modelLabel}`
-          : selectedProviderContext.providerLabel,
-        connected: true,
+        label: `${selectedProviderLabel} · setup needed`,
+        connected: false,
       };
     }
     return {
@@ -3035,18 +3110,12 @@ export function WorkstationChatPane() {
   }, [
     liveTrace?.trace?.model,
     liveTrace?.trace?.provider,
+    gatewayToolingOnline,
     providerCatalog,
+    selectedProviderRecord,
     selectedProviderContext.modelLabel,
     selectedProviderContext.providerLabel,
   ]);
-  const selectedProviderRecord = useMemo(
-    () => providerCatalog.find((provider) => readString(provider.id) === readString(selectedProviderContext.providerId)) ?? null,
-    [providerCatalog, selectedProviderContext.providerId],
-  );
-  const gatewayToolingOnline = useMemo(
-    () => gatewayReadinessOnline,
-    [gatewayReadinessOnline],
-  );
   const runtimeStatus = useMemo(() => {
     const providerId = readString(selectedProviderRecord?.id).toLowerCase();
     const credentialPlane = readString(selectedProviderRecord?.credential_plane).toLowerCase();
@@ -3497,14 +3566,19 @@ export function WorkstationChatPane() {
     submitInFlightRef.current = true;
     if (!activeProviderSummary.connected) {
       setHasEnteredConversationFlow(true);
-      setSendFailureNotice({
-        message: 'Sage needs Empyralis credits or your own API key before it can answer. Set up hosted credits, DeepSeek, Gemini, OpenAI, or another AI model in Connected Apps.',
-        retryable: false,
-        actions: [
-          { label: 'Manage credits', target: 'integrations' },
-          { label: 'Add API key', target: 'integrations' },
-        ],
-      });
+      setSendFailureNotice(
+        selectedProviderRecord
+          ? providerFailureNoticeForProvider(selectedProviderRecord)
+          : {
+              message: 'Sage needs Empyralis credits or your own API key before it can answer. Set up hosted credits, DeepSeek, Gemini, OpenAI, or another AI model in Connected Apps.',
+              retryable: false,
+              actions: [
+                { label: 'Manage credits', target: 'integrations' },
+                { label: 'Add API key', target: 'integrations' },
+                { label: 'Choose AI Model', target: 'integrations' },
+              ],
+            },
+      );
       submitInFlightRef.current = false;
       return;
     }
@@ -3981,11 +4055,27 @@ export function WorkstationChatPane() {
           || normalizedRawMessage.includes('selected for chat')
           || normalizedRawMessage.includes('not available');
         const localComputerNeedsAttention = isLocalCompanionGateMessage(rawMessage) || normalizedRawMessage.includes('gateway offline');
+        const authNeedsAttention = normalizedError?.status === 401 || normalizedError?.status === 403;
+        const rateLimitFailure = normalizedError?.status === 429 || /rate.?limit|capacity/i.test(normalizedRawMessage);
+        const timeoutFailure = /timed out|too long to respond|request timeout/i.test(normalizedRawMessage);
+        const transportFailure = /failed to fetch|could not connect|network error|transport failure|connection/i.test(normalizedRawMessage);
+        const serverFailure = (typeof normalizedError?.status === 'number' && normalizedError.status >= 500)
+          || /bad gateway|gateway timeout|service unavailable|internal server error|server error/i.test(normalizedRawMessage);
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
           ? 'My Computer is needed for this request. Connect this computer and try again.'
           : providerNeedsAttention
             ? 'The selected AI model is not ready. Switch to hosted credits/API key, connect this computer, or choose another model in Connected Apps.'
-            : rawMessage;
+            : authNeedsAttention
+              ? 'Your session needs attention before Sage can continue. Refresh the page or sign in again.'
+              : rateLimitFailure
+                ? 'Sage is temporarily at capacity. Try again in a moment or switch AI model.'
+                : timeoutFailure
+                  ? 'Sage took too long to respond. Try again or switch AI model.'
+                  : transportFailure
+                    ? 'The request could not reach the server. Check your connection and try again.'
+                    : serverFailure
+                      ? 'Sage hit a temporary server issue before it could reply. Try again in a moment.'
+                      : "Sage couldn't complete that turn. Try again or choose another AI model in Connected Apps.";
         const providerNotice = providerNeedsAttention
           ? providerFailureNoticeForProvider(selectedProviderRecord, noticeMessage)
           : null;
@@ -3996,7 +4086,9 @@ export function WorkstationChatPane() {
             : true,
           actions: localComputerNeedsAttention
             ? [{ label: 'Connect My Computer', target: 'gateway' }]
-            : providerNotice?.actions,
+            : authNeedsAttention
+              ? undefined
+              : providerNotice?.actions,
           retryDraft: outboundMessage,
         });
       }
@@ -4270,7 +4362,7 @@ export function WorkstationChatPane() {
         contextWindowLabel={contextWindowLabel}
         busy={isSending}
         controlsDisabled={isPersistingModelSelection}
-        sendDisabled={!activeProviderSummary.connected}
+        sendDisabled={false}
         placeholder="Message Sage..."
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{

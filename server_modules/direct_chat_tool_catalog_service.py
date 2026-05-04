@@ -239,6 +239,10 @@ def message_requests_tool_inventory(message: str) -> bool:
         "tools available",
         "what can you do with tools",
         "do you have any tools",
+        "what can you help me with",
+        "what do you have access to",
+        "what is available right now",
+        "what's available right now",
     )
     return any(phrase in compact for phrase in inventory_phrases)
 
@@ -267,6 +271,43 @@ def _tool_label(tool: Dict[str, Any]) -> str:
     return f"{name} — {description}" if description else name
 
 
+def _status_summary_line(title: str, detail: str) -> str:
+    text = str(detail or "").strip()
+    return f"{title}: {text or 'none'}"
+
+
+def _state_label(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return "unknown"
+    return normalized.replace("_", " ")
+
+
+def _collect_state_labels(items: Any, *, limit: int = 4) -> str:
+    labels: List[str] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or item.get("id") or "").strip()
+        if not label:
+            continue
+        state = item.get("runtime_usable")
+        if state is True:
+            summary = label
+        elif state is False:
+            summary = f"{label} (not ready)"
+        elif item.get("connected"):
+            summary = f"{label} (connected)"
+        else:
+            summary = f"{label} (not connected)"
+        if summary in labels:
+            continue
+        labels.append(summary)
+        if len(labels) >= limit:
+            break
+    return ", ".join(labels) if labels else "none"
+
+
 def direct_chat_tool_inventory_reply(tools: List[Dict[str, Any]], availability_payload: Dict[str, Any]) -> str:
     grouped: Dict[str, List[str]] = {}
     for item in tools:
@@ -291,12 +332,49 @@ def direct_chat_tool_inventory_reply(tools: List[Dict[str, Any]], availability_p
         if isinstance(availability_payload.get("capability_truth"), dict)
         else {}
     )
+    provider_truth = capability_truth.get("provider") if isinstance(capability_truth.get("provider"), dict) else {}
+    credits_truth = capability_truth.get("credits") if isinstance(capability_truth.get("credits"), dict) else {}
+    my_computer = capability_truth.get("my_computer") if isinstance(capability_truth.get("my_computer"), dict) else {}
+    connected_apps = capability_truth.get("connected_apps") if isinstance(capability_truth.get("connected_apps"), list) else []
+    channels = capability_truth.get("channels") if isinstance(capability_truth.get("channels"), list) else []
+    byok_providers = capability_truth.get("byok_providers") if isinstance(capability_truth.get("byok_providers"), list) else []
     setup_actions = (
         capability_truth.get("required_setup_actions")
         if isinstance(capability_truth.get("required_setup_actions"), list)
         else []
     )
-    lines = ["These are the tools currently available in this workspace:"]
+    provider_label = str(provider_truth.get("label") or availability_payload.get("provider") or "AI").strip() or "AI"
+    provider_ready = bool(provider_truth.get("ai_ready"))
+    credits_enabled = bool(credits_truth.get("hosted_enabled"))
+    credits_reason = _state_label(credits_truth.get("reason"))
+    my_computer_state = _state_label(my_computer.get("state"))
+    byok_labels = [
+        str(item.get("label") or item.get("provider_id") or "").strip()
+        for item in byok_providers
+        if isinstance(item, dict) and str(item.get("label") or item.get("provider_id") or "").strip()
+    ]
+
+    lines = ["Here is what I can actually do in this workspace right now:"]
+    lines.append("")
+    lines.append(
+        _status_summary_line(
+            "Selected AI model",
+            f"{provider_label} ({'ready' if provider_ready else 'setup required'})",
+        )
+    )
+    lines.append(
+        _status_summary_line(
+            "Empyralis credits",
+            "available" if credits_enabled else f"blocked ({credits_reason})",
+        )
+    )
+    lines.append(_status_summary_line("My Computer", my_computer_state))
+    lines.append(_status_summary_line("Connected apps", _collect_state_labels(connected_apps)))
+    lines.append(_status_summary_line("Messaging channels", _collect_state_labels(channels)))
+    if byok_labels:
+        lines.append(_status_summary_line("AI model connections you can use", ", ".join(byok_labels[:5])))
+    lines.append("")
+    lines.append("Available tools:")
     if not grouped:
         lines.append("")
         lines.append("- No tools are currently available.")

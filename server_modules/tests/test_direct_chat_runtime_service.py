@@ -48,7 +48,7 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
                 execute_single_tool_call=lambda **kwargs: "tool reply",
             ),
             build_context_used=lambda **kwargs: kwargs,
-            resolve_provider_for_direct_chat_message=lambda workspace_id, requested_provider, message: ("openai", {}),
+            resolve_provider_for_direct_chat_message=lambda workspace_id, requested_provider, message, tools_present=False: ("openai", {}),
             plan_direct_chat_route=lambda **kwargs: SimpleNamespace(
                 allow_direct_tool_calls=True,
                 preview=None,
@@ -478,7 +478,77 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         payload = events[0]["payload"]
         self.assertEqual(payload["mode"], "connect")
         self.assertEqual(payload["interventions"][0]["title"], "My Computer setup required")
+        self.assertIn("connect My Computer", payload["interventions"][0]["detail"])
         self.assertEqual(payload["actions"][0]["label"], "Connect My Computer")
+
+    def test_collect_direct_operator_reply_answers_capability_question_from_active_catalog(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="what can you do here right now?",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="openai",
+            normalized_requested_model="gpt-5.4",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={
+                "ai_ready": True,
+                "runtime_ok": False,
+                "local_gateway_online": False,
+                "capability_truth": {
+                    "provider": {"label": "DeepSeek", "ai_ready": True},
+                    "credits": {"hosted_enabled": True, "reason": ""},
+                    "my_computer": {
+                        "online": False,
+                        "runtime_ok": False,
+                        "local_tools_available": False,
+                        "state": "offline",
+                    },
+                    "connected_apps": [
+                        {"label": "Google Workspace", "connected": True, "runtime_usable": True},
+                    ],
+                    "channels": [
+                        {"label": "Telegram", "connected": True, "runtime_usable": True},
+                    ],
+                    "byok_providers": [{"label": "DeepSeek"}, {"label": "Gemini"}, {"label": "OpenAI"}],
+                    "required_setup_actions": [{"label": "Connect My Computer", "href": "/integrations"}],
+                },
+            },
+            connected_systems=["Google Workspace", "Telegram"],
+            tool_capabilities=[],
+            tools=[
+                {"name": "web__search", "description": "Search the web"},
+                {"name": "telegram_bot__send_message", "description": "Send a Telegram message"},
+            ],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = (
+            lambda **kwargs: (_ for _ in ()).throw(AssertionError("model generation should not run for tool inventory"))
+        )
+
+        payload = direct_chat_runtime_service.collect_direct_operator_reply(
+            services=services,
+            message="what can you do here right now?",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("Here is what I can actually do in this workspace right now:", payload["reply"])
+        self.assertIn("Selected AI model: DeepSeek (ready)", payload["reply"])
+        self.assertIn("Empyralis credits: available", payload["reply"])
+        self.assertIn("My Computer: offline", payload["reply"])
+        self.assertIn("Connected apps: Google Workspace", payload["reply"])
+        self.assertIn("Messaging channels: Telegram", payload["reply"])
+        self.assertIn("Setup available now: Connect My Computer.", payload["reply"])
 
     def test_build_direct_operator_reply_returns_explicit_provider_unavailable_when_not_ready(self) -> None:
         prepared = SimpleNamespace(

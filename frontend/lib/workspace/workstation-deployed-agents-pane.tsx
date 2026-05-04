@@ -3299,9 +3299,9 @@ export function WorkstationDeployedAgentsPane({
                     <div className="deployed-agents-overlay__marketplace">
                       <div className="deployed-agents-overlay__marketplace-header">
                         <div>
-                          <strong className="deployed-agents-overlay__marketplace-title">Discover</strong>
+                          <strong className="deployed-agents-overlay__marketplace-title">Discover listing</strong>
                           <p className="deployed-agents-overlay__marketplace-hint">
-                            Control whether this assistant appears in the public Discover catalog.
+                            Build keeps assistants private by default. Only turn this on if you want this assistant to appear in Discover.
                           </p>
                         </div>
                         <button
@@ -3319,15 +3319,15 @@ export function WorkstationDeployedAgentsPane({
                       </div>
                       <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                         <FormField
-                          label="List in Discover"
-                          hint="Owners control public listing. The Telegram button disables automatically when no Telegram username is configured."
+                          label="Show in Discover"
+                          hint="Owners control public listing. Leave this off for private assistants."
                         >
                           <FormReadout
-                            label="List in Discover"
-                            value={overlayMarketplaceListed ? 'Enabled' : 'Disabled'}
+                            label="Show in Discover"
+                            value={overlayMarketplaceListed ? 'Visible in Discover' : 'Private assistant'}
                           />
                         </FormField>
-                        <FormField label="Category" hint="Examples: Medical, Legal, Finance.">
+                        <FormField label="Discover category" hint="Only used when this assistant is visible in Discover.">
                           <FormInput
                             value={overlayMarketplaceCategory}
                             onChange={(event) => setOverlayMarketplaceCategory(event.currentTarget.value)}

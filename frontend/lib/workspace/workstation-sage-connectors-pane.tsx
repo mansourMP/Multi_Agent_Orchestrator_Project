@@ -93,6 +93,8 @@ type ConnectorCardDefinition = {
   image: string;
   connectorIds?: string[];
   capabilityTags: string[];
+  summary: string;
+  setupHint: string;
 };
 
 type ConnectorCardRecord = {
@@ -225,6 +227,8 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/integrations/gmail.png',
     connectorIds: ['google_workspace'],
     capabilityTags: ['Send email', 'Read inbox'],
+    summary: 'Use one Google sign-in when Sage should work with Gmail and Google Calendar.',
+    setupHint: 'Connect Google Workspace to unlock Gmail and Calendar in one place.',
   },
   {
     id: 'google_calendar',
@@ -232,6 +236,26 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/integrations/microsoft365.png',
     connectorIds: ['google_workspace'],
     capabilityTags: ['Calendar', 'Events'],
+    summary: 'Use Google Calendar when Sage should schedule, review, or update events for you.',
+    setupHint: 'Connect Google Workspace first, then Sage can use your Google Calendar.',
+  },
+  {
+    id: 'email',
+    label: 'Email',
+    image: '',
+    connectorIds: ['google_workspace', 'microsoft_365', 'smtp'],
+    capabilityTags: ['Inbox', 'Send email'],
+    summary: 'Email is where Sage can reach people across Gmail, Outlook, or a custom SMTP inbox.',
+    setupHint: 'Connect Gmail or Microsoft 365 for the easiest setup. Use SMTP when you need a custom mailbox.',
+  },
+  {
+    id: 'discord',
+    label: 'Discord',
+    image: '',
+    connectorIds: ['discord_bot'],
+    capabilityTags: ['Servers', 'DMs'],
+    summary: 'Discord is prepared for bot-based community and team messaging.',
+    setupHint: 'Connect a Discord bot when you want Sage to reply in servers or direct messages.',
   },
   {
     id: 'slack',
@@ -239,6 +263,8 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/integrations/slack.png',
     connectorIds: ['slack'],
     capabilityTags: ['Channels', 'DMs'],
+    summary: 'Use Slack when Sage should work in team channels and direct messages.',
+    setupHint: 'Connect Slack to let Sage read and send messages in your workspace.',
   },
   {
     id: 'github',
@@ -246,6 +272,8 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/integrations/github.png',
     connectorIds: ['github'],
     capabilityTags: ['Issues', 'Pull requests'],
+    summary: 'GitHub gives Sage repo, issue, and pull-request context.',
+    setupHint: 'Connect GitHub when Sage should read or act on repositories and pull requests.',
   },
   {
     id: 'notion',
@@ -253,6 +281,8 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/integrations/notion.png',
     connectorIds: ['notion'],
     capabilityTags: ['Pages', 'Search'],
+    summary: 'Use Notion when Sage should search notes, docs, and workspace pages.',
+    setupHint: 'Connect Notion to make workspace pages available to Sage.',
   },
   {
     id: 'microsoft_365',
@@ -260,6 +290,8 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/integrations/microsoft365.png',
     connectorIds: ['microsoft_365'],
     capabilityTags: ['Mail', 'Calendar'],
+    summary: 'Microsoft 365 lets Sage work with Outlook mail and calendar in one connection.',
+    setupHint: 'Connect Microsoft 365 when your email and calendar live in Outlook.',
   },
   {
     id: 'webhook',
@@ -267,6 +299,8 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/integrations/webhook.png',
     connectorIds: ['webhook'],
     capabilityTags: ['HTTP', 'Automation'],
+    summary: 'Webhooks let Sage notify or trigger external systems without a full app connection.',
+    setupHint: 'Add a webhook when you need lightweight outbound automation.',
   },
 ];
 
@@ -751,7 +785,7 @@ function describeConnectorCard(record: ConnectorCardRecord): string {
   if (record.connected) {
     return record.definition.capabilityTags.slice(0, 2).join(' · ') || 'Ready';
   }
-  return record.definition.capabilityTags.slice(0, 2).join(' · ') || 'Connect to continue';
+  return record.definition.setupHint;
 }
 
 function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor: GatewayDoctorPayload | null): {
@@ -901,12 +935,13 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
   summary: string;
   nextStep: string | null;
 } {
+  const ownershipSummary = 'Personal WhatsApp stays on your paired device. It uses your own session and does not use the paid WhatsApp Cloud API.';
   if (!gateway) {
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
       detail: 'Pair this computer before Sage can use your WhatsApp.',
-      summary: 'Personal WhatsApp stays on your device and routes through the paired local companion.',
+      summary: ownershipSummary,
       nextStep: 'Open the device connection page and pair this computer first.',
     };
   }
@@ -919,7 +954,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Not connected',
       statusTone: 'neutral',
       detail: 'Your WhatsApp is not linked yet.',
-      summary: 'Open the device connection page to finish the personal WhatsApp login flow for Sage.',
+      summary: ownershipSummary,
       nextStep: 'Open the device connection page to start WhatsApp login.',
     };
   }
@@ -928,7 +963,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Connected',
       statusTone: 'connected',
       detail: linkedLabel ? `${linkedLabel} is linked on this device.` : 'Your WhatsApp is linked on this device.',
-      summary: 'Sage can reply through your personal WhatsApp from the paired local companion.',
+      summary: `${ownershipSummary} Sage can reply through your personal WhatsApp from the paired local companion.`,
       nextStep: null,
     };
   }
@@ -937,7 +972,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Waiting for QR/login',
       statusTone: 'warning',
       detail: 'WhatsApp is waiting for a QR scan or pairing code step.',
-      summary: 'Finish the personal WhatsApp login flow on the device connection page.',
+      summary: ownershipSummary,
       nextStep: 'Open the device connection page to complete QR or pairing code login.',
     };
   }
@@ -946,7 +981,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Reconnecting',
       statusTone: 'warning',
       detail: 'WhatsApp is reconnecting on the paired computer.',
-      summary: 'Sage will use your WhatsApp again after the local companion recovers.',
+      summary: ownershipSummary,
       nextStep: 'Open the device connection page if reconnect does not recover.',
     };
   }
@@ -954,7 +989,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
     statusLabel: 'Needs attention',
     statusTone: 'danger',
     detail: `Your WhatsApp is ${status.replace(/_/g, ' ')}.`,
-    summary: 'Open the device connection page to inspect the personal WhatsApp session on this computer.',
+    summary: ownershipSummary,
     nextStep: 'Open the device connection page to inspect WhatsApp state.',
   };
 }
@@ -966,12 +1001,13 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
   summary: string;
   nextStep: string | null;
 } {
+  const ownershipSummary = 'Personal Telegram stays on your paired device and uses your own local session.';
   if (!gateway) {
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
       detail: 'Pair this computer before Sage can use your Telegram.',
-      summary: 'Personal Telegram stays on your device and routes through the paired local companion.',
+      summary: ownershipSummary,
       nextStep: 'Open the device connection page and pair this computer first.',
     };
   }
@@ -983,7 +1019,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Not connected',
       statusTone: 'neutral',
       detail: 'Your Telegram is not linked yet.',
-      summary: 'Open the device connection page to finish the personal Telegram login flow for Sage.',
+      summary: ownershipSummary,
       nextStep: 'Open the device connection page to start Telegram login.',
     };
   }
@@ -992,7 +1028,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Connected',
       statusTone: 'connected',
       detail: linkedLabel ? `${linkedLabel} is linked on this device.` : 'Your Telegram is linked on this device.',
-      summary: 'Sage can reply through your personal Telegram from the paired local companion.',
+      summary: `${ownershipSummary} Sage can reply through your personal Telegram from the paired local companion.`,
       nextStep: null,
     };
   }
@@ -1001,7 +1037,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Waiting for QR/login',
       statusTone: 'warning',
       detail: 'Telegram is waiting for a login code or confirmation.',
-      summary: 'Finish the personal Telegram login flow on the device connection page.',
+      summary: ownershipSummary,
       nextStep: 'Open the device connection page to complete Telegram login.',
     };
   }
@@ -1010,7 +1046,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
       statusLabel: 'Reconnecting',
       statusTone: 'warning',
       detail: 'Telegram is reconnecting on the paired computer.',
-      summary: 'Sage will use your Telegram again after the local companion recovers.',
+      summary: ownershipSummary,
       nextStep: 'Open the device connection page if reconnect does not recover.',
     };
   }
@@ -1018,7 +1054,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
     statusLabel: 'Needs attention',
     statusTone: 'danger',
     detail: `Your Telegram is ${status.replace(/_/g, ' ')}.`,
-    summary: 'Open the device connection page to inspect the personal Telegram session on this computer.',
+    summary: ownershipSummary,
     nextStep: 'Open the device connection page to inspect Telegram state.',
   };
 }
@@ -1034,7 +1070,7 @@ export function WorkstationSageConnectorsPane({
   connectorIds?: string[];
   className?: string;
 } = {}) {
-  const { bootstrap } = useWorkspaceBoundary();
+  const { bootstrap, routeManifest } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const gridColumns = useResponsiveColumns();
   const cacheKey = bootstrap.workspace.id;
@@ -1590,7 +1626,21 @@ export function WorkstationSageConnectorsPane({
     if (typeof window === 'undefined') {
       return;
     }
-    window.location.assign(`/w/${encodeURIComponent(workspaceId)}/gateway`);
+    window.location.assign(routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(workspaceId)}/gateway`);
+  }
+
+  function openWorkspaceRoute(routeId: 'gateway' | 'channels' | 'gatewayActivity' | 'gatewayApprovals') {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const fallbackPath = routeId === 'gateway'
+      ? 'gateway'
+      : routeId === 'channels'
+        ? 'channels'
+        : routeId === 'gatewayActivity'
+          ? 'gateway-activity'
+          : 'gateway-approvals';
+    window.location.assign(routeManifest.routeIndex[routeId]?.href ?? `/w/${encodeURIComponent(workspaceId)}/${fallbackPath}`);
   }
 
   function openBillingSettings() {
@@ -1832,6 +1882,7 @@ export function WorkstationSageConnectorsPane({
   }
 
   function renderPersonalExpand(record: PersonalCardRecord) {
+    const showChannelActions = record.id === 'telegram_personal' || record.id === 'whatsapp_personal';
     return (
       <MotionSlidePanel className="sage-unified-expand">
         <div className="sage-unified-expand__header">
@@ -1852,14 +1903,44 @@ export function WorkstationSageConnectorsPane({
         <div className="sage-unified-expand__actions">
           <AppButton
             type="button"
-            onClick={openGatewaySurface}
+            onClick={() => {
+              if (showChannelActions) {
+                openWorkspaceRoute('channels');
+                return;
+              }
+              openGatewaySurface();
+            }}
           >
             {record.statusLabel === 'Connect computer'
               ? 'Connect this computer'
               : record.id === 'browser'
                 ? 'Open browser sessions'
-                : 'Open device connection'}
+                : showChannelActions
+                  ? 'Open pairing and send test'
+                  : 'Open device connection'}
           </AppButton>
+          {showChannelActions ? (
+            <AppButton
+              type="button"
+              tone="ghost"
+              onClick={() => {
+                openWorkspaceRoute('gatewayActivity');
+              }}
+            >
+              View activity
+            </AppButton>
+          ) : null}
+          {record.id === 'device' || showChannelActions ? (
+            <AppButton
+              type="button"
+              tone="ghost"
+              onClick={() => {
+                openWorkspaceRoute('gateway');
+              }}
+            >
+              Revoke access
+            </AppButton>
+          ) : null}
           <button
             type="button"
             className="sage-unified-expand__link"
@@ -1889,6 +1970,7 @@ export function WorkstationSageConnectorsPane({
         </div>
         {record.connected ? (
           <>
+            <div className="sage-unified-expand__text">{record.definition.summary}</div>
             <div className="sage-unified-expand__tag-row">
               {record.definition.capabilityTags.map((tag) => (
                 <span key={tag} className="sage-unified-expand__tag">{tag}</span>
@@ -1923,7 +2005,26 @@ export function WorkstationSageConnectorsPane({
               </AppButton>
             </div>
           </>
-        ) : null}
+        ) : (
+          <>
+            <div className="sage-unified-expand__text">{record.definition.summary}</div>
+            <div className="sage-unified-expand__text">{record.definition.setupHint}</div>
+            <div className="sage-unified-expand__tag-row">
+              {record.definition.capabilityTags.map((tag) => (
+                <span key={tag} className="sage-unified-expand__tag">{tag}</span>
+              ))}
+            </div>
+            <div className="sage-unified-expand__actions">
+              <button
+                type="button"
+                className="sage-unified-expand__link"
+                onClick={() => setExpandedCardId(null)}
+              >
+                Close
+              </button>
+            </div>
+          </>
+        )}
       </MotionSlidePanel>
     );
   }

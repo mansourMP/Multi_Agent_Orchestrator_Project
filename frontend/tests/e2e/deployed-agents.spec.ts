@@ -315,8 +315,8 @@ test.describe('deployed agents surface', () => {
     await loginAsOwner(page);
     await page.goto('/w/ws-1/chat');
 
-    await expect(page.getByRole('link', { name: /^studio$/i })).toBeVisible();
-    await page.getByRole('link', { name: /^studio$/i }).click();
+    await expect(page.getByRole('link', { name: /^build$/i })).toBeVisible();
+    await page.getByRole('link', { name: /^build$/i }).click();
     await expect(page).toHaveURL(/\/w\/ws-1\/studio$/);
     await expect(page.locator('[data-workstation-surface="deployed-agents"]')).toBeVisible();
   });
@@ -873,7 +873,7 @@ test.describe('deployed agents surface', () => {
     await page.getByRole('button', { name: /close specialist settings/i }).click();
     await page.goto('/w/ws-1/inbox');
     const inboxSurface = page.locator('[data-workstation-surface="deployed-agents"]');
-    await expect(inboxSurface).toContainText(/studio · inbox/i);
+    await expect(inboxSurface).toContainText(/build · inbox/i);
     await expect(inboxSurface).toContainText(/live conversation inbox/i);
     await expect(inboxSurface).toContainText(/showing 3 of 3 customer sessions/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).toContainText(/customer one/i);
@@ -918,7 +918,7 @@ test.describe('deployed agents surface', () => {
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/spreadsheet read/i);
     await page.getByRole('button', { name: /continue/i }).click();
     await page.getByLabel(/telegram state/i).selectOption('enabled');
-    await page.getByLabel(/telegram connector/i).selectOption('tg-connector-1');
+    await page.getByLabel(/telegram connected app/i).selectOption('tg-connector-1');
     await page.getByRole('button', { name: /continue/i }).click();
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/persistent customer memory/i);
     await page.getByRole('button', { name: /continue/i }).click();
@@ -932,7 +932,7 @@ test.describe('deployed agents surface', () => {
     await page.locator('[data-deployed-agent-model-select="true"]').selectOption('deepseek-reasoner');
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/managed third-party api/i);
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/reasoning, low cost, hosted api/i);
-    await page.getByLabel(/run environment/i).selectOption('cloud');
+    await page.getByLabel(/computer target/i).selectOption('cloud');
     await page.getByLabel(/billing plan/i).selectOption('free');
     await page.getByLabel(/daily message limit/i).fill('25');
     await page.getByLabel(/monthly cost cap \(usd\)/i).fill('25');

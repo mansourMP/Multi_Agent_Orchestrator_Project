@@ -84,7 +84,7 @@ async function resolveApprovalsSurfaceSelector(page) {
 }
 
 async function stubSurfaceDataRequests(page) {
-  await page.route('**/api/threads/primary?**', async (route) => {
+  await page.route('**/api/threads/primary**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -97,7 +97,7 @@ async function stubSurfaceDataRequests(page) {
     });
   });
 
-  await page.route('**/api/runs?**', async (route) => {
+  await page.route('**/api/runs**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -105,7 +105,7 @@ async function stubSurfaceDataRequests(page) {
     });
   });
 
-  await page.route('**/api/approvals?**', async (route) => {
+  await page.route('**/api/approvals**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -113,7 +113,7 @@ async function stubSurfaceDataRequests(page) {
     });
   });
 
-  await page.route('**/api/sage-memory?**', async (route) => {
+  await page.route('**/api/sage-memory**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -121,7 +121,7 @@ async function stubSurfaceDataRequests(page) {
     });
   });
 
-  await page.route('**/activity/timeline?**', async (route) => {
+  await page.route('**/activity/timeline**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -129,7 +129,7 @@ async function stubSurfaceDataRequests(page) {
     });
   });
 
-  await page.route('**/api/events/inbox/stream?**', async (route) => {
+  await page.route('**/api/events/inbox/stream**', async (route) => {
     await route.fulfill({
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
@@ -137,7 +137,7 @@ async function stubSurfaceDataRequests(page) {
     });
   });
 
-  await page.route('**/api/notifications?**', async (route) => {
+  await page.route('**/api/notifications**', async (route) => {
     const url = new URL(route.request().url());
     if (url.searchParams.get('stream') === 'true') {
       await route.fulfill({
@@ -153,6 +153,113 @@ async function stubSurfaceDataRequests(page) {
       body: JSON.stringify({ items: [] }),
     });
   });
+}
+
+async function stubChatTrustProviderRequests(page) {
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    const state = {
+      persistedTurns: [] as Array<Record<string, unknown>>,
+      persistCallCount: 0,
+      turnCallCount: 0,
+    };
+    (window as typeof window & { __e2eChatTrustState?: typeof state }).__e2eChatTrustState = state;
+
+    const jsonResponse = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), {
+      status,
+      headers: {
+        'content-type': 'application/json',
+      },
+    });
+
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+      if (url.includes('/api/providers/catalog')) {
+        return jsonResponse({
+          providers: [
+            {
+              id: 'deepseek',
+              label: 'DeepSeek',
+              kind: 'provider',
+              usable: true,
+              active: true,
+              credential_plane: 'platform_runtime',
+              platform_runtime_allowed: true,
+              provider_scopes: ['sage_personal'],
+              models: [
+                {
+                  id: 'deepseek-chat',
+                  label: 'DeepSeek Chat',
+                  provider: 'deepseek',
+                  supports_reasoning: true,
+                  reasoning_levels: ['low', 'medium', 'high'],
+                },
+              ],
+            },
+          ],
+        });
+      }
+
+      if (url.includes('/api/providers/profiles')) {
+        return jsonResponse({ items: [] });
+      }
+
+      if (url.includes('/api/sessions')) {
+        return jsonResponse({
+          session_id: 'session-e2e-chat-trust',
+          tenant_id: 't-1',
+          workspace_id: 'ws-1',
+          thread_id: 'primary',
+        });
+      }
+
+      if (url.includes('/api/threads/primary/turns')) {
+        state.persistCallCount += 1;
+        const payload = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : {};
+        state.persistedTurns.splice(0, state.persistedTurns.length, {
+          id: 'turn-user-1',
+          role: 'user',
+          status: 'completed',
+          content: payload?.content ?? '',
+          created_at: new Date().toISOString(),
+          metadata: {
+            request_id: payload?.client_request_id ?? 'req-1',
+            client_request_id: payload?.client_request_id ?? 'req-1',
+          },
+        });
+        return jsonResponse({
+          id: 'primary',
+          thread_id: 'primary',
+          title: 'Primary thread',
+          turns: state.persistedTurns,
+        });
+      }
+
+      if (url.includes('/api/threads/primary')) {
+        return jsonResponse({
+          id: 'primary',
+          thread_id: 'primary',
+          title: 'Primary thread',
+          turns: state.persistedTurns,
+        });
+      }
+
+      if (url.includes('/api/turn')) {
+        state.turnCallCount += 1;
+        return jsonResponse({
+          detail: 'The selected AI model is not ready. Switch to hosted credits/API key, connect this computer, or choose another model in Connected Apps.',
+        }, 400);
+      }
+
+      return originalFetch(input, init);
+    };
+  });
+
 }
 
 test.describe('workstation data reconciliation', () => {
@@ -173,6 +280,33 @@ test.describe('workstation data reconciliation', () => {
     await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible();
     await expect(page.locator('[data-workstation-surface="chat"]').getByText(/loading conversation history/i)).toHaveCount(0);
     await expectNoVisibleLoadingCopy(page);
+  });
+
+  test('sage chat collapses pending user turns and shows provider failures as notices', async ({ page }) => {
+    await loginAsOwner(page);
+    await stubSurfaceDataRequests(page);
+    await stubChatTrustProviderRequests(page);
+    await mountSurface(page, '/w/ws-1/sage', '[data-workstation-surface="chat"]');
+
+    await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('DeepSeek');
+    await page.getByRole('button', { name: 'Change model and reasoning' }).click();
+    await page.getByRole('button', { name: 'DeepSeek Chat' }).click();
+    const composer = page.locator('[data-workstation-chat-composer="root"] textarea');
+    await expect(composer).toBeVisible();
+    await composer.fill('hello');
+    await expect(composer).toHaveValue('hello');
+    await composer.press('Enter');
+
+    await expect(page.locator('.app-chat-status-notice')).toContainText('Action needed');
+    await expect(page.locator('.app-chat-status-notice')).toContainText(/Sage needs Empyralis credits|The selected AI model is not ready\./);
+    await expect(page.locator('.app-chat-status-notice')).toContainText('Manage credits');
+    await expect(page.locator('.app-chat-status-notice')).toContainText('Add API key');
+    await expect(page.locator('.app-chat-status-notice')).toContainText('Choose AI Model');
+    const userBubbleCount = await page.locator('[data-chat-role="user"]').filter({ hasText: 'hello' }).count();
+    expect(userBubbleCount).toBeLessThanOrEqual(1);
+    await expect(
+      page.locator('[data-chat-role="assistant"]').filter({ hasText: /Sage needs Empyralis credits|The selected AI model is not ready\./ }),
+    ).toHaveCount(0);
   });
 
   test('runs, approvals, activity, and home surfaces leave loading states and mount live data surfaces', async ({ page }) => {

@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 
 import { FirstLaunchPanel } from '@/lib/auth/first-launch-panel';
 import { loadAccountShellSessionSafely } from '@/lib/server/load-account-shell-session';
+import { resolvePrimaryProductWorkspaceId } from '@/lib/shell/workspace-membership-model';
 
 export const metadata: Metadata = {
   title: 'Welcome to Empyralis',
@@ -13,7 +14,11 @@ export const metadata: Metadata = {
 export default async function LandingPage() {
   const session = await loadAccountShellSessionSafely();
   if (session) {
-    redirect('/onboarding');
+    const workspaceId = resolvePrimaryProductWorkspaceId(session.workspaceMemberships);
+    if (workspaceId) {
+      redirect(`/w/${encodeURIComponent(workspaceId)}/sage`);
+    }
+    redirect('/workspaces/new');
   }
 
   return (

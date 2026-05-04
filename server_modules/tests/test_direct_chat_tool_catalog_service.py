@@ -109,6 +109,7 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         self.assertTrue(service.message_requests_tool_inventory("what capabilities do you have?"))
         self.assertTrue(service.message_requests_tool_inventory("what tools do you have?"))
         self.assertTrue(service.message_requests_tool_inventory("List your tools"))
+        self.assertTrue(service.message_requests_tool_inventory("What can you help me with here right now?"))
         self.assertFalse(service.message_requests_tool_inventory("use the web search tool"))
 
     def test_tool_inventory_reply_uses_actual_tool_list(self) -> None:
@@ -144,6 +145,22 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
             [{"name": "web__search", "description": "Search the web"}],
             {
                 "capability_truth": {
+                    "provider": {"label": "DeepSeek", "ai_ready": False},
+                    "credits": {"hosted_enabled": False, "reason": "policy_disabled"},
+                    "my_computer": {"state": "offline"},
+                    "connected_apps": [
+                        {"label": "Google Workspace", "connected": True, "runtime_usable": True},
+                        {"label": "GitHub", "connected": False, "runtime_usable": None},
+                    ],
+                    "channels": [
+                        {"label": "Telegram", "connected": True, "runtime_usable": True},
+                        {"label": "WhatsApp", "connected": False, "runtime_usable": False},
+                    ],
+                    "byok_providers": [
+                        {"label": "DeepSeek"},
+                        {"label": "Gemini"},
+                        {"label": "OpenAI"},
+                    ],
                     "required_setup_actions": [
                         {"label": "Connect My Computer", "href": "/integrations"},
                         {"label": "Add API key", "href": "/integrations"},
@@ -152,6 +169,12 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
             },
         )
 
+        self.assertIn("Selected AI model: DeepSeek (setup required)", reply)
+        self.assertIn("Empyralis credits: blocked (policy disabled)", reply)
+        self.assertIn("My Computer: offline", reply)
+        self.assertIn("Connected apps: Google Workspace, GitHub (not connected)", reply)
+        self.assertIn("Messaging channels: Telegram, WhatsApp (not ready)", reply)
+        self.assertIn("AI model connections you can use: DeepSeek, Gemini, OpenAI", reply)
         self.assertIn("Setup available now: Connect My Computer, Add API key.", reply)
 
 

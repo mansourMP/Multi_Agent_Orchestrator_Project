@@ -16,7 +16,8 @@ test.describe('browser auth session', () => {
     const postedSignupRequest = await signupRequest;
     expect(JSON.parse(postedSignupRequest.postData() || '{}').acquisition_token).toBe('tg-signup-token');
 
-    await page.waitForURL(/\/(w\/|onboarding|$)/);
+    await page.waitForURL(/\/w\/.+\/sage(?:[/?#]|$)/);
+    await expect(page).not.toHaveURL(/\/onboarding(?:[/?#]|$)/);
     await page.reload();
     await expect(page).not.toHaveURL(/\/login$/);
   });
@@ -33,7 +34,8 @@ test.describe('browser auth session', () => {
     const postedLoginRequest = await loginRequest;
     expect(JSON.parse(postedLoginRequest.postData() || '{}').acquisition_token).toBe('tg-login-token');
 
-    await page.waitForURL(/\/(w\/|onboarding|$)/);
+    await page.waitForURL(/\/w\/.+\/sage(?:[/?#]|$)/);
+    await expect(page).not.toHaveURL(/\/onboarding(?:[/?#]|$)/);
     await page.reload();
     await expect(page).not.toHaveURL(/\/login$/);
   });

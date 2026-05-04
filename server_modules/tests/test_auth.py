@@ -320,6 +320,21 @@ def test_register_user_assigns_real_default_workspace_identity(monkeypatch: pyte
     assert created["default_tenant_id"] == workspace_entry["tenant_id"]
 
 
+def test_register_user_bootstraps_ready_personal_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("workspace.ready@example.com", "password-123", name="Ready User")
+
+    workspace = auth._control_plane_call(
+        control_plane_repository_module.get_workspace_by_id(created["default_workspace_id"])
+    )
+
+    assert isinstance(workspace, dict)
+    shell = dict((workspace.get("metadata") or {}).get("shell") or {})
+    assert shell["preferredProfile"] == "personal_shell"
+    assert shell["defaultRoute"] == f"/w/{created['default_workspace_id']}/sage"
+    assert shell["setupCompleted"] is True
+
+
 def test_expired_token_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
 

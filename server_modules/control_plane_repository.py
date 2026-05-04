@@ -2391,7 +2391,12 @@ async def create_local_password_account(
     workspace_name = f"{display_label or email_prefix}'s Workspace".strip()
     auth_identity_id = str(uuid.uuid4())
     membership_id = str(uuid.uuid4())
-    workspace_metadata = _workspace_shell_metadata(_new_workspace_billing_metadata(), setup_completed=False)
+    workspace_metadata = _workspace_shell_metadata(
+        _new_workspace_billing_metadata(),
+        preferred_shell_profile="personal_shell",
+        default_route=f"/w/{resolved_workspace_id}/sage",
+        setup_completed=True,
+    )
 
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:

@@ -70,7 +70,7 @@ export default function SignupPage() {
     try {
       await signup(email, password, name || undefined);
       await awaitBrowserAuthReady();
-      window.location.replace('/onboarding');
+      window.location.replace('/');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Signup failed.');
     } finally {

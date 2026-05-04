@@ -25,6 +25,30 @@ FAILED_PRIOR_MESSAGE_STATUSES = {
 }
 
 
+def _compact_labels(items: Any, *, limit: int = 4) -> str:
+    labels: List[str] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or item.get("id") or "").strip()
+        if not label or label in labels:
+            continue
+        labels.append(label)
+        if len(labels) >= limit:
+            break
+    return ", ".join(labels) if labels else "none"
+
+
+def _credits_summary_line(credits_truth: Dict[str, Any]) -> str:
+    hosted_enabled = bool(credits_truth.get("hosted_enabled"))
+    reason = str(credits_truth.get("reason") or "").strip().lower()
+    if hosted_enabled:
+        return "Empyralis credits: available"
+    if reason:
+        return f"Empyralis credits: blocked ({reason.replace('_', ' ')})"
+    return "Empyralis credits: unavailable"
+
+
 def is_public_generation_error_message(content: Any) -> bool:
     normalized = re.sub(r"\s+", " ", str(content or "").strip()).lower()
     if not normalized:
@@ -112,9 +136,22 @@ def availability_lines(
     provider_ready = bool(provider_truth.get("ai_ready"))
     lines.append(f"Selected AI model: {provider_label} ({'ready' if provider_ready else 'setup required'})")
 
+    credits_truth = capability_truth.get("credits") if isinstance(capability_truth.get("credits"), dict) else {}
+    if credits_truth:
+        lines.append(_credits_summary_line(credits_truth))
+
     computer_state = str(my_computer.get("state") or "").strip().lower()
     if computer_state:
         lines.append(f"My Computer: {computer_state.replace('_', ' ')}")
+
+    connected_apps = capability_truth.get("connected_apps") if isinstance(capability_truth.get("connected_apps"), list) else []
+    channels = capability_truth.get("channels") if isinstance(capability_truth.get("channels"), list) else []
+    byok_providers = capability_truth.get("byok_providers") if isinstance(capability_truth.get("byok_providers"), list) else []
+
+    lines.append(f"Connected apps: {_compact_labels(connected_apps)}")
+    lines.append(f"Messaging channels: {_compact_labels(channels)}")
+    if byok_providers:
+        lines.append(f"Available AI connections: {_compact_labels(byok_providers)}")
 
     if setup_actions:
         action_labels = [

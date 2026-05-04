@@ -46,7 +46,11 @@ class DirectChatContextServiceTests(unittest.TestCase):
                 "tool_capabilities": [],
                 "capability_truth": {
                     "provider": {"label": "DeepSeek", "ai_ready": False},
+                    "credits": {"hosted_enabled": False, "reason": "policy_disabled"},
                     "my_computer": {"state": "offline"},
+                    "connected_apps": [{"label": "Google Workspace", "connected": True}],
+                    "channels": [{"label": "Telegram", "connected": False}],
+                    "byok_providers": [{"label": "DeepSeek"}, {"label": "Gemini"}],
                     "required_setup_actions": [{"label": "Connect My Computer"}],
                 },
             },
@@ -54,7 +58,11 @@ class DirectChatContextServiceTests(unittest.TestCase):
         )
 
         self.assertIn("Selected AI model: DeepSeek (setup required)", lines)
+        self.assertIn("Empyralis credits: blocked (policy disabled)", lines)
         self.assertIn("My Computer: offline", lines)
+        self.assertIn("Connected apps: Google Workspace", lines)
+        self.assertIn("Messaging channels: Telegram", lines)
+        self.assertIn("Available AI connections: DeepSeek, Gemini", lines)
         self.assertIn("Required setup actions: Connect My Computer", lines)
 
     def test_session_model_preference_round_trip(self) -> None:

@@ -16,6 +16,246 @@ from server_modules.provider_profiles import _build_provider_credential_candidat
 from server_modules import skills_service
 
 
+CHANNEL_CAPABILITY_IDS = {
+    "telegram_bot",
+    "whatsapp",
+    "slack",
+    "discord_bot",
+    "google_workspace",
+    "microsoft_365",
+    "smtp",
+}
+
+
+def _normalize_capability_entries(tool_capabilities: Any) -> List[Dict[str, Any]]:
+    if not isinstance(tool_capabilities, list):
+        return []
+    normalized: List[Dict[str, Any]] = []
+    for item in tool_capabilities:
+        if not isinstance(item, dict):
+            continue
+        capability_id = str(item.get("id") or "").strip().lower()
+        if not capability_id:
+            continue
+        normalized.append(
+            {
+                "id": capability_id,
+                "label": str(item.get("label") or capability_id).strip() or capability_id,
+                "connected": bool(item.get("connected")),
+                "runtime_usable": item.get("runtime_usable")
+                if isinstance(item.get("runtime_usable"), bool)
+                else None,
+                "read_actions": list(item.get("read_actions") or [])
+                if isinstance(item.get("read_actions"), list)
+                else [],
+                "write_actions": list(item.get("write_actions") or [])
+                if isinstance(item.get("write_actions"), list)
+                else [],
+                "approval_required_actions": list(item.get("approval_required_actions") or [])
+                if isinstance(item.get("approval_required_actions"), list)
+                else [],
+            }
+        )
+    return normalized
+
+
+def _append_setup_action(
+    actions: List[Dict[str, str]],
+    *,
+    action_id: str,
+    label: str,
+    href: str,
+    reason: str,
+) -> None:
+    for item in actions:
+        if str(item.get("id") or "").strip() == action_id:
+            return
+    actions.append(
+        {
+            "id": action_id,
+            "label": label,
+            "href": href,
+            "reason": reason,
+        }
+    )
+
+
+def _byok_provider_options() -> List[Dict[str, Any]]:
+    options: List[Dict[str, Any]] = []
+    for provider_id in ("deepseek", "gemini", "openai", "ollama_cloud", "anthropic"):
+        entry = provider_profiles.PROVIDER_CATALOG.get(provider_id)
+        if not isinstance(entry, dict):
+            continue
+        options.append(
+            {
+                "provider_id": provider_id,
+                "label": str(entry.get("label") or provider_id).strip() or provider_id,
+                "default_model": str(entry.get("default_model") or "").strip() or None,
+                "models": list(entry.get("models") or []),
+            }
+        )
+    return options
+
+
+def build_capability_truth(
+    *,
+    workspace_id: str,
+    provider: str,
+    provider_truth: Dict[str, Any],
+    tool_capabilities: Any,
+    runtime_ok: bool,
+    local_gateway_online: bool,
+    ai_ready: bool,
+    connection_mode: str,
+) -> Dict[str, Any]:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    provider_id = "openai-codex" if str(provider or "").strip().lower() == "codex_cli" else str(provider or "").strip().lower()
+    provider_catalog_entry = provider_profiles.PROVIDER_CATALOG.get(provider_id) or {}
+    capability_entries = _normalize_capability_entries(tool_capabilities)
+
+    connected_apps: List[Dict[str, Any]] = []
+    channels: List[Dict[str, Any]] = []
+    for item in capability_entries:
+        connected_apps.append(
+            {
+                "id": item["id"],
+                "label": item["label"],
+                "connected": bool(item.get("connected")),
+                "runtime_usable": item.get("runtime_usable")
+                if isinstance(item.get("runtime_usable"), bool)
+                else None,
+            }
+        )
+        if item["id"] in CHANNEL_CAPABILITY_IDS:
+            channels.append(
+                {
+                    "id": item["id"],
+                    "label": item["label"],
+                    "connected": bool(item.get("connected")),
+                    "runtime_usable": item.get("runtime_usable")
+                    if isinstance(item.get("runtime_usable"), bool)
+                    else None,
+                }
+            )
+
+    local_tools_online = bool(local_gateway_online and runtime_ok)
+    setup_actions: List[Dict[str, str]] = []
+    credential_plane = str(provider_truth.get("credential_plane") or "").strip().lower()
+    hosted_enabled = bool(provider_truth.get("hosted_ai_enabled"))
+    hosted_reason = str(provider_truth.get("hosted_sage_ai_reason") or "").strip().lower()
+    provider_label = str(
+        provider_truth.get("provider_label")
+        or provider_catalog_entry.get("label")
+        or provider_display_name(provider)
+    ).strip() or provider_display_name(provider)
+
+    if credential_plane == "local_runtime" and not local_gateway_online:
+        _append_setup_action(
+            setup_actions,
+            action_id="connect_my_computer",
+            label="Connect My Computer",
+            href="/integrations",
+            reason="My Computer is offline.",
+        )
+    if credential_plane == "local_runtime" and local_gateway_online and not runtime_ok:
+        _append_setup_action(
+            setup_actions,
+            action_id="restart_local_runtime",
+            label="Open My Computer",
+            href="/integrations",
+            reason="My Computer is connected, but local runtime is not healthy.",
+        )
+    if not ai_ready and credential_plane != "local_runtime":
+        if hosted_enabled:
+            _append_setup_action(
+                setup_actions,
+                action_id="connect_or_switch_model",
+                label="Choose AI Model",
+                href="/integrations",
+                reason=f"{provider_label} is selected but not ready in this workspace.",
+            )
+        else:
+            if hosted_reason in {"owner_approval_required", "cap_reached", "policy_disabled"}:
+                _append_setup_action(
+                    setup_actions,
+                    action_id="manage_credits",
+                    label="Manage credits",
+                    href="/integrations",
+                    reason="Empyralis credits are currently blocked for this workspace.",
+                )
+            _append_setup_action(
+                setup_actions,
+                action_id="add_provider_key",
+                label="Add API key",
+                href="/integrations",
+                reason=f"Add a BYOK key to use {provider_label}.",
+            )
+
+    for channel_item in channels:
+        if not channel_item.get("connected"):
+            _append_setup_action(
+                setup_actions,
+                action_id=f"connect_{channel_item['id']}",
+                label=f"Connect {channel_item['label']}",
+                href="/integrations",
+                reason=f"{channel_item['label']} is not connected.",
+            )
+
+    return {
+        "workspace_id": normalized_workspace_id,
+        "provider": {
+            "id": provider_id,
+            "label": provider_label,
+            "connection_mode": str(connection_mode or "").strip() or None,
+            "ai_ready": bool(ai_ready),
+            "credential_plane": credential_plane or None,
+            "models": list(provider_catalog_entry.get("models") or []),
+            "default_model": str(provider_catalog_entry.get("default_model") or "").strip() or None,
+        },
+        "credits": {
+            "hosted_enabled": hosted_enabled,
+            "policy": str(provider_truth.get("hosted_sage_ai_policy") or "").strip().lower() or None,
+            "reason": hosted_reason or None,
+            "monthly_cap_usd": float(provider_truth.get("hosted_sage_ai_monthly_cap_usd") or 0.0),
+            "monthly_cost_usd": float(provider_truth.get("hosted_sage_ai_monthly_cost_usd") or 0.0),
+            "monthly_remaining_usd": float(provider_truth.get("hosted_sage_ai_monthly_remaining_usd") or 0.0),
+        },
+        "byok_providers": _byok_provider_options(),
+        "my_computer": {
+            "online": bool(local_gateway_online),
+            "runtime_ok": bool(runtime_ok),
+            "local_tools_available": local_tools_online,
+            "state": (
+                "online"
+                if local_tools_online
+                else "connected_unhealthy"
+                if local_gateway_online and not runtime_ok
+                else "offline"
+            ),
+        },
+        "local_tools": {
+            "available": [
+                "file read/list",
+                "shell",
+                "browser",
+                "screenshot",
+                "clipboard",
+                "computer control",
+            ]
+            if local_tools_online
+            else [],
+            "required_state": "My Computer online",
+        },
+        "connected_apps": connected_apps,
+        "channels": channels,
+        "permissions": {
+            "requested_session_mode": None,
+            "effective_session_mode": None,
+        },
+        "required_setup_actions": setup_actions,
+    }
+
+
 def credential_auth_mode(
     provider: str,
     credentials: Optional[Dict[str, Any]],
@@ -477,12 +717,33 @@ def resolve_direct_chat_availability(
         **provider_truth,
         "tool_capabilities": tool_capabilities,
     }
+    resolved["capability_truth"] = build_capability_truth(
+        workspace_id=normalized_workspace_id,
+        provider=provider,
+        provider_truth=provider_truth,
+        tool_capabilities=tool_capabilities,
+        runtime_ok=runtime_ok,
+        local_gateway_online=local_gateway_online,
+        ai_ready=ai_ready,
+        connection_mode=connection_mode,
+    )
     if override_payload:
         resolved.update(override_payload)
         if "tool_capabilities" not in override_payload:
             resolved["tool_capabilities"] = tool_capabilities
         if "connection_mode" not in override_payload:
             resolved["connection_mode"] = connection_mode
+        if "capability_truth" not in override_payload:
+            resolved["capability_truth"] = build_capability_truth(
+                workspace_id=normalized_workspace_id,
+                provider=provider,
+                provider_truth=provider_truth,
+                tool_capabilities=resolved.get("tool_capabilities"),
+                runtime_ok=bool(resolved.get("runtime_ok")),
+                local_gateway_online=bool(resolved.get("local_gateway_online")),
+                ai_ready=bool(resolved.get("ai_ready")),
+                connection_mode=str(resolved.get("connection_mode") or ""),
+            )
     return resolved
 
 

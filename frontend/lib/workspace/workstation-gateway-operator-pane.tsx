@@ -119,6 +119,13 @@ type ChannelDraft = {
 type ChannelKind = 'whatsapp' | 'telegram';
 
 type GatewayOperatorSection = 'all' | 'status' | 'channels' | 'approvals' | 'activity';
+type MyComputerStatusLabel = 'Not set up' | 'Online' | 'Working' | 'Needs your OK' | 'Offline';
+type CapabilitySurfaceItem = {
+  id: 'files' | 'shell' | 'browser' | 'screenshots' | 'clipboard' | 'telegram' | 'whatsapp' | 'ollama';
+  label: string;
+  description: string;
+  available: boolean;
+};
 
 function buildQueryString(params: Record<string, string | number | null | undefined>): string {
   const query = new URLSearchParams();
@@ -332,6 +339,164 @@ function gatewayConnectionSummary(gateways: GatewayRegistrationRecord[]): string
     String(gateway.connection_status ?? gateway.status ?? '').trim().toLowerCase() === 'online',
   ).length;
   return onlineCount > 0 ? `${gateways.length} · ${onlineCount} online` : `${gateways.length} · Offline`;
+}
+
+function normalizeCapabilityTokenSet(values: string[]): Set<string> {
+  return new Set(
+    values
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function tokenSetHasAny(tokens: Set<string>, fragments: string[]): boolean {
+  for (const token of tokens) {
+    if (fragments.some((fragment) => token.includes(fragment))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function summarizeMyComputerCapabilities(
+  selectedGatewayCapabilities: string[],
+  providerItems: Record<string, unknown>[],
+): CapabilitySurfaceItem[] {
+  const capabilityTokens = normalizeCapabilityTokenSet(selectedGatewayCapabilities);
+  const providerTokens = new Set(
+    providerItems
+      .flatMap((item) => [readString(item.id, ''), readString(item.label, ''), readString(item.state, '')])
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const ollamaProviderAvailable = providerItems.some((item) => {
+    const id = readString(item.id, '').trim().toLowerCase();
+    const label = readString(item.label, '').trim().toLowerCase();
+    const state = readString(item.state, '').trim().toLowerCase();
+    if (!(id.includes('ollama') || label.includes('ollama'))) {
+      return false;
+    }
+    return state === 'active' || state === 'configured' || state === 'ready' || state === 'connected' || state === 'usable';
+  });
+  const hasFiles = tokenSetHasAny(capabilityTokens, ['file.', 'files.', 'fs.', 'workspace.file', 'local.file']);
+  const hasShell = tokenSetHasAny(capabilityTokens, ['shell.', 'terminal.', '.exec', 'command.run']);
+  const hasBrowser = tokenSetHasAny(capabilityTokens, ['browser.', 'web.', 'session.', 'navigator.']);
+  const hasScreenshots = tokenSetHasAny(capabilityTokens, ['screenshot', 'screen.capture', 'browser.capture']);
+  const hasClipboard = tokenSetHasAny(capabilityTokens, ['clipboard.']);
+  const hasTelegram = tokenSetHasAny(capabilityTokens, ['telegram']);
+  const hasWhatsApp = tokenSetHasAny(capabilityTokens, ['whatsapp']);
+  const hasOllama = ollamaProviderAvailable
+    || tokenSetHasAny(capabilityTokens, ['ollama'])
+    || Array.from(providerTokens).some((token) => token.includes('ollama'));
+
+  return [
+    {
+      id: 'files',
+      label: 'Files',
+      description: 'Read and list local files from this computer.',
+      available: hasFiles,
+    },
+    {
+      id: 'shell',
+      label: 'Shell',
+      description: 'Run safe terminal commands on this computer.',
+      available: hasShell,
+    },
+    {
+      id: 'browser',
+      label: 'Browser',
+      description: 'Use local browser sessions and actions.',
+      available: hasBrowser,
+    },
+    {
+      id: 'screenshots',
+      label: 'Screenshots',
+      description: 'Capture visual snapshots during local work.',
+      available: hasScreenshots,
+    },
+    {
+      id: 'clipboard',
+      label: 'Clipboard',
+      description: 'Read/write clipboard content when allowed.',
+      available: hasClipboard,
+    },
+    {
+      id: 'telegram',
+      label: 'Telegram',
+      description: 'Use personal Telegram through this connected computer.',
+      available: hasTelegram,
+    },
+    {
+      id: 'whatsapp',
+      label: 'WhatsApp',
+      description: 'Use personal WhatsApp through this connected computer.',
+      available: hasWhatsApp,
+    },
+    {
+      id: 'ollama',
+      label: 'Ollama',
+      description: 'Use local Ollama models when available on this computer.',
+      available: hasOllama,
+    },
+  ];
+}
+
+function summarizeMyComputerStatus(params: {
+  gateways: GatewayRegistrationRecord[];
+  selectedGateway: GatewayRegistrationRecord | null;
+  doctorStatus: string;
+  approvalsPendingCount: number;
+  busyActionKey: string | null;
+}): { label: MyComputerStatusLabel; tone: 'neutral' | 'success' | 'warning' | 'danger'; detail: string } {
+  const { gateways, selectedGateway, doctorStatus, approvalsPendingCount, busyActionKey } = params;
+  if (gateways.length === 0) {
+    return {
+      label: 'Not set up',
+      tone: 'neutral',
+      detail: 'Connect a computer to unlock local tools.',
+    };
+  }
+
+  const selected = selectedGateway ?? gateways[0] ?? null;
+  const connection = String(selected?.connection_status ?? selected?.status ?? '').trim().toLowerCase();
+  const doctor = String(doctorStatus ?? '').trim().toLowerCase();
+  const offline = ['offline', 'revoked', 'blocked', 'not_attached', 'attach_failed', 'disconnected'].includes(connection)
+    || ['offline', 'failed', 'fail', 'blocked'].includes(doctor);
+  if (offline) {
+    return {
+      label: 'Offline',
+      tone: 'danger',
+      detail: 'Sage cannot use local tools until this computer reconnects.',
+    };
+  }
+  if (approvalsPendingCount > 0) {
+    return {
+      label: 'Needs your OK',
+      tone: 'warning',
+      detail: 'Sage is waiting for approval before continuing local actions.',
+    };
+  }
+  if (busyActionKey && !busyActionKey.startsWith('pairing') && !busyActionKey.startsWith('revoke:')) {
+    return {
+      label: 'Working',
+      tone: 'warning',
+      detail: 'A local task is currently in progress.',
+    };
+  }
+  const online = ['online', 'connected', 'attached', 'healthy', 'active', 'pass'].includes(connection)
+    || ['online', 'healthy', 'pass'].includes(doctor);
+  if (online) {
+    return {
+      label: 'Online',
+      tone: 'success',
+      detail: 'Sage can use this computer now.',
+    };
+  }
+  return {
+    label: 'Offline',
+    tone: 'danger',
+    detail: 'This computer is not ready for local tasks yet.',
+  };
 }
 
 function doctorDisplayStatus(status: unknown): { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' | 'accent' } {
@@ -910,6 +1075,14 @@ export function WorkstationGatewayOperatorPane({
   const providerItems = Array.isArray(readRecord(doctor?.providers).items)
     ? (readRecord(doctor?.providers).items as Record<string, unknown>[])
     : [];
+  const myComputerStatus = summarizeMyComputerStatus({
+    gateways,
+    selectedGateway,
+    doctorStatus,
+    approvalsPendingCount,
+    busyActionKey,
+  });
+  const myComputerCapabilities = summarizeMyComputerCapabilities(selectedGatewayCapabilities, providerItems);
   const showStatusSection = initialSection === 'all' || initialSection === 'status';
   const showChannelsSection = initialSection === 'all' || initialSection === 'channels';
   const showApprovalsSection = initialSection === 'all' || initialSection === 'approvals';
@@ -950,17 +1123,22 @@ export function WorkstationGatewayOperatorPane({
 
         <WorkstationSurfaceStatGrid>
           <WorkstationSurfaceStat
-            label="Connected computers"
-            value={gatewayConnectionSummary(gateways)}
-            hint="Trusted local runtime edges in this workspace"
+            label="My Computer"
+            value={<DataBadge tone={myComputerStatus.tone}>{myComputerStatus.label}</DataBadge>}
+            hint={myComputerStatus.detail}
           />
           <WorkstationSurfaceStat
-            label="Doctor"
+            label="Connected computers"
+            value={gatewayConnectionSummary(gateways)}
+            hint="Trusted local computer edges in this workspace"
+          />
+          <WorkstationSurfaceStat
+            label="Health"
             value={<DataBadge tone={doctorStatusDisplay.tone}>{doctorStatusDisplay.label}</DataBadge>}
             hint="Selected computer health posture"
           />
           <WorkstationSurfaceStat
-            label="Pending approvals"
+            label="Needs your OK"
             value={String(approvalsPendingCount)}
             hint="Local actions waiting for review"
           />
@@ -1013,8 +1191,8 @@ export function WorkstationGatewayOperatorPane({
         </FormSection>
 
         <FormSection
-          title={`Pair this ${pairingDeviceLabel}`}
-          description="Create a short-lived pairing token for the local companion on this trusted computer."
+          title={`Connect this ${pairingDeviceLabel}`}
+          description="Create a short-lived connection request for this trusted computer."
         >
           <FormGrid columns="repeat(2, minmax(0, 1fr))">
             <FormField label="Device label" hint="Human-readable name shown in operator surfaces.">
@@ -1042,22 +1220,18 @@ export function WorkstationGatewayOperatorPane({
               void handleCreatePairingIntent();
             }}
           >
-              {busyActionKey === 'pairing' ? 'Creating pairing…' : `Pair this ${pairingDeviceLabel}`}
+              {busyActionKey === 'pairing' ? 'Creating connection…' : 'Connect computer'}
             </WorkstationActionButton>
           </div>
         </FormSection>
 
         {pairingIntent ? (
           <FormSection
-            title={`Finish on this ${pairingDeviceLabel}`}
-            description="Copy one command, paste it into Terminal, and press Return. This is the launch setup path until the packaged companion download is published."
+            title="Advanced terminal setup"
+            description="Fallback setup for advanced users. Copy one command, paste it into Terminal, and press Return."
             className="gateway-pairing-command-section"
           >
             <FormGrid>
-              <FormReadout
-                label="Pairing token"
-                value={<code>{readString(pairingIntent.pairing_token, 'Unavailable')}</code>}
-              />
               <FormReadout
                 label="Expires"
                 value={formatTimestamp(pairingIntent.expires_at)}
@@ -1074,26 +1248,17 @@ export function WorkstationGatewayOperatorPane({
             <div className="gateway-pairing-command-card">
               <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
                 <div className="gateway-pairing-command-card__copy">
-                  <strong>Run on this Mac</strong>
-                  <span>Use this if Empyralis Companion is not already connected.</span>
+                  <strong>Run on this computer</strong>
+                  <span>Use this only if Empyralis Companion is not already connected.</span>
                 </div>
                 <div className="app-inline-actions app-inline-actions--tight">
-                  <WorkstationActionButton
-                    type="button"
-                    tone="secondary"
-                    onClick={() => {
-                      void copyToClipboard('Pairing token', readString(pairingIntent.pairing_token, ''));
-                    }}
-                  >
-                    Copy token
-                  </WorkstationActionButton>
                   <WorkstationActionButton
                     type="button"
                     onClick={() => {
                       void copyToClipboard('Companion command', gatewayPairingCommand(pairingIntent.pairing_token));
                     }}
                   >
-                    Copy command
+                    Copy setup command
                   </WorkstationActionButton>
                 </div>
               </div>
@@ -1160,15 +1325,35 @@ export function WorkstationGatewayOperatorPane({
             <FormReadout label="Last seen" value={formatTimestamp(selectedGateway.last_seen_at)} />
             <FormReadout label="Checkpoint lane" value={<DataBadge tone={statusTone(readRecord(doctor?.checkpoint).status)}>{checkpointStatus.status}</DataBadge>} />
             <FormReadout label="Browser lane" value={<DataBadge tone={statusTone(readRecord(doctor?.browser).status)}>{browserLaneStatus.status}</DataBadge>} />
-            <FormReadout label="Studio specialists" value={<DataBadge tone={statusTone(readRecord(doctor?.specialists).status)}>{specialistStatus.status}</DataBadge>} />
-            <FormReadout label="Provider reachability" value={<DataBadge tone={statusTone(readRecord(doctor?.providers).status)}>{providerStatus.status}</DataBadge>} />
+            <FormReadout label="Build assistants" value={<DataBadge tone={statusTone(readRecord(doctor?.specialists).status)}>{specialistStatus.status}</DataBadge>} />
+            <FormReadout label="AI model reachability" value={<DataBadge tone={statusTone(readRecord(doctor?.providers).status)}>{providerStatus.status}</DataBadge>} />
             <FormReadout label="Quota state" value={<DataBadge tone={statusTone(readRecord(doctor?.quota).status)}>{quotaStatus.status}</DataBadge>} />
-            <FormReadout label="Approvals waiting" value={String(approvalsPendingCount)} />
+            <FormReadout label="Needs your OK waiting" value={String(approvalsPendingCount)} />
           </FormGrid>
 
           <FormSection
-            title="Capability manifest"
-            description="These are the local actions this paired computer declares to the cloud. Sage should use this manifest as truth instead of guessing."
+            title="What Sage can use on this computer"
+            description="Capability truth from this paired computer."
+          >
+            <WorkstationSurfaceList>
+              {myComputerCapabilities.map((capability) => (
+                <WorkstationSurfaceListItem
+                  key={capability.id}
+                  title={capability.label}
+                  description={capability.description}
+                  actions={(
+                    <DataBadge tone={capability.available ? 'success' : 'neutral'}>
+                      {capability.available ? 'Available' : 'Not available'}
+                    </DataBadge>
+                  )}
+                />
+              ))}
+            </WorkstationSurfaceList>
+          </FormSection>
+
+          <FormSection
+            title="Advanced capability manifest"
+            description="Raw capability IDs reported by this computer."
           >
             {selectedGatewayCapabilities.length > 0 ? (
               <div className="app-inline-actions app-inline-actions--tight app-inline-actions--wrap">
@@ -1227,7 +1412,7 @@ export function WorkstationGatewayOperatorPane({
                 )}
               />
               <WorkstationSurfaceListItem
-                title="Studio specialist health"
+                title="Build assistant health"
                 subtitle={specialistStatus.status}
                 description={specialistStatus.summary}
                 actions={(
@@ -1264,7 +1449,7 @@ export function WorkstationGatewayOperatorPane({
               {specialistItems.map((item) => (
                 <WorkstationSurfaceListItem
                   key={readString(item.deployed_agent_id, readString(item.name, 'specialist'))}
-                  title={readString(item.name, 'Studio specialist')}
+                  title={readString(item.name, 'Build assistant')}
                   subtitle={humanizeToken(item.deployment_state, 'Unknown')}
                   description={readString(item.summary, 'No detail available.')}
                   actions={(
@@ -1282,9 +1467,9 @@ export function WorkstationGatewayOperatorPane({
               {providerItems.map((item) => (
                 <WorkstationSurfaceListItem
                   key={readString(item.id, readString(item.label, 'provider'))}
-                  title={readString(item.label, 'Provider')}
+                  title={readString(item.label, 'AI model provider')}
                   subtitle={humanizeToken(item.state, 'Unknown')}
-                  description={readString(item.state_detail, 'No provider detail available.')}
+                  description={readString(item.state_detail, 'No AI model provider detail available.')}
                   actions={(
                     <DataBadge tone={statusTone(item.state === 'active' ? 'pass' : 'fail')}>
                       {humanizeToken(item.state, 'Unknown')}
@@ -1496,7 +1681,7 @@ export function WorkstationGatewayOperatorPane({
 
       {selectedGateway && showApprovalsSection ? (
         <WorkstationSurfaceCard
-          title="Permission requests"
+          title="Needs your OK requests"
           description="Resolve risky local actions without leaving the product shell."
         >
           {pendingApprovals.length === 0 ? (
@@ -1516,7 +1701,7 @@ export function WorkstationGatewayOperatorPane({
                     key={approvalId}
                     title={humanizeToken(approval.capability_id, 'Local permission request')}
                     subtitle={`${approvalId} · Run ${readString(approval.run_id, 'unlinked')}`}
-                    description={readString(approval.note, 'Approval required before Sage can continue on the paired device.')}
+                    description={readString(approval.note, 'Needs your OK before Sage can continue on the paired device.')}
                     actions={(
                       <div className="app-inline-actions app-inline-actions--tight">
                         <DataBadge tone={statusTone(approval.status)}>

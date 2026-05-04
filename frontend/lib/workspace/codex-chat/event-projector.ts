@@ -130,6 +130,29 @@ function toolDisplayName(rawName: string): string {
   return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function browserActionDisplay(action: string): string {
+  const normalized = action.toLowerCase();
+  if (!normalized) {
+    return 'Browser action';
+  }
+  if (normalized.includes('click')) {
+    return 'Browser action · Click';
+  }
+  if (normalized.includes('type') || normalized.includes('input')) {
+    return 'Browser action · Type';
+  }
+  if (normalized.includes('navigate') || normalized.includes('goto') || normalized.includes('open')) {
+    return 'Browser action · Navigate';
+  }
+  if (normalized.includes('scroll')) {
+    return 'Browser action · Scroll';
+  }
+  if (normalized.includes('select')) {
+    return 'Browser action · Select';
+  }
+  return `Browser action · ${action.replace(/[_-]+/g, ' ')}`.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function eventId(prefix: string, candidate: unknown, fallbackIndex: number): string {
   return readString(candidate) || `${prefix}:${fallbackIndex}`;
 }
@@ -193,13 +216,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   const metadata = readObject(payload.metadata);
 
   if (eventType === 'trace.started') {
-    return [{
-      type: 'status',
-      id: eventId('trace', payload.trace_id, fallbackIndex),
-      label: 'Started',
-      detail: null,
-      status: 'running',
-    }];
+    return [];
   }
 
   if (eventType === 'reasoning.summary.delta') {
@@ -299,6 +316,40 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     }];
   }
 
+  if (eventType === 'browser.action' || eventType === 'computer.browser.action') {
+    const action = readString(data.action) || readString(data.kind) || readString(data.event) || 'Action';
+    const summary = readString(data.summary) || readString(data.detail) || null;
+    return [{
+      type: 'tool_result',
+      id: eventId('browser-action', payload.item_id || payload.tool_call_id, fallbackIndex),
+      name: browserActionDisplay(action),
+      status: readString(data.status).toLowerCase() === 'error' ? 'error' : 'done',
+      result: summary,
+    }];
+  }
+
+  if (eventType.includes('telegram')) {
+    const status = readString(data.status).toLowerCase() === 'error' ? 'error' : 'done';
+    return [{
+      type: 'tool_result',
+      id: eventId('telegram', payload.item_id || payload.tool_call_id, fallbackIndex),
+      name: 'Telegram',
+      status,
+      result: readString(data.summary) || readString(data.message) || null,
+    }];
+  }
+
+  if (eventType.includes('whatsapp')) {
+    const status = readString(data.status).toLowerCase() === 'error' ? 'error' : 'done';
+    return [{
+      type: 'tool_result',
+      id: eventId('whatsapp', payload.item_id || payload.tool_call_id, fallbackIndex),
+      name: 'WhatsApp',
+      status,
+      result: readString(data.summary) || readString(data.message) || null,
+    }];
+  }
+
   if (eventType === 'search.query') {
     return [{
       type: 'web_search_started',
@@ -354,6 +405,13 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
         status: 'done',
       }];
     }
+    return [{
+      type: 'status',
+      id: eventId('artifact', data.artifact_id || data.artifactId || payload.item_id, fallbackIndex),
+      label: 'Result or file ready',
+      detail: readString(data.title) || readString(data.label) || readString(data.mime_type) || null,
+      status: 'done',
+    }];
   }
 
   if (eventType === 'plan.item.created') {
@@ -383,6 +441,21 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       type: 'approval_request',
       id: eventId('approval', data.approval_id || data.id || payload.item_id, fallbackIndex),
       prompt: readString(data.prompt) || readString(data.message) || 'Approval required',
+    }];
+  }
+
+  if (
+    eventType === 'trace.completed'
+    || eventType === 'run.completed'
+    || eventType === 'turn.completed'
+    || eventType === 'assistant.completed'
+  ) {
+    return [{
+      type: 'status',
+      id: eventId('done', payload.trace_id || payload.item_id, fallbackIndex),
+      label: 'Done',
+      detail: null,
+      status: 'done',
     }];
   }
 

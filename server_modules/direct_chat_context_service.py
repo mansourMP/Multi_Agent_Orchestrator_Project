@@ -92,13 +92,39 @@ def availability_lines(
     labels = skills_service.availability_label_summary(
         {"tool_capabilities": normalize_tool_capabilities(availability)}
     )
-    return [
+    lines = [
         f"Workspace: {workspace_id or 'default'}",
         f"AI account: {'ready' if ai_ready else 'not ready'}",
         f"Connected systems: {', '.join(labels['connected']) if labels['connected'] else 'none'}",
         f"Unavailable now: {', '.join(labels['unavailable']) if labels['unavailable'] else 'none'}",
         f"Not verified: {', '.join(labels['unverified']) if labels['unverified'] else 'none'}",
     ]
+    capability_truth = availability.get("capability_truth") if isinstance(availability.get("capability_truth"), dict) else {}
+    provider_truth = capability_truth.get("provider") if isinstance(capability_truth.get("provider"), dict) else {}
+    my_computer = capability_truth.get("my_computer") if isinstance(capability_truth.get("my_computer"), dict) else {}
+    setup_actions = (
+        capability_truth.get("required_setup_actions")
+        if isinstance(capability_truth.get("required_setup_actions"), list)
+        else []
+    )
+
+    provider_label = str(provider_truth.get("label") or availability.get("provider") or "AI").strip() or "AI"
+    provider_ready = bool(provider_truth.get("ai_ready"))
+    lines.append(f"Selected AI model: {provider_label} ({'ready' if provider_ready else 'setup required'})")
+
+    computer_state = str(my_computer.get("state") or "").strip().lower()
+    if computer_state:
+        lines.append(f"My Computer: {computer_state.replace('_', ' ')}")
+
+    if setup_actions:
+        action_labels = [
+            str(item.get("label") or "").strip()
+            for item in setup_actions
+            if isinstance(item, dict) and str(item.get("label") or "").strip()
+        ]
+        if action_labels:
+            lines.append(f"Required setup actions: {', '.join(action_labels[:4])}")
+    return lines
 
 
 def connected_system_labels(

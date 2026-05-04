@@ -435,7 +435,7 @@ export function ChatMessage({
       || lowerText.includes('selected provider')
       || lowerText.includes('selected for chat')
       || lowerText.includes('local-only')
-      ? 'Choose Empyralis credits, add a provider key, or connect the required local runtime.'
+      ? 'Choose Empyralis credits, add an AI model key, or connect this computer.'
       : text;
     return (
       <article
@@ -446,7 +446,7 @@ export function ChatMessage({
           <CircleAlert size={14} strokeWidth={1.9} />
         </span>
         <div className="app-chat-transcript-error__copy">
-          <strong>Provider attention needed</strong>
+          <strong>AI model attention needed</strong>
           <span>{providerNoticeText}</span>
         </div>
         {actionHref && actionLabel ? (

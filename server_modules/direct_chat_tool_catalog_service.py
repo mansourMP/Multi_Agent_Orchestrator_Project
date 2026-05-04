@@ -286,6 +286,16 @@ def direct_chat_tool_inventory_reply(tools: List[Dict[str, Any]], availability_p
         availability_payload.get("cloud_computer_online")
         or availability_payload.get("cloud_computer_available")
     )
+    capability_truth = (
+        availability_payload.get("capability_truth")
+        if isinstance(availability_payload.get("capability_truth"), dict)
+        else {}
+    )
+    setup_actions = (
+        capability_truth.get("required_setup_actions")
+        if isinstance(capability_truth.get("required_setup_actions"), list)
+        else []
+    )
     lines = ["These are the tools currently available in this workspace:"]
     if not grouped:
         lines.append("")
@@ -306,5 +316,13 @@ def direct_chat_tool_inventory_reply(tools: List[Dict[str, Any]], availability_p
         )
     else:
         lines.append("Local machine tools require the gateway to be online. Sage Cloud Computer can run cloud-side computer tasks only when enabled.")
+    if setup_actions:
+        labels = [
+            str(item.get("label") or "").strip()
+            for item in setup_actions
+            if isinstance(item, dict) and str(item.get("label") or "").strip()
+        ]
+        if labels:
+            lines.append(f"Setup available now: {', '.join(labels[:4])}.")
     lines.append("Tool availability is based on gateway status, connector state, and workspace policy, not the selected model provider.")
     return "\n".join(lines).strip()

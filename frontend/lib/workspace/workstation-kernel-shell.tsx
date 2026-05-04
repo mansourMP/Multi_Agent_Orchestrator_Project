@@ -59,7 +59,7 @@ export function WorkstationKernelShell({
           ? { ...memoryRoute, label: 'Memory' as const }
           : null,
         integrationsRoute
-          ? { ...integrationsRoute, label: 'Integrations' as const }
+          ? { ...integrationsRoute, label: 'Connected Apps' as const }
           : null,
       ].filter((route): route is NonNullable<typeof route> => Boolean(route));
     }

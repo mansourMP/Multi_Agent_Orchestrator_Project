@@ -82,7 +82,7 @@ type HostedSageAiSnapshot = {
 };
 
 type ProviderPickerSection = {
-  id: 'byok' | 'hosted';
+  id: 'byok' | 'hosted' | 'local';
   label: string;
   items: ProviderCardRecord[];
 };
@@ -185,7 +185,6 @@ const FALLBACK_PROVIDER_IDS = [
   'gemini',
   'openai',
   'ollama_cloud',
-  'anthropic',
   'openai-codex',
   'vertex',
   'mistral',
@@ -595,7 +594,7 @@ function providerIsLocalOnly(record: ProviderCardRecord | null): boolean {
 
 function providerPickerStatusLabel(record: ProviderCardRecord, localCompanionOnline: boolean): string {
   if (providerNeedsGateway(record.provider.id) && !localCompanionOnline) {
-    return 'Requires connected computer';
+    return 'Connect My Computer';
   }
   return record.connected ? 'Connected' : 'Not configured';
 }
@@ -786,7 +785,7 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
     statusLabel: 'Needs attention',
     statusTone: 'danger',
     detail: 'This computer is paired, but the local companion is offline or degraded.',
-    summary: 'Open the device connection page to reconnect the local runtime and clear device health issues.',
+    summary: 'Open the device connection page to reconnect this computer and clear device health issues.',
     nextStep: 'Open the device connection page to reconnect or inspect health.',
   };
 }
@@ -831,7 +830,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
   const attachStatus = readString(browserAttachRecord.status).toLowerCase();
   if (attachApprovalRequiredCount > 0) {
     return {
-      statusLabel: 'Approval needed',
+      statusLabel: 'Needs your OK',
       statusTone: 'warning',
       detail: 'Signed-in browser attach is waiting for approval.',
       summary: 'Public web search can stay in cloud, but your private browser sessions stay on this device and need approval from the paired computer first.',
@@ -1159,7 +1158,7 @@ export function WorkstationSageConnectorsPane({
     void loadState()
       .catch((loadError) => {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Integrations are unavailable right now.');
+          setError(loadError instanceof Error ? loadError.message : 'Connected Apps are unavailable right now.');
         }
       })
       .finally(() => {
@@ -1236,7 +1235,13 @@ export function WorkstationSageConnectorsPane({
       profile,
       connected,
       keyTail: maskKeyTail(credential),
-    };
+    } satisfies ProviderCardRecord;
+  }).filter((record) => {
+    const providerId = readString(record.provider.id).toLowerCase();
+    if (providerId === 'anthropic') {
+      return record.connected || record.provider.active;
+    }
+    return true;
   }), [credentials, localCompanionOnline, profiles, providerModelOverrides, providers]);
 
   const hostedProviderCard = useMemo(() => {
@@ -1251,7 +1256,7 @@ export function WorkstationSageConnectorsPane({
     if (hostedEligibleCards.length === 0) {
       return null;
     }
-    const launchHostedPriority = ['deepseek', 'gemini', 'openai', 'anthropic'];
+    const launchHostedPriority = ['deepseek', 'gemini', 'openai'];
     for (const providerId of launchHostedPriority) {
       const preferred = hostedEligibleCards.find((record) => record.provider.id === providerId);
       if (preferred) {
@@ -1287,6 +1292,9 @@ export function WorkstationSageConnectorsPane({
     const byokItems = orderedByokIds
       .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
       .filter((record): record is ProviderCardRecord => Boolean(record));
+    const localItems = ['ollama']
+      .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
+      .filter((record): record is ProviderCardRecord => Boolean(record));
     const sections: ProviderPickerSection[] = [];
     if (hostedProviderCard || hostedSageAi.planAllowsHostedAi) {
       sections.push({
@@ -1300,6 +1308,13 @@ export function WorkstationSageConnectorsPane({
       label: 'Use your own API key',
       items: byokItems,
     });
+    if (localItems.length > 0) {
+      sections.push({
+        id: 'local',
+        label: 'Use My Computer (local Ollama)',
+        items: localItems,
+      });
+    }
     return sections;
   }, [hostedProviderCard, hostedSageAi.planAllowsHostedAi, providerCards]);
 
@@ -1400,7 +1415,7 @@ export function WorkstationSageConnectorsPane({
       await refreshAfterMutation(`${record.label} is now connected.`);
       setProviderDraftKeys((current) => ({ ...current, [record.id]: '' }));
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Provider connection failed.');
+      setError(saveError instanceof Error ? saveError.message : 'AI model connection failed.');
     } finally {
       setBusyCardId(null);
     }
@@ -1474,7 +1489,7 @@ export function WorkstationSageConnectorsPane({
       setProviderPickerDraftId(null);
       setProviderPickerOpen(false);
     } catch (selectionError) {
-      setError(selectionError instanceof Error ? selectionError.message : 'Could not select this provider.');
+      setError(selectionError instanceof Error ? selectionError.message : 'Could not select this AI model.');
     } finally {
       setBusyCardId(null);
     }
@@ -1506,7 +1521,7 @@ export function WorkstationSageConnectorsPane({
       setProviderPickerDraftId(null);
       setProviderPickerOpen(false);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Provider connection failed.');
+      setError(saveError instanceof Error ? saveError.message : 'AI model connection failed.');
     } finally {
       setBusyCardId(null);
     }
@@ -1526,7 +1541,7 @@ export function WorkstationSageConnectorsPane({
       await refreshAfterMutation(`${record.label} disconnected.`);
       setExpandedCardId(null);
     } catch (disconnectError) {
-      setError(disconnectError instanceof Error ? disconnectError.message : 'Provider disconnect failed.');
+      setError(disconnectError instanceof Error ? disconnectError.message : 'AI model disconnect failed.');
     } finally {
       setBusyCardId(null);
     }
@@ -1545,7 +1560,7 @@ export function WorkstationSageConnectorsPane({
       await refreshAfterMutation(`${record.label} disconnected.`);
       setExpandedCardId(null);
     } catch (disconnectError) {
-      setError(disconnectError instanceof Error ? disconnectError.message : 'Connector disconnect failed.');
+      setError(disconnectError instanceof Error ? disconnectError.message : 'Connected app disconnect failed.');
     } finally {
       setBusyCardId(null);
     }
@@ -1797,10 +1812,10 @@ export function WorkstationSageConnectorsPane({
     const rows = chunkItems(fallbackProviderCatalog(), gridColumns);
     return (
       <section className="sage-unified-section">
-        <p className="sage-unified-section__label">AI Providers</p>
+        <p className="sage-unified-section__label">AI Models</p>
         {rows.map((row, rowIndex) => (
           <div
-            key={`AI Providers-skeleton-${rowIndex}`}
+            key={`AI Models-skeleton-${rowIndex}`}
             className={joinClassNames('sage-unified-grid', gridColumns === 2 ? 'sage-unified-grid--2' : 'sage-unified-grid--4')}
           >
             {row.map((provider) => (
@@ -1940,6 +1955,7 @@ export function WorkstationSageConnectorsPane({
 
   function renderProviderPickerRow(record: ProviderCardRecord, sectionId: ProviderPickerSection['id']) {
     const isHostedSection = sectionId === 'hosted';
+    const isLocalSection = sectionId === 'local';
     const pickerConnected = sectionId === 'hosted'
       ? hostedSageAi.allowed
       : providerPickerConnected(record, localCompanionOnline);
@@ -1947,9 +1963,17 @@ export function WorkstationSageConnectorsPane({
     const requiresSecret = providerRequiresSecret(record.provider, record.profile);
     const showInlineKey = !isHostedSection && providerPickerDraftId === record.id && !pickerConnected && requiresSecret;
     const busy = busyCardId === record.id;
-    const displayLabel = sectionId === 'hosted' ? 'Empyralis default model' : record.label;
+    const displayLabel = sectionId === 'hosted'
+      ? 'Empyralis default model'
+      : record.provider.id === 'ollama_cloud'
+        ? 'Ollama Cloud (API key)'
+        : record.provider.id === 'ollama'
+          ? 'Ollama on My Computer'
+          : record.label;
     const detailLabel = sectionId === 'hosted'
       ? hostedProviderDetailLabel(hostedSageAi, record)
+      : isLocalSection
+        ? (localCompanionOnline ? 'Uses models available on this computer' : 'Connect My Computer first')
       : providerPickerStatusLabel(record, localCompanionOnline);
     return (
       <div key={`${sectionId}:${record.id}`} className={joinClassNames('sage-provider-picker__item', isHostedSection && 'sage-provider-picker__item--hosted')}>
@@ -2028,7 +2052,7 @@ export function WorkstationSageConnectorsPane({
   return (
     <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)}>
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
-      {error ? <AppNotice tone="warning">Integrations could not refresh. Try again when ready.</AppNotice> : null}
+      {error ? <AppNotice tone="warning">Connected Apps could not refresh. Try again when ready.</AppNotice> : null}
 
       <div className="sage-unified-page">
         {isLoading ? (
@@ -2048,7 +2072,7 @@ export function WorkstationSageConnectorsPane({
         {showProviders ? (
           isLoading ? renderProviderSkeletons() : (
             <section className="sage-unified-section">
-              <p className="sage-unified-section__label">AI Providers</p>
+              <p className="sage-unified-section__label">AI Models</p>
               <div className="sage-hosted-credits">
                 <div className="sage-hosted-credits__copy">
                   <strong className="sage-hosted-credits__title">Empyralis credits</strong>
@@ -2106,8 +2130,8 @@ export function WorkstationSageConnectorsPane({
                     </>
                   ) : (
                     <div className="sage-provider-active__copy">
-                      <strong className="sage-provider-active__name">No provider active</strong>
-                      <span className="sage-provider-active__model">Choose a provider to start chatting.</span>
+                      <strong className="sage-provider-active__name">No AI model active</strong>
+                      <span className="sage-provider-active__model">Choose an AI model to start chatting.</span>
                     </div>
                   )}
                   <AppButton
@@ -2140,8 +2164,8 @@ export function WorkstationSageConnectorsPane({
 
       <CommandSheet
         open={providerPickerOpen}
-        title="Choose provider"
-        description="Use Empyralis credits by default, or connect your own API key for direct provider billing."
+        title="Choose AI model"
+        description="Use Empyralis credits by default, or connect your own API key for direct model billing."
         onClose={() => {
           setProviderPickerOpen(false);
           setProviderPickerDraftId(null);

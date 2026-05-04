@@ -162,7 +162,10 @@ type SendFailureNotice = {
   message: string;
   retryable: boolean;
   retryDraft?: string | null;
-  actionTarget?: 'integrations' | null;
+  actions?: {
+    label: string;
+    target: 'gateway' | 'integrations';
+  }[];
 };
 
 type ChatMachineTrust = 'personal' | 'agent';
@@ -619,12 +622,15 @@ function isSyntheticTranscriptMessage(message: WorkstationChatMessageRecord): bo
   }
   const metadata = readObject(message.metadata);
   const displayKind = readString(metadata.display_kind).toLowerCase();
-  if (displayKind === 'status_notice' || displayKind === 'local_access_notice') {
+  if (displayKind === 'status_notice' || displayKind === 'local_access_notice' || displayKind === 'provider_error') {
     return true;
   }
   const normalized = readString(message.content).toLowerCase();
   if (!normalized) {
     return false;
+  }
+  if (isProviderRuntimeGateMessage(normalized)) {
+    return true;
   }
   if (normalized.startsWith('turn submitted.')) {
     return true;
@@ -674,6 +680,28 @@ function isProviderRuntimeGateMessage(message: string): boolean {
     || normalized.includes('connect this computer, switch to empyralis credits')
     || normalized.includes('required local runtime')
   );
+}
+
+function isProviderGateSystemCell(cell: CodexTranscriptCell): boolean {
+  if (cell.kind === 'error') {
+    return isProviderRuntimeGateMessage(cell.message);
+  }
+  if (cell.kind === 'status') {
+    const combined = `${readString(cell.label)} ${readString(cell.detail)}`;
+    return isProviderRuntimeGateMessage(combined);
+  }
+  if (cell.kind === 'tool') {
+    const combined = `${readString(cell.name)} ${readString(cell.result)}`;
+    return isProviderRuntimeGateMessage(combined);
+  }
+  return false;
+}
+
+function isProviderGateTranscriptCell(cell: CodexTranscriptCell): boolean {
+  if (cell.kind === 'assistant') {
+    return isProviderRuntimeGateMessage(readString(cell.content));
+  }
+  return isProviderGateSystemCell(cell);
 }
 
 function normalizeStructuredRecordList(value: unknown): Record<string, unknown>[] {
@@ -1018,15 +1046,61 @@ function providerFailureMessageForProvider(provider: ProviderCatalogRecord | nul
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected computer. Connect this computer, use Empyralis credits, or add your own API key in Integrations.`;
+    return `${providerLabel} needs a connected computer. Connect this computer, use Empyralis credits, or add your own API key in Connected Apps.`;
   }
   if (credentialPlane === 'workspace_connection') {
-    return 'Your provider key needs attention. Check the key, quota, or selected model in Integrations.';
+    return 'Your AI model key needs attention. Check the key, quota, or selected model in Connected Apps.';
   }
   if (credentialPlane === 'platform_runtime') {
-    return 'The hosted provider is temporarily unavailable. Try again or switch model.';
+    return 'The hosted AI model is temporarily unavailable. Try again or switch model.';
   }
-  return 'The selected provider is not available right now. Switch model or open Integrations.';
+  return 'The selected AI model is not available right now. Switch model or open Connected Apps.';
+}
+
+function providerFailureActionsForProvider(
+  provider: ProviderCatalogRecord | null | undefined,
+  message: string,
+): SendFailureNotice['actions'] {
+  const normalized = message.trim().toLowerCase();
+  const credentialPlane = readString(provider?.credential_plane).toLowerCase();
+  const providerId = readString(provider?.id).toLowerCase();
+  const localOnly = providerId === 'ollama'
+    || provider?.local_only === true
+    || credentialPlane === 'local_runtime'
+    || normalized.includes('local-only')
+    || normalized.includes('connected computer')
+    || normalized.includes('gateway offline');
+  if (localOnly) {
+    return [
+      { label: 'Connect My Computer', target: 'gateway' },
+      { label: 'Choose AI Model', target: 'integrations' },
+      { label: 'Use Empyralis credits', target: 'integrations' },
+    ];
+  }
+  const creditsOrKey = normalized.includes('api key')
+    || normalized.includes('credential')
+    || normalized.includes('quota')
+    || normalized.includes('credits')
+    || credentialPlane === 'workspace_connection';
+  if (creditsOrKey) {
+    return [
+      { label: 'Manage credits', target: 'integrations' },
+      { label: 'Add API key', target: 'integrations' },
+    ];
+  }
+  return [{ label: 'Choose AI Model', target: 'integrations' }];
+}
+
+function providerFailureNoticeForProvider(
+  provider: ProviderCatalogRecord | null | undefined,
+  message?: string | null,
+): SendFailureNotice {
+  const text = readString(message) || providerFailureMessageForProvider(provider);
+  return {
+    message: text,
+    retryable: false,
+    actions: providerFailureActionsForProvider(provider, text),
+  };
 }
 
 function modelOptionDisplayLabel(
@@ -1199,16 +1273,6 @@ function reasoningLabel(value: ChatReasoningEffort): string {
   }
 }
 
-function firstInterventionMessage(interventions: unknown[]): string {
-  const first = Array.isArray(interventions) ? interventions[0] : null;
-  if (!first || typeof first !== 'object') {
-    return '';
-  }
-  const record = first as Record<string, unknown>;
-  const token = record.message ?? record.detail ?? record.reason;
-  return typeof token === 'string' ? token.trim() : '';
-}
-
 function findProviderFailureIntervention(interventions: unknown[]): Record<string, unknown> | null {
   if (!Array.isArray(interventions)) {
     return null;
@@ -1369,7 +1433,16 @@ function canonicalIncludesMessage(
   }
   const candidateRequestId = messageRequestId(candidate);
   if (candidateRequestId) {
-    return messages.some((message) => messageRequestId(message) === candidateRequestId);
+    if (messages.some((message) => messageRequestId(message) === candidateRequestId)) {
+      return true;
+    }
+    // Some backend turn snapshots omit request ids for user turns. Fall back to role+content
+    // so pending bubbles collapse instead of duplicating the same submitted text.
+    const normalizedContent = readString(candidate.content);
+    return messages.some((message) =>
+      message.role === candidate.role
+      && readString(message.content) === normalizedContent,
+    );
   }
   const normalizedContent = readString(candidate.content);
   return messages.some((message) =>
@@ -1599,21 +1672,21 @@ function classifyStatusNotice(message: string): {
   if (isGatewayBrowserMessage(message)) {
     return {
       tone: 'warning',
-      title: 'Gateway browser needed',
-      body: 'Localhost pages, signed-in sites, and private browser sessions stay on this device. Open Gateway when Sage needs browser access or approval.',
+      title: 'My Computer browser needed',
+      body: 'Localhost pages, signed-in sites, and private browser sessions stay on this device. Open My Computer when Sage needs browser access or needs your OK.',
       requiresLocalAccess: true,
       actionTarget: 'gateway',
-      actionLabel: 'Open Gateway',
+      actionLabel: 'Open My Computer',
     };
   }
   if (isLocalCompanionGateMessage(message)) {
     return {
       tone: 'warning',
-      title: 'Gateway attention needed',
+      title: 'My Computer attention needed',
       body: message,
       requiresLocalAccess: true,
       actionTarget: 'gateway',
-      actionLabel: 'Open Gateway',
+      actionLabel: 'Open My Computer',
     };
   }
   if (/^turn submitted/i.test(message)) {
@@ -1629,13 +1702,13 @@ function classifyStatusNotice(message: string): {
   if (isProviderRuntimeGateMessage(message) || /provider error|api key|credential|ollama/i.test(message)) {
     return {
       tone: 'warning',
-      title: 'Provider attention needed',
+      title: 'AI model attention needed',
       body: /api key|credential/i.test(message)
-        ? 'Check your provider key or quota in Integrations.'
-        : 'Choose Empyralis credits, add a provider key, or connect the required local runtime.',
+        ? 'Check your AI model key or quota in Connected Apps.'
+        : 'Choose Empyralis credits, add an AI model key, or connect this computer.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
-      actionLabel: 'Open Integrations',
+      actionLabel: 'Open Connected Apps',
     };
   }
   return {
@@ -1680,7 +1753,7 @@ function browserReadinessPill(
   if (attachApprovalRequiredCount > 0) {
     return {
       id: 'browser-approval',
-      label: 'Browser: Approval needed',
+      label: 'Browser: Needs your OK',
       tone: 'warning',
       target: 'gateway',
     };
@@ -2800,14 +2873,16 @@ export function WorkstationChatPane() {
 
   const projectedSystemCells = useMemo(
     () => projectedTimelineCells.filter((cell) => (
-      cell.kind === 'reasoning_summary'
-      || cell.kind === 'exec'
-      || cell.kind === 'tool'
-      || cell.kind === 'web_search'
-      || cell.kind === 'file_change'
-      || cell.kind === 'approval_request'
-      || cell.kind === 'status'
-      || cell.kind === 'error'
+      (
+        cell.kind === 'reasoning_summary'
+        || cell.kind === 'exec'
+        || cell.kind === 'tool'
+        || cell.kind === 'web_search'
+        || cell.kind === 'file_change'
+        || cell.kind === 'approval_request'
+        || cell.kind === 'status'
+        || cell.kind === 'error'
+      ) && !isProviderGateSystemCell(cell)
     )),
     [projectedTimelineCells],
   );
@@ -2840,7 +2915,9 @@ export function WorkstationChatPane() {
 
   const visibleTranscriptCells = useMemo(() => {
     const canonicalMessages = thread.messages.filter((message) => !isSyntheticTranscriptMessage(message));
-    const nextCells = canonicalMessages.map(workstationMessageToCodexCell);
+    const nextCells = canonicalMessages
+      .map(workstationMessageToCodexCell)
+      .filter((cell) => !isProviderGateTranscriptCell(cell));
     if (pendingUserMessage && !canonicalIncludesMessage(canonicalMessages, pendingUserMessage)) {
       nextCells.push(workstationMessageToCodexCell(pendingUserMessage));
     }
@@ -2952,7 +3029,7 @@ export function WorkstationChatPane() {
       };
     }
     return {
-      label: 'No provider — Set up in Integrations',
+      label: 'No AI model — Set up in Connected Apps',
       connected: false,
     };
   }, [
@@ -2978,7 +3055,7 @@ export function WorkstationChatPane() {
       || selectedProviderRecord?.local_only === true
       || credentialPlane === 'local_runtime';
     if (!gatewayToolingOnline) {
-      return { label: 'Gateway offline', tone: 'warning' as const };
+      return { label: 'My Computer offline', tone: 'warning' as const };
     }
     if (localProvider) {
       return { label: 'This Mac', tone: 'success' as const };
@@ -2986,7 +3063,7 @@ export function WorkstationChatPane() {
     return { label: 'Cloud', tone: 'neutral' as const };
   }, [gatewayToolingOnline, selectedProviderRecord]);
   const composerToolGroups = useMemo<ComposerToolGroup[]>(() => {
-    const localReason = gatewayToolingOnline ? 'Available through the paired gateway' : 'Requires local gateway';
+    const localReason = gatewayToolingOnline ? 'Available through this paired computer' : 'Requires a connected computer';
     const emailAvailable = hasConnectedConnector(connectorCredentials, ['google_workspace', 'smtp', 'microsoft_365']);
     const telegramAvailable = hasConnectedConnector(connectorCredentials, ['telegram_bot']);
     const telegramChannelEnabled = hasCapability('telegram_channel_enabled');
@@ -3028,26 +3105,26 @@ export function WorkstationChatPane() {
             id: 'telegram-send',
             label: 'Telegram send',
             detail: telegramSendEnabled
-              ? 'Available through your paired gateway'
-              : (telegramChannelEnabled ? 'Connect your gateway to send Telegram messages' : 'Telegram channel is disabled in this workspace'),
+              ? 'Available through this paired computer'
+              : (telegramChannelEnabled ? 'Connect your computer to send Telegram messages' : 'Telegram channel is disabled in this workspace'),
             enabled: telegramSendEnabled,
           },
           {
             id: 'whatsapp-send',
             label: 'WhatsApp send',
             detail: whatsappSendEnabled
-              ? 'Available through your paired gateway'
-              : (whatsappChannelEnabled ? 'Connect your gateway to send WhatsApp messages' : 'WhatsApp channel is disabled in this workspace'),
+              ? 'Available through this paired computer'
+              : (whatsappChannelEnabled ? 'Connect your computer to send WhatsApp messages' : 'WhatsApp channel is disabled in this workspace'),
             enabled: whatsappSendEnabled,
           },
-          { id: 'email-send', label: 'Email', detail: emailAvailable ? 'Email connector is active' : 'Connect email first', enabled: emailAvailable },
+          { id: 'email-send', label: 'Email', detail: emailAvailable ? 'Email connected app is active' : 'Connect email first', enabled: emailAvailable },
         ],
       },
       {
         id: 'data',
         label: 'Data',
         items: [
-          { id: 'spreadsheet', label: 'Spreadsheet', detail: spreadsheetAvailable ? 'Workspace spreadsheet connector is active' : 'Connect Google Workspace or Microsoft 365', enabled: spreadsheetAvailable },
+          { id: 'spreadsheet', label: 'Spreadsheet', detail: spreadsheetAvailable ? 'Spreadsheet connected app is active' : 'Connect Google Workspace or Microsoft 365', enabled: spreadsheetAvailable },
           { id: 'code-execution', label: 'Code execution', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: gatewayToolingOnline && codeEnabled },
         ],
       },
@@ -3147,7 +3224,7 @@ export function WorkstationChatPane() {
     ? `${artifactCount} attached output${artifactCount === 1 ? '' : 's'} in this thread`
     : 'No app updates yet';
   const nextStepTitle = approvals.length > 0
-    ? 'Approval is waiting'
+    ? 'Needs your OK is waiting'
     : latestRun
       ? 'Task is in progress'
       : 'Sage is ready for the next turn';
@@ -3232,7 +3309,7 @@ export function WorkstationChatPane() {
     if (!selectedProviderContext.providerLabel) {
       pills.push({
         id: 'provider',
-        label: 'AI: Connect provider',
+        label: 'AI: Connect model',
         tone: 'danger',
         target: 'integrations',
       });
@@ -3240,7 +3317,7 @@ export function WorkstationChatPane() {
     if (!gatewayReadinessOnline) {
       pills.push({
         id: 'gateway',
-        label: 'Gateway: Offline',
+        label: 'My Computer: Offline',
         tone: 'danger',
         target: 'gateway',
       });
@@ -3421,9 +3498,12 @@ export function WorkstationChatPane() {
     if (!activeProviderSummary.connected) {
       setHasEnteredConversationFlow(true);
       setSendFailureNotice({
-        message: 'Sage needs Empyralis credits or your own API key before it can answer. Set up hosted credits, DeepSeek, Gemini, OpenAI, or another provider in Integrations.',
+        message: 'Sage needs Empyralis credits or your own API key before it can answer. Set up hosted credits, DeepSeek, Gemini, OpenAI, or another AI model in Connected Apps.',
         retryable: false,
-        actionTarget: 'integrations',
+        actions: [
+          { label: 'Manage credits', target: 'integrations' },
+          { label: 'Add API key', target: 'integrations' },
+        ],
       });
       submitInFlightRef.current = false;
       return;
@@ -3769,30 +3849,18 @@ export function WorkstationChatPane() {
           : threadRef.current.messages
       );
       const assistantMessage = createCanonicalAssistantMessage(normalizedResponse, nextThreadId);
-      const hasVisibleAssistantReply = Boolean(
+      const assistantMessageVisible = Boolean(
         assistantMessage
-        || (typeof normalizedResponse.reply === 'string' && normalizedResponse.reply.trim()),
+        && !isSyntheticTranscriptMessage(assistantMessage),
       );
-      const inlineProviderFailureMessage = !assistantMessage && providerFailureIntervention
-        ? {
-            id: `${nextThreadId}:assistant-error:${Date.now()}`,
-            role: 'assistant',
-            content: providerFailureMessageForProvider(providerFailureRecord),
-            status: 'failed',
-            createdAt: new Date().toISOString(),
-            runId: typeof normalizedResponse.run_id === 'string' ? normalizedResponse.run_id : null,
-            approvals: [],
-            interventions: Array.isArray(normalizedResponse.interventions) ? normalizedResponse.interventions : [],
-            artifacts: [],
-            metadata: {
-              display_kind: 'provider_error',
-              action_href: `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
-              action_label: 'Open Integrations',
-              intervention_kind: String(providerFailureIntervention.kind ?? providerFailureIntervention.type ?? ''),
-              intervention_code: String(providerFailureIntervention.code ?? ''),
-            },
-          } satisfies WorkstationChatMessageRecord
-        : null;
+      const hasVisibleAssistantReply = Boolean(
+        assistantMessageVisible
+        || (
+          typeof normalizedResponse.reply === 'string'
+          && normalizedResponse.reply.trim()
+          && !isProviderRuntimeGateMessage(normalizedResponse.reply)
+        ),
+      );
 
       setLiveTrace((current) => {
         if (!traceId && !current) {
@@ -3816,7 +3884,7 @@ export function WorkstationChatPane() {
         };
       });
 
-      const responseMessage = assistantMessage ?? inlineProviderFailureMessage;
+      const responseMessage = assistantMessageVisible ? assistantMessage : null;
       const immediateMessages = responseMessage
         ? [...nextMessages, responseMessage]
         : nextMessages;
@@ -3857,20 +3925,32 @@ export function WorkstationChatPane() {
       }
       const hasPendingApprovals = Array.isArray(normalizedResponse.approvals) && normalizedResponse.approvals.length > 0;
       const hasProviderFailure = Boolean(providerFailureIntervention);
+      const providerGateDetected = hasProviderFailure
+        || isProviderRuntimeGateMessage(readString(normalizedResponse.reply));
       const needsUserIntervention = Array.isArray(normalizedResponse.interventions)
         && normalizedResponse.interventions.length > 0
         && !hasVisibleAssistantReply;
       setStatusMessage(
-        hasPendingApprovals
-          ? responseExecutionTarget === 'local_companion'
-            ? 'Sage is waiting for approval before using the local companion.'
-            : 'Approval is waiting.'
-          : needsUserIntervention && !hasProviderFailure
-            ? 'Sage needs your input before it can continue.'
-            : null,
+        providerGateDetected
+          ? null
+          : hasPendingApprovals
+            ? responseExecutionTarget === 'local_companion'
+              ? 'Sage is waiting for approval before using the local companion.'
+              : 'Needs your OK is waiting.'
+            : needsUserIntervention && !hasProviderFailure
+              ? 'Sage needs your input before it can continue.'
+              : null,
       );
-      setSendFailureNotice(null);
+      setSendFailureNotice(
+        providerGateDetected
+          ? providerFailureNoticeForProvider(
+              providerFailureRecord,
+              providerFailureMessageForProvider(providerFailureRecord),
+            )
+          : null,
+      );
     } catch (error) {
+      updatePendingUserMessage(null);
       const normalizedError = error instanceof WorkstationClientError ? error : null;
       const aborted = normalizedError?.code === 'stream_aborted' || streamAbortRequestedRef.current;
       const partialStreamText = readString(streamingAssistantTextRef.current);
@@ -3900,17 +3980,23 @@ export function WorkstationChatPane() {
           || normalizedRawMessage.includes('ollama')
           || normalizedRawMessage.includes('selected for chat')
           || normalizedRawMessage.includes('not available');
+        const localComputerNeedsAttention = isLocalCompanionGateMessage(rawMessage) || normalizedRawMessage.includes('gateway offline');
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
-          ? 'Could not send this message.'
+          ? 'My Computer is needed for this request. Connect this computer and try again.'
           : providerNeedsAttention
-            ? 'The selected provider is not ready. Switch to hosted credits/API key, connect the required local runtime, or choose another model in Integrations.'
+            ? 'The selected AI model is not ready. Switch to hosted credits/API key, connect this computer, or choose another model in Connected Apps.'
             : rawMessage;
+        const providerNotice = providerNeedsAttention
+          ? providerFailureNoticeForProvider(selectedProviderRecord, noticeMessage)
+          : null;
         setSendFailureNotice({
-          message: noticeMessage,
+          message: providerNotice?.message ?? noticeMessage,
           retryable: error instanceof WorkstationClientError
             ? error.retryable
             : true,
-          actionTarget: providerNeedsAttention ? 'integrations' : null,
+          actions: localComputerNeedsAttention
+            ? [{ label: 'Connect My Computer', target: 'gateway' }]
+            : providerNotice?.actions,
           retryDraft: outboundMessage,
         });
       }
@@ -4074,18 +4160,19 @@ export function WorkstationChatPane() {
                 <span>{sendFailureNotice.message}</span>
               </div>
               <div className="app-chat-status-notice__actions">
-                {sendFailureNotice.actionTarget === 'integrations' ? (
+                {(sendFailureNotice.actions ?? []).map((action) => (
                   <AppButton
+                    key={`${action.target}:${action.label}`}
                     type="button"
                     tone="secondary"
                     onClick={() => {
                       setSendFailureNotice(null);
-                      router.push(integrationsHref);
+                      router.push(action.target === 'gateway' ? gatewayHref : integrationsHref);
                     }}
                   >
-                    Open Integrations
+                    {action.label}
                   </AppButton>
-                ) : null}
+                ))}
                 {sendFailureNotice.retryable ? (
                   <AppButton
                     type="button"
@@ -4113,7 +4200,7 @@ export function WorkstationChatPane() {
             </AppNotice>
           ) : null}
 
-          {statusMessage ? (
+          {!sendFailureNotice && statusMessage ? (
             <AppNotice
               tone={statusNotice?.tone ?? 'neutral'}
               role="status"
@@ -4188,7 +4275,7 @@ export function WorkstationChatPane() {
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{
           label: activeProviderSummary.label,
-          actionLabel: 'Set up in Integrations',
+          actionLabel: 'Set up in Connected Apps',
         }}
         runtimeStatusLabel={runtimeStatus.label}
         runtimeStatusTone={runtimeStatus.tone}
@@ -4205,8 +4292,8 @@ export function WorkstationChatPane() {
 
       <CommandSheet
         open={isApprovalsSheetOpen}
-        title="Approvals"
-        description="Review pending approval requests attached to this conversation."
+        title="Needs your OK"
+        description="Review pending requests that need your OK for this conversation."
         onClose={() => {
           setIsApprovalsSheetOpen(false);
         }}

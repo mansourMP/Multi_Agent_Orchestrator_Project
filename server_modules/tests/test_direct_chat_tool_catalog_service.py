@@ -139,6 +139,21 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         self.assertIn("Personal-device tools still require a paired gateway.", reply)
         self.assertIn("Tool availability is based on gateway status, connector state, and workspace policy", reply)
 
+    def test_tool_inventory_reply_includes_setup_actions_from_capability_truth(self) -> None:
+        reply = service.direct_chat_tool_inventory_reply(
+            [{"name": "web__search", "description": "Search the web"}],
+            {
+                "capability_truth": {
+                    "required_setup_actions": [
+                        {"label": "Connect My Computer", "href": "/integrations"},
+                        {"label": "Add API key", "href": "/integrations"},
+                    ]
+                }
+            },
+        )
+
+        self.assertIn("Setup available now: Connect My Computer, Add API key.", reply)
+
 
 if __name__ == "__main__":
     unittest.main()

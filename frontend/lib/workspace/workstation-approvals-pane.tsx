@@ -100,7 +100,7 @@ export function WorkstationApprovalsPane() {
       if (cancelled) {
         return;
       }
-      setError(loadError instanceof Error ? loadError.message : 'Approvals are unavailable right now.');
+      setError(loadError instanceof Error ? loadError.message : 'Needs your OK requests are unavailable right now.');
       setIsLoading(false);
     });
 
@@ -116,7 +116,7 @@ export function WorkstationApprovalsPane() {
         if (cancelled) {
           return;
         }
-        setError(loadError instanceof Error ? loadError.message : 'Approvals are unavailable right now.');
+        setError(loadError instanceof Error ? loadError.message : 'Needs your OK requests are unavailable right now.');
         setIsLoading(false);
       });
     });
@@ -132,7 +132,7 @@ export function WorkstationApprovalsPane() {
       return;
     }
     void refresh(false).catch((loadError) => {
-      setError(loadError instanceof Error ? loadError.message : 'Approvals are unavailable right now.');
+      setError(loadError instanceof Error ? loadError.message : 'Needs your OK requests are unavailable right now.');
       setIsLoading(false);
     });
   }, [services.client, streamState.activity.version]);
@@ -173,14 +173,14 @@ export function WorkstationApprovalsPane() {
       services.streams.touchActivity();
       setStatusMessage(
         resolution === 'approved'
-          ? 'Approval accepted. Sage resumed the blocked work.'
-          : 'Approval rejected. Sage stopped the blocked work.',
+          ? 'Request approved. Sage resumed the blocked work.'
+          : 'Request rejected. Sage stopped the blocked work.',
       );
     } catch (resolveError) {
       setError(
         resolveError instanceof WorkstationClientError || resolveError instanceof Error
           ? resolveError.message
-          : 'Approval resolution failed.',
+          : 'Request resolution failed.',
       );
     } finally {
       setResolvingApprovalId(null);
@@ -190,7 +190,7 @@ export function WorkstationApprovalsPane() {
   return (
     <WorkstationSurfaceRoot surface="approvals">
       <WorkstationSurfaceCard
-        title="Approvals"
+        title="Needs your OK"
         description="Single-purpose queue for decisions Sage cannot make without you."
         actions={(
           <WorkstationActionButton
@@ -205,16 +205,16 @@ export function WorkstationApprovalsPane() {
         )}
       >
         {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
-        {error ? <WorkstationSurfaceNotice tone="danger">Approvals could not refresh. Use Refresh to try again.</WorkstationSurfaceNotice> : null}
+        {error ? <WorkstationSurfaceNotice tone="danger">Needs your OK requests could not refresh. Use Refresh to try again.</WorkstationSurfaceNotice> : null}
 
         <WorkstationSurfaceStatGrid>
           <WorkstationSurfaceStat
-            label="Pending approvals"
+            label="Pending needs your OK"
             value={String(pendingCount)}
             hint="Needs explicit decision to continue"
           />
           <WorkstationSurfaceStat
-            label="Total approvals"
+            label="Total needs your OK"
             value={String(items.length)}
             hint="Visible in this workspace"
           />
@@ -228,7 +228,7 @@ export function WorkstationApprovalsPane() {
           </div>
         ) : items.length === 0 ? (
           <EmptyPanel
-            title="No approvals waiting"
+            title="No needs your OK requests waiting"
             body="When Sage needs your permission, the request will appear here with clear approve and reject actions."
           />
         ) : (
@@ -247,7 +247,7 @@ export function WorkstationApprovalsPane() {
                     className="app-card-button__title"
                     onClick={() => setSelectedApprovalId(approvalId)}
                   >
-                    {readString(item.prompt, 'Approval request')}
+                    {readString(item.prompt, 'Needs your OK request')}
                   </button>
                   <span className="app-card-button__subtitle">{approvalId}</span>
                   <span className="app-card-button__meta">Run: {readString(item.run_id, 'Awaiting run linkage')}</span>
@@ -284,7 +284,7 @@ export function WorkstationApprovalsPane() {
       </WorkstationSurfaceCard>
 
       <WorkstationSurfaceCard
-        title={selectedApproval ? 'Approval detail' : 'Decision detail'}
+        title={selectedApproval ? 'Needs your OK detail' : 'Decision detail'}
         description={selectedApproval ? 'Review the selected request context before deciding.' : 'Select an approval to inspect detail.'}
       >
         {!selectedApproval ? (
@@ -296,7 +296,7 @@ export function WorkstationApprovalsPane() {
           <div className="app-meta-list">
             <div className="app-meta-item">
               <span className="app-meta-label">Request</span>
-              <span className="app-meta-value app-meta-value--body">{readString(selectedApproval.prompt, 'Approval request')}</span>
+              <span className="app-meta-value app-meta-value--body">{readString(selectedApproval.prompt, 'Needs your OK request')}</span>
             </div>
             <div className="app-meta-item">
               <span className="app-meta-label">Status</span>

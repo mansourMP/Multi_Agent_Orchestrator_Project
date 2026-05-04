@@ -185,7 +185,7 @@ export function WorkstationBillingPane() {
           hint={currentPeriodEnd ? `Current period ends at ${currentPeriodEnd}.` : 'Canonical subscription status from billing state.'}
         />
         <WorkstationSurfaceStat
-          label="Provider"
+          label="Billing system"
           value={readText(summary?.configured ? 'stripe' : 'offline', 'offline')}
           hint={summary?.configured ? 'Stripe checkout and portal are configured.' : 'Stripe is not configured for this environment.'}
         />

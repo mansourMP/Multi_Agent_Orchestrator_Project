@@ -4544,6 +4544,7 @@ textarea {
 
 .app-studio-shell .studio-template-card {
   width: 100%;
+  aspect-ratio: 1 / 1;
   min-height: 13.5rem;
   display: grid;
   grid-template-rows: auto 1fr auto auto;
@@ -9060,6 +9061,10 @@ textarea {
 
   .app-studio-shell .studio-template-grid {
     grid-template-columns: 1fr;
+  }
+
+  .app-studio-shell .studio-template-card {
+    aspect-ratio: auto;
   }
 }
 

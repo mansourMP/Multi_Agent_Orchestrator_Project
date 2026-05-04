@@ -258,13 +258,13 @@ export function WorkstationArtifactsPane() {
         ) : (
           <div className="app-meta-list">
             <div className="app-meta-item">
-              <span className="app-meta-label">Artifact id</span>
+              <span className="app-meta-label">Result or file id</span>
               <span className="app-meta-value app-meta-value--mono">{selectedArtifactId ?? 'Unknown'}</span>
             </div>
             <div className="app-meta-item">
               <span className="app-meta-label">Type</span>
               <span className="app-meta-value app-meta-value--secondary">
-                {readString(selectedArtifact.mime_type ?? selectedArtifact.content_type, 'artifact')}
+                {readString(selectedArtifact.mime_type ?? selectedArtifact.content_type, 'result or file')}
               </span>
             </div>
             <div className="app-meta-item">

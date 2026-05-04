@@ -37,6 +37,26 @@ class DirectChatContextServiceTests(unittest.TestCase):
         self.assertEqual(connected, ["Slack", "Telegram", "Google Workspace"])
         self.assertEqual(len(context_caps), 2)
 
+    def test_availability_lines_include_capability_truth_summary(self) -> None:
+        lines = service.availability_lines(
+            "default",
+            {
+                "ai_ready": False,
+                "provider": "deepseek",
+                "tool_capabilities": [],
+                "capability_truth": {
+                    "provider": {"label": "DeepSeek", "ai_ready": False},
+                    "my_computer": {"state": "offline"},
+                    "required_setup_actions": [{"label": "Connect My Computer"}],
+                },
+            },
+            normalize_tool_capabilities=lambda payload: payload.get("tool_capabilities") or [],
+        )
+
+        self.assertIn("Selected AI model: DeepSeek (setup required)", lines)
+        self.assertIn("My Computer: offline", lines)
+        self.assertIn("Required setup actions: Connect My Computer", lines)
+
     def test_session_model_preference_round_trip(self) -> None:
         store = {}
 

@@ -259,6 +259,10 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertTrue(payload["workspace_connected"])
         self.assertEqual(payload["custom"], "value")
         self.assertEqual(payload["tool_capabilities"], [{"id": "gmail", "workspace_id": "workspace-a"}])
+        self.assertIsInstance(payload.get("capability_truth"), dict)
+        self.assertEqual(payload["capability_truth"]["provider"]["id"], "openai")
+        self.assertEqual(payload["capability_truth"]["my_computer"]["state"], "offline")
+        self.assertEqual(payload["capability_truth"]["required_setup_actions"], [])
 
     def test_resolve_direct_chat_availability_prefers_platform_mode_for_mobile(self) -> None:
         payload = direct_chat_provider_service.resolve_direct_chat_availability(

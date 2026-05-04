@@ -30,9 +30,9 @@ const SETTINGS_SECTIONS: Array<{
   {
     id: 'devices',
     label: 'Devices',
-    eyebrow: 'Runtime',
+    eyebrow: 'My Computer',
     title: 'Devices',
-    description: 'Trusted devices, gateway health, and local runtime readiness.',
+    description: 'Trusted devices, connection health, and local computer readiness.',
   },
   {
     id: 'usage',
@@ -53,7 +53,7 @@ const SETTINGS_SECTIONS: Array<{
     label: 'Privacy & Safety',
     eyebrow: 'Trust',
     title: 'Privacy & Safety',
-    description: 'Approvals, memory, device trust.',
+    description: 'Needs your OK, memory, device trust.',
   },
 ];
 
@@ -107,7 +107,7 @@ export function WorkstationSettingsPane() {
         <aside className="settings-nav" aria-label="Settings sections">
           <div className="app-settings-sidebar__header">
             <h2 className="app-settings-sidebar__title">Settings</h2>
-            <p className="app-settings-sidebar__subtitle">Workspace controls.</p>
+            <p className="app-settings-sidebar__subtitle">Account controls.</p>
           </div>
           {SETTINGS_SECTIONS.map((section) => (
             <button
@@ -160,7 +160,7 @@ export function WorkstationSettingsPane() {
               <FormGrid>
                 <FormReadout label="Deployment mode" value={humanizeToken(bootstrap.runtime.deploymentMode)} />
                 <FormReadout
-                  label="Preferred runtime"
+                  label="Preferred computer target"
                   value={preferredRuntimeTarget ? preferredRuntimeTarget.label : 'Cloud'}
                 />
                 <FormReadout
@@ -168,7 +168,7 @@ export function WorkstationSettingsPane() {
                   value={localCompanionTarget?.online ? 'Connected' : localCompanionTarget ? 'Available but offline' : 'Not detected'}
                 />
                 <FormReadout
-                  label="Approval mode"
+                  label="Needs your OK mode"
                   value={preferredRuntimeTarget?.approvalMode ? humanizeToken(preferredRuntimeTarget.approvalMode) : 'Auto-run'}
                 />
               </FormGrid>
@@ -198,7 +198,7 @@ export function WorkstationSettingsPane() {
               <div className="settings-detail-grid">
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">Action approvals</strong>
+                    <strong className="settings-detail-card__title">Needs your OK actions</strong>
                   </div>
                   <p className="settings-detail-card__body">
                     Sage pauses for review before destructive file changes, external sends, purchases, and dangerous shell commands.
@@ -217,7 +217,7 @@ export function WorkstationSettingsPane() {
                     <strong className="settings-detail-card__title">This Mac boundary</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Local files, browser, clipboard, screenshots, and terminal require an online paired gateway on a trusted device.
+                    Local files, browser, clipboard, screenshots, and terminal require an online paired computer on a trusted device.
                   </p>
                 </article>
                 <article className="settings-detail-card">
@@ -230,10 +230,10 @@ export function WorkstationSettingsPane() {
                 </article>
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">Provider credentials</strong>
+                    <strong className="settings-detail-card__title">AI model credentials</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    BYOK credentials are stored in the workspace vault and provider choice should only change the reasoning model.
+                    BYOK credentials are stored in the workspace vault and AI model choice should only change the reasoning model.
                   </p>
                 </article>
                 <article className="settings-detail-card">
@@ -241,7 +241,7 @@ export function WorkstationSettingsPane() {
                     <strong className="settings-detail-card__title">External user deletion</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Studio agents support privacy/delete requests for external channel users, including conversation data and memory.
+                    Build assistants support privacy/delete requests for external channel users, including conversation data and memory.
                   </p>
                 </article>
               </div>

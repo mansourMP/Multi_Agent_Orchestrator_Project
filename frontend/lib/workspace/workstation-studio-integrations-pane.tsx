@@ -9,13 +9,13 @@ export function WorkstationStudioIntegrationsPane() {
     <WorkstationSurfaceRoot surface="studio-integrations">
       <ListDetailShell
         className="app-studio-shell app-studio-shell--integrations"
-        title="Studio · Integrations"
-        subtitle="Business channels and workflow connectors for deployed specialists."
+        title="Build · Connected Apps"
+        subtitle="Business messaging and workflow app connections for deployed specialists."
       >
         <ListDetailPanel
           className="studio-panel studio-panel--integrations"
-          eyebrow="Integrations"
-          title="Channel and workflow connections"
+          eyebrow="Connected Apps"
+          title="Messaging and workflow connections"
           subtitle="Keep customer-facing channels and follow-up systems ready for inbox, deploy, and launch work."
         >
           <WorkstationSageConnectorsPane

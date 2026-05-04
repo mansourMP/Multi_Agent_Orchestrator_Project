@@ -803,15 +803,15 @@ export function MarketplacePane() {
     <WorkstationSurfaceRoot surface="marketplace">
       <ListDetailShell
         className="marketplace-pane"
-        title="Marketplace"
-        subtitle="Review governed applications and model providers, then install them with trust, billing, and runtime truth visible up front."
+        title="Discover"
+        subtitle="Install governed templates, tools, and AI models. Use Build to create and manage your private assistants."
       >
         <ListDetailColumns
           primary={(
             <ListDetailPanel
               className="marketplace-pane__browse-panel"
-              title="Governed distribution"
-              subtitle="Each package carries verification, review, billing, and runtime trust metadata before it can enter the shell."
+              title="Install governed apps and AI models"
+              subtitle="Discover is for adding governed packages. Build is where you create private assistants."
             >
               <div className="marketplace-pane__filters">
                 <div className="marketplace-pane__filter-row">
@@ -830,14 +830,14 @@ export function MarketplacePane() {
                   ))}
                 </div>
                 <p className="marketplace-pane__panel-copy">
-                  Packages stay curated. The shell surfaces trust, billing, and runtime markers before install instead of treating external apps and providers like unmanaged plugins.
+                  Every package shows verification, review, billing, and runtime details before install.
                 </p>
               </div>
 
               {error && !loading ? (
                 <div className="marketplace-pane__error">
                   <div className="marketplace-pane__error-copy">
-                    <strong>Marketplace could not refresh.</strong>
+                    <strong>Discover could not refresh.</strong>
                     <span>Check the connection, then retry.</span>
                   </div>
                   <AppButton type="button" tone="secondary" onClick={() => { void loadMarketplacePackages(kindFilter); }}>
@@ -850,8 +850,8 @@ export function MarketplacePane() {
                 <MarketplaceSkeleton />
               ) : renderedCards.length === 0 ? (
                 <EmptyPanel
-                  title="No governed packages are registered for this workspace yet."
-                  body="Marketplace is the install and discovery surface. Developer publishing is hidden behind an explicit registration panel."
+                  title="No packages are available yet."
+                  body="Discover installs governed templates, tools, and AI models. Build creates private assistants."
                 />
               ) : (
                 <div className="marketplace-pane__grid">
@@ -985,8 +985,8 @@ export function MarketplacePane() {
               <ListDetailPanel
                 className="marketplace-pane__detail-panel"
                 eyebrow={selectedPackage ? humanizeToken(selectedPackage.kind) : 'Details'}
-                title={selectedPackage?.name || 'Select a package'}
-                subtitle={selectedPackage ? selectedPackage.description : 'Choose a package to inspect its governed distribution metadata.'}
+                title={selectedPackage?.name || 'Select an app or model'}
+                subtitle={selectedPackage ? selectedPackage.description : 'Choose a package to review trust, permissions, and install details.'}
               >
                 {selectedPackage && selectedDetails ? (
                   <div className="marketplace-pane__detail-stack">
@@ -1728,7 +1728,7 @@ export function MarketplacePane() {
                   className="marketplace-pane__composer-panel marketplace-pane__composer-panel--collapsed"
                   eyebrow="Developer publishing"
                   title="Publish a package"
-                  subtitle="Marketplace is for governed distribution. Create specialists in Studio; register third-party apps or providers here only when you are publishing new inventory."
+                  subtitle="Discover is for governed distribution. Create assistants in Build; only open this when publishing package inventory."
                 >
                   <p className="marketplace-pane__panel-copy">
                     Normal users should browse, inspect trust metadata, and add packages to the workspace. Publisher registration is intentionally hidden to keep the Marketplace simple.

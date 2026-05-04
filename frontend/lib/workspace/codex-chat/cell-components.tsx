@@ -45,6 +45,42 @@ function humanizeToken(value: string | null | undefined): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function toolActivityLabel(name: string): string {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) {
+    return 'Using tool';
+  }
+  if (normalized.includes('telegram')) {
+    return 'Telegram';
+  }
+  if (normalized.includes('whatsapp')) {
+    return 'WhatsApp';
+  }
+  if (normalized.includes('browser action')) {
+    return 'Browser action';
+  }
+  if (normalized.includes('browser')) {
+    return 'Browser action';
+  }
+  if (normalized.includes('web search') || normalized.includes('search')) {
+    return 'Searching web';
+  }
+  return humanizeToken(name) || 'Using tool';
+}
+
+function fileActivityLabel(action: string): string {
+  const normalized = action.trim().toLowerCase();
+  if (
+    normalized.includes('write')
+    || normalized.includes('delete')
+    || normalized.includes('rename')
+    || normalized.includes('move')
+  ) {
+    return 'Updating file';
+  }
+  return 'Reading file';
+}
+
 function providerLabel(cell: CodexTranscriptCell): string {
   if (cell.kind !== 'assistant') {
     return '';
@@ -237,7 +273,10 @@ function SystemInlineRow({
   dimmed: boolean;
 }) {
   return (
-    <article className={`app-chat-system-row app-chat-system-row--${state}${dimmed ? ' app-chat-system-row--dimmed' : ''}`}>
+    <article
+      data-chat-role="system"
+      className={`app-chat-system-row app-chat-system-row--${state}${dimmed ? ' app-chat-system-row--dimmed' : ''}`}
+    >
       <span className="app-chat-system-row__icon" aria-hidden="true">{icon}</span>
       <span className="app-chat-system-row__primary">{primary}</span>
       <span className="app-chat-system-row__secondary">{secondary}</span>
@@ -351,8 +390,8 @@ export function ExecCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <SquareTerminal size={14} strokeWidth={1.9} />}
-      primary={cell.command || 'Shell'}
-      secondary={cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running'}
+      primary="Running shell"
+      secondary={cell.command || (cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running')}
       state={cell.status}
       dimmed={cell.dimmed === true}
     />
@@ -367,8 +406,8 @@ export function ToolCallCell({ cell }: { cell: Extract<CodexTranscriptCell, { ki
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <Wrench size={14} strokeWidth={1.9} />}
-      primary={cell.name || 'Tool'}
-      secondary={cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running'}
+      primary={toolActivityLabel(cell.name || '')}
+      secondary={cell.result || (cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : (cell.name || 'Running'))}
       state={cell.status}
       dimmed={cell.dimmed === true}
     />
@@ -384,8 +423,8 @@ export function WebSearchCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <Search size={14} strokeWidth={1.9} />}
-      primary={cell.query || 'Search'}
-      secondary={cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Searching'}
+      primary="Searching web"
+      secondary={cell.query || (cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Searching')}
       state={state}
       dimmed={cell.dimmed === true}
     />
@@ -400,8 +439,8 @@ export function FileChangeCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <FileText size={14} strokeWidth={1.9} />}
-      primary={cell.filename || 'File'}
-      secondary={cell.action || (cell.status === 'done' ? 'Done' : 'Reading')}
+      primary={fileActivityLabel(cell.action || '')}
+      secondary={cell.filename || (cell.status === 'done' ? 'Done' : 'File')}
       state={cell.status}
       dimmed={cell.dimmed === true}
     />
@@ -415,8 +454,8 @@ export function ScreenshotCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
       icon={cell.status === 'done'
         ? <Camera size={14} strokeWidth={1.9} />
         : <CircleAlert size={14} strokeWidth={2} />}
-      primary={cell.caption || 'Screenshot'}
-      secondary={cell.status === 'done' ? `Captured${sizeLabel}` : 'Failed'}
+      primary="Screenshot/artifact"
+      secondary={cell.caption || (cell.status === 'done' ? `Captured${sizeLabel}` : 'Failed')}
       state={cell.status}
       dimmed={cell.dimmed === true}
     />
@@ -445,9 +484,9 @@ export function ApprovalCell({
         <ShieldCheck size={14} strokeWidth={1.9} />
       </span>
       <div className="app-chat-approval-cell__copy">
-        <span className="app-chat-system-row__primary">{cell.prompt || 'Approval required'}</span>
+        <span className="app-chat-system-row__primary">Needs your OK</span>
         <span className="app-chat-system-row__secondary">
-          {cell.status === 'waiting' ? 'Choose 1 allow once, 2 allow session, or 3 deny' : cell.status === 'done' ? 'Done' : 'Failed'}
+          {cell.prompt || (cell.status === 'waiting' ? 'Choose 1 allow once, 2 allow session, or 3 deny' : cell.status === 'done' ? 'Done' : 'Failed')}
         </span>
       </div>
       {canResolve ? (
@@ -506,7 +545,7 @@ export function ErrorCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind:
     || lowerMessage.includes('selected provider')
     || lowerMessage.includes('selected for chat')
     || lowerMessage.includes('local-only')
-    ? 'Choose Empyralis credits, add a provider key, or connect the required local runtime.'
+    ? 'Choose Empyralis credits, add an AI model key, or connect this computer.'
     : cell.message;
   return (
     <article data-chat-role="system" className="app-chat-transcript-error">
@@ -514,7 +553,7 @@ export function ErrorCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind:
         <CircleAlert size={14} strokeWidth={1.9} />
       </span>
       <div className="app-chat-transcript-error__copy">
-        <strong>Provider attention needed</strong>
+        <strong>AI model attention needed</strong>
         <span>{message}</span>
       </div>
       {actionHref && actionLabel ? (

@@ -9,7 +9,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'studio',
-    label: 'Studio',
+    label: 'Build',
     iconName: 'boxes',
     defaultRouteId: 'studio',
     childRouteIds: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
@@ -17,7 +17,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'marketplace',
-    label: 'Marketplace',
+    label: 'Discover',
     iconName: 'compass',
     defaultRouteId: 'marketplace',
     childRouteIds: ['marketplace'],
@@ -25,7 +25,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'gateway',
-    label: 'Gateway',
+    label: 'My Computer',
     iconName: 'waypoints',
     defaultRouteId: 'gateway',
     childRouteIds: ['gateway', 'channels', 'gatewayApprovals', 'gatewayActivity'],
@@ -88,7 +88,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'approvals',
-    label: 'Approvals',
+    label: 'Needs your OK',
     segment: 'approvals',
     destinationId: 'sage',
     requiredCapabilities: ['approvals_enabled'],
@@ -99,13 +99,13 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/approvals',
       screenName: 'approvals',
       groupId: 'sage',
-      tabLabel: 'Approvals',
+      tabLabel: 'Needs your OK',
       includeInBottomTabs: false,
     },
   },
   {
     id: 'artifacts',
-    label: 'Files',
+    label: 'Results & Files',
     segment: 'artifacts',
     destinationId: 'sage',
     requiredCapabilities: ['artifacts_enabled'],
@@ -148,7 +148,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'integrations',
-    label: 'Integrations',
+    label: 'Connected Apps',
     segment: 'integrations',
     destinationId: 'sage',
     web: {
@@ -157,7 +157,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'studio',
-    label: 'Agents',
+    label: 'Assistants',
     segment: 'studio',
     legacySegments: ['deployed-agents'],
     destinationId: 'studio',
@@ -167,13 +167,13 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/kin/index',
       screenName: 'kin/index',
       groupId: 'studio',
-      tabLabel: 'Agents',
+      tabLabel: 'Assistants',
       includeInBottomTabs: true,
     },
   },
   {
     id: 'studioIntegrations',
-    label: 'Integrations',
+    label: 'Connected Apps',
     segment: 'studio-integrations',
     destinationId: 'studio',
     requiredCapabilities: ['workspace_admin_enabled'],
@@ -183,7 +183,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'channels',
-    label: 'Channels',
+    label: 'Connected Apps',
     segment: 'channels',
     destinationId: 'gateway',
     web: {
@@ -192,7 +192,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'inbox',
-    label: 'Inbox',
+    label: 'Messages',
     segment: 'inbox',
     legacySegments: ['agents'],
     destinationId: 'studio',
@@ -201,7 +201,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'deploy',
-    label: 'Deploy',
+    label: 'Go Live',
     segment: 'deploy',
     legacySegments: ['applications'],
     destinationId: 'studio',
@@ -225,7 +225,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'marketplace',
-    label: 'Marketplace',
+    label: 'Discover',
     segment: 'marketplace',
     destinationId: 'marketplace',
     web: {},
@@ -233,20 +233,20 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/apps/index',
       screenName: 'apps/index',
       groupId: 'marketplace',
-      tabLabel: 'Applications',
+      tabLabel: 'Discover',
       includeInBottomTabs: true,
     },
   },
   {
     id: 'gateway',
-    label: 'Status',
+    label: 'My Computer',
     segment: 'gateway',
     destinationId: 'gateway',
     web: {},
   },
   {
     id: 'gatewayApprovals',
-    label: 'Approvals',
+    label: 'Needs your OK',
     segment: 'gateway-approvals',
     destinationId: 'gateway',
     web: {

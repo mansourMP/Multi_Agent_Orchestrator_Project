@@ -419,6 +419,67 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(payload["interventions"][0]["title"], "Anthropic is not available")
         self.assertEqual(payload["suggestions"], ["Connect Anthropic"])
 
+    def test_build_direct_operator_reply_returns_local_setup_required_for_offline_my_computer(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="find this file on my laptop",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="openai",
+            normalized_requested_model="gpt-5.4",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={
+                "ai_ready": True,
+                "runtime_ok": False,
+                "local_gateway_online": False,
+                "capability_truth": {
+                    "my_computer": {
+                        "online": False,
+                        "runtime_ok": False,
+                        "local_tools_available": False,
+                        "state": "offline",
+                    },
+                    "required_setup_actions": [
+                        {
+                            "id": "connect_my_computer",
+                            "label": "Connect My Computer",
+                            "href": "/integrations",
+                            "reason": "My Computer is offline.",
+                        }
+                    ],
+                },
+            },
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+
+        events = list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message="find this file on my laptop",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+            )
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "final")
+        payload = events[0]["payload"]
+        self.assertEqual(payload["mode"], "connect")
+        self.assertEqual(payload["interventions"][0]["title"], "My Computer setup required")
+        self.assertEqual(payload["actions"][0]["label"], "Connect My Computer")
+
     def test_build_direct_operator_reply_returns_explicit_provider_unavailable_when_not_ready(self) -> None:
         prepared = SimpleNamespace(
             normalized_message="hello",

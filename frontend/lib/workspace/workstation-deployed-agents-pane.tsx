@@ -294,7 +294,7 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   {
     id: 'deploy',
     label: 'Deploy',
-    description: 'Choose provider, model, budget guardrails, then save or launch when ready.',
+    description: 'Choose AI model provider, model, budget guardrails, then save or launch when ready.',
   },
 ];
 
@@ -364,7 +364,7 @@ const SPECIALIST_OVERLAY_TABS: Array<{
   { id: 'overview', label: 'Overview' },
   { id: 'tools', label: 'Tools' },
   { id: 'memory', label: 'Memory' },
-  { id: 'connectors', label: 'Connectors' },
+  { id: 'connectors', label: 'Connected Apps' },
   { id: 'analytics', label: 'Analytics' },
 ];
 
@@ -1723,7 +1723,7 @@ export function WorkstationDeployedAgentsPane({
       setProviderCatalog(nextCatalog);
     } catch (error) {
       setProviderCatalog([]);
-      setErrorMessage(error instanceof Error ? error.message : 'Provider catalog is unavailable.');
+      setErrorMessage(error instanceof Error ? error.message : 'AI model catalog is unavailable.');
     } finally {
       setIsLoadingProviderCatalog(false);
     }
@@ -2207,7 +2207,7 @@ export function WorkstationDeployedAgentsPane({
     const dailyMessageLimit = wizardState.dailyMessageLimit.trim();
     const monthlyCostCapUsd = wizardState.monthlyCostCapUsd.trim();
     if (!wizardState.providerId.trim()) {
-      setErrorMessage('Choose a provider before saving this specialist.');
+      setErrorMessage('Choose an AI model provider before saving this assistant.');
       return;
     }
     if (!wizardState.modelId.trim()) {
@@ -2237,7 +2237,7 @@ export function WorkstationDeployedAgentsPane({
       }
     }
     if (wizardState.telegramEnabled && !wizardState.telegramConnectorId.trim()) {
-      setErrorMessage('Choose a Telegram connector before saving a live-ready specialist.');
+      setErrorMessage('Choose a Telegram connected app before saving a live-ready assistant.');
       return;
     }
     const payload = {
@@ -2436,15 +2436,15 @@ export function WorkstationDeployedAgentsPane({
     : [];
   const knowledgeSourceCount = selectedKnowledgeSources.length;
   const studioTitle = currentStudioSubview === 'agents'
-    ? 'Studio · Agents'
+    ? 'Build · Assistants'
     : currentStudioSubview === 'inbox'
-      ? 'Studio · Inbox'
-      : 'Studio · Deploy';
+      ? 'Build · Inbox'
+      : 'Build · Go Live';
   const studioSubtitle = currentStudioSubview === 'agents'
     ? 'Specialist roster, readiness, and operational posture.'
     : currentStudioSubview === 'inbox'
       ? 'Customer sessions, escalation pressure, and transcript flow.'
-      : 'Launch checks, provider choice, and go-live controls.';
+      : 'Launch checks, AI model choice, and go-live controls.';
   const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
   const showReadinessPanel = currentStudioSubview === 'deploy';
   const showDetailPanel = currentStudioSubview === 'deploy';
@@ -2560,8 +2560,8 @@ export function WorkstationDeployedAgentsPane({
         {visibleErrorMessage ? (
           <StateBanner
             tone="danger"
-            title="Studio is having trouble loading"
-            detail="Studio keeps any successfully loaded specialist data visible while retrying failed requests."
+            title="Build is having trouble loading"
+            detail="Build keeps any successfully loaded assistant data visible while retrying failed requests."
           >
             {visibleErrorMessage}
           </StateBanner>
@@ -2579,7 +2579,7 @@ export function WorkstationDeployedAgentsPane({
                       className="studio-panel studio-panel--templates"
                       eyebrow="Templates"
                       title="Start from a specialist template"
-                      subtitle="Pick the job first. Studio will create a draft and keep tools, memory, channels, and deployment settings behind focused tabs."
+                      subtitle="Pick the job first. Build will create a draft and keep tools, memory, messaging, and go-live settings behind focused tabs."
                       actions={currentStudioSubview === 'agents' ? (
                         <div className="app-inline-actions app-inline-actions--tight">
                           <AppButton
@@ -2592,8 +2592,8 @@ export function WorkstationDeployedAgentsPane({
                                 refreshAgents({ preserveSelection: true }),
                               ]);
                             }}
-                            aria-label="Refresh studio"
-                            title="Refresh studio"
+                            aria-label="Refresh build"
+                            title="Refresh build"
                           >
                             <RefreshCw size={14} strokeWidth={1.9} aria-hidden="true" />
                           </AppButton>
@@ -2630,7 +2630,7 @@ export function WorkstationDeployedAgentsPane({
                       {agents.length === 0 ? (
                         <EmptyPanel
                           title="No specialists yet"
-                          body="Choose a template above to create a draft. Provider, model, billing, and marketplace settings stay out of the first step."
+                          body="Choose a template above to create a draft. AI model, billing, and Discover settings stay out of the first step."
                         />
                       ) : (
                       <div className="deployed-agents-card-grid">
@@ -2719,7 +2719,7 @@ export function WorkstationDeployedAgentsPane({
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />
                       <FormReadout label="Channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
-                      <FormReadout label="Runtime" value={humanizeToken(selectedAgent?.runtime_target, 'Cloud')} />
+                      <FormReadout label="Computer target" value={humanizeToken(selectedAgent?.runtime_target, 'Cloud')} />
                     </FormGrid>
                   </ListDetailPanel>
                 ) : null}
@@ -2783,7 +2783,7 @@ export function WorkstationDeployedAgentsPane({
                         <FormReadout label="Context" value={humanizeToken(selectedStudioTemplate.contextBudgetPreset, 'Balanced')} />
                       </FormGrid>
                       <div className="studio-template-detail__group">
-                        <span className="studio-template-detail__label">Required connectors</span>
+                        <span className="studio-template-detail__label">Required connected apps</span>
                         <div className="studio-template-card__tags">
                           {selectedStudioTemplate.requiredConnectors.map((connector) => (
                             <span key={connector} className="studio-template-card__tag">{connector}</span>
@@ -2824,11 +2824,11 @@ export function WorkstationDeployedAgentsPane({
                         <StateBanner
                           tone={selectedTelegramReadiness.readyForLive ? 'success' : selectedTelegramReadiness.blockers.length > 0 ? 'warning' : 'neutral'}
                           title={selectedTelegramReadiness.readyForLive ? 'Telegram launch ready' : 'Telegram launch not ready'}
-                          detail={selectedTelegramReadiness.nextAction ?? 'Connector checks are in progress.'}
+                          detail={selectedTelegramReadiness.nextAction ?? 'Connected app checks are in progress.'}
                         >
                           {selectedTelegramReadiness.blockers.length > 0
                             ? selectedTelegramReadiness.blockers.map((item) => item.message).join(' · ')
-                            : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || `${selectedTelegramReadiness.connectors.length} connector${selectedTelegramReadiness.connectors.length === 1 ? '' : 's'} checked.`}
+                            : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || `${selectedTelegramReadiness.connectors.length} connected app${selectedTelegramReadiness.connectors.length === 1 ? '' : 's'} checked.`}
                         </StateBanner>
                       ) : isLoadingTelegramReadiness ? (
                         <SkeletonBlock height="5rem" />
@@ -2836,7 +2836,7 @@ export function WorkstationDeployedAgentsPane({
                       <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
                         <FormReadout label="State" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
                         <FormReadout label="Run environment" value={humanizeToken(selectedAgent.runtime_target, 'Cloud')} />
-                        <FormReadout label="Provider" value={humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
+                        <FormReadout label="AI model provider" value={humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
                         <FormReadout label="Model" value={selectedModelId(selectedAgent) || 'Not pinned'} />
                         <FormReadout label="Billing plan" value={humanizeToken(selectedAgent.billing_plan, 'Free')} />
                         <FormReadout
@@ -2869,7 +2869,7 @@ export function WorkstationDeployedAgentsPane({
                           }
                         />
                         <FormReadout
-                          label="Telegram connector"
+                          label="Telegram connected app"
                           value={readString(
                             readRecord(selectedTelegramReadiness?.configuredBinding).label,
                             readString(readRecord(selectedTelegramReadiness?.configuredBinding).connector_id, 'Not bound'),
@@ -3299,9 +3299,9 @@ export function WorkstationDeployedAgentsPane({
                     <div className="deployed-agents-overlay__marketplace">
                       <div className="deployed-agents-overlay__marketplace-header">
                         <div>
-                          <strong className="deployed-agents-overlay__marketplace-title">Marketplace</strong>
+                          <strong className="deployed-agents-overlay__marketplace-title">Discover</strong>
                           <p className="deployed-agents-overlay__marketplace-hint">
-                            Control whether this specialist appears in the public Marketplace catalog.
+                            Control whether this assistant appears in the public Discover catalog.
                           </p>
                         </div>
                         <button
@@ -3319,11 +3319,11 @@ export function WorkstationDeployedAgentsPane({
                       </div>
                       <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                         <FormField
-                          label="List in Marketplace"
+                          label="List in Discover"
                           hint="Owners control public listing. The Telegram button disables automatically when no Telegram username is configured."
                         >
                           <FormReadout
-                            label="List in Marketplace"
+                            label="List in Discover"
                             value={overlayMarketplaceListed ? 'Enabled' : 'Disabled'}
                           />
                         </FormField>
@@ -3577,7 +3577,7 @@ export function WorkstationDeployedAgentsPane({
         title={wizardMode === 'create' ? `New ${selectedStudioTemplate.title}` : 'Edit Specialist'}
         description={
           wizardMode === 'create'
-            ? 'Create a draft from a template. Advanced tools, memory, channel, provider, and deploy settings stay in focused steps.'
+            ? 'Create a draft from a template. Advanced tools, memory, channel, AI model, and go-live settings stay in focused steps.'
             : 'Adjust the specialist configuration, customer channel, and launch settings.'
         }
         onClose={closeWizard}
@@ -3655,7 +3655,7 @@ export function WorkstationDeployedAgentsPane({
 
                     <div className="deployed-agents-wizard__quickstart">
                       <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                        <FormField label="Specialist name" hint="The name your team sees in Studio.">
+                        <FormField label="Specialist name" hint="The name your team sees in Build.">
                           <FormInput
                             value={wizardState.name}
                             onChange={(event) => setWizardField('name', event.currentTarget.value)}
@@ -3835,11 +3835,11 @@ export function WorkstationDeployedAgentsPane({
                     <StateBanner
                       tone={selectedTelegramReadiness.readyForLive ? 'success' : selectedTelegramReadiness.blockers.length > 0 ? 'warning' : 'neutral'}
                       title={selectedTelegramReadiness.readyForLive ? 'Telegram launch path is ready' : 'Telegram launch checks'}
-                      detail={selectedTelegramReadiness.nextAction ?? 'Connector checks are in progress.'}
+                      detail={selectedTelegramReadiness.nextAction ?? 'Connected app checks are in progress.'}
                     >
                       {selectedTelegramReadiness.blockers.length > 0
                         ? selectedTelegramReadiness.blockers.map((item) => item.message).join(' · ')
-                        : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || `${selectedTelegramReadiness.connectors.length} connector${selectedTelegramReadiness.connectors.length === 1 ? '' : 's'} checked.`}
+                        : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || `${selectedTelegramReadiness.connectors.length} connected app${selectedTelegramReadiness.connectors.length === 1 ? '' : 's'} checked.`}
                     </StateBanner>
                   ) : isLoadingTelegramReadiness ? (
                     <SkeletonBlock height="5rem" />
@@ -3854,7 +3854,7 @@ export function WorkstationDeployedAgentsPane({
                         <option value="enabled">Ready for live deploy</option>
                       </FormSelect>
                     </FormField>
-                    <FormField label="Telegram connector" hint="Bind to one workspace Telegram bot.">
+                    <FormField label="Telegram connected app" hint="Bind to one workspace Telegram bot.">
                       <FormSelect
                         value={wizardState.telegramConnectorId}
                         onChange={(event) => {
@@ -3870,10 +3870,10 @@ export function WorkstationDeployedAgentsPane({
                       >
                         <option value="">
                           {isLoadingTelegramReadiness
-                            ? 'Checking Telegram connectors…'
+                            ? 'Checking Telegram connected apps…'
                             : selectedTelegramReadiness?.connectors.length
                               ? 'Select a Telegram bot'
-                              : 'No Telegram connectors available'}
+                              : 'No Telegram connected apps available'}
                         </option>
                         {(selectedTelegramReadiness?.connectors ?? []).map((connector) => (
                           <option key={connector.id} value={connector.id}>
@@ -3886,7 +3886,7 @@ export function WorkstationDeployedAgentsPane({
                   {!isLoadingTelegramReadiness && (selectedTelegramReadiness?.connectors.length ?? 0) === 0 ? (
                     <div className="app-stack-3">
                       <StateBanner tone="neutral" title="No Telegram bot connected yet.">
-                        Studio needs one Telegram bot before this specialist can go live.
+                        Build needs one Telegram bot before this specialist can go live.
                       </StateBanner>
                       <div className="app-inline-actions">
                         <AppButton
@@ -4043,7 +4043,7 @@ export function WorkstationDeployedAgentsPane({
               {wizardStep.id === 'deploy' ? (
                 <div className="app-stack-3">
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Provider" hint="Choose the AI provider for this specialist.">
+                    <FormField label="AI model provider" hint="Choose the AI model provider for this assistant.">
                       <FormSelect
                         data-deployed-agent-provider-select="true"
                         value={wizardState.providerId}
@@ -4062,7 +4062,7 @@ export function WorkstationDeployedAgentsPane({
                         disabled={isLoadingProviderCatalog || providerCatalog.length === 0}
                       >
                         <option value="">
-                          {isLoadingProviderCatalog ? 'Loading providers…' : 'Select a provider'}
+                          {isLoadingProviderCatalog ? 'Loading AI model providers…' : 'Select an AI model provider'}
                         </option>
                         {providerCatalog.map((provider) => (
                           <option key={provider.id} value={provider.id}>
@@ -4079,7 +4079,7 @@ export function WorkstationDeployedAgentsPane({
                         disabled={!selectedProviderCatalog || selectedProviderCatalog.models.length === 0}
                       >
                         <option value="">
-                          {selectedProviderCatalog ? 'Select a model' : 'Select a provider first'}
+                          {selectedProviderCatalog ? 'Select a model' : 'Select an AI model provider first'}
                         </option>
                         {(selectedProviderCatalog?.models ?? []).map((model) => (
                           <option key={model.id} value={model.id}>
@@ -4088,14 +4088,14 @@ export function WorkstationDeployedAgentsPane({
                         ))}
                       </FormSelect>
                     </FormField>
-                    <FormField label="Run environment" hint="Cloud is the default. Use local targets only for advanced private-runtime cases.">
+                    <FormField label="Computer target" hint="Cloud is the default. Use local targets only for advanced private-computer cases.">
                       <FormSelect
                         value={wizardState.runtimeTarget}
                         onChange={(event) => setWizardField('runtimeTarget', event.currentTarget.value)}
                       >
                         <option value="cloud">Cloud</option>
-                        <option value="local">Local runtime (advanced)</option>
-                        <option value="device">Privileged device (advanced)</option>
+                        <option value="local">This computer (advanced)</option>
+                        <option value="device">Managed computer (advanced)</option>
                       </FormSelect>
                     </FormField>
                     <FormField label="Billing plan" hint="Choose the plan tied to this specialist.">
@@ -4111,7 +4111,7 @@ export function WorkstationDeployedAgentsPane({
                     </FormField>
                   </FormGrid>
                   <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-                    <FormReadout label="Provider state" value={humanizeToken(selectedProviderCatalog?.state, isLoadingProviderCatalog ? 'Loading' : 'Unknown')} />
+                    <FormReadout label="AI model provider state" value={humanizeToken(selectedProviderCatalog?.state, isLoadingProviderCatalog ? 'Loading' : 'Unknown')} />
                     <FormReadout label="Privacy profile" value={selectedProviderCatalog?.privacyPosture || 'n/a'} />
                     <FormReadout label="Jurisdiction" value={selectedProviderCatalog?.jurisdiction || 'n/a'} />
                     <FormReadout label="Residency" value={selectedProviderCatalog?.residency || 'n/a'} />

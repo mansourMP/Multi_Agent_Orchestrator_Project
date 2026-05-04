@@ -3364,8 +3364,9 @@ export function WorkstationChatPane() {
       return;
     }
     if (!activeProviderSummary.connected) {
+      setHasEnteredConversationFlow(true);
       setSendFailureNotice({
-        message: 'Connect an AI provider in Integrations before sending.',
+        message: 'Sage needs Empyralis credits or your own API key before it can answer. Set up hosted credits, DeepSeek, Gemini, OpenAI, or another provider in Integrations.',
         retryable: false,
         actionTarget: 'integrations',
       });

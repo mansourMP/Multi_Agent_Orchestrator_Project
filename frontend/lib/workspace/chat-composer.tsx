@@ -158,7 +158,7 @@ export function ChatComposer({
   const [runtimePickerOpen, setRuntimePickerOpen] = useState(false);
   const [toolPaletteOpen, setToolPaletteOpen] = useState(false);
   const hasDraft = draft.trim().length > 0;
-  const canSend = !sendDisabled && !busy && hasDraft;
+  const canSend = !busy && hasDraft;
   const canStop = busy && typeof onStop === 'function';
   const showSendButton = busy || hasDraft;
   const selectedModelLabel = composerOptionLabel(modelOptions, model);
@@ -406,7 +406,7 @@ export function ChatComposer({
             type={busy ? 'button' : 'submit'}
             onClick={busy ? onStop : undefined}
             disabled={busy ? !canStop : !canSend}
-            aria-label={sendDisabled && !busy ? 'Connect provider before sending' : busy ? 'Stop response' : 'Send message'}
+            aria-label={sendDisabled && !busy ? 'Send message and review provider setup' : busy ? 'Stop response' : 'Send message'}
             className={joinClassNames(
               'app-chat-composer__send',
               busy && 'app-chat-composer__send--stop',

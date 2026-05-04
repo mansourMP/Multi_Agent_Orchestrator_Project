@@ -660,6 +660,20 @@ function isSyntheticTranscriptMessage(message: WorkstationChatMessageRecord): bo
     );
 }
 
+function isProviderRuntimeGateMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes('is selected for chat but is not available right now')
+    || normalized.includes('is local-only and needs a connected computer')
+    || normalized.includes('the selected provider is not ready')
+    || normalized.includes('the selected provider is not available right now')
+    || normalized.includes('connect this computer, switch to empyralis credits')
+  );
+}
+
 function normalizeStructuredRecordList(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) {
     const records = value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object');
@@ -739,6 +753,9 @@ function normalizeCanonicalChatThread(
           : ''
       );
     if (!rawContent.trim() && providerFailureIntervention && typeof nextMetadata.display_kind !== 'string') {
+      nextMetadata.display_kind = 'provider_error';
+    }
+    if (rawContent.trim() && isProviderRuntimeGateMessage(rawContent) && typeof nextMetadata.display_kind !== 'string') {
       nextMetadata.display_kind = 'provider_error';
     }
 
@@ -1251,6 +1268,9 @@ function createCanonicalAssistantMessage(
     return null;
   }
   if (!reply && providerFailureIntervention && typeof metadata.display_kind !== 'string') {
+    metadata.display_kind = 'provider_error';
+  }
+  if (reply && isProviderRuntimeGateMessage(reply) && typeof metadata.display_kind !== 'string') {
     metadata.display_kind = 'provider_error';
   }
 

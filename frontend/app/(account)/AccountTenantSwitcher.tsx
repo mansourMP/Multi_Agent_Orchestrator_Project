@@ -204,7 +204,6 @@ export function AccountTenantSwitcher() {
               prefetch
               aria-current={activeDestinationId === destination.id ? 'page' : undefined}
               data-workstation-destination-link={destination.id}
-              data-label={destination.label}
               className={joinClassNames(
                 'account-switcher__link',
                 activeDestinationId === destination.id && 'account-switcher__link--active',
@@ -233,7 +232,6 @@ export function AccountTenantSwitcher() {
           className="account-switcher__link account-switcher__theme-toggle"
           aria-label={`${themeLabel}. Click to switch to ${nextTheme}.`}
           title={`${themeLabel}. Click to switch to ${nextTheme}.`}
-          data-label={themeLabel}
           onClick={() => {
             actions.setGlobalTheme(nextTheme);
           }}
@@ -248,7 +246,6 @@ export function AccountTenantSwitcher() {
               prefetch
               aria-current={activeDestinationId === destination.id ? 'page' : undefined}
               data-workstation-destination-link={destination.id}
-              data-label={destination.label}
               className={joinClassNames(
                 'account-switcher__link',
                 activeDestinationId === destination.id && 'account-switcher__link--active',
@@ -266,7 +263,6 @@ export function AccountTenantSwitcher() {
           className="account-switcher__link account-switcher__avatar"
           aria-label="Account"
           title={state.account?.displayName || state.account?.email || 'Account'}
-          data-label={state.account?.displayName || state.account?.email || 'Account'}
         >
           {accountInitial}
         </Link>

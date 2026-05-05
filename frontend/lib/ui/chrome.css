@@ -3863,13 +3863,18 @@ textarea {
   position: fixed;
   inset: 0 auto 0 0;
   z-index: var(--z-sidebar);
-  padding: var(--app-space-3) 0;
-  border-right: 1px solid color-mix(in srgb, var(--app-border-subtle) 88%, transparent 12%);
-  background: var(--app-bg-shell);
-  backdrop-filter: blur(22px);
+  padding: var(--app-space-4) 0;
+  border-right: 1px solid color-mix(in srgb, var(--app-border-subtle) 80%, transparent 20%);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--app-bg-shell) 86%, transparent 14%) 0%,
+      color-mix(in srgb, var(--app-bg-shell) 94%, var(--app-bg-page) 6%) 100%
+    );
+  backdrop-filter: blur(14px);
   box-shadow:
-    inset -1px 0 0 color-mix(in srgb, var(--app-border-subtle) 74%, transparent 26%),
-    14px 0 34px -30px color-mix(in srgb, black 32%, transparent);
+    inset -1px 0 0 color-mix(in srgb, var(--app-border-subtle) 64%, transparent 36%),
+    10px 0 24px -26px color-mix(in srgb, black 26%, transparent);
 }
 
 .app-shell-frame__kernel {
@@ -4449,7 +4454,7 @@ textarea {
   align-items: center;
   justify-content: flex-start;
   gap: var(--app-space-3);
-  padding: var(--app-space-2) 0;
+  padding: 0;
   background: transparent;
 }
 
@@ -4476,14 +4481,14 @@ textarea {
 
 .account-switcher__spacer {
   flex: 1 1 auto;
-  min-height: var(--app-space-4);
+  min-height: var(--app-space-6);
 }
 
 .account-switcher__nav {
   display: grid;
   justify-items: center;
-  gap: var(--app-space-2);
-  padding: var(--app-space-1) 0;
+  gap: var(--app-space-1);
+  padding: 0;
 }
 
 .account-switcher__nav--secondary {
@@ -4521,8 +4526,8 @@ textarea {
 
 .account-switcher__link {
   position: relative;
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4544,16 +4549,16 @@ textarea {
 }
 
 .account-switcher__link:hover {
-  background: color-mix(in srgb, var(--app-bg-panel-elevated) 62%, transparent 38%);
-  border-color: color-mix(in srgb, var(--app-border-muted) 58%, transparent 42%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 38%, transparent 62%);
+  border-color: color-mix(in srgb, var(--app-border-muted) 36%, transparent 64%);
   color: var(--text-primary);
   transform: translateY(-1px);
   box-shadow: none;
 }
 
 .account-switcher__link--active {
-  border-color: color-mix(in srgb, var(--app-border-strong) 58%, transparent 42%);
-  background: color-mix(in srgb, var(--app-bg-panel-elevated) 64%, transparent 36%);
+  border-color: color-mix(in srgb, var(--app-border-strong) 42%, transparent 58%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 40%, transparent 60%);
   color: var(--text-primary);
   box-shadow: none;
 }

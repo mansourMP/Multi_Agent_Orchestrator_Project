@@ -186,13 +186,9 @@ export default function SignupPage() {
                 ? 'Create an Empyralis account to continue from Telegram, then finish inside Sage.'
                 : 'Choose the live sign-in path you want now. You can connect the rest later from inside Empyralis.'}
             </p>
-            <div className="app-auth-trust-strip">
-              <span className="app-auth-trust-strip__item">Private workspace</span>
-              <span className="app-auth-trust-strip__item">Credits-first launch</span>
-            </div>
           </div>
           <div className="app-auth-provider-stack">
-            <div className="app-auth-social-grid">
+            <div className="app-auth-social-stack">
               <AppButton
                 type="button"
                 tone="secondary"

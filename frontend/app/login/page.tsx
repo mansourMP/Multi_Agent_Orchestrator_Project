@@ -177,13 +177,9 @@ function LoginPageContent() {
             <span className="app-auth-kicker">Welcome back</span>
             <h2 className="app-auth-title">Log in</h2>
             <p className="app-auth-subtitle">Use the fastest live sign-in path now, then manage everything from inside Empyralis.</p>
-            <div className="app-auth-trust-strip">
-              <span className="app-auth-trust-strip__item">Direct to Sage</span>
-              <span className="app-auth-trust-strip__item">One private account</span>
-            </div>
           </div>
           <div className="app-auth-provider-stack">
-            <div className="app-auth-social-grid">
+            <div className="app-auth-social-stack">
               <AppButton
                 type="button"
                 tone="secondary"

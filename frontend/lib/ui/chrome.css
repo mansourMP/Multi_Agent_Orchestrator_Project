@@ -1484,11 +1484,19 @@ textarea {
   gap: var(--app-space-3);
 }
 
+.app-auth-social-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--app-space-3);
+}
+
 .app-auth-social {
+  width: 100%;
   min-height: 50px;
   justify-content: flex-start;
   gap: var(--app-space-2);
   padding: 0 16px;
+  white-space: normal;
   border-radius: calc(var(--app-radius-lg) + 2px);
   background:
     linear-gradient(180deg, rgba(39, 42, 50, 0.96) 0%, rgba(31, 33, 39, 0.96) 100%);

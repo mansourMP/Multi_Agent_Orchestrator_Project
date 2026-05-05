@@ -39,7 +39,7 @@ const DESTINATION_ICON_MAP: Record<WorkspaceNavDestinationId, LucideIcon> = {
 };
 
 const PRIMARY_DESTINATIONS = WORKSPACE_NAV_DESTINATIONS
-  .filter((destination) => destination.id !== 'settings' && destination.id !== 'gateway')
+  .filter((destination) => destination.id !== 'settings')
   .map((destination) => ({
     id: destination.id,
     label: destination.label,

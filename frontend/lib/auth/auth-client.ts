@@ -12,11 +12,123 @@ type AwaitBrowserAuthReadyOptions = {
   delayMs?: number;
 };
 
+type ExternalAuthProvider = 'google' | 'apple';
+
+type ExternalAuthPendingRecord = {
+  provider: ExternalAuthProvider;
+  startedAt: number;
+};
+
+type ExternalAuthCompletionRecord = {
+  provider: ExternalAuthProvider;
+  completedAt: number;
+};
+
 export type AuthProviderOptions = {
   email?: { enabled?: boolean } | null;
   google?: { enabled?: boolean } | null;
   apple?: { enabled?: boolean } | null;
 };
+
+const EXTERNAL_AUTH_PENDING_STORAGE_KEY = 'empyralis.external-auth.pending';
+const EXTERNAL_AUTH_COMPLETION_STORAGE_KEY = 'empyralis.external-auth.complete';
+
+function hasWindowStorage(): boolean {
+  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+}
+
+function parseExternalAuthProvider(value: unknown): ExternalAuthProvider | null {
+  if (value === 'google' || value === 'apple') {
+    return value;
+  }
+  return null;
+}
+
+function readStoredJson<T>(storageKey: string): T | null {
+  if (!hasWindowStorage()) {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredJson<T>(storageKey: string, value: T): void {
+  if (!hasWindowStorage()) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(value));
+  } catch {
+    // ignore local storage errors in auth helpers
+  }
+}
+
+export function getPendingExternalAuthProvider(): ExternalAuthProvider | null {
+  const pending = readStoredJson<ExternalAuthPendingRecord>(EXTERNAL_AUTH_PENDING_STORAGE_KEY);
+  return parseExternalAuthProvider(pending?.provider);
+}
+
+export function markExternalAuthPending(provider: ExternalAuthProvider): void {
+  writeStoredJson<ExternalAuthPendingRecord>(EXTERNAL_AUTH_PENDING_STORAGE_KEY, {
+    provider,
+    startedAt: Date.now(),
+  });
+}
+
+export function clearExternalAuthPending(): void {
+  if (!hasWindowStorage()) {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(EXTERNAL_AUTH_PENDING_STORAGE_KEY);
+  } catch {
+    // ignore local storage errors in auth helpers
+  }
+}
+
+export function announceExternalAuthCompletion(provider: ExternalAuthProvider): void {
+  writeStoredJson<ExternalAuthCompletionRecord>(EXTERNAL_AUTH_COMPLETION_STORAGE_KEY, {
+    provider,
+    completedAt: Date.now(),
+  });
+}
+
+export function watchExternalAuthCompletion(onReady: () => void): () => void {
+  if (typeof window === 'undefined') {
+    return () => {};
+  }
+
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === EXTERNAL_AUTH_COMPLETION_STORAGE_KEY) {
+      onReady();
+    }
+  };
+  const handleFocus = () => {
+    onReady();
+  };
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') {
+      onReady();
+    }
+  };
+
+  window.addEventListener('storage', handleStorage);
+  window.addEventListener('focus', handleFocus);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+
+  return () => {
+    window.removeEventListener('storage', handleStorage);
+    window.removeEventListener('focus', handleFocus);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+  };
+}
 
 function channelAttributionToken(): string | undefined {
   if (typeof window === 'undefined') {
@@ -154,6 +266,7 @@ export async function logout(): Promise<Record<string, unknown> | null> {
 }
 
 export function googleLogin(): void {
+  markExternalAuthPending('google');
   const params = new URLSearchParams();
   const attribution = channelAttributionToken();
   if (attribution) {

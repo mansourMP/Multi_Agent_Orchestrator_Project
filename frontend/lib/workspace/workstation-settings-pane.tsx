@@ -3,13 +3,25 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
-import { joinClassNames } from '@/lib/ui/primitives';
+import { logout, me, type AuthProviderOptions, listAuthProviders } from '@/lib/auth/auth-client';
+import {
+  AppButton,
+  AppNotice,
+  AppSurfaceCard,
+  AppSurfaceList,
+  AppSurfaceListItem,
+  AppSurfaceStat,
+  AppSurfaceStatGrid,
+  joinClassNames,
+} from '@/lib/ui/primitives';
 import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationBillingPane } from '@/lib/workspace/workstation-billing-pane';
 import { WorkstationDesktopStatus } from '@/lib/workspace/workstation-desktop-status';
 import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gateway-operator-pane';
 import { WorkstationPlatformAnalyticsPane } from '@/lib/workspace/workstation-platform-analytics-pane';
+import type { ProviderCatalogRecord, ProviderProfileRecord } from '@/lib/workspace/workstation-client';
 
 type SettingsSectionId = 'account' | 'devices' | 'usage' | 'billing' | 'privacy';
 
@@ -65,6 +77,176 @@ function humanizeToken(value: string): string {
     .join(' ');
 }
 
+type AccountProfilePayload = Record<string, unknown> & {
+  user?: Record<string, unknown> | null;
+  identity_boundary?: Record<string, unknown> | null;
+  current_workspace_entitlements?: Record<string, unknown> | null;
+};
+
+type BillingSummaryPayload = Record<string, unknown> & {
+  subscription?: Record<string, unknown> | null;
+  hosted_sage_ai?: Record<string, unknown> | null;
+};
+
+type AccountMethodRecord = Record<string, unknown> & {
+  provider?: string | null;
+  method_type?: string | null;
+  label?: string | null;
+  status?: string | null;
+  is_primary?: boolean | null;
+  can_recover?: boolean | null;
+};
+
+type HostedCreditsSnapshot = {
+  allowed: boolean;
+  message: string;
+  monthlyCreditCap: number;
+  monthlyCreditsRemaining: number;
+};
+
+function readString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function readOptionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function readNumber(value: unknown, fallback = 0): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatCredits(value: number): string {
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.max(0, Math.round(value)));
+}
+
+function normalizeHostedCreditValue(record: Record<string, unknown>, usdKey: string, creditKey: string): number {
+  const explicitCredits = readNumber(record[creditKey], Number.NaN);
+  if (Number.isFinite(explicitCredits)) {
+    return explicitCredits;
+  }
+  const creditsPerUsd = Math.max(1, readNumber(record.credits_per_usd, 1000));
+  return readNumber(record[usdKey], 0) * creditsPerUsd;
+}
+
+function normalizeHostedCredits(summary: BillingSummaryPayload | null): HostedCreditsSnapshot {
+  const hosted = summary && typeof summary.hosted_sage_ai === 'object'
+    ? summary.hosted_sage_ai as Record<string, unknown>
+    : {};
+  return {
+    allowed: hosted.allowed === true,
+    message: readString(hosted.message, 'Credits are not active yet.'),
+    monthlyCreditCap: normalizeHostedCreditValue(hosted, 'monthly_cap_usd', 'monthly_credit_cap'),
+    monthlyCreditsRemaining: normalizeHostedCreditValue(hosted, 'monthly_remaining_usd', 'monthly_credits_remaining'),
+  };
+}
+
+function normalizeAuthMethods(profile: AccountProfilePayload | null): AccountMethodRecord[] {
+  const boundary = profile && typeof profile.identity_boundary === 'object'
+    ? profile.identity_boundary as Record<string, unknown>
+    : {};
+  return Array.isArray(boundary.auth_methods)
+    ? boundary.auth_methods.filter((item): item is AccountMethodRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function formatAuthMethodLabel(method: AccountMethodRecord): string {
+  const provider = readString(method.provider).toLowerCase();
+  if (provider === 'empyralis_password') {
+    return 'Email and password';
+  }
+  if (provider === 'google') {
+    return 'Google';
+  }
+  if (provider === 'apple') {
+    return 'Apple';
+  }
+  if (provider === 'oidc') {
+    return 'Single sign-on';
+  }
+  const label = readString(method.label);
+  if (label) {
+    return label;
+  }
+  return humanizeToken(provider || readString(method.method_type, 'sign-in'));
+}
+
+function formatAuthMethodDetail(method: AccountMethodRecord): string {
+  const notes: string[] = [];
+  if (method.is_primary === true) {
+    notes.push('Primary sign-in');
+  }
+  if (method.can_recover === true) {
+    notes.push('Recovery enabled');
+  }
+  const status = readString(method.status);
+  if (status && status !== 'active') {
+    notes.push(humanizeToken(status));
+  }
+  return notes.join(' · ') || 'Available';
+}
+
+function normalizeProviderRecords(payload: unknown): ProviderCatalogRecord[] {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  return Array.isArray(record.providers)
+    ? record.providers.filter((item): item is ProviderCatalogRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function normalizeProfileRecords(payload: unknown): ProviderProfileRecord[] {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  return Array.isArray(record.items)
+    ? record.items.filter((item): item is ProviderProfileRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function deriveActiveModelPath(
+  providers: ProviderCatalogRecord[],
+  profiles: ProviderProfileRecord[],
+  hostedCredits: HostedCreditsSnapshot,
+): { value: string; hint: string } {
+  const enabledProfiles = [...profiles]
+    .filter((profile) => profile.enabled !== false)
+    .sort((left, right) => Number(left.priority ?? 100) - Number(right.priority ?? 100));
+  const selectedProfile = enabledProfiles[0] ?? null;
+  if (selectedProfile) {
+    const providerId = readString(selectedProfile.provider).toLowerCase();
+    const provider = providers.find((item) => readString(item.id).toLowerCase() === providerId) ?? null;
+    const providerLabel = readString(provider?.label, providerId || 'AI model');
+    const modelLabel = readString(selectedProfile.model)
+      || readString(provider?.default_model)
+      || 'Default model';
+    const routeLabel = provider?.local_only === true || providerId === 'ollama'
+      ? 'My Computer'
+      : 'Your API key';
+    return {
+      value: `${providerLabel} · ${modelLabel}`,
+      hint: routeLabel,
+    };
+  }
+
+  if (hostedCredits.allowed) {
+    const hostedProvider = providers.find((provider) => {
+      const policy = readString(provider.hosted_sage_ai_policy).toLowerCase();
+      return policy === 'enabled_with_cap' || policy === 'allowed';
+    }) ?? null;
+    const providerLabel = readString(hostedProvider?.label, 'Empyralis default model');
+    const modelLabel = readString(hostedProvider?.default_model)
+      || readString((Array.isArray(hostedProvider?.models) ? hostedProvider?.models[0]?.label : null))
+      || 'Default model';
+    return {
+      value: `${providerLabel} · ${modelLabel}`,
+      hint: 'Empyralis credits',
+    };
+  }
+
+  return {
+    value: 'No AI model selected',
+    hint: 'Choose credits, add an API key, or connect My Computer.',
+  };
+}
+
 function isSettingsSectionId(value: string | null): value is SettingsSectionId {
   return value === 'account'
     || value === 'devices'
@@ -76,10 +258,22 @@ function isSettingsSectionId(value: string | null): value is SettingsSectionId {
 export function WorkstationSettingsPane() {
   const searchParams = useSearchParams();
   const { bootstrap } = useWorkspaceBoundary();
+  const services = useWorkspaceServices();
   const [selectedSection, setSelectedSection] = useState<SettingsSectionId>(() => {
     const requestedSection = searchParams.get('section');
     return isSettingsSectionId(requestedSection) ? requestedSection : 'account';
   });
+  const [accountProfile, setAccountProfile] = useState<AccountProfilePayload | null>(null);
+  const [billingSummary, setBillingSummary] = useState<BillingSummaryPayload | null>(null);
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);
+  const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRecord[]>([]);
+  const [authProviders, setAuthProviders] = useState<AuthProviderOptions>({
+    email: { enabled: true },
+    google: { enabled: false },
+    apple: { enabled: false },
+  });
+  const [accountDetailsError, setAccountDetailsError] = useState<string | null>(null);
+  const [logoutPending, setLogoutPending] = useState(false);
 
   useEffect(() => {
     const requestedSection = searchParams.get('section');
@@ -87,6 +281,54 @@ export function WorkstationSettingsPane() {
       setSelectedSection(requestedSection);
     }
   }, [searchParams, selectedSection]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAccountDetailsError(null);
+
+    void Promise.allSettled([
+      me(),
+      services.client.getBillingSummary(),
+      services.client.listProviderCatalog(),
+      services.client.listProviderProfiles(),
+      listAuthProviders(),
+    ]).then((results) => {
+      if (cancelled) {
+        return;
+      }
+
+      const [profileResult, billingResult, catalogResult, profilesResult, authProvidersResult] = results;
+
+      if (profileResult.status === 'fulfilled') {
+        setAccountProfile((profileResult.value ?? null) as AccountProfilePayload | null);
+      }
+      if (billingResult.status === 'fulfilled') {
+        setBillingSummary((billingResult.value ?? null) as BillingSummaryPayload | null);
+      }
+      if (catalogResult.status === 'fulfilled') {
+        setProviderCatalog(normalizeProviderRecords(catalogResult.value));
+      }
+      if (profilesResult.status === 'fulfilled') {
+        setProviderProfiles(normalizeProfileRecords(profilesResult.value));
+      }
+      if (authProvidersResult.status === 'fulfilled') {
+        setAuthProviders({
+          email: { enabled: authProvidersResult.value?.email?.enabled !== false },
+          google: { enabled: authProvidersResult.value?.google?.enabled === true },
+          apple: { enabled: authProvidersResult.value?.apple?.enabled === true },
+        });
+      }
+
+      const failed = results.some((result) => result.status === 'rejected');
+      if (failed) {
+        setAccountDetailsError('Some account details could not refresh. Showing the last known basics.');
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [services.client]);
 
   const preferredRuntimeTarget = useMemo(
     () => bootstrap.runtime.runtimeTargets.find((target) => target.preferred) ?? bootstrap.runtime.runtimeTargets[0] ?? null,
@@ -100,6 +342,35 @@ export function WorkstationSettingsPane() {
   const accountDisplayName = bootstrap.account.displayName?.trim() || 'Empyralis User';
   const accountEmail = bootstrap.account.email;
   const accountInitial = (accountDisplayName || accountEmail).charAt(0).toUpperCase();
+  const hostedCredits = useMemo(() => normalizeHostedCredits(billingSummary), [billingSummary]);
+  const authMethods = useMemo(() => normalizeAuthMethods(accountProfile), [accountProfile]);
+  const currentPlan = readString(
+    (billingSummary?.subscription && typeof billingSummary.subscription === 'object'
+      ? (billingSummary.subscription as Record<string, unknown>).label
+      : null)
+    ?? (accountProfile?.current_workspace_entitlements && typeof accountProfile.current_workspace_entitlements === 'object'
+      ? (accountProfile.current_workspace_entitlements as Record<string, unknown>).label
+      : null),
+    bootstrap.entitlements.label,
+  );
+  const activeModelPath = useMemo(
+    () => deriveActiveModelPath(providerCatalog, providerProfiles, hostedCredits),
+    [hostedCredits, providerCatalog, providerProfiles],
+  );
+  const signInMethodSummary = authMethods.length > 0
+    ? authMethods.map((method) => formatAuthMethodLabel(method)).join(' · ')
+    : 'Email and password';
+
+  async function handleLogout() {
+    setLogoutPending(true);
+    try {
+      await logout();
+      window.location.replace('/login');
+    } catch {
+      setAccountDetailsError('Logout could not finish. Try again when ready.');
+      setLogoutPending(false);
+    }
+  }
 
   return (
     <main data-workstation-surface="settings" className="app-settings-page">
@@ -142,14 +413,87 @@ export function WorkstationSettingsPane() {
                   <p className="settings-account-card__eyebrow">Current account</p>
                   <h2 className="settings-account-card__name">{accountDisplayName}</h2>
                   <p className="settings-account-card__email">{accountEmail}</p>
+                  <p className="settings-account-card__summary">
+                    Your Empyralis account owns this workspace, its credits, your connected apps, and the sign-in methods below.
+                  </p>
+                </div>
+                <div className="settings-account-card__actions">
+                  <AppButton type="button" tone="secondary" onClick={() => setSelectedSection('billing')}>
+                    Manage billing
+                  </AppButton>
+                  <AppButton type="button" tone="ghost" disabled={logoutPending} onClick={() => void handleLogout()}>
+                    {logoutPending ? 'Signing out…' : 'Log out'}
+                  </AppButton>
                 </div>
               </section>
+              {accountDetailsError ? (
+                <AppNotice tone="warning">{accountDetailsError}</AppNotice>
+              ) : null}
+              <AppSurfaceStatGrid className="settings-account-stat-grid">
+                <AppSurfaceStat
+                  label="Plan"
+                  value={currentPlan}
+                  hint="The active workspace plan that governs credits and launch limits."
+                />
+                <AppSurfaceStat
+                  label="Credits status"
+                  value={hostedCredits.allowed && hostedCredits.monthlyCreditCap > 0
+                    ? `${formatCredits(hostedCredits.monthlyCreditsRemaining)} / ${formatCredits(hostedCredits.monthlyCreditCap)}`
+                    : 'Not active'}
+                  hint={hostedCredits.allowed ? hostedCredits.message : 'Add credits or use your own API key.'}
+                />
+                <AppSurfaceStat
+                  label="Active AI path"
+                  value={activeModelPath.value}
+                  hint={activeModelPath.hint}
+                />
+                <AppSurfaceStat
+                  label="Sign-in methods"
+                  value={String(authMethods.length || 1)}
+                  hint={signInMethodSummary}
+                />
+              </AppSurfaceStatGrid>
               <FormGrid>
                 <FormReadout label="Display name" value={bootstrap.account.displayName || 'Not set yet'} />
                 <FormReadout label="Email" value={bootstrap.account.email} />
-                <FormReadout label="Plan" value={bootstrap.entitlements.label} />
+                <FormReadout label="Plan" value={currentPlan} />
                 <FormReadout label="Default experience" value="Sage" />
+                <FormReadout label="Credits status" value={hostedCredits.allowed ? hostedCredits.message : 'Credits not active'} />
+                <FormReadout label="Active AI model" value={activeModelPath.value} />
               </FormGrid>
+              <AppSurfaceCard
+                title="Sign-in methods"
+                description="Account access stays separate from AI model providers and connected apps."
+              >
+                <AppSurfaceList>
+                  {authMethods.length > 0 ? authMethods.map((method) => (
+                    <AppSurfaceListItem
+                      key={`${readString(method.provider)}:${readString(method.method_type)}:${readString(method.subject)}`}
+                      title={formatAuthMethodLabel(method)}
+                      subtitle={formatAuthMethodDetail(method)}
+                      description={method.is_primary === true
+                        ? 'This is the main account access path on this browser account.'
+                        : 'Available as an additional way to access this Empyralis account.'}
+                    />
+                  )) : (
+                    <AppSurfaceListItem
+                      title="Email and password"
+                      subtitle="Primary sign-in"
+                      description="This account currently falls back to the Empyralis email sign-in path."
+                    />
+                  )}
+                  <AppSurfaceListItem
+                    title="Google sign-in"
+                    subtitle={authProviders.google?.enabled === true ? 'Available on this environment' : 'Not enabled on this environment'}
+                    description="Google is the fastest sign-in path when the environment and runtime are both configured."
+                  />
+                  <AppSurfaceListItem
+                    title="Apple sign-in"
+                    subtitle={authProviders.apple?.enabled === true ? 'Available on this environment' : 'Coming soon on web'}
+                    description="Apple will appear here as a real method once the web sign-in path is enabled."
+                  />
+                </AppSurfaceList>
+              </AppSurfaceCard>
             </div>
           ) : null}
 

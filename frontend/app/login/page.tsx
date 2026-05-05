@@ -5,7 +5,16 @@ import { useSearchParams } from 'next/navigation';
 import { FormEvent, Suspense, useEffect, useState } from 'react';
 import { ArrowRight, Lock, Mail } from 'lucide-react';
 
-import { awaitBrowserAuthReady, googleLogin, listAuthProviders, login, type AuthProviderOptions } from '@/lib/auth/auth-client';
+import {
+  awaitBrowserAuthReady,
+  clearExternalAuthPending,
+  getPendingExternalAuthProvider,
+  googleLogin,
+  listAuthProviders,
+  login,
+  type AuthProviderOptions,
+  watchExternalAuthCompletion,
+} from '@/lib/auth/auth-client';
 import { AppleProviderIcon, GoogleProviderIcon } from '@/lib/auth/auth-provider-icons';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
@@ -61,6 +70,7 @@ function LoginPageContent() {
   useEffect(() => {
     setIsHydrated(true);
     if (providerError) {
+      clearExternalAuthPending();
       setError(providerError);
     }
     void listAuthProviders()
@@ -80,13 +90,45 @@ function LoginPageContent() {
       });
   }, [providerError]);
 
+  useEffect(() => {
+    if (!isHydrated) {
+      return undefined;
+    }
+    let cancelled = false;
+    let inflight = false;
+
+    const recoverGoogleAuth = async () => {
+      if (cancelled || inflight || getPendingExternalAuthProvider() !== 'google') {
+        return;
+      }
+      inflight = true;
+      try {
+        await awaitBrowserAuthReady({ attempts: 2, delayMs: 200 });
+        if (cancelled) {
+          return;
+        }
+        clearExternalAuthPending();
+        window.location.replace('/');
+      } catch {
+        // keep waiting for the callback tab or focus handoff
+      } finally {
+        inflight = false;
+      }
+    };
+
+    void recoverGoogleAuth();
+    return watchExternalAuthCompletion(() => {
+      void recoverGoogleAuth();
+    });
+  }, [isHydrated]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
       await login(email, password);
-      await awaitBrowserAuthReady();
+      await awaitBrowserAuthReady({ attempts: 12, delayMs: 250 });
       window.location.replace('/');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Login failed.');

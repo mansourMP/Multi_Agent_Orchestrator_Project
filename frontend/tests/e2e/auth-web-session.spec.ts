@@ -69,4 +69,49 @@ test.describe('browser auth session', () => {
     await page.goto('/w/ws-1/chat');
     await expect(page).toHaveURL(/\/login$/);
   });
+
+  test('google auth completion redirects the original auth tab into Sage', async ({ browser }) => {
+    const context = await browser.newContext();
+    const loginPage = await context.newPage();
+    await loginPage.goto('/login');
+    await loginPage.evaluate(() => {
+      window.localStorage.setItem(
+        'empyralis.external-auth.pending',
+        JSON.stringify({ provider: 'google', startedAt: Date.now() }),
+      );
+    });
+
+    const signupEmail = `google-handoff+${Date.now()}@example.com`;
+    const browserAuthResult = await loginPage.evaluate(async ({ signupEmail }) => {
+      const response = await fetch('/api/auth/signup', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: signupEmail,
+          password: 'password-123',
+          name: 'Google Handoff',
+          channel: 'web',
+        }),
+      });
+
+      return {
+        ok: response.ok,
+        status: response.status,
+      };
+    }, { signupEmail });
+    expect(
+      browserAuthResult.ok,
+      `synthetic browser signup failed with status ${browserAuthResult.status}`,
+    ).toBeTruthy();
+
+    const callbackPage = await context.newPage();
+    await callbackPage.goto('/auth/complete?provider=google&next=/', { waitUntil: 'domcontentloaded' });
+
+    await callbackPage.waitForURL(/\/w\/.+\/sage(?:[/?#]|$)/);
+    await loginPage.waitForURL(/\/w\/.+\/sage(?:[/?#]|$)/);
+    await expect(loginPage).not.toHaveURL(/\/login(?:[/?#]|$)/);
+  });
 });

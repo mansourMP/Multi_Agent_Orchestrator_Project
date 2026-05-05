@@ -1430,6 +1430,41 @@ textarea {
   box-shadow: 0 22px 48px -28px rgba(39, 105, 165, 0.78);
 }
 
+.app-auth-complete-card {
+  display: grid;
+  gap: var(--app-space-5);
+  align-content: center;
+}
+
+.app-auth-complete-meter {
+  position: relative;
+  height: 10px;
+  overflow: hidden;
+  border-radius: var(--app-radius-full);
+  background: color-mix(in srgb, var(--app-surface-2) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 70%, transparent);
+}
+
+.app-auth-complete-meter__fill {
+  position: absolute;
+  inset: 0;
+  width: 36%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4f7fe0 0%, #2f8fb1 55%, #3ca373 100%);
+  box-shadow: 0 0 24px -12px rgba(53, 128, 198, 0.78);
+  animation: app-auth-complete-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes app-auth-complete-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(320%);
+  }
+}
+
 .app-auth-error {
   padding: var(--app-space-3);
   border: 1px solid var(--app-danger);
@@ -6156,11 +6191,49 @@ textarea {
   word-break: break-word;
 }
 
+.settings-account-card__summary {
+  margin: 0;
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-13);
+  line-height: 1.55;
+  max-width: 52ch;
+}
+
+.settings-account-card__actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.settings-account-stat-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
 .settings-action-row {
   display: flex;
   align-items: center;
   gap: var(--app-space-3);
   flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .settings-account-card {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .settings-account-card__actions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .settings-account-card__actions .app-button {
+    flex: 1 1 180px;
+  }
 }
 
 .settings-detail-grid,

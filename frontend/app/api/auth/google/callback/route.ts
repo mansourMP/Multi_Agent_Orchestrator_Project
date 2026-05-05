@@ -151,7 +151,10 @@ export async function GET(request: NextRequest) {
       });
       return redirectWithError(request, backendGoogleAuthErrorCode(upstream.status, upstreamText));
     }
-    const response = NextResponse.redirect(new URL('/', requestOrigin(request)));
+    const completionUrl = new URL('/auth/complete', requestOrigin(request));
+    completionUrl.searchParams.set('provider', 'google');
+    completionUrl.searchParams.set('next', '/');
+    const response = NextResponse.redirect(completionUrl);
     appendUpstreamCookies(response, upstream.headers);
     response.cookies.delete(GOOGLE_OAUTH_STATE_COOKIE);
     return response;

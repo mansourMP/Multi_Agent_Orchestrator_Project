@@ -1,6 +1,7 @@
 'use client';
 
 import type {
+  AnchorHTMLAttributes,
   ButtonHTMLAttributes,
   CSSProperties,
   HTMLAttributes,
@@ -11,6 +12,7 @@ import type {
   TextareaHTMLAttributes,
 } from 'react';
 import { useEffect } from 'react';
+import { ChevronRight } from 'lucide-react';
 
 import { MotionPressButton, MotionSurfaceRow } from '@/lib/ui/motion';
 
@@ -97,6 +99,47 @@ export function AppShinyText({
     >
       {children}
     </span>
+  );
+}
+
+export function AppGetStartedButton(
+  props:
+    | (PropsWithChildren<AnchorHTMLAttributes<HTMLAnchorElement>> & {
+        href: string;
+      })
+    | (PropsWithChildren<ButtonHTMLAttributes<HTMLButtonElement>> & {
+        href?: undefined;
+      }),
+) {
+  const { children = 'Get Started', className, ...rest } = props as PropsWithChildren<
+    AnchorHTMLAttributes<HTMLAnchorElement> & ButtonHTMLAttributes<HTMLButtonElement>
+  >;
+
+  const content = (
+    <>
+      <span className="app-get-started-button__label">{children}</span>
+      <i className="app-get-started-button__rail">
+        <ChevronRight size={16} strokeWidth={2} aria-hidden="true" />
+      </i>
+    </>
+  );
+
+  if ('href' in rest && typeof rest.href === 'string') {
+    const { href, ...anchorProps } = rest as AnchorHTMLAttributes<HTMLAnchorElement>;
+    return (
+      <a href={href} {...anchorProps} className={joinClassNames('app-get-started-button', className)}>
+        {content}
+      </a>
+    );
+  }
+
+  return (
+    <button
+      {...(rest as ButtonHTMLAttributes<HTMLButtonElement>)}
+      className={joinClassNames('app-get-started-button', className)}
+    >
+      {content}
+    </button>
   );
 }
 

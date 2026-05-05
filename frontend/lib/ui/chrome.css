@@ -567,6 +567,86 @@ textarea {
   background: color-mix(in srgb, var(--app-danger-muted) 70%, var(--app-bg-panel) 30%);
 }
 
+.app-get-started-button {
+  position: relative;
+  overflow: hidden;
+  min-height: 48px;
+  padding: 0 calc(var(--app-space-6) + 2px);
+  border-radius: var(--app-radius-full);
+  border: 1px solid color-mix(in srgb, var(--app-accent) 72%, transparent 28%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--app-accent) 74%, transparent 26%), var(--app-accent-strong));
+  color: var(--app-accent-text);
+  box-shadow: 0 16px 32px -22px color-mix(in srgb, var(--app-accent) 68%, transparent 32%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--app-space-2);
+  font-family: var(--app-font-sans);
+  font-size: var(--app-font-14);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    background var(--app-motion-normal),
+    box-shadow var(--app-motion-normal),
+    transform var(--app-motion-fast);
+}
+
+.app-get-started-button:hover,
+.app-get-started-button:focus-visible {
+  text-decoration: none;
+  transform: translateY(-1px);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--app-accent-strong) 74%, transparent 26%), var(--app-accent));
+}
+
+.app-get-started-button:disabled,
+.app-get-started-button[aria-disabled="true"] {
+  opacity: 0.56;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.app-get-started-button__label {
+  margin-right: calc(var(--app-space-10));
+  transition: opacity var(--app-motion-fast);
+}
+
+.app-get-started-button:hover .app-get-started-button__label,
+.app-get-started-button:focus-visible .app-get-started-button__label {
+  opacity: 0;
+}
+
+.app-get-started-button__rail {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  bottom: 4px;
+  width: 28px;
+  border-radius: var(--app-radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: width var(--app-motion-normal);
+  background: color-mix(in srgb, var(--app-text-primary) 16%, transparent 84%);
+}
+
+.app-get-started-button:hover .app-get-started-button__rail,
+.app-get-started-button:focus-visible .app-get-started-button__rail {
+  width: calc(100% - 8px);
+}
+
+.app-get-started-button__rail > svg {
+  transition: transform var(--app-motion-fast);
+}
+
+.app-get-started-button:hover .app-get-started-button__rail > svg,
+.app-get-started-button:focus-visible .app-get-started-button__rail > svg {
+  transform: translateX(2px);
+}
+
 .app-field,
 .app-select,
 .app-textarea {

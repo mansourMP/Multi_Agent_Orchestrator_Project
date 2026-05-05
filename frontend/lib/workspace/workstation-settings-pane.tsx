@@ -41,10 +41,10 @@ const SETTINGS_SECTIONS: Array<{
   },
   {
     id: 'devices',
-    label: 'Devices',
+    label: 'My Computer',
     eyebrow: 'My Computer',
-    title: 'Devices',
-    description: 'Trusted devices, connection health, and local computer readiness.',
+    title: 'My Computer',
+    description: 'Trusted computers, connection health, and local tool readiness.',
   },
   {
     id: 'usage',
@@ -65,7 +65,7 @@ const SETTINGS_SECTIONS: Array<{
     label: 'Privacy & Safety',
     eyebrow: 'Trust',
     title: 'Privacy & Safety',
-    description: 'Needs your OK, memory, device trust.',
+    description: 'Needs your OK, memory, and computer trust.',
   },
 ];
 
@@ -378,7 +378,7 @@ export function WorkstationSettingsPane() {
         <aside className="settings-nav" aria-label="Settings sections">
           <div className="app-settings-sidebar__header">
             <h2 className="app-settings-sidebar__title">Settings</h2>
-            <p className="app-settings-sidebar__subtitle">Account controls.</p>
+            <p className="app-settings-sidebar__subtitle">Account, AI model, and trust controls.</p>
           </div>
           {SETTINGS_SECTIONS.map((section) => (
             <button
@@ -459,7 +459,7 @@ export function WorkstationSettingsPane() {
                 <FormReadout label="Plan" value={currentPlan} />
                 <FormReadout label="Default experience" value="Sage" />
                 <FormReadout label="Credits status" value={hostedCredits.allowed ? hostedCredits.message : 'Credits not active'} />
-                <FormReadout label="Active AI model" value={activeModelPath.value} />
+                <FormReadout label="Active AI path" value={activeModelPath.value} />
               </FormGrid>
               <AppSurfaceCard
                 title="Sign-in methods"
@@ -558,7 +558,7 @@ export function WorkstationSettingsPane() {
                 </article>
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">This Mac boundary</strong>
+                    <strong className="settings-detail-card__title">My Computer boundary</strong>
                   </div>
                   <p className="settings-detail-card__body">
                     Local files, browser, clipboard, screenshots, and terminal require an online paired computer on a trusted device.

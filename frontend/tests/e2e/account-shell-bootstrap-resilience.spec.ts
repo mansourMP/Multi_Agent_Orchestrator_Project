@@ -49,7 +49,7 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page).not.toHaveURL(/\/w\/ws-1\/admin$/);
   });
 
-  test('global account and device settings routes resolve into workspace settings sections', async ({ page }) => {
+  test('global account and My Computer settings routes resolve into workspace settings sections', async ({ page }) => {
     await loginAsOwner(page);
 
     await page.goto('/settings/account');
@@ -62,6 +62,6 @@ test.describe('account shell and bootstrap resilience', () => {
 
     await page.goto('/settings/devices');
     await expect(page).toHaveURL(/\/w\/ws-1\/settings\?section=devices$/);
-    await expect(page.getByRole('heading', { name: /^devices$/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^my computer$/i })).toBeVisible();
   });
 });

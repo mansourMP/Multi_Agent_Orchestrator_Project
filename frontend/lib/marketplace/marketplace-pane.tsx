@@ -535,7 +535,7 @@ function summarizeInstallReadiness(
 ): string[] {
   const lines: string[] = [];
   lines.push(card.approvalRequired ? 'Needs your OK before install' : 'No install approval required');
-  lines.push(card.kind === 'app' ? 'Opens in Discover after install' : 'Appears in AI Model setup after install');
+  lines.push(card.kind === 'app' ? 'Opens in Discover after install' : 'Appears in AI Models after install');
   if (card.kind === 'app') {
     if (details.permissionList.length > 0) {
       lines.push(`Uses ${details.permissionList.slice(0, 3).map(humanizeToken).join(', ')}`);
@@ -878,14 +878,14 @@ export function MarketplacePane() {
       <ListDetailShell
         className="marketplace-pane"
         title="Discover"
-        subtitle="Install governed templates, tools, and AI models. Use Build to create and manage your private assistants."
+        subtitle="Install governed apps, templates, connected tools, and AI models. Use Build to create and manage your private assistants."
       >
         <ListDetailColumns
           primary={(
             <ListDetailPanel
               className="marketplace-pane__browse-panel"
               title="Install apps, templates, and AI models"
-              subtitle="Discover is for adding governed packages. Build is where you create and manage private assistants."
+              subtitle="Discover adds governed packages with trust details up front. Build is where you create and manage private assistants."
             >
               <div className="marketplace-pane__filters">
                 <div className="marketplace-pane__filter-row">

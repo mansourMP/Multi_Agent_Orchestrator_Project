@@ -166,6 +166,49 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page.getByRole('link', { name: /needs your ok · 1/i })).toBeVisible();
   });
 
+  test('sage setup load cannot spin forever and hosted credits stay selectable when provider catalog is degraded', async ({ page }) => {
+    await page.route('**/api/sage-profile?workspace_id=ws-1', async (route) => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 9_500);
+      });
+      await route.fulfill({
+        status: 504,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'profile timeout' }),
+      });
+    });
+    await page.route('**/api/providers/catalog**', async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'provider catalog unavailable' }),
+      });
+    });
+    await page.route('**/api/providers?**', async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'providers unavailable' }),
+      });
+    });
+    await page.route('**/api/providers/profiles**', async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'profiles unavailable' }),
+      });
+    });
+
+    await loginAsOwner(page);
+
+    await expect(page.getByText(/Loading Sage setup/i)).toBeVisible();
+    await expect(page.getByText(/Sage setup is temporarily unavailable/i)).toBeVisible({ timeout: 12_000 });
+    await expect(page.getByRole('button', { name: /^retry$/i })).toBeVisible();
+    await expect(page.getByText(/DeepSeek/i).first()).toBeVisible();
+    await expect(page.getByText(/No AI model/i)).toHaveCount(0);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
   test('memory owns identity, rules, projections, and memory controls', async ({ page }) => {
     await page.route('**/api/sage-profile?workspace_id=ws-1', async (route) => {
       await route.fulfill({

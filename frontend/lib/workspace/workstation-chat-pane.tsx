@@ -214,6 +214,8 @@ type ChatModelOption = {
 const VALID_REASONING_LEVELS: ChatReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
 const PRIMARY_THREAD_ID = 'primary';
+const CHAT_READ_TIMEOUT_MS = 8_000;
+const SAGE_SETUP_TIMEOUT_MS = 8_000;
 const ACTIVE_THREAD_QUERY_KEY = 'chat:canonical:active-thread';
 const ACTIVE_THREAD_STORAGE_PREFIX = 'empyralis.chat.active-thread.v1';
 const RUNS_QUERY_KEY = 'chat:canonical:runs';
@@ -2028,6 +2030,11 @@ function normalizeSageProfileSnapshot(payload: unknown): SageProfileSnapshot {
 }
 
 function humanizeSageSetupFailure(error: unknown, mode: 'load' | 'save'): string {
+  if (error instanceof Error && /timed out|took too long/i.test(error.message)) {
+    return mode === 'save'
+      ? 'Sage setup took too long to save this answer. Retry in a moment.'
+      : 'Sage setup took too long to load. You can retry instead of waiting on this screen.';
+  }
   if (error instanceof WorkstationClientError) {
     if (error.status === 404) {
       return mode === 'save'
@@ -2046,6 +2053,52 @@ function humanizeSageSetupFailure(error: unknown, mode: 'load' | 'save'): string
   return mode === 'save'
     ? 'Sage setup could not save this answer right now. Retry when ready.'
     : 'Sage setup is temporarily unavailable right now. Retry when ready.';
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
+
+function hostedCreditsFallbackProvider(): ProviderCatalogRecord {
+  return {
+    id: 'deepseek',
+    kind: 'provider',
+    label: 'DeepSeek',
+    state: 'configured',
+    usable: true,
+    active: true,
+    configured: true,
+    hidden: false,
+    default_model: 'deepseek-chat',
+    default_auth_mode: 'platform_runtime',
+    credential_plane: 'platform_runtime',
+    platform_runtime_allowed: true,
+    provider_scopes: ['sage_personal'],
+    sage_visible: true,
+    models: [
+      {
+        id: 'deepseek-chat',
+        label: 'DeepSeek Chat',
+        provider: 'deepseek',
+        supports_reasoning: true,
+        reasoning_levels: ['low', 'medium', 'high'],
+      },
+    ],
+  };
 }
 
 function normalizeSageToolPolicy(payload: unknown): SageToolPolicyRecord[] {
@@ -2501,9 +2554,13 @@ export function WorkstationChatPane() {
     }).catch(() => null);
 
     if (!payload || typeof payload !== 'object') {
-      setProviderCatalog((current) => current);
+      setProviderCatalog((current) => (current.length > 0 ? current : [hostedCreditsFallbackProvider()]));
       setProviderProfiles((current) => current);
-      setModelOptions((current) => (current.length > 0 ? current : [disconnectedModelOption()]));
+      setModelOptions((current) => (
+        current.some((option) => option.providerId)
+          ? current
+          : normalizeChatModelOptions({ providers: [hostedCreditsFallbackProvider()] })
+      ));
       return;
     }
 
@@ -2513,12 +2570,17 @@ export function WorkstationChatPane() {
     const normalizedProfiles = normalizeProviderProfiles(
       (payload as { profilesPayload?: unknown }).profilesPayload,
     );
-    setProviderCatalog(normalizedProviders);
+    const effectiveProviders = normalizedProviders.length > 0
+      ? normalizedProviders
+      : [hostedCreditsFallbackProvider()];
+    setProviderCatalog(effectiveProviders);
     setProviderProfiles(normalizedProfiles);
     const nextOptions = normalizeChatModelOptions(
-      (payload as { catalogPayload?: unknown }).catalogPayload,
+      normalizedProviders.length > 0
+        ? (payload as { catalogPayload?: unknown }).catalogPayload
+        : { providers: effectiveProviders },
     );
-    setModelOptions(nextOptions.length > 0 ? nextOptions : [workspaceDefaultModelOption(normalizedProviders)]);
+    setModelOptions(nextOptions.length > 0 ? nextOptions : [workspaceDefaultModelOption(effectiveProviders)]);
   }, [services.client, services.queryClient]);
 
   const refreshToolingState = useCallback(async () => {
@@ -2664,10 +2726,14 @@ export function WorkstationChatPane() {
     const cachedThread = services.queryClient.peek<CanonicalChatThreadState>(threadQueryKey(requestedThreadId));
     const payload = await services.queryClient.run(
       `chat:canonical:thread-load:${requestedThreadId}`,
-      async () => services.client.getThread({
-        threadId: requestedThreadId,
-        allowMissing: true,
-      }),
+      async () => withTimeout(
+        services.client.getThread({
+          threadId: requestedThreadId,
+          allowMissing: true,
+        }),
+        CHAT_READ_TIMEOUT_MS,
+        'Conversation history took too long to load.',
+      ),
     );
     if (payload === null) {
       if (cachedThread && cachedThread.messages.length > 0) {
@@ -2735,7 +2801,7 @@ export function WorkstationChatPane() {
       throw error;
     });
 
-    await services.queryClient.run('chat:canonical:overview', async () => {
+    await withTimeout(services.queryClient.run('chat:canonical:overview', async () => {
       const [nextRuns, nextApprovals, timelineItems] = await Promise.all([
         runsRequest,
         approvalsRequest,
@@ -2751,19 +2817,19 @@ export function WorkstationChatPane() {
         return;
       }
       writeRecentThreads(deriveRecentThreads([], activeThreadIdRef.current));
-    });
+    }), CHAT_READ_TIMEOUT_MS, 'Activity overview took too long to load.');
   };
 
   const loadMemory = async () => {
     const cachedSnapshot = services.queryClient.peek<SageMemorySnapshot>(SAGE_MEMORY_QUERY_KEY) ?? memorySnapshot;
-    const payload = await services.queryClient.run('chat:canonical:memory', async () =>
+    const payload = await withTimeout(services.queryClient.run('chat:canonical:memory', async () =>
       services.client.listSageMemory().catch((error) => {
         if (isTransientBackgroundReadError(error)) {
           return null;
         }
         throw error;
       }),
-    );
+    ), CHAT_READ_TIMEOUT_MS, 'Memory took too long to load.');
     const nextSnapshot = payload === null
       ? cachedSnapshot
       : normalizeSageMemorySnapshot(payload);
@@ -2774,15 +2840,20 @@ export function WorkstationChatPane() {
   const loadProfile = async () => {
     const cachedProfile = services.queryClient.peek<SageProfileSnapshot>(SAGE_PROFILE_QUERY_KEY) ?? profileSnapshot;
     let profileError: unknown = null;
-    const payload = await services.queryClient.run('chat:canonical:sage-profile', async () =>
-      services.client.getSageProfile().catch((error) => {
-        if (isTransientBackgroundReadError(error)) {
+    let payload: WorkstationSageProfileRecord | null = null;
+    try {
+      payload = await withTimeout(services.queryClient.run('chat:canonical:sage-profile', async () =>
+        services.client.getSageProfile().catch((error) => {
+          if (isTransientBackgroundReadError(error)) {
+            return null;
+          }
+          profileError = error;
           return null;
-        }
-        profileError = error;
-        return null;
-      }),
-    );
+        }),
+      ), SAGE_SETUP_TIMEOUT_MS, 'Sage setup timed out.');
+    } catch (error) {
+      profileError = error;
+    }
     if (profileError) {
       setSageSetupState('unavailable');
       setSageSetupMessage(humanizeSageSetupFailure(profileError, 'load'));
@@ -2796,11 +2867,15 @@ export function WorkstationChatPane() {
   };
 
   const refreshCanonicalState = async (requestedThreadId = activeThreadId) => {
+    const threadFallback = services.queryClient.peek<CanonicalChatThreadState>(threadQueryKey(requestedThreadId))
+      ?? normalizeCanonicalChatThread(null, requestedThreadId);
     const [nextThread] = await Promise.all([
-      loadThread(requestedThreadId),
-      loadOverview(),
-      loadMemory(),
-      loadProfile(),
+      loadThread(requestedThreadId).catch(() => threadFallback),
+      Promise.allSettled([
+        loadOverview(),
+        loadMemory(),
+        loadProfile(),
+      ]),
     ]);
     return nextThread;
   };

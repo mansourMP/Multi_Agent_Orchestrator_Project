@@ -7,6 +7,15 @@ services:
     name: empyralis-runtime
     runtime: docker
     dockerfilePath: ./Dockerfile.runtime
+    buildFilter:
+      paths:
+        - Dockerfile.runtime
+        - requirements.txt
+        - requirements-worker.txt
+        - server.py
+        - server_modules/**
+        - scripts/**
+        - render.yaml
     plan: starter
     autoDeploy: true
     healthCheckPath: /health
@@ -72,6 +81,11 @@ services:
     runtime: docker
     dockerContext: .
     dockerfilePath: ./frontend/Dockerfile
+    buildFilter:
+      paths:
+        - frontend/**
+        - shared/**
+        - render.yaml
     plan: starter
     autoDeploy: true
     healthCheckPath: /healthz

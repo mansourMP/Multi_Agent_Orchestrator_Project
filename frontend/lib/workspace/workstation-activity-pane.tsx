@@ -8,7 +8,11 @@ import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { AppButton } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
-import type { WorkstationSageMemoryRecord } from '@/lib/workspace/workstation-client';
+import type {
+  WorkstationSageMemoryRecord,
+  WorkstationSageProfileQuestionRecord,
+  WorkstationSageProfileRecord,
+} from '@/lib/workspace/workstation-client';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import {
@@ -27,6 +31,38 @@ type SageMemoryCategoryRecord = {
 type SageMemorySnapshot = {
   items: WorkstationSageMemoryRecord[];
   categories: SageMemoryCategoryRecord[];
+};
+
+type SageProfileSnapshot = {
+  profile: {
+    user_name: string;
+    identity_summary: string;
+    communication_style: string;
+    recurring_responsibility: string;
+    standing_rules: string[];
+    standing_rules_text: string;
+  };
+  bootstrap: {
+    complete: boolean;
+    answered_count: number;
+    total_count: number;
+    progress_label: string;
+    current_question: WorkstationSageProfileQuestionRecord | null;
+  };
+  storagePolicy: Record<string, unknown>;
+  projections: Record<string, string>;
+  accountSeed: {
+    display_name: string;
+    email: string;
+  };
+};
+
+type SageProfileDraft = {
+  user_name: string;
+  identity_summary: string;
+  communication_style: string;
+  recurring_responsibility: string;
+  standing_rules_text: string;
 };
 
 type SageMemoryStoragePolicy = Record<string, unknown> & {
@@ -110,6 +146,99 @@ function normalizeMemorySnapshot(payload: unknown): SageMemorySnapshot {
   return {
     items,
     categories: parsedCategories.length > 0 ? parsedCategories : [...DEFAULT_MEMORY_CATEGORIES],
+  };
+}
+
+function defaultProfileSnapshot(): SageProfileSnapshot {
+  return {
+    profile: {
+      user_name: '',
+      identity_summary: '',
+      communication_style: '',
+      recurring_responsibility: '',
+      standing_rules: [],
+      standing_rules_text: '',
+    },
+    bootstrap: {
+      complete: false,
+      answered_count: 0,
+      total_count: 5,
+      progress_label: '0/5',
+      current_question: null,
+    },
+    storagePolicy: {},
+    projections: {},
+    accountSeed: {
+      display_name: '',
+      email: '',
+    },
+  };
+}
+
+function normalizeProfileSnapshot(payload: unknown): SageProfileSnapshot {
+  const record = payload && typeof payload === 'object' ? payload as WorkstationSageProfileRecord : {};
+  const profileRecord = record.profile && typeof record.profile === 'object'
+    ? record.profile as Record<string, unknown>
+    : {};
+  const bootstrapRecord = record.bootstrap && typeof record.bootstrap === 'object'
+    ? record.bootstrap as Record<string, unknown>
+    : {};
+  const standingRules = Array.isArray(profileRecord.standing_rules)
+    ? profileRecord.standing_rules.flatMap((item) => {
+      const rule = readString(item);
+      return rule ? [rule] : [];
+    })
+    : [];
+  const projectionsRecord = record.projections && typeof record.projections === 'object'
+    ? record.projections as Record<string, unknown>
+    : {};
+  const accountSeedRecord = record.account_seed && typeof record.account_seed === 'object'
+    ? record.account_seed as Record<string, unknown>
+    : {};
+  const answeredCount = readNumber(bootstrapRecord.answered_count);
+  const totalCount = Math.max(1, readNumber(bootstrapRecord.total_count, 5));
+  return {
+    profile: {
+      user_name: readString(profileRecord.user_name),
+      identity_summary: readString(profileRecord.identity_summary),
+      communication_style: readString(profileRecord.communication_style),
+      recurring_responsibility: readString(profileRecord.recurring_responsibility),
+      standing_rules: standingRules,
+      standing_rules_text: readString(profileRecord.standing_rules_text) || standingRules.join('\n'),
+    },
+    bootstrap: {
+      complete: Boolean(bootstrapRecord.complete),
+      answered_count: answeredCount,
+      total_count: totalCount,
+      progress_label: readString(bootstrapRecord.progress_label) || `${answeredCount}/${totalCount}`,
+      current_question: bootstrapRecord.current_question && typeof bootstrapRecord.current_question === 'object'
+        ? bootstrapRecord.current_question as WorkstationSageProfileQuestionRecord
+        : null,
+    },
+    storagePolicy: record.storage_policy && typeof record.storage_policy === 'object'
+      ? record.storage_policy as Record<string, unknown>
+      : {},
+    projections: Object.entries(projectionsRecord).reduce<Record<string, string>>((accumulator, [key, value]) => {
+      const normalized = readString(value);
+      if (normalized) {
+        accumulator[key] = normalized;
+      }
+      return accumulator;
+    }, {}),
+    accountSeed: {
+      display_name: readString(accountSeedRecord.display_name),
+      email: readString(accountSeedRecord.email),
+    },
+  };
+}
+
+function draftFromProfileSnapshot(snapshot: SageProfileSnapshot): SageProfileDraft {
+  return {
+    user_name: snapshot.profile.user_name,
+    identity_summary: snapshot.profile.identity_summary,
+    communication_style: snapshot.profile.communication_style,
+    recurring_responsibility: snapshot.profile.recurring_responsibility,
+    standing_rules_text: snapshot.profile.standing_rules_text,
   };
 }
 
@@ -238,6 +367,13 @@ export function WorkstationActivityPane() {
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [storagePolicy, setStoragePolicy] = useState<SageMemoryStoragePolicy | null>(null);
+  const cachedProfilePayload = services.queryClient.peek<unknown>('chat:canonical:sage-profile');
+  const cachedProfile = cachedProfilePayload ? normalizeProfileSnapshot(cachedProfilePayload) : null;
+  const [profileSnapshot, setProfileSnapshot] = useState<SageProfileSnapshot>(() => cachedProfile ?? defaultProfileSnapshot());
+  const [profileDraft, setProfileDraft] = useState<SageProfileDraft>(() => draftFromProfileSnapshot(cachedProfile ?? defaultProfileSnapshot()));
+  const [isProfileLoading, setIsProfileLoading] = useState(() => cachedProfile === null);
+  const [isProfileSaving, setIsProfileSaving] = useState(false);
+  const [isIdentitySheetOpen, setIsIdentitySheetOpen] = useState(false);
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultMemoryDraft());
   const [mutatingMemory, setMutatingMemory] = useState<string | null>(null);
@@ -266,6 +402,19 @@ export function WorkstationActivityPane() {
     setIsLoading(false);
   };
 
+  const refreshProfile = async (showLoading = false) => {
+    if (showLoading) {
+      setIsProfileLoading(true);
+    }
+    setError(null);
+    const payload = await services.client.getSageProfile();
+    const nextSnapshot = normalizeProfileSnapshot(payload);
+    services.queryClient.set('chat:canonical:sage-profile', nextSnapshot);
+    setProfileSnapshot(nextSnapshot);
+    setProfileDraft(draftFromProfileSnapshot(nextSnapshot));
+    setIsProfileLoading(false);
+  };
+
   useEffect(() => {
     let cancelled = false;
     void refresh(cachedSnapshot === null).catch((loadError) => {
@@ -280,6 +429,19 @@ export function WorkstationActivityPane() {
   }, [cachedSnapshot, services.client]);
 
   useEffect(() => {
+    let cancelled = false;
+    void refreshProfile(cachedProfile === null).catch((loadError) => {
+      if (!cancelled) {
+        setError(loadError instanceof Error ? loadError.message : 'Memory identity is unavailable right now.');
+        setIsProfileLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [services.client]);
+
+  useEffect(() => {
     if (streamState.activity.version === 0) {
       return;
     }
@@ -287,6 +449,7 @@ export function WorkstationActivityPane() {
       setError(memoryPaneErrorMessage(loadError));
       setIsLoading(false);
     });
+    void refreshProfile(false).catch(() => {});
   }, [services.client, streamState.activity.version]);
 
   const pendingDeleteMemory = useMemo(
@@ -312,6 +475,64 @@ export function WorkstationActivityPane() {
   const memoryAuthorityLabel = readString(storagePolicy?.authority).replace(/_/g, ' ') || 'cloud canonical';
   const runtimeFormatLabel = readString(storagePolicy?.runtime_format).replace(/_/g, ' ') || 'structured classes';
   const pinnedCount = snapshot.items.filter((entry) => Boolean(entry.pinned)).length;
+  const pinnedMemoryItems = useMemo(
+    () => snapshot.items.filter((entry) => Boolean(entry.pinned)),
+    [snapshot.items],
+  );
+  const recentMemoryItems = useMemo(
+    () => sortMemoryEntries(snapshot.items.filter((entry) => !Boolean(entry.pinned) && inferMemorySensitivity(entry) !== 'red')).slice(0, 12),
+    [snapshot.items],
+  );
+  const sensitiveMemoryItems = useMemo(
+    () => snapshot.items.filter((entry) => {
+      const sensitivity = inferMemorySensitivity(entry);
+      return sensitivity === 'orange' || sensitivity === 'red';
+    }),
+    [snapshot.items],
+  );
+  const projectionItems = useMemo(
+    () => Object.entries(profileSnapshot.projections).map(([filename, content]) => ({
+      filename,
+      preview: content.split('\n').find((line) => readString(line)) || 'Generated projection',
+    })),
+    [profileSnapshot.projections],
+  );
+  const profileAuthority = readString(profileSnapshot.storagePolicy.authority).replace(/_/g, ' ') || 'structured profile cloud canonical';
+  const projectedFiles = Array.isArray(profileSnapshot.storagePolicy.projected_files)
+    ? profileSnapshot.storagePolicy.projected_files.flatMap((value) => {
+      const token = readString(value);
+      return token ? [token] : [];
+    })
+    : [];
+  const bootstrapQuestion = profileSnapshot.bootstrap.current_question;
+  const displayNameHint = profileSnapshot.accountSeed.display_name || profileSnapshot.accountSeed.email || 'Set a preferred name';
+
+  const saveProfileDraft = async () => {
+    if (isProfileSaving) {
+      return;
+    }
+    setIsProfileSaving(true);
+    setError(null);
+    setStatusMessage(null);
+    try {
+      const payload = await services.client.updateSageProfile({
+        userName: profileDraft.user_name,
+        identitySummary: profileDraft.identity_summary,
+        communicationStyle: profileDraft.communication_style,
+        recurringResponsibility: profileDraft.recurring_responsibility,
+        standingRulesText: profileDraft.standing_rules_text,
+      });
+      const nextSnapshot = normalizeProfileSnapshot(payload);
+      services.queryClient.set('chat:canonical:sage-profile', nextSnapshot);
+      setProfileSnapshot(nextSnapshot);
+      setProfileDraft(draftFromProfileSnapshot(nextSnapshot));
+      setStatusMessage('Memory identity updated.');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not update memory identity.');
+    } finally {
+      setIsProfileSaving(false);
+    }
+  };
 
   const openCreateMemory = () => {
     setMemoryDraft(defaultMemoryDraft());
@@ -482,13 +703,73 @@ export function WorkstationActivityPane() {
     }
   };
 
+  const renderMemoryRows = (items: WorkstationSageMemoryRecord[], emptyLabel: string) => (
+    <div className="app-memory-minimal-group__list">
+      {items.length === 0 ? (
+        <div className="app-memory-minimal-empty-row">{emptyLabel}</div>
+      ) : items.map((entry) => {
+        const entryId = readString(entry.id);
+        const busy = mutatingMemory === entryId;
+        const categoryLabel = categoryLabels.get(readString(entry.category)) || 'Saved memory';
+        const updatedLabel = formatMemoryTimestamp(readString(entry.updated_at) || readString(entry.created_at) || null);
+        const contentLabel = [readString(entry.title), readString(entry.content)]
+          .filter(Boolean)
+          .join(' — ');
+        return (
+          <div key={entryId || `memory-${readString(entry.title)}`} className="app-memory-minimal-row">
+            <button
+              type="button"
+              className="app-memory-minimal-row__copy"
+              onClick={() => {
+                openEditMemory(entry);
+              }}
+            >
+              <span className="app-memory-minimal-row__content" title={contentLabel || 'Saved memory'}>
+                {contentLabel || 'Saved memory'}
+              </span>
+              <span className="app-memory-minimal-row__meta">
+                {[categoryLabel, updatedLabel, entry.pinned ? 'Pinned' : null].filter(Boolean).join(' · ')}
+              </span>
+            </button>
+            <div className="app-inline-actions">
+              <button
+                type="button"
+                className="app-memory-minimal-row__delete"
+                disabled={busy}
+                onClick={() => {
+                  void togglePinned(entry);
+                }}
+                aria-label={entry.pinned ? 'Unpin memory' : 'Pin memory'}
+                title={entry.pinned ? 'Unpin memory' : 'Pin memory'}
+              >
+                {entry.pinned ? <PinOff size={16} strokeWidth={1.9} aria-hidden="true" /> : <Pin size={16} strokeWidth={1.9} aria-hidden="true" />}
+              </button>
+              <button
+                type="button"
+                className="app-memory-minimal-row__delete"
+                disabled={busy}
+                onClick={() => {
+                  setPendingDeleteMemoryId(entryId);
+                }}
+                aria-label="Delete memory"
+                title="Delete memory"
+              >
+                <Trash2 size={16} strokeWidth={1.9} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
     <WorkstationSurfaceRoot surface="memory">
       <main className="app-stack-4">
         {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
         {error ? <WorkstationSurfaceNotice tone="warning">{error}</WorkstationSurfaceNotice> : null}
 
-        {isLoading ? (
+        {isLoading || isProfileLoading ? (
           <div className="app-stack-3">
             <SkeletonBlock height="7rem" />
             <SkeletonBlock height="12rem" />
@@ -498,14 +779,14 @@ export function WorkstationActivityPane() {
           <>
             <WorkstationSurfaceStatGrid>
               <WorkstationSurfaceStat
-                label="Stored entries"
+                label="Memory entries"
                 value={`${Math.min(memoryUsed, memoryLimit)}/${memoryLimit}`}
                 hint={`${memoryRemaining} slots open`}
               />
               <WorkstationSurfaceStat
-                label="Pinned"
-                value={pinnedCount}
-                hint="Pinned entries stay at the top of carry-forward memory."
+                label="Identity"
+                value={profileSnapshot.bootstrap.complete ? 'Complete' : 'In progress'}
+                hint={profileSnapshot.bootstrap.progress_label}
               />
               <WorkstationSurfaceStat
                 label="Storage policy"
@@ -515,8 +796,114 @@ export function WorkstationActivityPane() {
             </WorkstationSurfaceStatGrid>
 
             <WorkstationSurfaceCard
-              title="Memory authority"
-              description="Structured memory is the runtime source of truth. Exported markdown is for inspection and transfer, not live authority."
+              title="About me"
+              description="What Sage currently knows about you. It should learn this through conversation; this page is for review and correction."
+              actions={(
+                <AppButton
+                  type="button"
+                  tone="primary"
+                  disabled={isProfileSaving}
+                  onClick={() => {
+                    setIsIdentitySheetOpen(true);
+                  }}
+                >
+                  Correct memory
+                </AppButton>
+              )}
+            >
+              <div className="app-stack-3">
+                <WorkstationSurfaceNotice tone="neutral">
+                  {profileSnapshot.bootstrap.complete
+                    ? `Sage has enough identity context to work normally. ${profileAuthority}.`
+                    : 'Sage is still learning. Keep chatting naturally; use Correct memory only when something is wrong.'}
+                </WorkstationSurfaceNotice>
+                <div className="app-memory-minimal-list">
+                  <section className="app-memory-minimal-group">
+                    <div className="app-memory-minimal-group__list">
+                      <div className="app-memory-minimal-row">
+                        <span className="app-memory-minimal-row__copy">
+                          <span className="app-memory-minimal-row__content">Name</span>
+                          <span className="app-memory-minimal-row__meta">{profileSnapshot.profile.user_name || displayNameHint}</span>
+                        </span>
+                      </div>
+                      <div className="app-memory-minimal-row">
+                        <span className="app-memory-minimal-row__copy">
+                          <span className="app-memory-minimal-row__content">Identity</span>
+                          <span className="app-memory-minimal-row__meta">{profileSnapshot.profile.identity_summary || 'Not learned yet'}</span>
+                        </span>
+                      </div>
+                      <div className="app-memory-minimal-row">
+                        <span className="app-memory-minimal-row__copy">
+                          <span className="app-memory-minimal-row__content">Recurring responsibility</span>
+                          <span className="app-memory-minimal-row__meta">{profileSnapshot.profile.recurring_responsibility || 'Not set yet'}</span>
+                        </span>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </WorkstationSurfaceCard>
+
+            <WorkstationSurfaceCard
+              title="Preferences"
+              description="Tone and working style Sage should carry into normal sessions."
+            >
+              <WorkstationSurfaceNotice tone="neutral">
+                {profileSnapshot.profile.communication_style || 'No communication preference saved yet. Sage can infer this from chat, or you can correct it manually.'}
+              </WorkstationSurfaceNotice>
+            </WorkstationSurfaceCard>
+
+            <WorkstationSurfaceCard
+              title="Rules"
+              description="Standing rules are durable instructions Sage should obey across sessions."
+            >
+              <div className="app-memory-minimal-list">
+                <section className="app-memory-minimal-group">
+                  <div className="app-memory-minimal-group__list">
+                    {profileSnapshot.profile.standing_rules.length === 0 ? (
+                      <div className="app-memory-minimal-empty-row">No standing rules saved yet.</div>
+                    ) : profileSnapshot.profile.standing_rules.map((rule) => (
+                      <div key={rule} className="app-memory-minimal-row">
+                        <span className="app-memory-minimal-row__copy">
+                          <span className="app-memory-minimal-row__content">{rule}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            </WorkstationSurfaceCard>
+
+            <WorkstationSurfaceCard
+              title="Pinned"
+              description="High-signal facts Sage should keep at the top of carry-forward memory."
+              actions={(
+                <AppButton type="button" tone="primary" onClick={openCreateMemory} disabled={Boolean(mutatingMemory)}>
+                  <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
+                  <span>Add memory</span>
+                </AppButton>
+              )}
+            >
+              {renderMemoryRows(pinnedMemoryItems, `No pinned facts yet. ${pinnedCount > 0 ? '' : 'Pin important memory when it should stay prominent.'}`)}
+            </WorkstationSurfaceCard>
+
+            <WorkstationSurfaceCard
+              title="Recent"
+              description="Short-term and long-term memory Sage recently saved or updated."
+            >
+              {renderMemoryRows(recentMemoryItems, 'No recent memory yet.')}
+            </WorkstationSurfaceCard>
+
+            <WorkstationSurfaceCard
+              title="Sensitive"
+              description="Private and restricted memory that needs tighter handling."
+            >
+              {renderMemoryRows(sensitiveMemoryItems, 'No sensitive memory saved.')}
+            </WorkstationSurfaceCard>
+
+            <WorkstationSurfaceCard
+              title="Controls"
+              description="Export, inspect projections, or wipe explicit Sage memory for this workspace."
               actions={(
                 <div className="app-inline-actions">
                   <AppButton
@@ -541,113 +928,138 @@ export function WorkstationActivityPane() {
                     <Trash2 size={16} strokeWidth={1.9} aria-hidden="true" />
                     <span>Wipe</span>
                   </AppButton>
-                  <AppButton
-                    type="button"
-                    tone="primary"
-                    onClick={openCreateMemory}
-                    disabled={Boolean(mutatingMemory)}
-                  >
-                    <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
-                    <span>Add memory</span>
-                  </AppButton>
                 </div>
               )}
             >
-              <WorkstationSurfaceNotice tone="neutral">
-                Save only the facts Sage should deliberately carry into future work.
-              </WorkstationSurfaceNotice>
-            </WorkstationSurfaceCard>
-
-            <div className="app-memory-minimal-list">
-              {snapshot.items.length === 0 ? (
-                <div className="app-memory-minimal-empty">
-                  <strong>No saved memory yet</strong>
-                  <span>Add explicit facts, preferences, or context Sage should carry into future conversations.</span>
-                </div>
-              ) : null}
-              {MEMORY_SENSITIVITY_ORDER.map((sensitivity) => {
-                const items = groupedMemoryItems.get(sensitivity) ?? [];
-                const sensitivityMeta = MEMORY_SENSITIVITY_META[sensitivity];
-                return (
-                  <section
-                    key={sensitivity}
-                    className={`app-memory-minimal-group${items.length === 0 ? ' app-memory-minimal-group--empty' : ''}`}
-                  >
+              <div className="app-stack-3">
+                <WorkstationSurfaceNotice tone="neutral">
+                  Structured backend memory is authoritative. Markdown files are projections for inspection, export, or advanced editing.
+                </WorkstationSurfaceNotice>
+                <div className="app-memory-minimal-list">
+                  <section className="app-memory-minimal-group">
                     <div className="app-memory-minimal-group__label">
-                      <span
-                        className={`app-memory-minimal-group__dot app-memory-minimal-group__dot--${sensitivity}`}
-                        aria-hidden="true"
-                      />
                       <span className="app-memory-minimal-group__copy">
-                        <span className="app-memory-minimal-group__name">{sensitivityMeta.label}</span>
-                        <span className="app-memory-minimal-group__description">{sensitivityMeta.description}</span>
+                        <span className="app-memory-minimal-group__name">USER / IDENTITY / SOUL projections</span>
+                        <span className="app-memory-minimal-group__description">
+                          {projectedFiles.join(' · ') || 'USER.md · IDENTITY.md · SOUL.md · HEARTBEAT.md'}
+                        </span>
                       </span>
-                      <span className="app-memory-minimal-group__count">{items.length}</span>
+                      <span className="app-memory-minimal-group__count">{projectionItems.length || projectedFiles.length || 4}</span>
                     </div>
                     <div className="app-memory-minimal-group__list">
-                      {items.length === 0 ? (
-                        <div className="app-memory-minimal-empty-row">No items</div>
-                      ) : items.map((entry) => {
-                        const entryId = readString(entry.id);
-                        const busy = mutatingMemory === entryId;
-                        const categoryLabel = categoryLabels.get(readString(entry.category)) || 'Saved memory';
-                        const updatedLabel = formatMemoryTimestamp(readString(entry.updated_at) || readString(entry.created_at) || null);
-                        const contentLabel = [readString(entry.title), readString(entry.content)]
-                          .filter(Boolean)
-                          .join(' — ');
-                        return (
-                          <div key={entryId || `memory-${readString(entry.title)}`} className="app-memory-minimal-row">
-                            <button
-                              type="button"
-                              className="app-memory-minimal-row__copy"
-                              onClick={() => {
-                                openEditMemory(entry);
-                              }}
-                            >
-                              <span className="app-memory-minimal-row__content" title={contentLabel || 'Saved memory'}>
-                                {contentLabel || 'Saved memory'}
-                              </span>
-                              <span className="app-memory-minimal-row__meta">
-                                {[categoryLabel, updatedLabel, entry.pinned ? 'Pinned' : null].filter(Boolean).join(' · ')}
-                              </span>
-                            </button>
-                            <div className="app-inline-actions">
-                              <button
-                                type="button"
-                                className="app-memory-minimal-row__delete"
-                                disabled={busy}
-                                onClick={() => {
-                                  void togglePinned(entry);
-                                }}
-                                aria-label={entry.pinned ? 'Unpin memory' : 'Pin memory'}
-                                title={entry.pinned ? 'Unpin memory' : 'Pin memory'}
-                              >
-                                {entry.pinned ? <PinOff size={16} strokeWidth={1.9} aria-hidden="true" /> : <Pin size={16} strokeWidth={1.9} aria-hidden="true" />}
-                              </button>
-                              <button
-                                type="button"
-                                className="app-memory-minimal-row__delete"
-                                disabled={busy}
-                                onClick={() => {
-                                  setPendingDeleteMemoryId(entryId);
-                                }}
-                                aria-label="Delete memory"
-                                title="Delete memory"
-                              >
-                                <Trash2 size={16} strokeWidth={1.9} aria-hidden="true" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
+                      {projectionItems.length === 0 ? (
+                        <div className="app-memory-minimal-empty-row">Projection previews will appear after identity setup.</div>
+                      ) : projectionItems.map((item) => (
+                        <div key={item.filename} className="app-memory-minimal-row">
+                          <span className="app-memory-minimal-row__copy">
+                            <span className="app-memory-minimal-row__content">{item.filename}</span>
+                            <span className="app-memory-minimal-row__meta">{item.preview}</span>
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </section>
-                );
-              })}
-            </div>
+                </div>
+              </div>
+            </WorkstationSurfaceCard>
           </>
         )}
       </main>
+
+      <CommandSheet
+        open={isIdentitySheetOpen}
+        title="Correct Sage memory"
+        description="Use this only to correct durable identity, tone, or standing rules. Normal learning should happen through chat."
+        onClose={() => {
+          setIsIdentitySheetOpen(false);
+          setProfileDraft(draftFromProfileSnapshot(profileSnapshot));
+        }}
+        actions={(
+          <>
+            <button
+              type="button"
+              className="app-memory-sheet__link"
+              disabled={isProfileSaving}
+              onClick={() => {
+                setIsIdentitySheetOpen(false);
+                setProfileDraft(draftFromProfileSnapshot(profileSnapshot));
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="app-button"
+              disabled={isProfileSaving}
+              onClick={() => {
+                void saveProfileDraft().then(() => {
+                  setIsIdentitySheetOpen(false);
+                });
+              }}
+            >
+              {isProfileSaving ? 'Saving…' : 'Save correction'}
+            </button>
+          </>
+        )}
+      >
+        <FormSection
+          title="Durable identity"
+          description="This updates the structured backend truth Sage carries into future turns."
+        >
+          <FormGrid columns="repeat(2, minmax(0, 1fr))">
+            <FormField label="Name">
+              <FormInput
+                value={profileDraft.user_name}
+                onChange={(event) => {
+                  setProfileDraft((current) => ({ ...current, user_name: event.currentTarget.value }));
+                }}
+                placeholder={displayNameHint}
+              />
+            </FormField>
+            <FormField label="Recurring responsibility">
+              <FormInput
+                value={profileDraft.recurring_responsibility}
+                onChange={(event) => {
+                  setProfileDraft((current) => ({ ...current, recurring_responsibility: event.currentTarget.value }));
+                }}
+                placeholder="Example: Keep my inbox triaged."
+              />
+            </FormField>
+          </FormGrid>
+          <FormGrid columns="1fr">
+            <FormField label="Identity">
+              <FormTextarea
+                rows={4}
+                value={profileDraft.identity_summary}
+                onChange={(event) => {
+                  setProfileDraft((current) => ({ ...current, identity_summary: event.currentTarget.value }));
+                }}
+                placeholder="Example: I run product and engineering for Empyralis."
+              />
+            </FormField>
+            <FormField label="Tone and communication style">
+              <FormTextarea
+                rows={4}
+                value={profileDraft.communication_style}
+                onChange={(event) => {
+                  setProfileDraft((current) => ({ ...current, communication_style: event.currentTarget.value }));
+                }}
+                placeholder="Example: Be direct, concise, and lead with the answer."
+              />
+            </FormField>
+            <FormField label="Standing rules" hint="One rule per line. These are stronger than casual chat preferences.">
+              <FormTextarea
+                rows={5}
+                value={profileDraft.standing_rules_text}
+                onChange={(event) => {
+                  setProfileDraft((current) => ({ ...current, standing_rules_text: event.currentTarget.value }));
+                }}
+                placeholder="Example: Never send external messages without approval."
+              />
+            </FormField>
+          </FormGrid>
+        </FormSection>
+      </CommandSheet>
 
       <CommandSheet
         open={isMemorySheetOpen}

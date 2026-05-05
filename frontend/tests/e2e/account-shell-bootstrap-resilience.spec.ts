@@ -166,6 +166,32 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page.getByRole('link', { name: /needs your ok · 1/i })).toBeVisible();
   });
 
+  test('memory owns identity, rules, projections, and memory controls', async ({ page }) => {
+    await page.route('**/api/sage-profile?workspace_id=ws-1', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(buildSageProfilePayload(SAGE_BOOTSTRAP_QUESTIONS.length)),
+      });
+    });
+
+    await loginAsOwner(page);
+    await page.getByRole('navigation', { name: /^workspace views$/i }).getByRole('link', { name: /^memory$/i }).click();
+
+    await expect(page).toHaveURL(/\/w\/ws-1\/memory$/);
+    await expect(page.getByRole('heading', { name: /^about me$/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^preferences$/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^rules$/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^pinned$/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^recent$/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^sensitive$/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^controls$/i })).toBeVisible();
+    await expect(page.getByText('USER / IDENTITY / SOUL projections', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^export$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^wipe$/i })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: /^workspace views$/i }).getByRole('link', { name: /^profile$/i })).toHaveCount(0);
+  });
+
   test('sage setup load failures render a retryable setup card instead of raw backend text', async ({ page }) => {
     await page.route('**/api/sage-profile?workspace_id=ws-1', async (route) => {
       await route.fulfill({

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { CommandSheet } from '@/lib/ui/command-sheet';
 import { DataBadge } from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import {
@@ -570,7 +571,7 @@ function summarizeMyComputerStatus(params: {
       id: 'not_connected',
       label: 'Not connected',
       tone: 'neutral',
-      detail: 'Connect this computer when Sage needs your files, browser, screenshots, clipboard, shell, or local Ollama.',
+      detail: 'Connect this computer when Sage needs trusted local access.',
       primaryAction: {
         label: 'Connect this computer',
         tone: 'primary',
@@ -827,6 +828,9 @@ export function WorkstationGatewayOperatorPane({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [busyActionKey, setBusyActionKey] = useState<string | null>(null);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [manualSetupVisible, setManualSetupVisible] = useState(false);
+  const [advancedDiagnosticsVisible, setAdvancedDiagnosticsVisible] = useState(false);
   const [channelDrafts, setChannelDrafts] = useState<Record<ChannelKind, ChannelDraft>>({
     whatsapp: defaultChannelDraft('Empyralis gateway test from this computer.'),
     telegram: defaultChannelDraft('Empyralis gateway test from this computer.'),
@@ -1347,6 +1351,18 @@ export function WorkstationGatewayOperatorPane({
     pairingIntentActive: Boolean(pairingIntent),
   });
   const trustSummary = gatewayTrustSummary(selectedGateway);
+  const platformToken = String(selectedGateway?.platform ?? pairingDraft.platform ?? '').trim().toLowerCase();
+  const normalDeviceTitle = platformToken.includes('mac') || platformToken.includes('darwin')
+    ? 'This Mac'
+    : platformToken.includes('windows')
+      ? 'This Windows PC'
+      : platformToken.includes('linux')
+        ? 'This Linux computer'
+        : 'This computer';
+  const normalTrustLabel = myComputerStatus.id === 'online'
+    ? (['Trusted', 'Verified'].includes(trustSummary.trustLabel) ? 'Verified' : trustSummary.trustLabel)
+    : trustSummary.trustLabel;
+  const normalDeviceLine = `${myComputerStatus.label} · ${normalTrustLabel} · Last seen ${trustSummary.lastSeenLabel}`;
   const certificationLanes = buildCertificationLanes({
     myComputerStatus,
     doctorStatus: String(doctorStatus ?? '').trim().toLowerCase(),
@@ -1394,23 +1410,17 @@ export function WorkstationGatewayOperatorPane({
   return (
     <div className="gateway-operator-pane app-stack-3">
       <WorkstationSurfaceCard
-        title="My Computer"
-        description="This is the trusted local computer lane for files, shell, browser, screenshots, clipboard, personal Telegram, personal WhatsApp, and local Ollama."
+        title={normalDeviceTitle}
+        description={normalDeviceLine}
         actions={(
           <WorkstationActionButton
             type="button"
-            tone="secondary"
+            tone="primary"
             onClick={() => {
-              setStatusMessage(null);
-              setErrorMessage(null);
-              void refreshRegistrations(true)
-                .then(() => (selectedGatewayId ? refreshGatewayDetail(selectedGatewayId, false, true) : undefined))
-                .catch((error) => {
-                  setErrorMessage(error instanceof Error ? error.message : 'Could not refresh device connection state.');
-                });
+              setManageOpen(true);
             }}
           >
-            Refresh
+            Manage
           </WorkstationActionButton>
         )}
       >
@@ -1424,11 +1434,6 @@ export function WorkstationGatewayOperatorPane({
             hint={myComputerStatus.detail}
           />
           <WorkstationSurfaceStat
-            label="This device"
-            value={trustSummary.deviceLabel}
-            hint={trustSummary.platformLabel}
-          />
-          <WorkstationSurfaceStat
             label="Last seen"
             value={trustSummary.lastSeenLabel}
             hint={trustSummary.lastConnectedLabel}
@@ -1438,33 +1443,10 @@ export function WorkstationGatewayOperatorPane({
             value={trustSummary.trustLabel}
             hint="Revocable device trust for local work"
           />
-          <WorkstationSurfaceStat
-            label="Connected computers"
-            value={gatewayConnectionSummary(gateways)}
-            hint="Trusted local computer edges in this workspace"
-          />
         </WorkstationSurfaceStatGrid>
 
-        <FormSection
-          title="Next step"
-          description="One clear action based on the current connection state."
-        >
-          <div className="settings-action-row">
-            <WorkstationActionButton
-              type="button"
-              tone={myComputerStatus.primaryAction.tone}
-              disabled={Boolean(myComputerStatus.primaryAction.disabled)}
-              onClick={handlePrimaryAction}
-            >
-              {myComputerStatus.primaryAction.label}
-            </WorkstationActionButton>
-          </div>
-          <WorkstationSurfaceNotice tone={myComputerStatus.tone === 'danger' ? 'danger' : myComputerStatus.tone === 'warning' ? 'warning' : myComputerStatus.tone === 'success' ? 'success' : 'neutral'}>
-            {myComputerStatus.detail}
-          </WorkstationSurfaceNotice>
-        </FormSection>
-
-        <FormSection
+        {advancedDiagnosticsVisible ? (
+          <FormSection
           title="What Sage can use on this computer"
           description="Capability groups from this paired computer, shown without protocol or token detail."
         >
@@ -1482,9 +1464,11 @@ export function WorkstationGatewayOperatorPane({
               />
             ))}
           </WorkstationSurfaceList>
-        </FormSection>
+          </FormSection>
+        ) : null}
 
-        <FormSection
+        {manualSetupVisible ? (
+          <FormSection
           title={`Connect or reconnect this ${pairingDeviceLabel}`}
           description="Create a short-lived connection request when this computer is not connected, reconnecting, or revoked."
         >
@@ -1517,9 +1501,11 @@ export function WorkstationGatewayOperatorPane({
               {busyActionKey === 'pairing' ? 'Creating connection…' : 'Connect this computer'}
             </WorkstationActionButton>
           </div>
-        </FormSection>
+          </FormSection>
+        ) : null}
 
-        <FormSection
+        {advancedDiagnosticsVisible ? (
+          <FormSection
           title="How this trust lane works"
           description="Default keeps risky local and external actions behind approval. Full Access only applies to a paired user-owned computer."
         >
@@ -1543,9 +1529,10 @@ export function WorkstationGatewayOperatorPane({
               <DataBadge key={permission} tone="neutral">{permission}</DataBadge>
             ))}
           </div>
-        </FormSection>
+          </FormSection>
+        ) : null}
 
-        {pairingIntent ? (
+        {manualSetupVisible && pairingIntent ? (
           <FormSection
             title="Advanced terminal setup"
             description="Fallback setup for advanced users. Copy one command, paste it into Terminal, and press Return."
@@ -1589,14 +1576,14 @@ export function WorkstationGatewayOperatorPane({
           </FormSection>
         ) : null}
 
-        {loadingRegistrations && !registrationsTimedOut ? (
+        {advancedDiagnosticsVisible && loadingRegistrations && !registrationsTimedOut ? (
           <WorkstationSurfaceNotice tone="neutral">Loading connected computers…</WorkstationSurfaceNotice>
-        ) : gateways.length === 0 ? (
+        ) : advancedDiagnosticsVisible && gateways.length === 0 ? (
           <EmptyPanel
             title="No computers connected yet"
             body="Pair this computer when you want Sage to use local files, browser sessions, screenshots, clipboard, terminal, or personal channels."
           />
-        ) : (
+        ) : advancedDiagnosticsVisible ? (
           <WorkstationSurfaceList>
             {gateways.map((gateway) => {
               const gatewayId = String(gateway.gateway_id ?? '').trim();
@@ -1625,10 +1612,93 @@ export function WorkstationGatewayOperatorPane({
               );
             })}
           </WorkstationSurfaceList>
-        )}
+        ) : null}
       </WorkstationSurfaceCard>
 
-      {selectedGateway && showStatusSection ? (
+      <CommandSheet
+        open={manageOpen}
+        title="Manage this computer"
+        description="Reconnect, revoke trust, or open advanced setup only when needed."
+        onClose={() => setManageOpen(false)}
+      >
+        <div className="app-stack-3">
+          <WorkstationSurfaceNotice tone={myComputerStatus.tone === 'danger' ? 'danger' : myComputerStatus.tone === 'warning' ? 'warning' : myComputerStatus.tone === 'success' ? 'success' : 'neutral'}>
+            {normalDeviceTitle} · {normalDeviceLine}
+          </WorkstationSurfaceNotice>
+          <div className="settings-action-row">
+            {myComputerStatus.primaryAction.action.kind === 'open_approvals' ? (
+              <WorkstationActionButton
+                type="button"
+                tone="primary"
+                disabled={Boolean(myComputerStatus.primaryAction.disabled)}
+                onClick={() => {
+                  setManageOpen(false);
+                  handlePrimaryAction();
+                }}
+              >
+                Approve action
+              </WorkstationActionButton>
+            ) : null}
+            <WorkstationActionButton
+              type="button"
+              tone="primary"
+              disabled={busyActionKey === 'pairing'}
+              onClick={() => {
+                setManageOpen(false);
+                setManualSetupVisible(true);
+                void handleCreatePairingIntent();
+              }}
+            >
+              {busyActionKey === 'pairing' ? 'Creating connection…' : selectedGateway ? 'Reconnect' : 'Connect this computer'}
+            </WorkstationActionButton>
+            {selectedGateway ? (
+              <WorkstationActionButton
+                type="button"
+                tone="danger"
+                disabled={busyActionKey === `revoke:${selectedGatewayId}`}
+                onClick={() => {
+                  setManageOpen(false);
+                  void handleRevokeGateway();
+                }}
+              >
+                {busyActionKey === `revoke:${selectedGatewayId}` ? 'Revoking…' : 'Revoke access'}
+              </WorkstationActionButton>
+            ) : null}
+            <WorkstationActionButton
+              type="button"
+              tone="secondary"
+              onClick={() => {
+                setManageOpen(false);
+                setManualSetupVisible(true);
+                if (!pairingIntent) {
+                  void handleCreatePairingIntent();
+                }
+              }}
+            >
+              Manual setup
+            </WorkstationActionButton>
+            <WorkstationActionButton
+              type="button"
+              tone="secondary"
+              onClick={() => {
+                setStatusMessage(null);
+                setErrorMessage(null);
+                setManageOpen(false);
+                setAdvancedDiagnosticsVisible(true);
+                void refreshRegistrations(true)
+                  .then(() => (selectedGatewayId ? refreshGatewayDetail(selectedGatewayId, false, true) : undefined))
+                  .catch((error) => {
+                    setErrorMessage(error instanceof Error ? error.message : 'Could not refresh device connection state.');
+                  });
+              }}
+            >
+              Advanced diagnostics
+            </WorkstationActionButton>
+          </div>
+        </div>
+      </CommandSheet>
+
+      {selectedGateway && showStatusSection && advancedDiagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Connection details"
           description="Trust, health, reconnect posture, and advanced diagnostics for the selected computer."
@@ -1804,7 +1874,7 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway && showChannelsSection ? (
+      {selectedGateway && showChannelsSection && advancedDiagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Personal channel state"
           description="Current login, linked identity, and recent activity for personal WhatsApp and Telegram on this computer."
@@ -1982,7 +2052,7 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway && showApprovalsSection ? (
+      {selectedGateway && showApprovalsSection && advancedDiagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Needs your OK requests"
           description="Resolve risky local actions without leaving the product shell."
@@ -2040,7 +2110,7 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway && showActivitySection ? (
+      {selectedGateway && showActivitySection && advancedDiagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Device activity"
           description="Inspect governed browser sessions and recent local browser activity without dropping into raw APIs."

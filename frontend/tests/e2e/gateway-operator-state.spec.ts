@@ -151,23 +151,33 @@ async function stubGatewayOperatorState(page, mode: GatewayStateMode) {
 }
 
 test.describe('gateway operator productization', () => {
-  test('not connected state shows one clear connect action', async ({ page }) => {
+  test('not connected state is compact and keeps setup behind Manage', async ({ page }) => {
     await stubGatewayOperatorState(page, 'not_connected');
     await loginAsOwner(page);
     await page.goto('/w/ws-1/gateway');
 
     const operatorSurface = page
       .locator('.app-surface-card')
-      .filter({ has: page.getByRole('heading', { name: /^My Computer$/i }) })
+      .filter({ has: page.getByRole('heading', { name: /^This Mac$/i }) })
       .first();
 
-    await expect(page.getByRole('heading', { name: /^My Computer$/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^This Mac$/i })).toBeVisible();
+    await expect(operatorSurface).toContainText(/Not connected/i);
     await expect(page.locator('.app-surface-stat').filter({ hasText: 'State' })).toContainText('Not connected');
-    await expect(page.getByRole('button', { name: /^Connect this computer$/i }).first()).toBeVisible();
-    await expect(operatorSurface).toContainText('Files');
+    await expect(operatorSurface.getByRole('button', { name: /^Manage$/i })).toBeVisible();
+    await expect(operatorSurface).not.toContainText('Files');
+    await expect(operatorSurface).not.toContainText('Telegram');
+    await expect(operatorSurface).not.toContainText('WhatsApp');
+    await expect(operatorSurface).not.toContainText('Advanced terminal setup');
+
+    await operatorSurface.getByRole('button', { name: /^Manage$/i }).click();
+    await expect(page.getByRole('dialog')).toContainText('Manage this computer');
+    await expect(page.getByRole('button', { name: /^Connect this computer$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Manual setup$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Advanced diagnostics$/i })).toBeVisible();
   });
 
-  test('pairing state shows pairing copy and connect command flow', async ({ page }) => {
+  test('manual setup reveals pairing copy and command flow only after Manage', async ({ page }) => {
     await stubGatewayOperatorState(page, 'not_connected');
     await page.route('**/api/gateway/pairings/intents', async (route) => {
       await route.fulfill({
@@ -185,58 +195,83 @@ test.describe('gateway operator productization', () => {
     await loginAsOwner(page);
     await page.goto('/w/ws-1/gateway');
 
-    await page.getByRole('button', { name: /^Connect this computer$/i }).first().click();
+    const operatorSurface = page
+      .locator('.app-surface-card')
+      .filter({ has: page.getByRole('heading', { name: /^This Mac$/i }) })
+      .first();
+
+    await expect(page.getByText(/advanced terminal setup/i)).toHaveCount(0);
+    await operatorSurface.getByRole('button', { name: /^Manage$/i }).click();
+    await page.getByRole('button', { name: /^Manual setup$/i }).click();
 
     await expect(page.locator('.app-surface-stat').filter({ hasText: 'State' })).toContainText('Pairing');
     await expect(page.getByText(/advanced terminal setup/i)).toBeVisible();
     await expect(page.getByText(/run on this computer/i)).toBeVisible();
   });
 
-  test('online state shows revoke as the primary action and capability groups', async ({ page }) => {
+  test('online state shows device trust first and hides capability groups by default', async ({ page }) => {
     await stubGatewayOperatorState(page, 'online');
     await loginAsOwner(page);
     await page.goto('/w/ws-1/gateway');
 
     const operatorSurface = page
       .locator('.app-surface-card')
-      .filter({ has: page.getByRole('heading', { name: /^My Computer$/i }) })
+      .filter({ has: page.getByRole('heading', { name: /^This Mac$/i }) })
       .first();
 
+    await expect(page.getByRole('heading', { name: /^This Mac$/i })).toBeVisible();
+    await expect(operatorSurface).toContainText(/Online/i);
+    await expect(operatorSurface).toContainText(/Verified/i);
     await expect(page.locator('.app-surface-stat').filter({ hasText: 'State' })).toContainText('Online');
-    await expect(page.getByRole('button', { name: /^Revoke access$/i }).first()).toBeVisible();
+    await expect(operatorSurface.getByRole('button', { name: /^Manage$/i })).toBeVisible();
+    await expect(operatorSurface).not.toContainText('Telegram');
+    await expect(operatorSurface).not.toContainText('WhatsApp');
+    await expect(operatorSurface).not.toContainText('Ollama');
+    await expect(operatorSurface).toContainText('Last seen');
+
+    await operatorSurface.getByRole('button', { name: /^Manage$/i }).click();
+    await expect(page.getByRole('button', { name: /^Reconnect$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Revoke access$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Manual setup$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Advanced diagnostics$/i })).toBeVisible();
+
+    await page.getByRole('button', { name: /^Advanced diagnostics$/i }).click();
     await expect(operatorSurface).toContainText('Telegram');
     await expect(operatorSurface).toContainText('WhatsApp');
     await expect(operatorSurface).toContainText('Ollama');
-    await expect(operatorSurface).toContainText('Last seen');
   });
 
-  test('revoked state shows reconnect as the primary action', async ({ page }) => {
+  test('revoked state keeps reconnect behind Manage', async ({ page }) => {
     await stubGatewayOperatorState(page, 'revoked');
     await loginAsOwner(page);
     await page.goto('/w/ws-1/gateway');
 
     const operatorSurface = page
       .locator('.app-surface-card')
-      .filter({ has: page.getByRole('heading', { name: /^My Computer$/i }) })
+      .filter({ has: page.getByRole('heading', { name: /^This Mac$/i }) })
       .first();
 
     await expect(page.locator('.app-surface-stat').filter({ hasText: 'State' })).toContainText('Revoked');
-    await expect(page.getByRole('button', { name: /^Reconnect$/i }).first()).toBeVisible();
+    await expect(operatorSurface.getByRole('button', { name: /^Manage$/i })).toBeVisible();
     await expect(operatorSurface).toContainText('Access from this computer was revoked');
+    await operatorSurface.getByRole('button', { name: /^Manage$/i }).click();
+    await expect(page.getByRole('button', { name: /^Reconnect$/i })).toBeVisible();
   });
 
-  test('reconnecting state shows reconnect as the primary action', async ({ page }) => {
+  test('reconnecting state keeps reconnect behind Manage', async ({ page }) => {
     await stubGatewayOperatorState(page, 'reconnecting');
     await loginAsOwner(page);
     await page.goto('/w/ws-1/gateway');
 
     const operatorSurface = page
       .locator('.app-surface-card')
-      .filter({ has: page.getByRole('heading', { name: /^My Computer$/i }) })
+      .filter({ has: page.getByRole('heading', { name: /^This Mac$/i }) })
       .first();
 
     await expect(page.locator('.app-surface-stat').filter({ hasText: 'State' })).toContainText('Reconnecting');
-    await expect(page.getByRole('button', { name: /^Reconnect$/i }).first()).toBeVisible();
+    await expect(operatorSurface.getByRole('button', { name: /^Manage$/i })).toBeVisible();
     await expect(operatorSurface).toContainText('reconnecting or waiting for the local companion');
+    await operatorSurface.getByRole('button', { name: /^Manage$/i }).click();
+    await expect(page.getByRole('button', { name: /^Reconnect$/i })).toBeVisible();
   });
 });

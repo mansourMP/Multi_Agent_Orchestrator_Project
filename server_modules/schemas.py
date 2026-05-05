@@ -104,6 +104,21 @@ class SageMemoryWipeRequest(BaseModel):
     confirm: str
 
 
+class SageProfileUpdateRequest(BaseModel):
+    workspace_id: str
+    user_name: Optional[str] = None
+    identity_summary: Optional[str] = None
+    communication_style: Optional[str] = None
+    recurring_responsibility: Optional[str] = None
+    standing_rules: Optional[list[str]] = None
+    standing_rules_text: Optional[str] = None
+
+
+class SageProfileBootstrapAnswerRequest(BaseModel):
+    workspace_id: str
+    answer: str
+
+
 class AgentCreate(BaseModel):
     path: Optional[str] = None
     workspace_id: Optional[str] = None

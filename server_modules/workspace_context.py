@@ -11,6 +11,8 @@ _WORKSPACE_DIR = _REPO_ROOT / ".orion-stack" / "workspace"
 ALLOWED_CONTEXT_FILENAMES = (
     "SOUL.md",
     "USER.md",
+    "IDENTITY.md",
+    "HEARTBEAT.md",
     "AGENTS.md",
     "TOOLS.md",
     "MEMORY.md",
@@ -27,6 +29,15 @@ DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
         "# User Profile\n\n"
         "- Capture durable user preferences here.\n"
         "- Keep notes short, factual, and useful for future conversations.\n"
+    ),
+    "IDENTITY.md": (
+        "# Identity\n\n"
+        "- Capture the user's role, active work, and durable responsibilities here.\n"
+        "- Keep this concise and factual.\n"
+    ),
+    "HEARTBEAT.md": (
+        "# Heartbeat\n\n"
+        "- Add recurring responsibilities Sage should keep track of here.\n"
     ),
     "AGENTS.md": (
         "# Assistant\n\n"

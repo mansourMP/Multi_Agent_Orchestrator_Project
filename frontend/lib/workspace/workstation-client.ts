@@ -162,6 +162,22 @@ export type WorkstationSageMemoryRecord = Record<string, unknown> & {
   history?: Record<string, unknown>[] | null;
 };
 
+export type WorkstationSageProfileQuestionRecord = Record<string, unknown> & {
+  id?: string | null;
+  field?: string | null;
+  prompt?: string | null;
+  placeholder?: string | null;
+};
+
+export type WorkstationSageProfileRecord = Record<string, unknown> & {
+  profile?: Record<string, unknown> | null;
+  bootstrap?: Record<string, unknown> | null;
+  storage_policy?: Record<string, unknown> | null;
+  projections?: Record<string, unknown> | null;
+  account_seed?: Record<string, unknown> | null;
+  updated_at?: string | null;
+};
+
 export type WorkstationAgentTraceRecord = Record<string, unknown> & {
   id?: string | null;
   tenant_id?: string | null;
@@ -548,6 +564,8 @@ export type WorkstationClientPaths = {
   notifications: (limit?: number) => string;
   activity: (limit?: number) => string;
   sageMemory: string;
+  sageProfile: string;
+  sageProfileBootstrapAnswer: string;
   sageMemoryStoragePolicy: string;
   sageMemoryExport: string;
   sageMemoryWipe: string;
@@ -686,6 +704,18 @@ export type WorkstationClient = {
   }) => Promise<Record<string, unknown> | null>;
   listActivityTimeline: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
   listSageMemory: () => Promise<Record<string, unknown>>;
+  getSageProfile: () => Promise<WorkstationSageProfileRecord>;
+  updateSageProfile: (options: {
+    userName?: string | null;
+    identitySummary?: string | null;
+    communicationStyle?: string | null;
+    recurringResponsibility?: string | null;
+    standingRules?: string[] | null;
+    standingRulesText?: string | null;
+  }) => Promise<WorkstationSageProfileRecord>;
+  answerSageProfileBootstrap: (options: {
+    answer: string;
+  }) => Promise<WorkstationSageProfileRecord>;
   getSageMemoryStoragePolicy: () => Promise<Record<string, unknown>>;
   exportSageMemory: () => Promise<Record<string, unknown>>;
   wipeSageMemory: (options: { confirm: string }) => Promise<Record<string, unknown>>;
@@ -1072,6 +1102,10 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/activity/timeline${buildQueryString({ workspace_id: workspaceId, limit })}`,
     sageMemory:
       `/api/sage-memory${buildQueryString({ workspace_id: workspaceId })}`,
+    sageProfile:
+      `/api/sage-profile${buildQueryString({ workspace_id: workspaceId })}`,
+    sageProfileBootstrapAnswer:
+      '/api/sage-profile/bootstrap/answer',
     sageMemoryStoragePolicy:
       `/api/sage-memory/storage-policy${buildQueryString({ workspace_id: workspaceId })}`,
     sageMemoryExport:
@@ -2091,6 +2125,49 @@ export function createWorkstationClient(
         path: paths.sageMemory,
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    getSageProfile: () =>
+      requestJson<WorkstationSageProfileRecord>({
+        path: paths.sageProfile,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<WorkstationSageProfileRecord>,
+    updateSageProfile: ({
+      userName = null,
+      identitySummary = null,
+      communicationStyle = null,
+      recurringResponsibility = null,
+      standingRules = null,
+      standingRulesText = null,
+    }) =>
+      requestJson<WorkstationSageProfileRecord>({
+        path: paths.sageProfile,
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            user_name: userName,
+            identity_summary: identitySummary,
+            communication_style: communicationStyle,
+            recurring_responsibility: recurringResponsibility,
+            standing_rules: standingRules,
+            standing_rules_text: standingRulesText,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<WorkstationSageProfileRecord>,
+    answerSageProfileBootstrap: ({ answer }) =>
+      requestJson<WorkstationSageProfileRecord>({
+        path: paths.sageProfileBootstrapAnswer,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            answer,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<WorkstationSageProfileRecord>,
     getSageMemoryStoragePolicy: () =>
       requestJson<Record<string, unknown>>({
         path: paths.sageMemoryStoragePolicy,

@@ -6,8 +6,13 @@ import { Download, Plus, Trash2 } from 'lucide-react';
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
+import { AppButton, AppNotice } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
-import type { WorkstationSageMemoryRecord } from '@/lib/workspace/workstation-client';
+import type {
+  WorkstationSageMemoryRecord,
+  WorkstationSageProfileQuestionRecord,
+  WorkstationSageProfileRecord,
+} from '@/lib/workspace/workstation-client';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
@@ -27,6 +32,33 @@ type SageMemoryStoragePolicy = Record<string, unknown> & {
   max_entries?: number | null;
   used_entries?: number | null;
   remaining_entries?: number | null;
+};
+
+type SageProfileSnapshot = {
+  profile: {
+    user_name: string;
+    identity_summary: string;
+    communication_style: string;
+    recurring_responsibility: string;
+    standing_rules: string[];
+    standing_rules_text: string;
+  };
+  bootstrap: {
+    complete: boolean;
+    answered_count: number;
+    total_count: number;
+    progress_label: string;
+    current_question: WorkstationSageProfileQuestionRecord | null;
+  };
+  storagePolicy: Record<string, unknown>;
+};
+
+type SageProfileDraft = {
+  user_name: string;
+  identity_summary: string;
+  communication_style: string;
+  recurring_responsibility: string;
+  standing_rules_text: string;
 };
 
 type SageMemoryDraft = {
@@ -113,6 +145,77 @@ function defaultMemoryDraft(category = 'safe_general'): SageMemoryDraft {
     title: '',
     content: '',
     pinned: false,
+  };
+}
+
+function defaultProfileSnapshot(): SageProfileSnapshot {
+  return {
+    profile: {
+      user_name: '',
+      identity_summary: '',
+      communication_style: '',
+      recurring_responsibility: '',
+      standing_rules: [],
+      standing_rules_text: '',
+    },
+    bootstrap: {
+      complete: false,
+      answered_count: 0,
+      total_count: 5,
+      progress_label: '0/5',
+      current_question: null,
+    },
+    storagePolicy: {},
+  };
+}
+
+function normalizeProfileSnapshot(payload: unknown): SageProfileSnapshot {
+  const record = payload && typeof payload === 'object' ? payload as WorkstationSageProfileRecord : {};
+  const profileRecord = record.profile && typeof record.profile === 'object'
+    ? record.profile as Record<string, unknown>
+    : {};
+  const bootstrapRecord = record.bootstrap && typeof record.bootstrap === 'object'
+    ? record.bootstrap as Record<string, unknown>
+    : {};
+  const standingRules = Array.isArray(profileRecord.standing_rules)
+    ? profileRecord.standing_rules.flatMap((item) => {
+      const rule = readString(item);
+      return rule ? [rule] : [];
+    })
+    : [];
+  const standingRulesText = readString(profileRecord.standing_rules_text) || standingRules.join('\n');
+  const currentQuestion = bootstrapRecord.current_question && typeof bootstrapRecord.current_question === 'object'
+    ? bootstrapRecord.current_question as WorkstationSageProfileQuestionRecord
+    : null;
+  return {
+    profile: {
+      user_name: readString(profileRecord.user_name),
+      identity_summary: readString(profileRecord.identity_summary),
+      communication_style: readString(profileRecord.communication_style),
+      recurring_responsibility: readString(profileRecord.recurring_responsibility),
+      standing_rules: standingRules,
+      standing_rules_text: standingRulesText,
+    },
+    bootstrap: {
+      complete: Boolean(bootstrapRecord.complete),
+      answered_count: readNumber(bootstrapRecord.answered_count),
+      total_count: Math.max(1, readNumber(bootstrapRecord.total_count, 5)),
+      progress_label: readString(bootstrapRecord.progress_label) || `${readNumber(bootstrapRecord.answered_count)}/${Math.max(1, readNumber(bootstrapRecord.total_count, 5))}`,
+      current_question: currentQuestion,
+    },
+    storagePolicy: record.storage_policy && typeof record.storage_policy === 'object'
+      ? record.storage_policy as Record<string, unknown>
+      : {},
+  };
+}
+
+function draftFromProfileSnapshot(snapshot: SageProfileSnapshot): SageProfileDraft {
+  return {
+    user_name: snapshot.profile.user_name,
+    identity_summary: snapshot.profile.identity_summary,
+    communication_style: snapshot.profile.communication_style,
+    recurring_responsibility: snapshot.profile.recurring_responsibility,
+    standing_rules_text: snapshot.profile.standing_rules_text,
   };
 }
 
@@ -226,11 +329,14 @@ export function WorkstationActivityPane() {
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
   const cachedSnapshot = memoryPaneCache.get(workspaceId) ?? null;
+  const [profileSnapshot, setProfileSnapshot] = useState<SageProfileSnapshot>(() => defaultProfileSnapshot());
+  const [profileDraft, setProfileDraft] = useState<SageProfileDraft>(() => draftFromProfileSnapshot(defaultProfileSnapshot()));
   const [snapshot, setSnapshot] = useState<SageMemorySnapshot>(() => cachedSnapshot ?? normalizeMemorySnapshot(null));
   const [isLoading, setIsLoading] = useState(() => cachedSnapshot === null);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [storagePolicy, setStoragePolicy] = useState<SageMemoryStoragePolicy | null>(null);
+  const [mutatingProfile, setMutatingProfile] = useState(false);
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultMemoryDraft());
   const [mutatingMemory, setMutatingMemory] = useState<string | null>(null);
@@ -242,9 +348,10 @@ export function WorkstationActivityPane() {
       setIsLoading(true);
     }
     setError(null);
-    const [payload, policyPayload] = await Promise.all([
+    const [payload, policyPayload, profilePayload] = await Promise.all([
       services.client.listSageMemory(),
       services.client.getSageMemoryStoragePolicy().catch(() => null),
+      services.client.getSageProfile().catch(() => null),
     ]);
     const nextSnapshot = normalizeMemorySnapshot(payload);
     const normalizedSnapshot = {
@@ -255,6 +362,12 @@ export function WorkstationActivityPane() {
     setSnapshot(normalizedSnapshot);
     if (policyPayload && typeof policyPayload === 'object') {
       setStoragePolicy(policyPayload as SageMemoryStoragePolicy);
+    }
+    if (profilePayload && typeof profilePayload === 'object') {
+      const normalizedProfile = normalizeProfileSnapshot(profilePayload);
+      services.queryClient.set('chat:canonical:sage-profile', normalizedProfile);
+      setProfileSnapshot(normalizedProfile);
+      setProfileDraft(draftFromProfileSnapshot(normalizedProfile));
     }
     setIsLoading(false);
   };
@@ -302,6 +415,34 @@ export function WorkstationActivityPane() {
   const memoryLimit = readNumber(storagePolicy?.max_entries, MEMORY_ITEM_LIMIT) || MEMORY_ITEM_LIMIT;
   const memoryUsed = readNumber(storagePolicy?.used_entries, snapshot.items.length);
   const memoryAuthorityLabel = readString(storagePolicy?.authority).replace(/_/g, ' ') || 'cloud canonical';
+  const profileAuthorityLabel = readString(profileSnapshot.storagePolicy.authority).replace(/_/g, ' ') || 'structured profile cloud canonical';
+  const bootstrapQuestion = profileSnapshot.bootstrap.current_question;
+
+  const submitProfileDraft = async () => {
+    if (mutatingProfile) {
+      return;
+    }
+    setMutatingProfile(true);
+    setStatusMessage(null);
+    try {
+      const payload = await services.client.updateSageProfile({
+        userName: profileDraft.user_name,
+        identitySummary: profileDraft.identity_summary,
+        communicationStyle: profileDraft.communication_style,
+        recurringResponsibility: profileDraft.recurring_responsibility,
+        standingRulesText: profileDraft.standing_rules_text,
+      });
+      const normalizedProfile = normalizeProfileSnapshot(payload);
+      services.queryClient.set('chat:canonical:sage-profile', normalizedProfile);
+      setProfileSnapshot(normalizedProfile);
+      setProfileDraft(draftFromProfileSnapshot(normalizedProfile));
+      setStatusMessage(normalizedProfile.bootstrap.complete ? 'Identity workspace updated.' : 'Bootstrap progress saved.');
+    } catch (profileError) {
+      setError(profileError instanceof Error ? profileError.message : 'Could not update the identity workspace.');
+    } finally {
+      setMutatingProfile(false);
+    }
+  };
 
   const openCreateMemory = () => {
     setMemoryDraft(defaultMemoryDraft());
@@ -535,7 +676,87 @@ export function WorkstationActivityPane() {
             <SkeletonBlock height="4.25rem" />
           </div>
         ) : (
-          <div className="app-memory-minimal-list">
+          <div className="app-stack-4">
+            <section className="app-surface-notice">
+              <FormSection
+                title="Identity workspace"
+                description="Structured profile is the runtime authority. USER.md, IDENTITY.md, SOUL.md, and HEARTBEAT.md are generated from this state."
+              >
+                <div className="app-stack-3">
+                  <AppNotice tone={profileSnapshot.bootstrap.complete ? 'success' : 'warning'}>
+                    {profileSnapshot.bootstrap.complete
+                      ? `Bootstrap complete · ${profileAuthorityLabel}`
+                      : `Bootstrap in progress · ${profileSnapshot.bootstrap.progress_label}${bootstrapQuestion?.prompt ? ` · Next: ${readString(bootstrapQuestion.prompt)}` : ''}`}
+                  </AppNotice>
+                  <FormGrid columns="repeat(2, minmax(0, 1fr))">
+                    <FormField label="What Sage should call you">
+                      <FormInput
+                        value={profileDraft.user_name}
+                        onChange={(event) => {
+                          setProfileDraft((current) => ({ ...current, user_name: event.currentTarget.value }));
+                        }}
+                        placeholder="Example: Mansur"
+                      />
+                    </FormField>
+                    <FormField label="Recurring responsibility">
+                      <FormInput
+                        value={profileDraft.recurring_responsibility}
+                        onChange={(event) => {
+                          setProfileDraft((current) => ({ ...current, recurring_responsibility: event.currentTarget.value }));
+                        }}
+                        placeholder="Example: Keep my inbox triaged."
+                      />
+                    </FormField>
+                  </FormGrid>
+                  <FormGrid columns="1fr">
+                    <FormField label="Role and active work">
+                      <FormTextarea
+                        rows={3}
+                        value={profileDraft.identity_summary}
+                        onChange={(event) => {
+                          setProfileDraft((current) => ({ ...current, identity_summary: event.currentTarget.value }));
+                        }}
+                        placeholder="Example: I run product and engineering for Empyralis."
+                      />
+                    </FormField>
+                    <FormField label="Communication style">
+                      <FormTextarea
+                        rows={3}
+                        value={profileDraft.communication_style}
+                        onChange={(event) => {
+                          setProfileDraft((current) => ({ ...current, communication_style: event.currentTarget.value }));
+                        }}
+                        placeholder="Example: Be direct, concise, and lead with the answer."
+                      />
+                    </FormField>
+                    <FormField label="Standing rules" hint="One rule per line. These are projected into Sage's personal style file, not stored as freeform runtime memory.">
+                      <FormTextarea
+                        rows={4}
+                        value={profileDraft.standing_rules_text}
+                        onChange={(event) => {
+                          setProfileDraft((current) => ({ ...current, standing_rules_text: event.currentTarget.value }));
+                        }}
+                        placeholder="Example: Never send external messages without approval."
+                      />
+                    </FormField>
+                  </FormGrid>
+                  <div className="app-inline-actions">
+                    <AppButton
+                      type="button"
+                      tone="primary"
+                      disabled={mutatingProfile}
+                      onClick={() => {
+                        void submitProfileDraft();
+                      }}
+                    >
+                      {mutatingProfile ? 'Saving…' : 'Save identity workspace'}
+                    </AppButton>
+                  </div>
+                </div>
+              </FormSection>
+            </section>
+
+            <div className="app-memory-minimal-list">
             {snapshot.items.length === 0 ? (
               <div className="app-memory-minimal-empty">
                 <strong>No saved memory yet</strong>
@@ -607,6 +828,7 @@ export function WorkstationActivityPane() {
                 </section>
               );
             })}
+            </div>
           </div>
         )}
       </main>

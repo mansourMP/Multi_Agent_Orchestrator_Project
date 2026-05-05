@@ -50,6 +50,7 @@ import {
   type ProviderProfileRecord,
   type VaultCredentialRecord,
   type WorkstationSageMemoryRecord,
+  type WorkstationSageProfileRecord,
   type WorkstationSessionActor,
   type WorkstationSessionRecord,
   type WorkstationTurnStreamAbortHandle,
@@ -107,6 +108,28 @@ type SageMemorySnapshot = {
   categories: SageMemoryCategoryRecord[];
   summary: Record<string, unknown>;
   updatedAt: string | null;
+};
+
+type SageProfileSnapshot = {
+  profile: {
+    user_name: string;
+    identity_summary: string;
+    communication_style: string;
+    recurring_responsibility: string;
+    standing_rules: string[];
+    standing_rules_text: string;
+  };
+  bootstrap: {
+    complete: boolean;
+    answered_count: number;
+    total_count: number;
+    progress_label: string;
+    current_question: {
+      id: string;
+      prompt: string;
+      placeholder: string;
+    } | null;
+  };
 };
 
 type RecentThreadSummary = {
@@ -194,6 +217,7 @@ const ACTIVE_THREAD_STORAGE_PREFIX = 'empyralis.chat.active-thread.v1';
 const RUNS_QUERY_KEY = 'chat:canonical:runs';
 const APPROVALS_QUERY_KEY = 'chat:canonical:approvals';
 const SAGE_MEMORY_QUERY_KEY = 'chat:canonical:sage-memory';
+const SAGE_PROFILE_QUERY_KEY = 'chat:canonical:sage-profile';
 const RECENT_THREADS_QUERY_KEY = 'chat:canonical:recent-threads';
 
 function activeThreadStorageKey(workspaceId: string): string {
@@ -1939,6 +1963,68 @@ function normalizeSageMemorySnapshot(payload: unknown): SageMemorySnapshot {
   };
 }
 
+function defaultSageProfileSnapshot(): SageProfileSnapshot {
+  return {
+    profile: {
+      user_name: '',
+      identity_summary: '',
+      communication_style: '',
+      recurring_responsibility: '',
+      standing_rules: [],
+      standing_rules_text: '',
+    },
+    bootstrap: {
+      complete: false,
+      answered_count: 0,
+      total_count: 5,
+      progress_label: '0/5',
+      current_question: null,
+    },
+  };
+}
+
+function normalizeSageProfileSnapshot(payload: unknown): SageProfileSnapshot {
+  const record = payload && typeof payload === 'object' ? payload as WorkstationSageProfileRecord : {};
+  const profileRecord = record.profile && typeof record.profile === 'object'
+    ? record.profile as Record<string, unknown>
+    : {};
+  const bootstrapRecord = record.bootstrap && typeof record.bootstrap === 'object'
+    ? record.bootstrap as Record<string, unknown>
+    : {};
+  const standingRules = Array.isArray(profileRecord.standing_rules)
+    ? profileRecord.standing_rules.flatMap((item) => {
+      const value = readString(item);
+      return value ? [value] : [];
+    })
+    : [];
+  const currentQuestionRecord = bootstrapRecord.current_question && typeof bootstrapRecord.current_question === 'object'
+    ? bootstrapRecord.current_question as Record<string, unknown>
+    : null;
+  return {
+    profile: {
+      user_name: readString(profileRecord.user_name),
+      identity_summary: readString(profileRecord.identity_summary),
+      communication_style: readString(profileRecord.communication_style),
+      recurring_responsibility: readString(profileRecord.recurring_responsibility),
+      standing_rules: standingRules,
+      standing_rules_text: readString(profileRecord.standing_rules_text) || standingRules.join('\n'),
+    },
+    bootstrap: {
+      complete: Boolean(bootstrapRecord.complete),
+      answered_count: readNumber(bootstrapRecord.answered_count, 0),
+      total_count: Math.max(1, readNumber(bootstrapRecord.total_count, 5)),
+      progress_label: readString(bootstrapRecord.progress_label) || `${readNumber(bootstrapRecord.answered_count, 0)}/${Math.max(1, readNumber(bootstrapRecord.total_count, 5))}`,
+      current_question: currentQuestionRecord
+        ? {
+          id: readString(currentQuestionRecord.id),
+          prompt: readString(currentQuestionRecord.prompt),
+          placeholder: readString(currentQuestionRecord.placeholder),
+        }
+        : null,
+    },
+  };
+}
+
 function normalizeSageToolPolicy(payload: unknown): SageToolPolicyRecord[] {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   const tools = Array.isArray(record.tools) ? record.tools : [];
@@ -2283,6 +2369,10 @@ export function WorkstationChatPane() {
       updatedAt: null,
     }],
   );
+  const [profileSnapshot, setProfileSnapshot] = useState<SageProfileSnapshot>(
+    () => services.queryClient.peek<SageProfileSnapshot>(SAGE_PROFILE_QUERY_KEY) ?? defaultSageProfileSnapshot(),
+  );
+  const [bootstrapAnswer, setBootstrapAnswer] = useState('');
   const [memorySnapshot, setMemorySnapshot] = useState<SageMemorySnapshot>(
     () => services.queryClient.peek<SageMemorySnapshot>(SAGE_MEMORY_QUERY_KEY) ?? normalizeSageMemorySnapshot(null),
   );
@@ -2291,6 +2381,7 @@ export function WorkstationChatPane() {
   const [titlebarActionsHost, setTitlebarActionsHost] = useState<HTMLElement | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [isSubmittingBootstrap, setIsSubmittingBootstrap] = useState(false);
   const [hasEnteredConversationFlow, setHasEnteredConversationFlow] = useState(false);
   const [smallModelWarningVisible, setSmallModelWarningVisible] = useState(false);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
@@ -2531,6 +2622,11 @@ export function WorkstationChatPane() {
     setMemorySnapshot(nextSnapshot);
   };
 
+  const writeProfileSnapshot = (nextSnapshot: SageProfileSnapshot) => {
+    services.queryClient.set(SAGE_PROFILE_QUERY_KEY, nextSnapshot);
+    setProfileSnapshot(nextSnapshot);
+  };
+
   const writeRecentThreads = (items: RecentThreadSummary[]) => {
     services.queryClient.set(RECENT_THREADS_QUERY_KEY, items);
     setRecentThreads(items);
@@ -2647,13 +2743,51 @@ export function WorkstationChatPane() {
     return nextSnapshot;
   };
 
+  const loadProfile = async () => {
+    const cachedProfile = services.queryClient.peek<SageProfileSnapshot>(SAGE_PROFILE_QUERY_KEY) ?? profileSnapshot;
+    const payload = await services.queryClient.run('chat:canonical:sage-profile', async () =>
+      services.client.getSageProfile().catch((error) => {
+        if (isTransientBackgroundReadError(error)) {
+          return null;
+        }
+        throw error;
+      }),
+    );
+    const nextProfile = payload === null
+      ? cachedProfile
+      : normalizeSageProfileSnapshot(payload);
+    writeProfileSnapshot(nextProfile);
+    return nextProfile;
+  };
+
   const refreshCanonicalState = async (requestedThreadId = activeThreadId) => {
     const [nextThread] = await Promise.all([
       loadThread(requestedThreadId),
       loadOverview(),
       loadMemory(),
+      loadProfile(),
     ]);
     return nextThread;
+  };
+
+  const submitBootstrapResponse = async () => {
+    const answer = bootstrapAnswer.trim();
+    if (!answer || isSubmittingBootstrap) {
+      return;
+    }
+    setIsSubmittingBootstrap(true);
+    setStatusMessage(null);
+    try {
+      const payload = await services.client.answerSageProfileBootstrap({ answer });
+      const nextProfile = normalizeSageProfileSnapshot(payload);
+      writeProfileSnapshot(nextProfile);
+      setBootstrapAnswer('');
+      setStatusMessage(nextProfile.bootstrap.complete ? 'Sage is ready.' : null);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Could not save the setup answer.');
+    } finally {
+      setIsSubmittingBootstrap(false);
+    }
   };
 
   const handleResolveApproval = async (approvalId: string, resolution: 'approved' | 'rejected') => {
@@ -3071,6 +3205,9 @@ export function WorkstationChatPane() {
     || Boolean(liveTrace);
   const showConversationContext = hasConversationContent || hasEnteredConversationFlow;
   const showFirstImpression = !showConversationContext;
+  const bootstrapQuestion = profileSnapshot.bootstrap.current_question;
+  const bootstrapComplete = profileSnapshot.bootstrap.complete;
+  const showBootstrapCard = !bootstrapComplete;
   const showBlankTranscript = !isLoading
     && visibleTranscriptCells.length === 0
     && !liveTrace;
@@ -3652,6 +3789,10 @@ export function WorkstationChatPane() {
   }, [isSending, stopStreamingResponse]);
 
   const sendMessage = async () => {
+    if (!bootstrapComplete) {
+      setStatusMessage(bootstrapQuestion?.prompt || 'Finish the Sage setup first.');
+      return;
+    }
     const outboundMessage = draft.trim();
     if (!outboundMessage || isSending || submitInFlightRef.current) {
       return;
@@ -4288,6 +4429,47 @@ export function WorkstationChatPane() {
           ) : null}
           <ScrollRegion className="app-chat-thread__scroll">
             <div className="app-chat-thread__body">
+              {showBootstrapCard ? (
+                <AppNotice tone="warning" className="app-chat-status-notice">
+                  <div className="app-chat-status-notice__copy">
+                    <strong>Set up Sage</strong>
+                    <span>
+                      {bootstrapQuestion?.prompt || 'Add your identity workspace so Sage can carry the right context into future turns.'}
+                    </span>
+                    <span>
+                      {`Progress ${profileSnapshot.bootstrap.progress_label}. Structured profile is the runtime authority; USER.md, IDENTITY.md, SOUL.md, and HEARTBEAT.md stay as projections.`}
+                    </span>
+                  </div>
+                  <form
+                    className="app-stack-2"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void submitBootstrapResponse();
+                    }}
+                  >
+                    <FormField label="Answer">
+                      <FormInput
+                        value={bootstrapAnswer}
+                        onChange={(event) => {
+                          setBootstrapAnswer(event.currentTarget.value);
+                        }}
+                        placeholder={bootstrapQuestion?.placeholder || 'Add the next answer for Sage'}
+                        disabled={isSubmittingBootstrap}
+                      />
+                    </FormField>
+                    <div className="app-chat-status-notice__actions">
+                      <AppButton
+                        type="submit"
+                        tone="primary"
+                        disabled={isSubmittingBootstrap || !bootstrapAnswer.trim()}
+                      >
+                        {isSubmittingBootstrap ? 'Saving…' : 'Save and continue'}
+                      </AppButton>
+                    </div>
+                  </form>
+                </AppNotice>
+              ) : null}
+
               {showBlankTranscript ? (
                 <div className={`app-chat-empty-state${recentRunRows.length > 0 ? ' app-chat-empty-state--recent' : ''}`}>
                   {recentRunRows.length > 0 ? (
@@ -4464,8 +4646,8 @@ export function WorkstationChatPane() {
         contextWindowLabel={contextWindowLabel}
         busy={isSending}
         controlsDisabled={isPersistingModelSelection}
-        sendDisabled={false}
-        placeholder="Message Sage..."
+        sendDisabled={!bootstrapComplete}
+        placeholder={bootstrapComplete ? 'Message Sage...' : 'Finish Sage setup to start chatting...'}
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{
           label: activeProviderSummary.label,

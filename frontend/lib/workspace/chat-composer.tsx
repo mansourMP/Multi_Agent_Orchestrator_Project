@@ -158,7 +158,7 @@ export function ChatComposer({
   const [runtimePickerOpen, setRuntimePickerOpen] = useState(false);
   const [toolPaletteOpen, setToolPaletteOpen] = useState(false);
   const hasDraft = draft.trim().length > 0;
-  const canSend = !busy && hasDraft;
+  const canSend = !busy && !sendDisabled && hasDraft;
   const canStop = busy && typeof onStop === 'function';
   const showSendButton = busy || hasDraft;
   const selectedModelLabel = composerOptionLabel(modelOptions, model);
@@ -244,6 +244,7 @@ export function ChatComposer({
           rows={1}
           placeholder={placeholder}
           className="app-textarea app-chat-composer__textarea"
+          disabled={sendDisabled && !busy}
         />
 
         {smallModelWarning ? (

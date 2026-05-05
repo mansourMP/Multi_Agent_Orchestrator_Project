@@ -1,5 +1,5 @@
-import { notFound } from 'next/navigation';
+import { redirectToWorkspaceSettings } from '@/app/(account)/settings/resolve-settings-route';
 
-export default function AccountSettingsPage() {
-  notFound();
+export default async function AccountSettingsPage() {
+  await redirectToWorkspaceSettings('account');
 }

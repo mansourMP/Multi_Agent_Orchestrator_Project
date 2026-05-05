@@ -14,7 +14,7 @@ test.describe('account shell and bootstrap resilience', () => {
     });
 
     await page.goto('/login');
-    await expect(page.getByRole('button', { name: /log in/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^continue$/i })).toBeVisible();
   });
 
   test('requested onboarding workspace fails closed when it is unavailable', async ({ page }) => {
@@ -47,5 +47,18 @@ test.describe('account shell and bootstrap resilience', () => {
 
     await page.goto('/w/ws-1');
     await expect(page).not.toHaveURL(/\/w\/ws-1\/admin$/);
+  });
+
+  test('global account and device settings routes resolve into workspace settings sections', async ({ page }) => {
+    await loginAsOwner(page);
+
+    await page.goto('/settings/account');
+    await expect(page).toHaveURL(/\/w\/ws-1\/settings\?section=account$/);
+    await expect(page.getByRole('heading', { name: /^account$/i })).toBeVisible();
+    await expect(page.getByText(/current account/i)).toBeVisible();
+
+    await page.goto('/settings/devices');
+    await expect(page).toHaveURL(/\/w\/ws-1\/settings\?section=devices$/);
+    await expect(page.getByRole('heading', { name: /^devices$/i })).toBeVisible();
   });
 });

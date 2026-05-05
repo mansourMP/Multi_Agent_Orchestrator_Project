@@ -41,6 +41,15 @@ function authErrorCopy(error: string): string {
   return 'Authentication could not finish. Try again when ready.';
 }
 
+function AuthErrorNotice({ title, message }: { title: string; message: string }) {
+  return (
+    <div role="alert" className="app-auth-error">
+      <strong>{title}</strong>
+      <span>{authErrorCopy(message)}</span>
+    </div>
+  );
+}
+
 function LoginPageContent() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
@@ -145,21 +154,21 @@ function LoginPageContent() {
           <div className="app-auth-hero__copy">
             <h1 className="app-auth-hero__title">One account. One clean control surface.</h1>
             <p className="app-auth-hero__body">
-              Use Google or email to open Sage, your connected apps, and your private assistants without setup noise.
+              Open Sage, your AI model path, connected apps, and private assistants from one serious surface without setup noise.
             </p>
           </div>
           <div className="app-auth-hero__rail">
             <div className="app-auth-hero__point">
-              <strong>Google</strong>
-              <span>Fastest path for launch.</span>
+              <strong>Chat immediately</strong>
+              <span>Production login flows land directly in Sage.</span>
             </div>
             <div className="app-auth-hero__point">
-              <strong>Email</strong>
-              <span>Fallback that always stays available.</span>
+              <strong>Private by default</strong>
+              <span>Your assistants, settings, and connected apps stay under one account.</span>
             </div>
             <div className="app-auth-hero__point">
-              <strong>Apple</strong>
-              <span>Reserved for the next auth pass, not faked today.</span>
+              <strong>Connected when ready</strong>
+              <span>Bring in Google, messaging, and your computer only when you actually need them.</span>
             </div>
           </div>
         </section>
@@ -167,7 +176,11 @@ function LoginPageContent() {
           <div className="app-auth-header">
             <span className="app-auth-kicker">Welcome back</span>
             <h2 className="app-auth-title">Log in</h2>
-            <p className="app-auth-subtitle">Use Google, Apple, or your Empyralis email account.</p>
+            <p className="app-auth-subtitle">Use the fastest live sign-in path now, then manage everything from inside Empyralis.</p>
+            <div className="app-auth-trust-strip">
+              <span className="app-auth-trust-strip__item">Direct to Sage</span>
+              <span className="app-auth-trust-strip__item">One private account</span>
+            </div>
           </div>
           <div className="app-auth-provider-stack">
             <div className="app-auth-social-grid">
@@ -179,7 +192,10 @@ function LoginPageContent() {
                 disabled={submitting || !isHydrated || providers.google?.enabled !== true}
               >
                 <GoogleProviderIcon className="app-auth-provider-mark" />
-                <span>Continue with Google</span>
+                <span className="app-auth-social__content">
+                  <span className="app-auth-social__title">Continue with Google</span>
+                  <span className="app-auth-social__meta">Live now · fastest launch path</span>
+                </span>
               </AppButton>
               <AppButton
                 type="button"
@@ -190,11 +206,14 @@ function LoginPageContent() {
                 title="Apple sign-in is not enabled on the web app yet."
               >
                 <AppleProviderIcon className="app-auth-provider-mark app-auth-provider-mark--apple" />
-                <span>Apple soon</span>
+                <span className="app-auth-social__content">
+                  <span className="app-auth-social__title">Apple</span>
+                  <span className="app-auth-social__meta">Coming soon on web</span>
+                </span>
               </AppButton>
             </div>
             {providers.google?.enabled !== true ? (
-              <p className="app-auth-provider-note">Google sign-in is unavailable here right now. Use email below.</p>
+              <p className="app-auth-provider-note">Google sign-in is unavailable in this environment right now. Use email below and finish setup from inside Sage.</p>
             ) : null}
             <div className="app-auth-divider">
               <span aria-hidden="true" />
@@ -232,7 +251,7 @@ function LoginPageContent() {
               />
             </span>
           </label>
-          {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
+          {error ? <AuthErrorNotice title="Couldn’t sign in" message={error} /> : null}
           <AppButton type="submit" disabled={submitting || !isHydrated} className="app-auth-submit">
             <span>{submitting ? 'Signing in…' : 'Continue'}</span>
             <ArrowRight size={16} aria-hidden="true" />

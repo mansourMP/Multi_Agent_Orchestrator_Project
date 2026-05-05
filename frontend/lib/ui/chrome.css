@@ -1248,7 +1248,7 @@ textarea {
 
 .app-auth-header {
   display: grid;
-  gap: var(--app-space-2);
+  gap: var(--app-space-3);
 }
 
 .app-auth-kicker {
@@ -1271,7 +1271,28 @@ textarea {
   margin: 0;
   color: rgba(214, 219, 229, 0.72);
   font-size: var(--app-font-13);
-  line-height: 1.5;
+  line-height: 1.65;
+  max-width: 42ch;
+}
+
+.app-auth-trust-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-2);
+}
+
+.app-auth-trust-strip__item {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(137, 168, 225, 0.14);
+  border-radius: var(--app-radius-pill);
+  display: inline-flex;
+  align-items: center;
+  background: rgba(28, 33, 42, 0.74);
+  color: rgba(223, 230, 243, 0.74);
+  font-size: 11px;
+  font-weight: var(--app-weight-medium);
+  letter-spacing: 0.02em;
 }
 
 .app-first-launch__copy {
@@ -1320,8 +1341,9 @@ textarea {
 
 .app-auth-social {
   min-height: 50px;
-  justify-content: center;
+  justify-content: flex-start;
   gap: var(--app-space-2);
+  padding: 0 16px;
   border-radius: calc(var(--app-radius-lg) + 2px);
   background:
     linear-gradient(180deg, rgba(39, 42, 50, 0.96) 0%, rgba(31, 33, 39, 0.96) 100%);
@@ -1341,6 +1363,26 @@ textarea {
   flex: 0 0 18px;
 }
 
+.app-auth-social__content {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.app-auth-social__title {
+  color: var(--app-text-primary);
+  font-size: var(--app-font-13);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.2;
+}
+
+.app-auth-social__meta {
+  color: rgba(203, 209, 220, 0.58);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .app-auth-provider-mark--apple {
   color: var(--app-text-primary);
 }
@@ -1351,7 +1393,7 @@ textarea {
 
 .app-auth-provider-note {
   margin: 0;
-  color: rgba(203, 209, 220, 0.58);
+  color: rgba(203, 209, 220, 0.66);
   font-size: var(--app-font-12);
   line-height: 1.5;
 }
@@ -1466,13 +1508,25 @@ textarea {
 }
 
 .app-auth-error {
-  padding: var(--app-space-3);
-  border: 1px solid var(--app-danger);
-  border-radius: var(--app-radius-md);
-  background: var(--app-danger-muted);
-  color: var(--app-danger);
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid rgba(220, 110, 110, 0.36);
+  border-radius: calc(var(--app-radius-md) + 2px);
+  background: linear-gradient(180deg, rgba(73, 30, 32, 0.58) 0%, rgba(55, 24, 28, 0.7) 100%);
+  color: #ffd6d6;
   font-size: var(--app-font-12);
-  line-height: 1.5;
+  line-height: 1.55;
+}
+
+.app-auth-error strong {
+  color: #fff0f0;
+  font-size: 12px;
+  font-weight: var(--app-weight-semibold);
+}
+
+.app-auth-error span {
+  color: rgba(255, 220, 220, 0.88);
 }
 
 .app-auth-footer {

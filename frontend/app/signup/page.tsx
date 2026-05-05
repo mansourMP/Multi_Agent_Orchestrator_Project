@@ -43,6 +43,15 @@ function authErrorCopy(error: string): string {
   return 'Authentication could not finish. Try again when ready.';
 }
 
+function AuthErrorNotice({ title, message }: { title: string; message: string }) {
+  return (
+    <div role="alert" className="app-auth-error">
+      <strong>{title}</strong>
+      <span>{authErrorCopy(message)}</span>
+    </div>
+  );
+}
+
 export default function SignupPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -150,21 +159,21 @@ export default function SignupPage() {
           <div className="app-auth-hero__copy">
             <h1 className="app-auth-hero__title">Start simple, then expand into connected work.</h1>
             <p className="app-auth-hero__body">
-              Create one account for Sage, Build, Discover, and your connected apps. Keep the surface clean from day one.
+              Create one account for Sage, Build, Discover, and your connected apps. Start with a clean core, then add power on your terms.
             </p>
           </div>
           <div className="app-auth-hero__rail">
             <div className="app-auth-hero__point">
               <strong>Chat first</strong>
-              <span>Fresh accounts land directly in Sage.</span>
+              <span>Fresh accounts land directly in Sage instead of a setup maze.</span>
             </div>
             <div className="app-auth-hero__point">
               <strong>Cheap default AI</strong>
-              <span>Empyralis credits stay the normal path.</span>
+              <span>Empyralis credits stay the normal launch path without forcing API keys.</span>
             </div>
             <div className="app-auth-hero__point">
               <strong>Connected apps later</strong>
-              <span>Add Google, Telegram, or your computer when ready.</span>
+              <span>Add Google, Telegram, or your computer when the workflow actually calls for it.</span>
             </div>
           </div>
         </section>
@@ -174,9 +183,13 @@ export default function SignupPage() {
             <h2 className="app-auth-title">Sign up</h2>
             <p className="app-auth-subtitle">
               {channelAttribution
-                ? 'Create an Empyralis account to continue from Telegram.'
-                : 'Use Google, Apple, or your Empyralis email account.'}
+                ? 'Create an Empyralis account to continue from Telegram, then finish inside Sage.'
+                : 'Choose the live sign-in path you want now. You can connect the rest later from inside Empyralis.'}
             </p>
+            <div className="app-auth-trust-strip">
+              <span className="app-auth-trust-strip__item">Private workspace</span>
+              <span className="app-auth-trust-strip__item">Credits-first launch</span>
+            </div>
           </div>
           <div className="app-auth-provider-stack">
             <div className="app-auth-social-grid">
@@ -188,7 +201,10 @@ export default function SignupPage() {
                 disabled={submitting || !isHydrated || providers.google?.enabled !== true}
               >
                 <GoogleProviderIcon className="app-auth-provider-mark" />
-                <span>Continue with Google</span>
+                <span className="app-auth-social__content">
+                  <span className="app-auth-social__title">Continue with Google</span>
+                  <span className="app-auth-social__meta">Live now · quickest account start</span>
+                </span>
               </AppButton>
               <AppButton
                 type="button"
@@ -199,11 +215,14 @@ export default function SignupPage() {
                 title="Apple sign-in is not enabled on the web app yet."
               >
                 <AppleProviderIcon className="app-auth-provider-mark app-auth-provider-mark--apple" />
-                <span>Apple soon</span>
+                <span className="app-auth-social__content">
+                  <span className="app-auth-social__title">Apple</span>
+                  <span className="app-auth-social__meta">Coming soon on web</span>
+                </span>
               </AppButton>
             </div>
             {providers.google?.enabled !== true ? (
-              <p className="app-auth-provider-note">Google sign-up is unavailable here right now. Use email below.</p>
+              <p className="app-auth-provider-note">Google sign-up is unavailable in this environment right now. Use email below and connect other sign-in methods later.</p>
             ) : null}
             <div className="app-auth-divider">
               <span aria-hidden="true" />
@@ -255,7 +274,7 @@ export default function SignupPage() {
               />
             </span>
           </label>
-          {error ? <p role="alert" className="app-auth-error">{authErrorCopy(error)}</p> : null}
+          {error ? <AuthErrorNotice title="Couldn’t create the account" message={error} /> : null}
           <AppButton type="submit" disabled={submitting || !isHydrated} className="app-auth-submit">
             <span>{submitting ? 'Creating account…' : 'Create account'}</span>
             <ArrowRight size={16} aria-hidden="true" />

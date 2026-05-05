@@ -7182,6 +7182,45 @@ textarea {
   gap: 0;
 }
 
+.app-filter-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid color-mix(in srgb, var(--app-border-muted) 62%, transparent 38%);
+}
+
+.app-filter-pill {
+  min-height: 34px;
+  padding: 0 var(--space-sm);
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 76%, transparent 24%);
+  border-radius: var(--app-radius-pill);
+  background: color-mix(in srgb, var(--app-bg-panel) 74%, transparent 26%);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: var(--app-weight-semibold);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    border-color var(--transition),
+    color var(--transition),
+    transform var(--transition);
+}
+
+.app-filter-pill:hover,
+.app-filter-pill:focus-visible {
+  border-color: color-mix(in srgb, var(--app-border-subtle) 86%, transparent 14%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 70%, var(--app-bg-panel) 30%);
+  color: var(--text-primary);
+}
+
+.app-filter-pill--active {
+  border-color: color-mix(in srgb, var(--app-accent) 28%, var(--app-border-subtle) 72%);
+  background: color-mix(in srgb, var(--app-accent-soft) 36%, var(--app-bg-panel) 64%);
+  color: var(--text-primary);
+}
+
 .app-runs-minimal-group {
   display: grid;
   gap: 4px;

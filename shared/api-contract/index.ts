@@ -16,6 +16,20 @@ export type AgentTurnPolicyContext = {
   session_mode?: 'copilot' | 'agent';
   approval_ui?: 'card';
   interactive_approvals?: boolean;
+  runtime_trust_zone?: 'shared_cloud' | 'user_owned_local' | 'owned_dedicated_runtime';
+  elevated_mode?: 'off' | 'ask' | 'full';
+  elevated?: {
+    mode?: 'off' | 'ask' | 'full';
+    runtime_trust_zone?: 'shared_cloud' | 'user_owned_local' | 'owned_dedicated_runtime';
+    granted_at?: string;
+    expires_at?: string;
+    ttl_seconds?: number;
+    task_id?: string;
+    granted_by?: string;
+    reason?: string;
+    allowed_action_classes?: string[];
+    denied_action_classes?: string[];
+  } | string;
   [key: string]: unknown;
 };
 

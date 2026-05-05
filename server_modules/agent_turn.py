@@ -298,6 +298,37 @@ def normalize_turn_policy_context(
 ) -> Dict[str, Any]:
     normalized = _metadata_dict(policy_context)
     if "session_mode" not in normalized:
+        if "runtime_trust_zone" in normalized or "elevated_mode" in normalized or "elevated" in normalized:
+            from server_modules import runtime_policy as runtime_policy_module
+
+            execution_target = str(normalized.get("execution_target") or "").strip()
+            normalized["runtime_trust_zone"] = runtime_policy_module.normalize_runtime_trust_zone(
+                normalized.get("runtime_trust_zone"),
+                target=execution_target,
+            )
+            if "elevated_mode" in normalized:
+                normalized["elevated_mode"] = runtime_policy_module.normalize_elevated_mode(
+                    normalized.get("elevated_mode"),
+                    default=runtime_policy_module.ELEVATED_MODE_ASK,
+                )
+            if "elevated" in normalized:
+                raw_elevated = normalized.get("elevated")
+                if isinstance(raw_elevated, str):
+                    normalized["elevated"] = runtime_policy_module.normalize_elevated_mode(
+                        raw_elevated,
+                        default=runtime_policy_module.ELEVATED_MODE_ASK,
+                    )
+                elif isinstance(raw_elevated, dict):
+                    next_elevated = dict(raw_elevated)
+                    next_elevated["mode"] = runtime_policy_module.normalize_elevated_mode(
+                        next_elevated.get("mode"),
+                        default=runtime_policy_module.ELEVATED_MODE_ASK,
+                    )
+                    next_elevated["runtime_trust_zone"] = runtime_policy_module.normalize_runtime_trust_zone(
+                        next_elevated.get("runtime_trust_zone") or normalized.get("runtime_trust_zone"),
+                        target=execution_target,
+                    )
+                    normalized["elevated"] = next_elevated
         return {key: value for key, value in normalized.items() if value not in (None, "", [], {})}
 
     requested_session_mode = normalize_session_mode(normalized.get("session_mode"))
@@ -345,6 +376,52 @@ def normalize_turn_policy_context(
         effective_trust_mode = "guarded"
     else:
         effective_trust_mode = requested_trust_mode or None
+
+    from server_modules import runtime_policy as runtime_policy_module
+
+    requested_execution_target = str(normalized.get("execution_target") or "").strip()
+    normalized_target = runtime_policy_module.normalize_execution_target(requested_execution_target)
+    machine_trust_declaration = str(normalized.get("machine_trust_declaration") or "").strip().lower()
+    if (
+        effective_session_mode == "agent"
+        and machine_trust_declaration == "agent"
+        and normalized_target == runtime_policy_module.EXECUTION_TARGET_LOCAL_COMPANION
+    ):
+        normalized_runtime_trust_zone = runtime_policy_module.RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME
+    else:
+        normalized_runtime_trust_zone = runtime_policy_module.normalize_runtime_trust_zone(
+            normalized.get("runtime_trust_zone"),
+            target=normalized_target,
+        )
+        if (
+            effective_session_mode != "agent"
+            and normalized_runtime_trust_zone == runtime_policy_module.RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME
+        ):
+            normalized_runtime_trust_zone = runtime_policy_module.normalize_runtime_trust_zone(
+                None,
+                target=normalized_target,
+            )
+
+    raw_elevated = normalized.get("elevated")
+    elevated_mode = runtime_policy_module.normalize_elevated_mode(
+        normalized.get("elevated_mode")
+        or (raw_elevated.get("mode") if isinstance(raw_elevated, dict) else raw_elevated),
+        default=runtime_policy_module.ELEVATED_MODE_ASK,
+    )
+    if effective_session_mode != "agent":
+        elevated_mode = runtime_policy_module.ELEVATED_MODE_ASK
+    normalized["runtime_trust_zone"] = normalized_runtime_trust_zone
+    normalized["elevated_mode"] = elevated_mode
+    if isinstance(raw_elevated, dict):
+        next_elevated = dict(raw_elevated)
+        next_elevated["mode"] = elevated_mode
+        next_elevated["runtime_trust_zone"] = normalized_runtime_trust_zone
+        normalized["elevated"] = next_elevated
+    elif isinstance(raw_elevated, str):
+        normalized["elevated"] = {
+            "mode": elevated_mode,
+            "runtime_trust_zone": normalized_runtime_trust_zone,
+        }
 
     normalized["requested_session_mode"] = requested_session_mode
     normalized["session_mode"] = effective_session_mode

@@ -45,7 +45,7 @@ class RuntimePolicyModeTests(unittest.TestCase):
             runtime_policy.ACTION_TYPE_EXTERNAL_SEND,
         )
 
-    def test_trusted_full_access_allows_send_but_confirms_publish(self):
+    def test_trusted_full_access_still_confirms_external_send_and_publish(self):
         send_eval = runtime_policy.evaluate_action_policy(
             {"send_message": 1},
             runtime_policy.POLICY_MODE_TRUSTED_FULL_ACCESS,
@@ -59,8 +59,8 @@ class RuntimePolicyModeTests(unittest.TestCase):
             "local_companion",
         )
 
-        self.assertFalse(send_eval.get("requires_confirmation"))
-        self.assertEqual(send_eval.get("denied_actions"), [])
+        self.assertTrue(send_eval.get("requires_confirmation"))
+        self.assertEqual(send_eval.get("confirmation_required_actions"), ["send_message"])
         self.assertEqual(publish_eval.get("confirmation_required_actions"), ["publish_content"])
         self.assertTrue(publish_eval.get("requires_confirmation"))
 

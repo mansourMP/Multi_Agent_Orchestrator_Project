@@ -221,31 +221,17 @@ def requires_human_approval(context: Dict[str, Any], plan_text: str) -> tuple[bo
     if agent_machine_full_trust_enabled(str(metadata.get("owner_user_id") or "").strip()):
         return False, ""
     trust_mode = normalize_trust_mode(metadata.get("trust_mode"))
-    if trust_mode == TRUST_MODE_AUTO:
-        return False, ""
-    if trust_mode == TRUST_MODE_STRICT:
-        return True, "Strict mode requires explicit approval before execution."
-
-    raw = " ".join(
-        [
-            str(context.get("user_goal") or ""),
-            str(context.get("business_plan") or ""),
-            str(plan_text or ""),
-        ]
-    ).lower()
-
-    matched = [kw for kw in RISKY_ACTION_KEYWORDS if kw in raw]
-    if trust_mode == TRUST_MODE_SENSITIVE_GUARD:
-        if matched:
-            return True, f"Sensitive Guard detected sensitive actions ({', '.join(sorted(set(matched))[:4])})."
-        return False, ""
-    if trust_mode == TRUST_MODE_COST_GUARD:
-        if len(matched) >= 2:
-            return True, f"Cost Guard detected multiple potentially expensive actions ({', '.join(sorted(set(matched))[:4])})."
-        return False, ""
-    if matched:
-        return True, f"Potentially risky actions detected ({', '.join(sorted(set(matched))[:4])})."
-    return False, ""
+    return plan_requires_human_approval(
+        trust_mode,
+        metadata,
+        context_text=" ".join(
+            [
+                str(context.get("user_goal") or ""),
+                str(context.get("business_plan") or ""),
+                str(plan_text or ""),
+            ]
+        ),
+    )
 
 
 def wait_for_human_response(

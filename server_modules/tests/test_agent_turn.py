@@ -709,7 +709,13 @@ class AgentTurnTests(unittest.TestCase):
     def test_normalize_turn_policy_context_downgrades_non_owner_agent_mode_and_logs(self):
         with self.assertLogs("server_modules.agent_turn", level="WARNING") as captured:
             normalized = normalize_turn_policy_context(
-                {"session_mode": "agent", "trust_mode": "auto"},
+                {
+                    "session_mode": "agent",
+                    "trust_mode": "auto",
+                    "execution_target": "local_companion",
+                    "runtime_trust_zone": "owned_dedicated_runtime",
+                    "elevated_mode": "full",
+                },
                 current_user={"user_id": "user-2", "role": "member", "is_admin": False},
                 workspace_id="workspace-1",
                 session_id="thread-1",
@@ -719,6 +725,8 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(normalized["session_mode"], "copilot")
         self.assertEqual(normalized["effective_session_mode"], "copilot")
         self.assertEqual(normalized["trust_mode"], "guarded")
+        self.assertEqual(normalized["runtime_trust_zone"], "user_owned_local")
+        self.assertEqual(normalized["elevated_mode"], "ask")
         self.assertTrue(normalized["interactive_approvals"])
         self.assertTrue(normalized["session_mode_downgraded"])
         self.assertIn("Downgraded requested agent session mode to copilot.", captured.output[0])
@@ -726,7 +734,13 @@ class AgentTurnTests(unittest.TestCase):
     def test_normalize_turn_policy_context_allows_owner_agent_mode(self):
         with patch("server_modules.runtime_config.agent_machine_full_trust_enabled", return_value=True):
             normalized = normalize_turn_policy_context(
-                {"session_mode": "agent", "trust_mode": "guarded"},
+                {
+                    "session_mode": "agent",
+                    "trust_mode": "guarded",
+                    "execution_target": "local_companion",
+                    "machine_trust_declaration": "agent",
+                    "elevated_mode": "full",
+                },
                 current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
                 workspace_id="workspace-1",
                 session_id="thread-1",
@@ -735,6 +749,8 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(normalized["session_mode"], "agent")
         self.assertEqual(normalized["effective_session_mode"], "agent")
         self.assertEqual(normalized["trust_mode"], "auto")
+        self.assertEqual(normalized["runtime_trust_zone"], "owned_dedicated_runtime")
+        self.assertEqual(normalized["elevated_mode"], "full")
         self.assertFalse(normalized["interactive_approvals"])
 
     def test_normalize_turn_policy_context_downgrades_owner_when_full_trust_is_disabled(self):

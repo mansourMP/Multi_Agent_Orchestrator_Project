@@ -4414,6 +4414,15 @@ def build_turn_seed_from_request(
         policy_trust_mode = _hint_text(policy_context.get("trust_mode"))
         if policy_trust_mode and not _hint_text(metadata.get("trust_mode")):
             metadata["trust_mode"] = policy_trust_mode
+        runtime_trust_zone = _hint_text(policy_context.get("runtime_trust_zone"))
+        if runtime_trust_zone and not _hint_text(metadata.get("runtime_trust_zone")):
+            metadata["runtime_trust_zone"] = runtime_trust_zone
+        elevated_mode = _hint_text(policy_context.get("elevated_mode"))
+        if elevated_mode and not _hint_text(metadata.get("elevated_mode")):
+            metadata["elevated_mode"] = elevated_mode
+        elevated = policy_context.get("elevated")
+        if "elevated" not in metadata and isinstance(elevated, (dict, str)):
+            metadata["elevated"] = elevated
         if "interactive_approvals" not in metadata and isinstance(policy_context.get("interactive_approvals"), bool):
             metadata["interactive_approvals"] = bool(policy_context.get("interactive_approvals"))
     if turn_request.machine_target and not _hint_text(metadata.get("machine_target")):
@@ -4751,6 +4760,8 @@ def prepare_run_start_request(
         raise HTTPException(status_code=400, detail=f"Unsupported outcome pack '{outcome_pack}'")
 
     if engine == "orion":
+        from server_modules import runtime_policy as runtime_policy_module
+
         raw_trust_mode = str(metadata.get("trust_mode") or "").strip().lower()
         normalized_trust_mode = services.normalize_trust_mode(raw_trust_mode)
         if (
@@ -4783,6 +4794,42 @@ def prepare_run_start_request(
                     detail="Unsupported execution_target. Use one of: auto, cloud, local_companion.",
                 )
             metadata["execution_target"] = normalized_target
+        metadata["runtime_trust_zone"] = runtime_policy_module.normalize_runtime_trust_zone(
+            metadata.get("runtime_trust_zone"),
+            target=metadata.get("execution_target"),
+        )
+        if "elevated_mode" in metadata:
+            metadata["elevated_mode"] = runtime_policy_module.normalize_elevated_mode(metadata.get("elevated_mode"))
+        if "elevated" in metadata:
+            raw_elevated = metadata.get("elevated")
+            if isinstance(raw_elevated, str):
+                metadata["elevated"] = {
+                    "mode": runtime_policy_module.normalize_elevated_mode(raw_elevated),
+                    "runtime_trust_zone": metadata.get("runtime_trust_zone"),
+                }
+            elif isinstance(raw_elevated, dict):
+                normalized_elevated = dict(raw_elevated)
+                normalized_elevated["mode"] = runtime_policy_module.normalize_elevated_mode(
+                    normalized_elevated.get("mode") or metadata.get("elevated_mode")
+                )
+                normalized_elevated["runtime_trust_zone"] = runtime_policy_module.normalize_runtime_trust_zone(
+                    normalized_elevated.get("runtime_trust_zone") or metadata.get("runtime_trust_zone"),
+                    target=metadata.get("execution_target"),
+                )
+                for field_name in ("allowed_action_classes", "denied_action_classes"):
+                    if field_name in normalized_elevated and not isinstance(normalized_elevated.get(field_name), list):
+                        raise HTTPException(status_code=400, detail=f"metadata.elevated.{field_name} must be a list.")
+                    normalized_elevated[field_name] = runtime_policy_module.normalize_action_type_list(
+                        normalized_elevated.get(field_name) or []
+                    )
+                if "ttl_seconds" in normalized_elevated:
+                    try:
+                        normalized_elevated["ttl_seconds"] = max(0, int(normalized_elevated.get("ttl_seconds")))
+                    except Exception as exc:
+                        raise HTTPException(status_code=400, detail="metadata.elevated.ttl_seconds must be an integer.") from exc
+                metadata["elevated"] = normalized_elevated
+            else:
+                raise HTTPException(status_code=400, detail="metadata.elevated must be a string or object.")
 
     if normalized_max_iterations is not None:
         metadata["max_iterations"] = normalized_max_iterations

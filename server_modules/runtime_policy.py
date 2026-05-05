@@ -430,6 +430,109 @@ VALID_EXECUTION_TARGETS = {
     EXECUTION_TARGET_LOCAL_COMPANION,
 }
 
+RUNTIME_TRUST_ZONE_SHARED_CLOUD = "shared_cloud"
+RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL = "user_owned_local"
+RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME = "owned_dedicated_runtime"
+RUNTIME_TRUST_ZONE_ALIASES = {
+    "cloud": RUNTIME_TRUST_ZONE_SHARED_CLOUD,
+    "shared_cloud": RUNTIME_TRUST_ZONE_SHARED_CLOUD,
+    "hosted": RUNTIME_TRUST_ZONE_SHARED_CLOUD,
+    "user_local": RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL,
+    "user_owned_local": RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL,
+    "local": RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL,
+    "paired_device": RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL,
+    "dedicated": RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME,
+    "owned": RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME,
+    "owned_dedicated_runtime": RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME,
+    "agent_machine": RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME,
+}
+VALID_RUNTIME_TRUST_ZONES = {
+    RUNTIME_TRUST_ZONE_SHARED_CLOUD,
+    RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL,
+    RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME,
+}
+
+ELEVATED_MODE_OFF = "off"
+ELEVATED_MODE_ASK = "ask"
+ELEVATED_MODE_FULL = "full"
+ELEVATED_MODE_ALIASES = {
+    "off": ELEVATED_MODE_OFF,
+    "disabled": ELEVATED_MODE_OFF,
+    "none": ELEVATED_MODE_OFF,
+    "ask": ELEVATED_MODE_ASK,
+    "default": ELEVATED_MODE_ASK,
+    "guarded": ELEVATED_MODE_ASK,
+    "manual": ELEVATED_MODE_ASK,
+    "full": ELEVATED_MODE_FULL,
+    "trusted": ELEVATED_MODE_FULL,
+    "full_access": ELEVATED_MODE_FULL,
+    "elevated": ELEVATED_MODE_FULL,
+}
+VALID_ELEVATED_MODES = {
+    ELEVATED_MODE_OFF,
+    ELEVATED_MODE_ASK,
+    ELEVATED_MODE_FULL,
+}
+
+ACTION_TYPE_ALIASES = {
+    ACTION_TYPE_READ: ACTION_TYPE_READ,
+    "safe_read": ACTION_TYPE_READ,
+    ACTION_TYPE_DRAFT: ACTION_TYPE_DRAFT,
+    ACTION_TYPE_REVERSIBLE_WRITE: ACTION_TYPE_REVERSIBLE_WRITE,
+    "write": ACTION_TYPE_REVERSIBLE_WRITE,
+    "internal_write": ACTION_TYPE_REVERSIBLE_WRITE,
+    ACTION_TYPE_EXTERNAL_SEND: ACTION_TYPE_EXTERNAL_SEND,
+    "send": ACTION_TYPE_EXTERNAL_SEND,
+    ACTION_TYPE_PUBLIC_PUBLISH: ACTION_TYPE_PUBLIC_PUBLISH,
+    "publish": ACTION_TYPE_PUBLIC_PUBLISH,
+    ACTION_TYPE_DESTRUCTIVE: ACTION_TYPE_DESTRUCTIVE,
+    "destructive": ACTION_TYPE_DESTRUCTIVE,
+}
+VALID_ACTION_TYPES = {
+    ACTION_TYPE_READ,
+    ACTION_TYPE_DRAFT,
+    ACTION_TYPE_REVERSIBLE_WRITE,
+    ACTION_TYPE_EXTERNAL_SEND,
+    ACTION_TYPE_PUBLIC_PUBLISH,
+    ACTION_TYPE_DESTRUCTIVE,
+}
+ACTION_TYPES_REQUIRING_HARD_CONFIRMATION = {
+    ACTION_TYPE_EXTERNAL_SEND,
+    ACTION_TYPE_PUBLIC_PUBLISH,
+    ACTION_TYPE_DESTRUCTIVE,
+}
+ELEVATED_FULL_DEFAULT_ACTION_TYPES = {
+    ACTION_TYPE_READ,
+    ACTION_TYPE_DRAFT,
+    ACTION_TYPE_REVERSIBLE_WRITE,
+}
+
+PLAN_EXTERNAL_ACTION_KEYWORDS = {
+    "send",
+    "email",
+    "message",
+    "reply",
+    "post",
+    "publish",
+    "submit",
+    "invoice",
+    "charge",
+    "refund",
+    "transfer",
+    "purchase",
+}
+PLAN_DESTRUCTIVE_ACTION_KEYWORDS = {
+    "delete",
+    "remove",
+    "terminate",
+    "credential",
+    "password",
+    "security",
+    "revoke",
+    "wipe",
+    "erase",
+}
+
 CUSTOMER_OPS_PACK_ID = "customer-ops-autopilot"
 WEEKLY_CONTENT_PACK_ID = "weekly-content-studio"
 COMPETITOR_BRIEF_PACK_ID = "competitor-brief-digest"
@@ -926,24 +1029,15 @@ def evaluate_action_policy(
             reasons.append("Critical action is blocked in cloud runtime.")
 
         if execution_decision != "deny":
-            action_type = str(classification.get("action_type") or ACTION_TYPE_REVERSIBLE_WRITE)
-            external_visibility = bool(classification.get("external_visibility"))
-            destructive_risk = bool(classification.get("destructive_risk"))
-            if destructive_risk:
-                execution_decision = "deny"
-                reasons.append("Destructive actions stay blocked by runtime policy.")
-            elif effective_policy_mode == POLICY_MODE_TRUSTED_FULL_ACCESS:
-                if action_type == ACTION_TYPE_PUBLIC_PUBLISH:
-                    execution_decision = "require_confirmation"
-                    reasons.append("Public publishing still requires one-time confirmation.")
-            else:
-                if action_type in {ACTION_TYPE_READ, ACTION_TYPE_DRAFT}:
-                    execution_decision = "allow"
-                elif action_type == ACTION_TYPE_REVERSIBLE_WRITE and not external_visibility:
-                    execution_decision = "allow"
-                else:
-                    execution_decision = "require_confirmation"
-                    reasons.append("This action requires one-time confirmation in local default mode.")
+            runtime_decision = decide_runtime_action_execution(
+                classification,
+                target=target,
+                policy_mode=effective_policy_mode,
+                metadata=metadata,
+            )
+            execution_decision = str(runtime_decision.get("execution_decision") or "allow").strip().lower() or "allow"
+            if runtime_decision.get("reason"):
+                reasons.append(str(runtime_decision.get("reason")))
 
         if execution_decision == "deny":
             denied_actions.append(normalized)
@@ -1433,6 +1527,284 @@ def normalize_execution_target(raw_value: Any) -> str:
     if raw in {"auto", "hybrid", ""}:
         return EXECUTION_TARGET_AUTO
     return EXECUTION_TARGET_AUTO
+
+
+def normalize_runtime_trust_zone(raw_value: Any, *, target: Optional[str] = None) -> str:
+    raw = str(raw_value or "").strip().lower()
+    normalized = RUNTIME_TRUST_ZONE_ALIASES.get(raw, raw)
+    if normalized in VALID_RUNTIME_TRUST_ZONES:
+        return normalized
+    normalized_target = normalize_execution_target(target)
+    if normalized_target == EXECUTION_TARGET_LOCAL_COMPANION:
+        return RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL
+    return RUNTIME_TRUST_ZONE_SHARED_CLOUD
+
+
+def normalize_elevated_mode(raw_value: Any, *, default: str = ELEVATED_MODE_ASK) -> str:
+    raw = str(raw_value or "").strip().lower()
+    if not raw:
+        return default
+    normalized = ELEVATED_MODE_ALIASES.get(raw, raw)
+    if normalized in VALID_ELEVATED_MODES:
+        return normalized
+    return default
+
+
+def normalize_action_type_token(raw_value: Any) -> str:
+    raw = str(raw_value or "").strip().lower()
+    normalized = ACTION_TYPE_ALIASES.get(raw, raw)
+    if normalized in VALID_ACTION_TYPES:
+        return normalized
+    return ""
+
+
+def normalize_action_type_list(raw_value: Any) -> List[str]:
+    values = raw_value if isinstance(raw_value, list) else [raw_value]
+    seen: Set[str] = set()
+    normalized: List[str] = []
+    for item in values:
+        token = normalize_action_type_token(item)
+        if token and token not in seen:
+            seen.add(token)
+            normalized.append(token)
+    return normalized
+
+
+def _parse_utc_datetime(raw_value: Any) -> Optional[datetime]:
+    token = str(raw_value or "").strip()
+    if not token:
+        return None
+    try:
+        normalized = token.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def resolve_elevated_access(
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    selected_target: Optional[str] = None,
+    policy_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    clean_metadata = metadata if isinstance(metadata, dict) else {}
+    target = normalize_execution_target(
+        selected_target
+        or clean_metadata.get("execution_target_selected")
+        or clean_metadata.get("execution_target")
+    )
+    raw_payload = clean_metadata.get("elevated")
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    if isinstance(raw_payload, str):
+        payload = {"mode": raw_payload}
+
+    runtime_trust_zone = normalize_runtime_trust_zone(
+        payload.get("runtime_trust_zone") or clean_metadata.get("runtime_trust_zone"),
+        target=target,
+    )
+    explicit_policy_mode = normalize_policy_mode(policy_mode or clean_metadata.get("policy_mode"))
+    raw_mode = payload.get("mode") or clean_metadata.get("elevated_mode")
+    if str(raw_mode or "").strip():
+        mode = normalize_elevated_mode(raw_mode)
+        source = "metadata"
+    elif explicit_policy_mode == POLICY_MODE_TRUSTED_FULL_ACCESS:
+        mode = ELEVATED_MODE_FULL
+        source = "policy_mode"
+    elif runtime_trust_zone == RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME:
+        mode = ELEVATED_MODE_FULL
+        source = "runtime_trust_zone_default"
+    else:
+        mode = ELEVATED_MODE_ASK
+        source = "default"
+
+    granted_at_raw = payload.get("granted_at") or clean_metadata.get("elevated_granted_at")
+    granted_at = _parse_utc_datetime(granted_at_raw)
+    expires_at_raw = payload.get("expires_at") or clean_metadata.get("elevated_expires_at")
+    expires_at = _parse_utc_datetime(expires_at_raw)
+    ttl_raw = payload.get("ttl_seconds")
+    if ttl_raw is None:
+        ttl_raw = clean_metadata.get("elevated_ttl_seconds")
+    try:
+        ttl_seconds = max(0, int(ttl_raw)) if ttl_raw is not None else None
+    except Exception:
+        ttl_seconds = None
+    if expires_at is None and granted_at is not None and ttl_seconds is not None:
+        expires_at = granted_at + timedelta(seconds=ttl_seconds)
+
+    now = datetime.now(timezone.utc)
+    expired = bool(expires_at is not None and now >= expires_at)
+    if expired:
+        mode = ELEVATED_MODE_OFF
+
+    allowed_action_classes = normalize_action_type_list(
+        payload.get("allowed_action_classes") or clean_metadata.get("elevated_allowed_action_classes") or []
+    )
+    denied_action_classes = normalize_action_type_list(
+        payload.get("denied_action_classes") or clean_metadata.get("elevated_denied_action_classes") or []
+    )
+    if mode == ELEVATED_MODE_FULL and not allowed_action_classes:
+        allowed_action_classes = sorted(ELEVATED_FULL_DEFAULT_ACTION_TYPES)
+
+    return {
+        "mode": mode,
+        "source": source,
+        "active": mode != ELEVATED_MODE_OFF,
+        "expired": expired,
+        "runtime_trust_zone": runtime_trust_zone,
+        "target": target,
+        "policy_mode": explicit_policy_mode,
+        "granted_at": granted_at.isoformat().replace("+00:00", "Z") if granted_at else None,
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z") if expires_at else None,
+        "ttl_seconds": ttl_seconds,
+        "task_id": str(payload.get("task_id") or clean_metadata.get("elevated_task_id") or "").strip() or None,
+        "granted_by": str(payload.get("granted_by") or clean_metadata.get("elevated_granted_by") or "").strip() or None,
+        "reason": str(payload.get("reason") or clean_metadata.get("elevated_reason") or "").strip() or None,
+        "allowed_action_classes": allowed_action_classes,
+        "denied_action_classes": denied_action_classes,
+    }
+
+
+def decide_runtime_action_execution(
+    classification: Dict[str, Any],
+    *,
+    target: Optional[str],
+    policy_mode: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    clean_classification = classification if isinstance(classification, dict) else {}
+    effective_target = normalize_execution_target(target)
+    elevated = resolve_elevated_access(
+        metadata,
+        selected_target=effective_target,
+        policy_mode=policy_mode,
+    )
+    action_type = str(clean_classification.get("action_type") or ACTION_TYPE_REVERSIBLE_WRITE).strip().lower()
+    external_visibility = bool(clean_classification.get("external_visibility"))
+    destructive_risk = bool(clean_classification.get("destructive_risk"))
+    allowed_classes = set(elevated.get("allowed_action_classes") or [])
+    denied_classes = set(elevated.get("denied_action_classes") or [])
+    runtime_trust_zone = str(elevated.get("runtime_trust_zone") or RUNTIME_TRUST_ZONE_SHARED_CLOUD)
+
+    if destructive_risk or action_type == ACTION_TYPE_DESTRUCTIVE:
+        return {
+            "execution_decision": "deny",
+            "reason": "Destructive actions never auto-run.",
+            "runtime_trust_zone": elevated.get("runtime_trust_zone"),
+            "elevated": elevated,
+        }
+
+    if action_type in denied_classes:
+        return {
+            "execution_decision": "require_confirmation",
+            "reason": f"Elevated access excludes {action_type} actions.",
+            "runtime_trust_zone": elevated.get("runtime_trust_zone"),
+            "elevated": elevated,
+        }
+
+    if elevated.get("mode") == ELEVATED_MODE_FULL and bool(elevated.get("active")):
+        if action_type in ACTION_TYPES_REQUIRING_HARD_CONFIRMATION or external_visibility:
+            return {
+                "execution_decision": "require_confirmation",
+                "reason": "External or irreversible actions still require approval.",
+                "runtime_trust_zone": elevated.get("runtime_trust_zone"),
+                "elevated": elevated,
+            }
+        if allowed_classes and action_type not in allowed_classes:
+            return {
+                "execution_decision": "require_confirmation",
+                "reason": f"Elevated access is not scoped to {action_type} actions.",
+                "runtime_trust_zone": elevated.get("runtime_trust_zone"),
+                "elevated": elevated,
+            }
+        if action_type in {ACTION_TYPE_READ, ACTION_TYPE_DRAFT}:
+            return {
+                "execution_decision": "allow",
+                "reason": "Elevated access allows safe read/draft actions.",
+                "runtime_trust_zone": elevated.get("runtime_trust_zone"),
+                "elevated": elevated,
+            }
+        if action_type == ACTION_TYPE_REVERSIBLE_WRITE and not external_visibility:
+            return {
+                "execution_decision": "allow",
+                "reason": "Elevated access allows internal reversible actions.",
+                "runtime_trust_zone": elevated.get("runtime_trust_zone"),
+                "elevated": elevated,
+            }
+        return {
+            "execution_decision": "require_confirmation",
+            "reason": "This action falls outside elevated auto-approval.",
+            "runtime_trust_zone": elevated.get("runtime_trust_zone"),
+            "elevated": elevated,
+        }
+
+    if action_type in {ACTION_TYPE_READ, ACTION_TYPE_DRAFT}:
+        return {
+            "execution_decision": "allow",
+            "reason": "Safe reads and drafts auto-run in default mode.",
+            "runtime_trust_zone": runtime_trust_zone,
+            "elevated": elevated,
+        }
+    if action_type == ACTION_TYPE_REVERSIBLE_WRITE and not external_visibility:
+        if runtime_trust_zone == RUNTIME_TRUST_ZONE_SHARED_CLOUD:
+            return {
+                "execution_decision": "require_confirmation",
+                "reason": "Default cloud mode still confirms internal write actions.",
+                "runtime_trust_zone": runtime_trust_zone,
+                "elevated": elevated,
+            }
+        return {
+            "execution_decision": "allow",
+            "reason": "Internal reversible actions auto-run in default mode.",
+            "runtime_trust_zone": runtime_trust_zone,
+            "elevated": elevated,
+        }
+    return {
+        "execution_decision": "require_confirmation",
+        "reason": "This action requires approval in default mode.",
+        "runtime_trust_zone": runtime_trust_zone,
+        "elevated": elevated,
+    }
+
+
+def plan_requires_human_approval(
+    trust_mode: str,
+    metadata: Optional[Dict[str, Any]],
+    *,
+    context_text: str,
+) -> tuple[bool, str]:
+    normalized_trust_mode = normalize_trust_mode(trust_mode)
+    elevated = resolve_elevated_access(metadata)
+    raw = str(context_text or "").strip().lower()
+    external_matches = sorted({kw for kw in PLAN_EXTERNAL_ACTION_KEYWORDS if kw in raw})
+    destructive_matches = sorted({kw for kw in PLAN_DESTRUCTIVE_ACTION_KEYWORDS if kw in raw})
+
+    if normalized_trust_mode == TRUST_MODE_STRICT and elevated.get("mode") != ELEVATED_MODE_FULL:
+        return True, "Strict mode requires explicit approval before execution."
+
+    if elevated.get("mode") == ELEVATED_MODE_FULL and bool(elevated.get("active")):
+        if destructive_matches:
+            return True, f"Elevated mode still requires approval for destructive actions ({', '.join(destructive_matches[:4])})."
+        if external_matches:
+            return True, f"Elevated mode still requires approval for external actions ({', '.join(external_matches[:4])})."
+        return False, ""
+
+    matched = [kw for kw in RISKY_ACTION_KEYWORDS if kw in raw]
+    if normalized_trust_mode == TRUST_MODE_AUTO:
+        return False, ""
+    if normalized_trust_mode == TRUST_MODE_SENSITIVE_GUARD:
+        if matched:
+            return True, f"Sensitive Guard detected sensitive actions ({', '.join(sorted(set(matched))[:4])})."
+        return False, ""
+    if normalized_trust_mode == TRUST_MODE_COST_GUARD:
+        if len(matched) >= 2:
+            return True, f"Cost Guard detected multiple potentially expensive actions ({', '.join(sorted(set(matched))[:4])})."
+        return False, ""
+    if matched:
+        return True, f"Potentially risky actions detected ({', '.join(sorted(set(matched))[:4])})."
+    return False, ""
 
 
 def resolve_runtime_policy_mode(
@@ -2397,6 +2769,7 @@ def _pack_has_sensitive_signals(result_data: Dict[str, Any], sensitive_keywords:
 
 def pack_approval_policy(trust_mode: str, result_data: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> tuple[bool, str]:
     metadata = metadata if isinstance(metadata, dict) else {}
+    elevated = resolve_elevated_access(metadata)
     rules = _approval_rules_from_metadata(metadata)
     outputs = result_data.get("outputs") if isinstance(result_data.get("outputs"), dict) else {}
     outbound_actions = parse_positive_int(outputs.get("outbound_actions"), 0)
@@ -2412,6 +2785,11 @@ def pack_approval_policy(trust_mode: str, result_data: Dict[str, Any], metadata:
     max_outbound_auto = parse_positive_int(rules.get("max_outbound_auto"), 0)
     max_urgent_auto = parse_positive_int(rules.get("max_urgent_auto"), 0)
     approve_on_connector_actions = bool(rules.get("approve_on_connector_actions"))
+
+    if elevated.get("mode") == ELEVATED_MODE_FULL and bool(elevated.get("active")):
+        if outbound_actions > 0 or connector_actions > 0:
+            return True, "Elevated mode still requires approval for outbound or connector actions."
+        return False, ""
 
     if trust_mode == TRUST_MODE_AUTO:
         return False, ""
@@ -2684,6 +3062,7 @@ def evaluate_tool_policy_decision(
         }
     execution_decision = "allow"
     reason = "policy_allow_default"
+    runtime_decision: Optional[Dict[str, Any]] = None
 
     if clean_tool_id in TOOL_CONTRACTS and not is_tool_enabled(clean_tool_id):
         execution_decision = "deny"
@@ -2700,25 +3079,15 @@ def evaluate_tool_policy_decision(
     elif effective_target == EXECUTION_TARGET_CLOUD and TOOL_POLICY.is_critical(clean_tool_id) and block_cloud_critical:
         execution_decision = "deny"
         reason = "blocked_cloud_critical"
-    elif bool(classification.get("destructive_risk")):
-        execution_decision = "deny"
-        reason = "runtime_policy_deny_destructive"
-    elif effective_policy_mode == POLICY_MODE_TRUSTED_FULL_ACCESS:
-        if str(classification.get("action_type") or "") == ACTION_TYPE_PUBLIC_PUBLISH:
-            execution_decision = "require_confirmation"
-            reason = "trusted_full_access_public_publish_requires_confirmation"
     else:
-        action_type = str(classification.get("action_type") or ACTION_TYPE_REVERSIBLE_WRITE)
-        external_visibility = bool(classification.get("external_visibility"))
-        if action_type in {ACTION_TYPE_READ, ACTION_TYPE_DRAFT}:
-            execution_decision = "allow"
-            reason = "local_default_allow_safe"
-        elif action_type == ACTION_TYPE_REVERSIBLE_WRITE and not external_visibility:
-            execution_decision = "allow"
-            reason = "local_default_allow_local_reversible"
-        else:
-            execution_decision = "require_confirmation"
-            reason = "local_default_requires_confirmation"
+        runtime_decision = decide_runtime_action_execution(
+            classification,
+            target=effective_target,
+            policy_mode=effective_policy_mode,
+            metadata=metadata,
+        )
+        execution_decision = str(runtime_decision.get("execution_decision") or "allow").strip().lower() or "allow"
+        reason = str(runtime_decision.get("reason") or "").strip() or reason
 
     if (
         execution_decision != "deny"
@@ -2770,6 +3139,15 @@ def evaluate_tool_policy_decision(
         "browser_security_profile": browser_profile or None,
         "browser_requires_approval": browser_requires_approval,
         "browser_privileged_actions": browser_privileged_actions or None,
+        "runtime_trust_zone": (
+            (runtime_decision.get("runtime_trust_zone") if isinstance(runtime_decision, dict) else None)
+            or resolve_elevated_access(
+                metadata,
+                selected_target=effective_target,
+                policy_mode=effective_policy_mode,
+            ).get("runtime_trust_zone")
+        ),
+        "elevated": runtime_decision.get("elevated") if isinstance(runtime_decision, dict) else None,
         "reviewed_approval_required": bool(
             clean_tool_id == "browser_automation.interactive"
             and effective_target == EXECUTION_TARGET_LOCAL_COMPANION
@@ -2783,8 +3161,16 @@ def tool_policy_snapshot(metadata: Optional[Dict[str, Any]] = None) -> Dict[str,
     metadata = metadata if isinstance(metadata, dict) else {}
     policy = _action_policy_from_metadata(metadata)
     runtime_policy = resolve_runtime_policy_mode(metadata)
+    elevated = resolve_elevated_access(
+        metadata,
+        selected_target=runtime_policy.get("target"),
+        policy_mode=runtime_policy.get("policy_mode"),
+    )
     return {
         "policy_mode": runtime_policy.get("policy_mode"),
+        "runtime_trust_zone": elevated.get("runtime_trust_zone"),
+        "elevated_mode": elevated.get("mode"),
+        "elevated_active": bool(elevated.get("active")),
         "blocked_actions": sorted(policy.get("blocked_actions", set())),
         "approval_actions": sorted(policy.get("approval_actions", set())),
         "allow_actions": sorted(policy.get("allow_actions", set())),

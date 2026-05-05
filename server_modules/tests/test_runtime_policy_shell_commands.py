@@ -38,7 +38,7 @@ class RuntimePolicyShellCommandTests(unittest.TestCase):
         )
 
         self.assertEqual(evaluation.get("execution_decision"), "allow")
-        self.assertEqual(evaluation.get("reason"), "local_default_allow_local_reversible")
+        self.assertEqual(evaluation.get("reason"), "Internal reversible actions auto-run in default mode.")
         self.assertTrue(evaluation.get("uses_raw_command_path"))
         self.assertTrue(evaluation.get("safe_raw_shell_command"))
 
@@ -118,7 +118,7 @@ class RuntimePolicyShellCommandTests(unittest.TestCase):
         )
 
         self.assertEqual(evaluation.get("execution_decision"), "deny")
-        self.assertEqual(evaluation.get("reason"), "runtime_policy_deny_destructive")
+        self.assertEqual(evaluation.get("reason"), "Destructive actions never auto-run.")
         self.assertTrue(evaluation.get("uses_capability_path"))
         self.assertFalse(evaluation.get("uses_raw_command_path"))
 

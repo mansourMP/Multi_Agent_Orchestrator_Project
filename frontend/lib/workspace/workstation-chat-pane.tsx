@@ -172,6 +172,8 @@ type ChatMachineTrust = 'personal' | 'agent';
 
 type ChatAutonomyMode = 'approval' | 'full';
 
+type ChatRuntimeTrustZone = 'shared_cloud' | 'user_owned_local' | 'owned_dedicated_runtime';
+
 type ChatReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 type ChatModelOption = {
@@ -916,6 +918,20 @@ function deriveRecentThreads(
 function readExecutionTarget(metadata: Record<string, unknown>): string {
   const selected = metadata.execution_target_selected ?? metadata.execution_target;
   return typeof selected === 'string' ? selected.trim().toLowerCase() : '';
+}
+
+function resolveRuntimeTrustZone(
+  runtimeTarget: WorkspaceBootstrapRuntimeTarget | null,
+  machineTrust: ChatMachineTrust,
+): ChatRuntimeTrustZone {
+  if (!runtimeTarget || readString(runtimeTarget.executionTarget).toLowerCase() !== 'local_companion') {
+    return 'shared_cloud';
+  }
+  const trustTier = readString(runtimeTarget.trustTier).toLowerCase();
+  if (machineTrust === 'agent' || trustTier === 'paired_local_privileged') {
+    return 'owned_dedicated_runtime';
+  }
+  return 'user_owned_local';
 }
 
 function readProviderScopes(provider: ProviderCatalogRecord): string[] {
@@ -3204,6 +3220,10 @@ export function WorkstationChatPane() {
     }
     return { label: 'Cloud AI', tone: 'neutral' as const };
   }, [gatewayToolingOnline, selectedProviderRecord]);
+  const runtimeTrustZone = useMemo<ChatRuntimeTrustZone>(
+    () => resolveRuntimeTrustZone(localRuntimeTarget, machineTrust),
+    [localRuntimeTarget, machineTrust],
+  );
   const composerToolGroups = useMemo<ComposerToolGroup[]>(() => {
     const localReason = gatewayToolingOnline ? 'Available through this paired computer' : 'Requires a connected computer';
     const emailAvailable = hasConnectedConnector(connectorCredentials, ['google_workspace', 'smtp', 'microsoft_365']);
@@ -3894,6 +3914,15 @@ export function WorkstationChatPane() {
           approval_ui: 'card',
           interactive_approvals: autonomyMode !== 'full',
           machine_trust_declaration: machineTrust,
+          runtime_trust_zone: runtimeTrustZone,
+          elevated_mode: autonomyMode === 'full' ? 'full' : 'ask',
+          elevated: {
+            mode: autonomyMode === 'full' ? 'full' : 'ask',
+            runtime_trust_zone: runtimeTrustZone,
+            reason: autonomyMode === 'full'
+              ? 'chat_full_access_requested'
+              : 'chat_default_mode',
+          },
         },
         onEvent: (event) => {
           if (event.event === 'trace') {

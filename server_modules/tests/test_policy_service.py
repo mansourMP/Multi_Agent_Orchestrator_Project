@@ -44,7 +44,7 @@ class PolicyServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(evaluation["execution_decision"], "allow")
-        self.assertEqual(evaluation["reason"], "local_default_allow_local_reversible")
+        self.assertEqual(evaluation["reason"], "Internal reversible actions auto-run in default mode.")
         self.assertTrue(evaluation["safe_raw_shell_command"])
 
     def test_compute_tool_policy_precheck_aggregates_items_and_counts(self) -> None:

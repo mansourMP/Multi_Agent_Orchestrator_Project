@@ -182,6 +182,22 @@ def resolve_runtime_policy_mode(
     }
 
 
+def _runtime_action_policy_decision(
+    classification: Dict[str, Any],
+    *,
+    target: str,
+    policy_mode: Optional[str],
+    metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    runtime_policy = _runtime_policy_module()
+    return runtime_policy.decide_runtime_action_execution(
+        classification,
+        target=target,
+        policy_mode=policy_mode,
+        metadata=metadata,
+    )
+
+
 def apply_execution_route_metadata(metadata: Dict[str, Any], route: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(metadata, dict):
         return metadata
@@ -396,24 +412,15 @@ def evaluate_action_policy(
             reasons.append("Critical action is blocked in cloud runtime.")
 
         if execution_decision != "deny":
-            action_type = str(classification.get("action_type") or runtime_policy.ACTION_TYPE_REVERSIBLE_WRITE)
-            external_visibility = bool(classification.get("external_visibility"))
-            destructive_risk = bool(classification.get("destructive_risk"))
-            if destructive_risk:
-                execution_decision = "deny"
-                reasons.append("Destructive actions stay blocked by runtime policy.")
-            elif effective_policy_mode == runtime_policy.POLICY_MODE_TRUSTED_FULL_ACCESS:
-                if action_type == runtime_policy.ACTION_TYPE_PUBLIC_PUBLISH:
-                    execution_decision = "require_confirmation"
-                    reasons.append("Public publishing still requires one-time confirmation.")
-            else:
-                if action_type in {runtime_policy.ACTION_TYPE_READ, runtime_policy.ACTION_TYPE_DRAFT}:
-                    execution_decision = "allow"
-                elif action_type == runtime_policy.ACTION_TYPE_REVERSIBLE_WRITE and not external_visibility:
-                    execution_decision = "allow"
-                else:
-                    execution_decision = "require_confirmation"
-                    reasons.append("This action requires one-time confirmation in local default mode.")
+            runtime_decision = _runtime_action_policy_decision(
+                classification,
+                target=target,
+                policy_mode=effective_policy_mode,
+                metadata=metadata,
+            )
+            execution_decision = str(runtime_decision.get("execution_decision") or "allow").strip().lower() or "allow"
+            if runtime_decision.get("reason"):
+                reasons.append(str(runtime_decision.get("reason")))
 
         if execution_decision == "deny":
             denied_actions.append(normalized)
@@ -648,6 +655,7 @@ def evaluate_tool_policy_decision(
 
     execution_decision = "allow"
     reason = "policy_allow_default"
+    runtime_decision: Optional[Dict[str, Any]] = None
     disabled_capability_state = next(
         (
             {
@@ -704,25 +712,15 @@ def evaluate_tool_policy_decision(
     ):
         execution_decision = "deny"
         reason = "blocked_cloud_critical"
-    elif bool(classification.get("destructive_risk")):
-        execution_decision = "deny"
-        reason = "runtime_policy_deny_destructive"
-    elif effective_policy_mode == runtime_policy.POLICY_MODE_TRUSTED_FULL_ACCESS:
-        if str(classification.get("action_type") or "") == runtime_policy.ACTION_TYPE_PUBLIC_PUBLISH:
-            execution_decision = "require_confirmation"
-            reason = "trusted_full_access_public_publish_requires_confirmation"
     else:
-        action_type = str(classification.get("action_type") or runtime_policy.ACTION_TYPE_REVERSIBLE_WRITE)
-        external_visibility = bool(classification.get("external_visibility"))
-        if action_type in {runtime_policy.ACTION_TYPE_READ, runtime_policy.ACTION_TYPE_DRAFT}:
-            execution_decision = "allow"
-            reason = "local_default_allow_safe"
-        elif action_type == runtime_policy.ACTION_TYPE_REVERSIBLE_WRITE and not external_visibility:
-            execution_decision = "allow"
-            reason = "local_default_allow_local_reversible"
-        else:
-            execution_decision = "require_confirmation"
-            reason = "local_default_requires_confirmation"
+        runtime_decision = _runtime_action_policy_decision(
+            classification,
+            target=effective_target,
+            policy_mode=effective_policy_mode,
+            metadata=metadata,
+        )
+        execution_decision = str(runtime_decision.get("execution_decision") or "allow").strip().lower() or "allow"
+        reason = str(runtime_decision.get("reason") or "").strip() or reason
 
     if (
         execution_decision != "deny"
@@ -774,6 +772,15 @@ def evaluate_tool_policy_decision(
         "browser_security_profile": browser_profile or None,
         "browser_requires_approval": browser_requires_approval,
         "browser_privileged_actions": browser_privileged_actions or None,
+        "runtime_trust_zone": (
+            (runtime_decision.get("runtime_trust_zone") if isinstance(runtime_decision, dict) else None)
+            or _runtime_policy_module().resolve_elevated_access(
+                metadata,
+                selected_target=effective_target,
+                policy_mode=effective_policy_mode,
+            ).get("runtime_trust_zone")
+        ),
+        "elevated": runtime_decision.get("elevated") if isinstance(runtime_decision, dict) else None,
         "policy_scope_precedence": list(
             metadata.get("policy_scope_precedence") or ["global", "tenant", "workspace", "machine", "capability"]
         ),

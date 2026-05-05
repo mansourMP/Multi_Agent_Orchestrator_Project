@@ -4,7 +4,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'runs', 'approvals', 'artifacts', 'activity', 'integrations', 'notifications'],
+    childRouteIds: ['chat', 'profile', 'runs', 'approvals', 'artifacts', 'activity', 'heartbeat', 'skills', 'integrations', 'notifications'],
     direct: true,
   },
   {
@@ -87,6 +87,15 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     },
   },
   {
+    id: 'profile',
+    label: 'Profile',
+    segment: 'profile',
+    destinationId: 'sage',
+    web: {
+      hiddenFromNavigation: true,
+    },
+  },
+  {
     id: 'approvals',
     label: 'Needs your OK',
     segment: 'approvals',
@@ -141,6 +150,24 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     label: 'Memory',
     segment: 'activity',
     legacySegments: ['memory'],
+    destinationId: 'sage',
+    web: {
+      hiddenFromNavigation: true,
+    },
+  },
+  {
+    id: 'heartbeat',
+    label: 'Heartbeat',
+    segment: 'heartbeat',
+    destinationId: 'sage',
+    web: {
+      hiddenFromNavigation: true,
+    },
+  },
+  {
+    id: 'skills',
+    label: 'Skills',
+    segment: 'skills',
     destinationId: 'sage',
     web: {
       hiddenFromNavigation: true,

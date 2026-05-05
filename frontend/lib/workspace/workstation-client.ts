@@ -178,6 +178,37 @@ export type WorkstationSageProfileRecord = Record<string, unknown> & {
   updated_at?: string | null;
 };
 
+export type WorkstationSageHeartbeatRecord = Record<string, unknown> & {
+  profile?: Record<string, unknown> | null;
+  bootstrap?: Record<string, unknown> | null;
+  quiet_hours?: Record<string, unknown> | null;
+  ambient_monitor?: Record<string, unknown> | null;
+  reminders?: Record<string, unknown> | null;
+  next_scheduled_action?: Record<string, unknown> | null;
+  wake_queue?: Record<string, unknown> | null;
+  policy?: Record<string, unknown> | null;
+};
+
+export type WorkstationSageSkillRecord = Record<string, unknown> & {
+  id?: string | null;
+  name?: string | null;
+  description?: string | null;
+  enabled?: boolean | null;
+  available?: boolean | null;
+  status?: string | null;
+  reason?: string | null;
+  source?: string | null;
+  required_bins?: string[] | null;
+  missing_bins?: string[] | null;
+  tools?: string[] | null;
+  slash_commands?: string[] | null;
+  permission_label?: string | null;
+  action_class?: string | null;
+  requires_approval?: boolean | null;
+  execution_mode?: string | null;
+  allowed_runtime_modes?: string[] | null;
+};
+
 export type WorkstationAgentTraceRecord = Record<string, unknown> & {
   id?: string | null;
   tenant_id?: string | null;
@@ -565,6 +596,8 @@ export type WorkstationClientPaths = {
   activity: (limit?: number) => string;
   sageMemory: string;
   sageProfile: string;
+  sageHeartbeat: string;
+  sageSkills: string;
   sageProfileBootstrapAnswer: string;
   sageMemoryStoragePolicy: string;
   sageMemoryExport: string;
@@ -705,6 +738,8 @@ export type WorkstationClient = {
   listActivityTimeline: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
   listSageMemory: () => Promise<Record<string, unknown>>;
   getSageProfile: () => Promise<WorkstationSageProfileRecord>;
+  getSageHeartbeat: () => Promise<WorkstationSageHeartbeatRecord>;
+  listSageSkills: () => Promise<Record<string, unknown>>;
   updateSageProfile: (options: {
     userName?: string | null;
     identitySummary?: string | null;
@@ -1104,6 +1139,10 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/sage-memory${buildQueryString({ workspace_id: workspaceId })}`,
     sageProfile:
       `/api/sage-profile${buildQueryString({ workspace_id: workspaceId })}`,
+    sageHeartbeat:
+      `/api/sage-heartbeat${buildQueryString({ workspace_id: workspaceId })}`,
+    sageSkills:
+      `/api/sage-skills${buildQueryString({ workspace_id: workspaceId })}`,
     sageProfileBootstrapAnswer:
       '/api/sage-profile/bootstrap/answer',
     sageMemoryStoragePolicy:
@@ -2130,6 +2169,16 @@ export function createWorkstationClient(
         path: paths.sageProfile,
         policy: READ_REQUEST_POLICY,
       }) as Promise<WorkstationSageProfileRecord>,
+    getSageHeartbeat: () =>
+      requestJson<WorkstationSageHeartbeatRecord>({
+        path: paths.sageHeartbeat,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<WorkstationSageHeartbeatRecord>,
+    listSageSkills: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageSkills,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
     updateSageProfile: ({
       userName = null,
       identitySummary = null,

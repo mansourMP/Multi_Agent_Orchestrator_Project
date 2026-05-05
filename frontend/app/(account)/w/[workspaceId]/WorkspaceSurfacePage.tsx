@@ -10,10 +10,13 @@ import { WorkstationArtifactsPane } from '@/lib/workspace/workstation-artifacts-
 import { WorkstationChatPane } from '@/lib/workspace/workstation-chat-pane';
 import { WorkstationDeployedAgentsPane } from '@/lib/workspace/workstation-deployed-agents-pane';
 import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gateway-operator-pane';
+import { WorkstationSageHeartbeatPane } from '@/lib/workspace/workstation-sage-heartbeat-pane';
 import { MarketplacePane } from '@/lib/marketplace/marketplace-pane';
 import { WorkstationNotificationsPane } from '@/lib/workspace/workstation-notifications-pane';
+import { WorkstationSageProfilePane } from '@/lib/workspace/workstation-sage-profile-pane';
 import { WorkstationRunsPane } from '@/lib/workspace/workstation-runs-pane';
 import { WorkstationSageConnectorsPane } from '@/lib/workspace/workstation-sage-connectors-pane';
+import { WorkstationSageSkillsPane } from '@/lib/workspace/workstation-sage-skills-pane';
 import { WorkstationSettingsPane } from '@/lib/workspace/workstation-settings-pane';
 import { WorkstationStudioIntegrationsPane } from '@/lib/workspace/workstation-studio-integrations-pane';
 import { WorkstationSurfaceViewport } from '@/lib/workspace/workstation-shell-frame';
@@ -35,6 +38,10 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
     destinationId: 'sage',
     render: () => <WorkstationChatPane />,
   },
+  profile: {
+    destinationId: 'sage',
+    render: () => <WorkstationSageProfilePane />,
+  },
   runs: {
     destinationId: 'sage',
     render: () => <WorkstationRunsPane />,
@@ -54,6 +61,14 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   activity: {
     destinationId: 'sage',
     render: () => <WorkstationActivityPane />,
+  },
+  heartbeat: {
+    destinationId: 'sage',
+    render: () => <WorkstationSageHeartbeatPane />,
+  },
+  skills: {
+    destinationId: 'sage',
+    render: () => <WorkstationSageSkillsPane />,
   },
   integrations: {
     destinationId: 'sage',

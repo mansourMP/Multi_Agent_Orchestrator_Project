@@ -12,11 +12,14 @@ export type WorkspaceNavDestinationId =
 
 export type WorkspaceRouteId =
   | 'chat'
+  | 'profile'
   | 'runs'
   | 'approvals'
   | 'artifacts'
   | 'notifications'
   | 'activity'
+  | 'heartbeat'
+  | 'skills'
   | 'integrations'
   | 'studioIntegrations'
   | 'studio'

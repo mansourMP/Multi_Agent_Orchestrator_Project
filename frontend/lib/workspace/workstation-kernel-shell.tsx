@@ -45,18 +45,30 @@ export function WorkstationKernelShell({
   const contextRoutes = useMemo(() => {
     if (activeDestinationId === 'sage') {
       const chatRoute = routeManifest.routeIndex.chat;
+      const profileRoute = routeManifest.routeIndex.profile;
       const historyRoute = routeManifest.routeIndex.runs;
       const memoryRoute = routeManifest.routeIndex.activity;
+      const heartbeatRoute = routeManifest.routeIndex.heartbeat;
+      const skillsRoute = routeManifest.routeIndex.skills;
       const integrationsRoute = routeManifest.routeIndex.integrations;
       return [
         chatRoute
           ? { ...chatRoute, label: 'Chat' as const }
           : null,
-        historyRoute
-          ? { ...historyRoute, label: 'History' as const }
+        profileRoute
+          ? { ...profileRoute, label: 'Profile' as const }
           : null,
         memoryRoute
           ? { ...memoryRoute, label: 'Memory' as const }
+          : null,
+        historyRoute
+          ? { ...historyRoute, label: 'History' as const }
+          : null,
+        heartbeatRoute
+          ? { ...heartbeatRoute, label: 'Heartbeat' as const }
+          : null,
+        skillsRoute
+          ? { ...skillsRoute, label: 'Skills' as const }
           : null,
         integrationsRoute
           ? { ...integrationsRoute, label: 'Connected Apps' as const }

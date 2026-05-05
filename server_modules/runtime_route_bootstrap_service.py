@@ -96,6 +96,8 @@ def build_runtime_run_route_bootstrap_callbacks(
     resolve_workspace_tenant_id: Callable[[str], Any],
     heartbeat_workspace_id: str | None,
 ) -> RuntimeRunRouteBootstrapCallbacks:
+    from server_modules.runtime_lane_queue import enqueue_runtime_lane_work
+
     return RuntimeRunRouteBootstrapCallbacks(
         heartbeat_run_callback=build_heartbeat_run_callback(
             build_inbound_agent_turn_request=build_inbound_agent_turn_request,
@@ -106,6 +108,7 @@ def build_runtime_run_route_bootstrap_callbacks(
             claim_due_scheduler_wake_requests=bounded_scheduler_service.claim_due_wake_requests,
             build_wakeup_execution_bundle=bounded_scheduler_service.build_wakeup_execution_bundle,
             finalize_scheduler_wake_requests=bounded_scheduler_service.finalize_wake_requests,
+            enqueue_lane_work=enqueue_runtime_lane_work,
         ),
         heartbeat_notify_callback=build_heartbeat_notify_callback(
             handle_telegram_send_message=handle_telegram_send_message,

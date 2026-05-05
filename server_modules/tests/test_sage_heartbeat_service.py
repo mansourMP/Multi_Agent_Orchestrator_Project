@@ -52,6 +52,17 @@ class SageHeartbeatServiceTests(unittest.TestCase):
                     }
                 ),
             ),
+            patch(
+                "server_modules.sage_heartbeat_service.runtime_lane_queue_snapshot",
+                return_value={
+                    "running": True,
+                    "pending_count": 2,
+                    "active_count": 1,
+                    "lanes": {
+                        "cron": {"pending_count": 2, "active_count": 1, "pending": [], "active": []},
+                    },
+                },
+            ),
         ):
             payload = asyncio.run(
                 sage_heartbeat_service.build_sage_heartbeat_snapshot(
@@ -64,6 +75,8 @@ class SageHeartbeatServiceTests(unittest.TestCase):
         self.assertEqual(payload["profile"]["recurring_responsibility"], "Keep my inbox triaged.")
         self.assertEqual(payload["next_scheduled_action"]["id"], "sched-1")
         self.assertEqual(payload["reminders"]["count"], 2)
+        self.assertEqual(payload["lane_queue"]["pending_count"], 2)
+        self.assertEqual(payload["lane_queue"]["active_count"], 1)
 
 
 if __name__ == "__main__":

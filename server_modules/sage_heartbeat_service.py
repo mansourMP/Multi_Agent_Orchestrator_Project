@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from server_modules import bounded_scheduler_service
+from server_modules.runtime_lane_queue import runtime_lane_queue_snapshot
 from server_modules.sage_profile_service import list_sage_profile
 
 
@@ -88,6 +89,7 @@ async def build_sage_heartbeat_snapshot(
     ]
     next_action = _next_action(schedule_items)
     wake_queue = scheduler_payload.get("wake_queue") if isinstance(scheduler_payload.get("wake_queue"), dict) else {}
+    lane_queue = runtime_lane_queue_snapshot()
     profile = profile_payload.get("profile") if isinstance(profile_payload.get("profile"), dict) else {}
     bootstrap = profile_payload.get("bootstrap") if isinstance(profile_payload.get("bootstrap"), dict) else {}
     return {
@@ -117,6 +119,7 @@ async def build_sage_heartbeat_snapshot(
             "pending": wake_queue.get("pending") if isinstance(wake_queue.get("pending"), list) else [],
             "claimed": wake_queue.get("claimed") if isinstance(wake_queue.get("claimed"), list) else [],
         },
+        "lane_queue": lane_queue if isinstance(lane_queue, dict) else {},
         "policy": {
             "plan_tier": _coerce_text(policy.get("plan_tier")) or None,
             "require_network_online": bool(policy.get("require_network_online")),

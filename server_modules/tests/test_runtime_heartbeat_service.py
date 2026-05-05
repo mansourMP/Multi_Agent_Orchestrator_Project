@@ -66,6 +66,26 @@ class RuntimeHeartbeatServiceTests(unittest.TestCase):
             {"acted": False, "summary": "No pending heartbeat tasks.", "scheduler_mode": "idle"},
         )
 
+    def test_build_heartbeat_run_callback_queues_background_work_when_lane_queue_is_available(self):
+        queued = []
+
+        callback = runtime_heartbeat_service.build_heartbeat_run_callback(
+            build_inbound_agent_turn_request=lambda **kwargs: kwargs,
+            trigger_pending_heartbeat_schedules=lambda **kwargs: {"started": []},
+            execute_system_agent_turn=lambda **kwargs: {"run_id": "run-1"},
+            run_execution_services=lambda: object(),
+            enqueue_lane_work=lambda **kwargs: queued.append(kwargs) or {"item_id": "lane-1"},
+        )
+
+        payload = callback(["Check inbox"], {"workspace_id": "ws-1", "trigger": "scheduled"})
+
+        self.assertTrue(payload["acted"])
+        self.assertTrue(payload["queued"])
+        self.assertEqual(payload["lane"], "cron")
+        self.assertEqual(payload["queue_item_id"], "lane-1")
+        self.assertEqual(queued[0]["lane"], "cron")
+        self.assertEqual(queued[0]["metadata"]["workspace_id"], "ws-1")
+
     def test_build_heartbeat_run_callback_starts_run_for_tasks(self):
         captured = {}
         callback = runtime_heartbeat_service.build_heartbeat_run_callback(

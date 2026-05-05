@@ -215,8 +215,9 @@ def build_heartbeat_run_callback(
     claim_due_scheduler_wake_requests: Optional[Callable[..., Any]] = None,
     build_wakeup_execution_bundle: Optional[Callable[..., Any]] = None,
     finalize_scheduler_wake_requests: Optional[Callable[..., Any]] = None,
+    enqueue_lane_work: Optional[Callable[..., Any]] = None,
 ) -> Callable[[list[str], dict[str, Any]], dict[str, Any]]:
-    def _start_heartbeat_run(tasks: list[str], metadata: dict[str, Any]) -> dict[str, Any]:
+    def _execute_heartbeat_run(tasks: list[str], metadata: dict[str, Any]) -> dict[str, Any]:
         scoped_metadata = dict(metadata or {})
         workspace_id = str(scoped_metadata.get("workspace_id") or "").strip()
         if not workspace_id:
@@ -341,6 +342,45 @@ def build_heartbeat_run_callback(
             ],
             "context_event_ids": list(execution_bundle.get("metadata", {}).get("context_event_ids") or []) if isinstance(execution_bundle, dict) else [],
         }
+
+    def _start_heartbeat_run(tasks: list[str], metadata: dict[str, Any]) -> dict[str, Any]:
+        scoped_metadata = dict(metadata or {})
+        workspace_id = str(scoped_metadata.get("workspace_id") or "").strip()
+        if not workspace_id:
+            return {
+                "acted": False,
+                "summary": "Heartbeat workspace scope is not configured.",
+            }
+        if callable(enqueue_lane_work):
+            queue_result = enqueue_lane_work(
+                lane="cron",
+                label="Heartbeat follow-up" if tasks else "Scheduler wakeup",
+                metadata={
+                    "workspace_id": workspace_id,
+                    "tenant_id": str(scoped_metadata.get("tenant_id") or "").strip() or None,
+                    "trigger": str(scoped_metadata.get("trigger") or "scheduled").strip() or "scheduled",
+                    "heartbeat_task_count": len(tasks),
+                    "source": "heartbeat",
+                },
+                work=lambda: _execute_heartbeat_run(tasks, scoped_metadata),
+            )
+            queue_item_id = (
+                str(queue_result.get("item_id") or "").strip()
+                if isinstance(queue_result, dict)
+                else ""
+            )
+            return {
+                "acted": True,
+                "queued": True,
+                "lane": "cron",
+                "queue_item_id": queue_item_id or None,
+                "summary": (
+                    "Queued heartbeat work in the cron lane."
+                    + (f" Queue item: {queue_item_id}." if queue_item_id else "")
+                ),
+                "scheduler_mode": "queued",
+            }
+        return _execute_heartbeat_run(tasks, scoped_metadata)
 
     return _start_heartbeat_run
 

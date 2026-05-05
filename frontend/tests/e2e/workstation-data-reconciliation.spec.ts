@@ -252,7 +252,7 @@ async function stubChatTrustProviderRequests(page) {
       if (url.includes('/api/turn')) {
         state.turnCallCount += 1;
         return jsonResponse({
-          detail: 'The selected AI model is not ready. Switch to hosted credits/API key, connect this computer, or choose another model in Connected Apps.',
+          detail: 'The selected AI path is not ready. Use Empyralis credits, add your own API key, connect My Computer, or choose another model in Connected Apps.',
         }, 400);
       }
 
@@ -298,14 +298,14 @@ test.describe('workstation data reconciliation', () => {
     await composer.press('Enter');
 
     await expect(page.locator('.app-chat-status-notice')).toContainText('Action needed');
-    await expect(page.locator('.app-chat-status-notice')).toContainText(/Sage needs Empyralis credits|The selected AI model is not ready\./);
+    await expect(page.locator('.app-chat-status-notice')).toContainText(/Sage needs an AI path|The selected AI path is not ready\./);
     await expect(page.locator('.app-chat-status-notice')).toContainText('Manage credits');
     await expect(page.locator('.app-chat-status-notice')).toContainText('Add API key');
     await expect(page.locator('.app-chat-status-notice')).toContainText('Choose AI Model');
     const userBubbleCount = await page.locator('[data-chat-role="user"]').filter({ hasText: 'hello' }).count();
     expect(userBubbleCount).toBeLessThanOrEqual(1);
     await expect(
-      page.locator('[data-chat-role="assistant"]').filter({ hasText: /Sage needs Empyralis credits|The selected AI model is not ready\./ }),
+      page.locator('[data-chat-role="assistant"]').filter({ hasText: /Sage needs an AI path|The selected AI path is not ready\./ }),
     ).toHaveCount(0);
   });
 

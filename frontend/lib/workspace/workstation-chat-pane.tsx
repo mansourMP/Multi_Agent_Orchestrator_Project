@@ -1041,18 +1041,74 @@ function providerRouteSuffix(provider: ProviderCatalogRecord | null | undefined)
   return null;
 }
 
+function providerPathLabel(provider: ProviderCatalogRecord | null | undefined): string | null {
+  if (!provider || typeof provider !== 'object') {
+    return null;
+  }
+  const providerId = readString(provider.id).toLowerCase();
+  const credentialPlane = readString(provider.credential_plane).toLowerCase();
+  const defaultAuthMode = readString(provider.default_auth_mode).toLowerCase();
+  const runtimeSource = readString(provider.runtime_active_source).toLowerCase();
+  const providerLabel = readString(provider.label) || readString(provider.id);
+
+  if (providerId === 'ollama') {
+    return 'My Computer · Ollama local';
+  }
+  if (providerId === 'openai-codex' || runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
+    return 'My Computer · CLI';
+  }
+  if (providerId === 'ollama_cloud') {
+    return 'Ollama Cloud';
+  }
+  if (credentialPlane === 'platform_runtime') {
+    return 'Empyralis credits';
+  }
+  if (credentialPlane === 'workspace_connection') {
+    return 'Your API key';
+  }
+  if (provider.local_only === true || credentialPlane === 'local_runtime') {
+    return 'My Computer';
+  }
+  return providerLabel || null;
+}
+
+function providerSummaryLabel({
+  provider,
+  providerLabel,
+  modelLabel,
+}: {
+  provider: ProviderCatalogRecord | null | undefined;
+  providerLabel: string | null | undefined;
+  modelLabel: string | null | undefined;
+}): string {
+  const pathLabel = providerPathLabel(provider);
+  const resolvedProviderLabel = readString(provider?.label) || readString(providerLabel);
+  const resolvedModelLabel = readString(modelLabel);
+  const parts: string[] = [];
+  if (pathLabel) {
+    parts.push(pathLabel);
+  }
+  if (resolvedProviderLabel && !pathLabel?.toLowerCase().includes(resolvedProviderLabel.toLowerCase())) {
+    parts.push(resolvedProviderLabel);
+  }
+  if (resolvedModelLabel) {
+    parts.push(resolvedModelLabel);
+  }
+  return parts.join(' · ');
+}
+
 function providerFailureMessageForProvider(provider: ProviderCatalogRecord | null | undefined): string {
   const credentialPlane = readString(provider?.credential_plane).toLowerCase();
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected computer. Connect this computer, use Empyralis credits, or add your own API key in Connected Apps.`;
+    return `${providerLabel} needs a connected computer. Connect My Computer, use Empyralis credits, or add your own API key in Connected Apps.`;
   }
   if (credentialPlane === 'workspace_connection') {
-    return 'Your AI model key needs attention. Check the key, quota, or selected model in Connected Apps.';
+    return 'Your AI model API key needs attention. Check the key, quota, or selected model in Connected Apps.';
   }
   if (credentialPlane === 'platform_runtime') {
-    return 'The hosted AI model is temporarily unavailable. Try again or switch model.';
+    return 'Empyralis credits are active, but the hosted AI model is temporarily unavailable. Try again or switch model.';
   }
   return 'The selected AI model is not available right now. Switch model or open Connected Apps.';
 }
@@ -3077,15 +3133,22 @@ export function WorkstationChatPane() {
     const liveProviderId = readString(liveTrace?.trace?.provider);
     const liveModelId = readString(liveTrace?.trace?.model);
     if (liveProviderId) {
-      const label = providerLabelById.get(liveProviderId) || liveProviderId;
+      const liveProvider = providerCatalog.find((provider) => readString(provider.id) === liveProviderId) ?? null;
+      const label = providerSummaryLabel({
+        provider: liveProvider,
+        providerLabel: providerLabelById.get(liveProviderId) || liveProviderId,
+        modelLabel: liveModelId || null,
+      }) || providerLabelById.get(liveProviderId) || liveProviderId;
       return {
-        label: liveModelId ? `${label} · ${liveModelId}` : label,
+        label,
         connected: true,
       };
     }
-    const selectedProviderLabel = selectedProviderContext.modelLabel
-      ? `${selectedProviderContext.providerLabel} · ${selectedProviderContext.modelLabel}`
-      : readString(selectedProviderContext.providerLabel);
+    const selectedProviderLabel = providerSummaryLabel({
+      provider: selectedProviderRecord,
+      providerLabel: selectedProviderContext.providerLabel,
+      modelLabel: selectedProviderContext.modelLabel,
+    }) || readString(selectedProviderContext.providerLabel);
     if (selectedProviderRecord) {
       const ready = providerReadyForChat(selectedProviderRecord, {
         gatewayToolingOnline,
@@ -3117,19 +3180,29 @@ export function WorkstationChatPane() {
     selectedProviderContext.providerLabel,
   ]);
   const runtimeStatus = useMemo(() => {
+    const providerPath = providerPathLabel(selectedProviderRecord);
     const providerId = readString(selectedProviderRecord?.id).toLowerCase();
     const credentialPlane = readString(selectedProviderRecord?.credential_plane).toLowerCase();
     const localProvider = providerId === 'ollama'
       || providerId === 'openai-codex'
       || selectedProviderRecord?.local_only === true
       || credentialPlane === 'local_runtime';
+    if (!selectedProviderRecord) {
+      return { label: 'No AI model', tone: 'warning' as const };
+    }
     if (!gatewayToolingOnline) {
       return { label: 'My Computer offline', tone: 'warning' as const };
     }
     if (localProvider) {
-      return { label: 'This Mac', tone: 'success' as const };
+      return { label: providerPath ?? 'My Computer', tone: 'success' as const };
     }
-    return { label: 'Cloud', tone: 'neutral' as const };
+    if (providerPath === 'Empyralis credits') {
+      return { label: 'Empyralis credits', tone: 'success' as const };
+    }
+    if (providerPath === 'Your API key' || providerPath === 'Ollama Cloud') {
+      return { label: providerPath, tone: 'neutral' as const };
+    }
+    return { label: 'Cloud AI', tone: 'neutral' as const };
   }, [gatewayToolingOnline, selectedProviderRecord]);
   const composerToolGroups = useMemo<ComposerToolGroup[]>(() => {
     const localReason = gatewayToolingOnline ? 'Available through this paired computer' : 'Requires a connected computer';
@@ -3570,7 +3643,7 @@ export function WorkstationChatPane() {
         selectedProviderRecord
           ? providerFailureNoticeForProvider(selectedProviderRecord)
           : {
-              message: 'Sage needs Empyralis credits or your own API key before it can answer. Set up hosted credits, DeepSeek, Gemini, OpenAI, or another AI model in Connected Apps.',
+              message: 'Sage needs an AI path before it can answer. Use Empyralis credits, add your own API key, or connect My Computer for local Ollama in Connected Apps.',
               retryable: false,
               actions: [
                 { label: 'Manage credits', target: 'integrations' },
@@ -4064,7 +4137,7 @@ export function WorkstationChatPane() {
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
           ? 'My Computer is needed for this request. Connect this computer and try again.'
           : providerNeedsAttention
-            ? 'The selected AI model is not ready. Switch to hosted credits/API key, connect this computer, or choose another model in Connected Apps.'
+            ? 'The selected AI path is not ready. Use Empyralis credits, add your own API key, connect My Computer, or choose another model in Connected Apps.'
             : authNeedsAttention
               ? 'Your session needs attention before Sage can continue. Refresh the page or sign in again.'
               : rateLimitFailure

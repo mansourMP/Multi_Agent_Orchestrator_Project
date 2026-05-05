@@ -486,7 +486,7 @@ function hostedCreditUsageLabel(hostedSageAi: HostedSageAiSnapshot): string {
 
 function hostedProviderDetailLabel(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord): string {
   const modelLabel = providerActiveModelLabel(hostedProviderCard);
-  return `${hostedProviderCard.label} · ${modelLabel} · ${hostedCreditUsageLabel(hostedSageAi)}`;
+  return `Empyralis credits · ${hostedProviderCard.label} · ${modelLabel} · ${hostedCreditUsageLabel(hostedSageAi)}`;
 }
 
 function fallbackProviderCatalog(): ProviderSnapshot[] {
@@ -651,6 +651,44 @@ function providerActiveModelLabel(record: ProviderCardRecord | null): string {
     || 'No model selected';
 }
 
+function providerPathLabel(record: ProviderCardRecord): string {
+  const providerId = readString(record.provider.id).toLowerCase();
+  const credentialPlane = readString(record.provider.credentialPlane).toLowerCase();
+  const defaultAuthMode = readString(record.provider.defaultAuthMode).toLowerCase();
+  const activeSource = readString(record.provider.activeSource).toLowerCase();
+
+  if (providerId === 'ollama') {
+    return 'My Computer · Ollama local';
+  }
+  if (providerId === 'openai-codex' || activeSource.includes('cli') || defaultAuthMode === 'oauth_token') {
+    return 'My Computer · CLI';
+  }
+  if (providerId === 'ollama_cloud') {
+    return 'Ollama Cloud';
+  }
+  if (
+    credentialPlane === 'platform_runtime'
+    || record.provider.hostedSageAiPolicy === 'allowed'
+    || record.provider.hostedSageAiPolicy === 'enabled_with_cap'
+    || activeSource.includes('platform')
+    || activeSource.includes('hosted')
+  ) {
+    return 'Empyralis credits';
+  }
+  if (
+    credentialPlane === 'workspace_connection'
+    || record.provider.workspaceConnected
+    || Boolean(record.credential)
+    || Boolean(readString(record.profile?.credential_id))
+  ) {
+    return 'Your API key';
+  }
+  if (record.provider.localOnly === true || credentialPlane === 'local_runtime') {
+    return 'My Computer';
+  }
+  return record.label;
+}
+
 function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
   if (!credential || typeof credential.metadata !== 'object' || !credential.metadata) {
     return null;
@@ -695,34 +733,36 @@ function BrandLogo({
 
 function describeProviderCard(record: ProviderCardRecord, localCompanionOnline: boolean): string {
   const modelCount = record.provider.models.length;
+  const pathLabel = providerPathLabel(record);
+  const modelLabel = providerActiveModelLabel(record);
   const authMode = readString(record.profile?.auth_mode).replace(/_/g, ' ');
   if (record.provider.id === 'ollama' && !localCompanionOnline) {
-    return 'Unavailable — connect this computer first';
+    return `${pathLabel} · Connect this computer first`;
   }
   if (record.connected) {
-    if (record.provider.defaultModel) {
-      return record.provider.defaultModel;
+    if (modelLabel && modelLabel !== 'No model selected') {
+      return `${pathLabel} · ${modelLabel}`;
     }
     if (modelCount > 0) {
-      return `${modelCount} model${modelCount === 1 ? '' : 's'} ready`;
+      return `${pathLabel} · ${modelCount} model${modelCount === 1 ? '' : 's'} ready`;
     }
     if (authMode) {
-      return authMode;
+      return `${pathLabel} · ${authMode}`;
     }
     if (record.provider.stateDetail) {
-      return record.provider.stateDetail;
+      return `${pathLabel} · ${record.provider.stateDetail}`;
     }
-    return 'Ready';
+    return `${pathLabel} · Ready`;
   }
   if (record.provider.id === 'ollama') {
-    return localCompanionOnline ? 'Browse local models' : 'Needs local device';
+    return localCompanionOnline ? `${pathLabel} · Browse local models` : `${pathLabel} · Needs this computer`;
   }
   if (record.provider.modelsError) {
-    return 'Needs model refresh';
+    return `${pathLabel} · Needs model refresh`;
   }
   return providerRequiresSecret(record.provider, record.profile)
-    ? `Add ${providerCredentialLabel(record.provider, record.profile).toLowerCase()}`
-    : 'Connect to continue';
+    ? `${pathLabel} · Add ${providerCredentialLabel(record.provider, record.profile).toLowerCase()}`
+    : `${pathLabel} · Connect to continue`;
 }
 
 function providerRouteBadge(record: ProviderCardRecord): { label: string; tone: 'neutral' | 'hosted' | 'local' } | null {
@@ -760,14 +800,36 @@ function providerStatusPresentation(
   record: ProviderCardRecord,
   localCompanionOnline: boolean,
 ): { label: string; className: string | null; showDot: boolean } {
+  const pathLabel = providerPathLabel(record);
   if (record.provider.id === 'ollama' && !localCompanionOnline) {
     return {
-      label: 'Unavailable',
+      label: 'Offline',
       className: 'sage-unified-card__status--warning',
       showDot: false,
     };
   }
   if (record.status === 'connected') {
+    if (pathLabel === 'Empyralis credits') {
+      return {
+        label: 'Credits ready',
+        className: 'sage-unified-card__status--connected',
+        showDot: true,
+      };
+    }
+    if (pathLabel === 'Your API key' || pathLabel === 'Ollama Cloud') {
+      return {
+        label: 'Key ready',
+        className: 'sage-unified-card__status--connected',
+        showDot: true,
+      };
+    }
+    if (pathLabel.startsWith('My Computer')) {
+      return {
+        label: 'Ready on this computer',
+        className: 'sage-unified-card__status--connected',
+        showDot: true,
+      };
+    }
     return {
       label: 'Connected',
       className: 'sage-unified-card__status--connected',
@@ -1335,19 +1397,19 @@ export function WorkstationSageConnectorsPane({
     if (hostedProviderCard || hostedSageAi.planAllowsHostedAi) {
       sections.push({
         id: 'hosted',
-        label: 'Use Empyralis credits',
+        label: 'Empyralis credits',
         items: hostedProviderCard ? [hostedProviderCard] : [],
       });
     }
     sections.push({
       id: 'byok',
-      label: 'Use your own API key',
+      label: 'Bring your own API key',
       items: byokItems,
     });
     if (localItems.length > 0) {
       sections.push({
         id: 'local',
-        label: 'Use My Computer (local Ollama)',
+        label: 'My Computer (local Ollama)',
         items: localItems,
       });
     }
@@ -2074,8 +2136,10 @@ export function WorkstationSageConnectorsPane({
     const detailLabel = sectionId === 'hosted'
       ? hostedProviderDetailLabel(hostedSageAi, record)
       : isLocalSection
-        ? (localCompanionOnline ? 'Uses models available on this computer' : 'Connect My Computer first')
-      : providerPickerStatusLabel(record, localCompanionOnline);
+        ? (localCompanionOnline ? 'My Computer · Uses the Ollama models available on this device' : 'My Computer · Connect this computer first')
+      : record.provider.id === 'ollama_cloud'
+        ? `${providerPickerStatusLabel(record, localCompanionOnline)} · Ollama Cloud API`
+        : `${providerPickerStatusLabel(record, localCompanionOnline)} · ${providerPathLabel(record)}`;
     return (
       <div key={`${sectionId}:${record.id}`} className={joinClassNames('sage-provider-picker__item', isHostedSection && 'sage-provider-picker__item--hosted')}>
         <button
@@ -2224,9 +2288,13 @@ export function WorkstationSageConnectorsPane({
                       />
                       <div className="sage-provider-active__copy">
                         <strong className="sage-provider-active__name">
-                          {activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Empyralis default model' : activeProviderCard.label}
+                          {activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Empyralis credits' : activeProviderCard.label}
                         </strong>
-                        <span className="sage-provider-active__model">{providerActiveModelLabel(activeProviderCard)}</span>
+                        <span className="sage-provider-active__model">
+                          {activeProviderCard === hostedProviderCard && !explicitSelectedProfile
+                            ? hostedProviderDetailLabel(hostedSageAi, activeProviderCard)
+                            : `${providerPathLabel(activeProviderCard)} · ${providerActiveModelLabel(activeProviderCard)}`}
+                        </span>
                       </div>
                     </>
                   ) : (

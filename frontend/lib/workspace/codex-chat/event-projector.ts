@@ -58,7 +58,7 @@ function fileActionLabel(label: string, fallback: string): string {
 }
 
 function isSendish(value: string): boolean {
-  return /send|dispatch|deliver|reply|post|submit|outbound/i.test(value);
+  return /send|sent|dispatch|deliver|reply|post|submit|outbound/i.test(value);
 }
 
 function isSearchLabel(value: string): boolean {
@@ -126,25 +126,7 @@ function toolDisplayName(rawName: string): string {
     return 'Generating image';
   }
   if (lower.includes('browser')) {
-    if (lower.includes('observe') || lower.includes('extract text') || lower.includes('get page state') || lower.includes('read')) {
-      return 'Reading browser';
-    }
-    if (lower.includes('navigate') || lower.includes('new tab') || lower.includes('switch tab') || lower.includes('open')) {
-      return 'Navigating browser';
-    }
-    if (lower.includes('screenshot') || lower.includes('pdf')) {
-      return 'Capturing browser artifact';
-    }
-    if (lower.includes('execute js') || lower.includes('download file')) {
-      return 'Updating browser';
-    }
-    if (lower.includes('click')) {
-      return 'Clicking browser';
-    }
-    if (lower.includes('type') || lower.includes('fill') || lower.includes('input')) {
-      return 'Typing in browser';
-    }
-    return 'Using browser';
+    return 'Browser action';
   }
   return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -152,36 +134,9 @@ function toolDisplayName(rawName: string): string {
 function browserActionDisplay(action: string): string {
   const normalized = action.toLowerCase();
   if (!normalized) {
-    return 'Using browser';
+    return 'Browser action';
   }
-  if (normalized.includes('click')) {
-    return 'Clicking browser';
-  }
-  if (normalized.includes('type') || normalized.includes('input')) {
-    return 'Typing in browser';
-  }
-  if (normalized.includes('fill')) {
-    return 'Typing in browser';
-  }
-  if (normalized.includes('navigate') || normalized.includes('goto') || normalized.includes('open')) {
-    return 'Navigating browser';
-  }
-  if (normalized.includes('scroll')) {
-    return 'Reading browser';
-  }
-  if (normalized.includes('select')) {
-    return 'Updating browser';
-  }
-  if (normalized.includes('observe') || normalized.includes('extract') || normalized.includes('read')) {
-    return 'Reading browser';
-  }
-  if (normalized.includes('screenshot') || normalized.includes('capture')) {
-    return 'Capturing browser artifact';
-  }
-  if (normalized.includes('script') || normalized.includes('execute')) {
-    return 'Updating browser';
-  }
-  return `Using browser · ${action.replace(/[_-]+/g, ' ')}`.replace(/\b\w/g, (char) => char.toUpperCase());
+  return 'Browser action';
 }
 
 function eventId(prefix: string, candidate: unknown, fallbackIndex: number): string {
@@ -454,7 +409,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     return [{
       type: 'status',
       id: eventId('artifact', data.artifact_id || data.artifactId || payload.item_id, fallbackIndex),
-      label: 'Final outcome ready',
+      label: 'Done',
       detail: readString(data.title) || readString(data.label) || readString(data.mime_type) || null,
       status: 'done',
     }];
@@ -500,7 +455,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     return [{
       type: 'status',
       id: eventId('done', payload.trace_id || payload.item_id, fallbackIndex),
-      label: 'Final outcome ready',
+      label: 'Done',
       detail: completionDetail,
       status: 'done',
     }];

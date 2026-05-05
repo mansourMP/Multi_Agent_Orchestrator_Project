@@ -1,12 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode } from 'react';
 import {
   Brain,
   Camera,
   Check,
-  ChevronRight,
   CircleAlert,
   FileText,
   Search,
@@ -59,27 +58,6 @@ function toolActivityLabel(name: string): string {
   if (normalized.includes('sending email')) {
     return 'Sending email';
   }
-  if (normalized.includes('browser action')) {
-    return 'Browser action';
-  }
-  if (normalized.includes('reading browser')) {
-    return 'Reading browser';
-  }
-  if (normalized.includes('navigating browser')) {
-    return 'Navigating browser';
-  }
-  if (normalized.includes('typing in browser')) {
-    return 'Typing in browser';
-  }
-  if (normalized.includes('clicking browser')) {
-    return 'Clicking browser';
-  }
-  if (normalized.includes('updating browser')) {
-    return 'Updating browser';
-  }
-  if (normalized.includes('capturing browser')) {
-    return 'Capturing browser';
-  }
   if (normalized.includes('browser')) {
     return 'Browser action';
   }
@@ -112,18 +90,6 @@ function providerLabel(cell: CodexTranscriptCell): string {
   ].filter(Boolean);
   return parts.join(' · ');
 }
-
-type ThinkingDisclosureSection = {
-  id: string;
-  title: string;
-  detail: string;
-};
-
-type ThinkingDisclosureContent = {
-  sections: ThinkingDisclosureSection[];
-  fallbackText: string;
-  showsDisclosure: boolean;
-};
 
 const THINKING_ACTIVITY_PREFIXES = [
   'running ',
@@ -165,100 +131,6 @@ function normalizedThinkingContent(rawText: string): string {
   return trimmed;
 }
 
-function summaryTitle(line: string): string | null {
-  const match = line.match(/^\s*\*\*(.+?)\*\*\s*$/);
-  return match?.[1]?.trim() || null;
-}
-
-function joinedThinkingBlock(lines: string[]): string {
-  return lines.join('\n').trim();
-}
-
-function coalescedAdjacentSections(sections: ThinkingDisclosureSection[]): ThinkingDisclosureSection[] {
-  const collapsed: ThinkingDisclosureSection[] = [];
-  for (const section of sections) {
-    const previous = collapsed.at(-1);
-    if (!previous || previous.title !== section.title) {
-      collapsed.push(section);
-      continue;
-    }
-    const mergedDetail = previous.detail === section.detail || !section.detail
-      ? previous.detail
-      : !previous.detail || section.detail.includes(previous.detail)
-        ? section.detail
-        : previous.detail.includes(section.detail)
-          ? previous.detail
-          : [previous.detail, section.detail].filter(Boolean).join('\n\n');
-    collapsed[collapsed.length - 1] = {
-      ...previous,
-      detail: mergedDetail,
-    };
-  }
-  return collapsed;
-}
-
-function parseThinkingDisclosure(rawText: string): ThinkingDisclosureContent {
-  const normalizedText = normalizedThinkingContent(rawText);
-  if (!normalizedText) {
-    return { sections: [], fallbackText: '', showsDisclosure: false };
-  }
-  const lines = normalizedText.split('\n');
-  const preambleLines: string[] = [];
-  const sections: ThinkingDisclosureSection[] = [];
-  let currentTitle: string | null = null;
-  let currentDetailLines: string[] = [];
-
-  const flushCurrent = () => {
-    if (!currentTitle) {
-      return;
-    }
-    sections.push({
-      id: `${sections.length}-${currentTitle}`,
-      title: currentTitle,
-      detail: joinedThinkingBlock(currentDetailLines),
-    });
-    currentDetailLines = [];
-  };
-
-  for (const line of lines) {
-    const title = summaryTitle(line);
-    if (title) {
-      flushCurrent();
-      currentTitle = title;
-      continue;
-    }
-    if (currentTitle === null) {
-      preambleLines.push(line);
-    } else {
-      currentDetailLines.push(line);
-    }
-  }
-  flushCurrent();
-
-  if (sections.length > 0) {
-    const preamble = joinedThinkingBlock(preambleLines);
-    if (preamble) {
-      const first = sections[0];
-      sections[0] = {
-        ...first,
-        detail: [preamble, first.detail].filter(Boolean).join('\n\n'),
-      };
-    }
-    const mergedSections = coalescedAdjacentSections(sections);
-    return {
-      sections: mergedSections,
-      fallbackText: normalizedText,
-      showsDisclosure: mergedSections.length > 0,
-    };
-  }
-
-  return {
-    sections: [],
-    fallbackText: normalizedText,
-    showsDisclosure: false,
-  };
-}
-
 function compactActivityPreview(text: string): string | null {
   const lines = normalizedThinkingContent(text)
     .split('\n')
@@ -280,14 +152,53 @@ function compactActivityPreview(text: string): string | null {
   return null;
 }
 
+function compactSystemDetail(value: string | null | undefined, fallback: string): string {
+  const trimmed = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const lower = trimmed.toLowerCase();
+  const isJsonLike = (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+  const looksDebugLike =
+    isJsonLike
+    || lower.startsWith('event:')
+    || lower.startsWith('data:')
+    || lower.includes('"event_type"')
+    || lower.includes('"payload"')
+    || lower.includes('"metadata"')
+    || lower.includes('trace_id')
+    || lower.includes('tool_call_id')
+    || lower.includes('activity_event_id');
+  if (looksDebugLike) {
+    return fallback;
+  }
+  return trimmed.length > 140 ? `${trimmed.slice(0, 137).trimEnd()}…` : trimmed;
+}
+
+function statusPrimaryLabel(label: string): string {
+  const normalized = label.trim().toLowerCase();
+  if (!normalized) {
+    return 'Done';
+  }
+  if (normalized === 'final outcome ready' || normalized === 'done') {
+    return 'Done';
+  }
+  if (normalized.includes('approval')) {
+    return 'Needs your OK';
+  }
+  return humanizeToken(label) || 'Done';
+}
+
 function SystemInlineRow({
   icon,
+  kind,
   primary,
   secondary,
   state,
   dimmed,
 }: {
   icon: ReactNode;
+  kind: string;
   primary: string;
   secondary: string;
   state: 'running' | 'done' | 'error';
@@ -296,6 +207,7 @@ function SystemInlineRow({
   return (
     <article
       data-chat-role="system"
+      data-chat-activity-kind={kind}
       className={`app-chat-system-row app-chat-system-row--${state}${dimmed ? ' app-chat-system-row--dimmed' : ''}`}
     >
       <span className="app-chat-system-row__icon" aria-hidden="true">{icon}</span>
@@ -350,55 +262,20 @@ export function ReasoningSummaryCell({
 }: {
   cell: Extract<CodexTranscriptCell, { kind: 'reasoning_summary' }>;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const text = cell.text.trim();
-  const activityLine = cell.activityLine || compactActivityPreview(text);
-  const disclosure = useMemo(
-    () => parseThinkingDisclosure(text),
-    [text],
-  );
-
-  if (activityLine) {
-    return (
-      <article className={`app-chat-thinking-row${cell.isStreaming ? ' app-chat-thinking-row--streaming' : ''}${cell.dimmed ? ' app-chat-thinking-row--dimmed' : ''}`}>
-        <div className="app-chat-thinking-row__header">
-          <span className="app-chat-thinking-row__pulse" aria-hidden="true" />
-          <span className="app-chat-thinking-row__label">Thinking</span>
-        </div>
-        <div className="app-chat-thinking-row__activity">{activityLine}</div>
-      </article>
-    );
-  }
+  const activityLine = compactSystemDetail(cell.activityLine || compactActivityPreview(text), 'Working');
 
   return (
-    <article className={`app-chat-thinking-row${cell.isStreaming ? ' app-chat-thinking-row--streaming' : ''}${cell.dimmed ? ' app-chat-thinking-row--dimmed' : ''}`}>
-      <button
-        type="button"
-        className="app-chat-thinking-row__toggle"
-        onClick={() => setExpanded((current) => !current)}
-      >
-        <ChevronRight
-          size={12}
-          strokeWidth={2}
-          className={`app-chat-thinking-row__chevron${expanded ? ' app-chat-thinking-row__chevron--expanded' : ''}`}
-          aria-hidden="true"
-        />
+    <article
+      data-chat-role="system"
+      data-chat-activity-kind="thinking"
+      className={`app-chat-thinking-row${cell.isStreaming ? ' app-chat-thinking-row--streaming' : ''}${cell.dimmed ? ' app-chat-thinking-row--dimmed' : ''}`}
+    >
+      <div className="app-chat-thinking-row__header">
+        <span className="app-chat-thinking-row__pulse" aria-hidden="true" />
         <span className="app-chat-thinking-row__label">Thinking</span>
-      </button>
-      {expanded ? (
-        <div className="app-chat-thinking-row__detail">
-          {disclosure.showsDisclosure
-            ? disclosure.sections.map((section) => (
-              <div key={section.id} className="app-chat-thinking-row__section">
-                <div className="app-chat-thinking-row__section-title">{section.title}</div>
-                {section.detail ? (
-                  <pre className="app-chat-thinking-row__detail-text">{section.detail}</pre>
-                ) : null}
-              </div>
-            ))
-            : <pre className="app-chat-thinking-row__detail-text">{disclosure.fallbackText}</pre>}
-        </div>
-      ) : null}
+      </div>
+      <div className="app-chat-thinking-row__activity">{activityLine}</div>
     </article>
   );
 }
@@ -406,13 +283,14 @@ export function ReasoningSummaryCell({
 export function ExecCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'exec' }> }) {
   return (
     <SystemInlineRow
+      kind="shell"
       icon={cell.status === 'done'
         ? <Check size={14} strokeWidth={2} />
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <SquareTerminal size={14} strokeWidth={1.9} />}
       primary="Running shell"
-      secondary={cell.command || (cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running')}
+      secondary={compactSystemDetail(cell.command, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running')}
       state={cell.status}
       dimmed={cell.dimmed === true}
     />
@@ -422,13 +300,14 @@ export function ExecCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 
 export function ToolCallCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'tool' }> }) {
   return (
     <SystemInlineRow
+      kind={toolActivityLabel(cell.name || '').toLowerCase().replace(/\s+/g, '_')}
       icon={cell.status === 'done'
         ? <Check size={14} strokeWidth={2} />
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <Wrench size={14} strokeWidth={1.9} />}
       primary={toolActivityLabel(cell.name || '')}
-      secondary={cell.result || (cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : (cell.name || 'Running'))}
+      secondary={compactSystemDetail(cell.result, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : (cell.name || 'Running'))}
       state={cell.status}
       dimmed={cell.dimmed === true}
     />
@@ -439,13 +318,14 @@ export function WebSearchCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
   const state = cell.status === 'searching' ? 'running' : cell.status;
   return (
     <SystemInlineRow
+      kind="search"
       icon={cell.status === 'done'
         ? <Check size={14} strokeWidth={2} />
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <Search size={14} strokeWidth={1.9} />}
       primary="Searching web"
-      secondary={cell.query || (cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Searching')}
+      secondary={compactSystemDetail(cell.query, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Searching')}
       state={state}
       dimmed={cell.dimmed === true}
     />
@@ -455,13 +335,14 @@ export function WebSearchCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
 export function FileChangeCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'file_change' }> }) {
   return (
     <SystemInlineRow
+      kind="file"
       icon={cell.status === 'done'
         ? <Check size={14} strokeWidth={2} />
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <FileText size={14} strokeWidth={1.9} />}
       primary={fileActivityLabel(cell.action || '')}
-      secondary={cell.filename || (cell.status === 'done' ? 'Done' : 'File')}
+      secondary={compactSystemDetail(cell.filename, cell.status === 'done' ? 'Done' : 'File')}
       state={cell.status}
       dimmed={cell.dimmed === true}
     />
@@ -469,14 +350,14 @@ export function FileChangeCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
 }
 
 export function ScreenshotCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'screenshot' }> }) {
-  const sizeLabel = cell.width && cell.height ? ` · ${cell.width}x${cell.height}` : '';
   return (
     <SystemInlineRow
+      kind="artifact"
       icon={cell.status === 'done'
         ? <Camera size={14} strokeWidth={1.9} />
         : <CircleAlert size={14} strokeWidth={2} />}
       primary="Screenshot/artifact"
-      secondary={cell.caption || (cell.status === 'done' ? `Captured${sizeLabel}` : 'Failed')}
+      secondary={compactSystemDetail(cell.caption, cell.status === 'done' ? 'Captured' : 'Failed')}
       state={cell.status}
       dimmed={cell.dimmed === true}
     />
@@ -500,14 +381,21 @@ export function ApprovalCell({
   const resolving = Boolean(resolvingApprovalId && resolvingApprovalId === approvalId);
   const canResolve = Boolean(approvalId && onResolveApproval && cell.status === 'waiting');
   return (
-    <article className={`app-chat-approval-cell app-chat-system-row--${cell.status === 'waiting' ? 'running' : cell.status}${cell.dimmed ? ' app-chat-system-row--dimmed' : ''}`}>
+    <article
+      data-chat-role="system"
+      data-chat-activity-kind="approval"
+      className={`app-chat-approval-cell app-chat-system-row--${cell.status === 'waiting' ? 'running' : cell.status}${cell.dimmed ? ' app-chat-system-row--dimmed' : ''}`}
+    >
       <span className="app-chat-system-row__icon" aria-hidden="true">
         <ShieldCheck size={14} strokeWidth={1.9} />
       </span>
       <div className="app-chat-approval-cell__copy">
         <span className="app-chat-system-row__primary">Needs your OK</span>
         <span className="app-chat-system-row__secondary">
-          {cell.prompt || (cell.status === 'waiting' ? 'Choose 1 allow once, 2 allow session, or 3 deny' : cell.status === 'done' ? 'Done' : 'Failed')}
+          {compactSystemDetail(
+            cell.prompt,
+            cell.status === 'waiting' ? 'Choose 1 allow once, 2 allow session, or 3 deny' : cell.status === 'done' ? 'Done' : 'Failed',
+          )}
         </span>
       </div>
       {canResolve ? (
@@ -545,13 +433,14 @@ export function ApprovalCell({
 export function StatusCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'status' }> }) {
   return (
     <SystemInlineRow
+      kind={statusPrimaryLabel(cell.label || '').toLowerCase().replace(/\s+/g, '_')}
       icon={cell.status === 'done'
         ? <Check size={14} strokeWidth={2} />
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <Brain size={14} strokeWidth={1.9} />}
-      primary={cell.label || 'Status'}
-      secondary={cell.detail || (cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running')}
+      primary={statusPrimaryLabel(cell.label || 'Status')}
+      secondary={compactSystemDetail(cell.detail, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running')}
       state={cell.status === 'idle' ? 'running' : cell.status}
       dimmed={cell.dimmed === true}
     />

@@ -84,6 +84,45 @@ async function resolveApprovalsSurfaceSelector(page) {
 }
 
 async function stubSurfaceDataRequests(page) {
+  await page.route('**/api/sage-profile?workspace_id=ws-1', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        profile: {
+          user_name: 'Owner',
+          identity_summary: 'Runs the workspace.',
+          communication_style: 'Direct',
+          recurring_responsibility: 'Keep operations moving.',
+          standing_rules: [],
+        },
+        bootstrap: {
+          complete: true,
+          answered_count: 5,
+          total_count: 5,
+          progress_label: '5/5',
+          current_question: null,
+        },
+      }),
+    });
+  });
+
+  await page.route('**/api/workspaces/ws-1/sage/tool-policy', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], summary: {} }),
+    });
+  });
+
+  await page.route('**/api/connectors/vault?workspace_id=ws-1', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] }),
+    });
+  });
+
   await page.route('**/api/threads/primary**', async (route) => {
     await route.fulfill({
       status: 200,
@@ -318,7 +357,7 @@ test.describe('workstation data reconciliation', () => {
       ['/w/ws-1', '[data-workstation-surface="chat"]'],
       ['/w/ws-1/runs', '[data-workstation-surface="runs"]'],
       ['/w/ws-1/approvals', approvalsSurfaceSelector],
-      ['/w/ws-1/activity', '[data-workstation-surface="activity"]'],
+      ['/w/ws-1/activity', '[data-workstation-surface="memory"]'],
     ];
 
     for (const [route, selector] of routeExpectations) {

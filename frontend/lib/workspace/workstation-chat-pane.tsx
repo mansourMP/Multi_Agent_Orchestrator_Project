@@ -3189,6 +3189,7 @@ export function WorkstationChatPane() {
         || cell.kind === 'tool'
         || cell.kind === 'web_search'
         || cell.kind === 'file_change'
+        || cell.kind === 'screenshot'
         || cell.kind === 'approval_request'
         || cell.kind === 'status'
         || cell.kind === 'error'

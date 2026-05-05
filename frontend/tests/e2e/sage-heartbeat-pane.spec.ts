@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 
 import { loginAsOwner } from './support/auth';
 
-test.describe('sage heartbeat pane', () => {
+test.describe('sage tasks pane', () => {
   test('shows product queue lanes and quiet-hours truth', async ({ page }) => {
     await page.route('**/api/sage-heartbeat?workspace_id=ws-1', async (route) => {
       await route.fulfill({
@@ -152,9 +152,13 @@ test.describe('sage heartbeat pane', () => {
     });
 
     await loginAsOwner(page);
-    await page.goto('/w/ws-1/heartbeat');
+    await page.goto('/w/ws-1/tasks');
 
-    await expect(page.getByText(/background queue/i)).toBeVisible();
+    await expect(page).toHaveURL(/\/w\/ws-1\/tasks$/);
+    await expect(page.getByText(/Tasks is where Sage shows heartbeat, reminders, recurring responsibilities, quiet hours, scheduled jobs, and governed work lanes/i)).toBeVisible();
+    await expect(page.getByText(/task lanes/i)).toBeVisible();
+    await expect(page.getByText(/Now, Waiting, Scheduled, Needs your OK, and Done show what Sage is doing now and what happens later/i)).toBeVisible();
+    await expect(page.getByText(/Reminders and recurring responsibilities/i)).toBeVisible();
     await expect(page.locator('.app-surface-stat').filter({ hasText: 'Running now' })).toContainText('1');
     await expect(page.locator('.app-surface-stat').filter({ hasText: 'Waiting' })).toContainText('1');
     await expect(page.locator('.app-surface-stat').filter({ hasText: 'Quiet hours' })).toContainText('Active');
@@ -166,5 +170,73 @@ test.describe('sage heartbeat pane', () => {
     await expect(page.getByText(/^Done$/i).first()).toBeVisible();
     await expect(page.getByText(/Need confirmation before sending/i)).toBeVisible();
     await expect(page.getByText(/Inbox triage summary delivered/i)).toBeVisible();
+  });
+
+  test('legacy heartbeat route remains a Tasks compatibility alias', async ({ page }) => {
+    await page.route('**/api/sage-heartbeat?workspace_id=ws-1', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          workspace_id: 'ws-1',
+          tenant_id: 'tenant-1',
+          profile: {
+            recurring_responsibility: 'Keep my inbox triaged.',
+          },
+          bootstrap: {
+            complete: true,
+            progress_label: '5/5',
+          },
+          quiet_hours: {
+            start_hour: 22,
+            end_hour: 7,
+            label: '22:00-07:00',
+          },
+          reminders: {
+            count: 0,
+            items: [],
+          },
+          wake_queue: {
+            pending_count: 0,
+            claimed_count: 0,
+          },
+          lane_queue: {
+            running: true,
+            accepting_new_work: true,
+            draining: false,
+            pending_count: 0,
+            active_count: 0,
+            max_total_concurrency: 4,
+            lanes: {},
+          },
+          queue_overview: {
+            queued_count: 0,
+            running_now_count: 0,
+            blocked_on_approval_count: 0,
+            done_count: 0,
+            quiet_hours: {
+              active: false,
+              label: 'Background work can run now',
+            },
+            lanes: {
+              now: [],
+              waiting: [],
+              scheduled: [],
+              needs_ok: [],
+              done: [],
+            },
+          },
+          policy: {
+            plan_tier: 'default',
+          },
+        }),
+      });
+    });
+
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/heartbeat');
+
+    await expect(page.getByText(/Tasks is where Sage shows heartbeat/i)).toBeVisible();
+    await expect(page.getByText(/task lanes/i)).toBeVisible();
   });
 });

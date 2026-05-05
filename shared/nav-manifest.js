@@ -162,7 +162,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   {
     id: 'heartbeat',
     label: 'Tasks',
-    segment: 'heartbeat',
+    segment: 'tasks',
     destinationId: 'sage',
     web: {},
   },
@@ -349,6 +349,10 @@ export function resolveWorkspaceRouteIdFromSegment(segment) {
 
   if (!normalizedSegment) {
     return null;
+  }
+
+  if (normalizedSegment === 'heartbeat') {
+    return 'heartbeat';
   }
 
   return WORKSPACE_ROUTE_SEGMENT_INDEX[normalizedSegment] ?? null;

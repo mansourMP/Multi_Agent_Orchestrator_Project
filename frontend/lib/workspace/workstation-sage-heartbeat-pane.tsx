@@ -290,7 +290,7 @@ export function WorkstationSageHeartbeatPane() {
     let cancelled = false;
     void refresh(true).catch((loadError) => {
       if (!cancelled) {
-        setError(loadError instanceof Error ? loadError.message : 'Heartbeat is unavailable right now.');
+        setError(loadError instanceof Error ? loadError.message : 'Tasks are unavailable right now.');
         setIsLoading(false);
       }
     });
@@ -338,7 +338,7 @@ export function WorkstationSageHeartbeatPane() {
   }, [snapshot]);
 
   return (
-    <WorkstationSurfaceRoot surface="sage-heartbeat">
+    <WorkstationSurfaceRoot surface="sage-tasks">
       <main className="app-stack-4">
         {error ? <WorkstationSurfaceNotice tone="warning">{error}</WorkstationSurfaceNotice> : null}
 
@@ -350,11 +350,15 @@ export function WorkstationSageHeartbeatPane() {
           </div>
         ) : (
           <>
+            <WorkstationSurfaceNotice tone="neutral">
+              Tasks is where Sage shows heartbeat, reminders, recurring responsibilities, quiet hours, scheduled jobs, and governed work lanes.
+            </WorkstationSurfaceNotice>
+
             <WorkstationSurfaceStatGrid>
               <WorkstationSurfaceStat
                 label="Recurring responsibility"
                 value={snapshot.recurringResponsibility || 'Not set'}
-                hint={snapshot.bootstrapComplete ? 'Projected into HEARTBEAT.md' : `Bootstrap ${snapshot.progressLabel}`}
+                hint={snapshot.bootstrapComplete ? 'Carried into normal Sage sessions' : `Bootstrap ${snapshot.progressLabel}`}
               />
               <WorkstationSurfaceStat
                 label="Running now"
@@ -379,8 +383,8 @@ export function WorkstationSageHeartbeatPane() {
             </WorkstationSurfaceStatGrid>
 
             <WorkstationSurfaceCard
-              title="Next scheduled action"
-              description="The next governed wakeup or recurring job Sage is already carrying."
+              title="Next scheduled task"
+              description="The next governed reminder, heartbeat, or recurring job Sage is already carrying."
             >
               {snapshot.nextAction ? (
                 <WorkstationSurfaceList>
@@ -398,8 +402,8 @@ export function WorkstationSageHeartbeatPane() {
             </WorkstationSurfaceCard>
 
             <WorkstationSurfaceCard
-              title="Heartbeat schedule"
-              description={`Plan tier ${snapshot.planTier}. ${snapshot.queueOverview.quietHours.label}`}
+              title="Reminders and recurring responsibilities"
+              description={`Scheduled jobs, reminders, and heartbeat wakeups. Plan tier ${snapshot.planTier}. ${snapshot.queueOverview.quietHours.label}`}
             >
               {upcomingItems.length > 0 ? (
                 <WorkstationSurfaceList>
@@ -420,11 +424,11 @@ export function WorkstationSageHeartbeatPane() {
             </WorkstationSurfaceCard>
 
             <WorkstationSurfaceCard
-              title="Background queue"
+              title="Task lanes"
               description={snapshot.laneQueue.draining
-                ? 'Background work is draining for shutdown.'
+                ? 'Governed work is draining for shutdown.'
                 : snapshot.laneQueue.acceptingNewWork
-                  ? 'Recurring and governed work is grouped into what Sage is doing now, what is waiting, and what happens next.'
+                  ? 'Now, Waiting, Scheduled, Needs your OK, and Done show what Sage is doing now and what happens later.'
                   : 'Queue is not accepting new work right now.'}
             >
               {queueSummaryRows.some((row) => row.count > 0) ? (
@@ -440,7 +444,7 @@ export function WorkstationSageHeartbeatPane() {
                 </WorkstationSurfaceList>
               ) : (
                 <WorkstationSurfaceNotice tone="neutral">
-                  No background work is active right now. When Sage has live work, waiting work, approvals, or finished recurring actions, they will appear here.
+                  No task work is active right now. When Sage has live work, waiting work, approvals, scheduled jobs, or finished recurring actions, they will appear here.
                 </WorkstationSurfaceNotice>
               )}
             </WorkstationSurfaceCard>

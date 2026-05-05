@@ -2,6 +2,7 @@
 
 import type {
   ButtonHTMLAttributes,
+  CSSProperties,
   HTMLAttributes,
   InputHTMLAttributes,
   PropsWithChildren,
@@ -74,6 +75,28 @@ export function AppNotice({
     >
       {children}
     </div>
+  );
+}
+
+export function AppShinyText({
+  children,
+  className,
+  shimmerWidth = 96,
+  ...props
+}: PropsWithChildren<HTMLAttributes<HTMLSpanElement> & {
+  shimmerWidth?: number;
+}>) {
+  return (
+    <span
+      {...props}
+      style={{
+        '--app-shiny-width': `${shimmerWidth}px`,
+        ...props.style,
+      } as CSSProperties}
+      className={joinClassNames('app-shiny-text', className)}
+    >
+      {children}
+    </span>
   );
 }
 

@@ -11,7 +11,7 @@ import { useRouter } from 'next/navigation';
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
-import { AppButton, AppNotice } from '@/lib/ui/primitives';
+import { AppButton, AppNotice, AppShinyText } from '@/lib/ui/primitives';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
 import { ChatComposer, type ComposerToolGroup } from '@/lib/workspace/chat-composer';
 import type {
@@ -4509,7 +4509,7 @@ export function WorkstationChatPane() {
           {showContextStrip ? (
             <div className="app-chat-context-strip" aria-label="Sage conversation context">
               {activeProviderSummary.connected ? (
-                <span>{activeProviderSummary.label}</span>
+                <AppShinyText>{activeProviderSummary.label}</AppShinyText>
               ) : (
                 <>
                   <button

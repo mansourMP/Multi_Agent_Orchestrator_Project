@@ -355,6 +355,47 @@ textarea {
   color: var(--app-danger);
 }
 
+.app-shiny-text {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  color: color-mix(in srgb, var(--app-text-primary) 78%, var(--app-text-secondary) 22%);
+  background-image:
+    linear-gradient(
+      105deg,
+      transparent 0%,
+      transparent 34%,
+      color-mix(in srgb, var(--app-text-primary) 92%, var(--app-accent-strong) 8%) 50%,
+      transparent 66%,
+      transparent 100%
+    );
+  background-repeat: no-repeat;
+  background-size: var(--app-shiny-width, 96px) 100%;
+  background-position: calc(-1 * var(--app-shiny-width, 96px)) 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: app-shiny-text 2.8s cubic-bezier(0.6, 0.6, 0, 1) infinite;
+}
+
+@keyframes app-shiny-text {
+  0%,
+  18% {
+    background-position: calc(-1 * var(--app-shiny-width, 96px)) 0;
+  }
+
+  72%,
+  100% {
+    background-position: calc(100% + var(--app-shiny-width, 96px)) 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shiny-text {
+    animation: none;
+    background-image: none;
+  }
+}
+
 .app-surface-list {
   display: grid;
   gap: var(--app-space-3);

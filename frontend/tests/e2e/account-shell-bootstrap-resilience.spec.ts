@@ -204,7 +204,16 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(sectionLabels.filter({ hasText: /^Knowledge$/ })).toBeVisible();
     await expect(sectionLabels.filter({ hasText: /^Tools$/ })).toBeVisible();
 
-    await expect(page.getByText(/^Empyralis credits$/)).toBeVisible();
+    await expect(page.getByText(/^AI Provider$/)).toBeVisible();
+    await expect(page.getByText(/DeepSeek stays primary through Empyralis credits/i)).toBeVisible();
+    await expect(page.getByText(/Active: .*through Empyralis credits/i)).toBeVisible();
+    await expect(page.getByText(/^Credits$/).first()).toBeVisible();
+    await expect(page.getByText(/remaining|Available|Not active/i).first()).toBeVisible();
+    await expect(page.getByText(/^Backup$/)).toBeVisible();
+    await expect(page.getByText(/Gemini (available|configurable)/i)).toBeVisible();
+    await expect(page.getByText(/^Advanced$/)).toBeVisible();
+    await expect(page.getByText(/^BYOK and local models$/)).toBeVisible();
+    await expect(page.getByText(/Ollama local requires This Computer/i)).toBeVisible();
     await expect(page.getByText(/^DeepSeek$/).first()).toBeVisible();
     await expect(page.getByText(/^OpenAI$/).first()).toBeVisible();
     await expect(page.getByText(/Gemini/i).first()).toBeVisible();

@@ -87,6 +87,17 @@ type ProviderPickerSection = {
   items: ProviderCardRecord[];
 };
 
+type AiProviderSummary = {
+  activeLabel: string;
+  activeDetail: string;
+  creditsLabel: string;
+  creditsDetail: string;
+  backupLabel: string;
+  backupDetail: string;
+  advancedLabel: string;
+  advancedDetail: string;
+};
+
 type ConnectorCardDefinition = {
   id: string;
   label: string;
@@ -827,6 +838,45 @@ function providerPathLabel(record: ProviderCardRecord): string {
     return 'My Computer';
   }
   return record.label;
+}
+
+function providerAvailabilityLabel(record: ProviderCardRecord | null, localCompanionOnline: boolean): string {
+  if (!record) {
+    return 'Not available';
+  }
+  if (providerPickerConnected(record, localCompanionOnline) || record.provider.usable) {
+    return 'available';
+  }
+  return 'configurable';
+}
+
+function providerActiveSummaryLabel(
+  activeProviderCard: ProviderCardRecord | null,
+  hostedProviderCard: ProviderCardRecord | null,
+  explicitSelectedProfile: ProviderProfileRecord | null,
+): string {
+  if (!activeProviderCard) {
+    return 'No AI model active';
+  }
+  if (activeProviderCard === hostedProviderCard && !explicitSelectedProfile) {
+    return `${activeProviderCard.label} through Empyralis credits`;
+  }
+  return `${activeProviderCard.label} through ${providerPathLabel(activeProviderCard)}`;
+}
+
+function providerActiveSummaryDetail(
+  activeProviderCard: ProviderCardRecord | null,
+  hostedProviderCard: ProviderCardRecord | null,
+  explicitSelectedProfile: ProviderProfileRecord | null,
+  hostedSageAi: HostedSageAiSnapshot,
+): string {
+  if (!activeProviderCard) {
+    return 'Choose an AI model before Sage can answer with hosted or connected models.';
+  }
+  if (activeProviderCard === hostedProviderCard && !explicitSelectedProfile) {
+    return hostedProviderDetailLabel(hostedSageAi, activeProviderCard);
+  }
+  return `${providerActiveModelLabel(activeProviderCard)} · ${providerPathLabel(activeProviderCard)}`;
 }
 
 function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
@@ -1610,11 +1660,44 @@ export function WorkstationSageConnectorsPane({
         return explicitCard;
       }
     }
-    return providerCards.find((record) => record.provider.active && (!providerIsLocalOnly(record) || providerPickerConnected(record, localCompanionOnline)))
-      ?? hostedProviderCard
+    return hostedProviderCard
+      ?? providerCards.find((record) => record.provider.active && (!providerIsLocalOnly(record) || providerPickerConnected(record, localCompanionOnline)))
       ?? providerCards.find((record) => providerPickerConnected(record, localCompanionOnline) && !providerIsLocalOnly(record))
       ?? null;
   }, [explicitSelectedProfile, hostedProviderCard, localCompanionOnline, providerCards]);
+
+  const backupProviderCard = useMemo(() => {
+    const backupPriority = ['gemini', 'openai', 'anthropic'];
+    for (const providerId of backupPriority) {
+      const card = providerCards.find((record) => record.provider.id === providerId) ?? null;
+      if (card) {
+        return card;
+      }
+    }
+    return null;
+  }, [providerCards]);
+
+  const aiProviderSummary = useMemo<AiProviderSummary>(() => {
+    const backupName = backupProviderCard?.provider.id === 'gemini' ? 'Gemini' : backupProviderCard?.label ?? 'Backup model';
+    const backupAvailability = providerAvailabilityLabel(backupProviderCard, localCompanionOnline);
+    const creditsLabel = hostedSageAi.monthlyCreditCap > 0
+      ? `${formatCredits(hostedSageAi.monthlyCreditsRemaining)} remaining`
+      : hostedSageAi.allowed
+        ? 'Available'
+        : 'Not active';
+    return {
+      activeLabel: providerActiveSummaryLabel(activeProviderCard, hostedProviderCard, explicitSelectedProfile),
+      activeDetail: providerActiveSummaryDetail(activeProviderCard, hostedProviderCard, explicitSelectedProfile, hostedSageAi),
+      creditsLabel,
+      creditsDetail: hostedSageAi.monthlyCreditCap > 0 ? hostedCreditUsageLabel(hostedSageAi) : describeHostedSageAi(hostedSageAi, hostedProviderCard),
+      backupLabel: backupProviderCard ? `${backupName} ${backupAvailability}` : 'No backup configured',
+      backupDetail: backupProviderCard
+        ? `${backupProviderCard.label} stays available as ${providerPathLabel(backupProviderCard)}.`
+        : 'Connect Gemini, OpenAI, or Anthropic when you want a fallback hosted provider.',
+      advancedLabel: 'BYOK and local models',
+      advancedDetail: 'OpenAI, Gemini, Anthropic, and Ollama Cloud stay configurable. Ollama local requires This Computer.',
+    };
+  }, [activeProviderCard, backupProviderCard, explicitSelectedProfile, hostedProviderCard, hostedSageAi, localCompanionOnline]);
 
   const providerPickerSections = useMemo<ProviderPickerSection[]>(() => {
     const orderedByokIds = ['deepseek', 'gemini', 'openai', 'anthropic', 'ollama_cloud'];
@@ -2889,10 +2972,8 @@ export function WorkstationSageConnectorsPane({
               <p className="sage-unified-section__label">AI</p>
               <div className="sage-hosted-credits">
                 <div className="sage-hosted-credits__copy">
-                  <strong className="sage-hosted-credits__title">Empyralis credits</strong>
-                  <span className="sage-hosted-credits__meta">
-                    {describeHostedSageAi(hostedSageAi, hostedProviderCard)}
-                  </span>
+                  <strong className="sage-hosted-credits__title">AI Provider</strong>
+                  <span className="sage-hosted-credits__meta">DeepSeek stays primary through Empyralis credits. Advanced paths remain available.</span>
                   {hostedSageAi.monthlyCreditCap > 0 ? (
                     <progress
                       className="sage-hosted-credits__meter"
@@ -2925,9 +3006,9 @@ export function WorkstationSageConnectorsPane({
                 </div>
               </div>
               <div className="sage-provider-active">
-                <div className="sage-provider-active__row">
+                <div className="sage-provider-active__row sage-provider-active__row--summary">
                   {activeProviderCard ? (
-                    <>
+                    <div className="sage-provider-active__identity">
                       <BrandLogo
                         id={activeProviderCard.id}
                         label={activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Empyralis default model' : activeProviderCard.label}
@@ -2937,21 +3018,36 @@ export function WorkstationSageConnectorsPane({
                       />
                       <div className="sage-provider-active__copy">
                         <strong className="sage-provider-active__name">
-                          {activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Empyralis credits' : activeProviderCard.label}
+                          Active: {aiProviderSummary.activeLabel}
                         </strong>
                         <span className="sage-provider-active__model">
-                          {activeProviderCard === hostedProviderCard && !explicitSelectedProfile
-                            ? hostedProviderDetailLabel(hostedSageAi, activeProviderCard)
-                            : `${providerPathLabel(activeProviderCard)} · ${providerActiveModelLabel(activeProviderCard)}`}
+                          {aiProviderSummary.activeDetail}
                         </span>
                       </div>
-                    </>
+                    </div>
                   ) : (
                     <div className="sage-provider-active__copy">
-                      <strong className="sage-provider-active__name">No AI model active</strong>
-                      <span className="sage-provider-active__model">Choose an AI model to start chatting.</span>
+                      <strong className="sage-provider-active__name">Active: {aiProviderSummary.activeLabel}</strong>
+                      <span className="sage-provider-active__model">{aiProviderSummary.activeDetail}</span>
                     </div>
                   )}
+                  <div className="sage-provider-active__summary-grid" aria-label="AI provider state">
+                    <div className="sage-provider-active__summary-item">
+                      <span>Credits</span>
+                      <strong>{aiProviderSummary.creditsLabel}</strong>
+                      <small>{aiProviderSummary.creditsDetail}</small>
+                    </div>
+                    <div className="sage-provider-active__summary-item">
+                      <span>Backup</span>
+                      <strong>{aiProviderSummary.backupLabel}</strong>
+                      <small>{aiProviderSummary.backupDetail}</small>
+                    </div>
+                    <div className="sage-provider-active__summary-item">
+                      <span>Advanced</span>
+                      <strong>{aiProviderSummary.advancedLabel}</strong>
+                      <small>{aiProviderSummary.advancedDetail}</small>
+                    </div>
+                  </div>
                   <AppButton
                     type="button"
                     tone="secondary"

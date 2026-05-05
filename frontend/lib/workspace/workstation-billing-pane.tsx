@@ -225,7 +225,15 @@ export function WorkstationBillingPane() {
             subtitle={readText(hostedSageAi.policy, 'disabled')}
             description="BYOK providers remain available separately for power users."
           />
+          <WorkstationSurfaceListItem
+            title="Default execution path"
+            subtitle="Hosted by Empyralis"
+            description="Normal users stay on hosted credits first. BYOK providers and local models remain advanced setup paths."
+          />
         </WorkstationSurfaceList>
+        <WorkstationSurfaceNotice tone="neutral">
+          Hosted credits are the launch default. Premium local power comes from a paired computer or dedicated agent machine, not from asking normal users to manage provider keys.
+        </WorkstationSurfaceNotice>
         <FormGrid columns="minmax(0, 1fr) auto">
           <FormField label="Monthly hosted AI credits" hint="Credits. Use 500 for the launch free-credit budget. Set 0 to disable hosted AI for this workspace.">
             <FormInput

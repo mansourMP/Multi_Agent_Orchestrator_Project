@@ -42,6 +42,9 @@ function fileActionLabel(label: string, fallback: string): string {
   if (lower.includes('read')) {
     return 'Read';
   }
+  if (lower.includes('rename') || lower.includes('move')) {
+    return 'Move';
+  }
   if (lower.includes('write')) {
     return 'Write';
   }
@@ -52,6 +55,10 @@ function fileActionLabel(label: string, fallback: string): string {
     return 'Delete';
   }
   return label || fallback || 'Updated';
+}
+
+function isSendish(value: string): boolean {
+  return /send|dispatch|deliver|reply|post|submit|outbound/i.test(value);
 }
 
 function isSearchLabel(value: string): boolean {
@@ -107,22 +114,34 @@ function toolDisplayName(rawName: string): string {
     return 'Using tool';
   }
   if (lower.includes('telegram')) {
-    return lower.includes('send') ? 'Sending Telegram' : 'Using Telegram';
+    return isSendish(lower) ? 'Sending Telegram' : 'Using Telegram';
   }
   if (lower.includes('whatsapp')) {
-    return lower.includes('send') ? 'Sending WhatsApp' : 'Using WhatsApp';
+    return isSendish(lower) ? 'Sending WhatsApp' : 'Using WhatsApp';
   }
   if (lower.includes('gmail') || lower.includes('email') || lower.includes('mail')) {
-    return lower.includes('send') ? 'Sending email' : 'Using email';
+    return isSendish(lower) ? 'Sending email' : 'Using email';
   }
   if (lower.includes('image')) {
     return 'Generating image';
   }
   if (lower.includes('browser')) {
+    if (lower.includes('observe') || lower.includes('extract text') || lower.includes('get page state') || lower.includes('read')) {
+      return 'Reading browser';
+    }
+    if (lower.includes('navigate') || lower.includes('new tab') || lower.includes('switch tab') || lower.includes('open')) {
+      return 'Navigating browser';
+    }
+    if (lower.includes('screenshot') || lower.includes('pdf')) {
+      return 'Capturing browser artifact';
+    }
+    if (lower.includes('execute js') || lower.includes('download file')) {
+      return 'Updating browser';
+    }
     if (lower.includes('click')) {
       return 'Clicking browser';
     }
-    if (lower.includes('type')) {
+    if (lower.includes('type') || lower.includes('fill') || lower.includes('input')) {
       return 'Typing in browser';
     }
     return 'Using browser';
@@ -133,24 +152,36 @@ function toolDisplayName(rawName: string): string {
 function browserActionDisplay(action: string): string {
   const normalized = action.toLowerCase();
   if (!normalized) {
-    return 'Browser action';
+    return 'Using browser';
   }
   if (normalized.includes('click')) {
-    return 'Browser action · Click';
+    return 'Clicking browser';
   }
   if (normalized.includes('type') || normalized.includes('input')) {
-    return 'Browser action · Type';
+    return 'Typing in browser';
+  }
+  if (normalized.includes('fill')) {
+    return 'Typing in browser';
   }
   if (normalized.includes('navigate') || normalized.includes('goto') || normalized.includes('open')) {
-    return 'Browser action · Navigate';
+    return 'Navigating browser';
   }
   if (normalized.includes('scroll')) {
-    return 'Browser action · Scroll';
+    return 'Reading browser';
   }
   if (normalized.includes('select')) {
-    return 'Browser action · Select';
+    return 'Updating browser';
   }
-  return `Browser action · ${action.replace(/[_-]+/g, ' ')}`.replace(/\b\w/g, (char) => char.toUpperCase());
+  if (normalized.includes('observe') || normalized.includes('extract') || normalized.includes('read')) {
+    return 'Reading browser';
+  }
+  if (normalized.includes('screenshot') || normalized.includes('capture')) {
+    return 'Capturing browser artifact';
+  }
+  if (normalized.includes('script') || normalized.includes('execute')) {
+    return 'Updating browser';
+  }
+  return `Using browser · ${action.replace(/[_-]+/g, ' ')}`.replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function eventId(prefix: string, candidate: unknown, fallbackIndex: number): string {
@@ -171,6 +202,19 @@ function projectStepEvent(payload: Record<string, unknown>, fallbackIndex: numbe
       id: 'reasoning_summary',
       text: detail || label || 'Thinking',
       isStreaming: status === 'running',
+    }];
+  }
+
+  if (kind === 'browser') {
+    if (status === 'running') {
+      return [{ type: 'tool_started', id, name: label || 'Using browser' }];
+    }
+    return [{
+      type: 'tool_result',
+      id,
+      name: label || 'Using browser',
+      status: status === 'error' ? 'error' : 'done',
+      result: detail || null,
     }];
   }
 
@@ -330,10 +374,11 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
 
   if (eventType.includes('telegram')) {
     const status = readString(data.status).toLowerCase() === 'error' ? 'error' : 'done';
+    const channelSummary = `${eventType} ${readString(data.delivery_transport)} ${readString(data.summary)} ${readString(data.message)}`;
     return [{
       type: 'tool_result',
       id: eventId('telegram', payload.item_id || payload.tool_call_id, fallbackIndex),
-      name: 'Telegram',
+      name: isSendish(channelSummary) ? 'Sending Telegram' : 'Using Telegram',
       status,
       result: readString(data.summary) || readString(data.message) || null,
     }];
@@ -341,10 +386,11 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
 
   if (eventType.includes('whatsapp')) {
     const status = readString(data.status).toLowerCase() === 'error' ? 'error' : 'done';
+    const channelSummary = `${eventType} ${readString(data.delivery_transport)} ${readString(data.summary)} ${readString(data.message)}`;
     return [{
       type: 'tool_result',
       id: eventId('whatsapp', payload.item_id || payload.tool_call_id, fallbackIndex),
-      name: 'WhatsApp',
+      name: isSendish(channelSummary) ? 'Sending WhatsApp' : 'Using WhatsApp',
       status,
       result: readString(data.summary) || readString(data.message) || null,
     }];
@@ -408,7 +454,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     return [{
       type: 'status',
       id: eventId('artifact', data.artifact_id || data.artifactId || payload.item_id, fallbackIndex),
-      label: 'Result or file ready',
+      label: 'Final outcome ready',
       detail: readString(data.title) || readString(data.label) || readString(data.mime_type) || null,
       status: 'done',
     }];
@@ -450,11 +496,12 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     || eventType === 'turn.completed'
     || eventType === 'assistant.completed'
   ) {
+    const completionDetail = readString(data.summary) || readString(data.outcome) || readString(data.result) || null;
     return [{
       type: 'status',
       id: eventId('done', payload.trace_id || payload.item_id, fallbackIndex),
-      label: 'Done',
-      detail: null,
+      label: 'Final outcome ready',
+      detail: completionDetail,
       status: 'done',
     }];
   }

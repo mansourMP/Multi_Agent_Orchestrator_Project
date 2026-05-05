@@ -38,6 +38,33 @@ class TelegramPersonalSetupRequest(BaseModel):
     password: Optional[str] = None
 
 
+def _personal_channel_governance_metadata(action: str, channel_key: str) -> dict:
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action.endswith(".configure"):
+        return {
+            "action_class": "credential_change",
+            "risk_level": "high",
+            "governance_boundary": "paired_gateway",
+            "requires_approval": False,
+            "external_side_effect": False,
+        }
+    if normalized_action.endswith(".send"):
+        return {
+            "action_class": "channel_send",
+            "risk_level": "critical",
+            "governance_boundary": "paired_gateway",
+            "requires_approval": True,
+            "external_side_effect": True,
+        }
+    return {
+        "action_class": f"{channel_key}_action",
+        "risk_level": "moderate",
+        "governance_boundary": "paired_gateway",
+        "requires_approval": False,
+        "external_side_effect": False,
+    }
+
+
 def _require_accessible_gateway_registration(
     gateway_id: str,
     current_user,
@@ -82,6 +109,7 @@ def _emit_personal_channel_audit(
         metadata={
             "gateway_id": str(gateway_id or "").strip(),
             "channel_key": channel_key,
+            **_personal_channel_governance_metadata(action, channel_key),
             **dict(metadata or {}),
         },
         idempotency_key=idempotency_key,

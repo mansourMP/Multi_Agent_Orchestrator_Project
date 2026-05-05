@@ -308,6 +308,52 @@ class GatewayRoutesTests(unittest.TestCase):
         "server_modules.personal_channels_service.gateway_execution_service.execute_tool_via_gateway",
         new_callable=AsyncMock,
     )
+    @patch("server_modules.routes_personal_channels.security_audit_service.emit_security_audit_event")
+    def test_configure_telegram_personal_gateway_emits_credential_audit(
+        self,
+        audit_mock,
+        execute_tool_mock: AsyncMock,
+    ) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        execute_tool_mock.return_value = {
+            "gateway_id": gateway_id,
+            "result": {
+                "status": "updated",
+                "reconnect_requested": True,
+                "config": {
+                    "has_api_id": True,
+                    "has_api_hash": True,
+                    "has_phone_number": True,
+                },
+                "state": {
+                    "status": "code_required",
+                    "login_hint": "******1234",
+                },
+            },
+        }
+
+        response = self.client.post(
+            f"/api/personal-channels/telegram/gateways/{gateway_id}/setup",
+            json={
+                "api_id": 123456,
+                "api_hash": "hash-123",
+                "phone_number": "+8618657105303",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        metadata = audit_mock.call_args.kwargs["metadata"]
+        self.assertEqual(metadata["action_class"], "credential_change")
+        self.assertEqual(metadata["risk_level"], "high")
+        self.assertEqual(metadata["governance_boundary"], "paired_gateway")
+        self.assertFalse(metadata["requires_approval"])
+        self.assertFalse(metadata["external_side_effect"])
+
+    @patch(
+        "server_modules.personal_channels_service.gateway_execution_service.execute_tool_via_gateway",
+        new_callable=AsyncMock,
+    )
     def test_configure_telegram_personal_gateway_dispatches_config_capability(self, execute_tool_mock: AsyncMock) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
@@ -404,6 +450,42 @@ class GatewayRoutesTests(unittest.TestCase):
                 "phone_number": "8618657105303",
             },
         )
+
+    @patch(
+        "server_modules.personal_channels_service.send_whatsapp_personal_message",
+        new_callable=AsyncMock,
+    )
+    @patch("server_modules.routes_personal_channels.security_audit_service.emit_security_audit_event")
+    def test_send_whatsapp_personal_message_emits_channel_send_audit(
+        self,
+        audit_mock,
+        send_message_mock: AsyncMock,
+    ) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        send_message_mock.return_value = {
+            "gateway_id": gateway_id,
+            "channel_key": "whatsapp_personal",
+            "status": "queued",
+        }
+
+        response = self.client.post(
+            f"/api/personal-channels/whatsapp/gateways/{gateway_id}/messages",
+            json={
+                "remote_jid": "8618657105303@s.whatsapp.net",
+                "text": "hello from sage",
+                "idempotency_key": "test-send-1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        metadata = audit_mock.call_args.kwargs["metadata"]
+        self.assertEqual(metadata["action_class"], "channel_send")
+        self.assertEqual(metadata["risk_level"], "critical")
+        self.assertEqual(metadata["governance_boundary"], "paired_gateway")
+        self.assertTrue(metadata["requires_approval"])
+        self.assertTrue(metadata["external_side_effect"])
+        self.assertEqual(metadata["text_length"], len("hello from sage"))
 
     def test_rotate_token_rejects_stale_gateway_token(self) -> None:
         registration_payload = self._register_gateway()

@@ -7,6 +7,15 @@ from typing import Any, Callable, Dict, List, Optional
 from server_modules import security_audit_service
 from server_modules import skills_service
 
+_BROWSER_CAPTURE_ACTIONS = {"screenshot", "pdf"}
+_BROWSER_MUTATION_ACTIONS = {"click", "fill", "execute_js", "download_file"}
+_BROWSER_NAVIGATION_ACTIONS = {"navigate", "new_tab", "switch_tab", "start_intercept", "stop_intercept"}
+_BROWSER_READ_ACTIONS = {"observe", "extract_text", "get_page_state"}
+_FILE_DELETE_ACTIONS = {"delete", "remove", "unlink", "trash"}
+_FILE_WRITE_ACTIONS = {"write", "append", "rename", "move", "copy", "mkdir", "touch"}
+_CHANNEL_CONNECTORS = {"discord", "email", "gmail", "imsg", "mail", "signal", "slack", "telegram", "whatsapp"}
+_HTTP_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+
 
 @dataclass(frozen=True)
 class DirectToolExecutionCallbacks:
@@ -57,6 +66,34 @@ def direct_tool_step_payload(
         label = "Running command"
         kind = "shell"
         detail = detail or callbacks.compact_step_detail(arguments.get("command"))
+    elif normalized_connector == "browser":
+        kind = "browser"
+        selector = (
+            arguments.get("selector")
+            or arguments.get("url")
+            or arguments.get("url_pattern")
+            or arguments.get("tab_id")
+            or arguments.get("save_path")
+            or arguments.get("output_path")
+        )
+        if normalized_action in _BROWSER_READ_ACTIONS:
+            label = "Reading browser page"
+        elif normalized_action in _BROWSER_CAPTURE_ACTIONS:
+            label = "Capturing browser artifact"
+        elif normalized_action in _BROWSER_NAVIGATION_ACTIONS:
+            label = "Navigating browser"
+        elif normalized_action == "click":
+            label = "Clicking browser"
+        elif normalized_action == "fill":
+            label = "Typing in browser"
+            selector = selector or arguments.get("value")
+        elif normalized_action == "download_file":
+            label = "Downloading from browser"
+        elif normalized_action == "execute_js":
+            label = "Running browser script"
+        else:
+            label = "Using browser"
+        detail = detail or callbacks.compact_step_detail(selector)
     elif normalized_connector == "screenshot" and normalized_action == "capture":
         label = "Capturing screenshot"
         kind = "screenshot"
@@ -228,6 +265,137 @@ def _infer_trace_capability_id(connector_id: str, action_id: str) -> Optional[st
     return normalized_connector
 
 
+def _argument_target_summary(arguments: Dict[str, Any]) -> str:
+    payload = arguments if isinstance(arguments, dict) else {}
+    for key in (
+        "command",
+        "path",
+        "file_path",
+        "url",
+        "query",
+        "selector",
+        "prompt",
+        "service_id",
+        "remote_jid",
+    ):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return _redact_audit_summary(value)
+    return ""
+
+
+def _looks_like_credential_change(connector_id: str, action_id: str, arguments: Dict[str, Any]) -> bool:
+    combined = " ".join(
+        [
+            str(connector_id or "").strip().lower(),
+            str(action_id or "").strip().lower(),
+            " ".join(str(key or "").strip().lower() for key in arguments.keys()),
+        ]
+    )
+    return any(token in combined for token in ("credential", "credentials", "password", "secret", "token", "api_key", "apikey", "auth"))
+
+
+def _direct_tool_governance_metadata(
+    connector_id: str,
+    action_id: str,
+    arguments: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    payload = arguments if isinstance(arguments, dict) else {}
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+
+    action_class = "tool_action"
+    risk_level = "low"
+    governance_boundary = "cloud"
+    requires_approval = False
+    destructive = False
+    external_side_effect = False
+    approval_reason: Optional[str] = None
+
+    if normalized_connector == "web" and normalized_action == "search":
+        action_class = "search"
+        governance_boundary = "web_search"
+    elif normalized_connector == "http" and normalized_action == "request":
+        method = str(payload.get("method") or "GET").strip().upper() or "GET"
+        action_class = "external_request"
+        governance_boundary = "outbound_network"
+        external_side_effect = method not in _HTTP_READ_METHODS
+        requires_approval = external_side_effect
+        risk_level = "high" if external_side_effect else "moderate"
+        approval_reason = "External network write" if external_side_effect else None
+    elif normalized_connector == "browser":
+        governance_boundary = "browser_session"
+        if normalized_action in _BROWSER_CAPTURE_ACTIONS:
+            action_class = "browser_capture"
+            risk_level = "moderate"
+        elif normalized_action in _BROWSER_MUTATION_ACTIONS:
+            action_class = "browser_mutation"
+            risk_level = "high"
+            requires_approval = True
+            approval_reason = "Browser mutation"
+        elif normalized_action in _BROWSER_NAVIGATION_ACTIONS:
+            action_class = "browser_navigation"
+            risk_level = "moderate"
+        else:
+            action_class = "browser_read"
+    elif normalized_connector == "file":
+        governance_boundary = "local_filesystem"
+        if normalized_action in _FILE_DELETE_ACTIONS:
+            action_class = "local_delete"
+            risk_level = "critical"
+            requires_approval = True
+            destructive = True
+            approval_reason = "Destructive file change"
+        elif normalized_action in _FILE_WRITE_ACTIONS:
+            action_class = "local_write"
+            risk_level = "high"
+            requires_approval = True
+            approval_reason = "Local file write"
+        else:
+            action_class = "file_read"
+    elif normalized_connector == "shell":
+        action_class = "shell_execute"
+        governance_boundary = "local_shell"
+        risk_level = "high"
+        requires_approval = True
+        approval_reason = "Shell execution"
+    elif normalized_connector == "computer":
+        action_class = "device_control"
+        governance_boundary = "paired_device"
+        risk_level = "high"
+        requires_approval = True
+        approval_reason = "Device control"
+    elif normalized_connector == "sage_service":
+        action_class = "service_state_update" if normalized_action in {"create_entry", "update_profile"} else "service_state_read"
+        governance_boundary = "sage_profile"
+        risk_level = "moderate" if action_class.endswith("update") else "low"
+    elif normalized_connector in _CHANNEL_CONNECTORS or normalized_action in {"send", "reply", "post", "dispatch"}:
+        action_class = "channel_send"
+        governance_boundary = "external_channel"
+        risk_level = "critical"
+        requires_approval = True
+        external_side_effect = True
+        approval_reason = "External send"
+
+    if _looks_like_credential_change(normalized_connector, normalized_action, payload):
+        action_class = "credential_change"
+        governance_boundary = governance_boundary if governance_boundary != "cloud" else "credential_store"
+        risk_level = "critical"
+        requires_approval = True
+        approval_reason = "Credential change"
+
+    return {
+        "action_class": action_class,
+        "risk_level": risk_level,
+        "governance_boundary": governance_boundary,
+        "requires_approval": requires_approval,
+        "approval_reason": approval_reason,
+        "external_side_effect": external_side_effect,
+        "destructive": destructive,
+        "argument_target": _argument_target_summary(payload) or None,
+    }
+
+
 def _parse_web_search_results(result_text: str) -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
     for block in re.split(r"\n\s*\n", str(result_text or "").strip()):
@@ -380,6 +548,7 @@ def execute_single_direct_tool_call(
             or ""
         )
         or None,
+        **_direct_tool_governance_metadata(connector_id, action_id, argument_payload),
     }
     security_audit_service.emit_security_audit_event(
         action="direct_tool.started",

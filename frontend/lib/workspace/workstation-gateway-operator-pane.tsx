@@ -127,6 +127,14 @@ type CapabilitySurfaceItem = {
   available: boolean;
 };
 
+type CertificationLaneItem = {
+  id: 'phone_web' | 'gateway_truth' | 'approvals' | 'degraded_states' | 'channel_recovery';
+  title: string;
+  subtitle: string;
+  description: string;
+  tone: 'neutral' | 'success' | 'warning' | 'danger' | 'accent';
+};
+
 function buildQueryString(params: Record<string, string | number | null | undefined>): string {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -508,6 +516,110 @@ function doctorDisplayStatus(status: unknown): { label: string; tone: 'neutral' 
     return { label: 'Issues found', tone: normalized === 'offline' || normalized === 'fail' || normalized === 'failed' || normalized === 'blocked' ? 'danger' : 'warning' };
   }
   return { label: 'Unknown', tone: 'neutral' };
+}
+
+function channelRecoveryLane(params: {
+  whatsappState: string;
+  telegramState: string;
+}): CertificationLaneItem {
+  const whatsapp = params.whatsappState;
+  const telegram = params.telegramState;
+  const states = [whatsapp, telegram].filter(Boolean);
+  const configured = states.some((state) => !['', 'idle', 'unknown'].includes(state));
+  const reconnecting = states.some((state) => ['connecting', 'reconnecting', 'resuming', 'pending', 'code_required', 'pairing_code_required'].includes(state));
+  const failed = states.some((state) => ['offline', 'failed', 'fail', 'revoked', 'error', 'blocked'].includes(state));
+  const connected = states.some((state) => ['connected', 'active', 'ready'].includes(state));
+  if (failed) {
+    return {
+      id: 'channel_recovery',
+      title: 'Channel recovery',
+      subtitle: 'Needs attention',
+      description: 'A personal channel is offline or blocked. Recover it from this phone/web control surface without leaving the operator lane.',
+      tone: 'danger',
+    };
+  }
+  if (reconnecting) {
+    return {
+      id: 'channel_recovery',
+      title: 'Channel recovery',
+      subtitle: 'Recovery in progress',
+      description: 'A personal channel is reconnecting or waiting for login confirmation on the paired computer.',
+      tone: 'warning',
+    };
+  }
+  if (connected) {
+    return {
+      id: 'channel_recovery',
+      title: 'Channel recovery',
+      subtitle: 'Ready',
+      description: 'Telegram and WhatsApp recovery stays governed from the phone/web control plane when the paired computer is online.',
+      tone: 'success',
+    };
+  }
+  return {
+    id: 'channel_recovery',
+    title: 'Channel recovery',
+    subtitle: configured ? 'Standby' : 'Not configured',
+    description: 'Personal channels are optional. Configure them here only when you want the gateway lane to own recovery and delivery truth.',
+    tone: configured ? 'neutral' : 'accent',
+  };
+}
+
+function buildCertificationLanes(params: {
+  myComputerStatus: { label: MyComputerStatusLabel; tone: 'neutral' | 'success' | 'warning' | 'danger'; detail: string };
+  doctorStatus: string;
+  doctorChecks: GatewayDoctorCheckRecord[];
+  approvalsPendingCount: number;
+  whatsappState: string;
+  telegramState: string;
+}): CertificationLaneItem[] {
+  const degradedChecks = params.doctorChecks.filter((check) => {
+    const status = String(check.status ?? '').trim().toLowerCase();
+    return ['warn', 'warning', 'degraded', 'issues_found', 'offline', 'fail', 'failed', 'blocked'].includes(status);
+  });
+  const degradedTone = degradedChecks.some((check) => ['offline', 'fail', 'failed', 'blocked'].includes(String(check.status ?? '').trim().toLowerCase()))
+    ? 'danger'
+    : degradedChecks.length > 0 || ['warn', 'warning', 'degraded', 'issues_found'].includes(params.doctorStatus)
+      ? 'warning'
+      : 'success';
+  return [
+    {
+      id: 'phone_web',
+      title: 'Phone/web command center',
+      subtitle: 'Ready',
+      description: 'Approvals, recovery, and runtime truth stay in the web shell so users can operate Sage without opening a laptop shell.',
+      tone: 'success',
+    },
+    {
+      id: 'gateway_truth',
+      title: 'Gateway online/offline truth',
+      subtitle: params.myComputerStatus.label,
+      description: params.myComputerStatus.detail,
+      tone: params.myComputerStatus.tone,
+    },
+    {
+      id: 'approvals',
+      title: 'Approval boundary',
+      subtitle: params.approvalsPendingCount > 0 ? `${params.approvalsPendingCount} waiting` : 'Clear',
+      description: params.approvalsPendingCount > 0
+        ? 'Risky local or external actions are paused until the owner approves them from the product shell.'
+        : 'No risky local actions are waiting right now.',
+      tone: params.approvalsPendingCount > 0 ? 'warning' : 'success',
+    },
+    {
+      id: 'degraded_states',
+      title: 'Degraded-state clarity',
+      subtitle: degradedChecks.length > 0 ? `${degradedChecks.length} issue${degradedChecks.length === 1 ? '' : 's'} surfaced` : 'Clear',
+      description: degradedChecks.length > 0
+        ? degradedChecks.map((check) => readString(check.summary, humanizeToken(check.id, 'Gateway check'))).slice(0, 2).join(' · ')
+        : 'Gateway health, browser attach, provider reachability, and quota checks are currently readable and quiet.',
+      tone: degradedTone,
+    },
+    channelRecoveryLane({
+      whatsappState: params.whatsappState,
+      telegramState: params.telegramState,
+    }),
+  ];
 }
 
 function gatewayCapabilityLabels(gateway: GatewayRegistrationRecord | null): string[] {
@@ -1082,6 +1194,14 @@ export function WorkstationGatewayOperatorPane({
     approvalsPendingCount,
     busyActionKey,
   });
+  const certificationLanes = buildCertificationLanes({
+    myComputerStatus,
+    doctorStatus: String(doctorStatus ?? '').trim().toLowerCase(),
+    doctorChecks,
+    approvalsPendingCount,
+    whatsappState: String(whatsapp?.state?.status ?? (whatsapp?.state?.qr_code ? 'pending' : 'idle')).trim().toLowerCase(),
+    telegramState: String(telegram?.state?.status ?? (telegram?.state?.login_hint ? 'pending' : 'idle')).trim().toLowerCase(),
+  });
   const myComputerCapabilities = summarizeMyComputerCapabilities(selectedGatewayCapabilities, providerItems);
   const showStatusSection = initialSection === 'all' || initialSection === 'status';
   const showChannelsSection = initialSection === 'all' || initialSection === 'channels';
@@ -1330,6 +1450,27 @@ export function WorkstationGatewayOperatorPane({
             <FormReadout label="Quota state" value={<DataBadge tone={statusTone(readRecord(doctor?.quota).status)}>{quotaStatus.status}</DataBadge>} />
             <FormReadout label="Needs your OK waiting" value={String(approvalsPendingCount)} />
           </FormGrid>
+
+          <FormSection
+            title="Launch certification lanes"
+            description="The phone/web control plane should make gateway truth, approvals, degraded states, and channel recovery obvious."
+          >
+            <WorkstationSurfaceList>
+              {certificationLanes.map((lane) => (
+                <WorkstationSurfaceListItem
+                  key={lane.id}
+                  title={lane.title}
+                  subtitle={lane.subtitle}
+                  description={lane.description}
+                  actions={(
+                    <DataBadge tone={lane.tone}>
+                      {lane.subtitle}
+                    </DataBadge>
+                  )}
+                />
+              ))}
+            </WorkstationSurfaceList>
+          </FormSection>
 
           <FormSection
             title="What Sage can use on this computer"

@@ -51,13 +51,34 @@ function toolActivityLabel(name: string): string {
     return 'Using tool';
   }
   if (normalized.includes('telegram')) {
-    return 'Telegram';
+    return normalized.includes('sending') ? 'Sending Telegram' : 'Telegram';
   }
   if (normalized.includes('whatsapp')) {
-    return 'WhatsApp';
+    return normalized.includes('sending') ? 'Sending WhatsApp' : 'WhatsApp';
+  }
+  if (normalized.includes('sending email')) {
+    return 'Sending email';
   }
   if (normalized.includes('browser action')) {
     return 'Browser action';
+  }
+  if (normalized.includes('reading browser')) {
+    return 'Reading browser';
+  }
+  if (normalized.includes('navigating browser')) {
+    return 'Navigating browser';
+  }
+  if (normalized.includes('typing in browser')) {
+    return 'Typing in browser';
+  }
+  if (normalized.includes('clicking browser')) {
+    return 'Clicking browser';
+  }
+  if (normalized.includes('updating browser')) {
+    return 'Updating browser';
+  }
+  if (normalized.includes('capturing browser')) {
+    return 'Capturing browser';
   }
   if (normalized.includes('browser')) {
     return 'Browser action';

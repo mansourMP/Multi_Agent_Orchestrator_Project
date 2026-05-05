@@ -132,6 +132,8 @@ type SageProfileSnapshot = {
   };
 };
 
+type SageSetupSurfaceState = 'loading' | 'required' | 'unavailable' | 'ready';
+
 type RecentThreadSummary = {
   threadId: string;
   title: string;
@@ -2025,6 +2027,27 @@ function normalizeSageProfileSnapshot(payload: unknown): SageProfileSnapshot {
   };
 }
 
+function humanizeSageSetupFailure(error: unknown, mode: 'load' | 'save'): string {
+  if (error instanceof WorkstationClientError) {
+    if (error.status === 404) {
+      return mode === 'save'
+        ? 'Sage setup is temporarily unavailable right now, so this answer could not be saved.'
+        : 'Sage setup is temporarily unavailable right now. Retry after the setup service is ready.';
+    }
+    if (error.status === 403) {
+      return 'Sage setup is unavailable in this workspace right now.';
+    }
+    if (error.status >= 500 || error.status === 0 || error.retryable) {
+      return mode === 'save'
+        ? 'Sage setup could not save this answer right now. Retry in a moment.'
+        : 'Sage setup is temporarily unavailable right now. Retry in a moment.';
+    }
+  }
+  return mode === 'save'
+    ? 'Sage setup could not save this answer right now. Retry when ready.'
+    : 'Sage setup is temporarily unavailable right now. Retry when ready.';
+}
+
 function normalizeSageToolPolicy(payload: unknown): SageToolPolicyRecord[] {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   const tools = Array.isArray(record.tools) ? record.tools : [];
@@ -2372,6 +2395,8 @@ export function WorkstationChatPane() {
   const [profileSnapshot, setProfileSnapshot] = useState<SageProfileSnapshot>(
     () => services.queryClient.peek<SageProfileSnapshot>(SAGE_PROFILE_QUERY_KEY) ?? defaultSageProfileSnapshot(),
   );
+  const [sageSetupState, setSageSetupState] = useState<SageSetupSurfaceState>('loading');
+  const [sageSetupMessage, setSageSetupMessage] = useState<string | null>(null);
   const [bootstrapAnswer, setBootstrapAnswer] = useState('');
   const [memorySnapshot, setMemorySnapshot] = useState<SageMemorySnapshot>(
     () => services.queryClient.peek<SageMemorySnapshot>(SAGE_MEMORY_QUERY_KEY) ?? normalizeSageMemorySnapshot(null),
@@ -2382,6 +2407,7 @@ export function WorkstationChatPane() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [isSubmittingBootstrap, setIsSubmittingBootstrap] = useState(false);
+  const [isRetryingSageSetup, setIsRetryingSageSetup] = useState(false);
   const [hasEnteredConversationFlow, setHasEnteredConversationFlow] = useState(false);
   const [smallModelWarningVisible, setSmallModelWarningVisible] = useState(false);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
@@ -2625,6 +2651,8 @@ export function WorkstationChatPane() {
   const writeProfileSnapshot = (nextSnapshot: SageProfileSnapshot) => {
     services.queryClient.set(SAGE_PROFILE_QUERY_KEY, nextSnapshot);
     setProfileSnapshot(nextSnapshot);
+    setSageSetupState(nextSnapshot.bootstrap.complete ? 'ready' : 'required');
+    setSageSetupMessage(null);
   };
 
   const writeRecentThreads = (items: RecentThreadSummary[]) => {
@@ -2745,14 +2773,21 @@ export function WorkstationChatPane() {
 
   const loadProfile = async () => {
     const cachedProfile = services.queryClient.peek<SageProfileSnapshot>(SAGE_PROFILE_QUERY_KEY) ?? profileSnapshot;
+    let profileError: unknown = null;
     const payload = await services.queryClient.run('chat:canonical:sage-profile', async () =>
       services.client.getSageProfile().catch((error) => {
         if (isTransientBackgroundReadError(error)) {
           return null;
         }
-        throw error;
+        profileError = error;
+        return null;
       }),
     );
+    if (profileError) {
+      setSageSetupState('unavailable');
+      setSageSetupMessage(humanizeSageSetupFailure(profileError, 'load'));
+      return cachedProfile;
+    }
     const nextProfile = payload === null
       ? cachedProfile
       : normalizeSageProfileSnapshot(payload);
@@ -2784,9 +2819,26 @@ export function WorkstationChatPane() {
       setBootstrapAnswer('');
       setStatusMessage(nextProfile.bootstrap.complete ? 'Sage is ready.' : null);
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Could not save the setup answer.');
+      setSageSetupState('unavailable');
+      setSageSetupMessage(humanizeSageSetupFailure(error, 'save'));
+      setStatusMessage(null);
     } finally {
       setIsSubmittingBootstrap(false);
+    }
+  };
+
+  const retrySageSetup = async () => {
+    if (isRetryingSageSetup) {
+      return;
+    }
+    setIsRetryingSageSetup(true);
+    setSageSetupState('loading');
+    setSageSetupMessage(null);
+    setStatusMessage(null);
+    try {
+      await loadProfile();
+    } finally {
+      setIsRetryingSageSetup(false);
     }
   };
 
@@ -3207,7 +3259,9 @@ export function WorkstationChatPane() {
   const showFirstImpression = !showConversationContext;
   const bootstrapQuestion = profileSnapshot.bootstrap.current_question;
   const bootstrapComplete = profileSnapshot.bootstrap.complete;
-  const showBootstrapCard = !bootstrapComplete;
+  const showSageSetupLoadingCard = sageSetupState === 'loading';
+  const showSageSetupUnavailableCard = sageSetupState === 'unavailable';
+  const showBootstrapCard = sageSetupState === 'required' && !bootstrapComplete;
   const showBlankTranscript = !isLoading
     && visibleTranscriptCells.length === 0
     && !liveTrace;
@@ -3790,6 +3844,14 @@ export function WorkstationChatPane() {
 
   const sendMessage = async () => {
     if (!bootstrapComplete) {
+      if (sageSetupState === 'loading') {
+        setStatusMessage('Sage is still loading your setup.');
+        return;
+      }
+      if (sageSetupState === 'unavailable') {
+        setStatusMessage(sageSetupMessage || 'Sage setup is temporarily unavailable right now.');
+        return;
+      }
       setStatusMessage(bootstrapQuestion?.prompt || 'Finish the Sage setup first.');
       return;
     }
@@ -4429,6 +4491,36 @@ export function WorkstationChatPane() {
           ) : null}
           <ScrollRegion className="app-chat-thread__scroll">
             <div className="app-chat-thread__body">
+              {showSageSetupLoadingCard ? (
+                <AppNotice tone="neutral" className="app-chat-status-notice">
+                  <div className="app-chat-status-notice__copy">
+                    <strong>Loading Sage setup</strong>
+                    <span>Checking your profile and bootstrap progress before Sage starts the conversation.</span>
+                  </div>
+                </AppNotice>
+              ) : null}
+
+              {showSageSetupUnavailableCard ? (
+                <AppNotice tone="warning" className="app-chat-status-notice">
+                  <div className="app-chat-status-notice__copy">
+                    <strong>Sage setup is temporarily unavailable</strong>
+                    <span>{sageSetupMessage || 'Sage setup could not be loaded right now.'}</span>
+                  </div>
+                  <div className="app-chat-status-notice__actions">
+                    <AppButton
+                      type="button"
+                      tone="primary"
+                      onClick={() => {
+                        void retrySageSetup();
+                      }}
+                      disabled={isRetryingSageSetup}
+                    >
+                      {isRetryingSageSetup ? 'Retrying…' : 'Retry'}
+                    </AppButton>
+                  </div>
+                </AppNotice>
+              ) : null}
+
               {showBootstrapCard ? (
                 <AppNotice tone="warning" className="app-chat-status-notice">
                   <div className="app-chat-status-notice__copy">
@@ -4646,8 +4738,16 @@ export function WorkstationChatPane() {
         contextWindowLabel={contextWindowLabel}
         busy={isSending}
         controlsDisabled={isPersistingModelSelection}
-        sendDisabled={!bootstrapComplete}
-        placeholder={bootstrapComplete ? 'Message Sage...' : 'Finish Sage setup to start chatting...'}
+        sendDisabled={sageSetupState !== 'ready'}
+        placeholder={
+          sageSetupState === 'ready'
+            ? 'Message Sage...'
+            : sageSetupState === 'loading'
+              ? 'Loading Sage setup...'
+              : sageSetupState === 'unavailable'
+                ? 'Sage setup is temporarily unavailable.'
+                : 'Finish Sage setup to start chatting...'
+        }
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{
           label: activeProviderSummary.label,

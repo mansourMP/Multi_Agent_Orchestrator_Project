@@ -212,6 +212,12 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page.getByText(/^Ollama Cloud$/).first()).toBeVisible();
     await expect(page.getByText(/^Your Telegram$/)).toBeVisible();
     await expect(page.getByText(/^Your WhatsApp$/)).toBeVisible();
+    await page.getByText(/^Your Telegram$/).click();
+    await expect(page.getByText(/Uses your paired computer session/i).first()).toBeVisible();
+    await expect(page.getByText(/Device-owned personal channel/i).first()).toBeVisible();
+    await expect(page.getByText(/Status:/i).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /Setup \/ reconnect|Reconnect \/ test/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Audit$/i })).toBeVisible();
     await expect(page.getByText(/^Signal$/)).toBeVisible();
     await expect(page.getByText(/^Slack$/)).toBeVisible();
     await expect(page.getByText(/^Discord$/)).toBeVisible();
@@ -223,6 +229,17 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page.getByText(/^Notion$/)).toBeVisible();
     await expect(page.getByText(/^Uploads$/)).toBeVisible();
     await expect(page.getByText(/^Websites$/)).toBeVisible();
+  });
+
+  test('legacy channels route opens Communication integrations, not the computer console', async ({ page }) => {
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/channels');
+
+    await expect(page.getByText(/^Communication$/)).toBeVisible();
+    await expect(page.getByText(/^Your Telegram$/)).toBeVisible();
+    await expect(page.getByText(/^Your WhatsApp$/)).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^This Mac$/i })).toHaveCount(0);
+    await expect(page.getByText(/What Sage can use on this computer/i)).toHaveCount(0);
   });
 
   test('sage setup load failures render a retryable setup card instead of raw backend text', async ({ page }) => {

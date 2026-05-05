@@ -4,7 +4,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'memory', 'integrations', 'heartbeat', 'activity', 'profile', 'runs', 'approvals', 'artifacts', 'skills', 'notifications'],
+    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'heartbeat', 'activity', 'profile', 'runs', 'approvals', 'artifacts', 'skills', 'notifications'],
     direct: true,
   },
   {
@@ -28,7 +28,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'My Computer',
     iconName: 'waypoints',
     defaultRouteId: 'gateway',
-    childRouteIds: ['gateway', 'channels', 'gatewayApprovals', 'gatewayActivity'],
+    childRouteIds: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
     direct: false,
   },
   {
@@ -212,7 +212,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     id: 'channels',
     label: 'Integrations',
     segment: 'channels',
-    destinationId: 'gateway',
+    destinationId: 'sage',
     web: {
       hiddenFromNavigation: true,
     },

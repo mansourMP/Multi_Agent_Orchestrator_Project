@@ -91,8 +91,8 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
     render: () => <WorkstationGatewayOperatorPane initialSection="status" />,
   },
   channels: {
-    destinationId: 'gateway',
-    render: () => <WorkstationGatewayOperatorPane initialSection="channels" />,
+    destinationId: 'sage',
+    render: () => <WorkstationSageConnectorsPane showProviders={false} showTools={false} />,
   },
   inbox: {
     destinationId: 'studio',

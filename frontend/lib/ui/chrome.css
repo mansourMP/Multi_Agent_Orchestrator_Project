@@ -1222,10 +1222,7 @@ textarea {
   overflow: hidden;
   isolation: isolate;
   background:
-    radial-gradient(circle at 10% 12%, rgba(53, 95, 178, 0.22) 0%, transparent 30%),
-    radial-gradient(circle at 84% 18%, rgba(24, 111, 92, 0.16) 0%, transparent 28%),
-    radial-gradient(circle at 68% 84%, rgba(15, 70, 110, 0.18) 0%, transparent 34%),
-    linear-gradient(180deg, #17181d 0%, #141414 52%, #111214 100%),
+    linear-gradient(180deg, #17181d 0%, #121417 100%),
     var(--app-bg-page);
 }
 
@@ -1247,8 +1244,6 @@ textarea {
   border: 1px solid rgba(175, 194, 232, 0.12);
   border-radius: calc(var(--app-radius-xl) + 10px);
   background:
-    radial-gradient(circle at top right, rgba(57, 107, 191, 0.17) 0%, transparent 34%),
-    radial-gradient(circle at bottom left, rgba(24, 111, 92, 0.14) 0%, transparent 30%),
     linear-gradient(180deg,
       rgba(38, 40, 47, 0.98) 0%,
       rgba(28, 30, 36, 0.98) 100%);
@@ -1258,22 +1253,11 @@ textarea {
 }
 
 .app-auth-hero::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(135deg, rgba(92, 132, 213, 0.08) 0%, transparent 34%),
-    linear-gradient(320deg, rgba(36, 130, 111, 0.08) 0%, transparent 32%);
-  pointer-events: none;
+  content: none;
 }
 
 .app-auth-hero::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent 0%, rgba(137, 168, 225, 0.32) 24%, rgba(111, 194, 165, 0.28) 76%, transparent 100%);
-  pointer-events: none;
+  content: none;
 }
 
 .app-auth-hero__badge {
@@ -1363,7 +1347,6 @@ textarea {
   border-color: rgba(175, 194, 232, 0.12);
   border-radius: calc(var(--app-radius-xl) + 8px);
   background:
-    radial-gradient(circle at top, rgba(68, 96, 156, 0.08) 0%, transparent 34%),
     linear-gradient(180deg,
       rgba(35, 37, 43, 0.98) 0%,
       rgba(29, 31, 36, 0.98) 100%);
@@ -1373,11 +1356,7 @@ textarea {
 }
 
 .app-auth-card--elevated::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015) 0%, transparent 24%);
-  pointer-events: none;
+  content: none;
 }
 
 .app-auth-card--wide {
@@ -1498,15 +1477,13 @@ textarea {
   padding: 0 16px;
   white-space: normal;
   border-radius: calc(var(--app-radius-lg) + 2px);
-  background:
-    linear-gradient(180deg, rgba(39, 42, 50, 0.96) 0%, rgba(31, 33, 39, 0.96) 100%);
+  background: rgba(31, 33, 39, 0.96);
   border-color: rgba(175, 194, 232, 0.1);
 }
 
 .app-auth-social:hover:not(:disabled) {
   border-color: rgba(175, 194, 232, 0.22);
-  background:
-    linear-gradient(180deg, rgba(46, 49, 59, 0.98) 0%, rgba(35, 38, 45, 0.98) 100%);
+  background: rgba(35, 38, 45, 0.98);
   box-shadow: 0 12px 28px -24px rgba(73, 118, 202, 0.46);
 }
 
@@ -1599,8 +1576,7 @@ textarea {
   min-height: 48px;
   border-radius: calc(var(--app-radius-lg) + 2px);
   border-color: rgba(175, 194, 232, 0.08);
-  background:
-    linear-gradient(180deg, rgba(28, 30, 36, 0.96) 0%, rgba(24, 26, 31, 0.98) 100%);
+  background: rgba(24, 26, 31, 0.98);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.015);
 }
 
@@ -1627,15 +1603,15 @@ textarea {
   justify-content: center;
   gap: var(--app-space-2);
   border-radius: calc(var(--app-radius-lg) + 4px);
-  border-color: rgba(88, 126, 208, 0.4);
-  background: linear-gradient(135deg, #2c4f91 0%, #245c70 52%, #1f4f45 100%);
+  border-color: rgba(116, 139, 172, 0.34);
+  background: #3a3f47;
   color: #f8fbff;
-  box-shadow: 0 18px 42px -28px rgba(34, 92, 145, 0.72);
+  box-shadow: 0 18px 42px -32px rgba(0, 0, 0, 0.72);
 }
 
 .app-auth-submit:hover:not(:disabled) {
-  background: linear-gradient(135deg, #335da7 0%, #2b687f 52%, #245b50 100%);
-  box-shadow: 0 22px 48px -28px rgba(39, 105, 165, 0.78);
+  background: #464c56;
+  box-shadow: 0 22px 48px -34px rgba(0, 0, 0, 0.78);
 }
 
 .app-auth-complete-card {

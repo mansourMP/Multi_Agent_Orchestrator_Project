@@ -95,6 +95,7 @@ type ConnectorCardDefinition = {
   capabilityTags: string[];
   summary: string;
   setupHint: string;
+  surfaceScope: 'all' | 'studio_only';
 };
 
 type ConnectorCardRecord = {
@@ -142,7 +143,7 @@ type PersonalChannelViewPayload = Record<string, unknown> & {
 type PersonalCardStatusTone = 'neutral' | 'connected' | 'warning' | 'danger';
 
 type PersonalCardRecord = {
-  id: 'device' | 'browser' | 'telegram_personal' | 'whatsapp_personal';
+  id: 'device' | 'browser' | 'telegram_personal' | 'whatsapp_personal' | 'signal_personal' | 'imessage_personal';
   label: string;
   image: string;
   detail: string;
@@ -229,6 +230,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Send email', 'Read inbox'],
     summary: 'Use one Google sign-in when Sage should work with Gmail and Google Calendar.',
     setupHint: 'Connect Google Workspace to unlock Gmail and Calendar in one place.',
+    surfaceScope: 'all',
   },
   {
     id: 'google_calendar',
@@ -238,6 +240,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Calendar', 'Events'],
     summary: 'Use Google Calendar when Sage should schedule, review, or update events for you.',
     setupHint: 'Connect Google Workspace first, then Sage can use your Google Calendar.',
+    surfaceScope: 'all',
   },
   {
     id: 'email',
@@ -247,15 +250,27 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Inbox', 'Send email'],
     summary: 'Email is where Sage can reach people across Gmail, Outlook, or a custom SMTP inbox.',
     setupHint: 'Connect Gmail or Microsoft 365 for the easiest setup. Use SMTP when you need a custom mailbox.',
+    surfaceScope: 'all',
   },
   {
-    id: 'discord',
-    label: 'Discord',
-    image: '',
-    connectorIds: ['discord_bot'],
-    capabilityTags: ['Servers', 'DMs'],
-    summary: 'Discord is prepared for bot-based community and team messaging.',
-    setupHint: 'Connect a Discord bot when you want Sage to reply in servers or direct messages.',
+    id: 'telegram_bot',
+    label: 'Telegram Bot',
+    image: '/integrations/telegram.png',
+    connectorIds: ['telegram_bot'],
+    capabilityTags: ['Customer chat', 'Bot replies'],
+    summary: 'Telegram bot deployments live in the Studio/business lane. They are separate from your personal Telegram session on a paired computer.',
+    setupHint: 'Connect a Telegram bot in Studio when deployed specialists need a cloud-managed channel.',
+    surfaceScope: 'studio_only',
+  },
+  {
+    id: 'whatsapp_twilio',
+    label: 'WhatsApp Business',
+    image: '/integrations/whatsapp.png',
+    connectorIds: ['whatsapp_twilio'],
+    capabilityTags: ['Customer inbox', 'Business sends'],
+    summary: 'Business WhatsApp stays in the Studio connector lane with provider-managed credentials and customer-facing delivery.',
+    setupHint: 'Connect Twilio WhatsApp in Studio when deployed specialists need a reliable business channel.',
+    surfaceScope: 'studio_only',
   },
   {
     id: 'slack',
@@ -265,6 +280,17 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Channels', 'DMs'],
     summary: 'Use Slack when Sage should work in team channels and direct messages.',
     setupHint: 'Connect Slack to let Sage read and send messages in your workspace.',
+    surfaceScope: 'studio_only',
+  },
+  {
+    id: 'discord_bot',
+    label: 'Discord',
+    image: '',
+    connectorIds: ['discord_bot'],
+    capabilityTags: ['Servers', 'DMs'],
+    summary: 'Discord stays in the Studio/business lane and is intentionally deferred until the personal-agent core is fully hardened.',
+    setupHint: 'Keep Discord deferred for now. Prioritize Telegram, WhatsApp, and Signal in the personal-agent lane first.',
+    surfaceScope: 'studio_only',
   },
   {
     id: 'github',
@@ -274,6 +300,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Issues', 'Pull requests'],
     summary: 'GitHub gives Sage repo, issue, and pull-request context.',
     setupHint: 'Connect GitHub when Sage should read or act on repositories and pull requests.',
+    surfaceScope: 'all',
   },
   {
     id: 'notion',
@@ -283,6 +310,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Pages', 'Search'],
     summary: 'Use Notion when Sage should search notes, docs, and workspace pages.',
     setupHint: 'Connect Notion to make workspace pages available to Sage.',
+    surfaceScope: 'all',
   },
   {
     id: 'microsoft_365',
@@ -292,6 +320,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Mail', 'Calendar'],
     summary: 'Microsoft 365 lets Sage work with Outlook mail and calendar in one connection.',
     setupHint: 'Connect Microsoft 365 when your email and calendar live in Outlook.',
+    surfaceScope: 'all',
   },
   {
     id: 'webhook',
@@ -301,6 +330,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['HTTP', 'Automation'],
     summary: 'Webhooks let Sage notify or trigger external systems without a full app connection.',
     setupHint: 'Add a webhook when you need lightweight outbound automation.',
+    surfaceScope: 'all',
   },
 ];
 
@@ -1121,16 +1151,50 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
   };
 }
 
+function summarizePlannedSignalPersonalState(): {
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  detail: string;
+  summary: string;
+  nextStep: string | null;
+} {
+  return {
+    statusLabel: 'Coming next',
+    statusTone: 'neutral',
+    detail: 'Signal is the next personal channel planned for the paired computer.',
+    summary: 'Signal will stay in the same personal gateway lane as your Telegram and WhatsApp. It is not live yet.',
+    nextStep: 'Use Telegram or WhatsApp today from the paired computer.',
+  };
+}
+
+function summarizePlannedIMessagePersonalState(): {
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  detail: string;
+  summary: string;
+  nextStep: string | null;
+} {
+  return {
+    statusLabel: 'Later',
+    statusTone: 'neutral',
+    detail: 'iMessage is held until a stable Mac bridge is certified.',
+    summary: 'iMessage will only ship once the Apple-side bridge is reliable enough for a user-owned Mac workflow.',
+    nextStep: 'Keep using Telegram or WhatsApp until the Mac bridge is ready.',
+  };
+}
+
 export function WorkstationSageConnectorsPane({
   showProviders = true,
   showTools = true,
   connectorIds,
   className,
+  surface = 'sage',
 }: {
   showProviders?: boolean;
   showTools?: boolean;
   connectorIds?: string[];
   className?: string;
+  surface?: 'sage' | 'studio';
 } = {}) {
   const { bootstrap, routeManifest } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
@@ -1420,17 +1484,22 @@ export function WorkstationSageConnectorsPane({
     () => gateways.find((gateway) => readString(gateway.gateway_id, '') === readString(selectedGatewayId, '')) ?? null,
     [gateways, selectedGatewayId],
   );
+  const showPersonalSurface = surface === 'sage';
 
   const personalCards = useMemo<PersonalCardRecord[]>(() => {
     const device = summarizeGatewayState(selectedGateway, doctor);
     const browser = summarizeBrowserState(selectedGateway, doctor);
     const telegram = summarizeTelegramPersonalState(selectedGateway, telegramPersonal);
     const whatsapp = summarizeWhatsappPersonalState(selectedGateway, whatsappPersonal);
+    const signal = summarizePlannedSignalPersonalState();
+    const imessage = summarizePlannedIMessagePersonalState();
     return [
       { id: 'device', label: 'This device', image: '', ...device },
       { id: 'browser', label: 'Use my browser', image: '', ...browser },
       { id: 'telegram_personal', label: 'Your Telegram', image: '/integrations/telegram.png', ...telegram },
       { id: 'whatsapp_personal', label: 'Your WhatsApp', image: '/integrations/whatsapp.png', ...whatsapp },
+      { id: 'signal_personal', label: 'Signal', image: '', ...signal },
+      { id: 'imessage_personal', label: 'iMessage', image: '', ...imessage },
     ];
   }, [doctor, selectedGateway, telegramPersonal, whatsappPersonal]);
 
@@ -1444,6 +1513,9 @@ export function WorkstationSageConnectorsPane({
     });
 
     return CONNECTOR_DEFINITIONS.flatMap((definition) => {
+      if (surface === 'sage' && definition.surfaceScope === 'studio_only') {
+        return [];
+      }
       if (Array.isArray(connectorIds) && connectorIds.length > 0 && !connectorIds.includes(definition.id)) {
         return [];
       }
@@ -1462,7 +1534,7 @@ export function WorkstationSageConnectorsPane({
         definition,
       }];
     });
-  }, [connectorIds, connectorVault]);
+  }, [connectorIds, connectorVault, surface]);
 
   useEffect(() => {
     setConnectorMemoryEnabled((current) => {
@@ -1945,6 +2017,7 @@ export function WorkstationSageConnectorsPane({
 
   function renderPersonalExpand(record: PersonalCardRecord) {
     const showChannelActions = record.id === 'telegram_personal' || record.id === 'whatsapp_personal';
+    const plannedChannel = record.id === 'signal_personal' || record.id === 'imessage_personal';
     return (
       <MotionSlidePanel className="sage-unified-expand">
         <div className="sage-unified-expand__header">
@@ -1973,7 +2046,9 @@ export function WorkstationSageConnectorsPane({
               openGatewaySurface();
             }}
           >
-            {record.statusLabel === 'Connect computer'
+            {plannedChannel
+              ? 'Open device connection'
+              : record.statusLabel === 'Connect computer'
               ? 'Connect this computer'
               : record.id === 'browser'
                 ? 'Open browser sessions'
@@ -2030,6 +2105,11 @@ export function WorkstationSageConnectorsPane({
             <X size={14} strokeWidth={1.9} aria-hidden="true" />
           </button>
         </div>
+        {record.definition.surfaceScope === 'studio_only' ? (
+          <div className="sage-unified-expand__text">
+            Studio/business lane · customer-facing bots and business messaging stay in Studio, not on your personal paired-device channel lane.
+          </div>
+        ) : null}
         {record.connected ? (
           <>
             <div className="sage-unified-expand__text">{record.definition.summary}</div>
@@ -2220,20 +2300,31 @@ export function WorkstationSageConnectorsPane({
       {error ? <AppNotice tone="warning">Connected Apps could not refresh. Try again when ready.</AppNotice> : null}
 
       <div className="sage-unified-page">
-        {isLoading ? (
-          <section className="sage-unified-section">
-            <p className="sage-unified-section__label">Personal</p>
-            <div className={joinClassNames('sage-unified-grid', gridColumns === 2 ? 'sage-unified-grid--2' : 'sage-unified-grid--4')}>
-              {Array.from({ length: gridColumns }).map((_, index) => (
-                <div key={`personal-skeleton-${index}`} className="sage-unified-card" aria-hidden="true">
-                  <SkeletonBlock height="40px" width="40px" />
-                  <SkeletonBlock height="16px" width="70%" />
-                  <SkeletonBlock height="12px" width="54%" />
+        {showPersonalSurface ? (
+          <>
+            <AppNotice tone="neutral">
+              Personal channels stay on your paired computer. Telegram and WhatsApp are live today, Signal is next, and iMessage waits for a stable Mac bridge. Customer-facing bots stay in Studio.
+            </AppNotice>
+            {isLoading ? (
+              <section className="sage-unified-section">
+                <p className="sage-unified-section__label">Personal</p>
+                <div className={joinClassNames('sage-unified-grid', gridColumns === 2 ? 'sage-unified-grid--2' : 'sage-unified-grid--4')}>
+                  {Array.from({ length: gridColumns }).map((_, index) => (
+                    <div key={`personal-skeleton-${index}`} className="sage-unified-card" aria-hidden="true">
+                      <SkeletonBlock height="40px" width="40px" />
+                      <SkeletonBlock height="16px" width="70%" />
+                      <SkeletonBlock height="12px" width="54%" />
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </section>
-        ) : renderSection('Personal', personalCards, renderPersonalCard, renderPersonalExpand)}
+              </section>
+            ) : renderSection('Personal', personalCards, renderPersonalCard, renderPersonalExpand)}
+          </>
+        ) : (
+          <AppNotice tone="neutral">
+            Studio is the business connector lane. Personal Telegram, personal WhatsApp, Signal, and future iMessage stay on the paired computer inside Sage.
+          </AppNotice>
+        )}
         {showProviders ? (
           isLoading ? renderProviderSkeletons() : (
             <section className="sage-unified-section">
@@ -2328,7 +2419,7 @@ export function WorkstationSageConnectorsPane({
           <div className="sage-settings-empty">
             Loading apps and accounts…
           </div>
-        ) : renderSection('Apps & Accounts', connectorCards, renderConnectorCard, renderConnectorExpand)}
+        ) : renderSection(surface === 'studio' ? 'Studio Apps & Channels' : 'Apps & Accounts', connectorCards, renderConnectorCard, renderConnectorExpand)}
       </div>
 
       <CommandSheet

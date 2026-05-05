@@ -1509,6 +1509,9 @@ export function WorkstationGatewayOperatorPane({
           title="Personal channel state"
           description="Current login, linked identity, and recent activity for personal WhatsApp and Telegram on this computer."
         >
+          <WorkstationSurfaceNotice tone="neutral">
+            Telegram and WhatsApp are the live personal channels on this paired computer. Signal is next, iMessage waits for a stable Mac bridge, and Discord stays in the Studio/business lane.
+          </WorkstationSurfaceNotice>
           <WorkstationSurfaceList>
             <WorkstationSurfaceListItem
               title="WhatsApp personal"

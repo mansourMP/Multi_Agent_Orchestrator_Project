@@ -22,6 +22,75 @@ PERSONAL_CHANNEL_SPECS: Dict[str, Dict[str, str]] = {
     },
 }
 
+PERSONAL_CHANNEL_ROADMAP: tuple[Dict[str, str], ...] = (
+    {
+        "channel_key": "telegram_personal",
+        "label": "Telegram",
+        "provider": "telegram_gramjs",
+        "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
+        "stage": "live",
+        "family": "personal",
+        "session_owner": "paired_gateway",
+    },
+    {
+        "channel_key": "whatsapp_personal",
+        "label": "WhatsApp",
+        "provider": "whatsapp_baileys",
+        "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
+        "stage": "live",
+        "family": "personal",
+        "session_owner": "paired_gateway",
+    },
+    {
+        "channel_key": "signal_personal",
+        "label": "Signal",
+        "provider": "signal_local_bridge",
+        "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
+        "stage": "next",
+        "family": "personal",
+        "session_owner": "paired_gateway",
+    },
+    {
+        "channel_key": "imessage_personal",
+        "label": "iMessage",
+        "provider": "imessage_local_bridge",
+        "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
+        "stage": "later",
+        "family": "personal",
+        "session_owner": "paired_gateway",
+    },
+)
+
+STUDIO_CHANNEL_ROADMAP: tuple[Dict[str, str], ...] = (
+    {
+        "channel_key": "telegram_bot",
+        "label": "Telegram Bot",
+        "provider": "telegram_bot_api",
+        "runtime_lane": STUDIO_CONNECTOR_RUNTIME_LANE,
+        "stage": "live",
+        "family": "studio_business",
+        "session_owner": "cloud_connector",
+    },
+    {
+        "channel_key": "whatsapp_twilio",
+        "label": "WhatsApp Business",
+        "provider": "twilio_whatsapp",
+        "runtime_lane": STUDIO_CONNECTOR_RUNTIME_LANE,
+        "stage": "live",
+        "family": "studio_business",
+        "session_owner": "cloud_connector",
+    },
+    {
+        "channel_key": "discord_bot",
+        "label": "Discord",
+        "provider": "discord_webhook",
+        "runtime_lane": STUDIO_CONNECTOR_RUNTIME_LANE,
+        "stage": "deferred",
+        "family": "studio_business",
+        "session_owner": "cloud_connector",
+    },
+)
+
 PUBLIC_STUDIO_WEBHOOK_ROUTES: Dict[str, Dict[str, str]] = {
     "/channels/whatsapp/twilio/webhook": {
         "provider": "twilio_whatsapp",
@@ -80,6 +149,14 @@ def is_personal_route_path(path: str) -> bool:
 def is_public_studio_webhook_path(path: str) -> bool:
     candidate = _normalize_route_path(path)
     return candidate in PUBLIC_STUDIO_WEBHOOK_ROUTES
+
+
+def personal_channel_catalog() -> list[Dict[str, str]]:
+    return [dict(item) for item in PERSONAL_CHANNEL_ROADMAP]
+
+
+def studio_channel_catalog() -> list[Dict[str, str]]:
+    return [dict(item) for item in STUDIO_CHANNEL_ROADMAP]
 
 
 def assert_personal_gateway_channel(channel_key: str, provider: str | None = None) -> Dict[str, str]:

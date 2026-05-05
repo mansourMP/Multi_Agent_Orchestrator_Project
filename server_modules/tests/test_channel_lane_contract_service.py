@@ -50,6 +50,33 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outside the Studio connector lane"):
             service.assert_public_studio_webhook_path("/personal-channels/whatsapp/gateways/gateway-1")
 
+    def test_channel_catalog_keeps_personal_priority_and_studio_boundary(self) -> None:
+        personal_catalog = service.personal_channel_catalog()
+        studio_catalog = service.studio_channel_catalog()
+
+        self.assertEqual(
+            [entry["channel_key"] for entry in personal_catalog],
+            ["telegram_personal", "whatsapp_personal", "signal_personal", "imessage_personal"],
+        )
+        self.assertEqual(
+            [entry["stage"] for entry in personal_catalog],
+            ["live", "live", "next", "later"],
+        )
+        self.assertTrue(
+            all(entry["runtime_lane"] == service.PERSONAL_GATEWAY_RUNTIME_LANE for entry in personal_catalog)
+        )
+
+        self.assertEqual(
+            [entry["channel_key"] for entry in studio_catalog],
+            ["telegram_bot", "whatsapp_twilio", "discord_bot"],
+        )
+        self.assertEqual(studio_catalog[0]["stage"], "live")
+        self.assertEqual(studio_catalog[1]["stage"], "live")
+        self.assertEqual(studio_catalog[2]["stage"], "deferred")
+        self.assertTrue(
+            all(entry["runtime_lane"] == service.STUDIO_CONNECTOR_RUNTIME_LANE for entry in studio_catalog)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

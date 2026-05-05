@@ -15,13 +15,14 @@ export function WorkstationStudioIntegrationsPane() {
         <ListDetailPanel
           className="studio-panel studio-panel--integrations"
           eyebrow="Connected Apps"
-          title="Messaging and workflow connections"
-          subtitle="Keep customer-facing channels and follow-up systems ready for inbox, deploy, and launch work."
+          title="Business messaging and workflow connections"
+          subtitle="Keep customer-facing channels in Studio. Personal Telegram and personal WhatsApp stay on the paired computer inside Sage."
         >
           <WorkstationSageConnectorsPane
+            surface="studio"
             showProviders={false}
             showTools={false}
-            connectorIds={['telegram', 'whatsapp', 'gmail', 'webhook']}
+            connectorIds={['telegram_bot', 'whatsapp_twilio', 'gmail', 'webhook', 'slack']}
             className="studio-integrations-pane"
           />
         </ListDetailPanel>

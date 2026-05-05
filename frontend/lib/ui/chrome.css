@@ -4454,16 +4454,7 @@ textarea {
 }
 
 .account-switcher::before {
-  content: '';
-  position: absolute;
-  inset: 8px 9px;
-  border-radius: 30px;
-  background: var(--app-bg-panel);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--app-border-subtle) 86%, transparent 14%),
-    inset 0 1px 0 color-mix(in srgb, white 22%, transparent 78%),
-    0 16px 30px -28px color-mix(in srgb, black 26%, transparent);
-  pointer-events: none;
+  content: none;
 }
 
 .account-switcher__cluster {
@@ -4477,6 +4468,10 @@ textarea {
 .account-switcher__cluster--upper,
 .account-switcher__cluster--lower {
   width: 100%;
+}
+
+.account-switcher__cluster--lower {
+  padding-bottom: var(--app-space-4);
 }
 
 .account-switcher__spacer {
@@ -4526,17 +4521,17 @@ textarea {
 
 .account-switcher__link {
   position: relative;
-  width: 44px;
-  height: 44px;
+  width: 42px;
+  height: 42px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   color: var(--text-secondary);
   text-decoration: none;
-  border: 1px solid color-mix(in srgb, var(--app-border-muted) 82%, transparent 18%);
-  border-radius: var(--app-radius-lg);
-  background: color-mix(in srgb, var(--app-bg-panel) 80%, transparent 20%);
+  border: 1px solid transparent;
+  border-radius: var(--app-radius-pill);
+  background: transparent;
   cursor: pointer;
   transform: translateY(0);
   transition:
@@ -4549,26 +4544,22 @@ textarea {
 }
 
 .account-switcher__link:hover {
-  background: color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-panel-elevated) 16%);
-  border-color: color-mix(in srgb, var(--app-border-strong) 74%, transparent 26%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 62%, transparent 38%);
+  border-color: color-mix(in srgb, var(--app-border-muted) 58%, transparent 42%);
   color: var(--text-primary);
   transform: translateY(-1px);
-  box-shadow:
-    var(--app-shadow-panel),
-    0 10px 24px -22px color-mix(in srgb, black 22%, transparent);
+  box-shadow: none;
 }
 
 .account-switcher__link--active {
-  border-color: color-mix(in srgb, var(--app-border-accent) 22%, transparent 78%);
-  background: color-mix(in srgb, var(--app-bg-panel) 98%, var(--app-bg-panel-elevated) 2%);
+  border-color: color-mix(in srgb, var(--app-border-strong) 58%, transparent 42%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 64%, transparent 36%);
   color: var(--text-primary);
-  box-shadow:
-    0 14px 24px -18px color-mix(in srgb, black 22%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, white 26%, transparent 74%);
+  box-shadow: none;
 }
 
 .account-switcher__theme-toggle {
-  border: 0;
+  border: 1px solid transparent;
   appearance: none;
 }
 

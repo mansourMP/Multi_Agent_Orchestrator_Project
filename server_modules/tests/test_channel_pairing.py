@@ -5,6 +5,7 @@ import importlib
 import os
 
 import pytest
+from fastapi import HTTPException
 
 import server_modules.auth as auth_module
 import server_modules.channel_pairing_service as channel_pairing_service_module
@@ -239,3 +240,34 @@ def test_pairing_intent_rejects_disabled_channel_provider(monkeypatch: pytest.Mo
 
         assert excinfo.value.status_code == 403
         assert excinfo.value.detail == "Telegram access is not included in this workspace plan."
+
+
+def test_pairing_intent_caps_pending_requests_per_provider(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    with _isolated_modules(monkeypatch, tmp_path) as (auth, pairing_module, _):
+        created = auth.register_user("pairing.cap@example.com", "password-123", name="Pairing Cap")
+        current_user = _current_user(auth, created["token"])
+
+        for _ in range(pairing_module.MAX_PENDING_PAIRING_INTENTS_PER_PROVIDER):
+            payload = pairing_module.create_authenticated_channel_pairing_intent(
+                current_user,
+                provider="telegram",
+                workspace_id="default",
+            )
+            assert payload["intent"]["provider"] == "telegram"
+
+        with pytest.raises(HTTPException) as excinfo:
+            pairing_module.create_authenticated_channel_pairing_intent(
+                current_user,
+                provider="telegram",
+                workspace_id="default",
+            )
+
+        assert excinfo.value.status_code == 429
+        assert "too many pending telegram pairing requests" in str(excinfo.value.detail).lower()
+
+        other_provider = pairing_module.create_authenticated_channel_pairing_intent(
+            current_user,
+            provider="whatsapp",
+            workspace_id="default",
+        )
+        assert other_provider["intent"]["provider"] == "whatsapp"

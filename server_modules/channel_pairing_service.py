@@ -22,6 +22,7 @@ DEFAULT_PAIRING_SCOPES = ("chat",)
 DEFAULT_PAIRING_TTL_SECONDS = 15 * 60
 MAX_PAIRING_TTL_SECONDS = 60 * 60
 MIN_PAIRING_TTL_SECONDS = 60
+MAX_PENDING_PAIRING_INTENTS_PER_PROVIDER = 3
 PAIRING_COMMAND_RE = re.compile(
     r"^\s*/?(?:pair|link|connect)\s+([A-Za-z0-9-]{6,48})\s*$",
     re.IGNORECASE,
@@ -357,6 +358,29 @@ class ChannelPairingService:
         with auth_module.AUTH_LOCK:
             with self._connect() as connection:
                 self._ensure_tables_locked(connection)
+                pending_row = connection.execute(
+                    """
+                    SELECT COUNT(*) AS pending_count
+                    FROM channel_pairing_intents
+                    WHERE account_user_id = ? AND workspace_id = ? AND provider = ?
+                      AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+                    """,
+                    (
+                        user_id,
+                        resolved_workspace_id,
+                        resolved_provider,
+                        created_at,
+                    ),
+                ).fetchone()
+                pending_count = int((pending_row["pending_count"] if pending_row else 0) or 0)
+                if pending_count >= MAX_PENDING_PAIRING_INTENTS_PER_PROVIDER:
+                    raise HTTPException(
+                        status_code=429,
+                        detail=(
+                            f"Too many pending {_display_provider(resolved_provider)} pairing requests. "
+                            "Use an existing code or wait for one to expire."
+                        ),
+                    )
                 connection.execute(
                     """
                     INSERT INTO channel_pairing_intents (

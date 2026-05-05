@@ -8,6 +8,19 @@ from server_modules import auth, gateway_state_repository
 
 
 DEFAULT_GATEWAY_PAIRING_TTL_SECONDS = 15 * 60
+MIN_GATEWAY_PAIRING_TTL_SECONDS = 60
+MAX_GATEWAY_PAIRING_TTL_SECONDS = 60 * 60
+MAX_PENDING_GATEWAY_PAIRING_INTENTS = 3
+
+
+def _normalize_gateway_pairing_ttl_seconds(ttl_seconds: Optional[int] = None) -> int:
+    return max(
+        MIN_GATEWAY_PAIRING_TTL_SECONDS,
+        min(
+            int(ttl_seconds or DEFAULT_GATEWAY_PAIRING_TTL_SECONDS),
+            MAX_GATEWAY_PAIRING_TTL_SECONDS,
+        ),
+    )
 
 
 def create_gateway_pairing_intent(
@@ -24,10 +37,11 @@ def create_gateway_pairing_intent(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         user_id=user_id,
-        ttl_seconds=int(ttl_seconds or DEFAULT_GATEWAY_PAIRING_TTL_SECONDS),
+        ttl_seconds=_normalize_gateway_pairing_ttl_seconds(ttl_seconds),
         display_name=display_name,
         platform=platform,
         metadata=metadata,
+        max_pending_intents=MAX_PENDING_GATEWAY_PAIRING_INTENTS,
     )
 
 

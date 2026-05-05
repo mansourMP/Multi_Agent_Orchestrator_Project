@@ -434,6 +434,7 @@ def create_pairing_intent(
     display_name: Optional[str] = None,
     platform: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    max_pending_intents: Optional[int] = None,
     db_path: Optional[Path | str] = None,
 ) -> Dict[str, Any]:
     pairing_token = f"gpair_{secrets.token_urlsafe(24)}"
@@ -454,6 +455,43 @@ def create_pairing_intent(
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
+            now_iso = _utc_now_iso()
+            conn.execute(
+                """
+                UPDATE gateway_pairing_intents
+                SET status = ?, consumed_at = COALESCE(consumed_at, ?)
+                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ?
+                  AND status = 'pending' AND expires_at <= ?
+                """,
+                (
+                    "expired",
+                    now_iso,
+                    record["tenant_id"],
+                    record["workspace_id"],
+                    record["user_id"],
+                    now_iso,
+                ),
+            )
+            if max_pending_intents is not None:
+                pending_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS pending_count
+                    FROM gateway_pairing_intents
+                    WHERE tenant_id = ? AND workspace_id = ? AND user_id = ?
+                      AND status = 'pending' AND expires_at > ?
+                    """,
+                    (
+                        record["tenant_id"],
+                        record["workspace_id"],
+                        record["user_id"],
+                        now_iso,
+                    ),
+                ).fetchone()
+                pending_count = int((pending_row["pending_count"] if pending_row else 0) or 0)
+                if pending_count >= max(1, int(max_pending_intents or 0)):
+                    raise ValueError(
+                        "Too many pending gateway pairing requests. Use an existing code or wait for one to expire."
+                    )
             conn.execute(
                 """
                 INSERT INTO gateway_pairing_intents (

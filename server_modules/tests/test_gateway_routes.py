@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -269,6 +270,39 @@ class GatewayRoutesTests(unittest.TestCase):
             reconnect_hello = websocket.receive_json()
             self.assertTrue(reconnect_ack["ok"])
             self.assertEqual(reconnect_hello["type"], "gateway.hello")
+
+    def test_gateway_pairing_intents_are_ttl_limited_and_pending_capped(self) -> None:
+        over_limit_response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={"workspace_id": "default", "ttl_seconds": 7200},
+        )
+        self.assertEqual(over_limit_response.status_code, 422)
+
+        first_pairing = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={"workspace_id": "default", "ttl_seconds": 3600},
+        )
+        self.assertEqual(first_pairing.status_code, 200)
+        first_payload = first_pairing.json()
+        expires_at = datetime.fromisoformat(first_payload["expires_at"].replace("Z", "+00:00"))
+        created_at = datetime.fromisoformat(first_payload["created_at"].replace("Z", "+00:00"))
+        ttl_seconds = (expires_at - created_at).total_seconds()
+        self.assertLessEqual(ttl_seconds, 3601)
+        self.assertGreater(ttl_seconds, 3500)
+
+        for _ in range(routes_gateway.gateway_pairing_service.MAX_PENDING_GATEWAY_PAIRING_INTENTS - 1):
+            capped_response = self.client.post(
+                "/api/gateway/pairings/intents",
+                json={"workspace_id": "default"},
+            )
+            self.assertEqual(capped_response.status_code, 200)
+
+        blocked_response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={"workspace_id": "default"},
+        )
+        self.assertEqual(blocked_response.status_code, 429)
+        self.assertIn("too many pending gateway pairing requests", blocked_response.json()["detail"].lower())
 
     @patch(
         "server_modules.personal_channels_service.gateway_execution_service.execute_tool_via_gateway",

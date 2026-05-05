@@ -26,7 +26,11 @@ router = APIRouter()
 
 class GatewayPairingIntentCreateRequest(BaseModel):
     workspace_id: Optional[str] = None
-    ttl_seconds: Optional[int] = Field(default=None, ge=60, le=24 * 60 * 60)
+    ttl_seconds: Optional[int] = Field(
+        default=None,
+        ge=gateway_pairing_service.MIN_GATEWAY_PAIRING_TTL_SECONDS,
+        le=gateway_pairing_service.MAX_GATEWAY_PAIRING_TTL_SECONDS,
+    )
     display_name: Optional[str] = None
     platform: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -151,15 +155,20 @@ async def create_gateway_pairing_intent(
         minimum_role="member",
     )
     tenant_id = workspace_tenant_id(current_user, workspace_id)
-    pairing = gateway_pairing_service.create_gateway_pairing_intent(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        user_id=str((current_user or {}).get("user_id") or "").strip() or "unknown-user",
-        ttl_seconds=payload.ttl_seconds,
-        display_name=payload.display_name,
-        platform=payload.platform,
-        metadata=payload.metadata,
-    )
+    try:
+        pairing = gateway_pairing_service.create_gateway_pairing_intent(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            user_id=str((current_user or {}).get("user_id") or "").strip() or "unknown-user",
+            ttl_seconds=payload.ttl_seconds,
+            display_name=payload.display_name,
+            platform=payload.platform,
+            metadata=payload.metadata,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 429 if "too many pending gateway pairing requests" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     return pairing
 
 

@@ -1,4 +1,5 @@
 import asyncio
+import os
 import json
 import tempfile
 import unittest
@@ -119,6 +120,41 @@ class SkillRegistryTests(unittest.TestCase):
         )
         self.assertIsNotNone(disabled)
         self.assertFalse(disabled.enabled)
+
+    def test_skill_availability_gates_on_os_env_and_python_packages(self) -> None:
+        _write_skill(
+            self.bundled_root,
+            name="mac-only-helper",
+            runtime={
+                "skill_class": "system",
+                "action_class": "read",
+                "execution_mode": "live",
+                "execution_adapter": "handler",
+                "supported_os": ["linux"],
+                "required_env": ["EMPYRALIS_TEST_SECRET"],
+                "required_python_packages": ["totally_missing_pkg_xyz"],
+            },
+            handler_body="print('ok')\n",
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            listed = installed_skills.list_installed_skills(workspace_id="workspace-1")
+
+        self.assertEqual(len(listed), 1)
+        item = listed[0]
+        self.assertFalse(item["available"])
+        self.assertIn("EMPYRALIS_TEST_SECRET", item["missing_env_vars"])
+        self.assertIn("totally_missing_pkg_xyz", item["missing_python_packages"])
+        self.assertEqual(item["supported_os"], ["linux"])
+        self.assertIsNone(skill_registry.get_skill_definition("mac-only-helper", workspace_id="workspace-1"))
+        disabled = skill_registry.get_skill_definition(
+            "mac-only-helper",
+            workspace_id="workspace-1",
+            include_disabled=True,
+        )
+        self.assertIsNotNone(disabled)
+        self.assertFalse(disabled.available)
+        self.assertIn("Missing environment variables", str(disabled.unavailable_reason))
 
     def test_handler_skill_executes_without_core_dispatch_change(self) -> None:
         _write_skill(

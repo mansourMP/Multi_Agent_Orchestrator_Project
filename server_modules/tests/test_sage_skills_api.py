@@ -54,6 +54,12 @@ class SageSkillsApiTests(unittest.TestCase):
                             "enabled": True,
                             "available": False,
                             "missing_bins": ["tmux"],
+                            "missing_env_vars": ["TMUX_SOCKET"],
+                            "supported_os": ["macos"],
+                            "availability_reasons": [
+                                "Missing runtime dependencies: tmux",
+                                "Missing environment variables: TMUX_SOCKET",
+                            ],
                             "runtime_metadata": {"action_class": "local_write", "requires_approval": True},
                         },
                     ],
@@ -62,7 +68,11 @@ class SageSkillsApiTests(unittest.TestCase):
                 payload = asyncio.run(route(workspace_id="workspace-1", current_user={"user_id": "user-1"}))
             self.assertEqual(payload["summary"]["active_count"], 1)
             self.assertEqual(payload["summary"]["gated_count"], 1)
-            self.assertEqual(payload["items"][1]["reason"], "Missing runtime dependencies: tmux")
+            self.assertEqual(
+                payload["items"][1]["reason"],
+                "Missing runtime dependencies: tmux; Missing environment variables: TMUX_SOCKET",
+            )
+            self.assertEqual(payload["items"][1]["supported_os"], ["macos"])
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)

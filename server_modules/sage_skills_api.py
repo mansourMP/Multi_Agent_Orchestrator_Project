@@ -23,6 +23,13 @@ def _skill_status(item: Dict[str, Any]) -> str:
 
 
 def _skill_reason(item: Dict[str, Any]) -> str | None:
+    reasons = [
+        _coerce_text(token)
+        for token in list(item.get("availability_reasons") or [])
+        if _coerce_text(token)
+    ]
+    if reasons:
+        return "; ".join(reasons)
     missing_bins = [
         _coerce_text(token)
         for token in list(item.get("missing_bins") or [])
@@ -71,6 +78,19 @@ def register_sage_skills_routes(app) -> None:
                     "source": _coerce_text(item.get("source")) or None,
                     "required_bins": [token for token in list(item.get("required_bins") or []) if _coerce_text(token)],
                     "missing_bins": [token for token in list(item.get("missing_bins") or []) if _coerce_text(token)],
+                    "required_env_vars": [
+                        token for token in list(item.get("required_env_vars") or []) if _coerce_text(token)
+                    ],
+                    "missing_env_vars": [
+                        token for token in list(item.get("missing_env_vars") or []) if _coerce_text(token)
+                    ],
+                    "required_python_packages": [
+                        token for token in list(item.get("required_python_packages") or []) if _coerce_text(token)
+                    ],
+                    "missing_python_packages": [
+                        token for token in list(item.get("missing_python_packages") or []) if _coerce_text(token)
+                    ],
+                    "supported_os": [token for token in list(item.get("supported_os") or []) if _coerce_text(token)],
                     "tools": [token for token in list(item.get("tools") or []) if _coerce_text(token)],
                     "slash_commands": [token for token in list(item.get("slash_commands") or []) if _coerce_text(token)],
                     "permission_label": _coerce_text(runtime_metadata.get("permission_label")) or None,

@@ -45,6 +45,8 @@ class SkillDefinition:
     source: str = _BUILT_IN_SOURCE
     path: str | None = None
     enabled: bool = True
+    available: bool = True
+    unavailable_reason: str | None = None
 
 
 async def _manual_skill_stub(*, goal: str, agent_label: str, skill_label: str, **_: Any) -> dict[str, Any]:
@@ -456,6 +458,11 @@ def _definition_from_installed_skill(item: dict[str, Any]) -> SkillDefinition | 
         source=str(item.get("source") or "workspace").strip() or "workspace",
         path=str(item.get("path") or "").strip() or None,
         enabled=bool(item.get("enabled")),
+        available=bool(item.get("available", True)),
+        unavailable_reason=(
+            "; ".join(str(token).strip() for token in list(item.get("availability_reasons") or []) if str(token).strip())
+            or None
+        ),
     )
 
 
@@ -489,7 +496,7 @@ def _skill_registry_map(*, workspace_id: str | None = None, include_disabled: bo
         definition = _definition_from_installed_skill(item)
         if definition is None:
             continue
-        if not include_disabled and not definition.enabled:
+        if not include_disabled and (not definition.enabled or not definition.available):
             if definition.id in merged:
                 merged.pop(definition.id, None)
             continue
@@ -578,6 +585,18 @@ async def execute_skill(
             "steps": [
                 {"label": "Resolving skill registry", "detail": definition.id, "status": "done", "kind": "thinking"},
                 {"label": "Workspace skill state", "detail": f"{definition.label} is disabled", "status": "error", "kind": "connector"},
+            ],
+        }
+
+    if not definition.available:
+        detail = str(definition.unavailable_reason or f"{definition.label} is not available in this environment.").strip()
+        return {
+            "status": "unavailable",
+            "reply": f"{agent_label} can use {definition.label}, but it is not ready here yet. {detail}",
+            "artifact": None,
+            "steps": [
+                {"label": "Resolving skill registry", "detail": definition.id, "status": "done", "kind": "thinking"},
+                {"label": "Skill availability", "detail": detail, "status": "error", "kind": "connector"},
             ],
         }
 

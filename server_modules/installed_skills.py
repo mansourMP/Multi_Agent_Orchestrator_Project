@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -161,6 +162,12 @@ def _list_from_any(value: Any) -> List[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _string_keys_from_any(value: Any) -> List[str]:
+    if isinstance(value, dict):
+        return [str(key).strip() for key in value.keys() if str(key).strip()]
+    return _list_from_any(value)
 
 
 def normalize_skill_id(value: Any) -> str:
@@ -452,10 +459,17 @@ def _load_skill_manifest(skill_dir: Path) -> Dict[str, Any]:
     return _standardize_manifest(payload, fallback_name=skill_dir.name, readme_text=readme_text)
 
 
-def _required_bins(frontmatter: Dict[str, Any], config: Dict[str, Any], runtime_config: Dict[str, Any]) -> List[str]:
+def _required_bins(
+    raw_manifest: Dict[str, Any],
+    frontmatter: Dict[str, Any],
+    config: Dict[str, Any],
+    runtime_config: Dict[str, Any],
+) -> List[str]:
     required: List[str] = []
+    runtime_manifest = _runtime_section(raw_manifest)
     for candidate in (
         runtime_config.get("required_bins"),
+        runtime_manifest.get("required_bins"),
         config.get("required_bins"),
         frontmatter.get("required_bins"),
     ):
@@ -467,6 +481,143 @@ def _required_bins(frontmatter: Dict[str, Any], config: Dict[str, Any], runtime_
 
 def _missing_bins(required_bins: List[str]) -> List[str]:
     return [token for token in required_bins if not shutil.which(token)]
+
+
+def _required_env_vars(
+    raw_manifest: Dict[str, Any],
+    frontmatter: Dict[str, Any],
+    config: Dict[str, Any],
+    runtime_config: Dict[str, Any],
+) -> List[str]:
+    required: List[str] = []
+    runtime_manifest = _runtime_section(raw_manifest)
+    for candidate in (
+        runtime_config.get("required_env"),
+        runtime_config.get("required_env_vars"),
+        runtime_manifest.get("required_env"),
+        runtime_manifest.get("required_env_vars"),
+        config.get("required_env"),
+        config.get("required_env_vars"),
+        frontmatter.get("required_env"),
+        frontmatter.get("required_env_vars"),
+    ):
+        for token in _string_keys_from_any(candidate):
+            if token not in required:
+                required.append(token)
+    return required
+
+
+def _missing_env_vars(required_env_vars: List[str]) -> List[str]:
+    missing: List[str] = []
+    for token in required_env_vars:
+        if not str(os.getenv(token, "")).strip():
+            missing.append(token)
+    return missing
+
+
+def _required_python_packages(
+    raw_manifest: Dict[str, Any],
+    frontmatter: Dict[str, Any],
+    config: Dict[str, Any],
+    runtime_config: Dict[str, Any],
+) -> List[str]:
+    required: List[str] = []
+    runtime_manifest = _runtime_section(raw_manifest)
+    for candidate in (
+        runtime_config.get("required_python_packages"),
+        runtime_config.get("required_packages"),
+        runtime_config.get("required_modules"),
+        runtime_manifest.get("required_python_packages"),
+        runtime_manifest.get("required_packages"),
+        runtime_manifest.get("required_modules"),
+        config.get("required_python_packages"),
+        config.get("required_packages"),
+        config.get("required_modules"),
+        frontmatter.get("required_python_packages"),
+        frontmatter.get("required_packages"),
+        frontmatter.get("required_modules"),
+    ):
+        for token in _list_from_any(candidate):
+            if token not in required:
+                required.append(token)
+    return required
+
+
+def _missing_python_packages(required_python_packages: List[str]) -> List[str]:
+    missing: List[str] = []
+    for token in required_python_packages:
+        module_name = str(token or "").strip().replace("-", "_")
+        if not module_name:
+            continue
+        if importlib.util.find_spec(module_name) is None:
+            missing.append(str(token).strip())
+    return missing
+
+
+def _supported_os(
+    raw_manifest: Dict[str, Any],
+    frontmatter: Dict[str, Any],
+    config: Dict[str, Any],
+    runtime_config: Dict[str, Any],
+) -> List[str]:
+    supported: List[str] = []
+    runtime_manifest = _runtime_section(raw_manifest)
+    for candidate in (
+        runtime_config.get("supported_os"),
+        runtime_config.get("allowed_os"),
+        runtime_manifest.get("supported_os"),
+        runtime_manifest.get("allowed_os"),
+        config.get("supported_os"),
+        config.get("allowed_os"),
+        frontmatter.get("supported_os"),
+        frontmatter.get("allowed_os"),
+    ):
+        for token in _list_from_any(candidate):
+            normalized = str(token or "").strip().lower()
+            if normalized and normalized not in supported:
+                supported.append(normalized)
+    return supported
+
+
+def _current_os_aliases() -> set[str]:
+    platform = sys.platform.lower()
+    aliases = {platform}
+    if platform.startswith("darwin"):
+        aliases.update({"macos", "mac", "osx", "unix", "posix"})
+    elif platform.startswith("linux"):
+        aliases.update({"linux", "unix", "posix"})
+    elif platform.startswith("win"):
+        aliases.update({"windows", "win", "win32"})
+    return aliases
+
+
+def _os_available(supported_os: List[str]) -> bool:
+    if not supported_os:
+        return True
+    aliases = _current_os_aliases()
+    return any(token in aliases for token in supported_os)
+
+
+def _availability_reasons(
+    *,
+    supported_os: List[str],
+    required_bins: List[str],
+    missing_bins: List[str],
+    required_env_vars: List[str],
+    missing_env_vars: List[str],
+    required_python_packages: List[str],
+    missing_python_packages: List[str],
+) -> List[str]:
+    reasons: List[str] = []
+    if supported_os and not _os_available(supported_os):
+        reasons.append(f"Only available on: {', '.join(supported_os)}")
+    if missing_bins:
+        reasons.append(f"Missing runtime dependencies: {', '.join(missing_bins)}")
+    if missing_env_vars:
+        reasons.append(f"Missing environment variables: {', '.join(missing_env_vars)}")
+    if missing_python_packages:
+        reasons.append(f"Missing Python packages: {', '.join(missing_python_packages)}")
+    return reasons
 
 
 def list_installed_skills(*, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -522,8 +673,22 @@ def list_installed_skills(*, workspace_id: Optional[str] = None) -> List[Dict[st
                 frontmatter=frontmatter,
                 has_query_handler=(skill_dir / "query_handler.py").exists() or (skill_dir / "handler.py").exists(),
             )
-            required_bins = _required_bins(frontmatter, config, runtime_config)
+            required_bins = _required_bins(raw_manifest, frontmatter, config, runtime_config)
             missing_bins = _missing_bins(required_bins)
+            required_env_vars = _required_env_vars(raw_manifest, frontmatter, config, runtime_config)
+            missing_env_vars = _missing_env_vars(required_env_vars)
+            required_python_packages = _required_python_packages(raw_manifest, frontmatter, config, runtime_config)
+            missing_python_packages = _missing_python_packages(required_python_packages)
+            supported_os = _supported_os(raw_manifest, frontmatter, config, runtime_config)
+            availability_reasons = _availability_reasons(
+                supported_os=supported_os,
+                required_bins=required_bins,
+                missing_bins=missing_bins,
+                required_env_vars=required_env_vars,
+                missing_env_vars=missing_env_vars,
+                required_python_packages=required_python_packages,
+                missing_python_packages=missing_python_packages,
+            )
             readme_text = _read_text(skill_dir / "README.md")
             items.append(
                 {
@@ -538,9 +703,15 @@ def list_installed_skills(*, workspace_id: Optional[str] = None) -> List[Dict[st
                     "homepage": str(manifest.get("homepage") or "").strip()[:500],
                     "source_url": str(manifest.get("source") or "").strip()[:1000],
                     "enabled": enabled,
-                    "available": not missing_bins,
+                    "available": not availability_reasons,
+                    "availability_reasons": availability_reasons,
+                    "supported_os": supported_os,
                     "missing_bins": missing_bins,
                     "required_bins": required_bins,
+                    "missing_env_vars": missing_env_vars,
+                    "required_env_vars": required_env_vars,
+                    "missing_python_packages": missing_python_packages,
+                    "required_python_packages": required_python_packages,
                     "source": source,
                     "format": "skill_json" if has_skill_json else "legacy",
                     "path": str(skill_dir),

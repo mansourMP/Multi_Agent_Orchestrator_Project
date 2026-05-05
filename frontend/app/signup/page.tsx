@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
-import { Apple, ArrowRight, Globe, Lock, Mail, User } from 'lucide-react';
+import { ArrowRight, Lock, Mail, User } from 'lucide-react';
 
 import { awaitBrowserAuthReady, googleLogin, listAuthProviders, signup, type AuthProviderOptions } from '@/lib/auth/auth-client';
+import { AppleProviderIcon, GoogleProviderIcon } from '@/lib/auth/auth-provider-icons';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 function authErrorCopy(error: string): string {
@@ -144,7 +145,7 @@ export default function SignupPage() {
                 onClick={() => googleLogin()}
                 disabled={submitting || !isHydrated || providers.google?.enabled !== true}
               >
-                <Globe size={16} aria-hidden="true" />
+                <GoogleProviderIcon className="app-auth-provider-mark" />
                 <span>Continue with Google</span>
               </AppButton>
               <AppButton
@@ -155,7 +156,7 @@ export default function SignupPage() {
                 aria-disabled="true"
                 title="Apple sign-in is not enabled on the web app yet."
               >
-                <Apple size={16} aria-hidden="true" />
+                <AppleProviderIcon className="app-auth-provider-mark app-auth-provider-mark--apple" />
                 <span>Apple soon</span>
               </AppButton>
             </div>

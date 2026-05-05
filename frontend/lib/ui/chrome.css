@@ -1278,6 +1278,16 @@ textarea {
   border-radius: calc(var(--app-radius-lg) + 2px);
 }
 
+.app-auth-provider-mark {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+.app-auth-provider-mark--apple {
+  color: var(--app-text-primary);
+}
+
 .app-auth-social:disabled {
   opacity: 0.58;
 }

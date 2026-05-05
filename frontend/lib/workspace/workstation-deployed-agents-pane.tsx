@@ -2436,15 +2436,15 @@ export function WorkstationDeployedAgentsPane({
     : [];
   const knowledgeSourceCount = selectedKnowledgeSources.length;
   const studioTitle = currentStudioSubview === 'agents'
-    ? 'Build · Assistants'
+    ? 'Build · Studio'
     : currentStudioSubview === 'inbox'
-      ? 'Build · Inbox'
-      : 'Build · Go Live';
+      ? 'Build · Studio Inbox'
+      : 'Build · Studio Launch';
   const studioSubtitle = currentStudioSubview === 'agents'
-    ? 'Specialist roster, readiness, and operational posture.'
+    ? 'Private specialists for business jobs. Sage stays the visible personal agent.'
     : currentStudioSubview === 'inbox'
-      ? 'Customer sessions, escalation pressure, and transcript flow.'
-      : 'Launch checks, AI model choice, and go-live controls.';
+      ? 'Customer sessions and escalations for Studio specialists working behind Sage.'
+      : 'Launch checks, AI model choice, and go-live controls for private specialists.';
   const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
   const showReadinessPanel = currentStudioSubview === 'deploy';
   const showDetailPanel = currentStudioSubview === 'deploy';
@@ -2579,7 +2579,7 @@ export function WorkstationDeployedAgentsPane({
                       className="studio-panel studio-panel--templates"
                       eyebrow="Templates"
                       title="Start from a specialist template"
-                      subtitle="Pick the job first. Build will create a draft and keep tools, memory, messaging, and go-live settings behind focused tabs."
+                      subtitle="Pick the business job first. Build creates a private specialist that works behind Sage, with tools, memory, messaging, and go-live settings kept in focused tabs."
                       actions={currentStudioSubview === 'agents' ? (
                         <div className="app-inline-actions app-inline-actions--tight">
                           <AppButton

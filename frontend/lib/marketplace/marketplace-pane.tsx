@@ -8,6 +8,7 @@ import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/li
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { MarketplacePackageRecord } from '@/lib/workspace/workstation-client';
+import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
@@ -610,6 +611,7 @@ function MarketplaceField({
 export function MarketplacePane() {
   const router = useRouter();
   const services = useWorkspaceServices();
+  const { hasCapability } = useWorkspaceBoundary();
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [items, setItems] = useState<MarketplacePackageRecord[]>([]);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
@@ -623,6 +625,7 @@ export function MarketplacePane() {
   const [composerStatus, setComposerStatus] = useState<string | null>(null);
   const [submittingComposer, setSubmittingComposer] = useState(false);
   const [showDeveloperRegistration, setShowDeveloperRegistration] = useState(false);
+  const canPublishPackages = hasCapability('workspace_admin_enabled');
   const activeRequestControllerRef = useRef<AbortController | null>(null);
 
   const loadMarketplacePackages = useCallback(async (requestedKind: KindFilter) => {
@@ -878,14 +881,14 @@ export function MarketplacePane() {
       <ListDetailShell
         className="marketplace-pane"
         title="Discover"
-        subtitle="Install governed apps, templates, connected tools, and AI models. Use Build to create and manage your private assistants."
+        subtitle="Install governed templates, tools, providers, connectors, and mini-apps. Build stays for private specialists that work behind Sage."
       >
         <ListDetailColumns
           primary={(
             <ListDetailPanel
               className="marketplace-pane__browse-panel"
-              title="Install apps, templates, and AI models"
-              subtitle="Discover adds governed packages with trust details up front. Build is where you create and manage private assistants."
+              title="Install governed packages"
+              subtitle="Discover is a curated distribution surface with trust details up front. Build is where you create and manage private specialists."
             >
               <div className="marketplace-pane__filters">
                 <div className="marketplace-pane__filter-row">
@@ -925,7 +928,7 @@ export function MarketplacePane() {
               ) : renderedCards.length === 0 ? (
                 <EmptyPanel
                   title="No packages are available yet."
-                  body="Discover installs governed templates, tools, and AI models. Build creates private assistants."
+                  body="Discover installs governed templates, tools, providers, connectors, and mini-apps. Build creates private specialists."
                 />
               ) : (
                 <div className="marketplace-pane__grid">
@@ -1146,7 +1149,7 @@ export function MarketplacePane() {
                     <div className="marketplace-pane__detail-group">
                       <strong className="marketplace-pane__detail-title">Before you install</strong>
                       <p className="marketplace-pane__panel-copy">
-                        Discover adds governed packages to this workspace. Build stays for private assistants you create yourself.
+                        Discover adds governed packages to this workspace. Build stays for private specialists you create yourself and keep behind Sage.
                       </p>
                       <div className="marketplace-pane__token-row">
                         {summarizeInstallReadiness(selectedPackage, selectedDetails).map((token) => (
@@ -1403,12 +1406,12 @@ export function MarketplacePane() {
                 )}
               </ListDetailPanel>
 
-              {showDeveloperRegistration ? (
+              {canPublishPackages && showDeveloperRegistration ? (
                 <ListDetailPanel
                   className="marketplace-pane__composer-panel"
-                  eyebrow="Developer publishing"
+                  eyebrow="Operator publishing"
                   title="Register governed package"
-                  subtitle="Create a third-party provider or hosted app package. This is for operators and developers, not the normal install flow."
+                  subtitle="Create a governed provider or hosted package. This stays hidden from the normal install flow so Discover does not turn into an open plugin bazaar."
                   actions={(
                     <AppButton type="button" tone="secondary" onClick={() => setShowDeveloperRegistration(false)}>
                       Hide
@@ -1852,15 +1855,15 @@ export function MarketplacePane() {
                   </AppButton>
                 </div>
               </ListDetailPanel>
-              ) : (
+              ) : canPublishPackages ? (
                 <ListDetailPanel
                   className="marketplace-pane__composer-panel marketplace-pane__composer-panel--collapsed"
-                  eyebrow="Developer publishing"
+                  eyebrow="Operator publishing"
                   title="Publish a package"
-                  subtitle="Discover is for installation. Build is for creating assistants. Only open this if you are publishing package inventory."
+                  subtitle="Discover is for installation. Build is for private specialists. Only open this if you are curating governed package inventory."
                 >
                   <p className="marketplace-pane__panel-copy">
-                    Normal users should browse, inspect trust metadata, and install packages. Publisher registration is intentionally hidden to keep Discover simple.
+                    Normal users should browse, inspect trust metadata, and install packages. Package publishing stays intentionally hidden to keep Discover curated and professional.
                   </p>
                   <div className="marketplace-pane__form-actions">
                     <AppButton type="button" tone="secondary" onClick={() => setShowDeveloperRegistration(true)}>
@@ -1868,7 +1871,7 @@ export function MarketplacePane() {
                     </AppButton>
                   </div>
                 </ListDetailPanel>
-              )}
+              ) : null}
             </div>
           )}
         />

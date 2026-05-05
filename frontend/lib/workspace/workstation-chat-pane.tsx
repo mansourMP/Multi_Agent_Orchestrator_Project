@@ -564,7 +564,7 @@ function summarizeLiveTraceStep(liveTrace: LiveTraceState | null): {
     }
     if (eventType === 'delegation.started') {
       return {
-        label: readString(data.task_summary) || readString(data.specialist_name) || 'Delegating work',
+        label: 'Coordinating behind the scenes',
         state: 'running',
       };
     }

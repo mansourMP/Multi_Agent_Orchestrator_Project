@@ -27,6 +27,7 @@ import {
   buildWorkspaceRouteHref,
   getWorkspaceNavRouteDefinition,
   resolveWorkspaceRouteIdFromSegment,
+  type WorkspaceRouteId,
   type WorkspaceNavDestinationId,
 } from '../../../shared/nav-manifest';
 
@@ -55,6 +56,16 @@ const SECONDARY_DESTINATIONS = WORKSPACE_NAV_DESTINATIONS
     defaultRouteId: destination.defaultRouteId,
     icon: DESTINATION_ICON_MAP[destination.id],
   }));
+
+function buildDestinationHref(
+  workspaceId: string,
+  destination: { id: WorkspaceNavDestinationId; defaultRouteId: WorkspaceRouteId },
+): string {
+  if (destination.id === 'gateway') {
+    return buildWorkspaceRouteHref(workspaceId, 'integrations');
+  }
+  return buildWorkspaceRouteHref(workspaceId, destination.defaultRouteId);
+}
 
 function extractRouteWorkspaceId(pathname: string | null): string | null {
   if (!pathname) {
@@ -200,7 +211,7 @@ export function AccountTenantSwitcher() {
           {PRIMARY_DESTINATIONS.map((destination) => (
             <Link
               key={destination.id}
-              href={activeWorkspaceId ? buildWorkspaceRouteHref(activeWorkspaceId, destination.defaultRouteId) : '/'}
+              href={activeWorkspaceId ? buildDestinationHref(activeWorkspaceId, destination) : '/'}
               prefetch
               aria-current={activeDestinationId === destination.id ? 'page' : undefined}
               data-workstation-destination-link={destination.id}

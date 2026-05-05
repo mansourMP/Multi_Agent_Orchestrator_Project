@@ -4542,6 +4542,7 @@ textarea {
   position: relative;
   width: 42px;
   height: 42px;
+  flex: 0 0 42px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4553,6 +4554,7 @@ textarea {
   background: color-mix(in srgb, var(--app-bg-panel) 64%, transparent 36%);
   cursor: pointer;
   transform: translateY(0);
+  transform-origin: center;
   transition:
     background-color var(--transition),
     border-color var(--transition),
@@ -4572,6 +4574,10 @@ textarea {
     0 14px 28px -24px color-mix(in srgb, black 32%, transparent);
 }
 
+.account-switcher__link > svg {
+  flex: 0 0 auto;
+}
+
 .account-switcher__link--active {
   border-color: color-mix(in srgb, var(--app-border-accent) 62%, transparent 38%);
   background:
@@ -4583,7 +4589,8 @@ textarea {
     inset 0 0 0 1px color-mix(in srgb, white 24%, transparent 76%);
 }
 
-.account-switcher__link-label {
+.account-switcher__link::after {
+  content: attr(data-label);
   position: absolute;
   left: calc(100% + 12px);
   top: 50%;
@@ -4606,8 +4613,8 @@ textarea {
     transform var(--app-motion-fast);
 }
 
-.account-switcher__link:hover .account-switcher__link-label,
-.account-switcher__link:focus-visible .account-switcher__link-label {
+.account-switcher__link:hover::after,
+.account-switcher__link:focus-visible::after {
   opacity: 1;
   transform: translate(0, -50%);
 }
@@ -4640,7 +4647,8 @@ textarea {
   }
 
   .account-switcher__link,
-  .account-switcher__link-label {
+  .account-switcher__link,
+  .account-switcher__link::after {
     transition: none;
   }
 }

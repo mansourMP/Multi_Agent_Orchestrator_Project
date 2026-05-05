@@ -204,6 +204,7 @@ export function AccountTenantSwitcher() {
               prefetch
               aria-current={activeDestinationId === destination.id ? 'page' : undefined}
               data-workstation-destination-link={destination.id}
+              data-label={destination.label}
               className={joinClassNames(
                 'account-switcher__link',
                 activeDestinationId === destination.id && 'account-switcher__link--active',
@@ -212,7 +213,6 @@ export function AccountTenantSwitcher() {
               title={destination.label}
             >
               <destination.icon size={18} />
-              <span className="account-switcher__link-label">{destination.label}</span>
             </Link>
           ))}
         </nav>
@@ -233,12 +233,12 @@ export function AccountTenantSwitcher() {
           className="account-switcher__link account-switcher__theme-toggle"
           aria-label={`${themeLabel}. Click to switch to ${nextTheme}.`}
           title={`${themeLabel}. Click to switch to ${nextTheme}.`}
+          data-label={themeLabel}
           onClick={() => {
             actions.setGlobalTheme(nextTheme);
           }}
         >
           <ThemeIcon size={18} />
-          <span className="account-switcher__link-label">{themeLabel}</span>
         </button>
         <nav aria-label="Settings destination" className="account-switcher__nav account-switcher__nav--secondary">
           {SECONDARY_DESTINATIONS.map((destination) => (
@@ -248,6 +248,7 @@ export function AccountTenantSwitcher() {
               prefetch
               aria-current={activeDestinationId === destination.id ? 'page' : undefined}
               data-workstation-destination-link={destination.id}
+              data-label={destination.label}
               className={joinClassNames(
                 'account-switcher__link',
                 activeDestinationId === destination.id && 'account-switcher__link--active',
@@ -256,7 +257,6 @@ export function AccountTenantSwitcher() {
               title={destination.label}
             >
               <destination.icon size={18} />
-              <span className="account-switcher__link-label">{destination.label}</span>
             </Link>
           ))}
         </nav>
@@ -266,11 +266,9 @@ export function AccountTenantSwitcher() {
           className="account-switcher__link account-switcher__avatar"
           aria-label="Account"
           title={state.account?.displayName || state.account?.email || 'Account'}
+          data-label={state.account?.displayName || state.account?.email || 'Account'}
         >
           {accountInitial}
-          <span className="account-switcher__link-label">
-            {state.account?.displayName || state.account?.email || 'Account'}
-          </span>
         </Link>
       </div>
     </aside>

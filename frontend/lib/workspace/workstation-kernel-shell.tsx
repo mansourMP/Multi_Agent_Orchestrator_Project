@@ -21,7 +21,7 @@ import {
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
   sage: ['chat', 'memory', 'integrations', 'heartbeat', 'activity'],
   studio: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
-  gateway: ['gateway', 'channels', 'gatewayApprovals', 'gatewayActivity'],
+  gateway: ['integrations'],
   marketplace: ['marketplace'],
   settings: ['settings'],
 };
@@ -107,7 +107,7 @@ export function WorkstationKernelShell({
       return routeManifest.routeIndex.marketplace?.href ?? `/w/${encodeURIComponent(workspaceId)}/marketplace`;
     }
     if (activeDestinationId === 'gateway') {
-      return routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(workspaceId)}/gateway`;
+      return routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(workspaceId)}/integrations`;
     }
     return routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(workspaceId)}/settings`;
   }, [activeDestinationId, routeManifest.routeIndex, workspaceId]);
@@ -140,9 +140,9 @@ export function WorkstationKernelShell({
           surfaceHref={surfaceHomeHref}
           diagnosticsVisible={false}
           onToggleDiagnostics={() => {}}
-          actions={pendingApprovalCount > 0 && routeManifest.routeIndex.approvals ? (
+          actions={pendingApprovalCount > 0 && routeManifest.routeIndex.heartbeat ? (
             <Link
-              href={routeManifest.routeIndex.approvals.href}
+              href={routeManifest.routeIndex.heartbeat.href}
               className="workstation-titlebar__link workstation-titlebar__link--active"
             >
               Needs your OK · {pendingApprovalCount}
@@ -165,7 +165,7 @@ export function WorkstationKernelShell({
           )) : null}
         />
         <nav className="workstation-mobile-destination-nav" aria-label="Workspace sections">
-          {WORKSPACE_NAV_DESTINATIONS.map((destination) => (
+          {WORKSPACE_NAV_DESTINATIONS.filter((destination) => destination.id !== 'gateway').map((destination) => (
             <Link
               key={destination.id}
               href={buildWorkspaceRouteHref(workspaceId, destination.defaultRouteId)}

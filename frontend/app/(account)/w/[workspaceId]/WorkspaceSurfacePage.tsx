@@ -5,18 +5,14 @@ import { useRouter } from 'next/navigation';
 
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { WorkstationActivityPane } from '@/lib/workspace/workstation-activity-pane';
-import { WorkstationApprovalsPane } from '@/lib/workspace/workstation-approvals-pane';
 import { WorkstationArtifactsPane } from '@/lib/workspace/workstation-artifacts-pane';
 import { WorkstationChatPane } from '@/lib/workspace/workstation-chat-pane';
 import { WorkstationDeployedAgentsPane } from '@/lib/workspace/workstation-deployed-agents-pane';
-import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gateway-operator-pane';
 import { WorkstationSageHeartbeatPane } from '@/lib/workspace/workstation-sage-heartbeat-pane';
 import { MarketplacePane } from '@/lib/marketplace/marketplace-pane';
 import { WorkstationNotificationsPane } from '@/lib/workspace/workstation-notifications-pane';
-import { WorkstationSageProfilePane } from '@/lib/workspace/workstation-sage-profile-pane';
 import { WorkstationRunsPane } from '@/lib/workspace/workstation-runs-pane';
 import { WorkstationSageConnectorsPane } from '@/lib/workspace/workstation-sage-connectors-pane';
-import { WorkstationSageSkillsPane } from '@/lib/workspace/workstation-sage-skills-pane';
 import { WorkstationSettingsPane } from '@/lib/workspace/workstation-settings-pane';
 import { WorkstationStudioIntegrationsPane } from '@/lib/workspace/workstation-studio-integrations-pane';
 import { WorkstationSurfaceViewport } from '@/lib/workspace/workstation-shell-frame';
@@ -44,7 +40,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   profile: {
     destinationId: 'sage',
-    render: () => <WorkstationSageProfilePane />,
+    render: () => <WorkstationActivityPane />,
   },
   runs: {
     destinationId: 'sage',
@@ -52,7 +48,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   approvals: {
     destinationId: 'sage',
-    render: () => <WorkstationApprovalsPane />,
+    render: () => <WorkstationSageHeartbeatPane />,
   },
   artifacts: {
     destinationId: 'sage',
@@ -72,7 +68,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   skills: {
     destinationId: 'sage',
-    render: () => <WorkstationSageSkillsPane />,
+    render: () => <WorkstationSageConnectorsPane />,
   },
   integrations: {
     destinationId: 'sage',
@@ -88,7 +84,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   gateway: {
     destinationId: 'gateway',
-    render: () => <WorkstationGatewayOperatorPane initialSection="status" />,
+    render: () => <WorkstationSageConnectorsPane />,
   },
   channels: {
     destinationId: 'sage',
@@ -108,11 +104,11 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   gatewayApprovals: {
     destinationId: 'gateway',
-    render: () => <WorkstationGatewayOperatorPane initialSection="approvals" />,
+    render: () => <WorkstationSageHeartbeatPane />,
   },
   gatewayActivity: {
     destinationId: 'gateway',
-    render: () => <WorkstationGatewayOperatorPane initialSection="activity" />,
+    render: () => <WorkstationRunsPane />,
   },
   settings: {
     destinationId: 'settings',

@@ -350,13 +350,12 @@ test.describe('workstation data reconciliation', () => {
 
   test('runs, approvals, activity, and home surfaces leave loading states and mount live data surfaces', async ({ page }) => {
     await loginAsOwner(page);
-    const approvalsSurfaceSelector = await resolveApprovalsSurfaceSelector(page);
     await stubSurfaceDataRequests(page);
 
     const routeExpectations: Array<[string, string]> = [
       ['/w/ws-1', '[data-workstation-surface="chat"]'],
       ['/w/ws-1/runs', '[data-workstation-surface="activity-proof"]'],
-      ['/w/ws-1/approvals', approvalsSurfaceSelector],
+      ['/w/ws-1/approvals', '[data-workstation-surface="sage-tasks"]'],
       ['/w/ws-1/activity', '[data-workstation-surface="activity-proof"]'],
     ];
 

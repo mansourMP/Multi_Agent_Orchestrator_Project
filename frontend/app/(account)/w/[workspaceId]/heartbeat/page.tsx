@@ -1,4 +1,4 @@
-import { WorkspaceSurfacePage } from '@/app/(account)/w/[workspaceId]/WorkspaceSurfacePage';
+import { redirect } from 'next/navigation';
 
 export default async function WorkspaceHeartbeatPage({
   params,
@@ -6,5 +6,5 @@ export default async function WorkspaceHeartbeatPage({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="heartbeat" />;
+  redirect(`/w/${encodeURIComponent(workspaceId)}/tasks`);
 }

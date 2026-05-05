@@ -2952,7 +2952,7 @@ export function WorkstationSageConnectorsPane({
   }
 
   return (
-    <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)}>
+    <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)} data-workstation-surface="integrations">
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
       {error ? <AppNotice tone="warning">Integrations could not refresh. Try again when ready.</AppNotice> : null}
 

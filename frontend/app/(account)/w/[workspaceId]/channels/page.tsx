@@ -1,4 +1,4 @@
-import { WorkspaceSurfacePage } from '@/app/(account)/w/[workspaceId]/WorkspaceSurfacePage';
+import { redirect } from 'next/navigation';
 
 export default async function WorkspaceChannelsPage({
   params,
@@ -6,5 +6,5 @@ export default async function WorkspaceChannelsPage({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="channels" />;
+  redirect(`/w/${encodeURIComponent(workspaceId)}/integrations`);
 }

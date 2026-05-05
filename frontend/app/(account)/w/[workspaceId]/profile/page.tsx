@@ -1,4 +1,4 @@
-import { WorkspaceSurfacePage } from '@/app/(account)/w/[workspaceId]/WorkspaceSurfacePage';
+import { redirect } from 'next/navigation';
 
 export default async function WorkspaceProfilePage({
   params,
@@ -6,5 +6,5 @@ export default async function WorkspaceProfilePage({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="profile" />;
+  redirect(`/w/${encodeURIComponent(workspaceId)}/memory`);
 }

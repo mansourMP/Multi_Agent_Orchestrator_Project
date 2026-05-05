@@ -1144,7 +1144,7 @@ function providerFailureMessageForProvider(provider: ProviderCatalogRecord | nul
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected computer. Connect My Computer, use Empyralis credits, or add your own API key in Integrations.`;
+    return `${providerLabel} needs this computer connected in Integrations. Use Empyralis credits, connect this computer, or add your own API key.`;
   }
   if (credentialPlane === 'workspace_connection') {
     return 'Your AI model API key needs attention. Check the key, quota, or selected model in Integrations.';
@@ -1170,7 +1170,7 @@ function providerFailureActionsForProvider(
     || normalized.includes('gateway offline');
   if (localOnly) {
     return [
-      { label: 'Connect My Computer', target: 'gateway' },
+      { label: 'Open Integrations', target: 'integrations' },
       { label: 'Choose AI Model', target: 'integrations' },
       { label: 'Use Empyralis credits', target: 'integrations' },
     ];
@@ -1813,10 +1813,10 @@ function classifyStatusNotice(message: string): {
     return {
       tone: 'warning',
       title: 'My Computer browser needed',
-      body: 'Localhost pages, signed-in sites, and private browser sessions stay on this device. Open My Computer when Sage needs browser access or needs your OK.',
+      body: 'Localhost pages, signed-in sites, and private browser sessions stay on this device. Open Integrations to manage This Computer access.',
       requiresLocalAccess: true,
-      actionTarget: 'gateway',
-      actionLabel: 'Open My Computer',
+      actionTarget: 'integrations',
+      actionLabel: 'Open Integrations',
     };
   }
   if (isLocalCompanionGateMessage(message)) {
@@ -1825,8 +1825,8 @@ function classifyStatusNotice(message: string): {
       title: 'My Computer attention needed',
       body: message,
       requiresLocalAccess: true,
-      actionTarget: 'gateway',
-      actionLabel: 'Open My Computer',
+      actionTarget: 'integrations',
+      actionLabel: 'Open Integrations',
     };
   }
   if (/^turn submitted/i.test(message)) {
@@ -1895,7 +1895,7 @@ function browserReadinessPill(
       id: 'browser-approval',
       label: 'Browser: Needs your OK',
       tone: 'warning',
-      target: 'gateway',
+      target: 'integrations',
     };
   }
   if (attachFailedCount > 0 || attachStatus === 'fail') {
@@ -1903,7 +1903,7 @@ function browserReadinessPill(
       id: 'browser-attach-failed',
       label: 'Browser: Attach failed',
       tone: 'danger',
-      target: 'gateway',
+      target: 'integrations',
     };
   }
   if (attachCount > 0 && attachPendingCount > 0) {
@@ -1911,7 +1911,7 @@ function browserReadinessPill(
       id: 'browser-attach-pending',
       label: 'Browser: Finish attach',
       tone: 'warning',
-      target: 'gateway',
+      target: 'integrations',
     };
   }
   if (browserStatus === 'fail') {
@@ -1919,7 +1919,7 @@ function browserReadinessPill(
       id: 'browser-unavailable',
       label: 'Browser: Unavailable',
       tone: 'danger',
-      target: 'gateway',
+      target: 'integrations',
     };
   }
   if (browserStatus === 'warn') {
@@ -1927,7 +1927,7 @@ function browserReadinessPill(
       id: 'browser-attention',
       label: 'Browser: Needs attention',
       tone: 'warning',
-      target: 'gateway',
+      target: 'integrations',
     };
   }
   return null;
@@ -3489,8 +3489,8 @@ export function WorkstationChatPane() {
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
   );
   const gatewayHref = useMemo(
-    () => routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/gateway`,
-    [bootstrap.workspace.id, routeManifest.routeIndex.gateway],
+    () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
   );
   const runTargetOptions = useMemo(
     () => [
@@ -3673,7 +3673,7 @@ export function WorkstationChatPane() {
         id: 'gateway',
         label: 'My Computer: Offline',
         tone: 'danger',
-        target: 'gateway',
+        target: 'integrations',
       });
     }
     const browserPill = browserReadinessPill(browserGatewayDoctor, {
@@ -4391,7 +4391,7 @@ export function WorkstationChatPane() {
             ? error.retryable
             : true,
           actions: localComputerNeedsAttention
-            ? [{ label: 'Connect My Computer', target: 'gateway' }]
+            ? [{ label: 'Open Integrations', target: 'integrations' }]
             : authNeedsAttention
               ? undefined
               : providerNotice?.actions,
@@ -4810,8 +4810,8 @@ export function WorkstationChatPane() {
             </section>
           ))}
           <div>
-            <Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`} className="app-link-button app-link-button--primary">
-              Open approvals
+            <Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/tasks`} className="app-link-button app-link-button--primary">
+              Open Tasks
             </Link>
           </div>
         </div>

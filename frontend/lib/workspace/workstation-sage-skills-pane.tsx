@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
+import { DataBadge } from '@/lib/ui/data-table';
 import type { WorkstationSageSkillRecord } from '@/lib/workspace/workstation-client';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import {
@@ -19,11 +20,22 @@ type SkillSnapshot = {
   id: string;
   name: string;
   description: string | null;
-  status: 'active' | 'gated' | 'unavailable';
+  whatItDoes: string | null;
+  status: 'ready' | 'needs_setup' | 'unsupported_device' | 'disabled_policy';
+  statusLabel: string;
   reason: string | null;
+  setupRequirement: string | null;
   source: string | null;
+  activeNow: boolean;
+  curated: boolean;
+  curatedRank: number | null;
   requiredBins: string[];
   missingBins: string[];
+  requiredEnvVars: string[];
+  missingEnvVars: string[];
+  requiredPythonPackages: string[];
+  missingPythonPackages: string[];
+  supportedOs: string[];
   tools: string[];
   slashCommands: string[];
   permissionLabel: string | null;
@@ -46,19 +58,51 @@ function normalizeSkillSnapshot(payload: unknown): SkillSnapshot[] {
     }
     const candidate = item as WorkstationSageSkillRecord;
     const statusToken = readString(candidate.status).toLowerCase();
-    const status: SkillSnapshot['status'] = statusToken === 'active' || statusToken === 'gated' ? statusToken : 'unavailable';
+    const status: SkillSnapshot['status'] =
+      statusToken === 'ready'
+      || statusToken === 'needs_setup'
+      || statusToken === 'unsupported_device'
+      || statusToken === 'disabled_policy'
+        ? statusToken
+        : 'needs_setup';
     return [{
       id: readString(candidate.id),
       name: readString(candidate.name) || 'Skill',
       description: readString(candidate.description) || null,
+      whatItDoes: readString(candidate.what_it_does) || null,
       status,
+      statusLabel: readString(candidate.status_label) || 'Needs setup',
       reason: readString(candidate.reason) || null,
+      setupRequirement: readString(candidate.setup_requirement) || null,
       source: readString(candidate.source) || null,
+      activeNow: candidate.active_now === true,
+      curated: candidate.curated === true,
+      curatedRank: typeof candidate.curated_rank === 'number' ? candidate.curated_rank : null,
       requiredBins: Array.isArray(candidate.required_bins) ? candidate.required_bins.flatMap((value) => {
         const token = readString(value);
         return token ? [token] : [];
       }) : [],
       missingBins: Array.isArray(candidate.missing_bins) ? candidate.missing_bins.flatMap((value) => {
+        const token = readString(value);
+        return token ? [token] : [];
+      }) : [],
+      requiredEnvVars: Array.isArray(candidate.required_env_vars) ? candidate.required_env_vars.flatMap((value) => {
+        const token = readString(value);
+        return token ? [token] : [];
+      }) : [],
+      missingEnvVars: Array.isArray(candidate.missing_env_vars) ? candidate.missing_env_vars.flatMap((value) => {
+        const token = readString(value);
+        return token ? [token] : [];
+      }) : [],
+      requiredPythonPackages: Array.isArray(candidate.required_python_packages) ? candidate.required_python_packages.flatMap((value) => {
+        const token = readString(value);
+        return token ? [token] : [];
+      }) : [],
+      missingPythonPackages: Array.isArray(candidate.missing_python_packages) ? candidate.missing_python_packages.flatMap((value) => {
+        const token = readString(value);
+        return token ? [token] : [];
+      }) : [],
+      supportedOs: Array.isArray(candidate.supported_os) ? candidate.supported_os.flatMap((value) => {
         const token = readString(value);
         return token ? [token] : [];
       }) : [],
@@ -80,6 +124,47 @@ function normalizeSkillSnapshot(payload: unknown): SkillSnapshot[] {
       }) : [],
     }];
   });
+}
+
+function statusTone(status: SkillSnapshot['status']): 'success' | 'warning' | 'neutral' | 'danger' {
+  switch (status) {
+    case 'ready':
+      return 'success';
+    case 'needs_setup':
+      return 'warning';
+    case 'unsupported_device':
+      return 'neutral';
+    case 'disabled_policy':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+}
+
+function buildSkillRequirementBits(item: SkillSnapshot): string[] {
+  const bits: string[] = [];
+  if (item.setupRequirement) {
+    bits.push(`Setup: ${item.setupRequirement}`);
+  }
+  if (item.reason) {
+    bits.push(`Why unavailable: ${item.reason}`);
+  }
+  if (item.missingBins.length > 0) {
+    bits.push(`Missing runtime dependencies: ${item.missingBins.join(', ')}`);
+  }
+  if (item.missingEnvVars.length > 0) {
+    bits.push(`Missing environment variables: ${item.missingEnvVars.join(', ')}`);
+  }
+  if (item.missingPythonPackages.length > 0) {
+    bits.push(`Missing Python packages: ${item.missingPythonPackages.join(', ')}`);
+  }
+  if (item.supportedOs.length > 0) {
+    bits.push(`Supported devices: ${item.supportedOs.join(', ')}`);
+  }
+  if (item.tools.length > 0) {
+    bits.push(`Tools: ${item.tools.join(', ')}`);
+  }
+  return bits;
 }
 
 export function WorkstationSageSkillsPane() {
@@ -110,9 +195,18 @@ export function WorkstationSageSkillsPane() {
     };
   }, [services.client]);
 
-  const activeSkills = useMemo(() => skills.filter((item) => item.status === 'active'), [skills]);
-  const gatedSkills = useMemo(() => skills.filter((item) => item.status === 'gated'), [skills]);
-  const unavailableSkills = useMemo(() => skills.filter((item) => item.status === 'unavailable'), [skills]);
+  const curatedSkills = useMemo(
+    () => skills.filter((item) => item.curated).sort((left, right) => (left.curatedRank ?? 999) - (right.curatedRank ?? 999)),
+    [skills],
+  );
+  const otherSkills = useMemo(
+    () => skills.filter((item) => !item.curated).sort((left, right) => left.name.localeCompare(right.name)),
+    [skills],
+  );
+  const readySkills = useMemo(() => skills.filter((item) => item.status === 'ready'), [skills]);
+  const needsSetupSkills = useMemo(() => skills.filter((item) => item.status === 'needs_setup'), [skills]);
+  const unsupportedSkills = useMemo(() => skills.filter((item) => item.status === 'unsupported_device'), [skills]);
+  const disabledSkills = useMemo(() => skills.filter((item) => item.status === 'disabled_policy'), [skills]);
 
   return (
     <WorkstationSurfaceRoot surface="sage-skills">
@@ -128,15 +222,77 @@ export function WorkstationSageSkillsPane() {
         ) : (
           <>
             <WorkstationSurfaceStatGrid>
-              <WorkstationSurfaceStat label="Active" value={activeSkills.length} hint="Loaded and available now" />
-              <WorkstationSurfaceStat label="Gated" value={gatedSkills.length} hint="Present, but blocked by runtime requirements" />
-              <WorkstationSurfaceStat label="Unavailable" value={unavailableSkills.length} hint="Installed but disabled for this workspace" />
+              <WorkstationSurfaceStat label="Ready" value={readySkills.length} hint="Available to Sage right now" />
+              <WorkstationSurfaceStat label="Needs setup" value={needsSetupSkills.length} hint="Configured conceptually, but still missing local setup" />
+              <WorkstationSurfaceStat label="Unsupported" value={unsupportedSkills.length} hint="Not supported on this device" />
+              <WorkstationSurfaceStat label="Disabled" value={disabledSkills.length} hint="Blocked by workspace policy" />
             </WorkstationSurfaceStatGrid>
 
+            <WorkstationSurfaceCard
+              title="Curated skills"
+              description="This is the first-class pack for trusted local work. These are the capabilities Sage should make feel deliberate, not accidental."
+            >
+              {curatedSkills.length > 0 ? (
+                <WorkstationSurfaceList>
+                  {curatedSkills.map((item) => {
+                    const detailBits = [
+                      item.activeNow ? 'active now' : null,
+                      item.permissionLabel,
+                      item.actionClass,
+                      item.requiresApproval ? 'needs approval' : null,
+                      item.executionMode,
+                    ].filter(Boolean);
+                    const requirementBits = buildSkillRequirementBits(item);
+                    return (
+                      <WorkstationSurfaceListItem
+                        key={item.id || item.name}
+                        title={item.name}
+                        subtitle={detailBits.join(' · ') || item.statusLabel}
+                        description={item.whatItDoes || item.description || requirementBits.join(' · ') || null}
+                        actions={(
+                          <DataBadge tone={statusTone(item.status)}>
+                            {item.statusLabel}
+                          </DataBadge>
+                        )}
+                      />
+                    );
+                  })}
+                </WorkstationSurfaceList>
+              ) : (
+                <WorkstationSurfaceNotice tone="neutral">
+                  No curated skills are defined right now.
+                </WorkstationSurfaceNotice>
+              )}
+            </WorkstationSurfaceCard>
+
+            {curatedSkills.length > 0 ? (
+              <WorkstationSurfaceCard
+                title="Setup truth"
+                description="Each curated skill tells you exactly why it is available now or what still needs to be finished."
+              >
+                <WorkstationSurfaceList>
+                  {curatedSkills.map((item) => (
+                    <WorkstationSurfaceListItem
+                      key={`${item.id || item.name}-setup`}
+                      title={item.name}
+                      subtitle={item.statusLabel}
+                      description={buildSkillRequirementBits(item).join(' · ') || 'Ready now.'}
+                      actions={(
+                        <DataBadge tone={statusTone(item.status)}>
+                          {item.statusLabel}
+                        </DataBadge>
+                      )}
+                    />
+                  ))}
+                </WorkstationSurfaceList>
+              </WorkstationSurfaceCard>
+            ) : null}
+
             {[
-              { key: 'active', title: 'Active skills', description: 'These are loaded into Sage now.', items: activeSkills, tone: 'success' as const },
-              { key: 'gated', title: 'Gated skills', description: 'These skills exist, but the current runtime is missing something they require.', items: gatedSkills, tone: 'warning' as const },
-              { key: 'unavailable', title: 'Unavailable skills', description: 'These skills are present but disabled for this workspace.', items: unavailableSkills, tone: 'neutral' as const },
+              { key: 'ready', title: 'Ready now', description: 'These skills are active and can be used by Sage right now.', items: readySkills, tone: 'success' as const },
+              { key: 'needs_setup', title: 'Needs setup', description: 'These skills belong in the product, but local setup is still missing.', items: needsSetupSkills, tone: 'warning' as const },
+              { key: 'unsupported_device', title: 'Unsupported on this device', description: 'These skills exist, but not on the current computer.', items: unsupportedSkills, tone: 'neutral' as const },
+              { key: 'disabled_policy', title: 'Disabled by policy', description: 'These skills are blocked by workspace policy even if the runtime could support them.', items: disabledSkills, tone: 'danger' as const },
             ].map((section) => (
               <WorkstationSurfaceCard
                 key={section.key}
@@ -147,6 +303,7 @@ export function WorkstationSageSkillsPane() {
                   <WorkstationSurfaceList>
                     {section.items.map((item) => {
                       const detailBits = [
+                        item.curated ? 'curated' : null,
                         item.source,
                         item.permissionLabel,
                         item.actionClass,
@@ -154,17 +311,20 @@ export function WorkstationSageSkillsPane() {
                         item.executionMode,
                       ].filter(Boolean);
                       const requirementBits = [
-                        item.reason,
-                        item.requiredBins.length > 0 ? `Requires: ${item.requiredBins.join(', ')}` : null,
+                        ...buildSkillRequirementBits(item),
                         item.allowedRuntimeModes.length > 0 ? `Runtimes: ${item.allowedRuntimeModes.join(', ')}` : null,
-                        item.tools.length > 0 ? `Tools: ${item.tools.join(', ')}` : null,
                       ].filter(Boolean);
                       return (
                         <WorkstationSurfaceListItem
                           key={item.id || item.name}
                           title={item.name}
                           subtitle={detailBits.join(' · ') || null}
-                          description={item.description || requirementBits.join(' · ') || null}
+                          description={item.description || item.whatItDoes || requirementBits.join(' · ') || null}
+                          actions={(
+                            <DataBadge tone={statusTone(item.status)}>
+                              {item.statusLabel}
+                            </DataBadge>
+                          )}
                         />
                       );
                     })}
@@ -176,6 +336,29 @@ export function WorkstationSageSkillsPane() {
                 )}
               </WorkstationSurfaceCard>
             ))}
+
+            {otherSkills.length > 0 ? (
+              <WorkstationSurfaceCard
+                title="Other installed skills"
+                description="Installed skills outside the first-class pack stay available here, but the curated pack comes first."
+              >
+                <WorkstationSurfaceList>
+                  {otherSkills.map((item) => (
+                    <WorkstationSurfaceListItem
+                      key={`other-${item.id || item.name}`}
+                      title={item.name}
+                      subtitle={item.statusLabel}
+                      description={item.description || item.whatItDoes || buildSkillRequirementBits(item).join(' · ') || null}
+                      actions={(
+                        <DataBadge tone={statusTone(item.status)}>
+                          {item.statusLabel}
+                        </DataBadge>
+                      )}
+                    />
+                  ))}
+                </WorkstationSurfaceList>
+              </WorkstationSurfaceCard>
+            ) : null}
           </>
         )}
       </main>

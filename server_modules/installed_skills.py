@@ -598,6 +598,24 @@ def _os_available(supported_os: List[str]) -> bool:
     return any(token in aliases for token in supported_os)
 
 
+def current_device_os_aliases() -> List[str]:
+    return sorted(_current_os_aliases())
+
+
+def current_device_os_label() -> str:
+    aliases = _current_os_aliases()
+    if "macos" in aliases:
+        return "macOS"
+    if "linux" in aliases:
+        return "Linux"
+    if "windows" in aliases:
+        return "Windows"
+    for token in sorted(aliases):
+        if token not in {"posix", "unix"}:
+            return token
+    return "this device"
+
+
 def _availability_reasons(
     *,
     supported_os: List[str],
@@ -618,6 +636,22 @@ def _availability_reasons(
     if missing_python_packages:
         reasons.append(f"Missing Python packages: {', '.join(missing_python_packages)}")
     return reasons
+
+
+def skill_availability_state(item: Dict[str, Any]) -> str:
+    enabled = bool(item.get("enabled"))
+    if not enabled:
+        return "disabled_policy"
+    supported_os = [
+        str(token or "").strip().lower()
+        for token in list(item.get("supported_os") or [])
+        if str(token or "").strip()
+    ]
+    if supported_os and not _os_available(supported_os):
+        return "unsupported_device"
+    if bool(item.get("available")):
+        return "ready"
+    return "needs_setup"
 
 
 def list_installed_skills(*, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:

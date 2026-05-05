@@ -155,6 +155,34 @@ class SkillRegistryTests(unittest.TestCase):
         self.assertIsNotNone(disabled)
         self.assertFalse(disabled.available)
         self.assertIn("Missing environment variables", str(disabled.unavailable_reason))
+        self.assertEqual(installed_skills.skill_availability_state(item), "unsupported_device")
+
+    def test_disabled_or_unsupported_skill_never_becomes_runnable(self) -> None:
+        _write_skill(
+            self.bundled_root,
+            name="notes-helper",
+            runtime={
+                "skill_class": "system",
+                "action_class": "read",
+                "execution_mode": "live",
+                "execution_adapter": "handler",
+                "supported_os": ["definitely-not-this-os"],
+            },
+            handler_body="print('ok')\n",
+        )
+
+        listed = installed_skills.list_installed_skills(workspace_id="workspace-1")
+        self.assertEqual(installed_skills.skill_availability_state(listed[0]), "unsupported_device")
+        self.assertIsNone(skill_registry.get_skill_definition("notes-helper", workspace_id="workspace-1"))
+
+        installed_skills.set_workspace_installed_skill_enabled(
+            skill_id="notes-helper",
+            workspace_id="workspace-1",
+            enabled=False,
+        )
+        disabled = installed_skills.list_installed_skills(workspace_id="workspace-1")[0]
+        self.assertEqual(installed_skills.skill_availability_state(disabled), "disabled_policy")
+        self.assertIsNone(skill_registry.get_skill_definition("notes-helper", workspace_id="workspace-1"))
 
     def test_handler_skill_executes_without_core_dispatch_change(self) -> None:
         _write_skill(

@@ -194,13 +194,22 @@ export type WorkstationSageSkillRecord = Record<string, unknown> & {
   id?: string | null;
   name?: string | null;
   description?: string | null;
+  what_it_does?: string | null;
   enabled?: boolean | null;
   available?: boolean | null;
+  active_now?: boolean | null;
   status?: string | null;
+  status_label?: string | null;
   reason?: string | null;
+  setup_requirement?: string | null;
   source?: string | null;
   required_bins?: string[] | null;
   missing_bins?: string[] | null;
+  required_env_vars?: string[] | null;
+  missing_env_vars?: string[] | null;
+  required_python_packages?: string[] | null;
+  missing_python_packages?: string[] | null;
+  supported_os?: string[] | null;
   tools?: string[] | null;
   slash_commands?: string[] | null;
   permission_label?: string | null;
@@ -208,6 +217,8 @@ export type WorkstationSageSkillRecord = Record<string, unknown> & {
   requires_approval?: boolean | null;
   execution_mode?: string | null;
   allowed_runtime_modes?: string[] | null;
+  curated?: boolean | null;
+  curated_rank?: number | null;
 };
 
 export type WorkstationAgentTraceRecord = Record<string, unknown> & {

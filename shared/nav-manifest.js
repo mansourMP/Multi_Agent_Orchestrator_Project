@@ -4,7 +4,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'profile', 'runs', 'approvals', 'artifacts', 'activity', 'heartbeat', 'skills', 'integrations', 'notifications'],
+    childRouteIds: ['chat', 'memory', 'integrations', 'heartbeat', 'activity', 'profile', 'runs', 'approvals', 'artifacts', 'skills', 'notifications'],
     direct: true,
   },
   {
@@ -70,8 +70,15 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     },
   },
   {
+    id: 'memory',
+    label: 'Memory',
+    segment: 'memory',
+    destinationId: 'sage',
+    web: {},
+  },
+  {
     id: 'runs',
-    label: 'Tasks',
+    label: 'History',
     segment: 'runs',
     legacySegments: ['work', 'history'],
     destinationId: 'sage',
@@ -147,22 +154,17 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'activity',
-    label: 'Memory',
+    label: 'Activity',
     segment: 'activity',
-    legacySegments: ['memory'],
     destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
+    web: {},
   },
   {
     id: 'heartbeat',
-    label: 'Heartbeat',
+    label: 'Tasks',
     segment: 'heartbeat',
     destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
+    web: {},
   },
   {
     id: 'skills',
@@ -175,12 +177,10 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'integrations',
-    label: 'Connected Apps',
+    label: 'Integrations',
     segment: 'integrations',
     destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
+    web: {},
   },
   {
     id: 'studio',
@@ -200,7 +200,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'studioIntegrations',
-    label: 'Connected Apps',
+    label: 'Integrations',
     segment: 'studio-integrations',
     destinationId: 'studio',
     requiredCapabilities: ['workspace_admin_enabled'],
@@ -210,7 +210,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'channels',
-    label: 'Connected Apps',
+    label: 'Integrations',
     segment: 'channels',
     destinationId: 'gateway',
     web: {

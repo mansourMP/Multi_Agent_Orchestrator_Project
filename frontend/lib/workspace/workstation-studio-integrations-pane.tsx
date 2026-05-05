@@ -9,12 +9,12 @@ export function WorkstationStudioIntegrationsPane() {
     <WorkstationSurfaceRoot surface="studio-integrations">
       <ListDetailShell
         className="app-studio-shell app-studio-shell--integrations"
-        title="Build · Connected Apps"
+        title="Build · Integrations"
         subtitle="Business messaging and workflow app connections for deployed specialists."
       >
         <ListDetailPanel
           className="studio-panel studio-panel--integrations"
-          eyebrow="Connected Apps"
+          eyebrow="Integrations"
           title="Business messaging and workflow connections"
           subtitle="Keep customer-facing channels in Studio. Personal Telegram and personal WhatsApp stay on the paired computer inside Sage."
         >

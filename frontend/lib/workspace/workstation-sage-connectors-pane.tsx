@@ -1320,7 +1320,7 @@ export function WorkstationSageConnectorsPane({
     void loadState()
       .catch((loadError) => {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Connected Apps are unavailable right now.');
+          setError(loadError instanceof Error ? loadError.message : 'Integrations are unavailable right now.');
         }
       })
       .finally(() => {
@@ -2297,7 +2297,7 @@ export function WorkstationSageConnectorsPane({
   return (
     <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)}>
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
-      {error ? <AppNotice tone="warning">Connected Apps could not refresh. Try again when ready.</AppNotice> : null}
+      {error ? <AppNotice tone="warning">Integrations could not refresh. Try again when ready.</AppNotice> : null}
 
       <div className="sage-unified-page">
         {showPersonalSurface ? (
@@ -2419,7 +2419,7 @@ export function WorkstationSageConnectorsPane({
           <div className="sage-settings-empty">
             Loading apps and accounts…
           </div>
-        ) : renderSection(surface === 'studio' ? 'Studio Apps & Channels' : 'Apps & Accounts', connectorCards, renderConnectorCard, renderConnectorExpand)}
+        ) : renderSection(surface === 'studio' ? 'Studio Integrations' : 'Integrations', connectorCards, renderConnectorCard, renderConnectorExpand)}
       </div>
 
       <CommandSheet

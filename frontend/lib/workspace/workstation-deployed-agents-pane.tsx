@@ -364,7 +364,7 @@ const SPECIALIST_OVERLAY_TABS: Array<{
   { id: 'overview', label: 'Overview' },
   { id: 'tools', label: 'Tools' },
   { id: 'memory', label: 'Memory' },
-  { id: 'connectors', label: 'Connected Apps' },
+  { id: 'connectors', label: 'Integrations' },
   { id: 'analytics', label: 'Analytics' },
 ];
 

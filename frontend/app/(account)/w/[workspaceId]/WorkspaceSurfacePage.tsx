@@ -38,6 +38,10 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
     destinationId: 'sage',
     render: () => <WorkstationChatPane />,
   },
+  memory: {
+    destinationId: 'sage',
+    render: () => <WorkstationActivityPane />,
+  },
   profile: {
     destinationId: 'sage',
     render: () => <WorkstationSageProfilePane />,
@@ -60,7 +64,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   activity: {
     destinationId: 'sage',
-    render: () => <WorkstationActivityPane />,
+    render: () => <WorkstationRunsPane />,
   },
   heartbeat: {
     destinationId: 'sage',

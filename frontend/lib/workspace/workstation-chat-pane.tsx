@@ -1144,15 +1144,15 @@ function providerFailureMessageForProvider(provider: ProviderCatalogRecord | nul
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected computer. Connect My Computer, use Empyralis credits, or add your own API key in Connected Apps.`;
+    return `${providerLabel} needs a connected computer. Connect My Computer, use Empyralis credits, or add your own API key in Integrations.`;
   }
   if (credentialPlane === 'workspace_connection') {
-    return 'Your AI model API key needs attention. Check the key, quota, or selected model in Connected Apps.';
+    return 'Your AI model API key needs attention. Check the key, quota, or selected model in Integrations.';
   }
   if (credentialPlane === 'platform_runtime') {
     return 'Empyralis credits are active, but the hosted AI model is temporarily unavailable. Try again or switch model.';
   }
-  return 'The selected AI model is not available right now. Switch model or open Connected Apps.';
+  return 'The selected AI model is not available right now. Switch model or open Integrations.';
 }
 
 function providerFailureActionsForProvider(
@@ -1844,11 +1844,11 @@ function classifyStatusNotice(message: string): {
       tone: 'warning',
       title: 'AI model attention needed',
       body: /api key|credential/i.test(message)
-        ? 'Check your AI model key or quota in Connected Apps.'
+        ? 'Check your AI model key or quota in Integrations.'
         : 'Choose Empyralis credits, add an AI model key, or connect this computer.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
-      actionLabel: 'Open Connected Apps',
+      actionLabel: 'Open Integrations',
     };
   }
   return {
@@ -3375,7 +3375,7 @@ export function WorkstationChatPane() {
       };
     }
     return {
-      label: 'No AI model — Set up in Connected Apps',
+      label: 'No AI model — Set up in Integrations',
       connected: false,
     };
   }, [
@@ -3867,7 +3867,7 @@ export function WorkstationChatPane() {
         selectedProviderRecord
           ? providerFailureNoticeForProvider(selectedProviderRecord)
           : {
-              message: 'Sage needs an AI path before it can answer. Use Empyralis credits, add your own API key, or connect My Computer for local Ollama in Connected Apps.',
+              message: 'Sage needs an AI path before it can answer. Use Empyralis credits, add your own API key, or connect My Computer for local Ollama in Integrations.',
               retryable: false,
               actions: [
                 { label: 'Manage credits', target: 'integrations' },
@@ -4370,7 +4370,7 @@ export function WorkstationChatPane() {
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
           ? 'My Computer is needed for this request. Connect this computer and try again.'
           : providerNeedsAttention
-            ? 'The selected AI path is not ready. Use Empyralis credits, add your own API key, connect My Computer, or choose another model in Connected Apps.'
+            ? 'The selected AI path is not ready. Use Empyralis credits, add your own API key, connect My Computer, or choose another model in Integrations.'
             : authNeedsAttention
               ? 'Your session needs attention before Sage can continue. Refresh the page or sign in again.'
               : rateLimitFailure
@@ -4381,7 +4381,7 @@ export function WorkstationChatPane() {
                     ? 'The request could not reach the server. Check your connection and try again.'
                     : serverFailure
                       ? 'Sage hit a temporary server issue before it could reply. Try again in a moment.'
-                      : "Sage couldn't complete that turn. Try again or choose another AI model in Connected Apps.";
+                      : "Sage couldn't complete that turn. Try again or choose another AI model in Integrations.";
         const providerNotice = providerNeedsAttention
           ? providerFailureNoticeForProvider(selectedProviderRecord, noticeMessage)
           : null;
@@ -4752,7 +4752,7 @@ export function WorkstationChatPane() {
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{
           label: activeProviderSummary.label,
-          actionLabel: 'Set up in Connected Apps',
+          actionLabel: 'Set up in Integrations',
         }}
         runtimeStatusLabel={runtimeStatus.label}
         runtimeStatusTone={runtimeStatus.tone}

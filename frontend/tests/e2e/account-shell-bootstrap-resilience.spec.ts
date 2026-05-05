@@ -128,7 +128,42 @@ test.describe('account shell and bootstrap resilience', () => {
 
     await page.goto('/settings/devices');
     await expect(page).toHaveURL(/\/w\/ws-1\/settings\?section=devices$/);
-    await expect(page.getByRole('heading', { name: /^my computer$/i })).toBeVisible();
+    await expect(page.locator('h1').filter({ hasText: /^My Computer$/ })).toBeVisible();
+  });
+
+  test('sage top navigation exposes the five IA surfaces and moves approvals into a badge', async ({ page }) => {
+    await page.route('**/api/approvals?workspace_id=ws-1&limit=24', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          pending_count: 1,
+          items: [
+            {
+              approval_id: 'approval-1',
+              status: 'pending',
+              prompt: 'Allow local action?',
+            },
+          ],
+        }),
+      });
+    });
+
+    await loginAsOwner(page);
+
+    const nav = page.getByRole('navigation', { name: /^workspace views$/i });
+    await expect(nav.getByRole('link', { name: /^chat$/i })).toBeVisible();
+    await expect(nav.getByRole('link', { name: /^memory$/i })).toBeVisible();
+    await expect(nav.getByRole('link', { name: /^integrations$/i })).toBeVisible();
+    await expect(nav.getByRole('link', { name: /^tasks$/i })).toBeVisible();
+    await expect(nav.getByRole('link', { name: /^activity$/i })).toBeVisible();
+
+    await expect(nav.getByRole('link', { name: /^profile$/i })).toHaveCount(0);
+    await expect(nav.getByRole('link', { name: /^skills$/i })).toHaveCount(0);
+    await expect(nav.getByRole('link', { name: /^heartbeat$/i })).toHaveCount(0);
+    await expect(nav.getByRole('link', { name: /^connected apps$/i })).toHaveCount(0);
+    await expect(nav.getByRole('link', { name: /^needs your ok$/i })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /needs your ok · 1/i })).toBeVisible();
   });
 
   test('sage setup load failures render a retryable setup card instead of raw backend text', async ({ page }) => {

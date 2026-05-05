@@ -12,6 +12,7 @@ export type WorkspaceNavDestinationId =
 
 export type WorkspaceRouteId =
   | 'chat'
+  | 'memory'
   | 'profile'
   | 'runs'
   | 'approvals'

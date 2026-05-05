@@ -6,5 +6,5 @@ export default async function WorkspaceMemoryPage({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="activity" />;
+  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="memory" />;
 }

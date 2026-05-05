@@ -2,12 +2,13 @@
 
 import type { PropsWithChildren } from 'react';
 import Link from 'next/link';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
 import { joinClassNames } from '@/lib/ui/primitives';
 import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { useWorkspaceServices, useWorkstationActivityVersion } from '@/lib/workspace/workspace-services';
 import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
 import {
   WORKSPACE_NAV_DESTINATIONS,
@@ -18,18 +19,35 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: [],
+  sage: ['chat', 'memory', 'integrations', 'heartbeat', 'activity'],
   studio: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
   gateway: ['gateway', 'channels', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
   settings: ['settings'],
 };
 
+function readPendingApprovalCount(payload: unknown): number {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const explicit = Number(record.pending_count);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return explicit;
+  }
+  const items = Array.isArray(record.items) ? record.items : [];
+  return items.filter((item) => {
+    const approval = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const status = String(approval.status ?? '').trim().toLowerCase();
+    return status === 'pending' || status === 'waiting' || status === 'needs_approval';
+  }).length;
+}
+
 export function WorkstationKernelShell({
   children,
 }: PropsWithChildren) {
   const pathname = usePathname();
   const { bootstrap, routeManifest, workspaceId } = useWorkspaceBoundary();
+  const services = useWorkspaceServices();
+  const activityVersion = useWorkstationActivityVersion();
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
 
   const activeRouteId = useMemo(
     () => resolveRouteIdFromHref(workspaceId, pathname),
@@ -43,45 +61,40 @@ export function WorkstationKernelShell({
   }, [activeRouteId]);
   const workspaceLabel = bootstrap.workspace.label;
   const contextRoutes = useMemo(() => {
-    if (activeDestinationId === 'sage') {
-      const chatRoute = routeManifest.routeIndex.chat;
-      const profileRoute = routeManifest.routeIndex.profile;
-      const historyRoute = routeManifest.routeIndex.runs;
-      const memoryRoute = routeManifest.routeIndex.activity;
-      const heartbeatRoute = routeManifest.routeIndex.heartbeat;
-      const skillsRoute = routeManifest.routeIndex.skills;
-      const integrationsRoute = routeManifest.routeIndex.integrations;
-      return [
-        chatRoute
-          ? { ...chatRoute, label: 'Chat' as const }
-          : null,
-        profileRoute
-          ? { ...profileRoute, label: 'Profile' as const }
-          : null,
-        memoryRoute
-          ? { ...memoryRoute, label: 'Memory' as const }
-          : null,
-        historyRoute
-          ? { ...historyRoute, label: 'History' as const }
-          : null,
-        heartbeatRoute
-          ? { ...heartbeatRoute, label: 'Heartbeat' as const }
-          : null,
-        skillsRoute
-          ? { ...skillsRoute, label: 'Skills' as const }
-          : null,
-        integrationsRoute
-          ? { ...integrationsRoute, label: 'Connected Apps' as const }
-          : null,
-      ].filter((route): route is NonNullable<typeof route> => Boolean(route));
-    }
-
     const routeIds = CONTEXT_ROUTE_IDS_BY_DESTINATION[activeDestinationId];
     return routeIds.flatMap((routeId) => {
       const route = routeManifest.routeIndex[routeId];
-      return route ? [route] : [];
+      if (!route) {
+        return [];
+      }
+      if (route.id === 'chat') {
+        return [{ ...route, label: 'Chat' as const }];
+      }
+      return [route];
     });
   }, [activeDestinationId, routeManifest.routeIndex]);
+
+  useEffect(() => {
+    if (!routeManifest.routeIndex.approvals) {
+      setPendingApprovalCount(0);
+      return;
+    }
+    let cancelled = false;
+    services.client.listApprovals({ limit: 24 })
+      .then((payload) => {
+        if (!cancelled) {
+          setPendingApprovalCount(readPendingApprovalCount(payload));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPendingApprovalCount(0);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activityVersion, routeManifest.routeIndex.approvals, services.client, workspaceId]);
 
   const surfaceHomeHref = useMemo(() => {
     if (activeDestinationId === 'sage') {
@@ -127,6 +140,14 @@ export function WorkstationKernelShell({
           surfaceHref={surfaceHomeHref}
           diagnosticsVisible={false}
           onToggleDiagnostics={() => {}}
+          actions={pendingApprovalCount > 0 && routeManifest.routeIndex.approvals ? (
+            <Link
+              href={routeManifest.routeIndex.approvals.href}
+              className="workstation-titlebar__link workstation-titlebar__link--active"
+            >
+              Needs your OK · {pendingApprovalCount}
+            </Link>
+          ) : null}
           navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
             <Link
               key={route.id}

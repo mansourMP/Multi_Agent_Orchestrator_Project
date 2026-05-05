@@ -212,6 +212,7 @@ export function AccountTenantSwitcher() {
               title={destination.label}
             >
               <destination.icon size={18} />
+              <span className="account-switcher__link-label">{destination.label}</span>
             </Link>
           ))}
         </nav>
@@ -237,6 +238,7 @@ export function AccountTenantSwitcher() {
           }}
         >
           <ThemeIcon size={18} />
+          <span className="account-switcher__link-label">{themeLabel}</span>
         </button>
         <nav aria-label="Settings destination" className="account-switcher__nav account-switcher__nav--secondary">
           {SECONDARY_DESTINATIONS.map((destination) => (
@@ -254,6 +256,7 @@ export function AccountTenantSwitcher() {
               title={destination.label}
             >
               <destination.icon size={18} />
+              <span className="account-switcher__link-label">{destination.label}</span>
             </Link>
           ))}
         </nav>
@@ -265,6 +268,9 @@ export function AccountTenantSwitcher() {
           title={state.account?.displayName || state.account?.email || 'Account'}
         >
           {accountInitial}
+          <span className="account-switcher__link-label">
+            {state.account?.displayName || state.account?.email || 'Account'}
+          </span>
         </Link>
       </div>
     </aside>

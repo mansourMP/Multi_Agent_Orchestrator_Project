@@ -4459,12 +4459,16 @@ textarea {
   content: '';
   position: absolute;
   inset: 8px 9px;
-  border-radius: 30px;
-  background: var(--app-bg-panel);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--app-bg-panel) 92%, var(--app-accent-soft) 8%),
+      color-mix(in srgb, var(--app-bg-shell) 88%, var(--app-bg-panel) 12%));
+  backdrop-filter: blur(18px);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--app-border-subtle) 86%, transparent 14%),
-    inset 0 1px 0 color-mix(in srgb, white 22%, transparent 78%),
-    0 16px 30px -28px color-mix(in srgb, black 26%, transparent);
+    inset 0 1px 0 color-mix(in srgb, white 24%, transparent 76%),
+    0 18px 34px -28px color-mix(in srgb, black 32%, transparent);
   pointer-events: none;
 }
 
@@ -4487,10 +4491,18 @@ textarea {
 }
 
 .account-switcher__nav {
+  position: relative;
   display: grid;
   justify-items: center;
-  gap: var(--app-space-2);
-  padding: var(--app-space-1) 0;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 82%, transparent 18%);
+  border-radius: calc(var(--app-radius-lg) + 6px);
+  background: color-mix(in srgb, var(--app-bg-panel) 78%, transparent 22%);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 18%, transparent 82%),
+    0 12px 24px -24px color-mix(in srgb, black 38%, transparent);
+  animation: app-account-dock-float 5.6s ease-in-out infinite;
 }
 
 .account-switcher__nav--secondary {
@@ -4528,17 +4540,17 @@ textarea {
 
 .account-switcher__link {
   position: relative;
-  width: 44px;
-  height: 44px;
+  width: 42px;
+  height: 42px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   color: var(--text-secondary);
   text-decoration: none;
-  border: 1px solid color-mix(in srgb, var(--app-border-muted) 82%, transparent 18%);
-  border-radius: var(--app-radius-lg);
-  background: color-mix(in srgb, var(--app-bg-panel) 80%, transparent 20%);
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 64%, transparent 36%);
+  border-radius: calc(var(--app-radius-md) + 2px);
+  background: color-mix(in srgb, var(--app-bg-panel) 64%, transparent 36%);
   cursor: pointer;
   transform: translateY(0);
   transition:
@@ -4551,22 +4563,53 @@ textarea {
 }
 
 .account-switcher__link:hover {
-  background: color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-panel-elevated) 16%);
-  border-color: color-mix(in srgb, var(--app-border-strong) 74%, transparent 26%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 72%, var(--app-accent-soft) 28%);
+  border-color: color-mix(in srgb, var(--app-border-accent) 42%, transparent 58%);
   color: var(--text-primary);
-  transform: translateY(-1px);
+  transform: translateY(-3px) scale(1.06);
   box-shadow:
     var(--app-shadow-panel),
-    0 10px 24px -22px color-mix(in srgb, black 22%, transparent);
+    0 14px 28px -24px color-mix(in srgb, black 32%, transparent);
 }
 
 .account-switcher__link--active {
-  border-color: color-mix(in srgb, var(--app-border-accent) 22%, transparent 78%);
-  background: color-mix(in srgb, var(--app-bg-panel) 98%, var(--app-bg-panel-elevated) 2%);
+  border-color: color-mix(in srgb, var(--app-border-accent) 62%, transparent 38%);
+  background:
+    radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--app-accent-soft) 82%, transparent 18%), transparent 58%),
+    color-mix(in srgb, var(--app-bg-panel) 82%, var(--app-bg-panel-elevated) 18%);
   color: var(--text-primary);
   box-shadow:
-    0 14px 24px -18px color-mix(in srgb, black 22%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, white 26%, transparent 74%);
+    0 14px 26px -20px color-mix(in srgb, var(--app-accent) 34%, black 18%),
+    inset 0 0 0 1px color-mix(in srgb, white 24%, transparent 76%);
+}
+
+.account-switcher__link-label {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translate(-4px, -50%);
+  max-width: 180px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 86%, transparent 14%);
+  border-radius: var(--app-radius-sm);
+  background: color-mix(in srgb, var(--app-bg-overlay) 92%, var(--app-bg-panel) 8%);
+  color: var(--app-text-primary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: 0 14px 28px -24px color-mix(in srgb, black 40%, transparent);
+  transition:
+    opacity var(--app-motion-fast),
+    transform var(--app-motion-fast);
+}
+
+.account-switcher__link:hover .account-switcher__link-label,
+.account-switcher__link:focus-visible .account-switcher__link-label {
+  opacity: 1;
+  transform: translate(0, -50%);
 }
 
 .account-switcher__theme-toggle {
@@ -4578,6 +4621,28 @@ textarea {
   font-size: var(--app-font-13);
   font-weight: var(--app-weight-bold);
   letter-spacing: 0.02em;
+}
+
+@keyframes app-account-dock-float {
+  0%,
+  100% {
+    transform: translateY(-1px);
+  }
+
+  50% {
+    transform: translateY(1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-switcher__nav {
+    animation: none;
+  }
+
+  .account-switcher__link,
+  .account-switcher__link-label {
+    transition: none;
+  }
 }
 
 .app-empty-panel {

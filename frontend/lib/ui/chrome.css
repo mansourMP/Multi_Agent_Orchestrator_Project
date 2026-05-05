@@ -1422,7 +1422,8 @@ textarea {
 .app-auth-trust-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--app-space-2);
+  column-gap: var(--app-space-2);
+  row-gap: var(--app-space-2);
 }
 
 .app-auth-trust-strip__item {
@@ -1479,7 +1480,7 @@ textarea {
 
 .app-auth-social-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--app-space-3);
 }
 
@@ -1519,12 +1520,14 @@ textarea {
   font-size: var(--app-font-13);
   font-weight: var(--app-weight-semibold);
   line-height: 1.2;
+  white-space: normal;
 }
 
 .app-auth-social__meta {
   color: rgba(203, 209, 220, 0.58);
   font-size: 11px;
   line-height: 1.4;
+  white-space: normal;
 }
 
 .app-auth-provider-mark--apple {
@@ -1598,6 +1601,17 @@ textarea {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.02),
     0 0 0 3px rgba(61, 109, 196, 0.16);
+}
+
+.app-auth-input:-webkit-autofill,
+.app-auth-input:-webkit-autofill:hover,
+.app-auth-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--app-text-primary);
+  caret-color: var(--app-text-primary);
+  box-shadow:
+    0 0 0 1000px rgba(28, 30, 36, 0.98) inset,
+    inset 0 1px 0 rgba(255, 255, 255, 0.015);
+  transition: background-color 9999s ease-out;
 }
 
 .app-auth-submit {

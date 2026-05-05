@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 import importlib
+from datetime import datetime, timezone
 
 from server_modules import bounded_scheduler_service
 
@@ -206,6 +207,28 @@ class BoundedSchedulerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["exact_jobs"]["count"], 2)
         self.assertEqual(result["wake_queue"]["pending_count"], 1)
         self.assertEqual(result["wake_queue"]["claimed_count"], 1)
+
+    def test_quiet_hours_status_snapshot_reports_active_window(self):
+        policy = bounded_scheduler_service.SchedulerPolicyBounds(
+            quiet_hours_start=22,
+            quiet_hours_end=7,
+            max_event_triggers_per_hour=4,
+            max_self_proposed_per_hour=2,
+            max_runtime_seconds=20,
+            minimum_battery_percent=20,
+            require_network_online=False,
+            require_owner_approval_for_privileged_wakeups=True,
+            plan_tier="standard",
+        )
+
+        snapshot = bounded_scheduler_service.quiet_hours_status_snapshot(
+            policy=policy,
+            now_utc=datetime(2026, 5, 5, 15, 30, tzinfo=timezone.utc),
+        )
+
+        self.assertTrue(snapshot["active"])
+        self.assertIn("Quiet hours active until", snapshot["label"])
+        self.assertTrue(snapshot["next_allowed_at"].endswith("Z"))
 
 
 if __name__ == "__main__":

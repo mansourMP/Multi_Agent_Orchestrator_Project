@@ -187,6 +187,7 @@ export type WorkstationSageHeartbeatRecord = Record<string, unknown> & {
   next_scheduled_action?: Record<string, unknown> | null;
   wake_queue?: Record<string, unknown> | null;
   lane_queue?: Record<string, unknown> | null;
+  queue_overview?: Record<string, unknown> | null;
   policy?: Record<string, unknown> | null;
 };
 

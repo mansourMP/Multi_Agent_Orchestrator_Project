@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
+from datetime import datetime, timezone
 
 from server_modules import sage_heartbeat_service
 
@@ -58,9 +59,52 @@ class SageHeartbeatServiceTests(unittest.TestCase):
                     "running": True,
                     "pending_count": 2,
                     "active_count": 1,
+                    "recent": [
+                        {
+                            "id": "done-1",
+                            "lane": "main",
+                            "label": "Finished recap",
+                            "status": "completed",
+                            "summary": "Inbox triage summary delivered.",
+                        }
+                    ],
                     "lanes": {
-                        "cron": {"pending_count": 2, "active_count": 1, "pending": [], "active": []},
+                        "cron": {
+                            "pending_count": 2,
+                            "active_count": 1,
+                            "pending": [
+                                {
+                                    "id": "approval-1",
+                                    "label": "Need confirmation before sending",
+                                    "status": "waiting_approval",
+                                    "summary": "Waiting for approval before messaging Alex.",
+                                },
+                                {
+                                    "id": "queued-1",
+                                    "label": "Follow-up queue",
+                                    "status": "queued",
+                                    "summary": "Follow up on the morning plan.",
+                                },
+                            ],
+                            "active": [
+                                {
+                                    "id": "run-1",
+                                    "label": "Morning review",
+                                    "status": "running",
+                                    "summary": "Reviewing the day plan now.",
+                                    "run_id": "run-1",
+                                }
+                            ],
+                        },
                     },
+                },
+            ),
+            patch(
+                "server_modules.sage_heartbeat_service.bounded_scheduler_service.quiet_hours_status_snapshot",
+                return_value={
+                    "active": True,
+                    "label": "Quiet hours active until 07:00",
+                    "next_allowed_at": datetime(2026, 5, 6, 7, 0, tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
                 },
             ),
         ):
@@ -77,6 +121,14 @@ class SageHeartbeatServiceTests(unittest.TestCase):
         self.assertEqual(payload["reminders"]["count"], 2)
         self.assertEqual(payload["lane_queue"]["pending_count"], 2)
         self.assertEqual(payload["lane_queue"]["active_count"], 1)
+        self.assertEqual(payload["queue_overview"]["running_now_count"], 1)
+        self.assertEqual(payload["queue_overview"]["queued_count"], 1)
+        self.assertEqual(payload["queue_overview"]["blocked_on_approval_count"], 1)
+        self.assertEqual(payload["queue_overview"]["done_count"], 1)
+        self.assertEqual(payload["queue_overview"]["quiet_hours"]["label"], "Quiet hours active until 07:00")
+        self.assertEqual(payload["queue_overview"]["lanes"]["scheduled"][0]["id"], "sched-2")
+        self.assertEqual(payload["queue_overview"]["lanes"]["needs_ok"][0]["id"], "approval-1")
+        self.assertEqual(payload["queue_overview"]["lanes"]["done"][0]["id"], "done-1")
 
 
 if __name__ == "__main__":

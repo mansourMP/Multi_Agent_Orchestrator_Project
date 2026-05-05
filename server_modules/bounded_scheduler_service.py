@@ -200,6 +200,25 @@ def _next_allowed_wakeup_time(now_utc: datetime, policy: SchedulerPolicyBounds) 
     return candidate.astimezone(timezone.utc)
 
 
+def quiet_hours_status_snapshot(
+    *,
+    policy: SchedulerPolicyBounds,
+    now_utc: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    current = now_utc or _utc_now()
+    active = _is_within_quiet_hours(current, policy)
+    next_allowed_at = _next_allowed_wakeup_time(current, policy)
+    return {
+        "active": active,
+        "label": (
+            f"Quiet hours active until {next_allowed_at.astimezone().strftime('%H:%M')}"
+            if active
+            else "Background work can run now"
+        ),
+        "next_allowed_at": next_allowed_at.isoformat().replace("+00:00", "Z"),
+    }
+
+
 def register_ambient_monitor(
     *,
     workspace_id: str,

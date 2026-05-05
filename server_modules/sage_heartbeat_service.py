@@ -27,6 +27,160 @@ def _format_quiet_hours(start: int, end: int) -> str:
     return f"{int(start):02d}:00–{int(end):02d}:00"
 
 
+def _queue_status_label(status: str) -> str:
+    token = _coerce_text(status).lower()
+    if token in {"running", "active", "started"}:
+        return "Running now"
+    if "approval" in token:
+        return "Needs your OK"
+    if token in {"queued", "pending", "waiting"}:
+        return "Waiting"
+    if token in {"completed", "executed", "done", "succeeded", "success"}:
+        return "Done"
+    if token in {"failed", "cancelled", "canceled"}:
+        return "Done"
+    return "Waiting"
+
+
+def _governed_work_item(
+    *,
+    item_id: str,
+    label: str,
+    lane: str,
+    product_lane: str,
+    status: str,
+    summary: Optional[str] = None,
+    scheduled_for: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "id": item_id,
+        "label": label or "Queued work",
+        "lane": lane or None,
+        "product_lane": product_lane,
+        "status": status,
+        "status_label": _queue_status_label(status),
+        "summary": summary or None,
+        "scheduled_for": scheduled_for or None,
+        "run_id": run_id or None,
+    }
+
+
+def _derive_queue_overview(
+    *,
+    schedule_items: List[Dict[str, Any]],
+    next_action: Optional[Dict[str, Any]],
+    wake_queue: Dict[str, Any],
+    lane_queue: Dict[str, Any],
+    quiet_hours: Dict[str, Any],
+) -> Dict[str, Any]:
+    running_items: List[Dict[str, Any]] = []
+    waiting_items: List[Dict[str, Any]] = []
+    blocked_items: List[Dict[str, Any]] = []
+    done_items: List[Dict[str, Any]] = []
+    scheduled_items: List[Dict[str, Any]] = []
+
+    lanes = lane_queue.get("lanes") if isinstance(lane_queue.get("lanes"), dict) else {}
+    for lane_name, lane_value in lanes.items():
+        lane_payload = lane_value if isinstance(lane_value, dict) else {}
+        for entry in list(lane_payload.get("active") or []):
+            if not isinstance(entry, dict):
+                continue
+            running_items.append(
+                _governed_work_item(
+                    item_id=_coerce_text(entry.get("id")),
+                    label=_coerce_text(entry.get("label")) or "Running work",
+                    lane=str(lane_name),
+                    product_lane="now",
+                    status=_coerce_text(entry.get("status")) or "running",
+                    summary=_coerce_text(entry.get("summary")) or (_coerce_text(entry.get("run_id")) and f"Run {_coerce_text(entry.get('run_id'))}") or None,
+                    run_id=_coerce_text(entry.get("run_id")) or None,
+                )
+            )
+        for entry in list(lane_payload.get("pending") or []):
+            if not isinstance(entry, dict):
+                continue
+            status = _coerce_text(entry.get("status")) or "queued"
+            destination = blocked_items if "approval" in status.lower() else waiting_items
+            destination.append(
+                _governed_work_item(
+                    item_id=_coerce_text(entry.get("id")),
+                    label=_coerce_text(entry.get("label")) or "Queued work",
+                    lane=str(lane_name),
+                    product_lane="needs_ok" if "approval" in status.lower() else "waiting",
+                    status=status,
+                    summary=_coerce_text(entry.get("summary")) or None,
+                    run_id=_coerce_text(entry.get("run_id")) or None,
+                )
+            )
+
+    for entry in list(lane_queue.get("recent") or []):
+        if not isinstance(entry, dict):
+            continue
+        status = _coerce_text(entry.get("status")) or "completed"
+        if "approval" in status.lower():
+            blocked_items.append(
+                _governed_work_item(
+                    item_id=_coerce_text(entry.get("id")),
+                    label=_coerce_text(entry.get("label")) or "Approval waiting",
+                    lane=_coerce_text(entry.get("lane")),
+                    product_lane="needs_ok",
+                    status=status,
+                    summary=_coerce_text(entry.get("summary")) or None,
+                    run_id=_coerce_text(entry.get("run_id")) or None,
+                )
+            )
+        else:
+            done_items.append(
+                _governed_work_item(
+                    item_id=_coerce_text(entry.get("id")),
+                    label=_coerce_text(entry.get("label")) or "Finished work",
+                    lane=_coerce_text(entry.get("lane")),
+                    product_lane="done",
+                    status=status,
+                    summary=_coerce_text(entry.get("summary")) or None,
+                    run_id=_coerce_text(entry.get("run_id")) or None,
+                )
+            )
+
+    for item in schedule_items:
+        if not isinstance(item, dict) or not item.get("enabled"):
+            continue
+        scheduled_items.append(
+            _governed_work_item(
+                item_id=_coerce_text(item.get("id")),
+                label=_coerce_text(item.get("name")) or "Scheduled action",
+                lane="cron",
+                product_lane="scheduled",
+                status="scheduled",
+                summary=(
+                    f"{_coerce_text(item.get('schedule_kind')) or 'cron'} · "
+                    f"{_coerce_text(item.get('wake_mode')) or 'now'} · "
+                    f"{_coerce_text(item.get('delivery')) or 'announce'}"
+                ),
+                scheduled_for=_coerce_text(item.get("next_run_at")) or None,
+            )
+        )
+
+    pending_wakeups = int(wake_queue.get("pending_count") or 0)
+    return {
+        "next_scheduled_action": next_action,
+        "queued_count": len(waiting_items),
+        "running_now_count": len(running_items),
+        "blocked_on_approval_count": len(blocked_items),
+        "done_count": len(done_items),
+        "pending_wakeup_count": pending_wakeups,
+        "quiet_hours": quiet_hours,
+        "lanes": {
+            "now": running_items[:6],
+            "waiting": waiting_items[:6],
+            "scheduled": scheduled_items[:6],
+            "needs_ok": blocked_items[:6],
+            "done": done_items[:6],
+        },
+    }
+
+
 def _serialize_schedule_item(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": _coerce_text(item.get("id")),
@@ -92,6 +246,26 @@ async def build_sage_heartbeat_snapshot(
     lane_queue = runtime_lane_queue_snapshot()
     profile = profile_payload.get("profile") if isinstance(profile_payload.get("profile"), dict) else {}
     bootstrap = profile_payload.get("bootstrap") if isinstance(profile_payload.get("bootstrap"), dict) else {}
+    quiet_hours_status = bounded_scheduler_service.quiet_hours_status_snapshot(
+        policy=bounded_scheduler_service.SchedulerPolicyBounds(
+            quiet_hours_start=quiet_start,
+            quiet_hours_end=quiet_end,
+            max_event_triggers_per_hour=int(policy.get("max_event_triggers_per_hour") or bounded_scheduler_service.DEFAULT_MAX_EVENT_TRIGGERS_PER_HOUR),
+            max_self_proposed_per_hour=int(policy.get("max_self_proposed_per_hour") or bounded_scheduler_service.DEFAULT_MAX_SELF_PROPOSED_PER_HOUR),
+            max_runtime_seconds=int(policy.get("max_runtime_seconds") or bounded_scheduler_service.DEFAULT_MAX_RUNTIME_SECONDS),
+            minimum_battery_percent=int(policy.get("minimum_battery_percent") or bounded_scheduler_service.DEFAULT_MINIMUM_BATTERY_PERCENT),
+            require_network_online=bool(policy.get("require_network_online")),
+            require_owner_approval_for_privileged_wakeups=bool(policy.get("require_owner_approval_for_privileged_wakeups")),
+            plan_tier=_coerce_text(policy.get("plan_tier")) or "default",
+        )
+    )
+    queue_overview = _derive_queue_overview(
+        schedule_items=schedule_items,
+        next_action=next_action,
+        wake_queue=wake_queue,
+        lane_queue=lane_queue if isinstance(lane_queue, dict) else {},
+        quiet_hours=quiet_hours_status,
+    )
     return {
         "workspace_id": workspace_id,
         "profile": {
@@ -120,6 +294,7 @@ async def build_sage_heartbeat_snapshot(
             "claimed": wake_queue.get("claimed") if isinstance(wake_queue.get("claimed"), list) else [],
         },
         "lane_queue": lane_queue if isinstance(lane_queue, dict) else {},
+        "queue_overview": queue_overview,
         "policy": {
             "plan_tier": _coerce_text(policy.get("plan_tier")) or None,
             "require_network_online": bool(policy.get("require_network_online")),

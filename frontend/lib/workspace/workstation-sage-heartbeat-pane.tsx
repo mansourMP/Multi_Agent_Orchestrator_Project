@@ -42,6 +42,32 @@ type LaneQueueLaneSnapshot = {
   active: LaneQueueItem[];
 };
 
+type ProductLaneId = 'now' | 'waiting' | 'scheduled' | 'needs_ok' | 'done';
+
+type ProductQueueItem = {
+  id: string;
+  label: string;
+  lane: string | null;
+  status: string;
+  statusLabel: string;
+  summary: string | null;
+  scheduledFor: string | null;
+  runId: string | null;
+};
+
+type ProductQueueOverview = {
+  queuedCount: number;
+  runningNowCount: number;
+  blockedOnApprovalCount: number;
+  doneCount: number;
+  quietHours: {
+    active: boolean;
+    label: string;
+    nextAllowedAt: string | null;
+  };
+  lanes: Record<ProductLaneId, ProductQueueItem[]>;
+};
+
 type HeartbeatSnapshot = {
   recurringResponsibility: string;
   bootstrapComplete: boolean;
@@ -63,6 +89,7 @@ type HeartbeatSnapshot = {
     maxTotalConcurrency: number;
     lanes: Record<string, LaneQueueLaneSnapshot>;
   };
+  queueOverview: ProductQueueOverview;
 };
 
 function readString(value: unknown): string {
@@ -85,6 +112,9 @@ function normalizeHeartbeatSnapshot(payload: unknown): HeartbeatSnapshot {
     : null;
   const wakeQueue = record.wake_queue && typeof record.wake_queue === 'object' ? record.wake_queue as Record<string, unknown> : {};
   const laneQueue = record.lane_queue && typeof record.lane_queue === 'object' ? record.lane_queue as Record<string, unknown> : {};
+  const queueOverview = record.queue_overview && typeof record.queue_overview === 'object'
+    ? record.queue_overview as Record<string, unknown>
+    : {};
   const policy = record.policy && typeof record.policy === 'object' ? record.policy as Record<string, unknown> : {};
   const items = Array.isArray(reminders.items)
     ? reminders.items.flatMap((item) => {
@@ -147,6 +177,29 @@ function normalizeHeartbeatSnapshot(payload: unknown): HeartbeatSnapshot {
     };
     return acc;
   }, {});
+  const normalizeProductItems = (value: unknown): ProductQueueItem[] => (
+    Array.isArray(value)
+      ? value.flatMap((item) => {
+        if (!item || typeof item !== 'object') {
+          return [];
+        }
+        const recordItem = item as Record<string, unknown>;
+        return [{
+          id: readString(recordItem.id),
+          label: readString(recordItem.label) || 'Queued work',
+          lane: readString(recordItem.lane) || null,
+          status: readString(recordItem.status) || 'queued',
+          statusLabel: readString(recordItem.status_label) || 'Waiting',
+          summary: readString(recordItem.summary) || null,
+          scheduledFor: readString(recordItem.scheduled_for) || null,
+          runId: readString(recordItem.run_id) || null,
+        }];
+      })
+      : []
+  );
+  const overviewLanes = queueOverview.lanes && typeof queueOverview.lanes === 'object'
+    ? queueOverview.lanes as Record<string, unknown>
+    : {};
   return {
     recurringResponsibility: readString(profile.recurring_responsibility),
     bootstrapComplete: Boolean(bootstrap.complete),
@@ -167,6 +220,35 @@ function normalizeHeartbeatSnapshot(payload: unknown): HeartbeatSnapshot {
       activeCount: readNumber(laneQueue.active_count, 0),
       maxTotalConcurrency: readNumber(laneQueue.max_total_concurrency, 4),
       lanes: laneEntries,
+    },
+    queueOverview: {
+      queuedCount: readNumber(queueOverview.queued_count, 0),
+      runningNowCount: readNumber(queueOverview.running_now_count, 0),
+      blockedOnApprovalCount: readNumber(queueOverview.blocked_on_approval_count, 0),
+      doneCount: readNumber(queueOverview.done_count, 0),
+      quietHours: {
+        active: Boolean(queueOverview.quiet_hours && typeof queueOverview.quiet_hours === 'object' && (queueOverview.quiet_hours as Record<string, unknown>).active),
+        label: (() => {
+          const label = readString(
+            queueOverview.quiet_hours && typeof queueOverview.quiet_hours === 'object'
+              ? (queueOverview.quiet_hours as Record<string, unknown>).label
+              : '',
+          );
+          return label || 'Background work can run now';
+        })(),
+        nextAllowedAt: readString(
+          queueOverview.quiet_hours && typeof queueOverview.quiet_hours === 'object'
+            ? (queueOverview.quiet_hours as Record<string, unknown>).next_allowed_at
+            : '',
+        ) || null,
+      },
+      lanes: {
+        now: normalizeProductItems(overviewLanes.now),
+        waiting: normalizeProductItems(overviewLanes.waiting),
+        scheduled: normalizeProductItems(overviewLanes.scheduled),
+        needs_ok: normalizeProductItems(overviewLanes.needs_ok),
+        done: normalizeProductItems(overviewLanes.done),
+      },
     },
   };
 }
@@ -228,20 +310,32 @@ export function WorkstationSageHeartbeatPane() {
     () => snapshot?.exactJobs ?? [],
     [snapshot],
   );
-  const queueItems = useMemo(
-    () => snapshot
-      ? ['main', 'cron', 'subagent', 'system'].flatMap((lane) => {
-        const laneRecord = snapshot.laneQueue.lanes[lane];
-        if (!laneRecord) {
-          return [];
-        }
-        const active = laneRecord.active.map((item) => ({ lane, tone: 'active' as const, ...item }));
-        const pending = laneRecord.pending.map((item) => ({ lane, tone: 'pending' as const, ...item }));
-        return [...active, ...pending];
-      })
-      : [],
-    [snapshot],
-  );
+  const queueSummaryRows = useMemo(() => {
+    if (!snapshot) {
+      return [];
+    }
+    const laneCopy: Array<{ id: ProductLaneId; title: string; empty: string }> = [
+      { id: 'now', title: 'Now', empty: 'Nothing is running right now.' },
+      { id: 'waiting', title: 'Waiting', empty: 'No queued work is waiting.' },
+      { id: 'scheduled', title: 'Scheduled', empty: 'No recurring work is scheduled yet.' },
+      { id: 'needs_ok', title: 'Needs your OK', empty: 'No actions are blocked on approval.' },
+      { id: 'done', title: 'Done', empty: 'No recent governed work yet.' },
+    ];
+    return laneCopy.map(({ id, title, empty }) => {
+      const items = snapshot.queueOverview.lanes[id] ?? [];
+      const preview = items.slice(0, 2).map((item) => {
+        const detail = item.summary || item.statusLabel || (item.runId ? `Run ${item.runId}` : '');
+        return detail ? `${item.label} — ${detail}` : item.label;
+      });
+      return {
+        id,
+        title,
+        count: items.length,
+        subtitle: items.length === 1 ? '1 work item' : `${items.length} work items`,
+        description: preview.length > 0 ? preview.join(' · ') : empty,
+      };
+    });
+  }, [snapshot]);
 
   return (
     <WorkstationSurfaceRoot surface="sage-heartbeat">
@@ -263,25 +357,30 @@ export function WorkstationSageHeartbeatPane() {
                 hint={snapshot.bootstrapComplete ? 'Projected into HEARTBEAT.md' : `Bootstrap ${snapshot.progressLabel}`}
               />
               <WorkstationSurfaceStat
+                label="Running now"
+                value={snapshot.queueOverview.runningNowCount}
+                hint={snapshot.queueOverview.lanes.now[0]?.label || 'Nothing active right now.'}
+              />
+              <WorkstationSurfaceStat
+                label="Waiting"
+                value={snapshot.queueOverview.queuedCount}
+                hint={`${snapshot.queueOverview.blockedOnApprovalCount} need your OK`}
+              />
+              <WorkstationSurfaceStat
+                label="Next scheduled action"
+                value={snapshot.nextAction ? formatTimestamp(snapshot.nextAction.nextRunAt) : 'None'}
+                hint={snapshot.nextAction?.name || 'No recurring work scheduled yet.'}
+              />
+              <WorkstationSurfaceStat
                 label="Quiet hours"
-                value={snapshot.quietHoursLabel}
-                hint="Self-wakeups shift outside this window."
-              />
-              <WorkstationSurfaceStat
-                label="Scheduled actions"
-                value={upcomingItems.length}
-                hint={`${snapshot.pendingWakeups} pending · ${snapshot.claimedWakeups} claimed`}
-              />
-              <WorkstationSurfaceStat
-                label="Lane queue"
-                value={`${snapshot.laneQueue.activeCount} active`}
-                hint={`${snapshot.laneQueue.pendingCount} waiting · max ${snapshot.laneQueue.maxTotalConcurrency}`}
+                value={snapshot.queueOverview.quietHours.active ? 'Active' : snapshot.quietHoursLabel}
+                hint={snapshot.queueOverview.quietHours.label}
               />
             </WorkstationSurfaceStatGrid>
 
             <WorkstationSurfaceCard
               title="Next scheduled action"
-              description="The next wakeup or recurring job Sage is already carrying."
+              description="The next governed wakeup or recurring job Sage is already carrying."
             >
               {snapshot.nextAction ? (
                 <WorkstationSurfaceList>
@@ -300,7 +399,7 @@ export function WorkstationSageHeartbeatPane() {
 
             <WorkstationSurfaceCard
               title="Heartbeat schedule"
-              description={`Plan tier ${snapshot.planTier}. Quiet hours run from ${snapshot.quietHoursStart}:00 to ${snapshot.quietHoursEnd}:00.`}
+              description={`Plan tier ${snapshot.planTier}. ${snapshot.queueOverview.quietHours.label}`}
             >
               {upcomingItems.length > 0 ? (
                 <WorkstationSurfaceList>
@@ -321,27 +420,27 @@ export function WorkstationSageHeartbeatPane() {
             </WorkstationSurfaceCard>
 
             <WorkstationSurfaceCard
-              title="Lane queue"
+              title="Background queue"
               description={snapshot.laneQueue.draining
                 ? 'Background work is draining for shutdown.'
                 : snapshot.laneQueue.acceptingNewWork
-                  ? 'Background work is routed through the governed runtime lanes.'
+                  ? 'Recurring and governed work is grouped into what Sage is doing now, what is waiting, and what happens next.'
                   : 'Queue is not accepting new work right now.'}
             >
-              {queueItems.length > 0 ? (
+              {queueSummaryRows.some((row) => row.count > 0) ? (
                 <WorkstationSurfaceList>
-                  {queueItems.map((item) => (
+                  {queueSummaryRows.map((row) => (
                     <WorkstationSurfaceListItem
-                      key={`${item.lane}-${item.id}-${item.tone}`}
-                      title={`${item.label} · ${item.lane}`}
-                      subtitle={`${item.tone === 'active' ? 'Running' : 'Waiting'} · ${item.status}`}
-                      description={item.summary || (item.runId ? `Run ${item.runId}` : 'Queued for governed execution')}
+                      key={row.id}
+                      title={row.title}
+                      subtitle={row.subtitle}
+                      description={row.description}
                     />
                   ))}
                 </WorkstationSurfaceList>
               ) : (
                 <WorkstationSurfaceNotice tone="neutral">
-                  No background work is active right now. Main, cron, subagent, and system lanes will appear here as work queues.
+                  No background work is active right now. When Sage has live work, waiting work, approvals, or finished recurring actions, they will appear here.
                 </WorkstationSurfaceNotice>
               )}
             </WorkstationSurfaceCard>

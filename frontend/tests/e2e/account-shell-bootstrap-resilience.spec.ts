@@ -192,6 +192,39 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page.getByRole('navigation', { name: /^workspace views$/i }).getByRole('link', { name: /^profile$/i })).toHaveCount(0);
   });
 
+  test('integrations owns providers, communication, computer, knowledge, and tools', async ({ page }) => {
+    await loginAsOwner(page);
+    await page.getByRole('navigation', { name: /^workspace views$/i }).getByRole('link', { name: /^integrations$/i }).click();
+
+    await expect(page).toHaveURL(/\/w\/ws-1\/integrations$/);
+    const sectionLabels = page.locator('.sage-unified-section__label');
+    await expect(sectionLabels.filter({ hasText: /^AI$/ })).toBeVisible();
+    await expect(sectionLabels.filter({ hasText: /^Communication$/ })).toBeVisible();
+    await expect(sectionLabels.filter({ hasText: /^This Computer$/ })).toBeVisible();
+    await expect(sectionLabels.filter({ hasText: /^Knowledge$/ })).toBeVisible();
+    await expect(sectionLabels.filter({ hasText: /^Tools$/ })).toBeVisible();
+
+    await expect(page.getByText(/^Empyralis credits$/)).toBeVisible();
+    await expect(page.getByText(/^DeepSeek$/).first()).toBeVisible();
+    await expect(page.getByText(/^OpenAI$/).first()).toBeVisible();
+    await expect(page.getByText(/Gemini/i).first()).toBeVisible();
+    await expect(page.getByText(/^Anthropic$/).first()).toBeVisible();
+    await expect(page.getByText(/^Ollama Cloud$/).first()).toBeVisible();
+    await expect(page.getByText(/^Your Telegram$/)).toBeVisible();
+    await expect(page.getByText(/^Your WhatsApp$/)).toBeVisible();
+    await expect(page.getByText(/^Signal$/)).toBeVisible();
+    await expect(page.getByText(/^Slack$/)).toBeVisible();
+    await expect(page.getByText(/^Discord$/)).toBeVisible();
+    await expect(page.getByText(/^Local gateway$/)).toBeVisible();
+    await expect(page.getByText(/^Browser attach$/)).toBeVisible();
+    await expect(page.getByText(/^Local files and shell$/)).toBeVisible();
+    await expect(page.getByText(/^Local models$/)).toBeVisible();
+    await expect(page.getByText(/^Drive$/)).toBeVisible();
+    await expect(page.getByText(/^Notion$/)).toBeVisible();
+    await expect(page.getByText(/^Uploads$/)).toBeVisible();
+    await expect(page.getByText(/^Websites$/)).toBeVisible();
+  });
+
   test('sage setup load failures render a retryable setup card instead of raw backend text', async ({ page }) => {
     await page.route('**/api/sage-profile?workspace_id=ws-1', async (route) => {
       await route.fulfill({

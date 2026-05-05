@@ -153,6 +153,19 @@ type PersonalCardRecord = {
   nextStep: string | null;
 };
 
+type ExternalIntegrationCardRecord = {
+  id: string;
+  label: string;
+  image: string;
+  detail: string;
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  summary: string;
+  nextStep: string | null;
+  actionLabel?: string | null;
+  secondaryActionLabel?: string | null;
+};
+
 type SageConnectorsPaneCache = {
   providers: ProviderSnapshot[];
   profiles: ProviderProfileRecord[];
@@ -187,6 +200,7 @@ const FALLBACK_PROVIDER_IDS = [
   'deepseek',
   'gemini',
   'openai',
+  'anthropic',
   'ollama_cloud',
   'openai-codex',
   'vertex',
@@ -280,7 +294,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Channels', 'DMs'],
     summary: 'Use Slack when Sage should work in team channels and direct messages.',
     setupHint: 'Connect Slack to let Sage read and send messages in your workspace.',
-    surfaceScope: 'studio_only',
+    surfaceScope: 'all',
   },
   {
     id: 'discord_bot',
@@ -288,9 +302,9 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '',
     connectorIds: ['discord_bot'],
     capabilityTags: ['Servers', 'DMs'],
-    summary: 'Discord stays in the Studio/business lane and is intentionally deferred until the personal-agent core is fully hardened.',
-    setupHint: 'Keep Discord deferred for now. Prioritize Telegram, WhatsApp, and Signal in the personal-agent lane first.',
-    surfaceScope: 'studio_only',
+    summary: 'Discord is a future communication integration. Keep it planned until the personal-agent core and channel safety are hardened.',
+    setupHint: 'Prioritize Telegram, WhatsApp, and Signal first. Add Discord when there is real demand.',
+    surfaceScope: 'all',
   },
   {
     id: 'github',
@@ -310,6 +324,36 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Pages', 'Search'],
     summary: 'Use Notion when Sage should search notes, docs, and workspace pages.',
     setupHint: 'Connect Notion to make workspace pages available to Sage.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'drive',
+    label: 'Drive',
+    image: '/integrations/gmail.png',
+    connectorIds: ['google_workspace'],
+    capabilityTags: ['Files', 'Search'],
+    summary: 'Google Drive gives Sage permissioned workspace files and documents when connected through Google Workspace.',
+    setupHint: 'Connect Google Workspace first, then expose Drive files through the knowledge lane.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'uploads',
+    label: 'Uploads',
+    image: '',
+    connectorIds: ['uploads'],
+    capabilityTags: ['Files', 'Knowledge'],
+    summary: 'Uploads are local workspace knowledge files Sage can use without a third-party account.',
+    setupHint: 'Upload files from chat or the knowledge surface when this lane is enabled.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'websites',
+    label: 'Websites',
+    image: '',
+    connectorIds: ['websites'],
+    capabilityTags: ['Web', 'Retrieval'],
+    summary: 'Websites let Sage use approved public pages or domains as knowledge sources.',
+    setupHint: 'Add websites when Sage needs stable product docs, support docs, or public references.',
     surfaceScope: 'all',
   },
   {
@@ -1398,12 +1442,6 @@ export function WorkstationSageConnectorsPane({
       connected,
       keyTail: maskKeyTail(credential),
     } satisfies ProviderCardRecord;
-  }).filter((record) => {
-    const providerId = readString(record.provider.id).toLowerCase();
-    if (providerId === 'anthropic') {
-      return record.connected || record.provider.active;
-    }
-    return true;
   }), [credentials, localCompanionOnline, profiles, providerModelOverrides, providers]);
 
   const hostedProviderCard = useMemo(() => {
@@ -1450,7 +1488,7 @@ export function WorkstationSageConnectorsPane({
   }, [explicitSelectedProfile, hostedProviderCard, localCompanionOnline, providerCards]);
 
   const providerPickerSections = useMemo<ProviderPickerSection[]>(() => {
-    const orderedByokIds = ['deepseek', 'gemini', 'openai', 'ollama_cloud'];
+    const orderedByokIds = ['deepseek', 'gemini', 'openai', 'anthropic', 'ollama_cloud'];
     const byokItems = orderedByokIds
       .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
       .filter((record): record is ProviderCardRecord => Boolean(record));
@@ -1503,6 +1541,68 @@ export function WorkstationSageConnectorsPane({
     ];
   }, [doctor, selectedGateway, telegramPersonal, whatsappPersonal]);
 
+  const communicationPersonalCards = useMemo(
+    () => personalCards.filter((card) =>
+      card.id === 'telegram_personal'
+      || card.id === 'whatsapp_personal'
+      || card.id === 'signal_personal'
+      || card.id === 'imessage_personal',
+    ),
+    [personalCards],
+  );
+
+  const thisComputerCards = useMemo<ExternalIntegrationCardRecord[]>(() => {
+    const device = personalCards.find((card) => card.id === 'device');
+    const browser = personalCards.find((card) => card.id === 'browser');
+    const shellAvailable = selectedGateway !== null || localCompanionOnline;
+    const localModelCard = providerCards.find((card) => card.provider.id === 'ollama');
+    const cards: ExternalIntegrationCardRecord[] = [];
+    if (device) {
+      cards.push({
+        ...device,
+        id: 'computer_gateway',
+        label: 'Local gateway',
+        actionLabel: device.statusLabel === 'Connect computer' ? 'Connect this computer' : 'Open device connection',
+        secondaryActionLabel: 'Revoke access',
+      });
+    }
+    if (browser) {
+      cards.push({
+        ...browser,
+        id: 'browser_attach',
+        label: 'Browser attach',
+        actionLabel: 'Open browser sessions',
+      });
+    }
+    cards.push(
+      {
+        id: 'local_files_shell',
+        label: 'Local files and shell',
+        image: '',
+        detail: shellAvailable ? 'Available through this paired computer.' : 'Connect this computer before Sage can use local files or shell.',
+        statusLabel: shellAvailable ? 'Available' : 'Not connected',
+        statusTone: shellAvailable ? 'connected' : 'neutral',
+        summary: 'Files and shell are local-computer capabilities. They stay behind the paired gateway and policy approval path.',
+        nextStep: shellAvailable ? 'Use chat when you want Sage to read files or run safe terminal work.' : 'Connect this computer first.',
+        actionLabel: 'Open device connection',
+      },
+      {
+        id: 'local_models',
+        label: 'Local models',
+        image: '/integrations/ollama.png',
+        detail: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline)
+          ? `${providerActiveModelLabel(localModelCard)} available through Ollama.`
+          : 'Connect this computer and Ollama before local models are available.',
+        statusLabel: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline) ? 'Available' : 'Not available',
+        statusTone: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline) ? 'connected' : 'neutral',
+        summary: 'Local models run through Ollama on the paired computer. Ollama Cloud stays in the AI provider lane.',
+        nextStep: 'Use the AI group to choose hosted, BYOK, Ollama Cloud, or local Ollama.',
+        actionLabel: 'Choose AI model',
+      },
+    );
+    return cards;
+  }, [localCompanionOnline, personalCards, providerCards, selectedGateway]);
+
   const connectorCards = useMemo<ConnectorCardRecord[]>(() => {
     const latestConnectorById = new Map<string, VaultCredentialRecord>();
     sortCredentials(connectorVault).forEach((item) => {
@@ -1535,6 +1635,30 @@ export function WorkstationSageConnectorsPane({
       }];
     });
   }, [connectorIds, connectorVault, surface]);
+
+  const communicationConnectorCards = useMemo(
+    () => connectorCards.filter((card) =>
+      card.id === 'gmail'
+      || card.id === 'email'
+      || card.id === 'microsoft_365'
+      || card.id === 'slack'
+      || card.id === 'discord_bot'
+      || card.id === 'telegram_bot'
+      || card.id === 'whatsapp_twilio',
+    ),
+    [connectorCards],
+  );
+
+  const knowledgeConnectorCards = useMemo(
+    () => connectorCards.filter((card) =>
+      card.id === 'drive'
+      || card.id === 'notion'
+      || card.id === 'uploads'
+      || card.id === 'websites'
+      || card.id === 'github',
+    ),
+    [connectorCards],
+  );
 
   useEffect(() => {
     setConnectorMemoryEnabled((current) => {
@@ -1855,7 +1979,7 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
-  function personalStatusClassName(record: PersonalCardRecord): string | null {
+  function personalStatusClassName(record: { statusTone: PersonalCardStatusTone }): string | null {
     if (record.statusTone === 'connected') {
       return 'sage-unified-card__status--connected';
     }
@@ -1869,6 +1993,34 @@ export function WorkstationSageConnectorsPane({
   }
 
   function renderPersonalCard(record: PersonalCardRecord) {
+    const isExpanded = expandedCardId === record.id;
+    return (
+      <button
+        key={record.id}
+        type="button"
+        className={joinClassNames('sage-unified-card', isExpanded && 'sage-unified-card--selected')}
+        onClick={() => {
+          setExpandedCardId(isExpanded ? null : record.id);
+        }}
+      >
+        <BrandLogo
+          id={record.id}
+          label={record.label}
+          src={record.image}
+          failedLogos={failedLogos}
+          onError={markLogoFailed}
+        />
+        <strong className="sage-unified-card__title">{record.label}</strong>
+        <span className="sage-unified-card__detail">{record.detail}</span>
+        <span className={joinClassNames('sage-unified-card__status', personalStatusClassName(record))}>
+          {record.statusTone === 'connected' ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
+          {record.statusLabel}
+        </span>
+      </button>
+    );
+  }
+
+  function renderExternalCard(record: ExternalIntegrationCardRecord) {
     const isExpanded = expandedCardId === record.id;
     return (
       <button
@@ -2076,6 +2228,61 @@ export function WorkstationSageConnectorsPane({
               }}
             >
               Revoke access
+            </AppButton>
+          ) : null}
+          <button
+            type="button"
+            className="sage-unified-expand__link"
+            onClick={() => setExpandedCardId(null)}
+          >
+            Close
+          </button>
+        </div>
+      </MotionSlidePanel>
+    );
+  }
+
+  function renderExternalExpand(record: ExternalIntegrationCardRecord) {
+    return (
+      <MotionSlidePanel className="sage-unified-expand">
+        <div className="sage-unified-expand__header">
+          <strong className="sage-unified-expand__title">{record.label}</strong>
+          <button
+            type="button"
+            className="sage-unified-expand__close"
+            onClick={() => setExpandedCardId(null)}
+            aria-label={`Close ${record.label}`}
+          >
+            <X size={14} strokeWidth={1.9} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="sage-unified-expand__text">{record.summary}</div>
+        {record.nextStep ? <div className="sage-unified-expand__text">{record.nextStep}</div> : null}
+        <div className="sage-unified-expand__actions">
+          {record.actionLabel ? (
+            <AppButton
+              type="button"
+              onClick={() => {
+                if (record.id === 'local_models') {
+                  setProviderPickerOpen(true);
+                  setProviderPickerDraftId(null);
+                  return;
+                }
+                openGatewaySurface();
+              }}
+            >
+              {record.actionLabel}
+            </AppButton>
+          ) : null}
+          {record.secondaryActionLabel ? (
+            <AppButton
+              type="button"
+              tone="ghost"
+              onClick={() => {
+                openWorkspaceRoute('gateway');
+              }}
+            >
+              {record.secondaryActionLabel}
             </AppButton>
           ) : null}
           <button
@@ -2301,25 +2508,9 @@ export function WorkstationSageConnectorsPane({
 
       <div className="sage-unified-page">
         {showPersonalSurface ? (
-          <>
-            <AppNotice tone="neutral">
-              Personal channels stay on your paired computer. Telegram and WhatsApp are live today, Signal is next, and iMessage waits for a stable Mac bridge. Customer-facing bots stay in Studio.
-            </AppNotice>
-            {isLoading ? (
-              <section className="sage-unified-section">
-                <p className="sage-unified-section__label">Personal</p>
-                <div className={joinClassNames('sage-unified-grid', gridColumns === 2 ? 'sage-unified-grid--2' : 'sage-unified-grid--4')}>
-                  {Array.from({ length: gridColumns }).map((_, index) => (
-                    <div key={`personal-skeleton-${index}`} className="sage-unified-card" aria-hidden="true">
-                      <SkeletonBlock height="40px" width="40px" />
-                      <SkeletonBlock height="16px" width="70%" />
-                      <SkeletonBlock height="12px" width="54%" />
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ) : renderSection('Personal', personalCards, renderPersonalCard, renderPersonalExpand)}
-          </>
+          <AppNotice tone="neutral">
+            Integrations is the one place for anything Sage connects to or uses: AI providers, personal channels, this computer, knowledge, and tools.
+          </AppNotice>
         ) : (
           <AppNotice tone="neutral">
             Studio is the business connector lane. Personal Telegram, personal WhatsApp, Signal, and future iMessage stay on the paired computer inside Sage.
@@ -2328,7 +2519,7 @@ export function WorkstationSageConnectorsPane({
         {showProviders ? (
           isLoading ? renderProviderSkeletons() : (
             <section className="sage-unified-section">
-              <p className="sage-unified-section__label">AI Models</p>
+              <p className="sage-unified-section__label">AI</p>
               <div className="sage-hosted-credits">
                 <div className="sage-hosted-credits__copy">
                   <strong className="sage-hosted-credits__title">Empyralis credits</strong>
@@ -2406,20 +2597,31 @@ export function WorkstationSageConnectorsPane({
                   </AppButton>
                 </div>
               </div>
+              {renderSection('AI providers', providerCards, renderProviderCard, renderProviderExpand)}
             </section>
           )
-        ) : null}
-        {showTools ? (
-          <section className="sage-unified-section">
-            <p className="sage-unified-section__label">Tools</p>
-            <WorkstationSageToolsPane onBlockedRequirementAction={handleBlockedToolAction} />
-          </section>
         ) : null}
         {isLoading ? (
           <div className="sage-settings-empty">
             Loading apps and accounts…
           </div>
-        ) : renderSection(surface === 'studio' ? 'Studio Integrations' : 'Integrations', connectorCards, renderConnectorCard, renderConnectorExpand)}
+        ) : (
+          <>
+            {showPersonalSurface ? renderSection('Communication', communicationPersonalCards, renderPersonalCard, renderPersonalExpand) : null}
+            {communicationConnectorCards.length > 0 ? renderSection('Communication apps', communicationConnectorCards, renderConnectorCard, renderConnectorExpand) : null}
+            {showPersonalSurface ? renderSection('This Computer', thisComputerCards, renderExternalCard, renderExternalExpand) : null}
+            {knowledgeConnectorCards.length > 0 ? renderSection('Knowledge', knowledgeConnectorCards, renderConnectorCard, renderConnectorExpand) : null}
+          </>
+        )}
+        {showTools ? (
+          <section className="sage-unified-section">
+            <p className="sage-unified-section__label">Tools</p>
+            <AppNotice tone="neutral">
+              Curated skills live here when they need an external app, binary, or local device requirement.
+            </AppNotice>
+            <WorkstationSageToolsPane onBlockedRequirementAction={handleBlockedToolAction} />
+          </section>
+        ) : null}
       </div>
 
       <CommandSheet

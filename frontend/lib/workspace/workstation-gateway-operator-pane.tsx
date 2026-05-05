@@ -321,17 +321,37 @@ function gatewayPairingCommand(token: unknown): string {
   if (!pairingToken) {
     return 'Pairing token unavailable';
   }
+  const shellQuote = (value: string): string => `'${String(value).replace(/'/g, "'\\''")}'`;
+  const normalizeGatewayApiBase = (value: string): string => {
+    const trimmed = String(value || '').trim().replace(/\/+$/, '');
+    if (!trimmed) {
+      return 'http://127.0.0.1:8001/api';
+    }
+    return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+  };
   const apiUrl = (() => {
+    const explicitRuntimeBase =
+      process.env.NEXT_PUBLIC_ORION_API_URL
+      ?? process.env.NEXT_PUBLIC_API_URL
+      ?? '';
+    if (explicitRuntimeBase.trim()) {
+      return normalizeGatewayApiBase(explicitRuntimeBase);
+    }
     if (typeof window === 'undefined') {
       return 'http://127.0.0.1:8001/api';
     }
-    const origin = String(window.location.origin || '').trim().replace(/\/+$/, '');
-    return origin ? `${origin}/api` : 'http://127.0.0.1:8001/api';
+    const hostname = String(window.location.hostname || '').trim().toLowerCase();
+    if (hostname === '127.0.0.1' || hostname === 'localhost') {
+      return 'http://127.0.0.1:8001/api';
+    }
+    return normalizeGatewayApiBase(window.location.origin);
   })();
   return [
-    'cd /path/to/Multi_Agent_Orchestrator_Project/empyralis-gateway',
+    'cd "$(git rev-parse --show-toplevel)/empyralis-gateway"',
     'npm run build',
-    `EMPYRALIS_GATEWAY_API_URL=${apiUrl} EMPYRALIS_GATEWAY_PAIRING_TOKEN=${pairingToken} npm start`,
+    `export EMPYRALIS_GATEWAY_API_URL=${shellQuote(apiUrl)}`,
+    `export EMPYRALIS_GATEWAY_PAIRING_TOKEN=${shellQuote(pairingToken)}`,
+    'npm start',
   ].join('\n');
 }
 

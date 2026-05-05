@@ -89,7 +89,19 @@ export class GatewayWsClient {
       }),
     });
     if (!response.ok) {
-      throw new Error(`Gateway registration failed with status ${response.status}`);
+      const rawBody = await response.text().catch(() => "");
+      let detail = rawBody.trim();
+      if (detail) {
+        try {
+          const parsed = JSON.parse(detail) as { detail?: unknown };
+          detail = typeof parsed.detail === "string" ? parsed.detail : detail;
+        } catch {
+          // Keep the raw body when the runtime does not return JSON.
+        }
+      }
+      throw new Error(
+        `Gateway registration failed with status ${response.status}${detail ? `: ${detail}` : ""}`,
+      );
     }
     const payload = (await response.json()) as GatewayRegistrationPayload;
     await this.db.writeJson("registration.json", payload.gateway);

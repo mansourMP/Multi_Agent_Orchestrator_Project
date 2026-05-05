@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 import { DataBadge } from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
@@ -119,7 +120,7 @@ type ChannelDraft = {
 type ChannelKind = 'whatsapp' | 'telegram';
 
 type GatewayOperatorSection = 'all' | 'status' | 'channels' | 'approvals' | 'activity';
-type MyComputerStatusLabel = 'Not set up' | 'Online' | 'Working' | 'Needs your OK' | 'Offline';
+type MyComputerStatusLabel = 'Not connected' | 'Pairing' | 'Online' | 'Reconnecting' | 'Needs your OK' | 'Offline' | 'Revoked';
 type CapabilitySurfaceItem = {
   id: 'files' | 'shell' | 'browser' | 'screenshots' | 'clipboard' | 'telegram' | 'whatsapp' | 'ollama';
   label: string;
@@ -133,6 +134,25 @@ type CertificationLaneItem = {
   subtitle: string;
   description: string;
   tone: 'neutral' | 'success' | 'warning' | 'danger' | 'accent';
+};
+
+type GatewayPrimaryAction = {
+  label: 'Connect this computer' | 'Reconnect' | 'Approve action' | 'Revoke access';
+  tone: 'primary' | 'secondary' | 'danger';
+  disabled?: boolean;
+  action:
+    | { kind: 'connect' }
+    | { kind: 'reconnect' }
+    | { kind: 'open_approvals' }
+    | { kind: 'revoke' };
+};
+
+type GatewayOperatorState = {
+  id: 'not_connected' | 'pairing' | 'online' | 'reconnecting' | 'needs_approval' | 'offline' | 'revoked';
+  label: MyComputerStatusLabel;
+  tone: 'neutral' | 'success' | 'warning' | 'danger';
+  detail: string;
+  primaryAction: GatewayPrimaryAction;
 };
 
 function buildQueryString(params: Record<string, string | number | null | undefined>): string {
@@ -180,6 +200,32 @@ function formatTimestamp(value: unknown): string {
   } catch {
     return token;
   }
+}
+
+function formatRelativeTimestamp(value: unknown): string {
+  const token = String(value ?? '').trim();
+  if (!token) {
+    return 'Not available';
+  }
+  const parsed = Date.parse(token);
+  if (!Number.isFinite(parsed)) {
+    return token;
+  }
+  const deltaMs = Date.now() - parsed;
+  const future = deltaMs < 0;
+  const deltaMinutes = Math.round(Math.abs(deltaMs) / 60000);
+  if (deltaMinutes < 1) {
+    return future ? 'In under a minute' : 'Just now';
+  }
+  if (deltaMinutes < 60) {
+    return future ? `In ${deltaMinutes} min` : `${deltaMinutes} min ago`;
+  }
+  const deltaHours = Math.round(deltaMinutes / 60);
+  if (deltaHours < 24) {
+    return future ? `In ${deltaHours} hr` : `${deltaHours} hr ago`;
+  }
+  const deltaDays = Math.round(deltaHours / 24);
+  return future ? `In ${deltaDays} day${deltaDays === 1 ? '' : 's'}` : `${deltaDays} day${deltaDays === 1 ? '' : 's'} ago`;
 }
 
 function statusTone(value: unknown): 'neutral' | 'success' | 'warning' | 'danger' | 'accent' {
@@ -349,6 +395,26 @@ function gatewayConnectionSummary(gateways: GatewayRegistrationRecord[]): string
   return onlineCount > 0 ? `${gateways.length} · ${onlineCount} online` : `${gateways.length} · Offline`;
 }
 
+function gatewayTrustSummary(selectedGateway: GatewayRegistrationRecord | null): {
+  deviceLabel: string;
+  platformLabel: string;
+  lastSeenLabel: string;
+  lastConnectedLabel: string;
+  trustLabel: string;
+} {
+  return {
+    deviceLabel: selectedGateway
+      ? readString(selectedGateway.display_name, 'This computer')
+      : 'This computer',
+    platformLabel: selectedGateway
+      ? humanizeToken(selectedGateway.platform, 'Unknown platform')
+      : 'Unknown platform',
+    lastSeenLabel: formatRelativeTimestamp(selectedGateway?.last_seen_at),
+    lastConnectedLabel: formatTimestamp(selectedGateway?.last_seen_at),
+    trustLabel: humanizeToken(selectedGateway?.device_trust_state, selectedGateway ? 'Trusted device' : 'Not paired'),
+  };
+}
+
 function normalizeCapabilityTokenSet(values: string[]): Set<string> {
   return new Set(
     values
@@ -455,55 +521,119 @@ function summarizeMyComputerStatus(params: {
   doctorStatus: string;
   approvalsPendingCount: number;
   busyActionKey: string | null;
-}): { label: MyComputerStatusLabel; tone: 'neutral' | 'success' | 'warning' | 'danger'; detail: string } {
-  const { gateways, selectedGateway, doctorStatus, approvalsPendingCount, busyActionKey } = params;
+  pairingIntentActive: boolean;
+}): GatewayOperatorState {
+  const {
+    gateways,
+    selectedGateway,
+    doctorStatus,
+    approvalsPendingCount,
+    busyActionKey,
+    pairingIntentActive,
+  } = params;
   if (gateways.length === 0) {
+    if (pairingIntentActive || busyActionKey === 'pairing') {
+      return {
+        id: 'pairing',
+        label: 'Pairing',
+        tone: 'warning',
+        detail: 'A short-lived connection request is ready. Run the local companion on this computer to finish pairing.',
+        primaryAction: {
+          label: 'Connect this computer',
+          tone: 'primary',
+          disabled: true,
+          action: { kind: 'connect' },
+        },
+      };
+    }
     return {
-      label: 'Not set up',
+      id: 'not_connected',
+      label: 'Not connected',
       tone: 'neutral',
-      detail: 'Connect a computer to unlock local tools.',
+      detail: 'Connect this computer when Sage needs your files, browser, screenshots, clipboard, shell, or local Ollama.',
+      primaryAction: {
+        label: 'Connect this computer',
+        tone: 'primary',
+        action: { kind: 'connect' },
+      },
     };
   }
 
   const selected = selectedGateway ?? gateways[0] ?? null;
   const connection = String(selected?.connection_status ?? selected?.status ?? '').trim().toLowerCase();
+  const trust = String(selected?.device_trust_state ?? '').trim().toLowerCase();
   const doctor = String(doctorStatus ?? '').trim().toLowerCase();
-  const offline = ['offline', 'revoked', 'blocked', 'not_attached', 'attach_failed', 'disconnected'].includes(connection)
-    || ['offline', 'failed', 'fail', 'blocked'].includes(doctor);
-  if (offline) {
+  const revoked = ['revoked'].includes(connection) || ['revoked'].includes(trust);
+  if (revoked) {
     return {
-      label: 'Offline',
+      id: 'revoked',
+      label: 'Revoked',
       tone: 'danger',
-      detail: 'Sage cannot use local tools until this computer reconnects.',
+      detail: 'Access from this computer was revoked. Pair it again before Sage can use any local tools.',
+      primaryAction: {
+        label: 'Reconnect',
+        tone: 'primary',
+        action: { kind: 'reconnect' },
+      },
     };
   }
   if (approvalsPendingCount > 0) {
     return {
+      id: 'needs_approval',
       label: 'Needs your OK',
       tone: 'warning',
       detail: 'Sage is waiting for approval before continuing local actions.',
+      primaryAction: {
+        label: 'Approve action',
+        tone: 'primary',
+        action: { kind: 'open_approvals' },
+      },
     };
   }
-  if (busyActionKey && !busyActionKey.startsWith('pairing') && !busyActionKey.startsWith('revoke:')) {
+  if (
+    busyActionKey?.startsWith('pairing')
+    || ['connecting', 'reconnecting', 'resuming', 'attach_required', 'pending'].includes(connection)
+    || ['connecting', 'reconnecting', 'resuming', 'degraded', 'warning'].includes(doctor)
+  ) {
     return {
-      label: 'Working',
+      id: 'reconnecting',
+      label: 'Reconnecting',
       tone: 'warning',
-      detail: 'A local task is currently in progress.',
+      detail: 'This computer is reconnecting or waiting for the local companion to finish attaching.',
+      primaryAction: {
+        label: 'Reconnect',
+        tone: 'primary',
+        disabled: busyActionKey === 'pairing',
+        action: { kind: 'reconnect' },
+      },
     };
   }
   const online = ['online', 'connected', 'attached', 'healthy', 'active', 'pass'].includes(connection)
     || ['online', 'healthy', 'pass'].includes(doctor);
   if (online) {
     return {
+      id: 'online',
       label: 'Online',
       tone: 'success',
       detail: 'Sage can use this computer now.',
+      primaryAction: {
+        label: 'Revoke access',
+        tone: 'danger',
+        disabled: busyActionKey === `revoke:${String(selected?.gateway_id ?? '').trim()}`,
+        action: { kind: 'revoke' },
+      },
     };
   }
   return {
+    id: 'offline',
     label: 'Offline',
     tone: 'danger',
     detail: 'This computer is not ready for local tasks yet.',
+    primaryAction: {
+      label: 'Reconnect',
+      tone: 'primary',
+      action: { kind: 'reconnect' },
+    },
   };
 }
 
@@ -654,6 +784,7 @@ export function WorkstationGatewayOperatorPane({
 }: {
   initialSection?: GatewayOperatorSection;
 }) {
+  const router = useRouter();
   const services = useWorkspaceServices();
   const { bootstrap } = useWorkspaceBoundary();
   const workspaceId = bootstrap.workspace.id;
@@ -1193,7 +1324,9 @@ export function WorkstationGatewayOperatorPane({
     doctorStatus,
     approvalsPendingCount,
     busyActionKey,
+    pairingIntentActive: Boolean(pairingIntent),
   });
+  const trustSummary = gatewayTrustSummary(selectedGateway);
   const certificationLanes = buildCertificationLanes({
     myComputerStatus,
     doctorStatus: String(doctorStatus ?? '').trim().toLowerCase(),
@@ -1215,11 +1348,34 @@ export function WorkstationGatewayOperatorPane({
         ? 'Linux computer'
         : 'computer';
 
+  const handlePrimaryAction = () => {
+    switch (myComputerStatus.primaryAction.action.kind) {
+      case 'connect':
+      case 'reconnect':
+        void handleCreatePairingIntent();
+        return;
+      case 'open_approvals':
+        if (showApprovalsSection) {
+          const firstPendingId = String(pendingApprovals[0]?.approval_id ?? '').trim();
+          if (firstPendingId && typeof document !== 'undefined') {
+            document.getElementById(`gateway-approval-${firstPendingId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+          return;
+        }
+        router.push(`/w/${encodeURIComponent(workspaceId)}/gateway-approvals`);
+        return;
+      case 'revoke':
+        void handleRevokeGateway();
+        return;
+      default:
+    }
+  };
+
   return (
     <div className="gateway-operator-pane app-stack-3">
       <WorkstationSurfaceCard
-        title="Connect this computer"
-        description="Use a trusted local computer when Sage needs your files, browser, screenshots, clipboard, terminal, or personal channels."
+        title="My Computer"
+        description="This is the trusted local computer lane for files, shell, browser, screenshots, clipboard, personal Telegram, personal WhatsApp, and local Ollama."
         actions={(
           <WorkstationActionButton
             type="button"
@@ -1243,66 +1399,64 @@ export function WorkstationGatewayOperatorPane({
 
         <WorkstationSurfaceStatGrid>
           <WorkstationSurfaceStat
-            label="My Computer"
+            label="State"
             value={<DataBadge tone={myComputerStatus.tone}>{myComputerStatus.label}</DataBadge>}
             hint={myComputerStatus.detail}
+          />
+          <WorkstationSurfaceStat
+            label="This device"
+            value={trustSummary.deviceLabel}
+            hint={trustSummary.platformLabel}
+          />
+          <WorkstationSurfaceStat
+            label="Last seen"
+            value={trustSummary.lastSeenLabel}
+            hint={trustSummary.lastConnectedLabel}
+          />
+          <WorkstationSurfaceStat
+            label="Trust"
+            value={trustSummary.trustLabel}
+            hint="Revocable device trust for local work"
           />
           <WorkstationSurfaceStat
             label="Connected computers"
             value={gatewayConnectionSummary(gateways)}
             hint="Trusted local computer edges in this workspace"
           />
-          <WorkstationSurfaceStat
-            label="Health"
-            value={<DataBadge tone={doctorStatusDisplay.tone}>{doctorStatusDisplay.label}</DataBadge>}
-            hint="Selected computer health posture"
-          />
-          <WorkstationSurfaceStat
-            label="Needs your OK"
-            value={String(approvalsPendingCount)}
-            hint="Local actions waiting for review"
-          />
-          <WorkstationSurfaceStat
-            label="Browser sessions"
-            value={String(browserSessionCount)}
-            hint="Tracked governed browser sessions"
-          />
         </WorkstationSurfaceStatGrid>
 
         <FormSection
-          title="How local control works"
-          description="Sage uses a headless local companion for reliable work. Screenshots and activity rows are the transparency layer, not the only execution method."
+          title="Next step"
+          description="One clear action based on the current connection state."
         >
-          <WorkstationSurfaceList>
-            {GATEWAY_SETUP_STEPS.map((step, index) => (
-              <WorkstationSurfaceListItem
-                key={step.title}
-                title={`${index + 1}. ${step.title}`}
-                description={step.description}
-              />
-            ))}
-          </WorkstationSurfaceList>
-          <div className="app-inline-actions app-inline-actions--tight app-inline-actions--wrap">
-            {GATEWAY_PERMISSION_CHECKLIST.map((permission) => (
-              <DataBadge key={permission} tone="neutral">{permission}</DataBadge>
-            ))}
+          <div className="settings-action-row">
+            <WorkstationActionButton
+              type="button"
+              tone={myComputerStatus.primaryAction.tone}
+              disabled={Boolean(myComputerStatus.primaryAction.disabled)}
+              onClick={handlePrimaryAction}
+            >
+              {myComputerStatus.primaryAction.label}
+            </WorkstationActionButton>
           </div>
+          <WorkstationSurfaceNotice tone={myComputerStatus.tone === 'danger' ? 'danger' : myComputerStatus.tone === 'warning' ? 'warning' : myComputerStatus.tone === 'success' ? 'success' : 'neutral'}>
+            {myComputerStatus.detail}
+          </WorkstationSurfaceNotice>
         </FormSection>
 
         <FormSection
-          title="Permission modes"
-          description="The product exposes two clear choices. Default is safe for normal use; Full Access is only for a paired user-owned computer."
+          title="What Sage can use on this computer"
+          description="Capability groups from this paired computer, shown without protocol or token detail."
         >
           <WorkstationSurfaceList>
-            {GATEWAY_MODE_SUMMARIES.map((mode) => (
+            {myComputerCapabilities.map((capability) => (
               <WorkstationSurfaceListItem
-                key={mode.title}
-                title={mode.title}
-                subtitle={mode.subtitle}
-                description={mode.description}
+                key={capability.id}
+                title={capability.label}
+                description={capability.description}
                 actions={(
-                  <DataBadge tone={mode.title === 'Default' ? 'success' : 'warning'}>
-                    {mode.title === 'Default' ? 'Safe default' : 'Owner approved'}
+                  <DataBadge tone={capability.available ? 'success' : 'neutral'}>
+                    {capability.available ? 'Available' : 'Not available'}
                   </DataBadge>
                 )}
               />
@@ -1311,8 +1465,8 @@ export function WorkstationGatewayOperatorPane({
         </FormSection>
 
         <FormSection
-          title={`Connect this ${pairingDeviceLabel}`}
-          description="Create a short-lived connection request for this trusted computer."
+          title={`Connect or reconnect this ${pairingDeviceLabel}`}
+          description="Create a short-lived connection request when this computer is not connected, reconnecting, or revoked."
         >
           <FormGrid columns="repeat(2, minmax(0, 1fr))">
             <FormField label="Device label" hint="Human-readable name shown in operator surfaces.">
@@ -1340,8 +1494,34 @@ export function WorkstationGatewayOperatorPane({
               void handleCreatePairingIntent();
             }}
           >
-              {busyActionKey === 'pairing' ? 'Creating connection…' : 'Connect computer'}
+              {busyActionKey === 'pairing' ? 'Creating connection…' : 'Connect this computer'}
             </WorkstationActionButton>
+          </div>
+        </FormSection>
+
+        <FormSection
+          title="How this trust lane works"
+          description="Default keeps risky local and external actions behind approval. Full Access only applies to a paired user-owned computer."
+        >
+          <WorkstationSurfaceList>
+            {GATEWAY_MODE_SUMMARIES.map((mode) => (
+              <WorkstationSurfaceListItem
+                key={mode.title}
+                title={mode.title}
+                subtitle={mode.subtitle}
+                description={mode.description}
+                actions={(
+                  <DataBadge tone={mode.title === 'Default' ? 'success' : 'warning'}>
+                    {mode.title === 'Default' ? 'Safe default' : 'Owner approved'}
+                  </DataBadge>
+                )}
+              />
+            ))}
+          </WorkstationSurfaceList>
+          <div className="app-inline-actions app-inline-actions--tight app-inline-actions--wrap">
+            {GATEWAY_PERMISSION_CHECKLIST.map((permission) => (
+              <DataBadge key={permission} tone="neutral">{permission}</DataBadge>
+            ))}
           </div>
         </FormSection>
 
@@ -1405,8 +1585,8 @@ export function WorkstationGatewayOperatorPane({
                 <WorkstationSurfaceListItem
                   key={gatewayId}
                   title={readString(gateway.display_name, gatewayId)}
-                  subtitle={`${humanizeToken(gateway.platform, 'Unknown platform')} · ${gatewayId}`}
-                  description={`Trust ${humanizeToken(gateway.device_trust_state, 'unknown')} · last seen ${formatTimestamp(gateway.last_seen_at)}`}
+                  subtitle={`${humanizeToken(gateway.platform, 'Unknown platform')}${selected ? ' · This device' : ''}`}
+                  description={`Trust ${humanizeToken(gateway.device_trust_state, 'unknown')} · last seen ${formatRelativeTimestamp(gateway.last_seen_at)}`}
                   actions={(
                     <div className="app-inline-actions app-inline-actions--tight">
                       <DataBadge tone={statusTone(gateway.connection_status ?? gateway.status)}>
@@ -1430,24 +1610,23 @@ export function WorkstationGatewayOperatorPane({
 
       {selectedGateway && showStatusSection ? (
         <WorkstationSurfaceCard
-          title="Device health"
-          description="Trust posture, readiness, and browser attach truth for the selected computer."
+          title="Connection details"
+          description="Trust, health, reconnect posture, and advanced diagnostics for the selected computer."
         >
           {loadingGatewayDetail ? (
             <WorkstationSurfaceNotice tone="neutral">Refreshing local device diagnostics…</WorkstationSurfaceNotice>
           ) : null}
 
           <FormGrid>
-            <FormReadout label="Computer" value={readString(selectedGateway.display_name, String(selectedGateway.gateway_id ?? ''))} />
-            <FormReadout label="Status" value={<DataBadge tone={statusTone(doctorStatus)}>{humanizeToken(doctorStatus, 'Unknown')}</DataBadge>} />
+            <FormReadout label="Computer" value={readString(selectedGateway.display_name, 'This computer')} />
+            <FormReadout label="State" value={<DataBadge tone={myComputerStatus.tone}>{myComputerStatus.label}</DataBadge>} />
             <FormReadout label="Platform" value={humanizeToken(selectedGateway.platform, 'Unknown')} />
-            <FormReadout label="Trust state" value={humanizeToken(selectedGateway.device_trust_state, 'Unknown')} />
-            <FormReadout label="Last seen" value={formatTimestamp(selectedGateway.last_seen_at)} />
-            <FormReadout label="Checkpoint lane" value={<DataBadge tone={statusTone(readRecord(doctor?.checkpoint).status)}>{checkpointStatus.status}</DataBadge>} />
-            <FormReadout label="Browser lane" value={<DataBadge tone={statusTone(readRecord(doctor?.browser).status)}>{browserLaneStatus.status}</DataBadge>} />
-            <FormReadout label="Build assistants" value={<DataBadge tone={statusTone(readRecord(doctor?.specialists).status)}>{specialistStatus.status}</DataBadge>} />
+            <FormReadout label="Trust state" value={trustSummary.trustLabel} />
+            <FormReadout label="Last connected" value={trustSummary.lastConnectedLabel} />
+            <FormReadout label="Last seen" value={trustSummary.lastSeenLabel} />
+            <FormReadout label="Health" value={<DataBadge tone={doctorStatusDisplay.tone}>{doctorStatusDisplay.label}</DataBadge>} />
+            <FormReadout label="Browser readiness" value={<DataBadge tone={statusTone(readRecord(doctor?.browser).status)}>{browserLaneStatus.status}</DataBadge>} />
             <FormReadout label="AI model reachability" value={<DataBadge tone={statusTone(readRecord(doctor?.providers).status)}>{providerStatus.status}</DataBadge>} />
-            <FormReadout label="Quota state" value={<DataBadge tone={statusTone(readRecord(doctor?.quota).status)}>{quotaStatus.status}</DataBadge>} />
             <FormReadout label="Needs your OK waiting" value={String(approvalsPendingCount)} />
           </FormGrid>
 
@@ -1470,46 +1649,6 @@ export function WorkstationGatewayOperatorPane({
                 />
               ))}
             </WorkstationSurfaceList>
-          </FormSection>
-
-          <FormSection
-            title="What Sage can use on this computer"
-            description="Capability truth from this paired computer."
-          >
-            <WorkstationSurfaceList>
-              {myComputerCapabilities.map((capability) => (
-                <WorkstationSurfaceListItem
-                  key={capability.id}
-                  title={capability.label}
-                  description={capability.description}
-                  actions={(
-                    <DataBadge tone={capability.available ? 'success' : 'neutral'}>
-                      {capability.available ? 'Available' : 'Not available'}
-                    </DataBadge>
-                  )}
-                />
-              ))}
-            </WorkstationSurfaceList>
-          </FormSection>
-
-          <FormSection
-            title="Advanced capability manifest"
-            description="Raw capability IDs reported by this computer."
-          >
-            {selectedGatewayCapabilities.length > 0 ? (
-              <div className="app-inline-actions app-inline-actions--tight app-inline-actions--wrap">
-                {selectedGatewayCapabilities.map((capability) => (
-                  <DataBadge key={capability} tone="neutral">
-                    {humanizeToken(capability, capability)}
-                  </DataBadge>
-                ))}
-              </div>
-            ) : (
-              <EmptyPanel
-                title="No capabilities reported yet"
-                body="The companion has not published a local tool manifest for this computer."
-              />
-            )}
           </FormSection>
 
           <FormSection

@@ -647,6 +647,34 @@ CREATE TABLE IF NOT EXISTS deployed_agent_conversation_memory (
     UNIQUE(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
 );
 
+CREATE TABLE IF NOT EXISTS deployed_agent_business_insights (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    deployed_agent_id TEXT NOT NULL REFERENCES deployed_agents(id) ON DELETE CASCADE,
+    pattern_key TEXT NOT NULL,
+    insight_type TEXT NOT NULL DEFAULT 'business_pattern',
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    recommendation TEXT NOT NULL DEFAULT '',
+    sensitivity TEXT NOT NULL DEFAULT 'yellow',
+    status TEXT NOT NULL DEFAULT 'candidate',
+    channel_key TEXT NOT NULL DEFAULT '',
+    event_count INTEGER NOT NULL DEFAULT 0,
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+    window_start TIMESTAMPTZ NULL,
+    window_end TIMESTAMPTZ NULL,
+    redacted_examples JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reviewed_at TIMESTAMPTZ NULL,
+    reviewed_by_user_id TEXT NULL,
+    applied_at TIMESTAMPTZ NULL,
+    applied_by_user_id TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, deployed_agent_id, pattern_key, channel_key)
+);
+
 CREATE TABLE IF NOT EXISTS external_user_privacy_requests (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -987,6 +1015,10 @@ CREATE INDEX IF NOT EXISTS idx_deployed_agent_conversation_memory_scope
     ON deployed_agent_conversation_memory(tenant_id, workspace_id, deployed_agent_id, channel_key, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deployed_agent_conversation_memory_external_user
     ON deployed_agent_conversation_memory(tenant_id, workspace_id, channel_key, external_user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deployed_agent_business_insights_scope
+    ON deployed_agent_business_insights(tenant_id, workspace_id, deployed_agent_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deployed_agent_business_insights_pattern
+    ON deployed_agent_business_insights(tenant_id, workspace_id, deployed_agent_id, pattern_key, channel_key);
 CREATE INDEX IF NOT EXISTS idx_external_user_privacy_requests_scope
     ON external_user_privacy_requests(tenant_id, workspace_id, deployed_agent_id, channel_key, last_requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_external_user_privacy_requests_status
@@ -1522,6 +1554,38 @@ def _row_to_deployed_agent_conversation_memory(row: Any) -> Optional[Dict[str, A
         "recent_message_count": int(payload.get("recent_message_count") or 0),
         "source_message_count": int(payload.get("source_message_count") or 0),
         "metadata": _decode_json_object(payload.get("metadata")),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_deployed_agent_business_insight(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "deployed_agent_id": str(payload.get("deployed_agent_id") or "").strip() or None,
+        "pattern_key": str(payload.get("pattern_key") or "").strip().lower() or None,
+        "insight_type": str(payload.get("insight_type") or "").strip().lower() or "business_pattern",
+        "title": str(payload.get("title") or "").strip(),
+        "summary": str(payload.get("summary") or "").strip(),
+        "recommendation": str(payload.get("recommendation") or "").strip(),
+        "sensitivity": str(payload.get("sensitivity") or "").strip().lower() or "yellow",
+        "status": str(payload.get("status") or "").strip().lower() or "candidate",
+        "channel_key": str(payload.get("channel_key") or "").strip().lower() or None,
+        "event_count": int(payload.get("event_count") or 0),
+        "confidence": round(float(payload.get("confidence") or 0.0), 6),
+        "window_start": _iso(payload.get("window_start")),
+        "window_end": _iso(payload.get("window_end")),
+        "redacted_examples": _decode_json_array(payload.get("redacted_examples")),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "reviewed_at": _iso(payload.get("reviewed_at")),
+        "reviewed_by_user_id": str(payload.get("reviewed_by_user_id") or "").strip() or None,
+        "applied_at": _iso(payload.get("applied_at")),
+        "applied_by_user_id": str(payload.get("applied_by_user_id") or "").strip() or None,
         "created_at": _iso(payload.get("created_at")),
         "updated_at": _iso(payload.get("updated_at")),
     }
@@ -4855,6 +4919,253 @@ async def upsert_deployed_agent_conversation_memory(
             now_ts,
         )
     return _row_to_deployed_agent_conversation_memory(row)
+
+
+async def list_deployed_agent_business_insights(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_status = str(status or "").strip().lower()
+    safe_limit = max(1, min(int(limit or 50), 200))
+    safe_offset = max(0, int(offset or 0))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM deployed_agent_business_insights
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND deployed_agent_id = $3
+              AND ($4 = '' OR status = $4)
+            ORDER BY
+              CASE status WHEN 'candidate' THEN 0 WHEN 'approved' THEN 1 WHEN 'applied' THEN 2 ELSE 3 END,
+              confidence DESC,
+              event_count DESC,
+              updated_at DESC,
+              id DESC
+            LIMIT $5 OFFSET $6
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_status,
+            safe_limit,
+            safe_offset,
+        )
+    return [
+        payload
+        for payload in (_row_to_deployed_agent_business_insight(row) for row in rows)
+        if isinstance(payload, dict)
+    ]
+
+
+async def get_deployed_agent_business_insight(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    insight_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_insight_id = _require_scope_token(insight_id, "insight_id")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM deployed_agent_business_insights
+            WHERE id = $1
+              AND tenant_id = $2
+              AND workspace_id = $3
+              AND deployed_agent_id = $4
+            LIMIT 1
+            """,
+            resolved_insight_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+        )
+    return _row_to_deployed_agent_business_insight(row)
+
+
+async def upsert_deployed_agent_business_insight_candidate(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    pattern_key: str,
+    insight_type: str,
+    title: str,
+    summary: str,
+    recommendation: str,
+    sensitivity: str = "yellow",
+    channel_key: Optional[str] = None,
+    confidence: float = 0.0,
+    redacted_examples: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    insight_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_pattern_key = _require_scope_token(pattern_key, "pattern_key").lower()
+    resolved_channel_key = str(channel_key or "").strip().lower()
+    resolved_insight_id = str(insight_id or f"bins_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO deployed_agent_business_insights (
+                id, tenant_id, workspace_id, deployed_agent_id, pattern_key, insight_type,
+                title, summary, recommendation, sensitivity, status, channel_key,
+                event_count, confidence, window_start, window_end, redacted_examples, metadata,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, 'candidate', $11,
+                1, $12, $14::timestamptz, $14::timestamptz, $13::jsonb, $15::jsonb,
+                $14::timestamptz, $14::timestamptz
+            )
+            ON CONFLICT (tenant_id, workspace_id, deployed_agent_id, pattern_key, channel_key)
+            DO UPDATE SET
+                insight_type = EXCLUDED.insight_type,
+                title = EXCLUDED.title,
+                summary = EXCLUDED.summary,
+                recommendation = EXCLUDED.recommendation,
+                sensitivity = EXCLUDED.sensitivity,
+                event_count = deployed_agent_business_insights.event_count + 1,
+                confidence = GREATEST(deployed_agent_business_insights.confidence, EXCLUDED.confidence),
+                window_start = COALESCE(deployed_agent_business_insights.window_start, EXCLUDED.window_start),
+                window_end = EXCLUDED.window_end,
+                redacted_examples = EXCLUDED.redacted_examples,
+                metadata = deployed_agent_business_insights.metadata || EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+            RETURNING *
+            """,
+            resolved_insight_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_pattern_key,
+            str(insight_type or "business_pattern").strip().lower() or "business_pattern",
+            str(title or "").strip(),
+            str(summary or "").strip(),
+            str(recommendation or "").strip(),
+            str(sensitivity or "yellow").strip().lower() or "yellow",
+            resolved_channel_key,
+            max(0.0, min(float(confidence or 0.0), 1.0)),
+            _to_json(list(redacted_examples or [])[:3], default=[]),
+            now_ts,
+            _to_json(metadata, default={}),
+        )
+    return _row_to_deployed_agent_business_insight(row)
+
+
+async def update_deployed_agent_business_insight_status(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    insight_id: str,
+    status: str,
+    actor_user_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_insight_id = _require_scope_token(insight_id, "insight_id")
+    resolved_status = str(status or "").strip().lower()
+    if resolved_status not in {"candidate", "approved", "dismissed", "archived", "applied"}:
+        raise ValueError("Unsupported business insight status.")
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            UPDATE deployed_agent_business_insights
+            SET
+                status = $5,
+                reviewed_at = CASE WHEN $5 IN ('approved', 'dismissed', 'archived') THEN $8::timestamptz ELSE reviewed_at END,
+                reviewed_by_user_id = CASE WHEN $5 IN ('approved', 'dismissed', 'archived') THEN NULLIF($6, '') ELSE reviewed_by_user_id END,
+                metadata = metadata || $7::jsonb,
+                updated_at = $8::timestamptz
+            WHERE id = $1
+              AND tenant_id = $2
+              AND workspace_id = $3
+              AND deployed_agent_id = $4
+            RETURNING *
+            """,
+            resolved_insight_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_status,
+            str(actor_user_id or "").strip(),
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+    return _row_to_deployed_agent_business_insight(row)
+
+
+async def mark_deployed_agent_business_insight_applied(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    insight_id: str,
+    actor_user_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_insight_id = _require_scope_token(insight_id, "insight_id")
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            UPDATE deployed_agent_business_insights
+            SET
+                status = 'applied',
+                applied_at = $6::timestamptz,
+                applied_by_user_id = NULLIF($5, ''),
+                metadata = metadata || $7::jsonb,
+                updated_at = $6::timestamptz
+            WHERE id = $1
+              AND tenant_id = $2
+              AND workspace_id = $3
+              AND deployed_agent_id = $4
+              AND status = 'approved'
+            RETURNING *
+            """,
+            resolved_insight_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            str(actor_user_id or "").strip(),
+            now_ts,
+            _to_json(metadata, default={}),
+        )
+    return _row_to_deployed_agent_business_insight(row)
 
 
 async def upsert_external_user_privacy_request(

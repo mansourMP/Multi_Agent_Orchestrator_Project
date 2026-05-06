@@ -231,6 +231,25 @@ def _telegram_readiness_payload() -> dict[str, object]:
     }
 
 
+def _business_insights_payload() -> dict[str, object]:
+    return {
+        "workspace_id": "ws-1",
+        "deployed_agent_id": "dagent_1",
+        "count": 1,
+        "items": [
+            {
+                "id": "bins_1",
+                "pattern_key": "pricing.price_match_or_discount_pressure",
+                "insight_type": "pricing_intelligence",
+                "status": "candidate",
+                "sensitivity": "orange",
+                "event_count": 4,
+                "redacted_examples": ["Can you price match this?"],
+            }
+        ],
+    }
+
+
 def _route_request(case: str) -> dict[str, object]:
     if case == "create":
         return {
@@ -1061,3 +1080,68 @@ async def test_get_deployed_agent_conversations_route_forbids_cross_workspace_me
         )
 
     assert response.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_list_deployed_agent_business_insights_route_returns_owner_payload(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = _owner_user
+
+    async def fake_list_owner_business_insights(**kwargs):
+        assert kwargs["workspace_id"] == "ws-1"
+        assert kwargs["deployed_agent_id"] == "dagent_1"
+        assert kwargs["status"] == "candidate"
+        current_user = kwargs["current_user"]
+        assert isinstance(current_user, dict)
+        assert current_user["auth_type"] == "bearer"
+        return _business_insights_payload()
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_business_insights_service,
+        "list_owner_business_insights",
+        fake_list_owner_business_insights,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/deployed-agents/dagent_1/business-insights",
+            params={"workspace_id": "ws-1", "status": "candidate"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["sensitivity"] == "orange"
+
+
+@pytest.mark.anyio
+async def test_approve_deployed_agent_business_insight_route_validates_csrf_and_owner_note(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = _owner_user
+    monkeypatch.setattr(routes_deployed_agents.auth_module, "validate_csrf", lambda request: None)
+
+    async def fake_review_owner_business_insight(**kwargs):
+        assert kwargs["workspace_id"] == "ws-1"
+        assert kwargs["deployed_agent_id"] == "dagent_1"
+        assert kwargs["insight_id"] == "bins_1"
+        assert kwargs["status"] == "approved"
+        assert kwargs["note"] == "Use this in the owner policy draft."
+        return {"insight": {"id": "bins_1", "status": "approved"}}
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_business_insights_service,
+        "review_owner_business_insight",
+        fake_review_owner_business_insight,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/deployed-agents/dagent_1/business-insights/bins_1/approve",
+            params={"workspace_id": "ws-1"},
+            json={"note": "Use this in the owner policy draft."},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["insight"]["status"] == "approved"

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from server_modules import control_plane_repository, session_transcript_store
+from server_modules import deployed_agent_business_insights_service
 from server_modules import deployed_agent_config_schema
 from server_modules import failure_policy_service
 from server_modules import memory_summary_service
@@ -411,7 +412,7 @@ async def persist_deployed_agent_memory_snapshot(
             },
             exc=exc,
         )
-    return await control_plane_repository.upsert_deployed_agent_conversation_memory(
+    memory_payload = await control_plane_repository.upsert_deployed_agent_conversation_memory(
         **key,
         session_key=session_key,
         summary_text=summary_text or "",
@@ -428,3 +429,31 @@ async def persist_deployed_agent_memory_snapshot(
             "retention_days": policy.retention.event_memory_days,
         },
     )
+    try:
+        await deployed_agent_business_insights_service.record_deployed_agent_turn_insights(
+            tenant_id=key["tenant_id"],
+            workspace_id=key["workspace_id"],
+            deployed_agent_id=deployed_agent_id,
+            channel_key=key["channel_key"],
+            user_message=user_message,
+            assistant_reply=assistant_reply,
+        )
+    except Exception as exc:
+        failure_policy_service.log_degraded_operation(
+            logger=logger,
+            code="deployed_agent_business_insights_persist_failed",
+            message="Failed to persist deployed-agent business insight candidate.",
+            error_class=STORAGE_WRITE_FAILURE,
+            degraded_component="deployed_agent_business_insights",
+            severity=SEVERITY_WARNING,
+            retryable=False,
+            status_code=500,
+            metadata={
+                "workspace_id": workspace_id,
+                "deployed_agent_id": deployed_agent_id,
+                "thread_id": str(thread_id or "").strip() or None,
+                "session_key": str(session_key or "").strip() or None,
+            },
+            exc=exc,
+        )
+    return memory_payload

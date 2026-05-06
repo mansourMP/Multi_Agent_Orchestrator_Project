@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from server_modules import auth as auth_module
+from server_modules import deployed_agent_business_insights_service
 from server_modules import deployed_agent_service
 from server_modules.deployed_agent_admin_dashboard_service import get_deployed_agent_admin_dashboard_service
 
@@ -60,6 +61,10 @@ class DeployedAgentExternalUserDeleteRequest(BaseModel):
     workspace_id: str
     channel: str
     session_id: Optional[str] = None
+    note: Optional[str] = None
+
+
+class DeployedAgentBusinessInsightReviewRequest(BaseModel):
     note: Optional[str] = None
 
 
@@ -183,6 +188,104 @@ async def list_deployed_agent_memory_entries(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=404, detail="Deployed agent not found.")
     return payload
+
+
+@router.get("/deployed-agents/{deployed_agent_id}/business-insights")
+async def list_deployed_agent_business_insights(
+    deployed_agent_id: str,
+    workspace_id: str,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    current_user=Depends(get_current_user),
+):
+    return await deployed_agent_business_insights_service.list_owner_business_insights(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        deployed_agent_id=deployed_agent_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/business-insights/{insight_id}/approve")
+async def approve_deployed_agent_business_insight(
+    deployed_agent_id: str,
+    insight_id: str,
+    workspace_id: str,
+    body: DeployedAgentBusinessInsightReviewRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    return await deployed_agent_business_insights_service.review_owner_business_insight(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        deployed_agent_id=deployed_agent_id,
+        insight_id=insight_id,
+        status="approved",
+        note=body.note,
+    )
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/business-insights/{insight_id}/dismiss")
+async def dismiss_deployed_agent_business_insight(
+    deployed_agent_id: str,
+    insight_id: str,
+    workspace_id: str,
+    body: DeployedAgentBusinessInsightReviewRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    return await deployed_agent_business_insights_service.review_owner_business_insight(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        deployed_agent_id=deployed_agent_id,
+        insight_id=insight_id,
+        status="dismissed",
+        note=body.note,
+    )
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/business-insights/{insight_id}/archive")
+async def archive_deployed_agent_business_insight(
+    deployed_agent_id: str,
+    insight_id: str,
+    workspace_id: str,
+    body: DeployedAgentBusinessInsightReviewRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    return await deployed_agent_business_insights_service.review_owner_business_insight(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        deployed_agent_id=deployed_agent_id,
+        insight_id=insight_id,
+        status="archived",
+        note=body.note,
+    )
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/business-insights/{insight_id}/apply")
+async def apply_deployed_agent_business_insight(
+    deployed_agent_id: str,
+    insight_id: str,
+    workspace_id: str,
+    body: DeployedAgentBusinessInsightReviewRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    return await deployed_agent_business_insights_service.apply_owner_business_insight(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        deployed_agent_id=deployed_agent_id,
+        insight_id=insight_id,
+        note=body.note,
+    )
 
 
 @router.get("/deployed-agents/telegram-readiness")

@@ -1,9 +1,44 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from server_modules.conversation_memory_policy import MemoryPolicyProfile
 from server_modules.workspace_context import read_workspace_context_files
+
+
+_RED_FACT_LINE_RE = re.compile(
+    r"(^|\b)(red|critical_restricted|critical|secret|credential|api[_ -]?key|private[_ -]?key|password|token)\b",
+    re.IGNORECASE,
+)
+_SECRET_VALUE_RE = re.compile(
+    r"(sk-[A-Za-z0-9_-]{12,}|[A-Za-z0-9+/]{32,}={0,2}|-----BEGIN [A-Z ]*PRIVATE KEY-----)",
+    re.IGNORECASE,
+)
+
+
+def strip_red_facts_from_external_context(text: str) -> str:
+    lines: List[str] = []
+    removed = 0
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.rstrip()
+        lowered = line.lower()
+        red_tagged = (
+            "[red]" in lowered
+            or "sensitivity:red" in lowered
+            or "sensitivity: red" in lowered
+            or lowered.lstrip().startswith("red:")
+            or lowered.lstrip().startswith("critical_restricted:")
+        )
+        if red_tagged or (_RED_FACT_LINE_RE.search(line) and _SECRET_VALUE_RE.search(line)):
+            removed += 1
+            continue
+        lines.append(line)
+    stripped = "\n".join(lines).strip()
+    if removed:
+        notice = f"[{removed} RED memory fact(s) stripped before external model context.]"
+        return f"{stripped}\n{notice}".strip() if stripped else notice
+    return stripped
 
 
 def load_workspace_context_payload(
@@ -58,7 +93,9 @@ def load_workspace_context_payload(
     else:
         memory_facts = memory_service.get_memory(workspace_id, agent_install_id=agent_install_id)
     if memory_facts:
-        sections.append(f"Runtime Memory Facts\n{memory_facts}")
+        sanitized_memory_facts = strip_red_facts_from_external_context(memory_facts)
+        if sanitized_memory_facts:
+            sections.append(f"Runtime Memory Facts\n{sanitized_memory_facts}")
 
     if not agent_install_id:
         try:
@@ -99,7 +136,12 @@ def load_workspace_context_payload(
 
 
 def render_workspace_context_text(contextual_blocks: List[str]) -> str:
-    blocks = [str(block or "").strip() for block in contextual_blocks if str(block or "").strip()]
+    blocks = [
+        strip_red_facts_from_external_context(str(block or "").strip())
+        for block in contextual_blocks
+        if str(block or "").strip()
+    ]
+    blocks = [block for block in blocks if block]
     if not blocks:
         return ""
     return (

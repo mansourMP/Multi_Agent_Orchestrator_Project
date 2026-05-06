@@ -1,6 +1,8 @@
 import asyncio
 import json
 
+import pytest
+
 from server_modules import app_registry_api
 from server_modules import marketplace_distribution_service
 from server_modules import mini_apps_service
@@ -192,3 +194,151 @@ def test_install_marketplace_provider_projects_into_provider_catalog(monkeypatch
     assert provider["billing_hooks"]["revenue_share_bps"] == 1200
     assert provider["analytics"]["runtime_event_count"] == 1
     assert provider["models"][0]["id"] == "neuralcloud-reasoner"
+
+
+def test_governed_package_contracts_cover_templates_connectors_skills_and_mini_apps(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+
+    packages = [
+        {
+            "kind": "agent_template",
+            "label": "Appointment Booking Template",
+            "description": "Governed specialist template for appointment booking.",
+            "verification_status": "verified",
+            "review_state": "approved",
+            "policy_posture": "governed",
+            "billing": {
+                "monetization_kind": "revenue_share",
+                "revenue_share_bps": 1500,
+                "accounting_hook": {"ledger_key": "template.appointment_booking.install"},
+            },
+            "agent_template": {
+                "template_id": "appointment_booking",
+                "required_connectors": ["calendar"],
+                "suggested_tools": ["availability_lookup"],
+                "launch_checklist": ["Configure calendar", "Review handoff policy"],
+            },
+        },
+        {
+            "kind": "connector",
+            "label": "Calendar Connector",
+            "description": "Governed calendar connector contract.",
+            "verification_status": "partner",
+            "review_state": "approved",
+            "policy_posture": "governed",
+            "billing": {
+                "monetization_kind": "metered",
+                "accounting_hook": {"ledger_key": "connector.calendar.usage"},
+            },
+            "connector": {
+                "connector_id": "calendar",
+                "connector_class": "api_connector",
+                "auth_modes": ["oauth"],
+                "scopes": ["calendar.read", "calendar.write"],
+                "actions": ["availability.lookup", "booking.create"],
+            },
+        },
+        {
+            "kind": "skill",
+            "label": "FAQ Answering Skill",
+            "description": "Governed retrieval skill contract.",
+            "verification_status": "verified",
+            "review_state": "approved",
+            "policy_posture": "governed",
+            "billing": {
+                "monetization_kind": "subscription",
+                "billing_product_id": "faq-skill-pro",
+                "accounting_hook": {"ledger_key": "skill.faq.install"},
+            },
+            "skill": {
+                "skill_id": "faq_answering",
+                "runtime": "hosted",
+                "permissions": ["knowledge:read"],
+                "tool_contracts": {"knowledge": ["retrieve"]},
+            },
+        },
+        {
+            "kind": "mini_app",
+            "label": "Booking Board",
+            "description": "Governed hosted mini-app package.",
+            "verification_status": "verified",
+            "review_state": "approved",
+            "policy_posture": "governed",
+            "billing": {
+                "monetization_kind": "free",
+                "accounting_hook": {"ledger_key": "mini_app.booking_board.install"},
+            },
+            "mini_app": {
+                "app_id": "booking_board",
+                "hosted_url": "https://apps.example/booking-board",
+                "allowed_origins": ["https://apps.example"],
+                "permissions": ["mini_app.read"],
+                "bridge_contracts": {"bookings": ["read"]},
+            },
+        },
+    ]
+
+    package_ids = [
+        marketplace_distribution_service.register_marketplace_package(
+            "ws-1",
+            actor_user_id="reviewer-1",
+            payload=payload,
+        )["package_id"]
+        for payload in packages
+    ]
+
+    listed = marketplace_distribution_service.list_marketplace_packages("ws-1")
+    listed_by_id = {item["package_id"]: item for item in listed["items"]}
+    assert {listed_by_id[package_id]["kind"] for package_id in package_ids} == {
+        "agent_template",
+        "connector",
+        "skill",
+        "mini_app",
+    }
+    assert all(listed_by_id[package_id]["install_eligible"] is True for package_id in package_ids)
+    assert listed_by_id["appointment_booking"]["billing"]["revenue_share_bps"] == 1500
+    assert listed_by_id["calendar"]["runtime_truth"]["surface"] == "connector_catalog"
+    assert listed_by_id["faq_answering"]["package"]["tool_contracts"] == {"knowledge": ["retrieve"]}
+
+    installed_mini_app = marketplace_distribution_service.install_marketplace_package(
+        "ws-1",
+        package_id="booking_board",
+        actor_user_id="user-1",
+    )
+    assert installed_mini_app["runtime_truth"]["surface"] == "mini_app_registry"
+    assert installed_mini_app["runtime_truth"]["open_href"] == "/w/ws-1/mini-apps/booking_board"
+    hosted_contract = mini_apps_service.get_mini_app_contract("ws-1", "booking_board")
+    assert hosted_contract["hosted_url"] == "https://apps.example/booking-board"
+
+
+def test_restricted_or_unverified_marketplace_packages_are_not_installable(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+
+    restricted = marketplace_distribution_service.register_marketplace_package(
+        "ws-1",
+        actor_user_id="reviewer-1",
+        payload={
+            "kind": "skill",
+            "label": "Unreviewed Plugin Skill",
+            "description": "Should remain a governed contract, not an open plugin install lane.",
+            "verification_status": "unverified",
+            "review_state": "restricted",
+            "policy_posture": "restricted",
+            "billing": {"monetization_kind": "metered"},
+            "skill": {"skill_id": "unreviewed_plugin", "permissions": ["shell:execute"]},
+        },
+    )
+
+    assert restricted["install_eligible"] is False
+    assert restricted["review_state"] == "restricted"
+    assert restricted["policy_posture"] == "restricted"
+    assert "review_not_approved" in restricted["install_blockers"]
+    assert "verification_required" in restricted["install_blockers"]
+    assert "policy_restricted" in restricted["install_blockers"]
+
+    with pytest.raises(ValueError, match="not installable"):
+        marketplace_distribution_service.install_marketplace_package(
+            "ws-1",
+            package_id="unreviewed_plugin",
+            actor_user_id="user-1",
+        )

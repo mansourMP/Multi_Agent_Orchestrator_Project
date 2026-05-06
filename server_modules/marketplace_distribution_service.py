@@ -13,12 +13,28 @@ from server_modules import workspace_context
 
 
 MARKETPLACE_DISTRIBUTION_VERSION = 1
-PACKAGE_KINDS = {"app", "provider"}
+PACKAGE_KINDS = {"agent_template", "app", "connector", "mini_app", "provider", "skill"}
 REVIEW_STATES = {"pending", "approved", "restricted"}
 VERIFICATION_STATUSES = {"unverified", "partner", "verified"}
 HEALTH_STATES = {"healthy", "degraded", "setup_required"}
 POLICY_POSTURES = {"governed", "restricted"}
 MONETIZATION_KINDS = {"free", "metered", "subscription", "revenue_share"}
+INSTALL_TARGETS = {
+    "agent_template": "template_catalog",
+    "app": "app_registry",
+    "connector": "connector_catalog",
+    "mini_app": "mini_app_registry",
+    "provider": "provider_catalog",
+    "skill": "skill_catalog",
+}
+DEFAULT_CATEGORIES = {
+    "agent_template": "Specialist template",
+    "app": "Applications",
+    "connector": "Connectors",
+    "mini_app": "Mini Apps",
+    "provider": "Models",
+    "skill": "Skills",
+}
 
 
 PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
@@ -387,6 +403,22 @@ def _normalize_provider_payload(package_id: str, value: Any) -> Dict[str, Any]:
     }
 
 
+def _normalize_agent_template_payload(package_id: str, value: Any) -> Dict[str, Any]:
+    payload = _coerce_dict(value)
+    template_id = _slug_token(payload.get("template_id") or package_id)
+    if not template_id:
+        raise ValueError("Marketplace agent template packages require a template_id.")
+    return {
+        "template_id": template_id,
+        "version": str(payload.get("version") or "1.0.0").strip() or "1.0.0",
+        "specialist_kind": str(payload.get("specialist_kind") or "custom").strip().lower() or "custom",
+        "required_connectors": _normalize_list_of_strings(payload.get("required_connectors")),
+        "suggested_tools": _normalize_list_of_strings(payload.get("suggested_tools")),
+        "setup_schema": _coerce_dict(payload.get("setup_schema")),
+        "launch_checklist": _normalize_list_of_strings(payload.get("launch_checklist")),
+    }
+
+
 def _normalize_app_payload(package_id: str, value: Any) -> Dict[str, Any]:
     payload = _coerce_dict(value)
     app_id = _slug_token(payload.get("app_id") or package_id)
@@ -416,15 +448,60 @@ def _normalize_app_payload(package_id: str, value: Any) -> Dict[str, Any]:
     }
 
 
+def _normalize_connector_payload(package_id: str, value: Any) -> Dict[str, Any]:
+    payload = _coerce_dict(value)
+    connector_id = _slug_token(payload.get("connector_id") or package_id)
+    if not connector_id:
+        raise ValueError("Marketplace connector packages require a connector_id.")
+    connector_class = str(payload.get("connector_class") or "api_connector").strip().lower() or "api_connector"
+    return {
+        "connector_id": connector_id,
+        "version": str(payload.get("version") or "1.0.0").strip() or "1.0.0",
+        "connector_class": connector_class,
+        "auth_modes": _normalize_list_of_strings(payload.get("auth_modes")) or ["oauth"],
+        "scopes": _normalize_list_of_strings(payload.get("scopes")),
+        "actions": _normalize_list_of_strings(payload.get("actions")),
+        "egress_domains": _normalize_list_of_strings(payload.get("egress_domains")),
+        "data_classes": _normalize_list_of_strings(payload.get("data_classes")),
+    }
+
+
+def _normalize_skill_payload(package_id: str, value: Any) -> Dict[str, Any]:
+    payload = _coerce_dict(value)
+    skill_id = _slug_token(payload.get("skill_id") or package_id)
+    if not skill_id:
+        raise ValueError("Marketplace skill packages require a skill_id.")
+    return {
+        "skill_id": skill_id,
+        "version": str(payload.get("version") or "1.0.0").strip() or "1.0.0",
+        "runtime": str(payload.get("runtime") or "hosted").strip().lower() or "hosted",
+        "permissions": _normalize_list_of_strings(payload.get("permissions")),
+        "tool_contracts": {
+            str(key).strip(): _normalize_list_of_strings(item)
+            for key, item in _coerce_dict(payload.get("tool_contracts")).items()
+            if str(key).strip()
+        },
+        "required_connectors": _normalize_list_of_strings(payload.get("required_connectors")),
+    }
+
+
 def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     package_kind = str(payload.get("kind") or "").strip().lower()
     if package_kind not in PACKAGE_KINDS:
-        raise ValueError("Marketplace package kind must be 'app' or 'provider'.")
+        raise ValueError("Marketplace package kind must be one of: agent_template, app, connector, mini_app, provider, skill.")
     inferred_package_id = payload.get("package_id") or payload.get("id") or payload.get("slug")
     if not inferred_package_id and package_kind == "app":
         inferred_package_id = _coerce_dict(payload.get("app")).get("app_id")
+    if not inferred_package_id and package_kind == "agent_template":
+        inferred_package_id = _coerce_dict(payload.get("agent_template")).get("template_id")
+    if not inferred_package_id and package_kind == "connector":
+        inferred_package_id = _coerce_dict(payload.get("connector")).get("connector_id")
+    if not inferred_package_id and package_kind == "mini_app":
+        inferred_package_id = _coerce_dict(payload.get("mini_app")).get("app_id")
     if not inferred_package_id and package_kind == "provider":
         inferred_package_id = _coerce_dict(payload.get("provider")).get("provider_id")
+    if not inferred_package_id and package_kind == "skill":
+        inferred_package_id = _coerce_dict(payload.get("skill")).get("skill_id")
     if not inferred_package_id:
         inferred_package_id = payload.get("label")
     package_id = _slug_token(inferred_package_id, allow_dot=True)
@@ -436,18 +513,25 @@ def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     description = _compact_text(payload.get("description"), limit=600)
     if not description:
         raise ValueError("Marketplace package description is required.")
-    if package_kind == "app":
+    if package_kind == "agent_template":
+        package_payload = _normalize_agent_template_payload(package_id, payload.get("agent_template"))
+    elif package_kind == "app":
         package_payload = _normalize_app_payload(package_id, payload.get("app"))
-        install_target = "app_registry"
+    elif package_kind == "connector":
+        package_payload = _normalize_connector_payload(package_id, payload.get("connector"))
+    elif package_kind == "mini_app":
+        package_payload = _normalize_app_payload(package_id, payload.get("mini_app"))
+    elif package_kind == "skill":
+        package_payload = _normalize_skill_payload(package_id, payload.get("skill"))
     else:
         package_payload = _normalize_provider_payload(package_id, payload.get("provider"))
-        install_target = "provider_catalog"
+    install_target = INSTALL_TARGETS[package_kind]
     return {
         "package_id": package_id,
         "kind": package_kind,
         "label": label,
         "description": description,
-        "category": str(payload.get("category") or ("Applications" if package_kind == "app" else "Models")).strip() or ("Applications" if package_kind == "app" else "Models"),
+        "category": str(payload.get("category") or DEFAULT_CATEGORIES[package_kind]).strip() or DEFAULT_CATEGORIES[package_kind],
         "publisher": _normalize_publisher(payload.get("publisher"), package_id=package_id),
         "onboarding": _normalize_onboarding(payload.get("onboarding")),
         "verification_status": _normalize_verification_status(payload.get("verification_status")),
@@ -561,7 +645,7 @@ def _existing_app_registry_item(app_id: str) -> Dict[str, Any]:
 
 
 def _sync_marketplace_app_to_mini_apps(workspace_id: str, package: Dict[str, Any]) -> Dict[str, Any]:
-    app_payload = _coerce_dict(package.get("app"))
+    app_payload = _coerce_dict(package.get("mini_app") if package.get("kind") == "mini_app" else package.get("app"))
     return mini_apps_service.upsert_mini_app_contract(
         workspace_id,
         str(app_payload.get("app_id") or "").strip(),
@@ -578,11 +662,16 @@ def _sync_marketplace_app_to_mini_apps(workspace_id: str, package: Dict[str, Any
 
 
 def _package_open_href(workspace_id: str, package: Dict[str, Any]) -> Optional[str]:
-    if str(package.get("kind") or "").strip() == "app":
+    package_kind = str(package.get("kind") or "").strip()
+    if package_kind == "app":
         app_id = str(_coerce_dict(package.get("app")).get("app_id") or "").strip()
         if app_id:
             return f"/w/{workspace_id}/applications/{app_id}"
-    if str(package.get("kind") or "").strip() == "provider":
+    if package_kind == "mini_app":
+        app_id = str(_coerce_dict(package.get("mini_app")).get("app_id") or "").strip()
+        if app_id:
+            return f"/w/{workspace_id}/mini-apps/{app_id}"
+    if package_kind == "provider":
         return f"/w/{workspace_id}/integrations"
     return None
 
@@ -590,7 +679,7 @@ def _package_open_href(workspace_id: str, package: Dict[str, Any]) -> Optional[s
 def _runtime_truth_projection(workspace_id: str, package: Dict[str, Any], install: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     kind = str(package.get("kind") or "").strip()
     install_state = "installed" if isinstance(install, dict) else "available"
-    surface = "app_registry" if kind == "app" else "provider_catalog"
+    surface = INSTALL_TARGETS.get(kind, "marketplace_contract")
     runtime_state = str(package.get("health_state") or "setup_required").strip() or "setup_required"
     if kind == "provider" and install_state == "installed" and runtime_state == "healthy":
         runtime_state = "setup_required"
@@ -605,8 +694,24 @@ def _runtime_truth_projection(workspace_id: str, package: Dict[str, Any], instal
     }
 
 
+def _install_blockers(package: Dict[str, Any]) -> List[str]:
+    blockers: List[str] = []
+    if bool(package.get("preview_only")):
+        blockers.append("preview_only")
+    if str(package.get("review_state") or "").strip() != "approved":
+        blockers.append("review_not_approved")
+    if str(package.get("verification_status") or "").strip() == "unverified":
+        blockers.append("verification_required")
+    if str(package.get("policy_posture") or "").strip() != "governed":
+        blockers.append("policy_restricted")
+    if bool(package.get("approval_required")):
+        blockers.append("manual_approval_required")
+    return blockers
+
+
 def _public_package_payload(workspace_id: str, package: Dict[str, Any], install: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     analytics = _coerce_dict(package.get("analytics"))
+    install_blockers = _install_blockers(package)
     return {
         "package_id": str(package.get("package_id") or "").strip(),
         "kind": str(package.get("kind") or "").strip(),
@@ -622,6 +727,8 @@ def _public_package_payload(workspace_id: str, package: Dict[str, Any], install:
         "approval_required": bool(package.get("approval_required")),
         "preview_only": bool(package.get("preview_only")),
         "install_target": str(package.get("install_target") or "").strip(),
+        "install_eligible": not install_blockers,
+        "install_blockers": install_blockers,
         "billing": _coerce_dict(package.get("billing")),
         "analytics": {
             "install_count": int(analytics.get("install_count") or 0),
@@ -729,6 +836,9 @@ def install_marketplace_package(
     entry = _coerce_dict(packages.get(normalized_package_id))
     if not entry:
         raise KeyError(f"Marketplace package '{normalized_package_id}' was not found.")
+    install_blockers = _install_blockers(entry)
+    if install_blockers:
+        raise ValueError(f"Marketplace package is not installable: {', '.join(install_blockers)}.")
     installed_at = _utc_now_iso()
     package_analytics = _coerce_dict(entry.get("analytics"))
     package_analytics["install_count"] = int(package_analytics.get("install_count") or 0) + 1
@@ -738,6 +848,8 @@ def install_marketplace_package(
     target_payload: Dict[str, Any] = {}
     if str(entry.get("kind") or "").strip() == "app":
         target_payload["app_registry"] = _upsert_marketplace_app_registry_item(entry, installed=True)
+        target_payload["mini_app_contract"] = _sync_marketplace_app_to_mini_apps(normalized_workspace_id, entry)
+    if str(entry.get("kind") or "").strip() == "mini_app":
         target_payload["mini_app_contract"] = _sync_marketplace_app_to_mini_apps(normalized_workspace_id, entry)
 
     install_record = {

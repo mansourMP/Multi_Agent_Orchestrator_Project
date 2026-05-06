@@ -248,6 +248,63 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
         self.assertEqual(audit_mock.call_args.kwargs["status"], "success")
         self.assertEqual(audit_mock.call_args.kwargs["metadata"]["action_class"], "automatic_inbound_reply")
 
+    def test_personal_channel_control_command_is_blocked_before_sage_reply(self) -> None:
+        pairing = gateway_pairing_service.create_gateway_pairing_intent(
+            tenant_id="tenant-1",
+            workspace_id="default",
+            user_id="user-1",
+        )
+        registration = gateway_pairing_service.register_gateway(
+            pairing_token=pairing["pairing_token"],
+            device_id="device-local-1",
+            gateway_id="gateway-local-1",
+            display_name="Mansur Mac",
+            platform="macos-arm64",
+            capabilities=["channel.telegram.personal"],
+        )
+
+        with (
+            patch(
+                "server_modules.personal_channel_sage_bridge_service.build_telegram_personal_reply",
+                return_value={"text": "should not be called", "source": "test_bridge"},
+            ) as reply_mock,
+            patch(
+                "server_modules.gateway_protocol_service.dispatch_channel_outbound",
+                new=AsyncMock(return_value={"external_message_id": "tg-out-control"}),
+            ) as dispatch_mock,
+            patch(
+                "server_modules.personal_channels_service.security_audit_service.emit_security_audit_event",
+            ) as audit_mock,
+        ):
+            result = asyncio.run(
+                personal_channels_service.handle_gateway_channel_inbound(
+                    gateway_id="gateway-local-1",
+                    registration=registration,
+                    payload={
+                        "channel_key": "telegram_personal",
+                        "provider": "telegram_gramjs",
+                        "message": {
+                            "external_message_id": "tg-control-1",
+                            "remote_jid": "telegram-user-1",
+                            "sender_jid": "telegram-user-1",
+                            "push_name": "Stranger",
+                            "text": "/model use expensive-provider",
+                            "received_at": "2026-04-22T16:00:00Z",
+                            "from_me": False,
+                        },
+                    },
+                )
+            )
+
+        self.assertTrue(result["blocked"])
+        self.assertEqual(result["policy"]["reason"], "owner_authorization_required")
+        self.assertIsNone(result["outbound"])
+        reply_mock.assert_not_called()
+        dispatch_mock.assert_not_awaited()
+        audit_mock.assert_called_once()
+        self.assertEqual(audit_mock.call_args.kwargs["status"], "denied")
+        self.assertEqual(audit_mock.call_args.kwargs["metadata"]["command"], "model")
+
     def test_duplicate_telegram_inbound_retries_pending_personal_reply_after_disconnect(self) -> None:
         pairing = gateway_pairing_service.create_gateway_pairing_intent(
             tenant_id="tenant-1",

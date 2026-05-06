@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Optional
 
 from server_modules import deployed_agent_service, safe_mode_service
@@ -7,6 +8,68 @@ from server_modules import error_response_service
 from server_modules.channel_routing_models import ChannelExecutionResult, ChannelRoutingContext
 from server_modules.error_contracts import IDEMPOTENCY_CONFLICT, POLICY_BLOCK
 from server_modules.channel_turn_request_service import coerce_dict
+
+
+_CONTROL_COMMAND_RE = re.compile(r"^\s*/(?P<command>[a-z][a-z0-9_-]{0,31})(?:\s|$)", re.IGNORECASE)
+_OWNER_ONLY_CONTROL_COMMANDS = frozenset(
+    {
+        "approve",
+        "config",
+        "connect",
+        "debug",
+        "deploy",
+        "model",
+        "policy",
+        "reset",
+        "restart",
+        "send",
+        "setup",
+        "system",
+        "tool",
+        "tools",
+    }
+)
+
+
+def classify_channel_control_command(text: str) -> Optional[Dict[str, Any]]:
+    match = _CONTROL_COMMAND_RE.match(str(text or ""))
+    if not match:
+        return None
+    command = str(match.group("command") or "").strip().lower()
+    if not command:
+        return None
+    return {
+        "command": command,
+        "owner_only": command in _OWNER_ONLY_CONTROL_COMMANDS,
+        "authorized_roles": ["owner"] if command in _OWNER_ONLY_CONTROL_COMMANDS else ["owner", "admin"],
+    }
+
+
+def check_personal_channel_control_command(
+    *,
+    text: str,
+    sender_role: str | None = None,
+) -> Optional[Dict[str, Any]]:
+    command = classify_channel_control_command(text)
+    if not command:
+        return None
+    normalized_role = str(sender_role or "").strip().lower()
+    authorized_roles = set(command.get("authorized_roles") or [])
+    allowed = bool(normalized_role and normalized_role in authorized_roles)
+    if allowed:
+        return {
+            "blocked": False,
+            "command": command["command"],
+            "sender_role": normalized_role,
+            "reason": "",
+        }
+    return {
+        "blocked": True,
+        "command": command["command"],
+        "sender_role": normalized_role or None,
+        "reason": "owner_authorization_required",
+        "reply": "That control command needs owner approval in Empyralis. I did not run it.",
+    }
 
 
 def duplicate_ignored_reply() -> str:

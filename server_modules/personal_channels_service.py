@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from server_modules import (
+    channel_blocking_policy_service,
     channel_lane_contract_service,
     gateway_execution_service,
     personal_channel_sage_bridge_service,
@@ -25,6 +26,20 @@ TELEGRAM_PERSONAL_CONFIGURE_CAPABILITY = "channel.telegram.personal.configure"
 WHATSAPP_PERSONAL_CONFIGURE_CAPABILITY = "channel.whatsapp.personal.configure"
 WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX = "whatsapp_personal:noreply:"
 TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX = "telegram_personal:noreply:"
+
+
+def _sender_role_from_message(message: Dict[str, Any]) -> Optional[str]:
+    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+    for candidate in (
+        message.get("sender_role"),
+        message.get("role"),
+        metadata.get("sender_role"),
+        metadata.get("role"),
+    ):
+        token = str(candidate or "").strip().lower()
+        if token:
+            return token
+    return None
 
 
 def _emit_automatic_reply_audit(
@@ -62,6 +77,59 @@ def _emit_automatic_reply_audit(
         },
         idempotency_key=idempotency_key,
     )
+
+
+def _control_command_block_result(
+    *,
+    gateway_id: str,
+    registration: Dict[str, Any],
+    inbound: Dict[str, Any],
+    channel_key: str,
+    provider: str,
+    external_message_id: str,
+    remote_jid: str,
+    text: str,
+    sender_role: Optional[str],
+    duplicate: bool,
+    no_reply_prefix: str,
+) -> Optional[Dict[str, Any]]:
+    command_check = channel_blocking_policy_service.check_personal_channel_control_command(
+        text=text,
+        sender_role=sender_role,
+    )
+    if not command_check or not bool(command_check.get("blocked")):
+        return None
+    no_reply_idempotency_key = f"{no_reply_prefix}command_blocked:{external_message_id}"
+    refreshed_inbound = personal_channels_repository.mark_inbound_processed(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        external_message_id=external_message_id,
+        reply_idempotency_key=no_reply_idempotency_key,
+    )
+    _emit_automatic_reply_audit(
+        action=f"personal_channel.{channel_key.split('_', 1)[0]}.control_command",
+        status="denied",
+        registration=registration,
+        gateway_id=gateway_id,
+        channel_key=channel_key,
+        provider=provider,
+        detail="Personal-channel control command was blocked before reaching the model.",
+        metadata={
+            "remote_jid": remote_jid,
+            "inbound_external_message_id": external_message_id,
+            "command": command_check.get("command"),
+            "sender_role": sender_role,
+            "policy_reason": command_check.get("reason"),
+        },
+        idempotency_key=f"personal_channel.control_command.denied:{gateway_id}:{channel_key}:{external_message_id}",
+    )
+    return {
+        "duplicate": duplicate,
+        "inbound": refreshed_inbound or inbound,
+        "outbound": None,
+        "blocked": True,
+        "policy": command_check,
+    }
 
 
 def sync_gateway_personal_channel_state(
@@ -383,6 +451,21 @@ async def _handle_whatsapp_gateway_channel_inbound(
             "from_me": bool(message.get("from_me")),
         },
     )
+    blocked_result = _control_command_block_result(
+        gateway_id=gateway_id,
+        registration=registration,
+        inbound=inbound,
+        channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+        provider=WHATSAPP_PERSONAL_PROVIDER,
+        external_message_id=external_message_id,
+        remote_jid=remote_jid,
+        text=text,
+        sender_role=_sender_role_from_message(message),
+        duplicate=not created,
+        no_reply_prefix=WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX,
+    )
+    if blocked_result is not None:
+        return blocked_result
     return await _deliver_whatsapp_personal_reply(
         gateway_id=gateway_id,
         registration=registration,
@@ -439,6 +522,21 @@ async def _handle_telegram_gateway_channel_inbound(
             "from_me": bool(message.get("from_me")),
         },
     )
+    blocked_result = _control_command_block_result(
+        gateway_id=gateway_id,
+        registration=registration,
+        inbound=inbound,
+        channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
+        provider=TELEGRAM_PERSONAL_PROVIDER,
+        external_message_id=external_message_id,
+        remote_jid=remote_jid,
+        text=text,
+        sender_role=_sender_role_from_message(message),
+        duplicate=not created,
+        no_reply_prefix=TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX,
+    )
+    if blocked_result is not None:
+        return blocked_result
     reply_idempotency_key = str(inbound.get("reply_idempotency_key") or "").strip() or None
     if reply_idempotency_key and reply_idempotency_key.startswith(TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX):
         return {"duplicate": not created, "inbound": inbound, "outbound": None}

@@ -105,6 +105,20 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
 
         self.assertTrue(any("Sage services" in block for block in payload["contextual_blocks"]))
 
+    def test_render_workspace_context_strips_red_facts_before_external_prompt(self):
+        text = workspace_context_memory_adapter.render_workspace_context_text(
+            [
+                "MEMORY.md\n- [RED] Production API key: sk-secret123456789\n- Safe preference: concise replies",
+                "Runtime Memory Facts\nRED: private token abcdefghijklmnopqrstuvwxyz123456\n- timezone: Asia/Shanghai",
+            ]
+        )
+
+        self.assertIn("Safe preference", text)
+        self.assertIn("timezone: Asia/Shanghai", text)
+        self.assertIn("RED memory fact(s) stripped", text)
+        self.assertNotIn("sk-secret123456789", text)
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz123456", text)
+
 
 if __name__ == "__main__":
     unittest.main()

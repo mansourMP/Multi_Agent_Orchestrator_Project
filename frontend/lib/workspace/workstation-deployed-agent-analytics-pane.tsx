@@ -10,6 +10,9 @@ import type {
   DeployedAgentAdminDashboardMessage,
   DeployedAgentAdminDashboardQuestion,
   DeployedAgentAdminDashboardRecord,
+  DeployedAgentBusinessInsightAction,
+  DeployedAgentBusinessInsightRecord,
+  DeployedAgentBusinessInsightsRecord,
   DeployedAgentCustomerEntryRecord,
   DeployedAgentAdminDashboardUserRow,
 } from '@/lib/workspace/workstation-client';
@@ -32,6 +35,22 @@ type DashboardSnapshot = {
   hasMore: boolean;
   nextCursorLastMessageAt: string | null;
   nextCursorExternalUserId: string | null;
+};
+
+type BusinessInsightSnapshot = {
+  id: string;
+  patternKey: string;
+  insightType: string;
+  title: string;
+  summary: string;
+  recommendation: string;
+  sensitivity: string;
+  status: string;
+  channelKey: string;
+  eventCount: number;
+  confidence: number;
+  redactedExamples: string[];
+  updatedAt: string | null;
 };
 
 type DashboardCursor = {
@@ -84,6 +103,41 @@ function normalizeDashboard(payload: unknown): DashboardSnapshot {
     nextCursorLastMessageAt: readString((record as Record<string, unknown>).next_cursor_last_message_at) || null,
     nextCursorExternalUserId: readString((record as Record<string, unknown>).next_cursor_external_user_id) || null,
   };
+}
+
+function normalizeBusinessInsights(payload: unknown): BusinessInsightSnapshot[] {
+  const record = (payload && typeof payload === 'object' ? payload : {}) as DeployedAgentBusinessInsightsRecord;
+  return readItems<DeployedAgentBusinessInsightRecord>(record.items).map((item, index) => {
+    const rawExamples = readItems<unknown>(item.redacted_examples);
+    return {
+      id: readString(item.id),
+      patternKey: readString(item.pattern_key),
+      insightType: readString(item.insight_type, 'business_pattern'),
+      title: readString(item.title, 'Business pattern detected'),
+      summary: readString(item.summary, 'This insight needs owner review before it changes the agent.'),
+      recommendation: readString(item.recommendation, 'Review this recommendation before applying any policy or knowledge update.'),
+      sensitivity: readString(item.sensitivity, 'yellow').toLowerCase(),
+      status: readString(item.status, 'candidate').toLowerCase(),
+      channelKey: readString(item.channel_key, 'all channels'),
+      eventCount: readNumber(item.event_count),
+      confidence: readNumber(item.confidence),
+      redactedExamples: rawExamples
+        .map((example) => {
+          if (typeof example === 'string') {
+            return example.trim();
+          }
+          if (example && typeof example === 'object') {
+            return readString((example as Record<string, unknown>).text)
+              || readString((example as Record<string, unknown>).content)
+              || readString((example as Record<string, unknown>).example);
+          }
+          return '';
+        })
+        .filter(Boolean)
+        .slice(0, 3),
+      updatedAt: readString(item.updated_at) || null,
+    };
+  });
 }
 
 function truncateExternalUserId(value: unknown): string {
@@ -180,6 +234,20 @@ function formatUsd(value: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+function formatPercent(value: number): string {
+  const normalized = value > 1 ? value / 100 : value;
+  return new Intl.NumberFormat(undefined, {
+    style: 'percent',
+    maximumFractionDigits: 0,
+  }).format(Math.max(0, Math.min(1, normalized)));
+}
+
+function formatInsightLabel(value: string): string {
+  return value
+    .replace(/[_.-]+/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function formatRelativeTime(value: unknown): string {
@@ -284,6 +352,13 @@ export function WorkstationDeployedAgentAnalyticsPane({
   const [error, setError] = useState<string | null>(null);
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
   const activeRequestControllerRef = useRef<AbortController | null>(null);
+  const [businessInsights, setBusinessInsights] = useState<BusinessInsightSnapshot[]>([]);
+  const [insightsLoading, setInsightsLoading] = useState(true);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
+  const [insightAction, setInsightAction] = useState<{
+    insightId: string;
+    action: DeployedAgentBusinessInsightAction;
+  } | null>(null);
 
   async function loadDashboard(options?: { append?: boolean; cursor?: DashboardCursor | null }) {
     const append = options?.append === true;
@@ -363,9 +438,52 @@ export function WorkstationDeployedAgentAnalyticsPane({
     }
   }
 
+  async function loadBusinessInsights() {
+    if (!agentId) {
+      setBusinessInsights([]);
+      setInsightsLoading(false);
+      return;
+    }
+    setInsightsLoading(true);
+    setInsightsError(null);
+    try {
+      const payload = await services.client.listDeployedAgentBusinessInsights({
+        deployedAgentId: agentId,
+        limit: 6,
+      });
+      setBusinessInsights(normalizeBusinessInsights(payload));
+    } catch (loadError) {
+      setBusinessInsights([]);
+      setInsightsError(loadError instanceof Error ? loadError.message : 'Business insights could not be loaded.');
+    } finally {
+      setInsightsLoading(false);
+    }
+  }
+
+  async function reviewBusinessInsight(insightId: string, action: DeployedAgentBusinessInsightAction) {
+    if (!insightId || insightAction) {
+      return;
+    }
+    setInsightAction({ insightId, action });
+    setInsightsError(null);
+    try {
+      await services.client.reviewDeployedAgentBusinessInsight({
+        deployedAgentId: agentId,
+        insightId,
+        action,
+      });
+      await loadBusinessInsights();
+    } catch (reviewError) {
+      setInsightsError(reviewError instanceof Error ? reviewError.message : 'Business insight review failed.');
+    } finally {
+      setInsightAction(null);
+    }
+  }
+
   useEffect(() => {
     setExpandedUsers({});
     void loadDashboard({ cursor: null });
+    void loadBusinessInsights();
     return () => {
       activeRequestControllerRef.current?.abort();
       activeRequestControllerRef.current = null;
@@ -378,6 +496,110 @@ export function WorkstationDeployedAgentAnalyticsPane({
     [dashboard],
   );
   const customerEntry = dashboard?.customerEntry ?? null;
+  const renderBusinessInsights = () => (
+    <div className="deployed-agent-analytics__expanded">
+      <div className="deployed-agent-analytics__message">
+        <div className="deployed-agent-analytics__message-meta">
+          <span className="deployed-agent-analytics__role deployed-agent-analytics__role--agent">Owner intelligence</span>
+          <span>{businessInsights.length > 0 ? `${businessInsights.length} active` : 'Aggregate only'}</span>
+        </div>
+        <div className="deployed-agent-analytics__message-body">
+          Aggregated, redacted business recommendations. They do not remember individual customers, auto-change prices, or apply policy without owner review.
+        </div>
+      </div>
+      {insightsError ? (
+        <div className="deployed-agent-analytics__error">
+          <span>{insightsError}</span>
+          <AppButton type="button" tone="secondary" onClick={() => { void loadBusinessInsights(); }}>
+            Retry
+          </AppButton>
+        </div>
+      ) : null}
+      {insightsLoading ? (
+        <div className="deployed-agent-analytics__message">
+          <SkeletonBlock height="1rem" width="12rem" />
+          <SkeletonBlock height="1rem" width="22rem" />
+        </div>
+      ) : businessInsights.length === 0 ? (
+        <EmptyPanel
+          title="No owner insights yet"
+          body="Cross-customer patterns will appear here after this agent handles enough conversations."
+        />
+      ) : businessInsights.map((insight, index) => {
+        const isBusy = insightAction?.insightId === insight.id;
+        const canReview = insight.status === 'candidate';
+        const canApply = insight.status === 'approved';
+        const canArchive = insight.status !== 'archived';
+        return (
+          <div key={insight.id || `${insight.patternKey}-${index}`} className="deployed-agent-analytics__message">
+            <div className="deployed-agent-analytics__message-meta">
+              <span className="deployed-agent-analytics__role deployed-agent-analytics__role--agent">
+                {formatInsightLabel(insight.sensitivity)} · {formatInsightLabel(insight.status)}
+              </span>
+              <span>{formatInsightLabel(insight.insightType)} · {formatPercent(insight.confidence)}</span>
+            </div>
+            <div className="deployed-agent-analytics__message-body">
+              <strong>{insight.title}</strong>
+              {' '}
+              {insight.summary}
+            </div>
+            <div className="deployed-agent-analytics__message-body">
+              Recommendation: {insight.recommendation}
+            </div>
+            <div className="deployed-agent-analytics__message-meta">
+              <span>{formatCount(insight.eventCount)} events · {insight.channelKey}</span>
+              <span>{insight.updatedAt ? formatRelativeTime(insight.updatedAt) : insight.patternKey}</span>
+            </div>
+            {insight.redactedExamples.length > 0 ? (
+              <div className="deployed-agent-analytics__expanded-empty">
+                {insight.redactedExamples.join(' · ')}
+              </div>
+            ) : null}
+            <div className="deployed-agent-analytics__footer">
+              {canReview ? (
+                <>
+                  <AppButton
+                    type="button"
+                    onClick={() => { void reviewBusinessInsight(insight.id, 'approve'); }}
+                    disabled={isBusy || !insight.id}
+                  >
+                    {isBusy && insightAction?.action === 'approve' ? 'Approving…' : 'Approve'}
+                  </AppButton>
+                  <AppButton
+                    type="button"
+                    tone="secondary"
+                    onClick={() => { void reviewBusinessInsight(insight.id, 'dismiss'); }}
+                    disabled={isBusy || !insight.id}
+                  >
+                    {isBusy && insightAction?.action === 'dismiss' ? 'Dismissing…' : 'Dismiss'}
+                  </AppButton>
+                </>
+              ) : null}
+              {canApply ? (
+                <AppButton
+                  type="button"
+                  onClick={() => { void reviewBusinessInsight(insight.id, 'apply'); }}
+                  disabled={isBusy || !insight.id}
+                >
+                  {isBusy && insightAction?.action === 'apply' ? 'Marking…' : 'Mark applied'}
+                </AppButton>
+              ) : null}
+              {canArchive ? (
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => { void reviewBusinessInsight(insight.id, 'archive'); }}
+                  disabled={isBusy || !insight.id}
+                >
+                  {isBusy && insightAction?.action === 'archive' ? 'Archiving…' : 'Archive'}
+                </AppButton>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 
   if (loading && !dashboard) {
     return <DashboardSkeleton />;
@@ -420,6 +642,7 @@ export function WorkstationDeployedAgentAnalyticsPane({
             </div>
           ))}
         </div>
+        {renderBusinessInsights()}
         <EmptyPanel
           title="No users have messaged this agent yet."
           body="Analytics will appear here once customer messages start flowing through this specialist."
@@ -468,6 +691,8 @@ export function WorkstationDeployedAgentAnalyticsPane({
           <span className="deployed-agent-analytics__stat-label">Upgrade Clicks This Month</span>
         </div>
       </div>
+
+      {renderBusinessInsights()}
 
       <div className="deployed-agent-analytics__expanded">
         <div className="deployed-agent-analytics__message">

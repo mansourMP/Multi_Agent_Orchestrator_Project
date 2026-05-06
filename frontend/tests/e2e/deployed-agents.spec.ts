@@ -310,6 +310,80 @@ function buildAnalytics(agentId: string, overrides = {}) {
   };
 }
 
+function buildAdminDashboard(agentId: string) {
+  return {
+    deployed_agent_id: agentId,
+    total_users: 3,
+    messages_today: 8,
+    messages_this_calendar_month: 58,
+    orders_today: 1,
+    revenue_today_usd: 8,
+    users_at_limit_today: 0,
+    upgrade_clicks_this_month: 2,
+    common_questions: [
+      { question: 'Can I return this order?', count: 4 },
+    ],
+    customer_entry: {
+      entry_url: 'https://example.com/customer-entry',
+      cta_label: 'Message agent',
+      qr_target: 'telegram',
+      telegram_deep_link: 'https://t.me/store_bot',
+    },
+    specialist_profile: {
+      knowledge: { title: 'Knowledge', mode: 'Catalog', summary: 'Return policy and catalog are attached.' },
+      live_data: { title: 'Live data', mode: 'Connected', summary: 'Inventory spreadsheet connected.' },
+      memory: { title: 'Memory', mode: 'Bounded', summary: 'Customer continuity is compacted.' },
+      actions: { title: 'Actions', mode: 'Governed', summary: 'Approval required for risky changes.' },
+      channel: { title: 'Channel', mode: 'Telegram', summary: 'Gateway-owned personal channel.' },
+    },
+    user_rows: [
+      {
+        external_user_id: 'customer-1',
+        last_message_at: '2026-04-13T12:05:00Z',
+        total_message_count: 5,
+        memory_entry_count: 1,
+        last_5_messages: [
+          {
+            id: 'dash-msg-1',
+            role: 'user',
+            content: 'Can I return this order?',
+            created_at: '2026-04-13T12:00:00Z',
+          },
+        ],
+      },
+    ],
+    limit: 50,
+    has_more: false,
+  };
+}
+
+function buildBusinessInsights(agentId: string) {
+  return {
+    workspace_id: 'ws-1',
+    deployed_agent_id: agentId,
+    count: 1,
+    items: [
+      {
+        id: `binsight-${agentId}-price`,
+        workspace_id: 'ws-1',
+        deployed_agent_id: agentId,
+        pattern_key: 'pricing.price_match_or_discount_pressure',
+        insight_type: 'pricing_intelligence',
+        title: 'Price-match or discount pressure detected',
+        summary: 'Customers are asking for discounts or cheaper alternatives.',
+        recommendation: 'Review whether the agent should explain the price policy more clearly. Do not change prices automatically.',
+        sensitivity: 'orange',
+        status: 'candidate',
+        channel_key: 'telegram',
+        event_count: 7,
+        confidence: 0.82,
+        redacted_examples: ['Customer asked whether the shop can match a competitor price.'],
+        updated_at: '2026-04-13T12:07:00Z',
+      },
+    ],
+  };
+}
+
 test.describe('deployed agents surface', () => {
   test('route registers in workstation navigation', async ({ page }) => {
     await loginAsOwner(page);
@@ -389,6 +463,7 @@ test.describe('deployed agents surface', () => {
         }),
       ],
     ]);
+    const businessInsightsByAgent = new Map([[agents[0].id, buildBusinessInsights(agents[0].id)]]);
     const conversationsByAgent = new Map([[agents[0].id, buildConversationList(agents[0].id, seedConversations)]]);
     const transcriptsByAgent = new Map([
       [
@@ -718,6 +793,51 @@ test.describe('deployed agents surface', () => {
           return;
         }
 
+        if (segments.length === 4 && segments[3] === 'admin-dashboard' && method === 'GET') {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(buildAdminDashboard(deployedAgentId)),
+          });
+          return;
+        }
+
+        if (segments.length === 4 && segments[3] === 'business-insights' && method === 'GET') {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(businessInsightsByAgent.get(deployedAgentId) ?? { items: [], count: 0 }),
+          });
+          return;
+        }
+
+        if (segments.length === 6 && segments[3] === 'business-insights' && method === 'POST') {
+          const insightId = segments[4];
+          const action = segments[5];
+          const payload = businessInsightsByAgent.get(deployedAgentId) ?? buildBusinessInsights(deployedAgentId);
+          const nextItems = (payload.items ?? []).map((item) => {
+            if (item.id !== insightId) {
+              return item;
+            }
+            return {
+              ...item,
+              status: action === 'apply' ? 'applied' : action === 'approve' ? 'approved' : action === 'dismiss' ? 'dismissed' : 'archived',
+              updated_at: '2026-04-13T12:08:00Z',
+            };
+          });
+          const nextPayload = {
+            ...payload,
+            items: nextItems,
+          };
+          businessInsightsByAgent.set(deployedAgentId, nextPayload);
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ insight: nextItems.find((item) => item.id === insightId) ?? null }),
+          });
+          return;
+        }
+
         if (segments.length === 3 && method === 'PATCH') {
           const body = request.postDataJSON();
           const updated = {
@@ -870,10 +990,15 @@ test.describe('deployed agents surface', () => {
     await expect(surface).toContainText(/\$8\.00/);
     await page.getByRole('button', { name: /store assistant/i }).click();
     await expect(page.getByRole('dialog', { name: /specialist settings/i })).toBeVisible();
+    await page.getByRole('tab', { name: /analytics/i }).click();
+    await expect(page.getByRole('dialog', { name: /specialist settings/i })).toContainText(/owner intelligence/i);
+    await expect(page.getByRole('dialog', { name: /specialist settings/i })).toContainText(/price-match or discount pressure detected/i);
+    await page.getByRole('button', { name: /^approve$/i }).click();
+    await expect(page.getByRole('dialog', { name: /specialist settings/i })).toContainText(/orange · approved/i);
     await page.getByRole('button', { name: /close specialist settings/i }).click();
     await page.goto('/w/ws-1/inbox');
     const inboxSurface = page.locator('[data-workstation-surface="deployed-agents"]');
-    await expect(inboxSurface).toContainText(/build · inbox/i);
+    await expect(inboxSurface).toContainText(/build · studio inbox/i);
     await expect(inboxSurface).toContainText(/live conversation inbox/i);
     await expect(inboxSurface).toContainText(/showing 3 of 3 customer sessions/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).toContainText(/customer one/i);

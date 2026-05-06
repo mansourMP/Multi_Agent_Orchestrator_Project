@@ -476,6 +476,39 @@ export type DeployedAgentAdminDashboardRecord = Record<string, unknown> & {
   has_more?: boolean | null;
 };
 
+export type DeployedAgentBusinessInsightAction = 'approve' | 'dismiss' | 'archive' | 'apply';
+
+export type DeployedAgentBusinessInsightRecord = Record<string, unknown> & {
+  id?: string | null;
+  workspace_id?: string | null;
+  deployed_agent_id?: string | null;
+  pattern_key?: string | null;
+  insight_type?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  recommendation?: string | null;
+  sensitivity?: string | null;
+  status?: string | null;
+  channel_key?: string | null;
+  event_count?: number | null;
+  confidence?: number | null;
+  window_start?: string | null;
+  window_end?: string | null;
+  redacted_examples?: unknown[] | null;
+  metadata?: Record<string, unknown> | null;
+  reviewed_at?: string | null;
+  applied_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type DeployedAgentBusinessInsightsRecord = Record<string, unknown> & {
+  workspace_id?: string | null;
+  deployed_agent_id?: string | null;
+  count?: number | null;
+  items?: DeployedAgentBusinessInsightRecord[] | null;
+};
+
 export type MarketplacePackageRecord = Record<string, unknown> & {
   package_id?: string | null;
   kind?: string | null;
@@ -671,6 +704,12 @@ export type WorkstationClientPaths = {
   deployedAgentAnalyticsRoster: string;
   deployedAgentAnalyticsDetail: (deployedAgentId: string) => string;
   deployedAgentAdminDashboard: (deployedAgentId: string, limit?: number, offset?: number) => string;
+  deployedAgentBusinessInsights: (deployedAgentId: string, status?: string | null, limit?: number, offset?: number) => string;
+  deployedAgentBusinessInsightReview: (
+    deployedAgentId: string,
+    insightId: string,
+    action: DeployedAgentBusinessInsightAction,
+  ) => string;
   deployedAgentMemory: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentConversations: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentConversationDetail: (deployedAgentId: string, sessionId: string) => string;
@@ -947,6 +986,18 @@ export type WorkstationClient = {
     limit?: number;
     offset?: number;
     allowMissing?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  listDeployedAgentBusinessInsights: (options: {
+    deployedAgentId: string;
+    status?: string | null;
+    limit?: number;
+    offset?: number;
+  }) => Promise<Record<string, unknown>>;
+  reviewDeployedAgentBusinessInsight: (options: {
+    deployedAgentId: string;
+    insightId: string;
+    action: DeployedAgentBusinessInsightAction;
+    note?: string | null;
   }) => Promise<Record<string, unknown> | null>;
   listDeployedAgentMemory: (options: {
     deployedAgentId: string;
@@ -1257,6 +1308,17 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
         workspace_id: workspaceId,
         limit,
         offset,
+      })}`,
+    deployedAgentBusinessInsights: (deployedAgentId, status = null, limit = 50, offset = 0) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/business-insights${buildQueryString({
+        workspace_id: workspaceId,
+        status,
+        limit,
+        offset,
+      })}`,
+    deployedAgentBusinessInsightReview: (deployedAgentId, insightId, action) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/business-insights/${encodeURIComponent(insightId)}/${action}${buildQueryString({
+        workspace_id: workspaceId,
       })}`,
     deployedAgentMemory: (deployedAgentId, limit = 50, offset = 0) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/memory${buildQueryString({
@@ -2754,6 +2816,23 @@ export function createWorkstationClient(
         path: paths.deployedAgentAdminDashboard(deployedAgentId, limit, offset),
         allowStatuses: allowMissing ? [404] : [],
         policy: READ_REQUEST_POLICY,
+      }),
+    listDeployedAgentBusinessInsights: ({ deployedAgentId, status = null, limit = 50, offset = 0 }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentBusinessInsights(deployedAgentId, status, limit, offset),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    reviewDeployedAgentBusinessInsight: ({ deployedAgentId, insightId, action, note = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentBusinessInsightReview(deployedAgentId, insightId, action),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            note: note ?? undefined,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
       }),
     listDeployedAgentMemory: ({ deployedAgentId, limit = 50, offset = 0 }) =>
       requestJson<Record<string, unknown>>({

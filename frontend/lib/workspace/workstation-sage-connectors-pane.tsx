@@ -1756,9 +1756,7 @@ export function WorkstationSageConnectorsPane({
   const communicationPersonalCards = useMemo(
     () => personalCards.filter((card) =>
       card.id === 'telegram_personal'
-      || card.id === 'whatsapp_personal'
-      || card.id === 'signal_personal'
-      || card.id === 'imessage_personal',
+      || card.id === 'whatsapp_personal',
     ),
     [personalCards],
   );
@@ -2957,54 +2955,10 @@ export function WorkstationSageConnectorsPane({
       {error ? <AppNotice tone="warning">Integrations could not refresh. Try again when ready.</AppNotice> : null}
 
       <div className="sage-unified-page">
-        {showPersonalSurface ? (
-          <AppNotice tone="neutral">
-            Integrations is the one place for anything Sage connects to or uses: AI providers, personal channels, this computer, knowledge, and tools.
-          </AppNotice>
-        ) : (
-          <AppNotice tone="neutral">
-            Studio is the business connector lane. Personal Telegram, personal WhatsApp, Signal, and future iMessage stay on the paired computer inside Sage.
-          </AppNotice>
-        )}
         {showProviders ? (
           isLoading ? renderProviderSkeletons() : (
             <section className="sage-unified-section">
               <p className="sage-unified-section__label">AI</p>
-              <div className="sage-hosted-credits">
-                <div className="sage-hosted-credits__copy">
-                  <strong className="sage-hosted-credits__title">AI Provider</strong>
-                  <span className="sage-hosted-credits__meta">DeepSeek stays primary through Empyralis credits. Advanced paths remain available.</span>
-                  {hostedSageAi.monthlyCreditCap > 0 ? (
-                    <progress
-                      className="sage-hosted-credits__meter"
-                      value={Math.max(0, Math.min(hostedSageAi.monthlyCreditsRemaining, hostedSageAi.monthlyCreditCap))}
-                      max={hostedSageAi.monthlyCreditCap}
-                      aria-label={hostedCreditUsageLabel(hostedSageAi)}
-                    />
-                  ) : null}
-                </div>
-                <div className="sage-hosted-credits__actions">
-                  {hostedProviderCard ? (
-                    <AppButton
-                      type="button"
-                      tone="secondary"
-                      disabled={!hostedSageAi.allowed || busyCardId === hostedProviderCard.id}
-                      onClick={() => {
-                        void handleProviderSelect(hostedProviderCard, { hosted: true });
-                      }}
-                    >
-                      Use credits
-                    </AppButton>
-                  ) : null}
-                  <AppButton
-                    type="button"
-                    tone="ghost"
-                    onClick={openBillingSettings}
-                  >
-                    Manage credits
-                  </AppButton>
-                </div>
-              </div>
               <div className="sage-provider-active">
                 <div className="sage-provider-active__row sage-provider-active__row--summary">
                   {activeProviderCard ? (
@@ -3048,16 +3002,37 @@ export function WorkstationSageConnectorsPane({
                       <small>{aiProviderSummary.advancedDetail}</small>
                     </div>
                   </div>
-                  <AppButton
-                    type="button"
-                    tone="secondary"
-                    onClick={() => {
-                      setProviderPickerOpen(true);
-                      setProviderPickerDraftId(null);
-                    }}
-                  >
-                    Change
-                  </AppButton>
+                  <div className="sage-hosted-credits__actions">
+                    {hostedProviderCard ? (
+                      <AppButton
+                        type="button"
+                        tone="secondary"
+                        disabled={!hostedSageAi.allowed || busyCardId === hostedProviderCard.id}
+                        onClick={() => {
+                          void handleProviderSelect(hostedProviderCard, { hosted: true });
+                        }}
+                      >
+                        Use credits
+                      </AppButton>
+                    ) : null}
+                    <AppButton
+                      type="button"
+                      tone="ghost"
+                      onClick={openBillingSettings}
+                    >
+                      Manage credits
+                    </AppButton>
+                    <AppButton
+                      type="button"
+                      tone="secondary"
+                      onClick={() => {
+                        setProviderPickerOpen(true);
+                        setProviderPickerDraftId(null);
+                      }}
+                    >
+                      Change
+                    </AppButton>
+                  </div>
                 </div>
               </div>
               {renderSection('AI providers', providerCards, renderProviderCard, renderProviderExpand)}
@@ -3079,9 +3054,6 @@ export function WorkstationSageConnectorsPane({
         {showTools ? (
           <section className="sage-unified-section">
             <p className="sage-unified-section__label">Tools</p>
-            <AppNotice tone="neutral">
-              Curated skills live here when they need an external app, binary, or local device requirement.
-            </AppNotice>
             <WorkstationSageToolsPane onBlockedRequirementAction={handleBlockedToolAction} />
           </section>
         ) : null}

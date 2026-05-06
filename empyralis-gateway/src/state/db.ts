@@ -7,7 +7,7 @@ export interface GatewayStateSnapshot {
   lastClientSeq?: number;
   sessionId?: string;
   sessionExpiresAt?: string;
-  healthState?: string;
+  healthState?: "online" | "offline" | "reconnecting" | "degraded";
   lastDisconnectReason?: string;
   lastOutboxError?: string;
   lastRecoveryAt?: string;

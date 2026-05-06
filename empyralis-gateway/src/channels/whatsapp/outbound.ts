@@ -1,5 +1,58 @@
 import { GatewayStateDb } from "../../state/db";
 
+export const WHATSAPP_TYPING_KEEPALIVE_MS = 3_000;
+export const WHATSAPP_TYPING_MAX_TTL_MS = 60_000;
+
+export type WhatsAppPresenceAction = "composing" | "paused";
+export type WhatsAppPresenceSender = (action: WhatsAppPresenceAction) => Promise<void> | void;
+
+export class WhatsAppTypingKeepalive {
+  private keepaliveTimer: NodeJS.Timeout | null = null;
+  private ttlTimer: NodeJS.Timeout | null = null;
+  private stopped = false;
+
+  constructor(
+    private readonly sender?: WhatsAppPresenceSender,
+    private readonly keepaliveMs = WHATSAPP_TYPING_KEEPALIVE_MS,
+    private readonly maxTtlMs = WHATSAPP_TYPING_MAX_TTL_MS,
+  ) {}
+
+  async start(): Promise<void> {
+    if (!this.sender || this.stopped) {
+      return;
+    }
+    try {
+      await Promise.resolve(this.sender("composing"));
+    } catch {
+      return;
+    }
+    this.keepaliveTimer = setInterval(() => {
+      void Promise.resolve(this.sender?.("composing")).catch(() => undefined);
+    }, this.keepaliveMs);
+    this.ttlTimer = setTimeout(() => {
+      void this.stop().catch(() => undefined);
+    }, this.maxTtlMs);
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+    this.stopped = true;
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+    if (this.ttlTimer) {
+      clearTimeout(this.ttlTimer);
+      this.ttlTimer = null;
+    }
+    if (this.sender) {
+      await Promise.resolve(this.sender("paused")).catch(() => undefined);
+    }
+  }
+}
+
 export interface WhatsAppOutboundRecord {
   idempotencyKey: string;
   remoteJid: string;

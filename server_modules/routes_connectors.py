@@ -16,6 +16,7 @@ from server_modules.runtime_models import (
 )
 from server_modules import connectors_core as core
 from server_modules import connectors_actions as actions
+from server_modules.connectors.discord_bot_runtime_service import DiscordBotRuntimeService
 from server_modules.provider_profiles import normalize_provider_id, resolve_provider_adapter, resolve_vault_credential
 from server_modules.schemas import ConnectorCreate, ConnectorDocumentCreateRequest, ConnectorSpreadsheetCreateRequest
 
@@ -50,6 +51,15 @@ async def _dispatch_public_studio_webhook(
 ) -> Any:
     _assert_public_studio_webhook_lane(path)
     return await delegate()
+
+
+async def discord_bot_runtime_status():
+    service = DiscordBotRuntimeService()
+    return {
+        "runtime": "discord_bot",
+        "execution": "bot_token_gateway_process",
+        "preflight": service.preflight(),
+    }
 
 async def provider_profiles(
     request: Request,
@@ -477,6 +487,7 @@ router.add_api_route("/channels/github/webhook", github_webhook, methods=['POST'
 router.add_api_route("/connectors/discord/webhook", discord_webhook, methods=['POST'])
 router.add_api_route("/channels/telegram/autopilot/status", actions.telegram_autopilot_status, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/whatsapp/autopilot/status", actions.whatsapp_autopilot_status, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/channels/discord/bot-runtime/status", discord_bot_runtime_status, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/autopilot/profiles", actions.list_autopilot_profiles, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/telegram/send", actions.telegram_send_message, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/telegram/autopilot/test-message", actions.telegram_autopilot_test_message, methods=['POST'], dependencies=[Depends(require_api_key)])

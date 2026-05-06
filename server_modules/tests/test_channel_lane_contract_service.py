@@ -65,6 +65,10 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         self.assertTrue(
             all(entry["runtime_lane"] == service.PERSONAL_GATEWAY_RUNTIME_LANE for entry in personal_catalog)
         )
+        self.assertEqual(
+            [entry["live_capable"] for entry in personal_catalog],
+            ["true", "true", "false", "false"],
+        )
 
         self.assertEqual(
             [entry["channel_key"] for entry in studio_catalog],
@@ -76,6 +80,35 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         self.assertTrue(
             all(entry["runtime_lane"] == service.STUDIO_CONNECTOR_RUNTIME_LANE for entry in studio_catalog)
         )
+
+    def test_discord_is_not_accepted_as_personal_channel(self) -> None:
+        self.assertFalse(service.is_personal_channel_key("discord_bot"))
+
+        with self.assertRaisesRegex(ValueError, "non-personal channel"):
+            service.assert_personal_gateway_channel("discord_bot", "discord_webhook")
+
+    def test_signal_and_imessage_specs_stay_on_personal_gateway_lane(self) -> None:
+        for channel_key, provider in (
+            ("signal_personal", "signal_local_bridge"),
+            ("imessage_personal", "imessage_local_bridge"),
+        ):
+            spec = service.assert_personal_gateway_channel(channel_key, provider)
+
+            self.assertEqual(spec["runtime_lane"], service.PERSONAL_GATEWAY_RUNTIME_LANE)
+            self.assertEqual(spec["memory_surface"], service.DIRECT_CHAT_MEMORY_SURFACE)
+            self.assertEqual(spec["live_capable"], "false")
+
+    def test_non_live_bridges_fail_closed_in_preflight(self) -> None:
+        for channel_key in ("signal_personal", "imessage_personal"):
+            preflight = service.personal_bridge_preflight(channel_key)
+
+            self.assertEqual(preflight["status"], "blocked")
+            self.assertFalse(preflight["launch_allowed"])
+            self.assertEqual(preflight["reason"], "bridge_contract_not_live_enabled")
+
+        telegram_preflight = service.personal_bridge_preflight("telegram_personal")
+        self.assertEqual(telegram_preflight["status"], "pass")
+        self.assertTrue(telegram_preflight["launch_allowed"])
 
 
 if __name__ == "__main__":

@@ -730,7 +730,7 @@ CONNECTOR_CATALOG = {
     },
     "discord_bot": {
         "label": "Discord (Bot API)",
-        "auth": ["bot_token", "channel_id", "guild_id"],
+        "auth": ["bot_token", "channel_id", "guild_id", "application_id", "public_key", "application_public_key"],
     },
     "slack": {
         "label": "Slack",

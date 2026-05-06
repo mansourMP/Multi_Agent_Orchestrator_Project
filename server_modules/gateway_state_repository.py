@@ -19,6 +19,30 @@ GATEWAY_STATE_DB_FILE = (
     Path(os.getenv("EMPYRALIS_GATEWAY_STATE_DB", EMPYRALIS_STATE_HOME / "gateway" / "gateway-state.sqlite3"))
 ).expanduser()
 _DB_LOCK = threading.Lock()
+_REDACTED_VALUE = "[redacted]"
+_SENSITIVE_GATEWAY_EVENT_KEYS = frozenset(
+    {
+        "api_hash",
+        "api_key",
+        "authorization",
+        "bot_token",
+        "code",
+        "credential",
+        "credentials",
+        "gateway_token",
+        "login_code",
+        "password",
+        "private_key",
+        "refresh_token",
+        "secret",
+        "session",
+        "session_string",
+        "session_token",
+        "signal_account",
+        "token",
+    }
+)
+_PERSONAL_MESSAGE_TEXT_KEYS = frozenset({"text", "delta", "content", "body"})
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS gateway_pairing_intents (
@@ -230,6 +254,79 @@ def _json_loads(value: Any, *, default: Any) -> Any:
         return json.loads(value)
     except Exception:
         return default
+
+
+def _gateway_event_key_is_sensitive(key: str) -> bool:
+    normalized_key = str(key or "").strip().lower()
+    if not normalized_key:
+        return False
+    if normalized_key in _SENSITIVE_GATEWAY_EVENT_KEYS:
+        return True
+    return any(
+        marker in normalized_key
+        for marker in (
+            "api_key",
+            "api_hash",
+            "auth_token",
+            "bot_token",
+            "credential",
+            "login_code",
+            "password",
+            "private_key",
+            "secret",
+            "session_token",
+        )
+    )
+
+
+def _gateway_event_is_personal_channel_payload(message_type: str, payload: Any) -> bool:
+    normalized_message_type = str(message_type or "").strip().lower()
+    if normalized_message_type.startswith("channel."):
+        return True
+    if isinstance(payload, dict):
+        channel_key = str(payload.get("channel_key") or "").strip().lower()
+        provider = str(payload.get("provider") or "").strip().lower()
+        if channel_key.endswith("_personal") or "personal" in provider:
+            return True
+        nested_payload = payload.get("payload")
+        if isinstance(nested_payload, dict):
+            return _gateway_event_is_personal_channel_payload(message_type, nested_payload)
+    return False
+
+
+def _redact_gateway_event_payload_value(value: Any, *, personal_channel_payload: bool, key: str = "") -> Any:
+    if _gateway_event_key_is_sensitive(key):
+        return _REDACTED_VALUE
+    normalized_key = str(key or "").strip().lower()
+    if personal_channel_payload and normalized_key in _PERSONAL_MESSAGE_TEXT_KEYS:
+        return _REDACTED_VALUE
+    if isinstance(value, dict):
+        return {
+            str(child_key): _redact_gateway_event_payload_value(
+                child_value,
+                personal_channel_payload=personal_channel_payload,
+                key=str(child_key),
+            )
+            for child_key, child_value in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _redact_gateway_event_payload_value(
+                item,
+                personal_channel_payload=personal_channel_payload,
+                key=key,
+            )
+            for item in value
+        ]
+    return value
+
+
+def sanitize_gateway_event_payload(payload: Optional[Dict[str, Any]], *, message_type: str) -> Dict[str, Any]:
+    raw_payload = dict(payload or {})
+    return _redact_gateway_event_payload_value(
+        raw_payload,
+        personal_channel_payload=_gateway_event_is_personal_channel_payload(message_type, raw_payload),
+    )
 
 
 def _pairing_from_row(row: sqlite3.Row | None) -> Optional[Dict[str, Any]]:
@@ -1384,6 +1481,7 @@ def record_gateway_event(
     ack: Optional[int] = None,
     db_path: Optional[Path | str] = None,
 ) -> None:
+    sanitized_payload = sanitize_gateway_event_payload(payload, message_type=message_type)
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
@@ -1401,7 +1499,7 @@ def record_gateway_event(
                     str(message_type or "").strip() or "unknown",
                     int(seq) if seq is not None else None,
                     int(ack) if ack is not None else None,
-                    _json_dumps(dict(payload or {})),
+                    _json_dumps(sanitized_payload),
                     _utc_now_iso(),
                 ),
             )

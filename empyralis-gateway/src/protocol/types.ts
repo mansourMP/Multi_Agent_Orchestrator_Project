@@ -130,6 +130,10 @@ export interface GatewayChannelOutboundPayload {
   remote_jid: string;
   text: string;
   idempotency_key: string;
+  operation?: "draft_start" | "draft_delta" | "draft_final" | "send_final";
+  draft_id?: string;
+  sequence?: number;
+  delta?: string;
   reply_to_external_message_id?: string;
   metadata?: Record<string, unknown>;
 }

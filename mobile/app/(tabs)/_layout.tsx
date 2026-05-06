@@ -75,9 +75,10 @@ export default function TabsLayout() {
         tabBarIcon: ({ color, size, focused }) => {
           const iconMap: Record<string, { active: keyof typeof Ionicons.glyphMap; inactive: keyof typeof Ionicons.glyphMap }> = {
             chats: { active: "chatbubble-ellipses", inactive: "chatbubble-ellipses-outline" },
-            kin: { active: "people", inactive: "people-outline" },
-            "apps/index": { active: "grid", inactive: "grid-outline" },
-            "profile/index": { active: "person-circle", inactive: "person-circle-outline" },
+            kin: { active: "construct", inactive: "construct-outline" },
+            "apps/index": { active: "compass", inactive: "compass-outline" },
+            "inbox/index": { active: "pulse", inactive: "pulse-outline" },
+            "profile/index": { active: "settings", inactive: "settings-outline" },
           };
           const iconSet = iconMap[route.name];
           const icon = iconSet ? (focused ? iconSet.active : iconSet.inactive) : "ellipse";
@@ -86,11 +87,11 @@ export default function TabsLayout() {
       })}
     >
       <Tabs.Screen name="chats" options={{ title: "Chat" }} />
-      <Tabs.Screen name="kin" options={{ title: "Agents" }} />
-      <Tabs.Screen name="apps/index" options={{ title: "Applications" }} />
-      <Tabs.Screen name="profile/index" options={{ title: "Profile" }} />
+      <Tabs.Screen name="kin" options={{ title: "Build" }} />
+      <Tabs.Screen name="apps/index" options={{ title: "Discover" }} />
+      <Tabs.Screen name="inbox/index" options={{ title: "Activity" }} />
+      <Tabs.Screen name="profile/index" options={{ title: "Settings" }} />
       <Tabs.Screen name="home/index" options={{ href: null }} />
-      <Tabs.Screen name="inbox/index" options={{ href: null }} />
       <Tabs.Screen name="today/index" options={{ href: null }} />
       <Tabs.Screen name="spaces/index" options={{ href: null }} />
     </Tabs>

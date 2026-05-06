@@ -4,8 +4,7 @@ import type {
   GatewayToolInvokePayload,
 } from "../protocol/types";
 import { GatewayBrowserRuntime } from "../browser/runtime";
-import { TelegramPersonalRuntime } from "../channels/telegram/runtime";
-import { WhatsAppPersonalRuntime } from "../channels/whatsapp/runtime";
+import { PersonalChannelRuntimeRegistry } from "../channels/personal-runtime";
 import { GatewaySupervisorClient } from "./client";
 
 function requireObject(value: unknown, message: string): Record<string, unknown> {
@@ -27,20 +26,14 @@ export class GatewayCapabilityRouter {
   constructor(
     private readonly supervisorClient: GatewaySupervisorClient,
     private readonly browserRuntime?: GatewayBrowserRuntime,
-    private readonly whatsappRuntime?: WhatsAppPersonalRuntime,
-    private readonly telegramRuntime?: TelegramPersonalRuntime,
+    private readonly personalChannelRuntimes = new PersonalChannelRuntimeRegistry(),
   ) {}
 
   supportedCapabilities(): string[] {
     return [
       ...this.supervisorClient.supportedCapabilities(),
       ...(this.browserRuntime?.requestedCapabilities() ?? []),
-      ...((this.whatsappRuntime?.requestedCapabilities() ?? []).filter((capability) =>
-        this.whatsappRuntime?.supportsCapability(capability),
-      )),
-      ...((this.telegramRuntime?.requestedCapabilities() ?? []).filter((capability) =>
-        this.telegramRuntime?.supportsCapability(capability),
-      )),
+      ...this.personalChannelRuntimes.requestedCapabilities(),
     ];
   }
 
@@ -64,19 +57,9 @@ export class GatewayCapabilityRouter {
         result,
       };
     }
-    if (this.whatsappRuntime?.supportsCapability(capabilityId)) {
-      const result = await this.whatsappRuntime.handleCapabilityInvoke(
-        frame as unknown as GatewayRequestEnvelope<GatewayToolInvokePayload>,
-      );
-      return {
-        request_id: frame.id,
-        capability_id: capabilityId,
-        run_id: runId,
-        result,
-      };
-    }
-    if (this.telegramRuntime?.supportsCapability(capabilityId)) {
-      const result = await this.telegramRuntime.handleCapabilityInvoke(
+    const personalRuntime = this.personalChannelRuntimes.runtimeForCapability(capabilityId);
+    if (personalRuntime) {
+      const result = await personalRuntime.handleCapabilityInvoke(
         frame as unknown as GatewayRequestEnvelope<GatewayToolInvokePayload>,
       );
       return {

@@ -10,7 +10,7 @@ import type {
 } from "../../protocol/types";
 import { buildTelegramConnectedState, buildTelegramPreflightState, loadTelegramLoginConfig, type TelegramLinkedAccount, type TelegramLoginConfig } from "./login";
 import { mapTelegramInboundMessage, mapTelegramOutboundResult, type TelegramInboundMessage } from "./message-mapper";
-import { TelegramOutboundStore } from "./outbound";
+import { TelegramOutboundStore, TelegramTypingKeepalive, type TelegramChatAction } from "./outbound";
 import {
   DEFAULT_TELEGRAM_RECONNECT_POLICY,
   computeTelegramReconnectDelay,
@@ -38,6 +38,7 @@ export interface TelegramAdapterClient {
     text: string,
     replyToExternalMessageId?: string,
   ) => Promise<Record<string, unknown> | undefined>;
+  sendChatAction?: (remoteJid: string, action: TelegramChatAction) => Promise<void> | void;
   disconnect?: () => Promise<void> | void;
   exportSessionString?: () => Promise<string> | string;
 }
@@ -53,6 +54,24 @@ export interface TelegramRuntimeDependencies {
   adapter?: TelegramRuntimeAdapter;
 }
 
+interface TelegramDraftState {
+  remoteJid: string;
+  idempotencyKey: string;
+  replyToExternalMessageId?: string;
+  text: string;
+  sequence: number;
+}
+
+type ChannelOutboundOperation = NonNullable<GatewayChannelOutboundPayload["operation"]>;
+
+function normalizeChannelOutboundOperation(operation: unknown): ChannelOutboundOperation {
+  const value = String(operation || "").trim();
+  if (value === "draft_start" || value === "draft_delta" || value === "draft_final") {
+    return value;
+  }
+  return "send_final";
+}
+
 export class TelegramPersonalRuntime {
   private readonly configStore: PersonalChannelConfigStore;
   private readonly sessionStore: TelegramSessionStore;
@@ -65,6 +84,7 @@ export class TelegramPersonalRuntime {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private connectPromise: Promise<void> | null = null;
   private reconnectAttempts = 0;
+  private readonly drafts = new Map<string, TelegramDraftState>();
 
   constructor(
     private readonly db: GatewayStateDb,
@@ -149,6 +169,79 @@ export class TelegramPersonalRuntime {
     if (!this.client) {
       throw new Error("Telegram personal runtime is not connected.");
     }
+    const operation = normalizeChannelOutboundOperation(payload.operation);
+    if (operation !== "send_final") {
+      return this.handleDraftOutbound(frame, operation);
+    }
+    return this.sendFinalOutbound(payload);
+  }
+
+  private async handleDraftOutbound(
+    frame: GatewayRequestEnvelope<GatewayChannelOutboundPayload>,
+    operation: Exclude<ChannelOutboundOperation, "send_final">,
+  ): Promise<Record<string, unknown>> {
+    const payload = frame.payload;
+    const draftId = String(payload.draft_id || payload.idempotency_key || "").trim();
+    const remoteJid = String(payload.remote_jid || "").trim();
+    const idempotencyKey = String(payload.idempotency_key || "").trim();
+    const sequence = Number.isFinite(Number(payload.sequence)) ? Number(payload.sequence) : 0;
+    if (!draftId || !remoteJid || !idempotencyKey) {
+      throw new Error("channel.outbound draft operation requires draft_id, idempotency_key, and remote_jid.");
+    }
+    const previous = this.drafts.get(draftId);
+    if (previous && sequence < previous.sequence) {
+      return {
+        channel_key: TELEGRAM_PERSONAL_CHANNEL_KEY,
+        provider: TELEGRAM_PERSONAL_PROVIDER,
+        idempotency_key: idempotencyKey,
+        draft_id: draftId,
+        operation,
+        delivered: false,
+        stale: true,
+      };
+    }
+    const nextText =
+      operation === "draft_delta"
+        ? `${previous?.text ?? ""}${String(payload.delta || "")}`
+        : String(payload.text || previous?.text || payload.delta || "");
+    const draft: TelegramDraftState = {
+      remoteJid,
+      idempotencyKey,
+      replyToExternalMessageId: String(payload.reply_to_external_message_id || previous?.replyToExternalMessageId || "").trim() || undefined,
+      text: nextText,
+      sequence,
+    };
+    this.drafts.set(draftId, draft);
+    if (operation !== "draft_final") {
+      return {
+        channel_key: TELEGRAM_PERSONAL_CHANNEL_KEY,
+        provider: TELEGRAM_PERSONAL_PROVIDER,
+        idempotency_key: idempotencyKey,
+        draft_id: draftId,
+        operation,
+        delivered: false,
+        text: draft.text,
+      };
+    }
+    try {
+      return await this.sendFinalOutbound({
+        ...payload,
+        idempotency_key: idempotencyKey,
+        remote_jid: remoteJid,
+        text: draft.text,
+        reply_to_external_message_id: draft.replyToExternalMessageId,
+        operation: "send_final",
+      });
+    } finally {
+      this.drafts.delete(draftId);
+    }
+  }
+
+  private async sendFinalOutbound(payload: GatewayChannelOutboundPayload): Promise<Record<string, unknown>> {
+    const client = this.client;
+    if (!client) {
+      throw new Error("Telegram personal runtime is not connected.");
+    }
     const idempotencyKey = String(payload.idempotency_key || "").trim();
     const remoteJid = String(payload.remote_jid || "").trim();
     const text = String(payload.text || "").trim();
@@ -172,25 +265,35 @@ export class TelegramPersonalRuntime {
       };
     }
     await this.outboundStore.markAttemptStarted(idempotencyKey);
-    const response = await this.client.sendMessage(
-      remoteJid,
-      text,
-      String(payload.reply_to_external_message_id || "").trim() || undefined,
+    const typing = new TelegramTypingKeepalive(
+      client.sendChatAction
+        ? (action) => client.sendChatAction?.(remoteJid, action)
+        : undefined,
     );
-    const mapped = mapTelegramOutboundResult(
-      {
-        idempotencyKey,
+    await typing.start();
+    try {
+      const response = await client.sendMessage(
         remoteJid,
         text,
-        replyToExternalMessageId: String(payload.reply_to_external_message_id || "").trim() || undefined,
-      },
-      response,
-    );
-    await this.outboundStore.markDelivered(
-      idempotencyKey,
-      String(mapped.external_message_id || "").trim() || undefined,
-    );
-    return mapped;
+        String(payload.reply_to_external_message_id || "").trim() || undefined,
+      );
+      const mapped = mapTelegramOutboundResult(
+        {
+          idempotencyKey,
+          remoteJid,
+          text,
+          replyToExternalMessageId: String(payload.reply_to_external_message_id || "").trim() || undefined,
+        },
+        response,
+      );
+      await this.outboundStore.markDelivered(
+        idempotencyKey,
+        String(mapped.external_message_id || "").trim() || undefined,
+      );
+      return mapped;
+    } finally {
+      await typing.stop();
+    }
   }
 
   private async connectClient(): Promise<void> {
@@ -440,6 +543,29 @@ export class TelegramPersonalRuntime {
                 externalMessageId: String(sent?.id ?? "").trim() || undefined,
                 remoteJid: String(sent?.chatId ?? remoteJid).trim() || remoteJid,
               };
+            },
+            sendChatAction: async (remoteJid, action) => {
+              const sendChatAction = (client as { sendChatAction?: (...args: unknown[]) => Promise<unknown> | unknown })
+                .sendChatAction;
+              if (typeof sendChatAction === "function") {
+                await Promise.resolve(sendChatAction.call(client, remoteJid, action));
+                return;
+              }
+              const Api = (telegram as { Api?: Record<string, any> }).Api;
+              if (action !== "typing") {
+                return;
+              }
+              const actionClass = Api?.SendMessageTypingAction;
+              const requestClass = Api?.messages?.SetTyping;
+              if (!actionClass || !requestClass || typeof client.invoke !== "function") {
+                return;
+              }
+              await client.invoke(
+                new requestClass({
+                  peer: remoteJid,
+                  action: new actionClass({}),
+                }),
+              );
             },
             disconnect: () => client.disconnect(),
             exportSessionString: () => client.session?.save?.(),

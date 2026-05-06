@@ -1,0 +1,321 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional
+
+
+_SCRIPT_EXTENSIONS = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".sh", ".bash", ".zsh"}
+_TOP_LEVEL_SCRIPT_NAMES = {"handler.py", "query_handler.py", "worker.py"}
+_SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "node_modules", "dist", "build"}
+_MAX_FILE_BYTES = 512_000
+
+
+class _Source(NamedTuple):
+    path: Path
+    relative_path: str
+    text: str
+    line_starts: List[int]
+
+
+def _line_starts(text: str) -> List[int]:
+    starts = [0]
+    for match in re.finditer(r"\n", text):
+        starts.append(match.end())
+    return starts
+
+
+def _line_for_offset(source: _Source, offset: int) -> int:
+    line = 1
+    for index, start in enumerate(source.line_starts, start=1):
+        if start > offset:
+            break
+        line = index
+    return line
+
+
+def _read_text(path: Path) -> str:
+    try:
+        if path.stat().st_size > _MAX_FILE_BYTES:
+            return ""
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _strip_markdown_examples(text: str) -> str:
+    lines = str(text or "").splitlines(keepends=True)
+    filtered: List[str] = []
+    in_fence = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            filtered.append("\n")
+            continue
+        if in_fence or stripped.startswith(">"):
+            filtered.append("\n")
+            continue
+        filtered.append(re.sub(r"`[^`\n]+`", "", line))
+    return "".join(filtered)
+
+
+def _source_for_file(skill_dir: Path, path: Path) -> Optional[_Source]:
+    text = _read_text(path)
+    if not text:
+        return None
+    if path.name == "SKILL.md":
+        text = _strip_markdown_examples(text)
+    try:
+        relative_path = str(path.relative_to(skill_dir))
+    except ValueError:
+        relative_path = path.name
+    return _Source(path=path, relative_path=relative_path, text=text, line_starts=_line_starts(text))
+
+
+def _iter_scan_files(skill_dir: Path) -> Iterable[Path]:
+    skill_md = skill_dir / "SKILL.md"
+    if skill_md.is_file():
+        yield skill_md
+    for name in sorted(_TOP_LEVEL_SCRIPT_NAMES):
+        candidate = skill_dir / name
+        if candidate.is_file():
+            yield candidate
+    scripts_dir = skill_dir / "scripts"
+    if not scripts_dir.is_dir():
+        return
+    for path in sorted(scripts_dir.rglob("*")):
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        if path.is_file() and path.suffix.lower() in _SCRIPT_EXTENSIONS:
+            yield path
+
+
+def _snippet(source: _Source, offset: int, length: int = 120) -> str:
+    start = max(0, offset - 40)
+    end = min(len(source.text), offset + length)
+    return " ".join(source.text[start:end].split())[:240]
+
+
+def _finding(
+    *,
+    severity: str,
+    code: str,
+    title: str,
+    source: _Source,
+    offset: int,
+    detail: str,
+) -> Dict[str, Any]:
+    return {
+        "severity": severity,
+        "code": code,
+        "title": title,
+        "path": source.relative_path,
+        "line": _line_for_offset(source, offset),
+        "detail": detail,
+        "evidence": _snippet(source, offset),
+    }
+
+
+def _add_regex_findings(
+    findings: List[Dict[str, Any]],
+    source: _Source,
+    *,
+    pattern: str,
+    severity: str,
+    code: str,
+    title: str,
+    detail: str,
+    flags: int = re.IGNORECASE,
+) -> None:
+    for match in re.finditer(pattern, source.text, flags):
+        findings.append(
+            _finding(
+                severity=severity,
+                code=code,
+                title=title,
+                source=source,
+                offset=match.start(),
+                detail=detail,
+            )
+        )
+
+
+def _has(pattern: str, text: str, flags: int = re.IGNORECASE) -> bool:
+    return re.search(pattern, text, flags) is not None
+
+
+def _first_offset(pattern: str, text: str, flags: int = re.IGNORECASE) -> int:
+    match = re.search(pattern, text, flags)
+    return match.start() if match else 0
+
+
+def _scan_source(source: _Source) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    text = source.text
+
+    _add_regex_findings(
+        findings,
+        source,
+        pattern=r"(?<![\w$.])eval\s*\(|\bnew\s+Function\s*\(",
+        severity="critical",
+        code="dynamic_code_eval",
+        title="Dynamic code evaluation",
+        detail="Skill content invokes eval or new Function, which can execute untrusted code.",
+    )
+    _add_regex_findings(
+        findings,
+        source,
+        pattern=r"(?<![\w.])exec\s*\(",
+        severity="critical",
+        code="python_exec",
+        title="Python exec usage",
+        detail="Skill content invokes Python exec, which can execute dynamic code.",
+    )
+
+    child_process_present = _has(r"child_process|node:child_process|from\s+['\"]child_process['\"]", text)
+    if child_process_present:
+        _add_regex_findings(
+            findings,
+            source,
+            pattern=r"\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(",
+            severity="critical",
+            code="dangerous_process_exec",
+            title="Shell process execution",
+            detail="Node child_process execution is blocked for skills unless explicitly audited.",
+        )
+    _add_regex_findings(
+        findings,
+        source,
+        pattern=r"\bspawn(?:Sync)?\s*\([^;\n]{0,500}(shell\s*:\s*true|/bin/sh|cmd\.exe|powershell|bash\s+-[lc])",
+        severity="critical",
+        code="dangerous_process_spawn",
+        title="Dangerous spawned process context",
+        detail="Spawned process uses a shell or shell interpreter context.",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    _add_regex_findings(
+        findings,
+        source,
+        pattern=r"subprocess\.(run|Popen|call|check_call|check_output)\s*\([^;\n]{0,500}shell\s*=\s*True",
+        severity="critical",
+        code="dangerous_subprocess_shell",
+        title="Dangerous subprocess shell context",
+        detail="Python subprocess uses shell=True, which can execute shell-expanded input.",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    _add_regex_findings(
+        findings,
+        source,
+        pattern=r"\bos\.system\s*\(",
+        severity="critical",
+        code="dangerous_os_system",
+        title="Shell command execution",
+        detail="os.system executes through a shell and is blocked for skills.",
+    )
+
+    _add_regex_findings(
+        findings,
+        source,
+        pattern=r"\b(xmrig|stratum\+tcp|cryptonight|minergate|monero|xmrpool|nanopool|nicehash)\b",
+        severity="critical",
+        code="crypto_mining_marker",
+        title="Crypto-mining marker",
+        detail="Skill content contains crypto-mining pool, miner, or currency markers.",
+    )
+
+    env_pattern = r"\b(process\.env|os\.environ|os\.getenv|dotenv|env\s*=|environ\b)"
+    network_send_pattern = (
+        r"\b(fetch|axios\.(post|put|request)|requests\.(post|put|request)|urllib\.request|"
+        r"https?\.request|WebSocket|curl)\b|wss?://"
+    )
+    file_read_pattern = (
+        r"\b(fs\.readFileSync|fs\.readFile|read_text\s*\(|read_bytes\s*\(|open\s*\(|"
+        r"Path\s*\([^)]*\)\.read_text|cat\s+)"
+    )
+    if _has(env_pattern, text) and _has(network_send_pattern, text):
+        findings.append(
+            _finding(
+                severity="critical",
+                code="env_network_send",
+                title="Environment harvesting with network send",
+                source=source,
+                offset=_first_offset(env_pattern, text),
+                detail="Skill content reads environment variables and sends data over a network path.",
+            )
+        )
+    if _has(file_read_pattern, text) and _has(network_send_pattern, text):
+        findings.append(
+            _finding(
+                severity="warning",
+                code="file_read_network_send",
+                title="File read with network send",
+                source=source,
+                offset=_first_offset(file_read_pattern, text),
+                detail="Skill content reads local files and also sends data over a network path.",
+            )
+        )
+
+    _add_regex_findings(
+        findings,
+        source,
+        pattern=(
+            r"\b(atob|unescape|String\.fromCharCode|charCodeAt|base64\.b64decode)\s*\(|"
+            r"Buffer\.from\s*\([^;\n]{0,160}['\"]base64['\"]"
+        ),
+        severity="warning",
+        code="obfuscation_marker",
+        title="Obfuscation marker",
+        detail="Skill content contains common string or payload obfuscation markers.",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    _add_regex_findings(
+        findings,
+        source,
+        pattern=r"wss?://[^'\"\s)]+:(4444|4445|5555|6666|6667|6697|7000|7777|8081|9001|9050|31337)\b",
+        severity="warning",
+        code="suspicious_websocket_port",
+        title="Suspicious websocket port",
+        detail="Skill content opens a websocket on a port commonly associated with tunnels, IRC, or control channels.",
+    )
+    return findings
+
+
+def scan_skill_dir(skill_dir: Path | str) -> Dict[str, Any]:
+    root = Path(skill_dir).expanduser().resolve()
+    findings: List[Dict[str, Any]] = []
+    scanned_files: List[str] = []
+    if not root.exists() or not root.is_dir():
+        return {
+            "ok": False,
+            "blocked": True,
+            "summary": {"critical": 1, "warning": 0},
+            "findings": [
+                {
+                    "severity": "critical",
+                    "code": "missing_skill_dir",
+                    "title": "Missing skill directory",
+                    "path": str(root),
+                    "line": 1,
+                    "detail": "Skill directory does not exist or is not a directory.",
+                    "evidence": "",
+                }
+            ],
+            "scanned_files": [],
+        }
+    for path in _iter_scan_files(root):
+        source = _source_for_file(root, path)
+        if source is None:
+            continue
+        scanned_files.append(source.relative_path)
+        findings.extend(_scan_source(source))
+
+    critical = sum(1 for item in findings if item.get("severity") == "critical")
+    warning = sum(1 for item in findings if item.get("severity") == "warning")
+    return {
+        "ok": critical == 0,
+        "blocked": critical > 0,
+        "summary": {"critical": critical, "warning": warning},
+        "findings": findings,
+        "scanned_files": scanned_files,
+    }

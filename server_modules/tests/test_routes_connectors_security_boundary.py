@@ -43,6 +43,7 @@ class ConnectorRouteSecurityBoundaryTests(unittest.TestCase):
     def test_operational_autopilot_routes_remain_backend_authenticated(self) -> None:
         self.assertIn("require_api_key", _route_dependencies("/channels/telegram/autopilot/status"))
         self.assertIn("require_api_key", _route_dependencies("/channels/whatsapp/autopilot/status"))
+        self.assertIn("require_api_key", _route_dependencies("/channels/discord/bot-runtime/status"))
         self.assertIn("require_api_key", _route_dependencies("/channels/autopilot/profiles"))
 
     def test_provider_catalog_route_enforces_workspace_access(self) -> None:

@@ -51,7 +51,14 @@ export const WORKSPACE_WEB_NAV_GROUP_LABELS = WORKSPACE_NAV_DESTINATIONS.reduce(
   return accumulator;
 }, {});
 
-export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = WORKSPACE_WEB_NAV_GROUP_LABELS;
+export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = {
+  ...WORKSPACE_WEB_NAV_GROUP_LABELS,
+  sage: 'Chat',
+  studio: 'Build',
+  marketplace: 'Discover',
+  gateway: 'Activity',
+  settings: 'Settings',
+};
 
 export const WORKSPACE_ROUTE_DEFINITIONS = [
   {
@@ -90,7 +97,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screenName: 'home/index',
       groupId: 'sage',
       tabLabel: 'Home',
-      includeInBottomTabs: true,
+      includeInBottomTabs: false,
     },
   },
   {
@@ -148,7 +155,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/inbox/index',
       screenName: 'inbox/index',
       groupId: 'sage',
-      tabLabel: 'Notifications',
+      tabLabel: 'Activity',
       includeInBottomTabs: true,
     },
   },
@@ -194,7 +201,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/kin/index',
       screenName: 'kin/index',
       groupId: 'studio',
-      tabLabel: 'Assistants',
+      tabLabel: 'Build',
       includeInBottomTabs: true,
     },
   },
@@ -246,7 +253,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/profile/index',
       screenName: 'profile/index',
       groupId: 'settings',
-      tabLabel: 'Profile',
+      tabLabel: 'Settings',
       includeInBottomTabs: true,
     },
   },
@@ -358,8 +365,21 @@ export function resolveWorkspaceRouteIdFromSegment(segment) {
   return WORKSPACE_ROUTE_SEGMENT_INDEX[normalizedSegment] ?? null;
 }
 
+const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER = ['chat', 'studio', 'marketplace', 'notifications', 'settings'];
+const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER_INDEX = WORKSPACE_MOBILE_BOTTOM_TAB_ORDER.reduce(
+  (accumulator, routeId, index) => {
+    accumulator[routeId] = index;
+    return accumulator;
+  },
+  {},
+);
+
 export const WORKSPACE_MOBILE_BOTTOM_TABS = WORKSPACE_MOBILE_ROUTE_DEFINITIONS.filter(
   (definition) => definition.mobile.includeInBottomTabs,
+).sort(
+  (left, right) =>
+    (WORKSPACE_MOBILE_BOTTOM_TAB_ORDER_INDEX[left.id] ?? Number.MAX_SAFE_INTEGER) -
+    (WORKSPACE_MOBILE_BOTTOM_TAB_ORDER_INDEX[right.id] ?? Number.MAX_SAFE_INTEGER),
 ).map((definition) => ({
   routeId: definition.id,
   label: definition.mobile.tabLabel ?? definition.label,

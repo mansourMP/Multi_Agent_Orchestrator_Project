@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from server_modules import external_content_guard
+
 
 PERSONAL_GATEWAY_RUNTIME_LANE = "personal_gateway"
 STUDIO_CONNECTOR_RUNTIME_LANE = "studio_business_connector"
@@ -14,11 +16,29 @@ PERSONAL_CHANNEL_SPECS: Dict[str, Dict[str, str]] = {
         "provider": "whatsapp_baileys",
         "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
         "memory_surface": DIRECT_CHAT_MEMORY_SURFACE,
+        "stage": "live",
+        "live_capable": "true",
     },
     "telegram_personal": {
         "provider": "telegram_gramjs",
         "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
         "memory_surface": DIRECT_CHAT_MEMORY_SURFACE,
+        "stage": "live",
+        "live_capable": "true",
+    },
+    "signal_personal": {
+        "provider": "signal_local_bridge",
+        "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
+        "memory_surface": DIRECT_CHAT_MEMORY_SURFACE,
+        "stage": "next",
+        "live_capable": "false",
+    },
+    "imessage_personal": {
+        "provider": "imessage_local_bridge",
+        "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
+        "memory_surface": DIRECT_CHAT_MEMORY_SURFACE,
+        "stage": "later",
+        "live_capable": "false",
     },
 }
 
@@ -29,6 +49,7 @@ PERSONAL_CHANNEL_ROADMAP: tuple[Dict[str, str], ...] = (
         "provider": "telegram_gramjs",
         "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
         "stage": "live",
+        "live_capable": "true",
         "family": "personal",
         "session_owner": "paired_gateway",
     },
@@ -38,6 +59,7 @@ PERSONAL_CHANNEL_ROADMAP: tuple[Dict[str, str], ...] = (
         "provider": "whatsapp_baileys",
         "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
         "stage": "live",
+        "live_capable": "true",
         "family": "personal",
         "session_owner": "paired_gateway",
     },
@@ -47,6 +69,7 @@ PERSONAL_CHANNEL_ROADMAP: tuple[Dict[str, str], ...] = (
         "provider": "signal_local_bridge",
         "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
         "stage": "next",
+        "live_capable": "false",
         "family": "personal",
         "session_owner": "paired_gateway",
     },
@@ -56,6 +79,7 @@ PERSONAL_CHANNEL_ROADMAP: tuple[Dict[str, str], ...] = (
         "provider": "imessage_local_bridge",
         "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
         "stage": "later",
+        "live_capable": "false",
         "family": "personal",
         "session_owner": "paired_gateway",
     },
@@ -159,6 +183,28 @@ def studio_channel_catalog() -> list[Dict[str, str]]:
     return [dict(item) for item in STUDIO_CHANNEL_ROADMAP]
 
 
+def personal_bridge_preflight(channel_key: str) -> Dict[str, Any]:
+    spec = assert_personal_gateway_channel(channel_key)
+    live_capable = str(spec.get("live_capable") or "").strip().lower() == "true"
+    if live_capable:
+        return {
+            "channel_key": channel_key,
+            "provider": spec["provider"],
+            "runtime_lane": spec["runtime_lane"],
+            "status": "pass",
+            "launch_allowed": True,
+            "reason": "live_personal_gateway_runtime",
+        }
+    return {
+        "channel_key": channel_key,
+        "provider": spec["provider"],
+        "runtime_lane": spec["runtime_lane"],
+        "status": "blocked",
+        "launch_allowed": False,
+        "reason": "bridge_contract_not_live_enabled",
+    }
+
+
 def assert_personal_gateway_channel(channel_key: str, provider: str | None = None) -> Dict[str, str]:
     normalized_channel_key = str(channel_key or "").strip()
     spec = PERSONAL_CHANNEL_SPECS.get(normalized_channel_key)
@@ -224,6 +270,25 @@ def build_personal_gateway_runtime_context(
         },
         "session_ctx": session_ctx,
     }
+
+
+def guard_personal_gateway_inbound_message(
+    *,
+    surface_channel: str,
+    text: str,
+    sender: str | None = None,
+    source_event_id: str | None = None,
+    metadata: Dict[str, Any] | None = None,
+) -> external_content_guard.GuardedExternalContent:
+    spec = assert_personal_gateway_channel(surface_channel)
+    return external_content_guard.wrap_external_content(
+        text,
+        source="personal_channel",
+        sender=sender,
+        channel=surface_channel,
+        source_event_id=source_event_id,
+        metadata={"provider": spec["provider"], **dict(metadata or {})},
+    )
 
 
 def assert_personal_runtime_session_ctx(session_ctx: Dict[str, Any]) -> Dict[str, Any]:

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from server_modules.auth import enforce_workspace_access
 from server_modules.runtime_common import require_api_key
 from server_modules import (
     channel_lane_contract_service,
+    gateway_approval_service,
     gateway_state_repository,
     personal_channels_service,
     security_audit_service,
@@ -116,6 +118,64 @@ def _emit_personal_channel_audit(
     )
 
 
+async def _request_personal_channel_send_approval(
+    *,
+    action: str,
+    registration: dict,
+    current_user,
+    gateway_id: str,
+    channel_key: str,
+    capability_id: str,
+    remote_jid: str,
+    text: str,
+    idempotency_key: str,
+    reply_to_external_message_id: Optional[str],
+) -> Optional[JSONResponse]:
+    governance_metadata = _personal_channel_governance_metadata(action, channel_key)
+    if not bool(governance_metadata.get("requires_approval")):
+        return None
+    approval = await gateway_approval_service.request_gateway_tool_approval(
+        registration=registration,
+        capability_id=capability_id,
+        arguments={
+            "channel_key": channel_key,
+            "remote_jid": remote_jid,
+            "text": text,
+            "idempotency_key": idempotency_key,
+            "reply_to_external_message_id": reply_to_external_message_id,
+            "source": "manual_api",
+        },
+        run_id=f"personal-channel-send-{channel_key}-{idempotency_key}",
+        trace_id=f"personal-channel-send-{channel_key}-{idempotency_key}",
+        request_id=idempotency_key,
+    )
+    _emit_personal_channel_audit(
+        action=action,
+        status="approval_required",
+        registration=registration,
+        current_user=current_user,
+        gateway_id=gateway_id,
+        channel_key=channel_key,
+        detail="Owner approval is required before dispatching a manual personal-channel message.",
+        metadata={
+            "remote_jid": remote_jid,
+            "text_length": len(text),
+            "has_reply_target": bool(reply_to_external_message_id),
+            "approval_id": approval.get("approval_id"),
+        },
+        idempotency_key=f"{action}.approval_required:{gateway_id}:{idempotency_key}",
+    )
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "status": "approval_required",
+            "gateway_id": gateway_id,
+            "channel_key": channel_key,
+            "approval": approval,
+        },
+    )
+
+
 @router.get("/personal-channels/whatsapp/gateways/{gateway_id}")
 async def get_whatsapp_personal_gateway_status(
     request: Request,
@@ -207,6 +267,20 @@ async def send_whatsapp_personal_message(
     )
     if resolved_workspace_id != str(registration.get("workspace_id") or "").strip():
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
+    approval_response = await _request_personal_channel_send_approval(
+        action="personal_channel.whatsapp.send",
+        registration=registration,
+        current_user=current_user,
+        gateway_id=gateway_id,
+        channel_key="whatsapp_personal",
+        capability_id="channel.whatsapp.personal.send",
+        remote_jid=body.remote_jid,
+        text=body.text,
+        idempotency_key=body.idempotency_key,
+        reply_to_external_message_id=body.reply_to_external_message_id,
+    )
+    if approval_response is not None:
+        return approval_response
     try:
         result = await personal_channels_service.send_whatsapp_personal_message(
             gateway_id=gateway_id,
@@ -353,6 +427,20 @@ async def send_telegram_personal_message(
     )
     if resolved_workspace_id != str(registration.get("workspace_id") or "").strip():
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
+    approval_response = await _request_personal_channel_send_approval(
+        action="personal_channel.telegram.send",
+        registration=registration,
+        current_user=current_user,
+        gateway_id=gateway_id,
+        channel_key="telegram_personal",
+        capability_id="channel.telegram.personal.send",
+        remote_jid=body.remote_jid,
+        text=body.text,
+        idempotency_key=body.idempotency_key,
+        reply_to_external_message_id=body.reply_to_external_message_id,
+    )
+    if approval_response is not None:
+        return approval_response
     try:
         result = await personal_channels_service.send_telegram_personal_message(
             gateway_id=gateway_id,

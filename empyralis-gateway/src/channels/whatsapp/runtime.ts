@@ -21,7 +21,7 @@ import {
   mapWhatsAppInboundMessage,
   mapWhatsAppOutboundResult,
 } from "./message-mapper";
-import { WhatsAppOutboundStore } from "./outbound";
+import { WhatsAppOutboundStore, WhatsAppTypingKeepalive, type WhatsAppPresenceAction } from "./outbound";
 import {
   DEFAULT_WHATSAPP_RECONNECT_POLICY,
   computeWhatsAppReconnectDelay,
@@ -56,6 +56,7 @@ interface BaileysSocketLike {
     content: Record<string, unknown>,
     options?: { messageId?: string },
   ) => Promise<Record<string, unknown> | undefined>;
+  sendPresenceUpdate?: (type: WhatsAppPresenceAction, jid: string) => Promise<void> | void;
   requestPairingCode?: (phoneNumber: string, customPairingCode?: string) => Promise<string>;
   user?: { id?: string; name?: string };
 }
@@ -77,6 +78,24 @@ export interface WhatsAppRuntimeDependencies {
   adapter?: WhatsAppBaileysAdapter;
 }
 
+interface WhatsAppDraftState {
+  remoteJid: string;
+  idempotencyKey: string;
+  replyToExternalMessageId?: string;
+  text: string;
+  sequence: number;
+}
+
+type ChannelOutboundOperation = NonNullable<GatewayChannelOutboundPayload["operation"]>;
+
+function normalizeChannelOutboundOperation(operation: unknown): ChannelOutboundOperation {
+  const value = String(operation || "").trim();
+  if (value === "draft_start" || value === "draft_delta" || value === "draft_final") {
+    return value;
+  }
+  return "send_final";
+}
+
 export class WhatsAppPersonalRuntime {
   private readonly configStore: PersonalChannelConfigStore;
   private readonly sessionStore: WhatsAppSessionStore;
@@ -91,6 +110,7 @@ export class WhatsAppPersonalRuntime {
   private pairingCodeRequested = false;
   private connectPromise: Promise<void> | null = null;
   private reconnectAttempts = 0;
+  private readonly drafts = new Map<string, WhatsAppDraftState>();
 
   constructor(
     private readonly db: GatewayStateDb,
@@ -179,6 +199,79 @@ export class WhatsAppPersonalRuntime {
     if (!this.socket) {
       throw new Error("WhatsApp personal runtime is not connected.");
     }
+    const operation = normalizeChannelOutboundOperation(payload.operation);
+    if (operation !== "send_final") {
+      return this.handleDraftOutbound(frame, operation);
+    }
+    return this.sendFinalOutbound(payload);
+  }
+
+  private async handleDraftOutbound(
+    frame: GatewayRequestEnvelope<GatewayChannelOutboundPayload>,
+    operation: Exclude<ChannelOutboundOperation, "send_final">,
+  ): Promise<Record<string, unknown>> {
+    const payload = frame.payload;
+    const draftId = String(payload.draft_id || payload.idempotency_key || "").trim();
+    const remoteJid = String(payload.remote_jid || "").trim();
+    const idempotencyKey = String(payload.idempotency_key || "").trim();
+    const sequence = Number.isFinite(Number(payload.sequence)) ? Number(payload.sequence) : 0;
+    if (!draftId || !remoteJid || !idempotencyKey) {
+      throw new Error("channel.outbound draft operation requires draft_id, idempotency_key, and remote_jid.");
+    }
+    const previous = this.drafts.get(draftId);
+    if (previous && sequence < previous.sequence) {
+      return {
+        channel_key: WHATSAPP_PERSONAL_CHANNEL_KEY,
+        provider: WHATSAPP_PERSONAL_PROVIDER,
+        idempotency_key: idempotencyKey,
+        draft_id: draftId,
+        operation,
+        delivered: false,
+        stale: true,
+      };
+    }
+    const nextText =
+      operation === "draft_delta"
+        ? `${previous?.text ?? ""}${String(payload.delta || "")}`
+        : String(payload.text || previous?.text || payload.delta || "");
+    const draft: WhatsAppDraftState = {
+      remoteJid,
+      idempotencyKey,
+      replyToExternalMessageId: String(payload.reply_to_external_message_id || previous?.replyToExternalMessageId || "").trim() || undefined,
+      text: nextText,
+      sequence,
+    };
+    this.drafts.set(draftId, draft);
+    if (operation !== "draft_final") {
+      return {
+        channel_key: WHATSAPP_PERSONAL_CHANNEL_KEY,
+        provider: WHATSAPP_PERSONAL_PROVIDER,
+        idempotency_key: idempotencyKey,
+        draft_id: draftId,
+        operation,
+        delivered: false,
+        text: draft.text,
+      };
+    }
+    try {
+      return await this.sendFinalOutbound({
+        ...payload,
+        idempotency_key: idempotencyKey,
+        remote_jid: remoteJid,
+        text: draft.text,
+        reply_to_external_message_id: draft.replyToExternalMessageId,
+        operation: "send_final",
+      });
+    } finally {
+      this.drafts.delete(draftId);
+    }
+  }
+
+  private async sendFinalOutbound(payload: GatewayChannelOutboundPayload): Promise<Record<string, unknown>> {
+    const socket = this.socket;
+    if (!socket) {
+      throw new Error("WhatsApp personal runtime is not connected.");
+    }
     const idempotencyKey = String(payload.idempotency_key || "").trim();
     const remoteJid = String(payload.remote_jid || "").trim();
     const text = String(payload.text || "").trim();
@@ -204,26 +297,36 @@ export class WhatsAppPersonalRuntime {
       };
     }
     const outboundRecord = await this.outboundStore.markAttemptStarted(idempotencyKey);
-    const response = await this.socket.sendMessage(
-      remoteJid,
-      { text },
-      { messageId: outboundRecord.clientMessageId || clientMessageId },
+    const typing = new WhatsAppTypingKeepalive(
+      socket.sendPresenceUpdate
+        ? (action) => socket.sendPresenceUpdate?.(action, remoteJid)
+        : undefined,
     );
-    const mapped = mapWhatsAppOutboundResult(
-      {
-        idempotencyKey,
+    await typing.start();
+    try {
+      const response = await socket.sendMessage(
         remoteJid,
-        text,
-        clientMessageId: outboundRecord.clientMessageId || clientMessageId,
-        replyToExternalMessageId: String(payload.reply_to_external_message_id || "").trim() || undefined,
-      },
-      response,
-    );
-    await this.outboundStore.markDelivered(
-      idempotencyKey,
-      String(mapped.external_message_id || "").trim() || undefined,
-    );
-    return mapped;
+        { text },
+        { messageId: outboundRecord.clientMessageId || clientMessageId },
+      );
+      const mapped = mapWhatsAppOutboundResult(
+        {
+          idempotencyKey,
+          remoteJid,
+          text,
+          clientMessageId: outboundRecord.clientMessageId || clientMessageId,
+          replyToExternalMessageId: String(payload.reply_to_external_message_id || "").trim() || undefined,
+        },
+        response,
+      );
+      await this.outboundStore.markDelivered(
+        idempotencyKey,
+        String(mapped.external_message_id || "").trim() || undefined,
+      );
+      return mapped;
+    } finally {
+      await typing.stop();
+    }
   }
 
   private async connectSocket(): Promise<void> {

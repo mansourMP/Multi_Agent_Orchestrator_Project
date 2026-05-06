@@ -80,6 +80,9 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
                 "server_modules.gateway_protocol_service.dispatch_channel_outbound",
                 new=AsyncMock(return_value={"external_message_id": "wa-out-1"}),
             ),
+            patch(
+                "server_modules.personal_channels_service.security_audit_service.emit_security_audit_event",
+            ) as audit_mock,
         ):
             personal_result = asyncio.run(
                 personal_channels_service.handle_gateway_channel_inbound(
@@ -103,6 +106,11 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
 
         self.assertFalse(personal_result["duplicate"])
         self.assertEqual(personal_result["outbound"]["status"], "delivered")
+        audit_mock.assert_called_once()
+        self.assertEqual(audit_mock.call_args.kwargs["action"], "personal_channel.whatsapp.automatic_reply")
+        self.assertEqual(audit_mock.call_args.kwargs["status"], "success")
+        self.assertEqual(audit_mock.call_args.kwargs["metadata"]["action_class"], "automatic_inbound_reply")
+        self.assertTrue(audit_mock.call_args.kwargs["metadata"]["external_side_effect"])
         recent_messages = personal_channels_repository.list_recent_gateway_messages(
             "gateway-local-1",
             channel_key="whatsapp_personal",
@@ -184,6 +192,61 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
         self.assertEqual(len(recent_messages["outbound"]), 1)
         self.assertEqual(recent_messages["outbound"][0]["status"], "delivered")
         self.assertEqual(dispatch_mock.await_count, 2)
+
+    def test_telegram_automatic_inbound_reply_emits_security_audit(self) -> None:
+        pairing = gateway_pairing_service.create_gateway_pairing_intent(
+            tenant_id="tenant-1",
+            workspace_id="default",
+            user_id="user-1",
+        )
+        registration = gateway_pairing_service.register_gateway(
+            pairing_token=pairing["pairing_token"],
+            device_id="device-local-1",
+            gateway_id="gateway-local-1",
+            display_name="Mansur Mac",
+            platform="macos-arm64",
+            capabilities=["channel.telegram.personal"],
+        )
+
+        with (
+            patch(
+                "server_modules.personal_channel_sage_bridge_service.build_telegram_personal_reply",
+                return_value={"text": "Sage Telegram reply", "source": "test_bridge"},
+            ),
+            patch(
+                "server_modules.gateway_protocol_service.dispatch_channel_outbound",
+                new=AsyncMock(return_value={"external_message_id": "tg-out-1"}),
+            ),
+            patch(
+                "server_modules.personal_channels_service.security_audit_service.emit_security_audit_event",
+            ) as audit_mock,
+        ):
+            personal_result = asyncio.run(
+                personal_channels_service.handle_gateway_channel_inbound(
+                    gateway_id="gateway-local-1",
+                    registration=registration,
+                    payload={
+                        "channel_key": "telegram_personal",
+                        "provider": "telegram_gramjs",
+                        "message": {
+                            "external_message_id": "tg-in-1",
+                            "remote_jid": "telegram-user-1",
+                            "sender_jid": "telegram-user-1",
+                            "push_name": "Mansur",
+                            "text": "hello from personal telegram",
+                            "received_at": "2026-04-22T16:00:00Z",
+                            "from_me": False,
+                        },
+                    },
+                )
+            )
+
+        self.assertFalse(personal_result["duplicate"])
+        self.assertEqual(personal_result["outbound"]["status"], "delivered")
+        audit_mock.assert_called_once()
+        self.assertEqual(audit_mock.call_args.kwargs["action"], "personal_channel.telegram.automatic_reply")
+        self.assertEqual(audit_mock.call_args.kwargs["status"], "success")
+        self.assertEqual(audit_mock.call_args.kwargs["metadata"]["action_class"], "automatic_inbound_reply")
 
     def test_duplicate_telegram_inbound_retries_pending_personal_reply_after_disconnect(self) -> None:
         pairing = gateway_pairing_service.create_gateway_pairing_intent(

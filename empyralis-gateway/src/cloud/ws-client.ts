@@ -27,8 +27,7 @@ import { GatewayRuntimeMetadata } from "../runtime/runtime-metadata";
 import { HeartbeatLoop } from "./heartbeat";
 import { ReconnectBackoff, classifyReconnectError, sleep } from "./reconnect";
 import { GatewayCapabilityRouter } from "../supervisor/capability-router";
-import { WhatsAppPersonalRuntime } from "../channels/whatsapp/runtime";
-import { TelegramPersonalRuntime } from "../channels/telegram/runtime";
+import { PersonalChannelRuntimeRegistry } from "../channels/personal-runtime";
 
 interface PendingResponse {
   messageType: GatewayRequestEnvelope["type"];
@@ -61,8 +60,7 @@ export class GatewayWsClient {
     private readonly checkpoints: GatewayCheckpoints,
     private readonly tokenStore: GatewayTokenStore,
     private readonly capabilityRouter: GatewayCapabilityRouter,
-    private readonly whatsappRuntime?: WhatsAppPersonalRuntime,
-    private readonly telegramRuntime?: TelegramPersonalRuntime,
+    private readonly personalChannelRuntimes = new PersonalChannelRuntimeRegistry(),
   ) {
     this.reconnect = new ReconnectBackoff({
       minDelayMs: this.config.reconnectMinDelayMs,
@@ -163,7 +161,7 @@ export class GatewayWsClient {
       this.socket.onmessage = (event) => {
         void this.handleIncomingFrame(typeof event.data === "string" ? event.data : String(event.data));
       };
-      this.socket.onclose = (event) => {
+      this.socket.onclose = async (event) => {
         const reason =
           this.socketFailureReason ||
           String(event.reason || "").trim() ||
@@ -172,9 +170,8 @@ export class GatewayWsClient {
         this.heartbeatLoop.stop();
         this.activeScope = null;
         this.socket = null;
-        void this.handleSocketFailure(reason);
-        void this.whatsappRuntime?.handleGatewayDisconnected(reason);
-        void this.telegramRuntime?.handleGatewayDisconnected(reason);
+        await this.handleSocketFailure(reason);
+        await this.personalChannelRuntimes.handleGatewayDisconnected(reason);
       };
 
       const connectResponse = await this.sendRequest(
@@ -203,8 +200,7 @@ export class GatewayWsClient {
         maxConsecutiveFailures: 2,
         sendHeartbeat: () => this.sendHeartbeat(session.scope, runtimeMetadata),
         onHeartbeatFailure: async (error, consecutiveFailures) => {
-          await this.checkpoints.save({
-            healthState: "degraded",
+          await this.checkpoints.saveHealthState("degraded", {
             lastDisconnectReason: `heartbeat_failure:${error.message}`,
             lastOutboxError: error.message,
             pendingOutboxCount: (await this.outbox.summarize()).pending,
@@ -214,15 +210,13 @@ export class GatewayWsClient {
           }
         },
         onHeartbeatRecovered: async () => {
-          await this.checkpoints.save({
-            healthState: "online",
+          await this.checkpoints.saveHealthState("online", {
             lastOutboxError: undefined,
           });
         },
       });
       await this.replayPendingOutbox(session.scope);
-      await this.whatsappRuntime?.handleGatewayConnected(session.scope);
-      await this.telegramRuntime?.handleGatewayConnected(session.scope);
+      await this.personalChannelRuntimes.handleGatewayConnected(session.scope);
       await this.checkpoints.markRecovered({
         sessionId: session.session_id,
         sessionExpiresAt: session.expires_at,
@@ -253,6 +247,9 @@ export class GatewayWsClient {
       try {
         await this.connect(identity, runtimeMetadata);
         await this.awaitSocketClose();
+        await this.checkpoints.saveHealthState("reconnecting", {
+          pendingOutboxCount: (await this.outbox.summarize()).pending,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const decision = classifyReconnectError(error);
@@ -264,6 +261,10 @@ export class GatewayWsClient {
         if (!decision.retryable) {
           throw error;
         }
+        await this.checkpoints.saveHealthState("reconnecting", {
+          lastDisconnectReason: message,
+          pendingOutboxCount: (await this.outbox.summarize()).pending,
+        });
       }
       const delayMs = this.reconnect.nextDelayMs();
       await sleep(delayMs);
@@ -291,6 +292,10 @@ export class GatewayWsClient {
         timeoutMs: this.requestTimeoutMsFor("gateway.heartbeat", this.config.heartbeatIntervalMs),
       },
     );
+    await this.checkpoints.saveHealthState("online", {
+      lastOutboxError: undefined,
+      pendingOutboxCount: outboxSummary.pending,
+    });
   }
 
   async sendStateUpdate(scope: GatewayScope, payload: Record<string, unknown>): Promise<void> {
@@ -344,8 +349,12 @@ export class GatewayWsClient {
       this.socket.close();
       this.socket = null;
       await this.tokenStore.clearSession();
-      await this.whatsappRuntime?.handleGatewayDisconnected(reason);
-      await this.telegramRuntime?.handleGatewayDisconnected(reason);
+      await this.personalChannelRuntimes.handleGatewayDisconnected(reason);
+      await this.checkpoints.saveHealthState("offline", {
+        lastDisconnectReason: reason,
+        pendingOutboxCount: (await this.outbox.summarize()).pending,
+        resumeReady: false,
+      });
     }
   }
 
@@ -369,10 +378,11 @@ export class GatewayWsClient {
       }
       const previousOnClose = socket.onclose;
       socket.onclose = (event) => {
-        if (previousOnClose) {
-          previousOnClose.call(socket, event);
+        if (!previousOnClose) {
+          resolve();
+          return;
         }
-        resolve();
+        void Promise.resolve(previousOnClose.call(socket, event)).finally(resolve);
       };
     });
   }
@@ -497,8 +507,7 @@ export class GatewayWsClient {
         await this.outbox.markAttemptFailed(requestId, error.message);
       }
     }
-    await this.checkpoints.save({
-      healthState: "degraded",
+    await this.checkpoints.saveHealthState("degraded", {
       lastDisconnectReason: `request_timeout:${requestId}`,
       lastOutboxError: error.message,
       pendingOutboxCount: (await this.outbox.summarize()).pending,
@@ -585,8 +594,7 @@ export class GatewayWsClient {
       }
     }
     const summary = await this.outbox.summarize();
-    await this.checkpoints.save({
-      healthState: "degraded",
+    await this.checkpoints.saveHealthState("offline", {
       lastDisconnectReason: reason,
       pendingOutboxCount: summary.pending + summary.failed,
       lastOutboxError: reason,
@@ -636,14 +644,11 @@ export class GatewayWsClient {
       if (frame.type === "channel.outbound") {
         const channelPayload = frame as unknown as GatewayRequestEnvelope<GatewayChannelOutboundPayload>;
         const channelKey = String(channelPayload.payload?.channel_key || "").trim();
-        let payload: Record<string, unknown> | undefined;
-        if (this.whatsappRuntime?.supportsChannel(channelKey)) {
-          payload = await this.whatsappRuntime.handleChannelOutbound(channelPayload);
-        } else if (this.telegramRuntime?.supportsChannel(channelKey)) {
-          payload = await this.telegramRuntime.handleChannelOutbound(channelPayload);
-        } else {
+        const runtime = this.personalChannelRuntimes.runtimeForChannel(channelKey);
+        if (!runtime) {
           throw new Error(`Unsupported personal channel key: ${channelKey || "unknown"}`);
         }
+        const payload = await runtime.handleChannelOutbound(channelPayload);
         await this.sendResponse(frame.id, true, payload ?? {});
         return;
       }

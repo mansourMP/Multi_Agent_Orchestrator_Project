@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from server_modules.config_loader import load_runtime_config
+from server_modules.skill_scanner import scan_skill_dir
 
 try:
     import yaml
@@ -724,6 +725,15 @@ def list_installed_skills(*, workspace_id: Optional[str] = None) -> List[Dict[st
                 missing_python_packages=missing_python_packages,
             )
             readme_text = _read_text(skill_dir / "README.md")
+            security_scan = scan_skill_dir(skill_dir)
+            if bool(security_scan.get("blocked")):
+                critical_titles = [
+                    str(item.get("title") or item.get("code") or "critical finding").strip()
+                    for item in list(security_scan.get("findings") or [])
+                    if str(item.get("severity") or "").strip() == "critical"
+                ]
+                suffix = f": {', '.join(critical_titles[:3])}" if critical_titles else ""
+                availability_reasons.append(f"Security scan blocked skill{suffix}")
             items.append(
                 {
                     "id": skill_id[:120],
@@ -739,6 +749,7 @@ def list_installed_skills(*, workspace_id: Optional[str] = None) -> List[Dict[st
                     "enabled": enabled,
                     "available": not availability_reasons,
                     "availability_reasons": availability_reasons,
+                    "security_scan": security_scan,
                     "supported_os": supported_os,
                     "missing_bins": missing_bins,
                     "required_bins": required_bins,

@@ -14,6 +14,7 @@ import { GatewaySupervisorClient } from "./supervisor/client";
 import { GatewayCapabilityRouter } from "./supervisor/capability-router";
 import { WhatsAppPersonalRuntime } from "./channels/whatsapp/runtime";
 import { TelegramPersonalRuntime } from "./channels/telegram/runtime";
+import { PersonalChannelRuntimeRegistry } from "./channels/personal-runtime";
 import { GatewayBrowserWorker } from "./browser/worker";
 import { GatewayBrowserRuntime } from "./browser/runtime";
 
@@ -93,11 +94,14 @@ async function main(): Promise<void> {
   const browserRuntime = new GatewayBrowserRuntime(db, browserWorker);
   const whatsappRuntime = new WhatsAppPersonalRuntime(db);
   const telegramRuntime = new TelegramPersonalRuntime(db);
+  const personalChannelRuntimes = new PersonalChannelRuntimeRegistry([
+    whatsappRuntime,
+    telegramRuntime,
+  ]);
   const capabilityRouter = new GatewayCapabilityRouter(
     supervisorClient,
     browserRuntime,
-    whatsappRuntime,
-    telegramRuntime,
+    personalChannelRuntimes,
   );
   const identity = await resolveDeviceIdentity(db, {
     gatewayId: config.gatewayId,
@@ -105,11 +109,7 @@ async function main(): Promise<void> {
   });
   const runtimeMetadata = buildRuntimeMetadata(
     GATEWAY_VERSION,
-    [
-      ...capabilityRouter.supportedCapabilities(),
-      ...whatsappRuntime.requestedCapabilities(),
-      ...telegramRuntime.requestedCapabilities(),
-    ],
+    capabilityRouter.supportedCapabilities(),
   );
   const client = new GatewayWsClient(
     config,
@@ -119,11 +119,9 @@ async function main(): Promise<void> {
     checkpoints,
     tokenStore,
     capabilityRouter,
-    whatsappRuntime,
-    telegramRuntime,
+    personalChannelRuntimes,
   );
-  whatsappRuntime.setPublisher(client);
-  telegramRuntime.setPublisher(client);
+  personalChannelRuntimes.setPublisher(client);
 
   const cleanup = async (reason: string) => {
     await journal.append("system", "gateway.process.stop", {
@@ -161,8 +159,7 @@ async function main(): Promise<void> {
       stateDir: config.stateDir,
       apiBaseUrl: config.apiBaseUrl,
     });
-    await whatsappRuntime.start();
-    await telegramRuntime.start();
+    await personalChannelRuntimes.startAll();
     await client.run(identity, runtimeMetadata);
   } finally {
     await releaseLock();

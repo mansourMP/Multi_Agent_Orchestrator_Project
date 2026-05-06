@@ -1,5 +1,55 @@
 import { GatewayStateDb } from "../../state/db";
 
+export const TELEGRAM_TYPING_KEEPALIVE_MS = 3_000;
+export const TELEGRAM_TYPING_MAX_TTL_MS = 60_000;
+
+export type TelegramChatAction = "typing";
+export type TelegramChatActionSender = (action: TelegramChatAction) => Promise<void> | void;
+
+export class TelegramTypingKeepalive {
+  private keepaliveTimer: NodeJS.Timeout | null = null;
+  private ttlTimer: NodeJS.Timeout | null = null;
+  private stopped = false;
+
+  constructor(
+    private readonly sender?: TelegramChatActionSender,
+    private readonly keepaliveMs = TELEGRAM_TYPING_KEEPALIVE_MS,
+    private readonly maxTtlMs = TELEGRAM_TYPING_MAX_TTL_MS,
+  ) {}
+
+  async start(): Promise<void> {
+    if (!this.sender || this.stopped) {
+      return;
+    }
+    try {
+      await Promise.resolve(this.sender("typing"));
+    } catch {
+      return;
+    }
+    this.keepaliveTimer = setInterval(() => {
+      void Promise.resolve(this.sender?.("typing")).catch(() => undefined);
+    }, this.keepaliveMs);
+    this.ttlTimer = setTimeout(() => {
+      void this.stop().catch(() => undefined);
+    }, this.maxTtlMs);
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+    this.stopped = true;
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+    if (this.ttlTimer) {
+      clearTimeout(this.ttlTimer);
+      this.ttlTimer = null;
+    }
+  }
+}
+
 export interface TelegramOutboundRecord {
   idempotencyKey: string;
   remoteJid: string;

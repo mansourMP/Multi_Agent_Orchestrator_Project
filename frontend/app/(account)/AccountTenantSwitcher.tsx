@@ -30,6 +30,8 @@ import {
   type WorkspaceRouteId,
   type WorkspaceNavDestinationId,
 } from '../../../shared/nav-manifest';
+import { useAppTheme } from '@/lib/ui/app-theme';
+import { APP_THEME_ATTRIBUTE } from '@/lib/ui/tokens';
 
 const DESTINATION_ICON_MAP: Record<WorkspaceNavDestinationId, LucideIcon> = {
   sage: Bot,
@@ -105,6 +107,7 @@ function extractActiveDestinationId(pathname: string | null): WorkspaceNavDestin
 export function AccountTenantSwitcher() {
   const pathname = usePathname();
   const { state, actions } = useAccountShell();
+  const { resolvedTheme } = useAppTheme();
   const [usageCost, setUsageCost] = useState<number | null>(null);
   const routeWorkspaceId = resolveRouteWorkspaceId(
     state.workspaceMemberships,
@@ -119,7 +122,6 @@ export function AccountTenantSwitcher() {
     ?? null;
   const activeMembership = state.workspaceMemberships.find((item) => item.workspace.id === activeWorkspaceId) ?? null;
   const activeTenantId = activeMembership?.workspace.tenantId ?? state.workspaceMemberships[0]?.workspace.tenantId ?? '';
-  const isLightTheme = state.globalTheme === 'light';
   const currentTheme = state.globalTheme;
   const accountInitial = String(state.account?.displayName || state.account?.email || 'You').trim().charAt(0).toUpperCase() || 'Y';
   const nextTheme = currentTheme === 'system'
@@ -170,8 +172,16 @@ export function AccountTenantSwitcher() {
   }, [activeTenantId, activeWorkspaceId]);
 
   useEffect(() => {
-    document.body.classList.toggle('theme-light', isLightTheme);
-  }, [isLightTheme]);
+    const root = document.documentElement;
+    const body = document.body;
+    const isLightTheme = resolvedTheme === 'light';
+
+    root.setAttribute(APP_THEME_ATTRIBUTE, resolvedTheme);
+    root.style.colorScheme = resolvedTheme;
+    body.setAttribute(APP_THEME_ATTRIBUTE, resolvedTheme);
+    body.style.colorScheme = resolvedTheme;
+    body.classList.toggle('theme-light', isLightTheme);
+  }, [resolvedTheme]);
 
   useEffect(() => {
     let cancelled = false;

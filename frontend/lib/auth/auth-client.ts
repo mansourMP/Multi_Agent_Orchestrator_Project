@@ -182,7 +182,7 @@ async function requestAuth<T>(path: string, options: AuthRequestOptions): Promis
       payload && typeof payload === 'object' && !Array.isArray(payload)
         ? String((payload as Record<string, unknown>).detail || '').trim()
         : '';
-    throw new Error(detail || 'Authentication could not finish. Try again when ready.');
+    throw new Error(detail || `Authentication request failed with status ${response.status}.`);
   }
   return payload as T;
 }
@@ -215,7 +215,7 @@ export async function awaitBrowserAuthReady({
     }
 
     lastStatus = response.status;
-    if (response.status === 401 || response.status >= 500 || response.status === 403) {
+    if (response.status === 401 || response.status === 403 || response.status >= 500) {
       await sleep(delayMs);
       continue;
     }

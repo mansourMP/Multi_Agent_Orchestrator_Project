@@ -2,7 +2,7 @@
 
 import type { PropsWithChildren } from 'react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
 import { joinClassNames } from '@/lib/ui/primitives';
@@ -48,6 +48,7 @@ export function WorkstationKernelShell({
   const services = useWorkspaceServices();
   const activityVersion = useWorkstationActivityVersion();
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const approvalRefreshTimerRef = useRef<number | null>(null);
 
   const activeRouteId = useMemo(
     () => resolveRouteIdFromHref(workspaceId, pathname),
@@ -76,23 +77,37 @@ export function WorkstationKernelShell({
 
   useEffect(() => {
     if (!routeManifest.routeIndex.approvals) {
+      if (approvalRefreshTimerRef.current !== null) {
+        window.clearTimeout(approvalRefreshTimerRef.current);
+        approvalRefreshTimerRef.current = null;
+      }
       setPendingApprovalCount(0);
       return;
     }
     let cancelled = false;
-    services.client.listApprovals({ limit: 24 })
-      .then((payload) => {
-        if (!cancelled) {
-          setPendingApprovalCount(readPendingApprovalCount(payload));
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPendingApprovalCount(0);
-        }
-      });
+    if (approvalRefreshTimerRef.current !== null) {
+      window.clearTimeout(approvalRefreshTimerRef.current);
+    }
+    approvalRefreshTimerRef.current = window.setTimeout(() => {
+      approvalRefreshTimerRef.current = null;
+      services.client.listApprovals({ limit: 24 })
+        .then((payload) => {
+          if (!cancelled) {
+            setPendingApprovalCount(readPendingApprovalCount(payload));
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setPendingApprovalCount(0);
+          }
+        });
+    }, activityVersion === 0 ? 0 : 750);
     return () => {
       cancelled = true;
+      if (approvalRefreshTimerRef.current !== null) {
+        window.clearTimeout(approvalRefreshTimerRef.current);
+        approvalRefreshTimerRef.current = null;
+      }
     };
   }, [activityVersion, routeManifest.routeIndex.approvals, services.client, workspaceId]);
 

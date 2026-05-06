@@ -426,7 +426,7 @@ export function WorkstationActivityPane() {
     return () => {
       cancelled = true;
     };
-  }, [cachedSnapshot, services.client]);
+  }, [services.client, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -440,17 +440,6 @@ export function WorkstationActivityPane() {
       cancelled = true;
     };
   }, [services.client]);
-
-  useEffect(() => {
-    if (streamState.activity.version === 0) {
-      return;
-    }
-    void refresh(false).catch((loadError) => {
-      setError(memoryPaneErrorMessage(loadError));
-      setIsLoading(false);
-    });
-    void refreshProfile(false).catch(() => {});
-  }, [services.client, streamState.activity.version]);
 
   const pendingDeleteMemory = useMemo(
     () => snapshot.items.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null,

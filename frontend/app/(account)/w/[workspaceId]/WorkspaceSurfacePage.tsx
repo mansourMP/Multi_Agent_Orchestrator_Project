@@ -13,6 +13,7 @@ import { MarketplacePane } from '@/lib/marketplace/marketplace-pane';
 import { WorkstationNotificationsPane } from '@/lib/workspace/workstation-notifications-pane';
 import { WorkstationRunsPane } from '@/lib/workspace/workstation-runs-pane';
 import { WorkstationSageConnectorsPane } from '@/lib/workspace/workstation-sage-connectors-pane';
+import { WorkstationSageProfilePane } from '@/lib/workspace/workstation-sage-profile-pane';
 import { WorkstationSettingsPane } from '@/lib/workspace/workstation-settings-pane';
 import { WorkstationStudioIntegrationsPane } from '@/lib/workspace/workstation-studio-integrations-pane';
 import { WorkstationSurfaceViewport } from '@/lib/workspace/workstation-shell-frame';
@@ -40,7 +41,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   profile: {
     destinationId: 'sage',
-    render: () => <WorkstationActivityPane />,
+    render: () => <WorkstationSageProfilePane />,
   },
   runs: {
     destinationId: 'sage',

@@ -19,7 +19,10 @@ import { AppleProviderIcon, GoogleProviderIcon } from '@/lib/auth/auth-provider-
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 function authErrorCopy(error: string): string {
-  const normalized = error.toLowerCase();
+  const unwrapped = error
+    .trim()
+    .replace(/^(login request failed|session readiness failed):\s*/i, '');
+  const normalized = unwrapped.toLowerCase();
   if (normalized.includes('google_not_configured')) {
     return 'Google sign-in is not configured for this environment yet.';
   }
@@ -34,6 +37,21 @@ function authErrorCopy(error: string): string {
   }
   if (normalized.includes('google_state_invalid') || normalized.includes('google_auth_failed')) {
     return 'Google sign-in could not finish. Try again or use email.';
+  }
+  if (normalized.includes('status 401')) {
+    return 'Email or password was not accepted.';
+  }
+  if (normalized.includes('status 403')) {
+    return 'This session is not allowed to open the workspace yet. Sign in again or use an allowed account.';
+  }
+  if (normalized.includes('status 404')) {
+    return 'The auth route is not available in this environment.';
+  }
+  if (normalized.includes('status 429')) {
+    return 'Too many sign-in attempts. Wait a minute, then try again.';
+  }
+  if (/status 5\d\d/.test(normalized)) {
+    return 'The auth service is warming up or unavailable. Try again in a moment.';
   }
   if (normalized.includes('password') || normalized.includes('credential') || normalized.includes('invalid')) {
     return 'Email or password was not accepted.';
@@ -137,10 +155,18 @@ function LoginPageContent() {
     setError(null);
     try {
       await login(email, password);
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : 'Login failed.';
+      setError(`Login request failed: ${message}`);
+      setSubmitting(false);
+      return;
+    }
+    try {
       await awaitBrowserAuthReady({ attempts: 12, delayMs: 250 });
       window.location.replace('/');
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Login failed.');
+      const message = nextError instanceof Error ? nextError.message : 'Session was not ready.';
+      setError(`Session readiness failed: ${message}`);
     } finally {
       setSubmitting(false);
     }
@@ -228,6 +254,7 @@ function LoginPageContent() {
                 required
                 value={email}
                 className="app-auth-input"
+                placeholder="Enter your email"
                 onChange={(event) => setEmail(event.target.value)}
               />
             </span>
@@ -243,6 +270,7 @@ function LoginPageContent() {
                 required
                 value={password}
                 className="app-auth-input"
+                placeholder="Enter your password"
                 onChange={(event) => setPassword(event.target.value)}
               />
             </span>

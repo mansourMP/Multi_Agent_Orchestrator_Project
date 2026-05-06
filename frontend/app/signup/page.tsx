@@ -235,6 +235,7 @@ export default function SignupPage() {
                 name="name"
                 value={name}
                 className="app-auth-input"
+                placeholder="Enter your name"
                 onChange={(event) => setName(event.target.value)}
               />
             </span>
@@ -250,6 +251,7 @@ export default function SignupPage() {
                 required
                 value={email}
                 className="app-auth-input"
+                placeholder="Enter your email"
                 onChange={(event) => setEmail(event.target.value)}
               />
             </span>
@@ -266,6 +268,7 @@ export default function SignupPage() {
                 required
                 value={password}
                 className="app-auth-input"
+                placeholder="Enter your password"
                 onChange={(event) => setPassword(event.target.value)}
               />
             </span>

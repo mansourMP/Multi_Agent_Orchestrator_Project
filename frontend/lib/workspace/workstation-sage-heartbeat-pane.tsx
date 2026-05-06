@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { WorkstationSageHeartbeatRecord } from '@/lib/workspace/workstation-client';
@@ -275,6 +275,7 @@ export function WorkstationSageHeartbeatPane() {
   const [snapshot, setSnapshot] = useState<HeartbeatSnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const activityRefreshTimerRef = useRef<number | null>(null);
 
   const refresh = async (showLoading = false) => {
     if (showLoading) {
@@ -303,7 +304,19 @@ export function WorkstationSageHeartbeatPane() {
     if (streamState.activity.version === 0) {
       return;
     }
-    void refresh(false).catch(() => {});
+    if (activityRefreshTimerRef.current !== null) {
+      window.clearTimeout(activityRefreshTimerRef.current);
+    }
+    activityRefreshTimerRef.current = window.setTimeout(() => {
+      activityRefreshTimerRef.current = null;
+      void refresh(false).catch(() => {});
+    }, 750);
+    return () => {
+      if (activityRefreshTimerRef.current !== null) {
+        window.clearTimeout(activityRefreshTimerRef.current);
+        activityRefreshTimerRef.current = null;
+      }
+    };
   }, [services.client, streamState.activity.version]);
 
   const upcomingItems = useMemo(

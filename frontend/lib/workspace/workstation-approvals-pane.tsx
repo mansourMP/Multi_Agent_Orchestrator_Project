@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { DataBadge } from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
@@ -77,6 +77,7 @@ function sortApprovals(items: ApprovalRecord[]): ApprovalRecord[] {
 export function WorkstationApprovalsPane() {
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
+  const activityRefreshTimerRef = useRef<number | null>(null);
   const [items, setItems] = useState<ApprovalRecord[]>([]);
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -131,10 +132,22 @@ export function WorkstationApprovalsPane() {
     if (streamState.activity.version === 0) {
       return;
     }
-    void refresh(false).catch((loadError) => {
-      setError(loadError instanceof Error ? loadError.message : 'Needs your OK requests are unavailable right now.');
-      setIsLoading(false);
-    });
+    if (activityRefreshTimerRef.current !== null) {
+      window.clearTimeout(activityRefreshTimerRef.current);
+    }
+    activityRefreshTimerRef.current = window.setTimeout(() => {
+      activityRefreshTimerRef.current = null;
+      void refresh(false).catch((loadError) => {
+        setError(loadError instanceof Error ? loadError.message : 'Needs your OK requests are unavailable right now.');
+        setIsLoading(false);
+      });
+    }, 750);
+    return () => {
+      if (activityRefreshTimerRef.current !== null) {
+        window.clearTimeout(activityRefreshTimerRef.current);
+        activityRefreshTimerRef.current = null;
+      }
+    };
   }, [services.client, streamState.activity.version]);
 
   useEffect(() => {

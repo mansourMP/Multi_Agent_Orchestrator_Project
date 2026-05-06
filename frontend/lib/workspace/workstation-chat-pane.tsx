@@ -2500,6 +2500,7 @@ export function WorkstationChatPane() {
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
   const streamInFlightRef = useRef(false);
+  const activeTurnRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
@@ -3164,7 +3165,6 @@ export function WorkstationChatPane() {
     }
     void Promise.all([
       loadOverview(),
-      loadMemory(),
     ]).catch((error) => {
       if (shouldSuppressBackgroundRefreshNotice(error)) {
         return;
@@ -3369,6 +3369,11 @@ export function WorkstationChatPane() {
     && localRuntimeTarget.healthy,
   );
   const gatewayReadinessOnline = readString(browserGatewayDoctor?.status).toLowerCase() === 'healthy';
+  const localToolingOnline = localCompanionConnected;
+  const gatewayToolingOnline = useMemo(
+    () => localToolingOnline || gatewayReadinessOnline,
+    [gatewayReadinessOnline, localToolingOnline],
+  );
   const persistedSelectedModelId = useMemo(
     () => resolvePersistedSelectedModelId({
       providers: providerCatalog,
@@ -3407,10 +3412,6 @@ export function WorkstationChatPane() {
   const selectedProviderRecord = useMemo(
     () => providerCatalog.find((provider) => readString(provider.id) === readString(selectedProviderContext.providerId)) ?? null,
     [providerCatalog, selectedProviderContext.providerId],
-  );
-  const gatewayToolingOnline = useMemo(
-    () => gatewayReadinessOnline,
-    [gatewayReadinessOnline],
   );
   const activeProviderSummary = useMemo(() => {
     const providerLabelById = new Map(
@@ -3476,7 +3477,7 @@ export function WorkstationChatPane() {
     if (!selectedProviderRecord) {
       return { label: 'No AI model', tone: 'warning' as const };
     }
-    if (!gatewayToolingOnline) {
+    if (localProvider && !localToolingOnline) {
       return { label: 'My Computer offline', tone: 'warning' as const };
     }
     if (localProvider) {
@@ -3489,13 +3490,13 @@ export function WorkstationChatPane() {
       return { label: providerPath, tone: 'neutral' as const };
     }
     return { label: 'Cloud AI', tone: 'neutral' as const };
-  }, [gatewayToolingOnline, selectedProviderRecord]);
+  }, [localToolingOnline, selectedProviderRecord]);
   const runtimeTrustZone = useMemo<ChatRuntimeTrustZone>(
     () => resolveRuntimeTrustZone(localRuntimeTarget, machineTrust),
     [localRuntimeTarget, machineTrust],
   );
   const composerToolGroups = useMemo<ComposerToolGroup[]>(() => {
-    const localReason = gatewayToolingOnline ? 'Available through this paired computer' : 'Requires a connected computer';
+    const localReason = localToolingOnline ? 'Available through this paired computer' : 'Requires a connected computer';
     const emailAvailable = hasConnectedConnector(connectorCredentials, ['google_workspace', 'smtp', 'microsoft_365']);
     const telegramAvailable = hasConnectedConnector(connectorCredentials, ['telegram_bot']);
     const telegramChannelEnabled = hasCapability('telegram_channel_enabled');
@@ -3507,18 +3508,18 @@ export function WorkstationChatPane() {
     const codeEnabled = toolPolicyEnabled(toolPolicy, 'code_execution');
     const browserStatus = readString(readObject(browserGatewayDoctor?.browser).status).toLowerCase();
     const browserEnabled = gatewayToolingOnline && browserStatus !== 'fail';
-    const telegramSendEnabled = gatewayToolingOnline && (telegramAvailable || telegramChannelEnabled);
-    const whatsappSendEnabled = gatewayToolingOnline && whatsappChannelEnabled;
+    const telegramSendEnabled = localToolingOnline && (telegramAvailable || telegramChannelEnabled);
+    const whatsappSendEnabled = localToolingOnline && whatsappChannelEnabled;
     return [
       {
         id: 'local-machine',
         label: 'Local machine',
         items: [
-          { id: 'files', label: 'Files', detail: fileEnabled ? localReason : 'Blocked by workspace policy', enabled: gatewayToolingOnline && fileEnabled },
+          { id: 'files', label: 'Files', detail: fileEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && fileEnabled },
           { id: 'browser', label: 'Browser', detail: browserEnabled ? localReason : 'Browser attach is not ready', enabled: browserEnabled },
           { id: 'screenshot', label: 'Screenshot', detail: browserEnabled ? localReason : 'Browser attach is not ready', enabled: browserEnabled },
-          { id: 'clipboard', label: 'Clipboard', detail: localReason, enabled: gatewayToolingOnline },
-          { id: 'terminal', label: 'Terminal', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: gatewayToolingOnline && codeEnabled },
+          { id: 'clipboard', label: 'Clipboard', detail: localReason, enabled: localToolingOnline },
+          { id: 'terminal', label: 'Terminal', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && codeEnabled },
         ],
       },
       {
@@ -3557,11 +3558,11 @@ export function WorkstationChatPane() {
         label: 'Data',
         items: [
           { id: 'spreadsheet', label: 'Spreadsheet', detail: spreadsheetAvailable ? 'Spreadsheet connected app is active' : 'Connect Google Workspace or Microsoft 365', enabled: spreadsheetAvailable },
-          { id: 'code-execution', label: 'Code execution', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: gatewayToolingOnline && codeEnabled },
+          { id: 'code-execution', label: 'Code execution', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && codeEnabled },
         ],
       },
     ];
-  }, [browserGatewayDoctor, connectorCredentials, gatewayToolingOnline, hasCapability, toolPolicy]);
+  }, [browserGatewayDoctor, connectorCredentials, gatewayToolingOnline, hasCapability, localToolingOnline, toolPolicy]);
   const integrationsHref = useMemo(
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
@@ -3746,7 +3747,7 @@ export function WorkstationChatPane() {
         target: 'integrations',
       });
     }
-    if (!gatewayReadinessOnline) {
+    if (!localToolingOnline) {
       pills.push({
         id: 'gateway',
         label: 'My Computer: Offline',
@@ -3761,7 +3762,7 @@ export function WorkstationChatPane() {
       pills.push(browserPill);
     }
     return pills;
-  }, [browserGatewayDoctor, gatewayReadinessOnline, selectedProviderContext.providerLabel]);
+  }, [browserGatewayDoctor, localToolingOnline, selectedProviderContext.providerLabel]);
   const showContextStrip = false;
   const showHeaderReadinessStrip = false;
 
@@ -3892,15 +3893,26 @@ export function WorkstationChatPane() {
   }, [liveTrace?.trace?.model, liveTrace?.trace?.provider, liveTrace?.traceId]);
 
   const stopStreamingResponse = useCallback(() => {
-    if (!streamInFlightRef.current) {
+    if (
+      !streamInFlightRef.current
+      && !submitInFlightRef.current
+      && !streamAbortHandleRef.current
+      && !activeTurnRequestIdRef.current
+    ) {
       return;
     }
+    activeTurnRequestIdRef.current = null;
     streamAbortRequestedRef.current = true;
     streamAbortHandleRef.current?.abort();
+    streamAbortHandleRef.current = null;
     setShowProjectedAssistant(false);
     setTimelineSettled(true);
     finalizePartialAssistantResponse(activeThreadIdRef.current);
+    setLiveTimelineEvents([]);
+    setLiveActivitySteps([]);
+    setLiveTrace(null);
     streamInFlightRef.current = false;
+    submitInFlightRef.current = false;
     setIsSending(false);
   }, [finalizePartialAssistantResponse]);
 
@@ -3972,6 +3984,14 @@ export function WorkstationChatPane() {
 
     const requestedThreadId = activeThreadId;
     const clientRequestId = createClientTurnRequestId();
+    activeTurnRequestIdRef.current = clientRequestId;
+    const assertTurnStillActive = () => {
+      if (activeTurnRequestIdRef.current !== clientRequestId || streamAbortRequestedRef.current) {
+        throw new WorkstationClientError('Turn stopped by user.', 0, null, 'stream_aborted', {
+          retryable: true,
+        });
+      }
+    };
     const pendingMessage = createPendingUserMessage(outboundMessage, requestedThreadId, clientRequestId);
     const streamAbortHandle: WorkstationTurnStreamAbortHandle = {
       signal: new AbortController().signal,
@@ -4035,6 +4055,7 @@ export function WorkstationChatPane() {
           resolve();
         });
       });
+      assertTurnStillActive();
 
       let session = await services.client.createSession({
         actor,
@@ -4044,6 +4065,7 @@ export function WorkstationChatPane() {
         forceNew: false,
         existingSession: thread.session,
       });
+      assertTurnStillActive();
       const persistedThreadPayload = await services.client.persistUserTurn({
         actor,
         sessionId: String(session.session_id),
@@ -4055,6 +4077,7 @@ export function WorkstationChatPane() {
         },
         clientRequestId,
       });
+      assertTurnStillActive();
       const persistedThreadState: CanonicalChatThreadState = {
         ...normalizeCanonicalChatThread(persistedThreadPayload, requestedThreadId),
         session,
@@ -4195,6 +4218,9 @@ export function WorkstationChatPane() {
           },
         },
         onEvent: (event) => {
+          if (activeTurnRequestIdRef.current !== clientRequestId || streamAbortRequestedRef.current) {
+            return;
+          }
           if (event.event === 'trace') {
             const traceEvent = normalizeTraceStreamEvent(event.payload);
             if (traceEvent) {
@@ -4267,6 +4293,7 @@ export function WorkstationChatPane() {
           }
         },
       });
+      assertTurnStillActive();
       session = streamedSession;
 
       const responseMetadata =
@@ -4398,13 +4425,18 @@ export function WorkstationChatPane() {
     } catch (error) {
       updatePendingUserMessage(null);
       const normalizedError = error instanceof WorkstationClientError ? error : null;
-      const aborted = normalizedError?.code === 'stream_aborted' || streamAbortRequestedRef.current;
+      const aborted = normalizedError?.code === 'stream_aborted'
+        || streamAbortRequestedRef.current
+        || activeTurnRequestIdRef.current !== clientRequestId;
       const partialStreamText = readString(streamingAssistantTextRef.current);
       const incompleteWithPartial = normalizedError?.code === 'stream_incomplete' && Boolean(partialStreamText);
       if (aborted || incompleteWithPartial) {
         setShowProjectedAssistant(false);
         setTimelineSettled(true);
         finalizePartialAssistantResponse(activeThreadIdRef.current);
+        setLiveTimelineEvents([]);
+        setLiveActivitySteps([]);
+        setLiveTrace(null);
         setSendFailureNotice(incompleteWithPartial
           ? {
               message: 'Response interrupted before completion.',
@@ -4466,11 +4498,16 @@ export function WorkstationChatPane() {
       }
       setLiveActivitySteps((current) => settleLiveActivitySteps(current, aborted ? 'done' : 'error'));
     } finally {
-      submitInFlightRef.current = false;
-      streamInFlightRef.current = false;
-      streamAbortHandleRef.current = null;
-      streamAbortRequestedRef.current = false;
-      setIsSending(false);
+      if (activeTurnRequestIdRef.current === clientRequestId || activeTurnRequestIdRef.current === null) {
+        submitInFlightRef.current = false;
+        streamInFlightRef.current = false;
+        streamAbortHandleRef.current = null;
+        streamAbortRequestedRef.current = false;
+        setIsSending(false);
+      }
+      if (activeTurnRequestIdRef.current === clientRequestId) {
+        activeTurnRequestIdRef.current = null;
+      }
     }
   };
 

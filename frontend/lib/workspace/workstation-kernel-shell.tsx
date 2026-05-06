@@ -20,7 +20,7 @@ import {
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
   sage: ['chat', 'memory', 'integrations', 'heartbeat', 'activity'],
-  studio: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
+  studio: ['studio'],
   gateway: ['integrations'],
   marketplace: ['marketplace'],
   settings: ['settings'],

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { RefreshCw, X } from 'lucide-react';
 
@@ -36,6 +36,7 @@ import type {
   DeployedAgentTelegramReadinessRecord,
   ProviderCatalogModelRecord,
   ProviderCatalogRecord,
+  StudioProofAgentSeedRecord,
 } from '@/lib/workspace/workstation-client';
 import { WorkstationDeployedAgentAnalyticsPane } from '@/lib/workspace/workstation-deployed-agent-analytics-pane';
 import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
@@ -597,6 +598,16 @@ function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function readBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
 function readNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
@@ -807,11 +818,105 @@ function normalizeToolIds(value: unknown): string[] {
     .filter((item, index, array) => allowed.has(item) && array.indexOf(item) === index);
 }
 
-function studioTemplateById(templateId: string | null | undefined): StudioTemplate {
+function mapSeedToolToStudioToolId(toolId: string): string {
+  const normalized = toolId.trim().toLowerCase();
+  if (normalized.includes('catalog') || normalized.includes('menu') || normalized.includes('availability_read')) {
+    return 'spreadsheet_read';
+  }
+  if (normalized.includes('capture') || normalized.includes('request') || normalized.includes('confirmation')) {
+    return 'spreadsheet_append';
+  }
+  if (normalized.includes('calendar') || normalized.includes('appointment')) {
+    return 'calendar_write';
+  }
+  if (normalized.includes('handoff')) {
+    return 'gmail_send';
+  }
+  return normalized;
+}
+
+function studioTemplateById(
+  templateId: string | null | undefined,
+  templates: ReadonlyArray<StudioTemplate> = STUDIO_TEMPLATES,
+): StudioTemplate {
   if (templateId === CUSTOM_STUDIO_TEMPLATE.id) {
     return CUSTOM_STUDIO_TEMPLATE;
   }
-  return STUDIO_TEMPLATES.find((template) => template.id === templateId) ?? DEFAULT_STUDIO_TEMPLATE;
+  return templates.find((template) => template.id === templateId) ?? templates[0] ?? DEFAULT_STUDIO_TEMPLATE;
+}
+
+function mapStudioSeedToTemplate(seed: StudioProofAgentSeedRecord): StudioTemplate | null {
+  const slug = readString(seed.slug);
+  const name = readString(seed.name);
+  if (!slug || !name) {
+    return null;
+  }
+  const persona = readRecord(seed.persona);
+  const runtime = readRecord(seed.runtime_tier_recommendation);
+  const dataSources = Array.isArray(seed.default_data_sources)
+    ? seed.default_data_sources.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    : [];
+  const channels = Array.isArray(seed.channels)
+    ? seed.channels.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    : [];
+  const tools = Array.isArray(seed.tools_skills)
+    ? seed.tools_skills.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    : [];
+  const requiredConnectors = [
+    ...dataSources.map((item) => readString(item.label, readString(item.source_id))).filter(Boolean),
+    ...channels
+      .filter((item) => readBoolean(item.default_enabled))
+      .map((item) => readString(item.label, readString(item.channel_key)))
+      .filter(Boolean),
+  ];
+  const selectedToolIds = normalizeToolIds(
+    tools
+      .filter((item) => readBoolean(item.default_enabled))
+      .map((item) => mapSeedToolToStudioToolId(readString(item.id))),
+  );
+  const personaRole = readString(persona.role);
+  const personaTone = readString(persona.tone);
+  const instructions = Array.isArray(persona.instructions)
+    ? persona.instructions.map((item) => readString(item)).filter(Boolean)
+    : [];
+  return {
+    id: slug,
+    title: name,
+    category: readString(seed.category, 'Specialist'),
+    icon: name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part.charAt(0).toUpperCase())
+      .join('') || 'AI',
+    outcome: readString(seed.description, 'Customize and deploy this specialist.'),
+    description: readString(seed.description, 'Backend-defined specialist template.'),
+    setupTime: '5 min setup',
+    channelLabel: channels.map((item) => readString(item.label, readString(item.channel_key))).filter(Boolean).slice(0, 3).join(' / ') || 'Choose later',
+    requiredConnectors: requiredConnectors.length ? requiredConnectors.slice(0, 4) : ['Connect live data'],
+    defaultName: readString(persona.default_name, name),
+    persona: [personaRole, personaTone].filter(Boolean).join(' — ') || readString(seed.description),
+    systemPrompt: instructions.join('\n') || readString(seed.description),
+    knowledgePlaceholder: dataSources.length
+      ? dataSources.map((item) => `${readString(item.label, readString(item.source_id))}: ${readString(item.kind, 'source')}`).join('\n')
+      : 'Add trusted docs, spreadsheets, URLs, or live data sources here.',
+    selectedToolIds: selectedToolIds.length ? selectedToolIds : ['web_search'],
+    memoryEnabled: true,
+    contextBudgetPreset: readString(runtime.tier).includes('hosted') ? 'balanced' : 'deep',
+  };
+}
+
+function normalizeStudioTemplates(payload: unknown): StudioTemplate[] {
+  const seedTemplates = readItems<StudioProofAgentSeedRecord>(payload)
+    .map(mapStudioSeedToTemplate)
+    .filter((item): item is StudioTemplate => Boolean(item));
+  if (!seedTemplates.length) {
+    return [...STUDIO_TEMPLATES];
+  }
+  return [
+    ...seedTemplates,
+    ...STUDIO_TEMPLATES.filter((template) => !seedTemplates.some((seed) => seed.id === template.id)),
+  ];
 }
 
 function applyStudioTemplate(state: WizardState, template: StudioTemplate): WizardState {
@@ -1569,6 +1674,7 @@ export function WorkstationDeployedAgentsPane({
   const [hadInitialCache] = useState(() => cachedStudioPane !== null);
   const [currentStudioSubview, setCurrentStudioSubview] = useState<StudioSubview>(initialSubview);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogSnapshot[]>(() => cachedStudioPane?.providerCatalog ?? []);
+  const [studioTemplates, setStudioTemplates] = useState<StudioTemplate[]>(() => [...STUDIO_TEMPLATES]);
   const [agents, setAgents] = useState<DeployedAgentRecord[]>(() => cachedStudioPane?.agents ?? []);
   const [connectorVaultIds, setConnectorVaultIds] = useState<Set<string>>(() => new Set(cachedStudioPane?.connectorVaultIds ?? []));
   const [agentMetricsById, setAgentMetricsById] = useState<Record<string, AgentOperationalMetrics>>(() => cachedStudioPane?.agentMetricsById ?? {});
@@ -1602,6 +1708,7 @@ export function WorkstationDeployedAgentsPane({
   const [wizardStepIndex, setWizardStepIndex] = useState(0);
   const [wizardState, setWizardState] = useState<WizardState>(() => buildWizardState(null));
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() => DEFAULT_STUDIO_TEMPLATE.id);
+  const handledTemplateDeepLinkRef = useRef<string | null>(null);
   const [isSubmittingWizard, setIsSubmittingWizard] = useState(false);
   const [detailConfigDraft, setDetailConfigDraft] = useState<DetailConfigDraft | null>(null);
   const [isSavingDetailConfig, setIsSavingDetailConfig] = useState(false);
@@ -1654,8 +1761,8 @@ export function WorkstationDeployedAgentsPane({
     [selectedTelegramReadiness, wizardState.telegramConnectorId],
   );
   const selectedStudioTemplate = useMemo(
-    () => studioTemplateById(selectedTemplateId),
-    [selectedTemplateId],
+    () => studioTemplateById(selectedTemplateId, studioTemplates),
+    [selectedTemplateId, studioTemplates],
   );
   const filteredConversations = useMemo(
     () => conversations.filter((conversation) => matchesConversationFilters(conversation, conversationFilters)),
@@ -1679,6 +1786,10 @@ export function WorkstationDeployedAgentsPane({
   );
   const requestedAgentId = useMemo(
     () => String(searchParams.get('agent') || '').trim(),
+    [searchParams],
+  );
+  const requestedProofAgentTemplateId = useMemo(
+    () => String(searchParams.get('proof_agent') || searchParams.get('template') || '').trim(),
     [searchParams],
   );
 
@@ -1726,6 +1837,21 @@ export function WorkstationDeployedAgentsPane({
       setErrorMessage(error instanceof Error ? error.message : 'AI model catalog is unavailable.');
     } finally {
       setIsLoadingProviderCatalog(false);
+    }
+  }
+
+  async function refreshStudioTemplates() {
+    try {
+      const payload = await services.client.listStudioTemplates();
+      const nextTemplates = normalizeStudioTemplates(payload);
+      setStudioTemplates(nextTemplates);
+      setSelectedTemplateId((current) => (
+        current === CUSTOM_STUDIO_TEMPLATE.id || nextTemplates.some((template) => template.id === current)
+          ? current
+          : nextTemplates[0]?.id ?? DEFAULT_STUDIO_TEMPLATE.id
+      ));
+    } catch {
+      setStudioTemplates([...STUDIO_TEMPLATES]);
     }
   }
 
@@ -1914,6 +2040,7 @@ export function WorkstationDeployedAgentsPane({
 
   useEffect(() => {
     void refreshAgents();
+    void refreshStudioTemplates();
     const handle = window.setTimeout(() => {
       void refreshProviderCatalog();
     }, hadInitialCache ? 120 : 260);
@@ -1938,6 +2065,20 @@ export function WorkstationDeployedAgentsPane({
     setSelectedAgentId(requestedAgentId);
     setOverlayAgentId(requestedAgentId);
   }, [agents, requestedAgentId]);
+
+  useEffect(() => {
+    if (!requestedProofAgentTemplateId || handledTemplateDeepLinkRef.current === requestedProofAgentTemplateId) {
+      return;
+    }
+    const template = studioTemplateById(requestedProofAgentTemplateId, studioTemplates);
+    if (template.id !== requestedProofAgentTemplateId) {
+      return;
+    }
+    handledTemplateDeepLinkRef.current = requestedProofAgentTemplateId;
+    setCurrentStudioSubview('agents');
+    openCreateWizard(template.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedProofAgentTemplateId, studioTemplates]);
 
   useEffect(() => {
     updateStudioPaneCache(workspaceId, {
@@ -2154,7 +2295,7 @@ export function WorkstationDeployedAgentsPane({
   }, [services.client]);
 
   function openCreateWizard(templateId: string = selectedTemplateId) {
-    const template = studioTemplateById(templateId);
+    const template = studioTemplateById(templateId, studioTemplates);
     setWizardMode('create');
     setWizardStepIndex(0);
     setSelectedTemplateId(template.id);
@@ -2601,7 +2742,7 @@ export function WorkstationDeployedAgentsPane({
                       ) : undefined}
                     >
                       <div className="studio-template-grid" data-studio-template-grid="true">
-                        {STUDIO_TEMPLATES.map((template) => (
+                        {studioTemplates.map((template) => (
                           <StudioTemplateCard
                             key={template.id}
                             template={template}

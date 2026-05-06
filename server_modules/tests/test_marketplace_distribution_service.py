@@ -33,14 +33,18 @@ def test_empty_marketplace_returns_preview_packages(monkeypatch, tmp_path):
 
     payload = marketplace_distribution_service.list_marketplace_packages("ws-empty")
     provider_payload = marketplace_distribution_service.list_marketplace_packages("ws-empty", kind="provider")
+    template_payload = marketplace_distribution_service.list_marketplace_packages("ws-empty", kind="agent_template")
 
-    assert payload["count"] >= 6
+    assert payload["count"] >= 9
     assert all(item["preview_only"] is True for item in payload["items"])
     package_ids = {item["package_id"] for item in payload["items"]}
     assert "preview-restaurant-orders" in package_ids
     assert "preview-deepseek-provider" in package_ids
+    assert "studio-proof-shop-assistant" in package_ids
     assert provider_payload["count"] == 1
     assert provider_payload["items"][0]["package_id"] == "preview-deepseek-provider"
+    assert template_payload["count"] == 3
+    assert template_payload["items"][0]["kind"] == "agent_template"
 
 
 def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypatch, tmp_path):

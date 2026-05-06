@@ -66,17 +66,22 @@ def test_contracts_are_returned_as_defensive_copies():
     assert all(item.get("source_id") != "mutated" for item in second["default_data_sources"])
 
 
-def test_marketplace_package_projection_is_normalizable_preview_app_contract():
+def test_marketplace_package_projection_is_normalizable_agent_template_contract():
     packages = studio_proof_agent_seed_service.build_studio_proof_agent_marketplace_package_contracts()
 
     assert len(packages) == 3
     for package in packages:
         normalized = marketplace_distribution_service._normalize_package_payload(package)
 
-        assert normalized["kind"] == "app"
-        assert normalized["install_target"] == "app_registry"
+        assert normalized["kind"] == "agent_template"
+        assert normalized["install_target"] == "template_catalog"
         assert normalized["review_state"] == "approved"
         assert normalized["policy_posture"] == "governed"
-        assert normalized["app"]["hosted_url"].startswith("/w/{workspace_id}/studio?proof_agent=")
-        assert "proof_agent_seed_contract" in normalized["app"]["context_envelope"]
-        assert normalized["app"]["context_envelope"]["proof_agent_seed_contract"]["customization"]["additional_fields_allowed"] is True
+        assert normalized["agent_template"]["template_id"] in {
+            "shop-assistant",
+            "dental-receptionist",
+            "restaurant-order-taker",
+        }
+        assert normalized["agent_template"]["launch_checklist"]
+        assert "proof_agent_seed_contract" in normalized["agent_template"]["context_envelope"]
+        assert normalized["agent_template"]["context_envelope"]["proof_agent_seed_contract"]["customization"]["additional_fields_allowed"] is True

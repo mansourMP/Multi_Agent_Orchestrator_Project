@@ -486,11 +486,27 @@ export type MarketplacePackageRecord = Record<string, unknown> & {
   review_state?: string | null;
   health_state?: string | null;
   installed?: boolean | null;
+  install_eligible?: boolean | null;
+  install_blockers?: string[] | null;
   runtime_truth?: Record<string, unknown> | null;
   billing?: Record<string, unknown> | null;
   analytics?: Record<string, unknown> | null;
   publisher?: Record<string, unknown> | null;
   package?: Record<string, unknown> | null;
+};
+
+export type StudioProofAgentSeedRecord = Record<string, unknown> & {
+  slug?: string | null;
+  name?: string | null;
+  category?: string | null;
+  description?: string | null;
+  persona?: Record<string, unknown> | null;
+  default_data_sources?: Array<Record<string, unknown>> | null;
+  channels?: Array<Record<string, unknown>> | null;
+  tools_skills?: Array<Record<string, unknown>> | null;
+  runtime_tier_recommendation?: Record<string, unknown> | null;
+  approval_policy?: Record<string, unknown> | null;
+  customization?: Record<string, unknown> | null;
 };
 
 export type MarketplaceAgentCardRecord = Record<string, unknown> & {
@@ -661,6 +677,7 @@ export type WorkstationClientPaths = {
   deployedAgentExternalUserDelete: (deployedAgentId: string, externalUserId: string) => string;
   marketplaceAgents: (filters?: { category?: string | null; costTier?: string | null; limit?: number; offset?: number }) => string;
   marketplacePackages: (kind?: string | null) => string;
+  studioTemplates: string;
   marketplaceProviderRegister: string;
   marketplaceAppRegister: string;
   marketplacePackageInstall: (packageId: string) => string;
@@ -962,6 +979,7 @@ export type WorkstationClient = {
   listMarketplacePackages: (options?: {
     kind?: string | null;
   }) => Promise<Record<string, unknown>>;
+  listStudioTemplates: () => Promise<Record<string, unknown>>;
   registerMarketplaceProvider: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
   registerMarketplaceApp: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
   installMarketplacePackage: (options: {
@@ -1269,6 +1287,7 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/packages${buildQueryString({
         kind,
       })}`,
+    studioTemplates: `/api/workspaces/${encodeURIComponent(workspaceId)}/studio/templates`,
     marketplaceProviderRegister: `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/providers`,
     marketplaceAppRegister: `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/apps`,
     marketplacePackageInstall: (packageId) =>
@@ -2780,6 +2799,11 @@ export function createWorkstationClient(
     listMarketplacePackages: ({ kind = null } = {}) =>
       requestJson<Record<string, unknown>>({
         path: paths.marketplacePackages(kind),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listStudioTemplates: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioTemplates,
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     registerMarketplaceProvider: (payload: Record<string, unknown>) =>

@@ -12,7 +12,7 @@ import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
-const KIND_FILTERS = ['all', 'app', 'provider'] as const;
+const KIND_FILTERS = ['all', 'agent_template', 'app', 'connector', 'skill', 'mini_app', 'provider'] as const;
 const COMPOSER_KINDS = ['app', 'provider'] as const;
 const VERIFICATION_OPTIONS = ['unverified', 'partner', 'verified'] as const;
 const REVIEW_OPTIONS = ['pending', 'approved', 'restricted'] as const;
@@ -86,6 +86,8 @@ type MarketplaceCardView = {
   publisherLabel: string;
   runtimeSurface: string;
   previewOnly: boolean;
+  installEligible: boolean;
+  installBlockers: string[];
   item: MarketplacePackageRecord;
 };
 
@@ -481,6 +483,8 @@ function buildMarketplaceCardView(item: MarketplacePackageRecord, index: number)
     publisherLabel: readString(publisher.label, 'Unknown publisher'),
     runtimeSurface: readString(runtimeTruth.surface, 'distribution'),
     previewOnly: readBoolean(item.preview_only),
+    installEligible: readBoolean(item.install_eligible) || readBoolean(item.installed),
+    installBlockers: readStringList(item.install_blockers),
     item,
   };
 }
@@ -517,10 +521,50 @@ function marketplacePrimaryActionLabel(card: MarketplaceCardView): string {
   if (card.previewOnly) {
     return 'Preview only';
   }
+  if (!card.installed && !card.installEligible) {
+    return 'Needs review';
+  }
   if (card.installed) {
-    return card.kind === 'app' ? 'Open app' : 'Open setup';
+    if (card.kind === 'agent_template') {
+      return 'Open in Build';
+    }
+    if (card.kind === 'app' || card.kind === 'mini_app') {
+      return 'Open app';
+    }
+    return 'Open setup';
+  }
+  if (card.kind === 'agent_template') {
+    return 'Install template';
+  }
+  if (card.kind === 'connector') {
+    return 'Install connector';
+  }
+  if (card.kind === 'skill') {
+    return 'Install skill';
+  }
+  if (card.kind === 'mini_app') {
+    return 'Install mini-app';
   }
   return card.kind === 'app' ? 'Install app' : 'Add AI model';
+}
+
+function marketplaceInstallTargetLabel(kind: string): string {
+  switch (kind) {
+    case 'agent_template':
+      return 'Appears in Build as a governed template';
+    case 'connector':
+      return 'Appears in Integrations after install';
+    case 'skill':
+      return 'Appears in Skills after install';
+    case 'mini_app':
+      return 'Opens as a governed mini-app after install';
+    case 'app':
+      return 'Opens in Discover after install';
+    case 'provider':
+      return 'Appears in AI Models after install';
+    default:
+      return 'Adds a governed workspace package';
+  }
 }
 
 function summarizeInstallReadiness(
@@ -536,8 +580,8 @@ function summarizeInstallReadiness(
 ): string[] {
   const lines: string[] = [];
   lines.push(card.approvalRequired ? 'Needs your OK before install' : 'No install approval required');
-  lines.push(card.kind === 'app' ? 'Opens in Discover after install' : 'Appears in AI Models after install');
-  if (card.kind === 'app') {
+  lines.push(marketplaceInstallTargetLabel(card.kind));
+  if (card.kind === 'app' || card.kind === 'mini_app') {
     if (details.permissionList.length > 0) {
       lines.push(`Uses ${details.permissionList.slice(0, 3).map(humanizeToken).join(', ')}`);
     } else {
@@ -546,13 +590,22 @@ function summarizeInstallReadiness(
     if (details.appBridgeContracts.length > 0) {
       lines.push('Can talk to Sage through a governed app bridge');
     }
-  } else {
+  } else if (card.kind === 'provider') {
     const authModes = details.providerAuthModes.length > 0 ? details.providerAuthModes : ['api_key'];
     lines.push(`Sign-in uses ${authModes.map(humanizeToken).join(' or ')}`);
     const defaultModel = readString(details.packagePayload.default_model);
     if (defaultModel) {
       lines.push(`Default AI model: ${defaultModel}`);
     }
+  } else if (card.kind === 'agent_template') {
+    const requiredConnectors = readStringList(details.packagePayload.required_connectors);
+    lines.push(requiredConnectors.length ? `Setup needs ${requiredConnectors.slice(0, 3).join(', ')}` : 'Template can be customized before launch');
+  } else if (card.kind === 'connector') {
+    const authModes = readStringList(details.packagePayload.auth_modes);
+    lines.push(authModes.length ? `Auth: ${authModes.map(humanizeToken).join(' or ')}` : 'Connector declares no auth modes');
+  } else if (card.kind === 'skill') {
+    const permissions = readStringList(details.packagePayload.permissions);
+    lines.push(permissions.length ? `Skill permissions: ${permissions.slice(0, 3).map(humanizeToken).join(', ')}` : 'Skill declares no permissions');
   }
   lines.push(`Lifecycle: ${marketplaceLifecycleLabel(details.item, details.packagePayload, details.runtimeTruth)}`);
   return lines;
@@ -1030,7 +1083,7 @@ export function MarketplacePane() {
                               card.installed && 'marketplace-pane__link-button--installed',
                               card.previewOnly && 'marketplace-pane__link-button--preview',
                             )}
-                            disabled={card.previewOnly || installing || (!card.installed && !card.id)}
+                            disabled={card.previewOnly || installing || (!card.installed && (!card.id || !card.installEligible))}
                             onClick={(event) => {
                               event.stopPropagation();
                               if (card.previewOnly) {
@@ -1128,7 +1181,7 @@ export function MarketplacePane() {
                           selectedPackage.installed && 'marketplace-pane__link-button--installed',
                           selectedPackage.previewOnly && 'marketplace-pane__link-button--preview',
                         )}
-                        disabled={selectedPackage.previewOnly || installingPackageId === selectedPackage.id}
+                        disabled={selectedPackage.previewOnly || (!selectedPackage.installed && !selectedPackage.installEligible) || installingPackageId === selectedPackage.id}
                         onClick={() => {
                           if (selectedPackage.previewOnly) {
                             return;
@@ -1314,9 +1367,11 @@ export function MarketplacePane() {
                       </div>
                     </div>
 
-                    {selectedPackage.kind === 'app' ? (
+                    {selectedPackage.kind === 'app' || selectedPackage.kind === 'mini_app' ? (
                       <div className="marketplace-pane__detail-group">
-                        <strong className="marketplace-pane__detail-title">Hosted app contract</strong>
+                        <strong className="marketplace-pane__detail-title">
+                          {selectedPackage.kind === 'mini_app' ? 'Mini-app contract' : 'Hosted app contract'}
+                        </strong>
                         <div className="marketplace-pane__detail-grid">
                           <div className="marketplace-pane__detail-item">
                             <span className="marketplace-pane__detail-label">Hosted URL</span>
@@ -1352,7 +1407,7 @@ export function MarketplacePane() {
                           <p className="marketplace-pane__panel-copy">No bridge contracts declared for this app package.</p>
                         )}
                       </div>
-                    ) : (
+                    ) : selectedPackage.kind === 'provider' ? (
                       <div className="marketplace-pane__detail-group">
                         <strong className="marketplace-pane__detail-title">Provider contract</strong>
                         <div className="marketplace-pane__detail-grid">
@@ -1394,6 +1449,44 @@ export function MarketplacePane() {
                           </div>
                         ) : (
                           <p className="marketplace-pane__panel-copy">No model metadata has been provided for this package yet.</p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="marketplace-pane__detail-group">
+                        <strong className="marketplace-pane__detail-title">{`${humanizeToken(selectedPackage.kind)} contract`}</strong>
+                        <div className="marketplace-pane__detail-grid">
+                          {Object.entries(selectedDetails.packagePayload)
+                            .filter(([, value]) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+                            .slice(0, 8)
+                            .map(([key, value]) => (
+                              <div key={key} className="marketplace-pane__detail-item">
+                                <span className="marketplace-pane__detail-label">{humanizeToken(key)}</span>
+                                <span className="marketplace-pane__detail-value">{readString(value, String(value))}</span>
+                              </div>
+                            ))}
+                        </div>
+                        <div className="marketplace-pane__token-row">
+                          {[
+                            ...readStringList(selectedDetails.packagePayload.required_connectors),
+                            ...readStringList(selectedDetails.packagePayload.suggested_tools),
+                            ...readStringList(selectedDetails.packagePayload.permissions),
+                            ...readStringList(selectedDetails.packagePayload.actions),
+                            ...readStringList(selectedDetails.packagePayload.scopes),
+                          ].slice(0, 8).map((token) => (
+                            <span key={token} className="marketplace-pane__stat-token">{humanizeToken(token)}</span>
+                          ))}
+                        </div>
+                        {readStringList(selectedDetails.packagePayload.launch_checklist).length ? (
+                          <div className="marketplace-pane__detail-list">
+                            {readStringList(selectedDetails.packagePayload.launch_checklist).map((item) => (
+                              <div key={item} className="marketplace-pane__detail-list-row">
+                                <span className="marketplace-pane__detail-label">Checklist</span>
+                                <span className="marketplace-pane__detail-value">{item}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="marketplace-pane__panel-copy">This package exposes a governed contract and can be expanded by its installer surface.</p>
                         )}
                       </div>
                     )}

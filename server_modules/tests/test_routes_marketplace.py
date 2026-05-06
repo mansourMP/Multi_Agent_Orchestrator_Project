@@ -62,6 +62,16 @@ async def test_marketplace_routes_register_install_and_track_runtime(monkeypatch
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            templates = await client.get("/api/workspaces/ws-1/studio/templates")
+            assert templates.status_code == 200
+            templates_payload = templates.json()
+            assert templates_payload["count"] == 3
+            assert {item["slug"] for item in templates_payload["items"]} == {
+                "shop-assistant",
+                "dental-receptionist",
+                "restaurant-order-taker",
+            }
+
             create_provider = await client.post(
                 "/api/workspaces/ws-1/marketplace/providers",
                 json={
@@ -136,3 +146,30 @@ async def test_marketplace_routes_register_install_and_track_runtime(monkeypatch
             assert installed_items[provider_package_id]["installed"] is True
             assert installed_items[provider_package_id]["billing"]["revenue_share_bps"] == 900
             assert installed_items[app_package_id]["runtime_truth"]["surface"] == "app_registry"
+
+
+@pytest.mark.anyio
+async def test_marketplace_route_lists_backend_seed_agent_templates(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_marketplace.get_current_user] = lambda: {
+        "user_id": "user-1",
+        "workspace_access": {"ws-1": {"tenant_id": "tenant-1", "role": "owner"}},
+    }
+    monkeypatch.setattr(
+        routes_marketplace.auth_module,
+        "enforce_workspace_access",
+        lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="marketplace-seed-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            list_response = await client.get("/api/workspaces/ws-1/marketplace/packages?kind=agent_template")
+            assert list_response.status_code == 200
+            payload = list_response.json()
+            assert payload["count"] == 3
+            items = {item["package"]["template_id"]: item for item in payload["items"]}
+            assert set(items) == {"shop-assistant", "dental-receptionist", "restaurant-order-taker"}
+            assert items["shop-assistant"]["kind"] == "agent_template"
+            assert items["shop-assistant"]["runtime_truth"]["open_href"] == "/w/ws-1/studio?proof_agent=shop-assistant"

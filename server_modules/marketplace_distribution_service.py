@@ -416,6 +416,7 @@ def _normalize_agent_template_payload(package_id: str, value: Any) -> Dict[str, 
         "suggested_tools": _normalize_list_of_strings(payload.get("suggested_tools")),
         "setup_schema": _coerce_dict(payload.get("setup_schema")),
         "launch_checklist": _normalize_list_of_strings(payload.get("launch_checklist")),
+        "context_envelope": _coerce_dict(payload.get("context_envelope")),
     }
 
 
@@ -554,7 +555,14 @@ def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _preview_marketplace_packages() -> Dict[str, Dict[str, Any]]:
     packages: Dict[str, Dict[str, Any]] = {}
-    for payload in PREVIEW_MARKETPLACE_PACKAGES:
+    seed_packages: List[Dict[str, Any]] = []
+    try:
+        from server_modules import studio_proof_agent_seed_service
+
+        seed_packages = studio_proof_agent_seed_service.build_studio_proof_agent_marketplace_package_contracts()
+    except Exception:
+        seed_packages = []
+    for payload in [*PREVIEW_MARKETPLACE_PACKAGES, *seed_packages]:
         try:
             package = _normalize_package_payload(payload)
         except ValueError:
@@ -663,6 +671,10 @@ def _sync_marketplace_app_to_mini_apps(workspace_id: str, package: Dict[str, Any
 
 def _package_open_href(workspace_id: str, package: Dict[str, Any]) -> Optional[str]:
     package_kind = str(package.get("kind") or "").strip()
+    if package_kind == "agent_template":
+        template_id = str(_coerce_dict(package.get("agent_template")).get("template_id") or "").strip()
+        if template_id:
+            return f"/w/{workspace_id}/studio?proof_agent={template_id}"
     if package_kind == "app":
         app_id = str(_coerce_dict(package.get("app")).get("app_id") or "").strip()
         if app_id:

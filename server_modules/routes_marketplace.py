@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from server_modules import auth as auth_module
 from server_modules.deployed_agent_marketplace_service import get_deployed_agent_marketplace_service
 from server_modules import marketplace_distribution_service
+from server_modules import studio_proof_agent_seed_service
 from server_modules.schemas import (
     MarketplaceAgentListResponse,
     MarketplaceUpgradeClickRequest,
@@ -21,7 +22,7 @@ get_current_user = auth_module.get_current_user
 
 class MarketplaceDistributionPackageRequest(BaseModel):
     package_id: Optional[str] = None
-    kind: Optional[str] = Field(default=None, pattern="^(app|provider)$")
+    kind: Optional[str] = Field(default=None, pattern="^(agent_template|app|connector|mini_app|provider|skill)$")
     label: str = Field(min_length=1)
     description: str = Field(min_length=1)
     category: Optional[str] = None
@@ -33,8 +34,12 @@ class MarketplaceDistributionPackageRequest(BaseModel):
     policy_posture: Optional[str] = None
     approval_required: bool = False
     billing: Dict[str, Any] = Field(default_factory=dict)
+    agent_template: Optional[Dict[str, Any]] = None
     provider: Optional[Dict[str, Any]] = None
     app: Optional[Dict[str, Any]] = None
+    connector: Optional[Dict[str, Any]] = None
+    mini_app: Optional[Dict[str, Any]] = None
+    skill: Optional[Dict[str, Any]] = None
 
 
 class MarketplaceDistributionRuntimeEventRequest(BaseModel):
@@ -77,6 +82,20 @@ async def list_workspace_marketplace_packages(
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
     return marketplace_distribution_service.list_marketplace_packages(resolved_workspace_id, kind=kind)
+
+
+@router.get("/workspaces/{workspace_id}/studio/templates")
+async def list_workspace_studio_templates(
+    workspace_id: str,
+    current_user=Depends(get_current_user),
+):
+    auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+    items = studio_proof_agent_seed_service.list_studio_proof_agent_seed_contracts()
+    return {
+        "version": studio_proof_agent_seed_service.STUDIO_PROOF_AGENT_SEED_VERSION,
+        "count": len(items),
+        "items": items,
+    }
 
 
 @router.post("/workspaces/{workspace_id}/marketplace/providers")

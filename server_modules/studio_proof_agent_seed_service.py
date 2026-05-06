@@ -231,7 +231,7 @@ def build_studio_proof_agent_marketplace_package_contracts() -> List[Dict[str, A
         packages.append(
             {
                 "package_id": f"studio-proof-{slug}",
-                "kind": "app",
+                "kind": "agent_template",
                 "label": contract["name"],
                 "description": contract["description"],
                 "category": f"Proof Agent / {contract['category']}",
@@ -253,13 +253,27 @@ def build_studio_proof_agent_marketplace_package_contracts() -> List[Dict[str, A
                     },
                 },
                 "analytics": {"events": deepcopy(contract["analytics_events"])},
-                "app": {
-                    "app_id": f"studio.proof.{slug}",
-                    "hosted_url": f"/w/{{workspace_id}}/studio?proof_agent={slug}",
+                "agent_template": {
+                    "template_id": slug,
                     "version": "0.1.0",
-                    "release_channel": "preview",
-                    "permissions": ["studio:agent_template_read", "studio:agent_template_install"],
-                    "bridge_contracts": {"studio": ["template_install", "agent_customize", "agent_publish"]},
+                    "specialist_kind": str(contract.get("category") or "custom").strip().lower(),
+                    "required_connectors": [
+                        str(item.get("label") or item.get("source_id") or "").strip()
+                        for item in contract.get("default_data_sources", [])
+                        if isinstance(item, dict) and str(item.get("label") or item.get("source_id") or "").strip()
+                    ],
+                    "suggested_tools": [
+                        str(item.get("id") or "").strip()
+                        for item in contract.get("tools_skills", [])
+                        if isinstance(item, dict) and str(item.get("id") or "").strip()
+                    ],
+                    "setup_schema": contract["customization"]["template_inputs_schema"],
+                    "launch_checklist": [
+                        "Customize persona and business name.",
+                        "Connect live data sources.",
+                        "Select customer channels.",
+                        "Review approval policy before publishing.",
+                    ],
                     "context_envelope": {"proof_agent_seed_contract": contract},
                 },
             }

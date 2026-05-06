@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import asyncio
+import copy
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -26,11 +28,13 @@ from server_modules import quota_policy_service, quota_response_service
 from server_modules import security_audit_service
 from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules.jwt_secret import resolve_jwt_secret
+from server_modules.sqlite_helpers import connect_sqlite_rw
 
 EMPYRALIS_STATE_HOME = Path(
     os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
 ).expanduser()
 AUTH_DB_FILE = (EMPYRALIS_STATE_HOME / "auth" / "users.db").expanduser()
+LOGGER = logging.getLogger(__name__)
 AUTH_LOCK = threading.Lock()
 LOGIN_RATE_LIMIT_LOCK = threading.Lock()
 LOGIN_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
@@ -69,6 +73,56 @@ PROVIDER_JWKS_CACHE_LOCK = threading.Lock()
 PROVIDER_JWKS_CACHE: Dict[str, dict[str, Any]] = {}
 PROVIDER_JWKS_CACHE_TTL_SECONDS = max(int(os.getenv("ORION_PROVIDER_JWKS_CACHE_TTL_SECONDS", "3600")), 60)
 PROVIDER_HTTP_TIMEOUT_SECONDS = max(float(os.getenv("ORION_PROVIDER_HTTP_TIMEOUT_SECONDS", "8")), 1.0)
+AUTH_HOT_CACHE_LOCK = threading.Lock()
+AUTH_HOT_CACHE_TTL_SECONDS = max(int(os.getenv("ORION_AUTH_HOT_CACHE_TTL_SECONDS", "15")), 5)
+WORKSPACE_TENANT_CACHE: Dict[str, dict[str, Any]] = {}
+TENANT_POLICY_CACHE: Dict[str, dict[str, Any]] = {}
+WORKSPACE_POLICY_CACHE: Dict[str, dict[str, Any]] = {}
+
+
+def _auth_hot_cache_get(cache: Dict[str, dict[str, Any]], key: str) -> Any:
+    now = time.time()
+    with AUTH_HOT_CACHE_LOCK:
+        cached = cache.get(key)
+        if not isinstance(cached, dict):
+            return None
+        expires_at = float(cached.get("expires_at") or 0.0)
+        if expires_at <= now:
+            cache.pop(key, None)
+            return None
+        return copy.deepcopy(cached.get("value"))
+
+
+def _auth_hot_cache_put(
+    cache: Dict[str, dict[str, Any]],
+    key: str,
+    value: Any,
+    *,
+    ttl_seconds: Optional[int] = None,
+) -> None:
+    ttl = max(int(ttl_seconds or AUTH_HOT_CACHE_TTL_SECONDS), 1)
+    with AUTH_HOT_CACHE_LOCK:
+        cache[key] = {
+            "value": copy.deepcopy(value),
+            "expires_at": time.time() + ttl,
+        }
+
+
+def _auth_hot_cache_drop(cache: Dict[str, dict[str, Any]], key: str) -> None:
+    with AUTH_HOT_CACHE_LOCK:
+        cache.pop(key, None)
+
+
+def _invalidate_workspace_auth_caches(
+    *,
+    workspace_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> None:
+    if workspace_id:
+        _auth_hot_cache_drop(WORKSPACE_TENANT_CACHE, workspace_id)
+        _auth_hot_cache_drop(WORKSPACE_POLICY_CACHE, workspace_id)
+    if tenant_id:
+        _auth_hot_cache_drop(TENANT_POLICY_CACHE, tenant_id)
 
 
 def _control_plane_call(coro: Any) -> Any:
@@ -973,9 +1027,7 @@ def _b64url_decode(value: str) -> bytes:
 
 
 def _connect_auth_db() -> sqlite3.Connection:
-    AUTH_DB_FILE.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(AUTH_DB_FILE)
-    connection.row_factory = sqlite3.Row
+    connection = connect_sqlite_rw(AUTH_DB_FILE, logger=LOGGER, label="auth")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -2315,10 +2367,17 @@ def ensure_workspace_tenant_binding(workspace_id: str, tenant_id: Optional[str] 
     )
     if not isinstance(binding, dict):
         raise HTTPException(status_code=500, detail="Workspace tenant binding could not be persisted.")
-    return {
+    resolved = {
         "workspace_id": _normalize_workspace_token(binding.get("workspace_id"), default=clean_workspace_id),
         "tenant_id": _normalize_tenant_token(binding.get("tenant_id"), default=clean_tenant_id),
     }
+    _invalidate_workspace_auth_caches(workspace_id=resolved["workspace_id"])
+    _auth_hot_cache_put(
+        WORKSPACE_TENANT_CACHE,
+        resolved["workspace_id"],
+        resolved["tenant_id"],
+    )
+    return resolved
 
 
 def tenant_id_for_workspace(workspace_id: str) -> str:
@@ -2326,9 +2385,20 @@ def tenant_id_for_workspace(workspace_id: str) -> str:
         workspace_id,
         detail="workspace_id is required to resolve tenant scope.",
     )
+    cached_tenant_id = _auth_hot_cache_get(WORKSPACE_TENANT_CACHE, clean_workspace_id)
+    if isinstance(cached_tenant_id, str) and cached_tenant_id.strip():
+        return _require_tenant_token(
+            cached_tenant_id,
+            detail="Workspace is not bound to a valid tenant.",
+        )
     pg_tenant_id = _control_plane_call(control_plane_repository.tenant_id_for_workspace(clean_workspace_id))
     if isinstance(pg_tenant_id, str) and pg_tenant_id.strip():
-        return _require_tenant_token(pg_tenant_id, detail="Workspace is not bound to a valid tenant.")
+        resolved_tenant_id = _require_tenant_token(
+            pg_tenant_id,
+            detail="Workspace is not bound to a valid tenant.",
+        )
+        _auth_hot_cache_put(WORKSPACE_TENANT_CACHE, clean_workspace_id, resolved_tenant_id)
+        return resolved_tenant_id
     raise HTTPException(status_code=403, detail=f"Workspace '{clean_workspace_id}' is not bound to a tenant.")
 
 
@@ -2516,6 +2586,9 @@ def _workspace_policy_from_row(row: Any, workspace_id: str, *, tenant_id: Option
 
 def load_workspace_policy(workspace_id: str) -> dict[str, Any]:
     clean_workspace_id = _require_workspace_token(workspace_id)
+    cached_policy = _auth_hot_cache_get(WORKSPACE_POLICY_CACHE, clean_workspace_id)
+    if isinstance(cached_policy, dict):
+        return cached_policy
     resolved_tenant_id = tenant_id_for_workspace(clean_workspace_id)
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
@@ -2538,7 +2611,9 @@ def load_workspace_policy(workspace_id: str) -> dict[str, Any]:
                 (clean_workspace_id,),
             ).fetchone()
             connection.commit()
-    return _workspace_policy_from_row(row, clean_workspace_id, tenant_id=resolved_tenant_id)
+    policy = _workspace_policy_from_row(row, clean_workspace_id, tenant_id=resolved_tenant_id)
+    _auth_hot_cache_put(WORKSPACE_POLICY_CACHE, clean_workspace_id, policy)
+    return policy
 
 
 def _tenant_policy_from_row(row: Any, tenant_id: str) -> dict[str, Any]:
@@ -2572,6 +2647,9 @@ def _tenant_policy_from_row(row: Any, tenant_id: str) -> dict[str, Any]:
 
 def load_tenant_policy(tenant_id: str) -> dict[str, Any]:
     clean_tenant_id = _normalize_tenant_token(tenant_id)
+    cached_policy = _auth_hot_cache_get(TENANT_POLICY_CACHE, clean_tenant_id)
+    if isinstance(cached_policy, dict):
+        return cached_policy
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             row = connection.execute(
@@ -2591,7 +2669,9 @@ def load_tenant_policy(tenant_id: str) -> dict[str, Any]:
                 """,
                 (clean_tenant_id,),
             ).fetchone()
-    return _tenant_policy_from_row(row, clean_tenant_id)
+    policy = _tenant_policy_from_row(row, clean_tenant_id)
+    _auth_hot_cache_put(TENANT_POLICY_CACHE, clean_tenant_id, policy)
+    return policy
 
 
 def upsert_tenant_policy(
@@ -2657,6 +2737,7 @@ def upsert_tenant_policy(
                 ),
             )
             connection.commit()
+    _invalidate_workspace_auth_caches(tenant_id=clean_tenant_id)
     return load_tenant_policy(clean_tenant_id)
 
 
@@ -2712,6 +2793,7 @@ def upsert_workspace_policy(
                 trusted_owner_machine_ids=trusted_owner_machine_ids if trusted_owner_machine_ids is not None else list(existing["trusted_owner_machine_ids"]),
             )
             connection.commit()
+    _invalidate_workspace_auth_caches(workspace_id=clean_workspace_id, tenant_id=resolved_tenant_id)
     return load_workspace_policy(clean_workspace_id)
 
 

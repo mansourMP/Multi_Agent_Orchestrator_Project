@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from server_modules import db as runtime_db
+from server_modules.sqlite_helpers import connect_sqlite_rw
 
 
 LOGGER = logging.getLogger(__name__)
@@ -2104,9 +2105,7 @@ def _upsert_local_workspace_billing_subscription(
 
 
 def _connect_local_identity_db() -> sqlite3.Connection:
-    LOCAL_IDENTITY_DB_FILE.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(LOCAL_IDENTITY_DB_FILE)
-    connection.row_factory = sqlite3.Row
+    connection = connect_sqlite_rw(LOCAL_IDENTITY_DB_FILE, logger=LOGGER, label="local_identity")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS users (

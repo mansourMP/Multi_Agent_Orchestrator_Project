@@ -4,6 +4,8 @@ import json
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 
@@ -38,6 +40,21 @@ _normalize_tenant_id: Optional[NormalizeTenantFn] = None
 _compact_event_text: Optional[CompactTextFn] = None
 _json_safe: Optional[JsonSafeFn] = None
 _safe_read_json: Optional[SafeReadJsonFn] = None
+
+
+@contextmanager
+def _connect_runtime_state_db() -> Any:
+    db_path = Path(str(ORION_RUNTIME_STATE_DB)).expanduser()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def configure_runtime_events(
@@ -335,8 +352,7 @@ def _list_durable_channel_events(
     query += " ORDER BY sort_ts DESC, id DESC LIMIT ?"
     params.append(max(1, int(limit or 100)))
 
-    with sqlite3.connect(str(ORION_RUNTIME_STATE_DB)) as conn:
-        conn.row_factory = sqlite3.Row
+    with _connect_runtime_state_db() as conn:
         rows = conn.execute(query, tuple(params)).fetchall()
     out: List[Dict[str, Any]] = []
     for row in rows:
@@ -421,8 +437,7 @@ def _resolve_durable_channel_event_cursor(
         clauses.append("trace_id = ?")
         params.append(str(trace_id).strip())
     query = "SELECT id, ts, event_json FROM channel_events WHERE " + " AND ".join(clauses) + " LIMIT 1"
-    with sqlite3.connect(str(ORION_RUNTIME_STATE_DB)) as conn:
-        conn.row_factory = sqlite3.Row
+    with _connect_runtime_state_db() as conn:
         row = conn.execute(query, tuple(params)).fetchone()
     if row is None:
         return None

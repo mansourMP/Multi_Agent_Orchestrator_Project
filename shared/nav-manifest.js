@@ -25,7 +25,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'gateway',
-    label: 'My Computer',
+    label: 'This Computer',
     iconName: 'waypoints',
     defaultRouteId: 'gateway',
     childRouteIds: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
@@ -56,7 +56,7 @@ export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = {
   sage: 'Chat',
   studio: 'Build',
   marketplace: 'Discover',
-  gateway: 'Activity',
+  gateway: 'This Computer',
   settings: 'Settings',
 };
 
@@ -273,7 +273,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'gateway',
-    label: 'My Computer',
+    label: 'This Computer',
     segment: 'gateway',
     destinationId: 'gateway',
     web: {},

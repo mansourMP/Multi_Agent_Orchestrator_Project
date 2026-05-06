@@ -32,6 +32,7 @@ test.describe('launch sage-first smoke', () => {
     await expect(page).toHaveURL(/\/w\/ws-1\/sage(?:[/?#]|$)/, { timeout: 20_000 });
     await expect(page.locator('[data-workstation-surface="chat"]')).toBeVisible();
     await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible();
+    await expect(page.locator('[data-workstation-chat-composer="root"] textarea')).toBeFocused();
 
     await expect(page.getByText(/finish workspace setup/i)).toHaveCount(0);
     await expect(page.getByText(/workspace setup/i)).toHaveCount(0);

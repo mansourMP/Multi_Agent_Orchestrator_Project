@@ -191,6 +191,7 @@ type ExternalIntegrationCardRecord = {
   nextStep: string | null;
   actionLabel?: string | null;
   secondaryActionLabel?: string | null;
+  actionTarget?: 'gateway' | 'ai' | 'close';
 };
 
 type SageConnectorsPaneCache = {
@@ -213,7 +214,7 @@ const DEFAULT_HOSTED_SAGE_AI: HostedSageAiSnapshot = {
   planAllowsHostedAi: false,
   policy: 'disabled',
   reason: 'policy_disabled',
-  message: 'Credits are not active yet. Add credits or use your own API key.',
+  message: 'Credits are not active yet. Add credits or connect your own AI account.',
   monthlyCapUsd: 0,
   monthlyCostUsd: 0,
   monthlyRemainingUsd: 0,
@@ -289,8 +290,8 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '',
     connectorIds: ['google_workspace', 'microsoft_365', 'smtp'],
     capabilityTags: ['Inbox', 'Send email'],
-    summary: 'Email is where Sage can reach people across Gmail, Outlook, or a custom SMTP inbox.',
-    setupHint: 'Connect Gmail or Microsoft 365 for the easiest setup. Use SMTP when you need a custom mailbox.',
+    summary: 'Email is where Sage can reach people across Gmail, Outlook, or a custom mailbox.',
+    setupHint: 'Connect Gmail or Microsoft 365 for the easiest setup. Use a custom mailbox only when needed.',
     surfaceScope: 'all',
   },
   {
@@ -398,9 +399,9 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     label: 'Webhook',
     image: '/integrations/webhook.png',
     connectorIds: ['webhook'],
-    capabilityTags: ['HTTP', 'Automation'],
-    summary: 'Webhooks let Sage notify or trigger external systems without a full app connection.',
-    setupHint: 'Add a webhook when you need lightweight outbound automation.',
+    capabilityTags: ['App action', 'Automation'],
+    summary: 'App actions let Sage notify or start work in another system without a full app connection.',
+    setupHint: 'Add an app action when you need lightweight automation.',
     surfaceScope: 'all',
   },
 ];
@@ -620,12 +621,12 @@ function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProvider
     return 'Credits need workspace owner approval before use.';
   }
   if (hostedSageAi.reason === 'cap_reached') {
-    return '0 credits left this month. Add credits or use your own API key.';
+    return '0 credits left this month. Add credits or connect your own AI account.';
   }
   if (hostedSageAi.monthlyCreditCap > 0) {
     return `${formatCredits(Math.max(0, hostedSageAi.monthlyCreditsRemaining))} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left`;
   }
-  return 'Credits are not active yet. Add credits or use your own API key.';
+  return 'Credits are not active yet. Add credits or connect your own AI account.';
 }
 
 function hostedCreditUsageLabel(hostedSageAi: HostedSageAiSnapshot): string {
@@ -752,18 +753,15 @@ function providerCredentialLabel(provider: ProviderSnapshot, profile: ProviderPr
   if (mode?.label) {
     return mode.label;
   }
-  return providerRequiresSecret(provider, profile) ? 'Credential' : 'No credential required';
+  return providerRequiresSecret(provider, profile) ? 'Connection detail' : 'No connection detail required';
 }
 
 function providerCredentialPlaceholder(provider: ProviderSnapshot): string {
   const authMode = readString(provider.defaultAuthMode).toLowerCase();
-  if (authMode === 'oauth_token' || authMode === 'access_token') {
-    return 'token-...';
-  }
   if (authMode === 'none' || authMode === 'local_cli') {
     return '';
   }
-  return 'sk-...';
+  return 'Paste connection detail';
 }
 
 function providerNeedsGateway(providerId: string): boolean {
@@ -779,7 +777,7 @@ function providerIsLocalOnly(record: ProviderCardRecord | null): boolean {
 
 function providerPickerStatusLabel(record: ProviderCardRecord, localCompanionOnline: boolean): string {
   if (providerNeedsGateway(record.provider.id) && !localCompanionOnline) {
-    return 'Connect My Computer';
+    return 'Connect this computer';
   }
   return record.connected ? 'Connected' : 'Not configured';
 }
@@ -809,10 +807,10 @@ function providerPathLabel(record: ProviderCardRecord): string {
   const activeSource = readString(record.provider.activeSource).toLowerCase();
 
   if (providerId === 'ollama') {
-    return 'My Computer · Ollama local';
+    return 'This Computer';
   }
   if (providerId === 'openai-codex' || activeSource.includes('cli') || defaultAuthMode === 'oauth_token') {
-    return 'My Computer · CLI';
+    return 'This Computer';
   }
   if (providerId === 'ollama_cloud') {
     return 'Ollama Cloud';
@@ -832,10 +830,10 @@ function providerPathLabel(record: ProviderCardRecord): string {
     || Boolean(record.credential)
     || Boolean(readString(record.profile?.credential_id))
   ) {
-    return 'Your API key';
+    return 'Your AI account';
   }
   if (record.provider.localOnly === true || credentialPlane === 'local_runtime') {
-    return 'My Computer';
+    return 'This Computer';
   }
   return record.label;
 }
@@ -962,10 +960,10 @@ function providerRouteBadge(record: ProviderCardRecord): { label: string; tone: 
   const activeSource = readString(record.provider.activeSource).toLowerCase();
 
   if (providerId === 'openai-codex' || defaultAuthMode === 'oauth_token' || activeSource.includes('cli')) {
-    return { label: 'CLI', tone: 'local' };
+    return { label: 'This computer', tone: 'local' };
   }
   if (providerId === 'ollama' || record.provider.localOnly || credentialPlane === 'local_runtime') {
-    return { label: 'Local', tone: 'local' };
+    return { label: 'This computer', tone: 'local' };
   }
   if (
     credentialPlane === 'platform_runtime'
@@ -981,7 +979,7 @@ function providerRouteBadge(record: ProviderCardRecord): { label: string; tone: 
     || Boolean(record.credential)
     || Boolean(readString(record.profile?.credential_id))
   ) {
-    return { label: 'BYOK', tone: 'neutral' };
+    return { label: 'Your account', tone: 'neutral' };
   }
   return null;
 }
@@ -1006,14 +1004,14 @@ function providerStatusPresentation(
         showDot: true,
       };
     }
-    if (pathLabel === 'Your API key' || pathLabel === 'Ollama Cloud') {
+    if (pathLabel === 'Your AI account' || pathLabel === 'Ollama Cloud') {
       return {
-        label: 'Key ready',
+        label: 'Account ready',
         className: 'sage-unified-card__status--connected',
         showDot: true,
       };
     }
-    if (pathLabel.startsWith('My Computer')) {
+    if (pathLabel.startsWith('This Computer')) {
       return {
         label: 'Ready on this computer',
         className: 'sage-unified-card__status--connected',
@@ -1118,8 +1116,8 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Needs your OK',
       statusTone: 'warning',
-      detail: 'Signed-in browser attach is waiting for approval.',
-      summary: 'Public web search can stay in cloud, but your private browser sessions stay on this device and need approval from the paired computer first.',
+      detail: 'Your browser is waiting for approval.',
+      summary: 'Public web search can stay online, but private browser sessions stay on this device and need your approval first.',
       nextStep: 'Open the device connection page to review browser approvals.',
     };
   }
@@ -1127,37 +1125,37 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: 'Your signed-in browser is attached through the local companion.',
+      detail: 'Your signed-in browser is ready on this computer.',
       summary: readString(
         browserAttachRecord.summary,
-        'The local companion is ready to use your existing signed-in browser session on this computer.',
+        'Sage is ready to use your existing signed-in browser session on this computer.',
       ),
-      nextStep: 'Open the device connection page to inspect browser sessions or interrupt attach.',
+      nextStep: 'Open the device connection page to review browser sessions.',
     };
   }
   if (attachFailedCount > 0 || attachStatus === 'fail') {
     return {
       statusLabel: 'Needs attention',
       statusTone: 'danger',
-      detail: readString(browserAttachRecord.summary, 'Existing-session browser attach failed.'),
-      summary: 'The local companion could not attach to your signed-in browser session. Localhost and private sites stay unavailable until attach recovers.',
-      nextStep: 'Open the device connection page to retry browser attach or inspect the failure.',
+      detail: readString(browserAttachRecord.summary, 'Your browser connection failed.'),
+      summary: 'Sage could not reach your signed-in browser session. Private sites stay unavailable until it recovers.',
+      nextStep: 'Open the device connection page to retry browser access.',
     };
   }
   if (attachCount > 0 && pendingAttachCount > 0) {
     return {
       statusLabel: 'Needs attention',
       statusTone: 'warning',
-      detail: readString(browserAttachRecord.summary, 'Existing-session browser attach is configured but not ready yet.'),
-      summary: 'The local companion knows about your browser attach flow, but it still needs a reachable local browser session before Sage can use it.',
-      nextStep: 'Open the device connection page to finish browser attach.',
+      detail: readString(browserAttachRecord.summary, 'Your browser is not ready yet.'),
+      summary: 'Sage still needs a reachable browser session on this computer before it can use private sites.',
+      nextStep: 'Open the device connection page to finish browser setup.',
     };
   }
   if (activeCount > 0 && status === 'pass') {
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: 'The local companion has a governed browser session ready.',
+      detail: 'Your browser is ready on this computer.',
       summary: `${readString(browserRecord.summary, 'Browser access is ready on this computer.')} Localhost pages and private sessions still stay on the paired computer.`,
       nextStep: 'Open the device connection page to review governed browser sessions.',
     };
@@ -1167,15 +1165,15 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Not connected',
       statusTone: 'neutral',
       detail: 'No browser session is active yet.',
-      summary: 'The local companion is online and ready. Use the device connection page when you want Sage to browse localhost, signed-in sites, or any other private browser state from this computer.',
-      nextStep: 'Open the device connection page to start or attach a browser session.',
+      summary: 'This computer is online and ready. Use the device connection page when you want Sage to browse signed-in sites or private browser pages from this computer.',
+      nextStep: 'Open the device connection page to start a browser session.',
     };
   }
   return {
     statusLabel: 'Needs attention',
     statusTone: status === 'warn' ? 'warning' : 'danger',
     detail: readString(browserRecord.summary, 'Browser access needs attention.'),
-    summary: 'Browser session health, localhost access, and signed-in session approvals all stay on the paired computer.',
+    summary: 'Browser health and signed-in session approvals stay on the paired computer.',
     nextStep: 'Open the device connection page to resolve browser session state.',
   };
 }
@@ -1191,7 +1189,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
   ownershipLabel: string;
   channel: PersonalCommunicationChannel;
 } {
-  const ownershipSummary = 'Uses your paired computer session. Device-owned personal channel. Not paid Cloud API.';
+  const ownershipSummary = 'Uses your paired computer session. This is your personal WhatsApp, not a business account.';
   const lastActivityLabel = latestPersonalChannelActivity(gateway, payload);
   if (!gateway) {
     return {
@@ -1286,7 +1284,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
   ownershipLabel: string;
   channel: PersonalCommunicationChannel;
 } {
-  const ownershipSummary = 'Uses your paired computer session. Device-owned personal channel.';
+  const ownershipSummary = 'Uses your paired computer session. This is your personal Telegram.';
   const lastActivityLabel = latestPersonalChannelActivity(gateway, payload);
   if (!gateway) {
     return {
@@ -1694,8 +1692,8 @@ export function WorkstationSageConnectorsPane({
       backupDetail: backupProviderCard
         ? `${backupProviderCard.label} stays available as ${providerPathLabel(backupProviderCard)}.`
         : 'Connect Gemini, OpenAI, or Anthropic when you want a fallback hosted provider.',
-      advancedLabel: 'BYOK and local models',
-      advancedDetail: 'OpenAI, Gemini, Anthropic, and Ollama Cloud stay configurable. Ollama local requires This Computer.',
+      advancedLabel: 'More AI choices',
+      advancedDetail: 'Connect another AI account or use a model on This Computer.',
     };
   }, [activeProviderCard, backupProviderCard, explicitSelectedProfile, hostedProviderCard, hostedSageAi, localCompanionOnline]);
 
@@ -1717,13 +1715,13 @@ export function WorkstationSageConnectorsPane({
     }
     sections.push({
       id: 'byok',
-      label: 'Bring your own API key',
+      label: 'Your AI accounts',
       items: byokItems,
     });
     if (localItems.length > 0) {
       sections.push({
         id: 'local',
-        label: 'My Computer (local Ollama)',
+        label: 'This Computer',
         items: localItems,
       });
     }
@@ -1756,7 +1754,9 @@ export function WorkstationSageConnectorsPane({
   const communicationPersonalCards = useMemo(
     () => personalCards.filter((card) =>
       card.id === 'telegram_personal'
-      || card.id === 'whatsapp_personal',
+      || card.id === 'whatsapp_personal'
+      || card.id === 'signal_personal'
+      || card.id === 'imessage_personal',
     ),
     [personalCards],
   );
@@ -1771,43 +1771,43 @@ export function WorkstationSageConnectorsPane({
       cards.push({
         ...device,
         id: 'computer_gateway',
-        label: 'Local gateway',
+        label: 'This computer',
         actionLabel: device.statusLabel === 'Connect computer' ? 'Connect this computer' : 'Open device connection',
-        secondaryActionLabel: 'Revoke access',
       });
     }
     if (browser) {
       cards.push({
         ...browser,
         id: 'browser_attach',
-        label: 'Browser attach',
+        label: 'My browser',
         actionLabel: 'Open browser sessions',
       });
     }
     cards.push(
       {
         id: 'local_files_shell',
-        label: 'Local files and shell',
+        label: 'Files on this computer',
         image: '',
-        detail: shellAvailable ? 'Available through this paired computer.' : 'Connect this computer before Sage can use local files or shell.',
+        detail: shellAvailable ? 'Available through this paired computer.' : 'Connect this computer before Sage can use local files.',
         statusLabel: shellAvailable ? 'Available' : 'Not connected',
         statusTone: shellAvailable ? 'connected' : 'neutral',
-        summary: 'Files and shell are local-computer capabilities. They stay behind the paired gateway and policy approval path.',
-        nextStep: shellAvailable ? 'Use chat when you want Sage to read files or run safe terminal work.' : 'Connect this computer first.',
+        summary: 'Files on this computer stay private until you ask Sage to use them and approve the work.',
+        nextStep: shellAvailable ? 'Ask Sage in chat when you want help with local files.' : 'Connect this computer first.',
         actionLabel: 'Open device connection',
       },
       {
         id: 'local_models',
-        label: 'Local models',
+        label: 'AI on this computer',
         image: '/integrations/ollama.png',
         detail: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline)
           ? `${providerActiveModelLabel(localModelCard)} available through Ollama.`
-          : 'Connect this computer and Ollama before local models are available.',
+          : 'Connect this computer before local AI models are available.',
         statusLabel: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline) ? 'Available' : 'Not available',
         statusTone: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline) ? 'connected' : 'neutral',
-        summary: 'Local models run through Ollama on the paired computer. Ollama Cloud stays in the AI provider lane.',
-        nextStep: 'Use the AI group to choose hosted, BYOK, Ollama Cloud, or local Ollama.',
+        summary: 'Local AI models run on the paired computer when you choose them.',
+        nextStep: 'Use the AI group to choose credits, your AI account, or local AI.',
         actionLabel: 'Choose AI model',
+        actionTarget: 'ai',
       },
     );
     return cards;
@@ -1859,6 +1859,55 @@ export function WorkstationSageConnectorsPane({
     [connectorCards],
   );
 
+  function connectorStatusTone(record: ConnectorCardRecord): PersonalCardStatusTone {
+    return record.connected ? 'connected' : 'neutral';
+  }
+
+  function connectorActionLabel(record: ConnectorCardRecord): string {
+    if (record.connected) {
+      return 'Done';
+    }
+    return 'Keep planned';
+  }
+
+  function connectorAsExternalCard(record: ConnectorCardRecord): ExternalIntegrationCardRecord {
+    return {
+      id: `connector_${record.id}`,
+      label: record.label,
+      image: record.image,
+      detail: describeConnectorCard(record),
+      statusLabel: record.connected ? 'Connected' : 'Not connected',
+      statusTone: connectorStatusTone(record),
+      summary: record.definition.summary,
+      nextStep: record.connected ? null : record.definition.setupHint,
+      actionLabel: connectorActionLabel(record),
+      actionTarget: 'close',
+    };
+  }
+
+  function personalAsExternalCard(record: PersonalCardRecord): ExternalIntegrationCardRecord {
+    return {
+      id: record.id,
+      label: record.label,
+      image: record.image,
+      detail: record.detail,
+      statusLabel: record.statusLabel,
+      statusTone: record.statusTone,
+      summary: record.summary,
+      nextStep: record.nextStep,
+      actionLabel: record.statusTone === 'connected' ? 'Review connection' : 'Set up',
+      actionTarget: 'gateway',
+    };
+  }
+
+  const communicationCards = useMemo<ExternalIntegrationCardRecord[]>(
+    () => [
+      ...communicationPersonalCards.map(personalAsExternalCard),
+      ...communicationConnectorCards.map(connectorAsExternalCard),
+    ],
+    [communicationConnectorCards, communicationPersonalCards],
+  );
+
   const knowledgeConnectorCards = useMemo(
     () => connectorCards.filter((card) =>
       card.id === 'drive'
@@ -1868,6 +1917,11 @@ export function WorkstationSageConnectorsPane({
       || card.id === 'github',
     ),
     [connectorCards],
+  );
+
+  const knowledgeCards = useMemo<ExternalIntegrationCardRecord[]>(
+    () => knowledgeConnectorCards.map(connectorAsExternalCard),
+    [knowledgeConnectorCards],
   );
 
   useEffect(() => {
@@ -2519,13 +2573,13 @@ export function WorkstationSageConnectorsPane({
         {showChannelActions ? (
           <>
             <div className="sage-unified-expand__text">
-              {`Status: ${record.statusLabel} · Identity: ${record.connectedIdentity || 'Not linked'} · Last activity: ${record.lastActivityLabel || 'No activity yet'}`}
+              {`${record.statusLabel} · ${record.connectedIdentity || 'Not linked'} · ${record.lastActivityLabel || 'No activity yet'}`}
             </div>
             <div className="sage-unified-expand__tag-row">
               <span className="sage-unified-expand__tag">Uses your paired computer session</span>
-              <span className="sage-unified-expand__tag">Device-owned personal channel</span>
+              <span className="sage-unified-expand__tag">Personal channel</span>
               {record.id === 'whatsapp_personal' ? (
-                <span className="sage-unified-expand__tag">Not paid Cloud API</span>
+                <span className="sage-unified-expand__tag">Not a business account</span>
               ) : null}
             </div>
           </>
@@ -2542,7 +2596,7 @@ export function WorkstationSageConnectorsPane({
                 setAdvancedChannelId(advancedOpen ? null : channel);
               }}
             >
-              {record.statusTone === 'connected' ? 'Reconnect / test' : 'Setup / reconnect'}
+              {record.statusTone === 'connected' ? 'Review connection' : 'Set up'}
             </AppButton>
           ) : (
             <AppButton
@@ -2568,18 +2622,7 @@ export function WorkstationSageConnectorsPane({
                 openWorkspaceRoute('gateway');
               }}
             >
-              {showChannelActions ? 'Revoke device access' : 'Revoke access'}
-            </AppButton>
-          ) : null}
-          {showChannelActions ? (
-            <AppButton
-              type="button"
-              tone="ghost"
-              onClick={() => {
-                openWorkspaceRoute('gatewayActivity');
-              }}
-            >
-              Audit
+              {showChannelActions ? 'Manage access' : 'Revoke access'}
             </AppButton>
           ) : null}
           <button
@@ -2711,9 +2754,13 @@ export function WorkstationSageConnectorsPane({
             <AppButton
               type="button"
               onClick={() => {
-                if (record.id === 'local_models') {
+                if (record.actionTarget === 'ai' || record.id === 'local_models') {
                   setProviderPickerOpen(true);
                   setProviderPickerDraftId(null);
+                  return;
+                }
+                if (record.actionTarget === 'close') {
+                  setExpandedCardId(null);
                   return;
                 }
                 openGatewaySurface();
@@ -2864,16 +2911,16 @@ export function WorkstationSageConnectorsPane({
     const displayLabel = sectionId === 'hosted'
       ? 'Empyralis default model'
       : record.provider.id === 'ollama_cloud'
-        ? 'Ollama Cloud (API key)'
+        ? 'Ollama Cloud'
         : record.provider.id === 'ollama'
-          ? 'Ollama on My Computer'
+          ? 'Ollama on This Computer'
           : record.label;
     const detailLabel = sectionId === 'hosted'
       ? hostedProviderDetailLabel(hostedSageAi, record)
       : isLocalSection
-        ? (localCompanionOnline ? 'My Computer · Uses the Ollama models available on this device' : 'My Computer · Connect this computer first')
+        ? (localCompanionOnline ? 'This Computer · Uses the Ollama models available on this device' : 'This Computer · Connect this computer first')
       : record.provider.id === 'ollama_cloud'
-        ? `${providerPickerStatusLabel(record, localCompanionOnline)} · Ollama Cloud API`
+        ? `${providerPickerStatusLabel(record, localCompanionOnline)} · Ollama Cloud`
         : `${providerPickerStatusLabel(record, localCompanionOnline)} · ${providerPathLabel(record)}`;
     return (
       <div key={`${sectionId}:${record.id}`} className={joinClassNames('sage-provider-picker__item', isHostedSection && 'sage-provider-picker__item--hosted')}>
@@ -3035,7 +3082,6 @@ export function WorkstationSageConnectorsPane({
                   </div>
                 </div>
               </div>
-              {renderSection('AI providers', providerCards, renderProviderCard, renderProviderExpand)}
             </section>
           )
         ) : null}
@@ -3045,10 +3091,9 @@ export function WorkstationSageConnectorsPane({
           </div>
         ) : (
           <>
-            {showPersonalSurface ? renderSection('Communication', communicationPersonalCards, renderPersonalCard, renderPersonalExpand) : null}
-            {communicationConnectorCards.length > 0 ? renderSection('Communication apps', communicationConnectorCards, renderConnectorCard, renderConnectorExpand) : null}
+            {showPersonalSurface && communicationCards.length > 0 ? renderSection('Communication', communicationCards, renderExternalCard, renderExternalExpand) : null}
             {showPersonalSurface ? renderSection('This Computer', thisComputerCards, renderExternalCard, renderExternalExpand) : null}
-            {knowledgeConnectorCards.length > 0 ? renderSection('Knowledge', knowledgeConnectorCards, renderConnectorCard, renderConnectorExpand) : null}
+            {knowledgeCards.length > 0 ? renderSection('Knowledge', knowledgeCards, renderExternalCard, renderExternalExpand) : null}
           </>
         )}
         {showTools ? (
@@ -3062,7 +3107,7 @@ export function WorkstationSageConnectorsPane({
       <CommandSheet
         open={providerPickerOpen}
         title="Choose AI model"
-        description="Use Empyralis credits by default, or connect your own API key for direct model billing."
+        description="Use Empyralis credits by default, or connect your own AI account."
         onClose={() => {
           setProviderPickerOpen(false);
           setProviderPickerDraftId(null);

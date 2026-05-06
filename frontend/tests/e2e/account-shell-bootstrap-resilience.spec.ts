@@ -115,7 +115,7 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page).not.toHaveURL(/\/w\/ws-1\/admin$/);
   });
 
-  test('global account and My Computer settings routes resolve into workspace settings sections', async ({ page }) => {
+  test('global account and This Computer settings routes resolve into workspace settings sections', async ({ page }) => {
     await loginAsOwner(page);
 
     await page.goto('/settings/account');
@@ -128,7 +128,7 @@ test.describe('account shell and bootstrap resilience', () => {
 
     await page.goto('/settings/devices');
     await expect(page).toHaveURL(/\/w\/ws-1\/settings\?section=devices$/);
-    await expect(page.locator('h1').filter({ hasText: /^My Computer$/ })).toBeVisible();
+    await expect(page.locator('h1').filter({ hasText: /^This Computer$/ })).toBeVisible();
   });
 
   test('sage top navigation exposes the five IA surfaces and moves approvals into a badge', async ({ page }) => {
@@ -247,36 +247,30 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(sectionLabels.filter({ hasText: /^Knowledge$/ })).toBeVisible();
     await expect(sectionLabels.filter({ hasText: /^Tools$/ })).toBeVisible();
 
-    await expect(page.getByText(/^AI Provider$/)).toBeVisible();
-    await expect(page.getByText(/DeepSeek stays primary through Empyralis credits/i)).toBeVisible();
     await expect(page.getByText(/Active: .*through Empyralis credits/i)).toBeVisible();
     await expect(page.getByText(/^Credits$/).first()).toBeVisible();
     await expect(page.getByText(/remaining|Available|Not active/i).first()).toBeVisible();
     await expect(page.getByText(/^Backup$/)).toBeVisible();
     await expect(page.getByText(/Gemini (available|configurable)/i)).toBeVisible();
     await expect(page.getByText(/^Advanced$/)).toBeVisible();
-    await expect(page.getByText(/^BYOK and local models$/)).toBeVisible();
-    await expect(page.getByText(/Ollama local requires This Computer/i)).toBeVisible();
-    await expect(page.getByText(/^DeepSeek$/).first()).toBeVisible();
-    await expect(page.getByText(/^OpenAI$/).first()).toBeVisible();
-    await expect(page.getByText(/Gemini/i).first()).toBeVisible();
-    await expect(page.getByText(/^Anthropic$/).first()).toBeVisible();
-    await expect(page.getByText(/^Ollama Cloud$/).first()).toBeVisible();
+    await expect(page.getByText(/^More AI choices$/)).toBeVisible();
+    await expect(page.getByText(/connect another AI account or use a model on This Computer/i)).toBeVisible();
+    await expect(sectionLabels.filter({ hasText: /^Communication apps$/ })).toHaveCount(0);
+    await expect(sectionLabels.filter({ hasText: /^AI providers$/ })).toHaveCount(0);
     await expect(page.getByText(/^Your Telegram$/)).toBeVisible();
     await expect(page.getByText(/^Your WhatsApp$/)).toBeVisible();
     await page.getByText(/^Your Telegram$/).click();
     await expect(page.getByText(/Uses your paired computer session/i).first()).toBeVisible();
-    await expect(page.getByText(/Device-owned personal channel/i).first()).toBeVisible();
-    await expect(page.getByText(/Status:/i).first()).toBeVisible();
-    await expect(page.getByRole('button', { name: /Setup \/ reconnect|Reconnect \/ test/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Audit$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Set up$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Audit$/i })).toHaveCount(0);
+    await expect(page.getByText(/token|WSS|protocol|API key/i)).toHaveCount(0);
     await expect(page.getByText(/^Signal$/)).toBeVisible();
     await expect(page.getByText(/^Slack$/)).toBeVisible();
     await expect(page.getByText(/^Discord$/)).toBeVisible();
-    await expect(page.getByText(/^Local gateway$/)).toBeVisible();
-    await expect(page.getByText(/^Browser attach$/)).toBeVisible();
-    await expect(page.getByText(/^Local files and shell$/)).toBeVisible();
-    await expect(page.getByText(/^Local models$/)).toBeVisible();
+    await expect(page.getByText(/^This computer$/)).toBeVisible();
+    await expect(page.getByText(/^My browser$/)).toBeVisible();
+    await expect(page.getByText(/^Files on this computer$/)).toBeVisible();
+    await expect(page.getByText(/^AI on this computer$/)).toBeVisible();
     await expect(page.getByText(/^Drive$/)).toBeVisible();
     await expect(page.getByText(/^Notion$/)).toBeVisible();
     await expect(page.getByText(/^Uploads$/)).toBeVisible();

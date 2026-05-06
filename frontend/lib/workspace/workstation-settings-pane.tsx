@@ -41,9 +41,9 @@ const SETTINGS_SECTIONS: Array<{
   },
   {
     id: 'devices',
-    label: 'My Computer',
-    eyebrow: 'My Computer',
-    title: 'My Computer',
+    label: 'This Computer',
+    eyebrow: 'This Computer',
+    title: 'This Computer',
     description: 'Trusted computers, connection health, and local tool readiness.',
   },
   {
@@ -218,8 +218,8 @@ function deriveActiveModelPath(
       || readString(provider?.default_model)
       || 'Default model';
     const routeLabel = provider?.local_only === true || providerId === 'ollama'
-      ? 'My Computer'
-      : 'Your API key';
+      ? 'This Computer'
+      : 'Your AI account';
     return {
       value: `${providerLabel} · ${modelLabel}`,
       hint: routeLabel,
@@ -243,7 +243,7 @@ function deriveActiveModelPath(
 
   return {
     value: 'No AI model selected',
-    hint: 'Choose credits, add an API key, or connect My Computer.',
+    hint: 'Choose credits, connect your own AI account, or connect this computer.',
   };
 }
 
@@ -440,7 +440,7 @@ export function WorkstationSettingsPane() {
                   value={hostedCredits.allowed && hostedCredits.monthlyCreditCap > 0
                     ? `${formatCredits(hostedCredits.monthlyCreditsRemaining)} / ${formatCredits(hostedCredits.monthlyCreditCap)}`
                     : 'Not active'}
-                  hint={hostedCredits.allowed ? hostedCredits.message : 'Add credits or use your own API key.'}
+                  hint={hostedCredits.allowed ? hostedCredits.message : 'Add credits or connect your own AI account.'}
                 />
                 <AppSurfaceStat
                   label="Active AI path"
@@ -558,7 +558,7 @@ export function WorkstationSettingsPane() {
                 </article>
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">My Computer boundary</strong>
+                    <strong className="settings-detail-card__title">This Computer boundary</strong>
                   </div>
                   <p className="settings-detail-card__body">
                     Local files, browser, clipboard, screenshots, and terminal require an online paired computer on a trusted device.

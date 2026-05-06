@@ -2717,6 +2717,25 @@ export function WorkstationDeployedAgentsPane({
                 {showAgentsIndex ? (
                   <>
                     <ListDetailPanel
+                      className="studio-panel studio-panel--demo-path"
+                      eyebrow="Demo path"
+                      title="Build one working business specialist"
+                      subtitle="Start with a template, create a private draft, test it in chat, then deploy and use Activity plus credits as the proof path."
+                      actions={(
+                        <AppButton type="button" tone="primary" onClick={() => openCreateWizard(selectedTemplateId)}>
+                          Create specialist
+                        </AppButton>
+                      )}
+                    >
+                      <div className="deployed-agents-card__badges" aria-label="Business specialist demo steps">
+                        <span className="deployed-agents-card__badge">1. Choose template</span>
+                        <span className="deployed-agents-card__badge">2. Test privately</span>
+                        <span className="deployed-agents-card__badge">3. Go live</span>
+                        <span className="deployed-agents-card__badge">4. Show Activity proof</span>
+                      </div>
+                    </ListDetailPanel>
+
+                    <ListDetailPanel
                       className="studio-panel studio-panel--templates"
                       eyebrow="Templates"
                       title="Start from a specialist template"

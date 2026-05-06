@@ -457,7 +457,7 @@ export function WorkstationRunsPane() {
         ) : activityItems.length === 0 ? (
           <EmptyPanel
             title="No activity yet"
-            body="Chat, tool runs, approvals, channels, gateway reconnects, provider failures, and final outcomes will appear here."
+            body="Ask Sage for help or test one business specialist. Chat, tool runs, approvals, channel sends, gateway reconnects, provider failures, and final outcomes will appear here as proof."
           />
         ) : (
           <div className="app-stack-4">

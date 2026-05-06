@@ -216,6 +216,7 @@ const VALID_REASONING_LEVELS: ChatReasoningEffort[] = ['none', 'minimal', 'low',
 const PRIMARY_THREAD_ID = 'primary';
 const CHAT_READ_TIMEOUT_MS = 8_000;
 const SAGE_SETUP_TIMEOUT_MS = 8_000;
+const CHAT_THINKING_RECOVERY_MS = 120_000;
 const ACTIVE_THREAD_QUERY_KEY = 'chat:canonical:active-thread';
 const ACTIVE_THREAD_STORAGE_PREFIX = 'empyralis.chat.active-thread.v1';
 const RUNS_QUERY_KEY = 'chat:canonical:runs';
@@ -701,6 +702,14 @@ function isProviderRuntimeGateMessage(message: string): boolean {
   if (!normalized) {
     return false;
   }
+  const mentionsProviderSetup = (
+    normalized.includes('provider')
+    || normalized.includes('credential')
+    || normalized.includes('api key')
+    || normalized.includes('runtime')
+    || normalized.includes('setup')
+    || normalized.includes('configured')
+  );
   return (
     normalized.includes('is selected for chat but is not available right now')
     || normalized.includes('is local-only and needs a connected computer')
@@ -709,6 +718,15 @@ function isProviderRuntimeGateMessage(message: string): boolean {
     || normalized.includes('the selected provider is not available right now')
     || normalized.includes('connect this computer, switch to empyralis credits')
     || normalized.includes('required local runtime')
+    || normalized.includes('no provider configured')
+    || normalized.includes('provider setup required')
+    || normalized.includes('missing provider')
+    || normalized.includes('missing credential')
+    || normalized.includes('missing api key')
+    || (mentionsProviderSetup && normalized.includes('not configured'))
+    || (mentionsProviderSetup && normalized.includes('not available'))
+    || (mentionsProviderSetup && normalized.includes('not ready'))
+    || (mentionsProviderSetup && normalized.includes('setup required'))
   );
 }
 
@@ -1096,10 +1114,10 @@ function providerPathLabel(provider: ProviderCatalogRecord | null | undefined): 
   const providerLabel = readString(provider.label) || readString(provider.id);
 
   if (providerId === 'ollama') {
-    return 'My Computer · Ollama local';
+    return 'This Computer · Ollama local';
   }
   if (providerId === 'openai-codex' || runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
-    return 'My Computer · CLI';
+    return 'This Computer';
   }
   if (providerId === 'ollama_cloud') {
     return 'Ollama Cloud';
@@ -1108,10 +1126,10 @@ function providerPathLabel(provider: ProviderCatalogRecord | null | undefined): 
     return 'Empyralis credits';
   }
   if (credentialPlane === 'workspace_connection') {
-    return 'Your API key';
+    return 'Your AI account';
   }
   if (provider.local_only === true || credentialPlane === 'local_runtime') {
-    return 'My Computer';
+    return 'This Computer';
   }
   return providerLabel || null;
 }
@@ -1146,10 +1164,10 @@ function providerFailureMessageForProvider(provider: ProviderCatalogRecord | nul
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs this computer connected in Integrations. Use Empyralis credits, connect this computer, or add your own API key.`;
+    return `${providerLabel} needs this computer connected in Integrations. Use Empyralis credits, connect this computer, or connect your own AI account.`;
   }
   if (credentialPlane === 'workspace_connection') {
-    return 'Your AI model API key needs attention. Check the key, quota, or selected model in Integrations.';
+    return 'Your AI account needs attention. Check the connection, quota, or selected model in Integrations.';
   }
   if (credentialPlane === 'platform_runtime') {
     return 'Empyralis credits are active, but the hosted AI model is temporarily unavailable. Try again or switch model.';
@@ -1185,7 +1203,7 @@ function providerFailureActionsForProvider(
   if (creditsOrKey) {
     return [
       { label: 'Manage credits', target: 'integrations' },
-      { label: 'Add API key', target: 'integrations' },
+      { label: 'Connect AI account', target: 'integrations' },
       { label: 'Choose AI Model', target: 'integrations' },
     ];
   }
@@ -1814,7 +1832,7 @@ function classifyStatusNotice(message: string): {
   if (isGatewayBrowserMessage(message)) {
     return {
       tone: 'warning',
-      title: 'My Computer browser needed',
+      title: 'This Computer browser needed',
       body: 'Localhost pages, signed-in sites, and private browser sessions stay on this device. Open Integrations to manage This Computer access.',
       requiresLocalAccess: true,
       actionTarget: 'integrations',
@@ -1824,7 +1842,7 @@ function classifyStatusNotice(message: string): {
   if (isLocalCompanionGateMessage(message)) {
     return {
       tone: 'warning',
-      title: 'My Computer attention needed',
+      title: 'This Computer attention needed',
       body: message,
       requiresLocalAccess: true,
       actionTarget: 'integrations',
@@ -2496,6 +2514,7 @@ export function WorkstationChatPane() {
   const pendingUserMessageRef = useRef<WorkstationChatMessageRecord | null>(pendingUserMessage);
   const streamingAssistantTextRef = useRef(streamingAssistantText);
   const liveActivityStepsRef = useRef<LiveActivityStepState[]>(liveActivitySteps);
+  const lastTurnActivityAtRef = useRef<number>(0);
   const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
@@ -2536,6 +2555,10 @@ export function WorkstationChatPane() {
   useEffect(() => {
     liveActivityStepsRef.current = liveActivitySteps;
   }, [liveActivitySteps]);
+
+  const markTurnActivity = useCallback(() => {
+    lastTurnActivityAtRef.current = Date.now();
+  }, []);
 
   const refreshProviderCatalog = useCallback(async () => {
     const payload = await services.queryClient.run('chat:provider-catalog', async () => {
@@ -3478,15 +3501,15 @@ export function WorkstationChatPane() {
       return { label: 'No AI model', tone: 'warning' as const };
     }
     if (localProvider && !localToolingOnline) {
-      return { label: 'My Computer offline', tone: 'warning' as const };
+      return { label: 'This Computer offline', tone: 'warning' as const };
     }
     if (localProvider) {
-      return { label: providerPath ?? 'My Computer', tone: 'success' as const };
+      return { label: providerPath ?? 'This Computer', tone: 'success' as const };
     }
     if (providerPath === 'Empyralis credits') {
       return { label: 'Empyralis credits', tone: 'success' as const };
     }
-    if (providerPath === 'Your API key' || providerPath === 'Ollama Cloud') {
+    if (providerPath === 'Your AI account' || providerPath === 'Ollama Cloud') {
       return { label: providerPath, tone: 'neutral' as const };
     }
     return { label: 'Cloud AI', tone: 'neutral' as const };
@@ -3513,11 +3536,11 @@ export function WorkstationChatPane() {
     return [
       {
         id: 'local-machine',
-        label: 'Local machine',
+        label: 'This Computer',
         items: [
           { id: 'files', label: 'Files', detail: fileEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && fileEnabled },
-          { id: 'browser', label: 'Browser', detail: browserEnabled ? localReason : 'Browser attach is not ready', enabled: browserEnabled },
-          { id: 'screenshot', label: 'Screenshot', detail: browserEnabled ? localReason : 'Browser attach is not ready', enabled: browserEnabled },
+          { id: 'browser', label: 'Browser', detail: browserEnabled ? localReason : 'Browser is not connected', enabled: browserEnabled },
+          { id: 'screenshot', label: 'Screenshot', detail: browserEnabled ? localReason : 'Browser is not connected', enabled: browserEnabled },
           { id: 'clipboard', label: 'Clipboard', detail: localReason, enabled: localToolingOnline },
           { id: 'terminal', label: 'Terminal', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && codeEnabled },
         ],
@@ -3750,7 +3773,7 @@ export function WorkstationChatPane() {
     if (!localToolingOnline) {
       pills.push({
         id: 'gateway',
-        label: 'My Computer: Offline',
+        label: 'This Computer: Offline',
         tone: 'danger',
         target: 'integrations',
       });
@@ -3933,30 +3956,38 @@ export function WorkstationChatPane() {
     };
   }, [isSending, stopStreamingResponse]);
 
+  useEffect(() => {
+    if (!isSending) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      if (!activeTurnRequestIdRef.current) {
+        stopStreamingResponse();
+        return;
+      }
+      const lastActivityAt = lastTurnActivityAtRef.current;
+      const inactiveFor = lastActivityAt > 0 ? Date.now() - lastActivityAt : 0;
+      if (inactiveFor < CHAT_THINKING_RECOVERY_MS) {
+        return;
+      }
+      stopStreamingResponse();
+      setSendFailureNotice({
+        message: 'Sage stopped waiting on a stalled response. Your draft is restored so you can try again.',
+        retryable: true,
+        retryDraft: pendingUserMessageRef.current?.content ?? draft,
+      });
+    }, 5_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [draft, isSending, stopStreamingResponse]);
+
   const sendMessage = async () => {
     const outboundMessage = draft.trim();
     if (!outboundMessage || isSending || submitInFlightRef.current) {
       return;
     }
     submitInFlightRef.current = true;
-    if (!activeProviderSummary.connected) {
-      setHasEnteredConversationFlow(true);
-      setSendFailureNotice(
-        selectedProviderRecord
-          ? providerFailureNoticeForProvider(selectedProviderRecord)
-          : {
-              message: 'Sage needs an AI path before it can answer. Use Empyralis credits, add your own API key, or connect My Computer for local Ollama in Integrations.',
-              retryable: false,
-              actions: [
-                { label: 'Manage credits', target: 'integrations' },
-                { label: 'Add API key', target: 'integrations' },
-                { label: 'Choose AI Model', target: 'integrations' },
-              ],
-            },
-      );
-      submitInFlightRef.current = false;
-      return;
-    }
     const resolvedProviderId = readString(selectedProviderContext.providerId) || null;
     const resolvedModelId = readString(selectedProviderContext.modelId)
       || (effectiveSelectedModel === 'default' ? null : effectiveSelectedModel);
@@ -3985,6 +4016,7 @@ export function WorkstationChatPane() {
     const requestedThreadId = activeThreadId;
     const clientRequestId = createClientTurnRequestId();
     activeTurnRequestIdRef.current = clientRequestId;
+    lastTurnActivityAtRef.current = Date.now();
     const assertTurnStillActive = () => {
       if (activeTurnRequestIdRef.current !== clientRequestId || streamAbortRequestedRef.current) {
         throw new WorkstationClientError('Turn stopped by user.', 0, null, 'stream_aborted', {
@@ -4221,6 +4253,7 @@ export function WorkstationChatPane() {
           if (activeTurnRequestIdRef.current !== clientRequestId || streamAbortRequestedRef.current) {
             return;
           }
+          markTurnActivity();
           if (event.event === 'trace') {
             const traceEvent = normalizeTraceStreamEvent(event.payload);
             if (traceEvent) {
@@ -4275,7 +4308,7 @@ export function WorkstationChatPane() {
             const finalReply = readString(event.payload.reply)
               || readString(event.payload.content)
               || readString(event.payload.message);
-            if (finalReply) {
+            if (finalReply && !isProviderRuntimeGateMessage(finalReply)) {
               observedFinalReply = finalReply;
               setStreamingAssistantText(finalReply);
               setStatusMessage(null);
@@ -4466,9 +4499,9 @@ export function WorkstationChatPane() {
         const serverFailure = (typeof normalizedError?.status === 'number' && normalizedError.status >= 500)
           || /bad gateway|gateway timeout|service unavailable|internal server error|server error/i.test(normalizedRawMessage);
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
-          ? 'My Computer is needed for this request. Connect this computer and try again.'
+          ? 'This Computer is needed for this request. Connect this computer and try again.'
           : providerNeedsAttention
-            ? 'The selected AI path is not ready. Use Empyralis credits, add your own API key, connect My Computer, or choose another model in Integrations.'
+            ? 'The selected AI path is not ready. Use Empyralis credits, connect your own AI account, connect this computer, or choose another model in Integrations.'
             : authNeedsAttention
               ? 'Your session needs attention before Sage can continue. Refresh the page or sign in again.'
               : rateLimitFailure

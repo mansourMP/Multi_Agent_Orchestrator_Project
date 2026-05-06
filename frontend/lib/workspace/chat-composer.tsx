@@ -198,6 +198,10 @@ export function ChatComposer({
   }, [draft]);
 
   useEffect(() => {
+    textareaRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
     if (!runtimePickerOpen && !toolPaletteOpen) {
       return undefined;
     }

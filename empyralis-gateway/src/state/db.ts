@@ -33,11 +33,29 @@ export class GatewayStateDb {
 
   async readJson<T>(name: string, fallback: T): Promise<T> {
     await this.ensureReady();
+    const target = this.filePath(name);
     try {
-      const raw = await fs.readFile(this.filePath(name), "utf8");
+      const raw = await fs.readFile(target, "utf8");
       return JSON.parse(raw) as T;
-    } catch {
-      return fallback;
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as NodeJS.ErrnoException).code || "")
+          : "";
+      if (code === "ENOENT") {
+        return fallback;
+      }
+      if (error instanceof SyntaxError) {
+        const backupPath = `${target}.corrupt.${new Date().toISOString().replace(/[:.]/g, "-")}`;
+        await fs.rename(target, backupPath);
+        throw new Error(
+          `Corrupt gateway state JSON at ${target}; backed up to ${backupPath}. ${error.message}`,
+        );
+      }
+      if (error instanceof Error) {
+        throw new Error(`Unable to read gateway state JSON at ${target}: ${error.message}`);
+      }
+      throw new Error(`Unable to read gateway state JSON at ${target}.`);
     }
   }
 

@@ -596,6 +596,41 @@ class GatewayRoutesTests(unittest.TestCase):
         )
         self.assertEqual(blocked_response.status_code, 401)
 
+    def test_revoke_gateway_shuts_down_live_connection_when_available(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+
+        class FakeConnection:
+            session_id = "gateway-session-live-1"
+
+            class FakeWebSocket:
+                close = AsyncMock()
+
+            websocket = FakeWebSocket()
+
+        unregister_mock = patch.object(
+            routes_gateway.gateway_protocol_service,
+            "_unregister_live_connection",
+        )
+        with patch.object(
+            routes_gateway.gateway_protocol_service,
+            "_get_live_connection",
+            return_value=FakeConnection(),
+        ), unregister_mock as unregister_connection:
+            revoke_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/revoke",
+                json={"reason": "owner_revoked_gateway"},
+            )
+
+        self.assertEqual(revoke_response.status_code, 200)
+        self.assertEqual(revoke_response.json()["live_connection_shutdown"], True)
+        FakeConnection.websocket.close.assert_awaited_once_with(code=4403, reason="registration revoked")
+        unregister_connection.assert_called_once_with(
+            gateway_id=gateway_id,
+            session_id="gateway-session-live-1",
+            reason="registration revoked",
+        )
+
     def test_tool_invoke_and_interrupt_flow_through_gateway_with_audit_events(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]

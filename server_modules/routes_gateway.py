@@ -143,6 +143,26 @@ def _accessible_gateway_registration(
     return registration, resolved_workspace_id
 
 
+async def _shutdown_revoked_live_gateway_connection(gateway_id: str, *, reason: str) -> bool:
+    get_connection = getattr(gateway_protocol_service, "_get_live_connection", None)
+    unregister_connection = getattr(gateway_protocol_service, "_unregister_live_connection", None)
+    if not callable(get_connection):
+        return False
+    connection = get_connection(gateway_id)
+    if connection is None:
+        return False
+    session_id = str(getattr(connection, "session_id", "") or "").strip()
+    websocket = getattr(connection, "websocket", None)
+    if websocket is not None and hasattr(websocket, "close"):
+        try:
+            await websocket.close(code=4403, reason=reason)
+        except Exception:
+            pass
+    if callable(unregister_connection):
+        unregister_connection(gateway_id=gateway_id, session_id=session_id, reason=reason)
+    return True
+
+
 @router.post("/gateway/pairings/intents")
 async def create_gateway_pairing_intent(
     body: Optional[GatewayPairingIntentCreateRequest] = None,
@@ -267,13 +287,18 @@ async def revoke_gateway_registration(
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
     tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
     try:
-        return gateway_registry_service.revoke_gateway_registration(
+        revoked_payload = gateway_registry_service.revoke_gateway_registration(
             gateway_id=gateway_id,
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
             user_id=str((current_user or {}).get("user_id") or "").strip() or None,
             reason=str((body or GatewayRegistrationRevokeRequest()).reason or "").strip() or None,
         )
+        revoked_payload["live_connection_shutdown"] = await _shutdown_revoked_live_gateway_connection(
+            gateway_id,
+            reason="registration revoked",
+        )
+        return revoked_payload
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

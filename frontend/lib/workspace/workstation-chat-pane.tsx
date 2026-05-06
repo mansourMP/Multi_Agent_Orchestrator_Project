@@ -3335,9 +3335,12 @@ export function WorkstationChatPane() {
   const showFirstImpression = !showConversationContext;
   const bootstrapQuestion = profileSnapshot.bootstrap.current_question;
   const bootstrapComplete = profileSnapshot.bootstrap.complete;
-  const showSageSetupLoadingCard = sageSetupState === 'loading';
-  const showSageSetupUnavailableCard = sageSetupState === 'unavailable';
-  const showBootstrapCard = sageSetupState === 'required' && !bootstrapComplete;
+  // Keep Sage chat usable even when profile bootstrap is incomplete.
+  // Setup remains available in Memory instead of owning the first impression.
+  const showSetupCardsInChat = false;
+  const showSageSetupLoadingCard = showSetupCardsInChat && sageSetupState === 'loading';
+  const showSageSetupUnavailableCard = showSetupCardsInChat && sageSetupState === 'unavailable';
+  const showBootstrapCard = showSetupCardsInChat && sageSetupState === 'required' && !bootstrapComplete;
   const showBlankTranscript = !isLoading
     && visibleTranscriptCells.length === 0
     && !liveTrace;
@@ -3919,18 +3922,6 @@ export function WorkstationChatPane() {
   }, [isSending, stopStreamingResponse]);
 
   const sendMessage = async () => {
-    if (!bootstrapComplete) {
-      if (sageSetupState === 'loading') {
-        setStatusMessage('Sage is still loading your setup.');
-        return;
-      }
-      if (sageSetupState === 'unavailable') {
-        setStatusMessage(sageSetupMessage || 'Sage setup is temporarily unavailable right now.');
-        return;
-      }
-      setStatusMessage(bootstrapQuestion?.prompt || 'Finish the Sage setup first.');
-      return;
-    }
     const outboundMessage = draft.trim();
     if (!outboundMessage || isSending || submitInFlightRef.current) {
       return;
@@ -4814,16 +4805,8 @@ export function WorkstationChatPane() {
         contextWindowLabel={contextWindowLabel}
         busy={isSending}
         controlsDisabled={isPersistingModelSelection}
-        sendDisabled={sageSetupState !== 'ready'}
-        placeholder={
-          sageSetupState === 'ready'
-            ? 'Message Sage...'
-            : sageSetupState === 'loading'
-              ? 'Loading Sage setup...'
-              : sageSetupState === 'unavailable'
-                ? 'Sage setup is temporarily unavailable.'
-                : 'Finish Sage setup to start chatting...'
-        }
+        sendDisabled={false}
+        placeholder="Message Sage..."
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{
           label: activeProviderSummary.label,

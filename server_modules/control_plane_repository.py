@@ -20,6 +20,7 @@ from server_modules.sqlite_helpers import connect_sqlite_rw
 
 
 LOGGER = logging.getLogger(__name__)
+LOCAL_IDENTITY_SCHEMA_READY_PATHS: set[str] = set()
 NEW_ACCOUNT_HOSTED_SAGE_AI_POLICY = "enabled_with_cap"
 
 
@@ -2106,6 +2107,9 @@ def _upsert_local_workspace_billing_subscription(
 
 def _connect_local_identity_db() -> sqlite3.Connection:
     connection = connect_sqlite_rw(LOCAL_IDENTITY_DB_FILE, logger=LOGGER, label="local_identity")
+    schema_key = str(LOCAL_IDENTITY_DB_FILE)
+    if schema_key in LOCAL_IDENTITY_SCHEMA_READY_PATHS:
+        return connection
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -2243,6 +2247,8 @@ def _connect_local_identity_db() -> sqlite3.Connection:
         connection.execute(
             "ALTER TABLE workspace_billing_subscriptions ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
         )
+    connection.commit()
+    LOCAL_IDENTITY_SCHEMA_READY_PATHS.add(schema_key)
     return connection
 
 

@@ -12,6 +12,7 @@ import type { AccountShellBootstrap } from '@/lib/shell/account-shell-store';
 import { parseAccountShellPayload } from '@/lib/shell/account-shell-payload';
 
 const RETRYABLE_ACCOUNT_SHELL_STATUSES = new Set([403, 429, 500, 502, 503, 504]);
+const accountShellInFlightRequests = new Map<string, Promise<LoadedAccountShellSession>>();
 
 export type DegradedAccountShellSession = {
   account: null;
@@ -100,7 +101,7 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
     const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
     const proto = requestHeaders.get('x-forwarded-proto') ?? 'http';
     const sameOriginUrl = sameOriginAccountShellUrl(host, proto);
-    const forwardHeaders = {
+    const forwardHeaders: Record<string, string> = {
       accept: 'application/json',
       ...(requestHeaders.get('cookie') ? { cookie: requestHeaders.get('cookie') as string } : {}),
       ...(requestHeaders.get('authorization') ? { authorization: requestHeaders.get('authorization') as string } : {}),
@@ -108,6 +109,50 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
       ...(proto ? { 'x-forwarded-proto': proto.split(',')[0].trim() || 'http' } : {}),
     };
     const accountShellUrl = `${controlPlaneBaseUrl()}/api/v1/auth/account-shell`;
+    const inFlightKey = [
+      accountShellUrl,
+      forwardHeaders.cookie ?? '',
+      forwardHeaders.authorization ?? '',
+      forwardHeaders['x-forwarded-host'] ?? '',
+      forwardHeaders['x-forwarded-proto'] ?? '',
+    ].join('::');
+    const existingRequest = accountShellInFlightRequests.get(inFlightKey);
+    if (existingRequest) {
+      return existingRequest;
+    }
+    const requestPromise = fetchAccountShellSessionWithRetry({
+      accountShellUrl,
+      sameOriginUrl,
+      forwardHeaders,
+    });
+    accountShellInFlightRequests.set(inFlightKey, requestPromise);
+    try {
+      return await requestPromise;
+    } finally {
+      if (accountShellInFlightRequests.get(inFlightKey) === requestPromise) {
+        accountShellInFlightRequests.delete(inFlightKey);
+      }
+    }
+  } catch (error) {
+    return degradedAccountShellSession(
+      null,
+      error instanceof Error && error.name === 'AbortError'
+        ? `Account shell bootstrap timed out after ${AUTH_ACCOUNT_SHELL_TIMEOUT_MS}ms.`
+        : error instanceof Error ? error.message : 'Account shell bootstrap failed.',
+    );
+  }
+}
+
+async function fetchAccountShellSessionWithRetry({
+  accountShellUrl,
+  sameOriginUrl,
+  forwardHeaders,
+}: {
+  accountShellUrl: string;
+  sameOriginUrl: string | null;
+  forwardHeaders: HeadersInit;
+}): Promise<LoadedAccountShellSession> {
+  try {
     let lastStatus: number | null = null;
     let lastErrorMessage: string | null = null;
 

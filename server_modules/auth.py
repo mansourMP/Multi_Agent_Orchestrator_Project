@@ -78,6 +78,7 @@ AUTH_HOT_CACHE_TTL_SECONDS = max(int(os.getenv("ORION_AUTH_HOT_CACHE_TTL_SECONDS
 WORKSPACE_TENANT_CACHE: Dict[str, dict[str, Any]] = {}
 TENANT_POLICY_CACHE: Dict[str, dict[str, Any]] = {}
 WORKSPACE_POLICY_CACHE: Dict[str, dict[str, Any]] = {}
+AUTH_DB_SCHEMA_READY_PATHS: set[str] = set()
 
 
 def _auth_hot_cache_get(cache: Dict[str, dict[str, Any]], key: str) -> Any:
@@ -1028,6 +1029,9 @@ def _b64url_decode(value: str) -> bytes:
 
 def _connect_auth_db() -> sqlite3.Connection:
     connection = connect_sqlite_rw(AUTH_DB_FILE, logger=LOGGER, label="auth")
+    schema_key = str(AUTH_DB_FILE)
+    if schema_key in AUTH_DB_SCHEMA_READY_PATHS:
+        return connection
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -1361,6 +1365,7 @@ def _connect_auth_db() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_channel_user_acquisition_touches_conversion ON channel_user_acquisition_touches(tenant_id, workspace_id, converted_user_id, converted_at DESC)"
     )
     connection.commit()
+    AUTH_DB_SCHEMA_READY_PATHS.add(schema_key)
     return connection
 
 

@@ -32,6 +32,7 @@ type WorkspaceBootstrapCacheEntry = {
 };
 
 const workspaceBootstrapCache = new Map<string, WorkspaceBootstrapCacheEntry>();
+const workspaceBootstrapInFlightRequests = new Map<string, Promise<WorkspaceBootstrapPayload>>();
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -62,7 +63,38 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
   if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
     return cachedEntry.payload;
   }
+  const existingRequest = workspaceBootstrapInFlightRequests.get(cacheKey);
+  if (existingRequest) {
+    return existingRequest;
+  }
 
+  const requestPromise = fetchWorkspaceBootstrapWithRetry({
+    workspaceId,
+    url,
+    forwardHeaders,
+    cacheKey,
+  });
+  workspaceBootstrapInFlightRequests.set(cacheKey, requestPromise);
+  try {
+    return await requestPromise;
+  } finally {
+    if (workspaceBootstrapInFlightRequests.get(cacheKey) === requestPromise) {
+      workspaceBootstrapInFlightRequests.delete(cacheKey);
+    }
+  }
+}
+
+async function fetchWorkspaceBootstrapWithRetry({
+  workspaceId,
+  url,
+  forwardHeaders,
+  cacheKey,
+}: {
+  workspaceId: string;
+  url: string;
+  forwardHeaders: Record<string, string>;
+  cacheKey: string;
+}): Promise<WorkspaceBootstrapPayload> {
   let lastStatus = 500;
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {

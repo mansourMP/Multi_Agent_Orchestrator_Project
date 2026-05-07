@@ -4919,23 +4919,25 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
   }
 
   .app-chat-page {
-    min-height: 100dvh;
+    height: 100%;
+    min-height: 0;
+    padding-bottom: max(var(--app-space-2), env(safe-area-inset-bottom));
     padding-inline: max(var(--app-space-2), env(safe-area-inset-left)) max(var(--app-space-2), env(safe-area-inset-right));
   }
 
   .app-chat-composer {
     width: 100%;
-    padding: var(--app-space-2) 0 calc(var(--app-space-2) + env(safe-area-inset-bottom));
+    padding: var(--app-space-2) 0 0;
   }
 
   .app-chat-composer__surface {
-    min-height: 116px;
+    min-height: 104px;
     padding: var(--app-space-3);
     border-radius: 22px;
   }
 
   .app-chat-composer__textarea {
-    min-height: 52px;
+    min-height: 44px;
     padding-inline: 4px;
   }
 

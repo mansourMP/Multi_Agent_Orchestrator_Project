@@ -35,6 +35,7 @@ class ToolBrokerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._env_patcher.stop()
         safe_mode_service.reset_state_for_tests()
+        tool_broker.tool_broker_guard_service.reset_state_for_tests()
 
     def _register_mcp_server(self, registry_path: Path) -> None:
         with patch.object(mcp_registry_service, "MCP_SERVER_REGISTRY_FILE", registry_path):

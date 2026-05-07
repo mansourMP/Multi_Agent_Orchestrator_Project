@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Literal
 
 from server_modules.agent_manifest import AgentManifest, manifest_skill_ids
-from server_modules import egress_policy, safe_mode_service, skill_registry
+from server_modules import egress_policy, safe_mode_service, skill_registry, tool_broker_guard_service
 
 
 ToolActionClass = Literal["read", "write", "execute"]
@@ -351,6 +351,25 @@ def _require_approval_if_needed(claims: Dict[str, Any], definition: skill_regist
         )
 
 
+def _require_broker_guard(
+    *,
+    claims: Dict[str, Any],
+    tool_key: str,
+    action_class: str,
+    connector_scope: str = "",
+    surface: str = "skill",
+) -> None:
+    decision = tool_broker_guard_service.evaluate_tool_call(
+        claims=claims,
+        tool_key=tool_key,
+        action_class=action_class,
+        connector_scope=connector_scope,
+        surface=surface,
+    )
+    if not decision.allowed:
+        raise ToolExecutionDeniedError(decision.code, decision.detail)
+
+
 async def execute_skill(
     *,
     capability_token: str,
@@ -398,6 +417,13 @@ async def execute_skill(
 
     _require_action_class(claims, definition.action_class)
     _require_connector_scopes(claims, definition.connector_scopes)
+    _require_broker_guard(
+        claims=claims,
+        tool_key=skill_id,
+        action_class=definition.action_class,
+        connector_scope=",".join(definition.connector_scopes),
+        surface="skill",
+    )
     if definition.executor is not None:
         _require_runtime_allowed(definition, runtime_mode)
         _require_approval_if_needed(claims, definition)
@@ -460,6 +486,13 @@ def authorize_connector_action(
         )
     _require_action_class(claims, normalized_action_class)
     _require_connector_scopes(claims, (_normalize_token(connector_scope),))
+    _require_broker_guard(
+        claims=claims,
+        tool_key=_normalize_token(connector_scope),
+        action_class=normalized_action_class,
+        connector_scope=_normalize_token(connector_scope),
+        surface="connector",
+    )
     if bool(approval_required if approval_required is not None else normalized_action_class != "read") and not bool(claims.get("approval_granted")):
         raise ToolExecutionDeniedError(
             "approval_required",

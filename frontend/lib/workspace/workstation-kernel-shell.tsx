@@ -5,8 +5,12 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
-import { joinClassNames } from '@/lib/ui/primitives';
+import { Activity, Bot, Compass, LayoutGrid, Menu, Settings2 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
 import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
+import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationActivityVersion } from '@/lib/workspace/workspace-services';
 import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
@@ -29,12 +33,13 @@ const MOBILE_DESTINATION_NAV: readonly {
   id: 'chat' | 'studio' | 'marketplace' | 'activity' | 'settings';
   label: string;
   defaultRouteId: WorkspaceRouteId;
+  icon: LucideIcon;
 }[] = [
-  { id: 'chat', label: 'Chat', defaultRouteId: 'chat' },
-  { id: 'studio', label: 'Build', defaultRouteId: 'studio' },
-  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace' },
-  { id: 'activity', label: 'Activity', defaultRouteId: 'activity' },
-  { id: 'settings', label: 'Settings', defaultRouteId: 'settings' },
+  { id: 'chat', label: 'Chat', defaultRouteId: 'chat', icon: Bot },
+  { id: 'studio', label: 'Build', defaultRouteId: 'studio', icon: LayoutGrid },
+  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
+  { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
+  { id: 'settings', label: 'Settings', defaultRouteId: 'settings', icon: Settings2 },
 ];
 
 const ACTIVITY_ROUTE_IDS = new Set<WorkspaceRouteId>([
@@ -67,6 +72,7 @@ export function WorkstationKernelShell({
   const services = useWorkspaceServices();
   const activityVersion = useWorkstationActivityVersion();
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const approvalRefreshTimerRef = useRef<number | null>(null);
 
   const activeRouteId = useMemo(
@@ -183,6 +189,16 @@ export function WorkstationKernelShell({
           surfaceHref={surfaceHomeHref}
           diagnosticsVisible={false}
           onToggleDiagnostics={() => {}}
+          leftAction={(
+            <button
+              type="button"
+              className="workstation-titlebar__mobile-menu-trigger"
+              aria-label="Open sidebar"
+              onClick={() => setIsSidebarOpen(true)}
+            >
+              <Menu size={20} />
+            </button>
+          )}
           actions={pendingApprovalCount > 0 && routeManifest.routeIndex.heartbeat ? (
             <Link
               href={routeManifest.routeIndex.heartbeat.href}
@@ -207,23 +223,19 @@ export function WorkstationKernelShell({
             </Link>
           )) : null}
         />
-        <nav className="workstation-mobile-destination-nav" aria-label="Workspace sections">
-          {MOBILE_DESTINATION_NAV.map((destination) => (
-            <Link
-              key={destination.id}
-              href={buildWorkspaceRouteHref(workspaceId, destination.defaultRouteId)}
-              prefetch
-              aria-current={activeMobileDestinationId === destination.id ? 'page' : undefined}
-              className={joinClassNames(
-                'workstation-mobile-destination-nav__link',
-                activeMobileDestinationId === destination.id && 'workstation-mobile-destination-nav__link--active',
-              )}
-            >
-              {destination.label}
-            </Link>
-          ))}
-        </nav>
       </div>
+
+      <AppDrawer
+        open={isSidebarOpen}
+        onOpenChange={setIsSidebarOpen}
+        title={workspaceLabel}
+        className="workstation-mobile-sidebar"
+      >
+        <div className="workstation-mobile-sidebar__content">
+          <AccountTenantSwitcher />
+        </div>
+      </AppDrawer>
+
       <div className="workstation-shell__body" data-workstation-main-pane="content-body">
         <div
           className="workstation-layout"
@@ -239,6 +251,24 @@ export function WorkstationKernelShell({
           </section>
         </div>
       </div>
+
+      <nav className="workstation-mobile-bottom-nav" aria-label="Main navigation">
+        {MOBILE_DESTINATION_NAV.map((destination) => (
+          <Link
+            key={destination.id}
+            href={buildWorkspaceRouteHref(workspaceId, destination.defaultRouteId)}
+            prefetch
+            aria-current={activeMobileDestinationId === destination.id ? 'page' : undefined}
+            className={joinClassNames(
+              'workstation-mobile-bottom-nav__link',
+              activeMobileDestinationId === destination.id && 'workstation-mobile-bottom-nav__link--active',
+            )}
+          >
+            <destination.icon size={20} aria-hidden="true" />
+            <span className="workstation-mobile-bottom-nav__label">{destination.label}</span>
+          </Link>
+        ))}
+      </nav>
     </div>
   );
 }

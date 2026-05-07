@@ -14,6 +14,7 @@ export function WorkstationTitlebar({
   onToggleDiagnostics: _onToggleDiagnostics,
   navigation,
   actions,
+  leftAction,
 }: {
   surfaceLabel: string;
   surfaceHref?: string;
@@ -21,6 +22,7 @@ export function WorkstationTitlebar({
   onToggleDiagnostics: () => void;
   navigation?: ReactNode;
   actions?: ReactNode;
+  leftAction?: ReactNode;
 }) {
   const desktop = useWorkstationDesktopBridge();
 
@@ -38,6 +40,7 @@ export function WorkstationTitlebar({
         className="workstation-titlebar__brand"
         data-tauri-drag-region={desktop.available ? '' : undefined}
       >
+        {leftAction}
         {surfaceHref ? (
           <Link
             href={surfaceHref}

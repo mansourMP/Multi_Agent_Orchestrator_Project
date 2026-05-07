@@ -10,6 +10,11 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 from fastapi import WebSocket, WebSocketDisconnect
 
+PROTOCOL_VERSION = "v1alpha1"
+DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS = 15
+MAX_GATEWAY_FRAME_BYTES = 256 * 1024
+MAX_GATEWAY_JSON_DEPTH = 32
+
 from server_modules import (
     auth,
     gateway_activity_service,
@@ -20,8 +25,6 @@ from server_modules import (
 )
 
 
-PROTOCOL_VERSION = "v1alpha1"
-DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS = 15
 _LIVE_GATEWAY_CONNECTIONS_BY_GATEWAY: Dict[str, "_LiveGatewayConnection"] = {}
 _LIVE_GATEWAY_CONNECTIONS_BY_SESSION: Dict[str, "_LiveGatewayConnection"] = {}
 _LIVE_GATEWAY_CONNECTIONS_LOCK = threading.Lock()
@@ -32,6 +35,14 @@ class _PendingGatewayRequest:
     message_type: str
     future: asyncio.Future[Dict[str, Any]]
     loop: asyncio.AbstractEventLoop
+
+
+class GatewayFrameValidationError(ValueError):
+    def __init__(self, *, error_code: str, reason: str, close_code: int = 4408) -> None:
+        super().__init__(reason)
+        self.error_code = str(error_code or "invalid_gateway_frame").strip() or "invalid_gateway_frame"
+        self.reason = str(reason or "Invalid gateway frame.").strip() or "Invalid gateway frame."
+        self.close_code = int(close_code)
 
 
 class _LiveGatewayConnection:
@@ -283,10 +294,48 @@ def _event_frame(
     return frame
 
 
+def _json_depth(value: Any, *, limit: int = MAX_GATEWAY_JSON_DEPTH) -> int:
+    def _walk(item: Any, depth: int) -> int:
+        if depth > limit:
+            return depth
+        if isinstance(item, dict):
+            if not item:
+                return depth
+            return max(_walk(child, depth + 1) for child in item.values())
+        if isinstance(item, list):
+            if not item:
+                return depth
+            return max(_walk(child, depth + 1) for child in item)
+        return depth
+
+    return _walk(value, 0)
+
+
 def _parse_frame(raw_text: str) -> Dict[str, Any]:
-    payload = json.loads(raw_text)
+    raw = str(raw_text or "")
+    if len(raw.encode("utf-8")) > MAX_GATEWAY_FRAME_BYTES:
+        raise GatewayFrameValidationError(
+            error_code="gateway_frame_too_large",
+            reason="Gateway frame exceeds the maximum allowed size.",
+            close_code=4409,
+        )
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise GatewayFrameValidationError(
+            error_code="gateway_frame_invalid_json",
+            reason="Gateway frame must be valid JSON.",
+        ) from exc
     if not isinstance(payload, dict):
-        raise ValueError("Gateway frame must decode to an object.")
+        raise GatewayFrameValidationError(
+            error_code="gateway_frame_not_object",
+            reason="Gateway frame must decode to an object.",
+        )
+    if _json_depth(payload) > MAX_GATEWAY_JSON_DEPTH:
+        raise GatewayFrameValidationError(
+            error_code="gateway_frame_too_deep",
+            reason="Gateway frame exceeds the maximum allowed nesting depth.",
+        )
     return payload
 
 
@@ -419,7 +468,13 @@ async def handle_gateway_websocket(
     await websocket.accept()
 
     try:
-        first_frame = _parse_frame(await websocket.receive_text())
+        try:
+            first_frame = _parse_frame(await websocket.receive_text())
+        except GatewayFrameValidationError as exc:
+            await websocket.close(code=exc.close_code, reason=exc.reason)
+            disconnected = True
+            gateway_state_repository.mark_gateway_session_disconnected(session_id, reason=exc.error_code)
+            return
         gateway_state_repository.record_gateway_event(
             gateway_id=gateway_id,
             session_id=session_id,
@@ -548,7 +603,20 @@ async def handle_gateway_websocket(
         )
 
         while True:
-            frame = _parse_frame(await websocket.receive_text())
+            try:
+                frame = _parse_frame(await websocket.receive_text())
+            except GatewayFrameValidationError as exc:
+                await websocket.send_json(
+                    _response_frame(
+                        "invalid",
+                        ok=False,
+                        error={"code": exc.error_code, "message": exc.reason},
+                    )
+                )
+                await websocket.close(code=exc.close_code, reason=exc.reason)
+                disconnected = True
+                gateway_state_repository.mark_gateway_session_disconnected(session_id, reason=exc.error_code)
+                break
             frame_kind = str(frame.get("kind") or "").strip()
             message_type = _normalized_request_type(frame)
             payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}

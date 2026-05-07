@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional
@@ -32,6 +33,14 @@ def _line_for_offset(source: _Source, offset: int) -> int:
             break
         line = index
     return line
+
+
+def _offset_for_ast_node(source: _Source, node: ast.AST) -> int:
+    lineno = max(int(getattr(node, "lineno", 1) or 1), 1)
+    col_offset = max(int(getattr(node, "col_offset", 0) or 0), 0)
+    if lineno <= len(source.line_starts):
+        return source.line_starts[lineno - 1] + col_offset
+    return 0
 
 
 def _read_text(path: Path) -> str:
@@ -150,9 +159,157 @@ def _first_offset(pattern: str, text: str, flags: int = re.IGNORECASE) -> int:
     return match.start() if match else 0
 
 
+def _literal_string(node: ast.AST | None) -> str:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return ""
+
+
+def _python_call_name(node: ast.AST, aliases: Dict[str, str]) -> str:
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        parent = _python_call_name(node.value, aliases)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    if isinstance(node, ast.Call):
+        call_name = _python_call_name(node.func, aliases)
+        if call_name == "__import__":
+            module_name = _literal_string(node.args[0] if node.args else None)
+            return module_name
+    return ""
+
+
+def _python_call_has_shell_true(node: ast.Call) -> bool:
+    for keyword in node.keywords:
+        if keyword.arg != "shell":
+            continue
+        if isinstance(keyword.value, ast.Constant):
+            return bool(keyword.value.value)
+        return True
+    return False
+
+
+def _scan_python_ast(source: _Source) -> List[Dict[str, Any]]:
+    if source.path.suffix.lower() != ".py":
+        return []
+    try:
+        tree = ast.parse(source.text)
+    except SyntaxError:
+        return []
+
+    aliases: Dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = str(alias.name or "")
+                if name in {"os", "subprocess", "builtins", "importlib"}:
+                    aliases[str(alias.asname or name)] = name
+        elif isinstance(node, ast.ImportFrom):
+            module = str(node.module or "")
+            if module in {"os", "subprocess", "builtins", "importlib"}:
+                for alias in node.names:
+                    imported_name = str(alias.name or "")
+                    local_name = str(alias.asname or imported_name)
+                    aliases[local_name] = f"{module}.{imported_name}"
+
+    findings: List[Dict[str, Any]] = []
+    subprocess_calls = {
+        "subprocess.run",
+        "subprocess.Popen",
+        "subprocess.call",
+        "subprocess.check_call",
+        "subprocess.check_output",
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _python_call_name(node.func, aliases)
+        offset = _offset_for_ast_node(source, node)
+
+        if call_name in {"eval", "builtins.eval"}:
+            findings.append(
+                _finding(
+                    severity="critical",
+                    code="dynamic_code_eval",
+                    title="Dynamic code evaluation",
+                    source=source,
+                    offset=offset,
+                    detail="Python AST found eval usage, which can execute untrusted code even when imported or aliased.",
+                )
+            )
+            continue
+        if call_name in {"exec", "builtins.exec"}:
+            findings.append(
+                _finding(
+                    severity="critical",
+                    code="python_exec",
+                    title="Python exec usage",
+                    source=source,
+                    offset=offset,
+                    detail="Python AST found exec usage, which can execute dynamic code even when imported or aliased.",
+                )
+            )
+            continue
+        if call_name == "os.system":
+            findings.append(
+                _finding(
+                    severity="critical",
+                    code="dangerous_os_system",
+                    title="Shell command execution",
+                    source=source,
+                    offset=offset,
+                    detail="Python AST found os.system usage, including imported or aliased forms.",
+                )
+            )
+            continue
+        if call_name in subprocess_calls:
+            findings.append(
+                _finding(
+                    severity="critical",
+                    code="dangerous_subprocess_shell" if _python_call_has_shell_true(node) else "dangerous_subprocess_exec",
+                    title="Subprocess execution",
+                    source=source,
+                    offset=offset,
+                    detail=(
+                        "Python AST found subprocess execution with shell=True."
+                        if _python_call_has_shell_true(node)
+                        else "Python AST found subprocess execution, including imported or aliased forms."
+                    ),
+                )
+            )
+            continue
+        if call_name == "getattr":
+            findings.append(
+                _finding(
+                    severity="critical",
+                    code="dynamic_getattr",
+                    title="Dynamic attribute lookup",
+                    source=source,
+                    offset=offset,
+                    detail="Python AST found dynamic getattr usage, which can hide dangerous function resolution.",
+                )
+            )
+            continue
+        if call_name in {"__import__", "importlib.import_module"}:
+            findings.append(
+                _finding(
+                    severity="critical",
+                    code="dynamic_import",
+                    title="Dynamic import",
+                    source=source,
+                    offset=offset,
+                    detail="Python AST found dynamic import usage, which can hide dependency and execution intent.",
+                )
+            )
+            continue
+
+    return findings
+
+
 def _scan_source(source: _Source) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
     text = source.text
+    findings.extend(_scan_python_ast(source))
 
     _add_regex_findings(
         findings,

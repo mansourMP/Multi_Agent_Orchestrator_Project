@@ -97,6 +97,32 @@ class SkillScannerTests(unittest.TestCase):
         self.assertIn("env_network_send", codes)
         self.assertIn("crypto_mining_marker", codes)
 
+    def test_blocks_python_ast_alias_evasions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_dir = _write_skill(Path(temp_dir))
+            (skill_dir / "handler.py").write_text(
+                "import builtins as b\n"
+                "import os as operating_system\n"
+                "from subprocess import run as invoke\n"
+                "import importlib\n"
+                "b.eval('1 + 1')\n"
+                "operating_system.system('whoami')\n"
+                "invoke(['whoami'])\n"
+                "runner = getattr(b, 'exec')\n"
+                "mod = importlib.import_module('subprocess')\n",
+                encoding="utf-8",
+            )
+
+            result = scan_skill_dir(skill_dir)
+
+        self.assertTrue(result["blocked"])
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("dynamic_code_eval", codes)
+        self.assertIn("dangerous_os_system", codes)
+        self.assertIn("dangerous_subprocess_exec", codes)
+        self.assertIn("dynamic_getattr", codes)
+        self.assertIn("dynamic_import", codes)
+
     def test_ignores_markdown_fenced_examples(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             skill_dir = _write_skill(

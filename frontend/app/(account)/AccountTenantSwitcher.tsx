@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  Activity,
   Bot,
   Compass,
   LayoutGrid,
@@ -11,7 +12,6 @@ import {
   Moon,
   Settings2,
   SunMedium,
-  Waypoints,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -23,49 +23,47 @@ import {
   resolveRouteWorkspaceId,
 } from '@/lib/shell/workspace-membership-model';
 import {
-  WORKSPACE_NAV_DESTINATIONS,
   buildWorkspaceRouteHref,
   getWorkspaceNavRouteDefinition,
   resolveWorkspaceRouteIdFromSegment,
   type WorkspaceRouteId,
-  type WorkspaceNavDestinationId,
 } from '../../../shared/nav-manifest';
 import { useAppTheme } from '@/lib/ui/app-theme';
 import { APP_THEME_ATTRIBUTE } from '@/lib/ui/tokens';
 
-const DESTINATION_ICON_MAP: Record<WorkspaceNavDestinationId, LucideIcon> = {
-  sage: Bot,
-  studio: LayoutGrid,
-  marketplace: Compass,
-  gateway: Waypoints,
-  settings: Settings2,
+type RailDestinationId = 'chat' | 'studio' | 'marketplace' | 'activity' | 'settings';
+
+type RailDestination = {
+  id: RailDestinationId;
+  label: string;
+  defaultRouteId: WorkspaceRouteId;
+  icon: LucideIcon;
+  dataLinkId?: string;
 };
 
-const PRIMARY_DESTINATIONS = WORKSPACE_NAV_DESTINATIONS
-  .filter((destination) => destination.id !== 'settings' && destination.id !== 'gateway')
-  .map((destination) => ({
-    id: destination.id,
-    label: destination.label,
-    defaultRouteId: destination.defaultRouteId,
-    icon: DESTINATION_ICON_MAP[destination.id],
-  }));
+const PRIMARY_DESTINATIONS: RailDestination[] = [
+  { id: 'chat', label: 'Chat', defaultRouteId: 'chat', icon: Bot, dataLinkId: 'sage' },
+  { id: 'studio', label: 'Build', defaultRouteId: 'studio', icon: LayoutGrid },
+  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
+  { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
+];
 
-const SECONDARY_DESTINATIONS = WORKSPACE_NAV_DESTINATIONS
-  .filter((destination) => destination.id === 'settings')
-  .map((destination) => ({
-    id: destination.id,
-    label: destination.label,
-    defaultRouteId: destination.defaultRouteId,
-    icon: DESTINATION_ICON_MAP[destination.id],
-  }));
+const SECONDARY_DESTINATIONS: RailDestination[] = [
+  { id: 'settings', label: 'Settings', defaultRouteId: 'settings', icon: Settings2 },
+];
+
+const ACTIVITY_ROUTE_IDS = new Set<WorkspaceRouteId>([
+  'activity',
+  'heartbeat',
+  'runs',
+  'approvals',
+  'notifications',
+]);
 
 function buildDestinationHref(
   workspaceId: string,
-  destination: { id: WorkspaceNavDestinationId; defaultRouteId: WorkspaceRouteId },
+  destination: { defaultRouteId: WorkspaceRouteId },
 ): string {
-  if (destination.id === 'gateway') {
-    return buildWorkspaceRouteHref(workspaceId, 'integrations');
-  }
   return buildWorkspaceRouteHref(workspaceId, destination.defaultRouteId);
 }
 
@@ -82,29 +80,33 @@ function extractRouteWorkspaceId(pathname: string | null): string | null {
   return decodeURIComponent(segments[1]);
 }
 
-function extractActiveDestinationId(pathname: string | null): WorkspaceNavDestinationId {
+function extractActiveRouteId(pathname: string | null): WorkspaceRouteId | null {
   if (!pathname) {
-    return 'sage';
+    return null;
   }
 
   const segments = pathname.split('/').filter(Boolean);
   if (segments[0] !== 'w' || segments.length < 3) {
-    return 'sage';
+    return null;
   }
 
-  const routeId = resolveWorkspaceRouteIdFromSegment(segments.slice(2).join('/'));
+  return resolveWorkspaceRouteIdFromSegment(segments.slice(2).join('/'));
+}
+
+function extractActiveRailId(pathname: string | null): RailDestinationId {
+  const routeId = extractActiveRouteId(pathname);
   if (!routeId) {
-    return 'sage';
+    return 'chat';
+  }
+  if (ACTIVITY_ROUTE_IDS.has(routeId)) {
+    return 'activity';
   }
 
   const destinationId = getWorkspaceNavRouteDefinition(routeId).destinationId;
-  if (destinationId === 'gateway') {
-    return 'sage';
-  }
-  if (WORKSPACE_NAV_DESTINATIONS.some((destination) => destination.id === destinationId)) {
+  if (destinationId === 'studio' || destinationId === 'marketplace' || destinationId === 'settings') {
     return destinationId;
   }
-  return 'sage';
+  return 'chat';
 }
 
 export function AccountTenantSwitcher() {
@@ -116,7 +118,7 @@ export function AccountTenantSwitcher() {
     state.workspaceMemberships,
     extractRouteWorkspaceId(pathname),
   );
-  const activeDestinationId = extractActiveDestinationId(pathname);
+  const activeRailId = extractActiveRailId(pathname);
   const activeWorkspaceId =
     routeWorkspaceId
     ?? state.selectedWorkspaceId
@@ -226,16 +228,17 @@ export function AccountTenantSwitcher() {
               key={destination.id}
               href={activeWorkspaceId ? buildDestinationHref(activeWorkspaceId, destination) : '/'}
               prefetch
-              aria-current={activeDestinationId === destination.id ? 'page' : undefined}
-              data-workstation-destination-link={destination.id}
+              aria-current={activeRailId === destination.id ? 'page' : undefined}
+              data-workstation-destination-link={destination.dataLinkId ?? destination.id}
               className={joinClassNames(
                 'account-switcher__link',
-                activeDestinationId === destination.id && 'account-switcher__link--active',
+                activeRailId === destination.id && 'account-switcher__link--active',
               )}
               aria-label={destination.label}
               title={destination.label}
             >
-              <destination.icon size={18} />
+              <destination.icon aria-hidden="true" />
+              <span className="account-switcher__link-label">{destination.label}</span>
             </Link>
           ))}
         </nav>
@@ -260,7 +263,7 @@ export function AccountTenantSwitcher() {
             actions.setGlobalTheme(nextTheme);
           }}
         >
-          <ThemeIcon size={18} />
+          <ThemeIcon aria-hidden="true" />
         </button>
         <nav aria-label="Settings destination" className="account-switcher__nav account-switcher__nav--secondary">
           {SECONDARY_DESTINATIONS.map((destination) => (
@@ -268,16 +271,17 @@ export function AccountTenantSwitcher() {
               key={destination.id}
               href={activeWorkspaceId ? buildWorkspaceRouteHref(activeWorkspaceId, destination.defaultRouteId) : '/'}
               prefetch
-              aria-current={activeDestinationId === destination.id ? 'page' : undefined}
-              data-workstation-destination-link={destination.id}
+              aria-current={activeRailId === destination.id ? 'page' : undefined}
+              data-workstation-destination-link={destination.dataLinkId ?? destination.id}
               className={joinClassNames(
                 'account-switcher__link',
-                activeDestinationId === destination.id && 'account-switcher__link--active',
+                activeRailId === destination.id && 'account-switcher__link--active',
               )}
               aria-label={destination.label}
               title={destination.label}
             >
-              <destination.icon size={18} />
+              <destination.icon aria-hidden="true" />
+              <span className="account-switcher__link-label">{destination.label}</span>
             </Link>
           ))}
         </nav>

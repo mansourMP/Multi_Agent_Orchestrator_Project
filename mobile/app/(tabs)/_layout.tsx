@@ -12,6 +12,8 @@ export default function TabsLayout() {
   const rootSegment = segments.at(0);
   const sectionSegment = segments.at(1);
   const leafSegment = segments.at(2);
+  const tabBarBottomInset = Math.max(insets.bottom, theme.spacing.xs);
+  const tabBarHeight = theme.spacing.xxl + theme.spacing.xl;
   const isChatThread =
     rootSegment === "(tabs)" &&
     (sectionSegment === "kin" || sectionSegment === "chats") &&
@@ -29,40 +31,40 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarHideOnKeyboard: true,
         tabBarActiveTintColor: theme.colors.text,
-        tabBarInactiveTintColor: "#7C838D",
+        tabBarInactiveTintColor: theme.colors.textMuted,
         tabBarStyle: {
           display: hiddenTabBar ? "none" : "flex",
           position: "absolute",
-          left: 14,
-          right: 14,
-          bottom: Math.max(insets.bottom, 10),
-          height: 68,
-          paddingTop: 7,
-          paddingBottom: 7,
-          paddingHorizontal: 8,
+          left: theme.spacing.sm,
+          right: theme.spacing.sm,
+          bottom: tabBarBottomInset,
+          height: tabBarHeight,
+          paddingTop: theme.spacing.xs,
+          paddingBottom: theme.spacing.xs,
+          paddingHorizontal: theme.spacing.xs,
           backgroundColor: theme.colors.card,
           borderTopWidth: 0,
           borderWidth: 1,
           borderColor: theme.colors.border,
-          borderRadius: 24,
-          shadowColor: "#121417",
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.08,
-          shadowRadius: 18,
-          elevation: 8,
+          borderRadius: theme.radii.xl,
+          shadowColor: theme.colors.border,
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 0,
+          shadowRadius: 0,
+          elevation: 0,
         },
         tabBarItemStyle: {
-          paddingTop: 2,
-          paddingBottom: 2,
-          borderRadius: 18,
-          marginHorizontal: 2,
+          paddingTop: 0,
+          paddingBottom: 0,
+          borderRadius: theme.radii.md,
+          marginHorizontal: 0,
         },
         tabBarLabelStyle: {
-          fontSize: 11.5,
+          fontSize: theme.typography.caption,
           fontFamily: "DMSans_700Bold",
-          marginTop: 2,
+          marginTop: 0,
           paddingBottom: 0,
-          letterSpacing: 0.15,
+          letterSpacing: 0,
         },
         tabBarIconStyle: {
           marginTop: 0,
@@ -70,7 +72,7 @@ export default function TabsLayout() {
         tabBarButton: (props) => <MotionTabBarButton {...props} />,
         sceneStyle: {
           backgroundColor: theme.colors.background,
-          paddingBottom: hiddenTabBar ? 0 : 88,
+          paddingBottom: hiddenTabBar ? 0 : tabBarHeight + tabBarBottomInset + theme.spacing.sm,
         },
         tabBarIcon: ({ color, size, focused }) => {
           const iconMap: Record<string, { active: keyof typeof Ionicons.glyphMap; inactive: keyof typeof Ionicons.glyphMap }> = {
@@ -82,7 +84,7 @@ export default function TabsLayout() {
           };
           const iconSet = iconMap[route.name];
           const icon = iconSet ? (focused ? iconSet.active : iconSet.inactive) : "ellipse";
-          return <Ionicons name={icon} size={focused ? size + 1 : size} color={color} />;
+          return <Ionicons name={icon} size={size} color={color} />;
         },
       })}
     >

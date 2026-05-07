@@ -23,6 +23,16 @@ const MONETIZATION_OPTIONS = ['free', 'metered', 'subscription', 'revenue_share'
 type KindFilter = typeof KIND_FILTERS[number];
 type ComposerKind = typeof COMPOSER_KINDS[number];
 
+const KIND_FILTER_LABELS: Record<KindFilter, string> = {
+  all: 'All',
+  agent_template: 'Agent templates',
+  app: 'Apps',
+  connector: 'Connectors',
+  skill: 'Skills',
+  mini_app: 'Mini-apps',
+  provider: 'AI model configs',
+};
+
 type BaseComposerDraft = {
   label: string;
   description: string;
@@ -148,190 +158,6 @@ const DEFAULT_PROVIDER_DRAFT: ProviderComposerDraft = {
   models: '',
 };
 
-const DEMO_MARKETPLACE_PACKAGES: MarketplacePackageRecord[] = [
-  {
-    package_id: 'preview-restaurant-orders',
-    kind: 'app',
-    label: 'Restaurant Orders',
-    description: 'Telegram ordering template with menu lookup, order confirmation, and human escalation.',
-    category: 'Specialist template',
-    verification_status: 'verified',
-    review_state: 'approved',
-    health_state: 'healthy',
-    approval_required: false,
-    preview_only: true,
-    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
-    onboarding: { docs_url: '/docs/studio-marketplace-ux-boundary-2026-04-30.md' },
-    runtime_truth: { surface: 'cloud_worker', policy_posture: 'governed', install_state: 'preview' },
-    billing: {
-      monetization_kind: 'free',
-      revenue_share_bps: 0,
-      accounting_hook: { ledger_key: 'studio.restaurant_orders', hook_kind: 'template_install' },
-    },
-    analytics: { install_count: 0, runtime_event_count: 0 },
-    package: {
-      app_id: 'studio.restaurant_orders',
-      hosted_url: '/w/{workspace_id}/studio?template=restaurant_orders',
-      version: '0.1.0',
-      release_channel: 'preview',
-      permissions: ['telegram:send', 'spreadsheet:read'],
-      allowed_origins: [],
-      bridge_contracts: { messages: ['read', 'write'], catalog: ['read'] },
-    },
-  },
-  {
-    package_id: 'preview-auto-parts-sales',
-    kind: 'app',
-    label: 'Auto Parts Sales',
-    description: 'Qualifies car model, requested part, catalog availability, and next customer action.',
-    category: 'Specialist template',
-    verification_status: 'verified',
-    review_state: 'approved',
-    health_state: 'healthy',
-    approval_required: false,
-    preview_only: true,
-    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
-    onboarding: { docs_url: '/docs/studio-marketplace-ux-boundary-2026-04-30.md' },
-    runtime_truth: { surface: 'cloud_worker', policy_posture: 'governed', install_state: 'preview' },
-    billing: {
-      monetization_kind: 'free',
-      revenue_share_bps: 0,
-      accounting_hook: { ledger_key: 'studio.auto_parts_sales', hook_kind: 'template_install' },
-    },
-    analytics: { install_count: 0, runtime_event_count: 0 },
-    package: {
-      app_id: 'studio.auto_parts_sales',
-      hosted_url: '/w/{workspace_id}/studio?template=auto_parts_sales',
-      version: '0.1.0',
-      release_channel: 'preview',
-      permissions: ['telegram:send', 'spreadsheet:read'],
-      allowed_origins: [],
-      bridge_contracts: { messages: ['read', 'write'], catalog: ['read'] },
-    },
-  },
-  {
-    package_id: 'preview-spreadsheet-catalog',
-    kind: 'app',
-    label: 'Spreadsheet Catalog',
-    description: 'Answers product, SKU, menu, or inventory questions from a trusted spreadsheet.',
-    category: 'Data',
-    verification_status: 'verified',
-    review_state: 'approved',
-    health_state: 'healthy',
-    approval_required: false,
-    preview_only: true,
-    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
-    onboarding: { docs_url: '/docs/studio-marketplace-ux-boundary-2026-04-30.md' },
-    runtime_truth: { surface: 'cloud_worker', policy_posture: 'governed', install_state: 'preview' },
-    billing: {
-      monetization_kind: 'free',
-      revenue_share_bps: 0,
-      accounting_hook: { ledger_key: 'tool.spreadsheet_catalog', hook_kind: 'package_install' },
-    },
-    analytics: { install_count: 0, runtime_event_count: 0 },
-    package: {
-      app_id: 'tool.spreadsheet_catalog',
-      hosted_url: '/w/{workspace_id}/studio?template=spreadsheet_catalog',
-      version: '0.1.0',
-      release_channel: 'preview',
-      permissions: ['spreadsheet:read', 'spreadsheet:append'],
-      allowed_origins: [],
-      bridge_contracts: { spreadsheet: ['read', 'write'] },
-    },
-  },
-  {
-    package_id: 'preview-web-search',
-    kind: 'app',
-    label: 'Web Search',
-    description: 'Lets Sage search the web with audit-visible tool calls and governed usage.',
-    category: 'Tool',
-    verification_status: 'verified',
-    review_state: 'approved',
-    health_state: 'healthy',
-    approval_required: false,
-    preview_only: true,
-    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
-    onboarding: { docs_url: '/docs/studio-marketplace-ux-boundary-2026-04-30.md' },
-    runtime_truth: { surface: 'cloud_tool', policy_posture: 'governed', install_state: 'preview' },
-    billing: {
-      monetization_kind: 'metered',
-      revenue_share_bps: 0,
-      accounting_hook: { ledger_key: 'tool.web_search', hook_kind: 'tool_usage' },
-    },
-    analytics: { install_count: 0, runtime_event_count: 0 },
-    package: {
-      app_id: 'tool.web_search',
-      hosted_url: '/tools/web-search',
-      version: '0.1.0',
-      release_channel: 'preview',
-      permissions: ['web:search'],
-      allowed_origins: [],
-      bridge_contracts: { web: ['search'] },
-    },
-  },
-  {
-    package_id: 'preview-image-generation',
-    kind: 'app',
-    label: 'Image Generation',
-    description: 'Image generation package using configured BYOK or hosted media credits.',
-    category: 'Media',
-    verification_status: 'partner',
-    review_state: 'approved',
-    health_state: 'setup_required',
-    approval_required: false,
-    preview_only: true,
-    publisher: { label: 'Empyralis', website: 'https://empyralis.dev' },
-    onboarding: { docs_url: '/docs/ai-os-five-phase-execution-plan-2026-04-30.md' },
-    runtime_truth: { surface: 'cloud_tool', policy_posture: 'governed', install_state: 'preview' },
-    billing: {
-      monetization_kind: 'metered',
-      revenue_share_bps: 0,
-      accounting_hook: { ledger_key: 'tool.generate_image', hook_kind: 'tool_usage' },
-    },
-    analytics: { install_count: 0, runtime_event_count: 0 },
-    package: {
-      app_id: 'tool.generate_image',
-      hosted_url: '/tools/generate-image',
-      version: '0.1.0',
-      release_channel: 'preview',
-      permissions: ['media:image_generate'],
-      allowed_origins: [],
-      bridge_contracts: { media: ['image_generate'] },
-    },
-  },
-  {
-    package_id: 'preview-deepseek-provider',
-    kind: 'provider',
-    label: 'DeepSeek Provider',
-    description: 'BYOK model provider package for DeepSeek chat and tool-capable generation.',
-    category: 'Models',
-    verification_status: 'partner',
-    review_state: 'approved',
-    health_state: 'setup_required',
-    approval_required: false,
-    preview_only: true,
-    publisher: { label: 'DeepSeek', website: 'https://platform.deepseek.com' },
-    onboarding: { docs_url: 'https://platform.deepseek.com' },
-    runtime_truth: { surface: 'cloud_model', policy_posture: 'governed', install_state: 'preview' },
-    billing: {
-      monetization_kind: 'byok',
-      revenue_share_bps: 0,
-      accounting_hook: { ledger_key: 'provider.deepseek', hook_kind: 'provider_usage' },
-    },
-    analytics: { install_count: 0, runtime_event_count: 0 },
-    package: {
-      provider_id: 'deepseek',
-      default_model: 'deepseek-chat',
-      auth_modes: ['api_key'],
-      privacy_posture: 'cloud_provider',
-      jurisdiction: 'provider_terms',
-      residency: 'provider_terms',
-      capability_labels: ['chat', 'tools'],
-      models: [{ id: 'deepseek-chat', label: 'DeepSeek Chat' }],
-    },
-  },
-];
-
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
@@ -370,6 +196,20 @@ function humanizeToken(value: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+function packageKindLabel(kind: string): string {
+  const normalized = kind.trim().toLowerCase();
+  if (normalized === 'provider') {
+    return 'AI model config';
+  }
+  if (normalized === 'mini_app') {
+    return 'Mini-app';
+  }
+  if (normalized === 'agent_template') {
+    return 'Agent template';
+  }
+  return humanizeToken(normalized || 'package');
 }
 
 function normalizeMarketplacePackages(payload: unknown): MarketplacePackageRecord[] {
@@ -609,6 +449,40 @@ function summarizeInstallReadiness(
   }
   lines.push(`Lifecycle: ${marketplaceLifecycleLabel(details.item, details.packagePayload, details.runtimeTruth)}`);
   return lines;
+}
+
+type AgentTemplateProofSnapshot = {
+  does: string;
+  channels: string[];
+  dataNeeds: string[];
+  moneyModel: string;
+};
+
+function readAgentTemplateProofDetails(packagePayload: Record<string, unknown>): AgentTemplateProofSnapshot {
+  const envelope = readRecord(packagePayload.context_envelope);
+  const proofContract = readRecord(envelope.proof_agent_seed_contract);
+  const channels = Array.isArray(proofContract.channels)
+    ? proofContract.channels
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+      .map((item) => readString(item.label, readString(item.channel_key)))
+      .filter(Boolean)
+    : [];
+  const dataNeeds = Array.isArray(proofContract.default_data_sources)
+    ? proofContract.default_data_sources
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+      .map((item) => readString(item.label, readString(item.source_id)))
+      .filter(Boolean)
+    : [];
+  const monetizationHint = readRecord(proofContract.monetization_hint);
+  const fallbackMoneyModel = readString(monetizationHint.kind, readString(packagePayload.specialist_kind, 'service'));
+  const fallbackOffer = readString(monetizationHint.suggested_offer);
+  const moneyModel = fallbackOffer || (fallbackMoneyModel ? humanizeToken(fallbackMoneyModel) : 'Revenue model pending');
+  return {
+    does: readString(proofContract.description, readString(packagePayload.description, 'Business behavior is defined in this template contract.')),
+    channels: channels.length ? channels : readStringList(packagePayload.required_connectors),
+    dataNeeds: dataNeeds.length ? dataNeeds : readStringList(packagePayload.required_connectors),
+    moneyModel,
+  };
 }
 
 function MarketplaceSkeleton() {
@@ -875,15 +749,7 @@ export function MarketplacePane() {
     }
   }
 
-  const displayedItems = useMemo(() => {
-    if (items.length) {
-      return items;
-    }
-    return DEMO_MARKETPLACE_PACKAGES.filter((item) => {
-      const itemKind = readString(item.kind);
-      return kindFilter === 'all' || itemKind === kindFilter;
-    });
-  }, [items, kindFilter]);
+  const displayedItems = useMemo(() => items, [items]);
 
   const renderedCards = useMemo(
     () => displayedItems.map((item, index) => buildMarketplaceCardView(item, index)),
@@ -955,7 +821,7 @@ export function MarketplacePane() {
                       )}
                       onClick={() => setKindFilter(filter)}
                     >
-                      {humanizeToken(filter)}
+                      {KIND_FILTER_LABELS[filter]}
                     </button>
                   ))}
                 </div>
@@ -1008,7 +874,7 @@ export function MarketplacePane() {
                         <div className="marketplace-pane__card-copy">
                           <div className="marketplace-pane__meta-row">
                             <span className={joinClassNames('marketplace-pane__kind-pill', `marketplace-pane__kind-pill--${card.kind}`)}>
-                              {humanizeToken(card.kind)}
+                              {packageKindLabel(card.kind)}
                             </span>
                             <span className="marketplace-pane__category-pill">{card.category}</span>
                           </div>
@@ -1110,7 +976,7 @@ export function MarketplacePane() {
             <div className="marketplace-pane__secondary-stack">
               <ListDetailPanel
                 className="marketplace-pane__detail-panel"
-                eyebrow={selectedPackage ? humanizeToken(selectedPackage.kind) : 'Details'}
+                eyebrow={selectedPackage ? packageKindLabel(selectedPackage.kind) : 'Details'}
                 title={selectedPackage?.name || 'Select an app or model'}
                 subtitle={selectedPackage ? selectedPackage.description : 'Choose a package to review trust, access, and install details.'}
               >
@@ -1120,7 +986,7 @@ export function MarketplacePane() {
                       <div className="marketplace-pane__detail-hero-copy">
                         <div className="marketplace-pane__meta-row">
                           <span className={joinClassNames('marketplace-pane__kind-pill', `marketplace-pane__kind-pill--${selectedPackage.kind}`)}>
-                            {humanizeToken(selectedPackage.kind)}
+                            {packageKindLabel(selectedPackage.kind)}
                           </span>
                           <span className="marketplace-pane__category-pill">{selectedPackage.category}</span>
                           <span className="marketplace-pane__status-badge marketplace-pane__status-badge--approved">
@@ -1450,6 +1316,40 @@ export function MarketplacePane() {
                         ) : (
                           <p className="marketplace-pane__panel-copy">No model metadata has been provided for this package yet.</p>
                         )}
+                      </div>
+                    ) : selectedPackage.kind === 'agent_template' ? (
+                      <div className="marketplace-pane__detail-group">
+                        <strong className="marketplace-pane__detail-title">Business proof snapshot</strong>
+                        {(() => {
+                          const proof = readAgentTemplateProofDetails(selectedDetails.packagePayload);
+                          return (
+                            <>
+                              <div className="marketplace-pane__detail-list">
+                                <div className="marketplace-pane__detail-list-row">
+                                  <span className="marketplace-pane__detail-label">What it does</span>
+                                  <span className="marketplace-pane__detail-value">{proof.does}</span>
+                                </div>
+                                <div className="marketplace-pane__detail-list-row">
+                                  <span className="marketplace-pane__detail-label">Channels</span>
+                                  <span className="marketplace-pane__detail-value">{proof.channels.slice(0, 4).join(' · ') || 'Defined during setup'}</span>
+                                </div>
+                                <div className="marketplace-pane__detail-list-row">
+                                  <span className="marketplace-pane__detail-label">Data needed</span>
+                                  <span className="marketplace-pane__detail-value">{proof.dataNeeds.slice(0, 4).join(' · ') || 'Connect trusted sources during setup'}</span>
+                                </div>
+                                <div className="marketplace-pane__detail-list-row">
+                                  <span className="marketplace-pane__detail-label">How it makes money</span>
+                                  <span className="marketplace-pane__detail-value">{proof.moneyModel}</span>
+                                </div>
+                              </div>
+                              <div className="marketplace-pane__token-row">
+                                {readStringList(selectedDetails.packagePayload.suggested_tools).slice(0, 6).map((toolId) => (
+                                  <span key={toolId} className="marketplace-pane__stat-token">{humanizeToken(toolId)}</span>
+                                ))}
+                              </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     ) : (
                       <div className="marketplace-pane__detail-group">

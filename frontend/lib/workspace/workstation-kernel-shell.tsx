@@ -11,7 +11,6 @@ import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationActivityVersion } from '@/lib/workspace/workspace-services';
 import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
 import {
-  WORKSPACE_NAV_DESTINATIONS,
   buildWorkspaceRouteHref,
   getWorkspaceNavRouteDefinition,
   type WorkspaceNavDestinationId,
@@ -25,6 +24,26 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
   marketplace: ['marketplace'],
   settings: ['settings'],
 };
+
+const MOBILE_DESTINATION_NAV: readonly {
+  id: 'chat' | 'studio' | 'marketplace' | 'activity' | 'settings';
+  label: string;
+  defaultRouteId: WorkspaceRouteId;
+}[] = [
+  { id: 'chat', label: 'Chat', defaultRouteId: 'chat' },
+  { id: 'studio', label: 'Build', defaultRouteId: 'studio' },
+  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace' },
+  { id: 'activity', label: 'Activity', defaultRouteId: 'activity' },
+  { id: 'settings', label: 'Settings', defaultRouteId: 'settings' },
+];
+
+const ACTIVITY_ROUTE_IDS = new Set<WorkspaceRouteId>([
+  'activity',
+  'heartbeat',
+  'runs',
+  'approvals',
+  'notifications',
+]);
 
 function readPendingApprovalCount(payload: unknown): number {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
@@ -60,6 +79,15 @@ export function WorkstationKernelShell({
     }
     return getWorkspaceNavRouteDefinition(activeRouteId).destinationId;
   }, [activeRouteId]);
+  const activeMobileDestinationId = useMemo(() => {
+    if (activeRouteId && ACTIVITY_ROUTE_IDS.has(activeRouteId)) {
+      return 'activity';
+    }
+    if (activeDestinationId === 'studio' || activeDestinationId === 'marketplace' || activeDestinationId === 'settings') {
+      return activeDestinationId;
+    }
+    return 'chat';
+  }, [activeDestinationId, activeRouteId]);
   const workspaceLabel = bootstrap.workspace.label;
   const contextRoutes = useMemo(() => {
     const routeIds = CONTEXT_ROUTE_IDS_BY_DESTINATION[activeDestinationId];
@@ -180,15 +208,15 @@ export function WorkstationKernelShell({
           )) : null}
         />
         <nav className="workstation-mobile-destination-nav" aria-label="Workspace sections">
-          {WORKSPACE_NAV_DESTINATIONS.filter((destination) => destination.id !== 'gateway').map((destination) => (
+          {MOBILE_DESTINATION_NAV.map((destination) => (
             <Link
               key={destination.id}
               href={buildWorkspaceRouteHref(workspaceId, destination.defaultRouteId)}
               prefetch
-              aria-current={activeDestinationId === destination.id ? 'page' : undefined}
+              aria-current={activeMobileDestinationId === destination.id ? 'page' : undefined}
               className={joinClassNames(
                 'workstation-mobile-destination-nav__link',
-                activeDestinationId === destination.id && 'workstation-mobile-destination-nav__link--active',
+                activeMobileDestinationId === destination.id && 'workstation-mobile-destination-nav__link--active',
               )}
             >
               {destination.label}

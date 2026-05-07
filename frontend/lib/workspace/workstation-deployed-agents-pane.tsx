@@ -859,14 +859,24 @@ function mapSeedToolToStudioToolId(toolId: string): string {
   return normalized;
 }
 
+function normalizeTemplateToken(value: string): string {
+  return value.trim().toLowerCase().replace(/[-\s]+/g, '_');
+}
+
 function studioTemplateById(
   templateId: string | null | undefined,
   templates: ReadonlyArray<StudioTemplate> = STUDIO_TEMPLATES,
 ): StudioTemplate {
-  if (templateId === CUSTOM_STUDIO_TEMPLATE.id) {
+  const normalizedTemplateId = normalizeTemplateToken(readString(templateId));
+  if (!normalizedTemplateId) {
+    return templates[0] ?? DEFAULT_STUDIO_TEMPLATE;
+  }
+  if (normalizedTemplateId === normalizeTemplateToken(CUSTOM_STUDIO_TEMPLATE.id)) {
     return CUSTOM_STUDIO_TEMPLATE;
   }
-  return templates.find((template) => template.id === templateId) ?? templates[0] ?? DEFAULT_STUDIO_TEMPLATE;
+  return templates.find((template) => normalizeTemplateToken(template.id) === normalizedTemplateId)
+    ?? templates[0]
+    ?? DEFAULT_STUDIO_TEMPLATE;
 }
 
 function mapStudioSeedToTemplate(seed: StudioProofAgentSeedRecord): StudioTemplate | null {
@@ -904,7 +914,7 @@ function mapStudioSeedToTemplate(seed: StudioProofAgentSeedRecord): StudioTempla
     ? persona.instructions.map((item) => readString(item)).filter(Boolean)
     : [];
   return {
-    id: slug,
+    id: normalizeTemplateToken(slug),
     title: name,
     category: readString(seed.category, 'Specialist'),
     icon: name
@@ -937,9 +947,14 @@ function normalizeStudioTemplates(payload: unknown): StudioTemplate[] {
   if (!seedTemplates.length) {
     return [...STUDIO_TEMPLATES];
   }
+  const seedIds = new Set(seedTemplates.map((template) => normalizeTemplateToken(template.id)));
+  const staticExtras = STUDIO_TEMPLATES.filter((template) => (
+    !seedIds.has(normalizeTemplateToken(template.id))
+    && !PRIMARY_STUDIO_TEMPLATE_IDS.has(normalizeTemplateToken(template.id))
+  ));
   return [
-    ...STUDIO_TEMPLATES,
-    ...seedTemplates.filter((seed) => !STUDIO_TEMPLATES.some((template) => template.id === seed.id)),
+    ...seedTemplates,
+    ...staticExtras,
   ];
 }
 
@@ -1738,6 +1753,7 @@ export function WorkstationDeployedAgentsPane({
   const [isSavingDetailConfig, setIsSavingDetailConfig] = useState(false);
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
   const [busyExternalUserId, setBusyExternalUserId] = useState<string | null>(null);
+  const [recentlyCreatedAgentId, setRecentlyCreatedAgentId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [conversationFilters, setConversationFilters] = useState<ConversationFilters>({
@@ -2099,14 +2115,15 @@ export function WorkstationDeployedAgentsPane({
   }, [agents, requestedAgentId]);
 
   useEffect(() => {
-    if (!requestedProofAgentTemplateId || handledTemplateDeepLinkRef.current === requestedProofAgentTemplateId) {
+    const normalizedRequestedTemplateId = normalizeTemplateToken(requestedProofAgentTemplateId);
+    if (!normalizedRequestedTemplateId || handledTemplateDeepLinkRef.current === normalizedRequestedTemplateId) {
       return;
     }
-    const template = studioTemplateById(requestedProofAgentTemplateId, studioTemplates);
-    if (template.id !== requestedProofAgentTemplateId) {
+    const template = studioTemplateById(normalizedRequestedTemplateId, studioTemplates);
+    if (normalizeTemplateToken(template.id) !== normalizedRequestedTemplateId) {
       return;
     }
-    handledTemplateDeepLinkRef.current = requestedProofAgentTemplateId;
+    handledTemplateDeepLinkRef.current = normalizedRequestedTemplateId;
     setCurrentStudioSubview('agents');
     openCreateWizard(template.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2443,6 +2460,7 @@ export function WorkstationDeployedAgentsPane({
         setSelectedAgentDetail(record);
         setSelectedAgentAnalytics(null);
         setSelectedAgentId(createdId || null);
+        setRecentlyCreatedAgentId(createdId || null);
         setStatusMessage(`Created assistant ${readString(record.name, payload.name)}.`);
         if (createdId) {
           await Promise.all([
@@ -2468,6 +2486,7 @@ export function WorkstationDeployedAgentsPane({
           loadAgentAnalytics(agentId),
           loadTelegramReadiness(agentId),
         ]);
+        setRecentlyCreatedAgentId(null);
         setStatusMessage(`Updated ${readString(record.name, 'assistant')} settings.`);
       }
       setIsWizardOpen(false);
@@ -2748,6 +2767,49 @@ export function WorkstationDeployedAgentsPane({
               <div className="app-stack-4">
                 {showAgentsIndex ? (
                   <>
+                    {recentlyCreatedAgentId && selectedAgent ? (
+                      <ListDetailPanel
+                        className="studio-panel studio-panel--demo-proof"
+                        eyebrow="Next step"
+                        title="Show proof in under a minute"
+                        subtitle="Open activity to show customer work, then open billing and credits to show the revenue path."
+                        actions={(
+                          <div className="app-inline-actions app-inline-actions--tight">
+                            <AppButton type="button" tone="secondary" onClick={() => setRecentlyCreatedAgentId(null)}>
+                              Dismiss
+                            </AppButton>
+                          </div>
+                        )}
+                      >
+                        <div className="app-inline-actions app-inline-actions--tight studio-inline-wrap">
+                          <AppButton
+                            type="button"
+                            onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}/activity`)}
+                          >
+                            Open Activity proof
+                          </AppButton>
+                          <AppButton
+                            type="button"
+                            tone="secondary"
+                            onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`)}
+                          >
+                            Open billing & credits
+                          </AppButton>
+                          <AppButton
+                            type="button"
+                            tone="secondary"
+                            onClick={() => {
+                              setSelectedAgentId(recentlyCreatedAgentId);
+                              setOverlayAgentId(recentlyCreatedAgentId);
+                              setOverlayTab('overview');
+                            }}
+                          >
+                            Open assistant detail
+                          </AppButton>
+                        </div>
+                      </ListDetailPanel>
+                    ) : null}
+
                     <ListDetailPanel
                       className="studio-panel studio-panel--demo-path"
                       eyebrow="Start here"

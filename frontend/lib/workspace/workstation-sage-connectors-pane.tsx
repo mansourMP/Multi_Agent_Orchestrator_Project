@@ -192,6 +192,7 @@ type ExternalIntegrationCardRecord = {
   actionLabel?: string | null;
   secondaryActionLabel?: string | null;
   actionTarget?: 'gateway' | 'ai' | 'close';
+  channel?: PersonalCommunicationChannel | null;
 };
 
 type SageConnectorsPaneCache = {
@@ -300,7 +301,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/integrations/telegram.png',
     connectorIds: ['telegram_bot'],
     capabilityTags: ['Customer chat', 'Bot replies'],
-    summary: 'Telegram bot deployments live in the Studio/business lane. They are separate from your personal Telegram session on a paired computer.',
+    summary: 'Telegram bot deployments live in the Studio/business lane. They are separate from your personal Telegram on This Computer.',
     setupHint: 'Connect a Telegram bot in Studio when deployed specialists need a cloud-managed channel.',
     surfaceScope: 'studio_only',
   },
@@ -605,8 +606,8 @@ function defaultPersonalChannelDraft(channel: PersonalCommunicationChannel): Per
     password: '',
     recipient: '',
     text: channel === 'telegram'
-      ? 'Empyralis Telegram test from my paired computer.'
-      : 'Empyralis WhatsApp test from my paired computer.',
+      ? 'Empyralis Telegram test from This Computer.'
+      : 'Empyralis WhatsApp test from This Computer.',
   };
 }
 
@@ -1033,7 +1034,7 @@ function providerStatusPresentation(
 
 function describeConnectorCard(record: ConnectorCardRecord): string {
   if (record.connected) {
-    return record.definition.capabilityTags.slice(0, 2).join(' · ') || 'Ready';
+    return `${record.label} is ready when you ask Sage to use it.`;
   }
   return record.definition.setupHint;
 }
@@ -1049,9 +1050,9 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
-      detail: 'Pair this computer so Sage can use your personal channels and browser.',
-      summary: 'Sage needs one paired computer before it can use your personal channels and browser.',
-      nextStep: 'Open the device connection page and pair this computer.',
+      detail: 'Connect This Computer so Sage can use your browser and personal apps when you ask.',
+      summary: 'This Computer keeps browser, files, and personal apps on your own machine until you approve use.',
+      nextStep: 'Open This Computer setup and connect this computer.',
     };
   }
   const connectionStatus = readString(gateway.connection_status || gateway.status).toLowerCase();
@@ -1060,17 +1061,17 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: 'This device is paired and online for Sage.',
-      summary: 'The paired computer is online and ready for personal channels, browser access, and local approvals.',
+      detail: 'This Computer is connected and ready.',
+      summary: 'Sage can use this computer for browser and personal apps when you ask and approve it.',
       nextStep: null,
     };
   }
   return {
     statusLabel: 'Needs attention',
     statusTone: 'danger',
-    detail: 'This computer is paired, but the desktop app is offline or needs attention.',
-    summary: 'Open the device connection page to reconnect this computer and clear device health issues.',
-    nextStep: 'Open the device connection page to reconnect or inspect health.',
+    detail: 'This Computer needs attention before Sage can use it.',
+    summary: 'Reconnect this computer to restore browser and personal app access.',
+    nextStep: 'Open This Computer setup to reconnect.',
   };
 }
 
@@ -1085,9 +1086,9 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
-      detail: 'Pair this computer before Sage can use your browser.',
-      summary: 'Signed-in sites, localhost pages, and your real browser session stay on the paired computer.',
-      nextStep: 'Open the device connection page and pair this computer first.',
+      detail: 'Connect This Computer before Sage can use your browser.',
+      summary: 'Your signed-in browser stays on your computer and only runs when you ask.',
+      nextStep: 'Connect This Computer first.',
     };
   }
   const gatewayOnline = readString(gateway.connection_status || gateway.status).toLowerCase() === 'online';
@@ -1095,9 +1096,9 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Needs attention',
       statusTone: 'danger',
-      detail: 'This computer is paired, but the desktop app is offline.',
-      summary: 'Localhost pages, signed-in sites, and private browser sessions only work while the paired computer is online.',
-      nextStep: 'Open the device connection page to reconnect this computer first.',
+      detail: 'This Computer needs attention before browser use is available.',
+      summary: 'Signed-in sites stay unavailable until this computer reconnects.',
+      nextStep: 'Open This Computer setup to reconnect first.',
     };
   }
   const browserRecord = doctor && typeof doctor.browser === 'object' ? doctor.browser as Record<string, unknown> : {};
@@ -1117,8 +1118,8 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Needs your OK',
       statusTone: 'warning',
       detail: 'Your browser is waiting for approval.',
-      summary: 'Public web search can stay online, but private browser sessions stay on this device and need your approval first.',
-      nextStep: 'Open the device connection page to review browser approvals.',
+      summary: 'Sage needs your OK before using signed-in browser pages on This Computer.',
+      nextStep: 'Open This Computer setup to review browser approvals.',
     };
   }
   if (attachedCount > 0 && attachStatus === 'pass') {
@@ -1130,7 +1131,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
         browserAttachRecord.summary,
         'Sage is ready to use your existing signed-in browser session on this computer.',
       ),
-      nextStep: 'Open the device connection page to review browser sessions.',
+      nextStep: 'Open This Computer setup to review browser access.',
     };
   }
   if (attachFailedCount > 0 || attachStatus === 'fail') {
@@ -1139,7 +1140,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusTone: 'danger',
       detail: readString(browserAttachRecord.summary, 'Your browser connection failed.'),
       summary: 'Sage could not reach your signed-in browser session. Private sites stay unavailable until it recovers.',
-      nextStep: 'Open the device connection page to retry browser access.',
+      nextStep: 'Open This Computer setup to retry browser access.',
     };
   }
   if (attachCount > 0 && pendingAttachCount > 0) {
@@ -1148,7 +1149,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusTone: 'warning',
       detail: readString(browserAttachRecord.summary, 'Your browser is not ready yet.'),
       summary: 'Sage still needs a reachable browser session on this computer before it can use private sites.',
-      nextStep: 'Open the device connection page to finish browser setup.',
+      nextStep: 'Open This Computer setup to finish browser access.',
     };
   }
   if (activeCount > 0 && status === 'pass') {
@@ -1156,8 +1157,8 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Connected',
       statusTone: 'connected',
       detail: 'Your browser is ready on this computer.',
-      summary: `${readString(browserRecord.summary, 'Browser access is ready on this computer.')} Localhost pages and private sessions still stay on the paired computer.`,
-      nextStep: 'Open the device connection page to review governed browser sessions.',
+      summary: `${readString(browserRecord.summary, 'Browser access is ready on this computer.')} Signed-in pages stay on This Computer.`,
+      nextStep: 'Open This Computer setup to review browser access.',
     };
   }
   if (activeCount === 0 && status === 'pass') {
@@ -1165,16 +1166,16 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Not connected',
       statusTone: 'neutral',
       detail: 'No browser session is active yet.',
-      summary: 'This computer is online and ready. Use the device connection page when you want Sage to browse signed-in sites or private browser pages from this computer.',
-      nextStep: 'Open the device connection page to start a browser session.',
+      summary: 'This Computer is online. Start browser access only when you want Sage to use signed-in pages.',
+      nextStep: 'Open This Computer setup to start browser access.',
     };
   }
   return {
     statusLabel: 'Needs attention',
     statusTone: status === 'warn' ? 'warning' : 'danger',
     detail: readString(browserRecord.summary, 'Browser access needs attention.'),
-    summary: 'Browser health and signed-in session approvals stay on the paired computer.',
-    nextStep: 'Open the device connection page to resolve browser session state.',
+    summary: 'Browser approvals stay on This Computer.',
+    nextStep: 'Open This Computer setup to resolve browser access.',
   };
 }
 
@@ -1189,15 +1190,15 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
   ownershipLabel: string;
   channel: PersonalCommunicationChannel;
 } {
-  const ownershipSummary = 'Uses your paired computer session. This is your personal WhatsApp, not a business account.';
+  const ownershipSummary = 'Stays on This Computer. This is your personal WhatsApp, not a business account.';
   const lastActivityLabel = latestPersonalChannelActivity(gateway, payload);
   if (!gateway) {
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
-      detail: 'Pair this computer before Sage can use your WhatsApp.',
+      detail: 'Connect This Computer before Sage can use your WhatsApp.',
       summary: ownershipSummary,
-      nextStep: 'Pair this computer first, then connect WhatsApp here.',
+      nextStep: 'Connect This Computer first, then connect WhatsApp here.',
       connectedIdentity: null,
       lastActivityLabel,
       ownershipLabel: ownershipSummary,
@@ -1225,8 +1226,8 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: linkedLabel ? `${linkedLabel} is linked on this device.` : 'Your WhatsApp is linked on this device.',
-      summary: `${ownershipSummary} Sage can reply through your personal WhatsApp from the paired computer.`,
+      detail: linkedLabel ? `${linkedLabel} is linked on This Computer.` : 'Your WhatsApp is linked on This Computer.',
+      summary: `${ownershipSummary} Sage can reply through your personal WhatsApp when you ask.`,
       nextStep: null,
       connectedIdentity: linkedLabel || 'Linked WhatsApp account',
       lastActivityLabel,
@@ -1251,7 +1252,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
     return {
       statusLabel: 'Reconnecting',
       statusTone: 'warning',
-      detail: 'WhatsApp is reconnecting on the paired computer.',
+      detail: 'WhatsApp is reconnecting on This Computer.',
       summary: ownershipSummary,
       nextStep: 'Reconnect from this card if it does not recover.',
       connectedIdentity: linkedLabel || null,
@@ -1265,7 +1266,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
     statusTone: 'danger',
     detail: `Your WhatsApp is ${status.replace(/_/g, ' ')}.`,
     summary: ownershipSummary,
-    nextStep: 'Reconnect from this card or review audit history.',
+    nextStep: 'Reconnect from this card or review recent activity.',
     connectedIdentity: linkedLabel || null,
     lastActivityLabel,
     ownershipLabel: ownershipSummary,
@@ -1284,15 +1285,15 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
   ownershipLabel: string;
   channel: PersonalCommunicationChannel;
 } {
-  const ownershipSummary = 'Uses your paired computer session. This is your personal Telegram.';
+  const ownershipSummary = 'Stays on This Computer. This is your personal Telegram.';
   const lastActivityLabel = latestPersonalChannelActivity(gateway, payload);
   if (!gateway) {
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
-      detail: 'Pair this computer before Sage can use your Telegram.',
+      detail: 'Connect This Computer before Sage can use your Telegram.',
       summary: ownershipSummary,
-      nextStep: 'Pair this computer first, then connect Telegram here.',
+      nextStep: 'Connect This Computer first, then connect Telegram here.',
       connectedIdentity: null,
       lastActivityLabel,
       ownershipLabel: ownershipSummary,
@@ -1319,8 +1320,8 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: linkedLabel ? `${linkedLabel} is linked on this device.` : 'Your Telegram is linked on this device.',
-      summary: `${ownershipSummary} Sage can reply through your personal Telegram from the paired computer.`,
+      detail: linkedLabel ? `${linkedLabel} is linked on This Computer.` : 'Your Telegram is linked on This Computer.',
+      summary: `${ownershipSummary} Sage can reply through your personal Telegram when you ask.`,
       nextStep: null,
       connectedIdentity: linkedLabel || 'Linked Telegram account',
       lastActivityLabel,
@@ -1345,7 +1346,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
     return {
       statusLabel: 'Reconnecting',
       statusTone: 'warning',
-      detail: 'Telegram is reconnecting on the paired computer.',
+      detail: 'Telegram is reconnecting on This Computer.',
       summary: ownershipSummary,
       nextStep: 'Reconnect from this card if it does not recover.',
       connectedIdentity: linkedLabel || null,
@@ -1359,7 +1360,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
     statusTone: 'danger',
     detail: `Your Telegram is ${status.replace(/_/g, ' ')}.`,
     summary: ownershipSummary,
-    nextStep: 'Reconnect from this card or review audit history.',
+    nextStep: 'Reconnect from this card or review recent activity.',
     connectedIdentity: linkedLabel || null,
     lastActivityLabel,
     ownershipLabel: ownershipSummary,
@@ -1377,9 +1378,9 @@ function summarizePlannedSignalPersonalState(): {
   return {
     statusLabel: 'Coming next',
     statusTone: 'neutral',
-    detail: 'Signal is the next personal channel planned for the paired computer.',
+    detail: 'Signal is planned for This Computer.',
     summary: 'Signal will appear beside Telegram and WhatsApp when it is ready for this computer.',
-    nextStep: 'Use Telegram or WhatsApp today from the paired computer.',
+    nextStep: 'Use Telegram or WhatsApp today from This Computer.',
   };
 }
 
@@ -1393,9 +1394,9 @@ function summarizePlannedIMessagePersonalState(): {
   return {
     statusLabel: 'Later',
     statusTone: 'neutral',
-    detail: 'iMessage is held until a stable Mac bridge is certified.',
-    summary: 'iMessage will only ship once the Apple-side bridge is reliable enough for a user-owned Mac workflow.',
-    nextStep: 'Keep using Telegram or WhatsApp until the Mac bridge is ready.',
+    detail: 'iMessage is planned for a future This Computer update.',
+    summary: 'iMessage will only ship once it is reliable enough for a user-owned Mac workflow.',
+    nextStep: 'Keep using Telegram or WhatsApp until iMessage is ready.',
   };
 }
 
@@ -1742,7 +1743,7 @@ export function WorkstationSageConnectorsPane({
     const signal = summarizePlannedSignalPersonalState();
     const imessage = summarizePlannedIMessagePersonalState();
     return [
-      { id: 'device', label: 'This device', image: '', ...device },
+      { id: 'device', label: 'This Computer', image: '', ...device },
       { id: 'browser', label: 'Use my browser', image: '', ...browser },
       { id: 'telegram_personal', label: 'Your Telegram', image: '/integrations/telegram.png', ...telegram },
       { id: 'whatsapp_personal', label: 'Your WhatsApp', image: '/integrations/whatsapp.png', ...whatsapp },
@@ -1771,8 +1772,9 @@ export function WorkstationSageConnectorsPane({
       cards.push({
         ...device,
         id: 'computer_gateway',
-        label: 'This computer',
-        actionLabel: device.statusLabel === 'Connect computer' ? 'Connect this computer' : 'Open device connection',
+        label: 'This Computer',
+        actionLabel: device.statusLabel === 'Connect computer' ? 'Connect This Computer' : 'Open This Computer setup',
+        secondaryActionLabel: device.statusTone === 'connected' ? 'Review advanced setup' : undefined,
       });
     }
     if (browser) {
@@ -1788,12 +1790,12 @@ export function WorkstationSageConnectorsPane({
         id: 'local_files_shell',
         label: 'Files on this computer',
         image: '',
-        detail: shellAvailable ? 'Available through this paired computer.' : 'Connect this computer before Sage can use local files.',
+        detail: shellAvailable ? 'Available on This Computer.' : 'Connect This Computer before Sage can use local files.',
         statusLabel: shellAvailable ? 'Available' : 'Not connected',
         statusTone: shellAvailable ? 'connected' : 'neutral',
         summary: 'Files on this computer stay private until you ask Sage to use them and approve the work.',
-        nextStep: shellAvailable ? 'Ask Sage in chat when you want help with local files.' : 'Connect this computer first.',
-        actionLabel: 'Open device connection',
+        nextStep: shellAvailable ? 'Ask Sage in chat when you want help with files on This Computer.' : 'Connect This Computer first.',
+        actionLabel: 'Open This Computer setup',
       },
       {
         id: 'local_models',
@@ -1801,10 +1803,10 @@ export function WorkstationSageConnectorsPane({
         image: '/integrations/ollama.png',
         detail: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline)
           ? `${providerActiveModelLabel(localModelCard)} available through Ollama.`
-          : 'Connect this computer before local AI models are available.',
+          : 'Connect This Computer before local AI models are available.',
         statusLabel: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline) ? 'Available' : 'Not available',
         statusTone: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline) ? 'connected' : 'neutral',
-        summary: 'Local AI models run on the paired computer when you choose them.',
+        summary: 'Local AI models run on This Computer when you choose them.',
         nextStep: 'Use the AI group to choose credits, your AI account, or local AI.',
         actionLabel: 'Choose AI model',
         actionTarget: 'ai',
@@ -1895,8 +1897,10 @@ export function WorkstationSageConnectorsPane({
       statusTone: record.statusTone,
       summary: record.summary,
       nextStep: record.nextStep,
-      actionLabel: record.statusTone === 'connected' ? 'Review connection' : 'Set up',
+      actionLabel: record.channel ? 'Advanced setup' : record.statusTone === 'connected' ? 'Review connection' : 'Set up',
+      secondaryActionLabel: record.channel ? 'This Computer settings' : null,
       actionTarget: 'gateway',
+      channel: record.channel ?? null,
     };
   }
 
@@ -2186,8 +2190,8 @@ export function WorkstationSageConnectorsPane({
       });
       await refreshAfterMutation(
         channel === 'telegram'
-          ? 'Telegram setup requested on this paired computer.'
-          : 'WhatsApp pairing requested on this paired computer.',
+          ? 'Telegram setup requested on This Computer.'
+          : 'WhatsApp pairing requested on This Computer.',
       );
     } catch (setupError) {
       setError(setupError instanceof Error ? setupError.message : 'Personal channel setup failed.');
@@ -2227,8 +2231,8 @@ export function WorkstationSageConnectorsPane({
       });
       await refreshAfterMutation(
         channel === 'telegram'
-          ? 'Telegram test sent through this paired computer.'
-          : 'WhatsApp test sent through this paired computer.',
+          ? 'Telegram test sent through This Computer.'
+          : 'WhatsApp test sent through This Computer.',
       );
     } catch (testError) {
       setError(testError instanceof Error ? testError.message : 'Personal channel test failed.');
@@ -2448,11 +2452,11 @@ export function WorkstationSageConnectorsPane({
         {record.status === 'connected' ? (
           <>
             <div className="sage-unified-expand__text">
-              {`Connected · ${record.keyTail ? `••••${record.keyTail}` : providerRequiresSecret(record.provider, record.profile) ? 'Saved credential hidden' : 'No credential required'}`}
+              {`Connected. ${record.keyTail ? `Saved sign-in ends in ${record.keyTail}` : providerRequiresSecret(record.provider, record.profile) ? 'Saved sign-in details are hidden.' : 'No sign-in details required.'}`}
             </div>
             {record.provider.id === 'ollama' && !localCompanionOnline ? (
               <div className="sage-unified-expand__text">
-                Connect local device to use Ollama
+                Connect This Computer to use Ollama.
               </div>
             ) : null}
             {record.provider.modelsError ? (
@@ -2498,8 +2502,8 @@ export function WorkstationSageConnectorsPane({
             ) : (
               <div className="sage-unified-expand__text">
                 {localCompanionOnline
-                  ? 'Connected local device can expose available Ollama models from this machine.'
-                  : 'Connect local device to use Ollama'}
+                  ? 'This Computer can use available Ollama models from this machine.'
+                  : 'Connect This Computer to use Ollama.'}
               </div>
             )}
             <div className="sage-unified-expand__actions">
@@ -2549,6 +2553,109 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderPersonalChannelAdvanced(
+    channel: PersonalCommunicationChannel,
+    channelDraft: PersonalChannelDraft,
+    channelBusy: boolean,
+  ) {
+    return (
+      <div className="sage-unified-expand__advanced app-stack-3">
+        <div className="sage-unified-expand__text">
+          Advanced setup is only for login, pairing, and controlled test messages.
+        </div>
+        {channel === 'whatsapp' ? (
+          <>
+            <FormField label="WhatsApp phone number" hint="Used only by This Computer for pairing.">
+              <FormInput
+                value={channelDraft.phoneNumber}
+                placeholder="8618657105303"
+                onChange={(event) => updateChannelDraft('whatsapp', { phoneNumber: event.currentTarget.value })}
+              />
+            </FormField>
+            <FormField label="Recipient" hint="Phone number or chat identifier for the controlled test.">
+              <FormInput
+                value={channelDraft.recipient}
+                placeholder="8618657105303"
+                onChange={(event) => updateChannelDraft('whatsapp', { recipient: event.currentTarget.value })}
+              />
+            </FormField>
+          </>
+        ) : (
+          <>
+            <FormField label="Telegram app ID" hint="Used only for advanced Telegram setup on This Computer.">
+              <FormInput
+                value={channelDraft.apiId}
+                placeholder="123456"
+                onChange={(event) => updateChannelDraft('telegram', { apiId: event.currentTarget.value })}
+              />
+            </FormField>
+            <FormField label="Telegram app secret">
+              <FormInput
+                value={channelDraft.apiHash}
+                placeholder="Telegram app secret"
+                onChange={(event) => updateChannelDraft('telegram', { apiHash: event.currentTarget.value })}
+              />
+            </FormField>
+            <FormField label="Phone number" hint="Used by Telegram login on This Computer.">
+              <FormInput
+                value={channelDraft.phoneNumber}
+                placeholder="+8618657105303"
+                onChange={(event) => updateChannelDraft('telegram', { phoneNumber: event.currentTarget.value })}
+              />
+            </FormField>
+            <FormField label="Login code" hint="Enter only when Telegram asks for a code.">
+              <FormInput
+                value={channelDraft.loginCode}
+                onChange={(event) => updateChannelDraft('telegram', { loginCode: event.currentTarget.value })}
+              />
+            </FormField>
+            <FormField label="2FA password" hint="Optional. Required only for Telegram accounts with 2FA enabled.">
+              <FormInput
+                type="password"
+                value={channelDraft.password}
+                onChange={(event) => updateChannelDraft('telegram', { password: event.currentTarget.value })}
+              />
+            </FormField>
+            <FormField label="Recipient" hint="Telegram user, chat, or channel for the controlled test.">
+              <FormInput
+                value={channelDraft.recipient}
+                placeholder="123456789"
+                onChange={(event) => updateChannelDraft('telegram', { recipient: event.currentTarget.value })}
+              />
+            </FormField>
+          </>
+        )}
+        <FormField label="Test message" hint="Sends from This Computer as a controlled test.">
+          <FormInput
+            value={channelDraft.text}
+            onChange={(event) => updateChannelDraft(channel, { text: event.currentTarget.value })}
+          />
+        </FormField>
+        <div className="sage-unified-expand__actions">
+          <AppButton
+            type="button"
+            disabled={channelBusy}
+            onClick={() => {
+              void handlePersonalChannelSetup(channel);
+            }}
+          >
+            {channelBusy && busyCardId === `${channel}_personal` ? 'Requesting…' : 'Request setup'}
+          </AppButton>
+          <AppButton
+            type="button"
+            tone="secondary"
+            disabled={channelBusy}
+            onClick={() => {
+              void handlePersonalChannelTest(channel);
+            }}
+          >
+            {channelBusy && busyCardId === `${channel}_personal:test` ? 'Sending…' : 'Send test'}
+          </AppButton>
+        </div>
+      </div>
+    );
+  }
+
   function renderPersonalExpand(record: PersonalCardRecord) {
     const showChannelActions = record.id === 'telegram_personal' || record.id === 'whatsapp_personal';
     const plannedChannel = record.id === 'signal_personal' || record.id === 'imessage_personal';
@@ -2576,7 +2683,7 @@ export function WorkstationSageConnectorsPane({
               {`${record.statusLabel} · ${record.connectedIdentity || 'Not linked'} · ${record.lastActivityLabel || 'No activity yet'}`}
             </div>
             <div className="sage-unified-expand__tag-row">
-              <span className="sage-unified-expand__tag">Uses your paired computer session</span>
+              <span className="sage-unified-expand__tag">Runs on This Computer</span>
               <span className="sage-unified-expand__tag">Personal channel</span>
               {record.id === 'whatsapp_personal' ? (
                 <span className="sage-unified-expand__tag">Not a business account</span>
@@ -2596,7 +2703,7 @@ export function WorkstationSageConnectorsPane({
                 setAdvancedChannelId(advancedOpen ? null : channel);
               }}
             >
-              {record.statusTone === 'connected' ? 'Review connection' : 'Set up'}
+              Advanced setup
             </AppButton>
           ) : (
             <AppButton
@@ -2606,12 +2713,12 @@ export function WorkstationSageConnectorsPane({
               }}
             >
               {plannedChannel
-                ? 'Open device connection'
+                ? 'Open This Computer setup'
                 : record.statusLabel === 'Connect computer'
-                ? 'Connect this computer'
+                ? 'Connect This Computer'
                 : record.id === 'browser'
                   ? 'Open browser sessions'
-                  : 'Open device connection'}
+                  : 'Open This Computer setup'}
             </AppButton>
           )}
           {record.id === 'device' || showChannelActions ? (
@@ -2622,7 +2729,7 @@ export function WorkstationSageConnectorsPane({
                 openWorkspaceRoute('gateway');
               }}
             >
-              {showChannelActions ? 'Manage access' : 'Revoke access'}
+              {showChannelActions ? 'This Computer settings' : 'Revoke access'}
             </AppButton>
           ) : null}
           <button
@@ -2633,107 +2740,16 @@ export function WorkstationSageConnectorsPane({
             Close
           </button>
         </div>
-        {showChannelActions && channel && channelDraft && advancedOpen ? (
-          <div className="sage-unified-expand__advanced app-stack-3">
-            <div className="sage-unified-expand__text">
-              Test messages stay here so the normal app card remains clean.
-            </div>
-            {channel === 'whatsapp' ? (
-              <>
-                <FormField label="WhatsApp phone number" hint="Used only by your paired computer session for pairing.">
-                  <FormInput
-                    value={channelDraft.phoneNumber}
-                    placeholder="8618657105303"
-                    onChange={(event) => updateChannelDraft('whatsapp', { phoneNumber: event.currentTarget.value })}
-                  />
-                </FormField>
-                <FormField label="Recipient" hint="Phone number or chat identifier for the controlled test.">
-                  <FormInput
-                    value={channelDraft.recipient}
-                    placeholder="8618657105303"
-                    onChange={(event) => updateChannelDraft('whatsapp', { recipient: event.currentTarget.value })}
-                  />
-                </FormField>
-              </>
-            ) : (
-              <>
-                <FormField label="Telegram app ID" hint="Stored through this computer's setup path.">
-                  <FormInput
-                    value={channelDraft.apiId}
-                    placeholder="123456"
-                    onChange={(event) => updateChannelDraft('telegram', { apiId: event.currentTarget.value })}
-                  />
-                </FormField>
-                <FormField label="Telegram app secret">
-                  <FormInput
-                    value={channelDraft.apiHash}
-                    placeholder="Telegram app secret"
-                    onChange={(event) => updateChannelDraft('telegram', { apiHash: event.currentTarget.value })}
-                  />
-                </FormField>
-                <FormField label="Phone number" hint="Used by Telegram login on this paired computer.">
-                  <FormInput
-                    value={channelDraft.phoneNumber}
-                    placeholder="+8618657105303"
-                    onChange={(event) => updateChannelDraft('telegram', { phoneNumber: event.currentTarget.value })}
-                  />
-                </FormField>
-                <FormField label="Login code" hint="Enter only when Telegram asks for a code.">
-                  <FormInput
-                    value={channelDraft.loginCode}
-                    onChange={(event) => updateChannelDraft('telegram', { loginCode: event.currentTarget.value })}
-                  />
-                </FormField>
-                <FormField label="2FA password" hint="Optional. Required only for Telegram accounts with 2FA enabled.">
-                  <FormInput
-                    type="password"
-                    value={channelDraft.password}
-                    onChange={(event) => updateChannelDraft('telegram', { password: event.currentTarget.value })}
-                  />
-                </FormField>
-                <FormField label="Recipient" hint="Telegram user, chat, or channel for the controlled test.">
-                  <FormInput
-                    value={channelDraft.recipient}
-                    placeholder="123456789"
-                    onChange={(event) => updateChannelDraft('telegram', { recipient: event.currentTarget.value })}
-                  />
-                </FormField>
-              </>
-            )}
-            <FormField label="Test message" hint="Sent through the paired device and audited.">
-              <FormInput
-                value={channelDraft.text}
-                onChange={(event) => updateChannelDraft(channel, { text: event.currentTarget.value })}
-              />
-            </FormField>
-            <div className="sage-unified-expand__actions">
-              <AppButton
-                type="button"
-                disabled={channelBusy}
-                onClick={() => {
-                  void handlePersonalChannelSetup(channel);
-                }}
-              >
-                {channelBusy && busyCardId === `${channel}_personal` ? 'Requesting…' : 'Request setup'}
-              </AppButton>
-              <AppButton
-                type="button"
-                tone="secondary"
-                disabled={channelBusy}
-                onClick={() => {
-                  void handlePersonalChannelTest(channel);
-                }}
-              >
-                {channelBusy && busyCardId === `${channel}_personal:test` ? 'Sending…' : 'Send test'}
-              </AppButton>
-            </div>
-          </div>
-        ) : null}
+        {showChannelActions && channel && channelDraft && advancedOpen ? renderPersonalChannelAdvanced(channel, channelDraft, channelBusy) : null}
       </MotionSlidePanel>
     );
   }
 
   function renderExternalExpand(record: ExternalIntegrationCardRecord) {
+    const channel = record.channel ?? null;
+    const channelDraft = channel ? channelDrafts[channel] : null;
+    const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
+    const advancedOpen = channel ? advancedChannelId === channel : false;
     return (
       <MotionSlidePanel className="sage-unified-expand">
         <div className="sage-unified-expand__header">
@@ -2754,6 +2770,10 @@ export function WorkstationSageConnectorsPane({
             <AppButton
               type="button"
               onClick={() => {
+                if (channel) {
+                  setAdvancedChannelId(advancedOpen ? null : channel);
+                  return;
+                }
                 if (record.actionTarget === 'ai' || record.id === 'local_models') {
                   setProviderPickerOpen(true);
                   setProviderPickerDraftId(null);
@@ -2788,7 +2808,24 @@ export function WorkstationSageConnectorsPane({
             Close
           </button>
         </div>
+        {channel && channelDraft && advancedOpen ? renderPersonalChannelAdvanced(channel, channelDraft, channelBusy) : null}
       </MotionSlidePanel>
+    );
+  }
+
+  function renderConnectorAdvancedDetails(record: ConnectorCardRecord) {
+    return (
+      <details className="sage-unified-expand__advanced-disclosure">
+        <summary className="sage-unified-expand__advanced-summary">Advanced details</summary>
+        <div className="sage-unified-expand__text">
+          App actions Sage can use after you connect this integration.
+        </div>
+        <div className="sage-unified-expand__tag-row">
+          {record.definition.capabilityTags.map((tag) => (
+            <span key={tag} className="sage-unified-expand__tag">{tag}</span>
+          ))}
+        </div>
+      </details>
     );
   }
 
@@ -2809,17 +2846,13 @@ export function WorkstationSageConnectorsPane({
         </div>
         {record.definition.surfaceScope === 'studio_only' ? (
           <div className="sage-unified-expand__text">
-            Studio/business lane · customer-facing bots and business messaging stay in Studio, not on your personal paired-device channel lane.
+            This app is for shared business channels. Personal Telegram and WhatsApp stay in Communication.
           </div>
         ) : null}
         {record.connected ? (
           <>
             <div className="sage-unified-expand__text">{record.definition.summary}</div>
-            <div className="sage-unified-expand__tag-row">
-              {record.definition.capabilityTags.map((tag) => (
-                <span key={tag} className="sage-unified-expand__tag">{tag}</span>
-              ))}
-            </div>
+            {renderConnectorAdvancedDetails(record)}
             <div className="sage-unified-expand__toggle-row">
               <span className="sage-unified-expand__text">Memory</span>
               <button
@@ -2853,11 +2886,7 @@ export function WorkstationSageConnectorsPane({
           <>
             <div className="sage-unified-expand__text">{record.definition.summary}</div>
             <div className="sage-unified-expand__text">{record.definition.setupHint}</div>
-            <div className="sage-unified-expand__tag-row">
-              {record.definition.capabilityTags.map((tag) => (
-                <span key={tag} className="sage-unified-expand__tag">{tag}</span>
-              ))}
-            </div>
+            {renderConnectorAdvancedDetails(record)}
             <div className="sage-unified-expand__actions">
               <button
                 type="button"
@@ -2878,11 +2907,13 @@ export function WorkstationSageConnectorsPane({
     items: T[],
     renderCard: (item: T) => ReactNode,
     renderExpand: (item: T) => ReactNode,
+    description?: string,
   ) {
     const rows = chunkItems(items, gridColumns);
     return (
       <section className="sage-unified-section">
         <p className="sage-unified-section__label">{label}</p>
+        {description ? <p className="sage-unified-section__description">{description}</p> : null}
         {rows.map((row, rowIndex) => {
           const expandedRecord = row.find((item) => item.id === expandedCardId) ?? null;
           return (
@@ -2918,7 +2949,7 @@ export function WorkstationSageConnectorsPane({
     const detailLabel = sectionId === 'hosted'
       ? hostedProviderDetailLabel(hostedSageAi, record)
       : isLocalSection
-        ? (localCompanionOnline ? 'This Computer · Uses the Ollama models available on this device' : 'This Computer · Connect this computer first')
+        ? (localCompanionOnline ? 'This Computer · Uses the Ollama models available here' : 'This Computer · Connect this computer first')
       : record.provider.id === 'ollama_cloud'
         ? `${providerPickerStatusLabel(record, localCompanionOnline)} · Ollama Cloud`
         : `${providerPickerStatusLabel(record, localCompanionOnline)} · ${providerPathLabel(record)}`;
@@ -3006,6 +3037,7 @@ export function WorkstationSageConnectorsPane({
           isLoading ? renderProviderSkeletons() : (
             <section className="sage-unified-section">
               <p className="sage-unified-section__label">AI</p>
+              <p className="sage-unified-section__description">Choose the AI Sage uses: credits, your own account, or models on This Computer.</p>
               <div className="sage-provider-active">
                 <div className="sage-provider-active__row sage-provider-active__row--summary">
                   {activeProviderCard ? (
@@ -3091,14 +3123,15 @@ export function WorkstationSageConnectorsPane({
           </div>
         ) : (
           <>
-            {showPersonalSurface && communicationCards.length > 0 ? renderSection('Communication', communicationCards, renderExternalCard, renderExternalExpand) : null}
-            {showPersonalSurface ? renderSection('This Computer', thisComputerCards, renderExternalCard, renderExternalExpand) : null}
-            {knowledgeCards.length > 0 ? renderSection('Knowledge', knowledgeCards, renderExternalCard, renderExternalExpand) : null}
+            {showPersonalSurface && communicationCards.length > 0 ? renderSection('Communication', communicationCards, renderExternalCard, renderExternalExpand, 'Telegram, WhatsApp, email, and team apps Sage can use when you ask.') : null}
+            {showPersonalSurface ? renderSection('This Computer', thisComputerCards, renderExternalCard, renderExternalExpand, 'Browser, files, and local AI stay on your machine until you approve use.') : null}
+            {knowledgeCards.length > 0 ? renderSection('Knowledge', knowledgeCards, renderExternalCard, renderExternalExpand, 'Docs, files, and approved sources Sage can read with permission.') : null}
           </>
         )}
         {showTools ? (
           <section className="sage-unified-section">
             <p className="sage-unified-section__label">Tools</p>
+            <p className="sage-unified-section__description">Actions Sage can run after you enable them.</p>
             <WorkstationSageToolsPane onBlockedRequirementAction={handleBlockedToolAction} />
           </section>
         ) : null}

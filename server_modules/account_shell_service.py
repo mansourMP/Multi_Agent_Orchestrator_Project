@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import threading
+import time
 from datetime import datetime
 import logging
 from typing import Any, Dict, List, Optional
@@ -13,6 +16,9 @@ from server_modules import workspace_bootstrap_service
 
 
 logger = logging.getLogger(__name__)
+ACCOUNT_SHELL_CACHE_LOCK = threading.Lock()
+ACCOUNT_SHELL_CACHE_TTL_SECONDS = max(int(os.getenv("ORION_ACCOUNT_SHELL_CACHE_TTL_SECONDS", "4")), 1)
+ACCOUNT_SHELL_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
@@ -33,6 +39,56 @@ def _version_component(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _account_shell_cache_key(
+    *,
+    user_id: str,
+    identity_versions: Dict[str, Any],
+    memberships: List[Dict[str, Any]],
+) -> str:
+    membership_tokens = []
+    for row in memberships:
+        if not isinstance(row, dict):
+            continue
+        workspace_id = str(row.get("workspace_id") or "").strip()
+        if not workspace_id:
+            continue
+        membership_tokens.append(
+            f"{workspace_id}:{_version_component(row.get('updated_at'))}:{str(row.get('role') or '').strip().lower()}"
+        )
+    membership_tokens.sort()
+    return "|".join(
+        [
+            user_id,
+            str(identity_versions.get("membership_version") or 0),
+            str(identity_versions.get("auth_version") or 0),
+            str(identity_versions.get("provider_scope_version") or 0),
+            ",".join(membership_tokens),
+        ]
+    )
+
+
+def _account_shell_cache_get(cache_key: str) -> Optional[Dict[str, Any]]:
+    now = time.time()
+    with ACCOUNT_SHELL_CACHE_LOCK:
+        cached = ACCOUNT_SHELL_CACHE.get(cache_key)
+        if not isinstance(cached, dict):
+            return None
+        expires_at = float(cached.get("expires_at") or 0.0)
+        if expires_at <= now:
+            ACCOUNT_SHELL_CACHE.pop(cache_key, None)
+            return None
+        payload = cached.get("payload")
+        return dict(payload) if isinstance(payload, dict) else None
+
+
+def _account_shell_cache_put(cache_key: str, payload: Dict[str, Any]) -> None:
+    with ACCOUNT_SHELL_CACHE_LOCK:
+        ACCOUNT_SHELL_CACHE[cache_key] = {
+            "expires_at": time.time() + ACCOUNT_SHELL_CACHE_TTL_SECONDS,
+            "payload": dict(payload),
+        }
 
 
 def _workspace_capabilities(
@@ -74,9 +130,18 @@ def _workspace_capabilities(
 
 async def build_account_shell_payload(current_user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     user = auth_module.get_authenticated_user_record(current_user)
+    user_id = _require_string(user.get("id"), field="account.id")
     memberships = auth_module.list_authenticated_workspace_memberships(current_user)
     identity_versions = auth_module.get_authenticated_identity_versions(current_user)
     membership_version_prefix = int(identity_versions.get("membership_version") or 1)
+    cache_key = _account_shell_cache_key(
+        user_id=user_id,
+        identity_versions=identity_versions,
+        memberships=memberships,
+    )
+    cached_payload = _account_shell_cache_get(cache_key)
+    if isinstance(cached_payload, dict):
+        return cached_payload
 
     workspace_memberships: List[Dict[str, Any]] = []
     for membership_row in memberships:
@@ -100,9 +165,14 @@ async def build_account_shell_payload(current_user: Optional[Dict[str, Any]]) ->
                 workspace=workspace_record,
                 workspace_name=str(membership_row.get("workspace_name") or "").strip() or None,
             )
-            role = auth_module.normalize_rbac_role(
-                membership_row.get("role"),
-                default=auth_module.workspace_role(current_user, raw_workspace_id) or "viewer",
+            raw_role = str(membership_row.get("role") or "").strip()
+            role = (
+                auth_module.normalize_rbac_role(raw_role, default="viewer")
+                if raw_role
+                else auth_module.normalize_rbac_role(
+                    auth_module.workspace_role(current_user, raw_workspace_id),
+                    default="viewer",
+                )
             )
             workspace_traits, capabilities, _ = _workspace_capabilities(
                 role=role,
@@ -155,11 +225,13 @@ async def build_account_shell_payload(current_user: Optional[Dict[str, Any]]) ->
             )
             continue
 
-    return {
+    payload = {
         "account": {
-            "id": _require_string(user.get("id"), field="account.id"),
+            "id": user_id,
             "email": _require_string(user.get("email"), field="account.email"),
             "displayName": str(user.get("name") or user.get("display_name") or "").strip() or None,
         },
         "workspaceMemberships": workspace_memberships,
     }
+    _account_shell_cache_put(cache_key, payload)
+    return payload

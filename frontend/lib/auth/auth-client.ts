@@ -235,9 +235,12 @@ export async function awaitBrowserAuthReady({
     }
 
     lastStatus = response.status;
-    if (response.status === 401 || response.status === 403 || response.status >= 500) {
+    if (response.status === 401 || response.status >= 500) {
       await sleep(delayMs);
       continue;
+    }
+    if (response.status === 403) {
+      throw new Error('This workspace is not accessible for this account.');
     }
 
     throw new Error(`Auth readiness check failed with status ${response.status}.`);

@@ -60,6 +60,12 @@ _LOCAL_IDENTITY_LOCK = threading.Lock()
 _LOCAL_AGENT_THREAD_LOCK = threading.RLock()
 _LOCAL_AGENT_THREADS: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 _LOCAL_AGENT_TURNS: Dict[tuple[str, str, str], List[Dict[str, Any]]] = {}
+WORKSPACE_LOOKUP_CACHE_TTL_SECONDS = max(
+    float(os.getenv("ORION_WORKSPACE_LOOKUP_CACHE_TTL_SECONDS", "3")),
+    0.5,
+)
+WORKSPACE_LOOKUP_CACHE_LOCK = threading.Lock()
+WORKSPACE_LOOKUP_CACHE: Dict[str, Dict[str, Any]] = {}
 
 _CONTROL_PLANE_SESSION_SCOPE_SQL = """
 SELECT
@@ -1166,6 +1172,41 @@ BEGIN
 END
 $$;
 """
+
+
+def _workspace_lookup_cache_get(workspace_id: str) -> Optional[Dict[str, Any]]:
+    key = str(workspace_id or "").strip()
+    if not key:
+        return None
+    now = time.time()
+    with WORKSPACE_LOOKUP_CACHE_LOCK:
+        cached = WORKSPACE_LOOKUP_CACHE.get(key)
+        if not isinstance(cached, dict):
+            return None
+        if float(cached.get("expires_at") or 0.0) <= now:
+            WORKSPACE_LOOKUP_CACHE.pop(key, None)
+            return None
+        payload = cached.get("value")
+        return dict(payload) if isinstance(payload, dict) else None
+
+
+def _workspace_lookup_cache_put(workspace_id: str, payload: Dict[str, Any]) -> None:
+    key = str(workspace_id or "").strip()
+    if not key:
+        return
+    with WORKSPACE_LOOKUP_CACHE_LOCK:
+        WORKSPACE_LOOKUP_CACHE[key] = {
+            "expires_at": time.time() + WORKSPACE_LOOKUP_CACHE_TTL_SECONDS,
+            "value": dict(payload),
+        }
+
+
+def _workspace_lookup_cache_drop(workspace_id: str) -> None:
+    key = str(workspace_id or "").strip()
+    if not key:
+        return
+    with WORKSPACE_LOOKUP_CACHE_LOCK:
+        WORKSPACE_LOOKUP_CACHE.pop(key, None)
 
 
 @dataclass(slots=True)
@@ -3097,6 +3138,7 @@ async def create_workspace_for_user(
                 resolved_workspace_id,
                 tenant_id=clean_tenant_id,
             )
+            _workspace_lookup_cache_drop(resolved_workspace_id)
             return await get_workspace_by_id(resolved_workspace_id)
 
         user_row = await connection.fetchrow(
@@ -3157,6 +3199,7 @@ async def create_workspace_for_user(
         resolved_workspace_id,
         tenant_id=clean_tenant_id,
     )
+    _workspace_lookup_cache_drop(resolved_workspace_id)
     return await get_workspace_by_id(resolved_workspace_id)
 
 
@@ -3207,6 +3250,7 @@ async def update_workspace_profile(workspace_id: str, updates: Dict[str, Any]) -
                         created_at_ts=int(existing_record.get("created_at") or created_at_ts),
                     )
                     fallback.commit()
+            _workspace_lookup_cache_drop(clean_workspace_id)
             return await get_workspace_by_id(clean_workspace_id)
 
         existing = await connection.fetchrow(
@@ -3256,6 +3300,7 @@ async def update_workspace_profile(workspace_id: str, updates: Dict[str, Any]) -
             _to_json(next_metadata, default={}),
             updated_at,
         )
+    _workspace_lookup_cache_drop(clean_workspace_id)
     return await get_workspace_by_id(clean_workspace_id)
 
 
@@ -4156,6 +4201,12 @@ async def upsert_workspace_billing_subscription(
 
 
 async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return None
+    cached = _workspace_lookup_cache_get(clean_workspace_id)
+    if isinstance(cached, dict):
+        return cached
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             with _LOCAL_IDENTITY_LOCK:
@@ -4167,9 +4218,12 @@ async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
                         WHERE workspace_id = ?
                         LIMIT 1
                         """,
-                        (str(workspace_id or "").strip(),),
+                        (clean_workspace_id,),
                     ).fetchone()
-            return _local_workspace_record_from_row(row)
+            payload = _local_workspace_record_from_row(row)
+            if isinstance(payload, dict):
+                _workspace_lookup_cache_put(clean_workspace_id, payload)
+            return payload
         row = await connection.fetchrow(
             """
             SELECT id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
@@ -4177,9 +4231,12 @@ async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
             WHERE workspace_id = $1
             LIMIT 1
             """,
-            str(workspace_id or "").strip(),
+            clean_workspace_id,
         )
-    return _workspace_record_from_row(row)
+    payload = _workspace_record_from_row(row)
+    if isinstance(payload, dict):
+        _workspace_lookup_cache_put(clean_workspace_id, payload)
+    return payload
 
 
 async def create_deployed_agent(

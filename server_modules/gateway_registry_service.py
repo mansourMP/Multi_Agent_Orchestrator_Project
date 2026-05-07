@@ -50,8 +50,29 @@ def _gateway_connection_payload(registration: Dict[str, Any]) -> Dict[str, Any]:
     registration_status = str(registration.get("status") or "").strip().lower()
     device_trust_state = str(registration.get("device_trust_state") or "").strip().lower()
     session_status = str((latest_session or {}).get("status") or "").strip().lower()
+    latest_session_metadata = dict((latest_session or {}).get("metadata") or {})
+    registration_metadata = dict(registration.get("metadata") or {})
+    reported_health_state = str(
+        latest_session_metadata.get("health_state")
+        or registration_metadata.get("health_state")
+        or ""
+    ).strip().lower()
     if registration_status == "revoked" or device_trust_state == "revoked":
         connection_status = "revoked"
+    elif session_status == "pending":
+        connection_status = "reconnecting"
+    elif reported_health_state == "reconnecting":
+        recently_active = (
+            heartbeat_age_seconds is None
+            or heartbeat_age_seconds <= DEFAULT_GATEWAY_FRESH_HEARTBEAT_SECONDS * 4
+        )
+        connection_status = (
+            "reconnecting"
+            if session_status in {"connected", "disconnected", "pending"} and recently_active
+            else "offline"
+        )
+    elif reported_health_state == "degraded":
+        connection_status = "degraded"
     elif session_status == "connected" and heartbeat_fresh:
         connection_status = "online"
     elif session_status in {"connected", "pending"}:
@@ -60,6 +81,7 @@ def _gateway_connection_payload(registration: Dict[str, Any]) -> Dict[str, Any]:
         connection_status = "offline"
     return {
         "connection_status": connection_status,
+        "reported_health_state": reported_health_state or None,
         "heartbeat_fresh": bool(heartbeat_fresh),
         "heartbeat_age_seconds": heartbeat_age_seconds,
         "latest_session_id": str((latest_session or {}).get("session_id") or "").strip() or None,

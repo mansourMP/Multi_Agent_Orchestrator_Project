@@ -6,6 +6,7 @@ import time
 import unittest
 from datetime import datetime
 from pathlib import Path
+import uuid
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
@@ -595,6 +596,183 @@ class GatewayRoutesTests(unittest.TestCase):
             json={"gateway_id": gateway_id, "gateway_token": gateway_token},
         )
         self.assertEqual(blocked_response.status_code, 401)
+
+    def test_gateway_connection_status_tracks_online_degraded_reconnecting_offline_and_revoked(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_token = registration_payload["gateway_token"]
+
+        pending_session_response = self.client.post(
+            "/api/gateway/sessions",
+            json={"gateway_id": gateway_id, "gateway_token": gateway_token},
+        )
+        self.assertEqual(pending_session_response.status_code, 200)
+        pending_session_payload = pending_session_response.json()
+
+        pending_list = self.client.get("/api/gateway/registrations", params={"workspace_id": "default"})
+        self.assertEqual(pending_list.status_code, 200)
+        self.assertEqual(pending_list.json()["items"][0]["connection_status"], "reconnecting")
+
+        ws_path = (
+            f"/api/gateway/ws?gateway_id={gateway_id}"
+            f"&session_token={pending_session_payload['session_token']}"
+        )
+        with self.client.websocket_connect(ws_path) as websocket:
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "req-connect-states-1",
+                    "type": "gateway.connect",
+                    "ts": "2026-04-22T13:00:00Z",
+                    "scope": pending_session_payload["scope"],
+                    "payload": {
+                        "gateway_version": "0.1.0",
+                        "device_metadata": {"hostname": "mansur-mac"},
+                        "requested_capabilities": ["screen.read"],
+                        "journal_cursor": 0,
+                        "checkpoint_cursor": 0,
+                    },
+                }
+            )
+            self.assertTrue(websocket.receive_json()["ok"])
+            websocket.receive_json()
+            websocket.receive_json()
+
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "req-heartbeat-states-1",
+                    "type": "gateway.heartbeat",
+                    "ts": "2026-04-22T13:00:01Z",
+                    "scope": pending_session_payload["scope"],
+                    "payload": {
+                        "health_state": "online",
+                        "journal_cursor": 1,
+                        "checkpoint_cursor": 1,
+                    },
+                }
+            )
+            self.assertTrue(websocket.receive_json()["ok"])
+
+            online_list = self.client.get("/api/gateway/registrations", params={"workspace_id": "default"})
+            self.assertEqual(online_list.status_code, 200)
+            self.assertEqual(online_list.json()["items"][0]["connection_status"], "online")
+
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "req-state-degraded",
+                    "type": "gateway.state.update",
+                    "ts": "2026-04-22T13:00:02Z",
+                    "scope": pending_session_payload["scope"],
+                    "payload": {
+                        "health_state": "degraded",
+                        "journal_cursor": 2,
+                        "checkpoint_cursor": 2,
+                    },
+                }
+            )
+            self.assertTrue(websocket.receive_json()["ok"])
+            websocket.receive_json()
+
+            degraded_list = self.client.get("/api/gateway/registrations", params={"workspace_id": "default"})
+            self.assertEqual(degraded_list.status_code, 200)
+            degraded_gateway = degraded_list.json()["items"][0]
+            self.assertEqual(degraded_gateway["connection_status"], "degraded")
+            self.assertEqual(degraded_gateway["reported_health_state"], "degraded")
+
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "req-state-reconnecting",
+                    "type": "gateway.state.update",
+                    "ts": "2026-04-22T13:00:03Z",
+                    "scope": pending_session_payload["scope"],
+                    "payload": {
+                        "health_state": "reconnecting",
+                        "journal_cursor": 3,
+                        "checkpoint_cursor": 3,
+                    },
+                }
+            )
+            self.assertTrue(websocket.receive_json()["ok"])
+            websocket.receive_json()
+
+            reconnecting_list = self.client.get("/api/gateway/registrations", params={"workspace_id": "default"})
+            self.assertEqual(reconnecting_list.status_code, 200)
+            reconnecting_gateway = reconnecting_list.json()["items"][0]
+            self.assertEqual(reconnecting_gateway["connection_status"], "reconnecting")
+            self.assertEqual(reconnecting_gateway["reported_health_state"], "reconnecting")
+
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "req-state-online-before-disconnect",
+                    "type": "gateway.state.update",
+                    "ts": "2026-04-22T13:00:03.500Z",
+                    "scope": pending_session_payload["scope"],
+                    "payload": {
+                        "health_state": "online",
+                        "journal_cursor": 4,
+                        "checkpoint_cursor": 4,
+                    },
+                }
+            )
+            self.assertTrue(websocket.receive_json()["ok"])
+            websocket.receive_json()
+
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "req-disconnect-states",
+                    "type": "gateway.disconnect",
+                    "ts": "2026-04-22T13:00:04Z",
+                    "scope": pending_session_payload["scope"],
+                    "payload": {"reason": "status_matrix_test"},
+                }
+            )
+            self.assertTrue(websocket.receive_json()["ok"])
+
+        offline_list = self.client.get("/api/gateway/registrations", params={"workspace_id": "default"})
+        self.assertEqual(offline_list.status_code, 200)
+        self.assertEqual(offline_list.json()["items"][0]["connection_status"], "offline")
+
+        revoke_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/revoke",
+            json={"reason": "status_matrix_revoke"},
+        )
+        self.assertEqual(revoke_response.status_code, 200)
+
+        revoked_list = self.client.get("/api/gateway/registrations", params={"workspace_id": "default"})
+        self.assertEqual(revoked_list.status_code, 200)
+        revoked_gateway = revoked_list.json()["items"][0]
+        self.assertEqual(revoked_gateway["status"], "revoked")
+        self.assertEqual(revoked_gateway["connection_status"], "revoked")
+
+    def test_gateway_revoke_does_not_revoke_existing_web_auth_session(self) -> None:
+        web_session_id = f"web-session-{uuid.uuid4().hex[:10]}"
+        auth.create_auth_session(
+            "owner-1",
+            channel="web",
+            session_id=web_session_id,
+            session_family_id="web-family-1",
+            metadata={"source": "gateway-routes-test"},
+            ttl_seconds=3600,
+        )
+        before = auth.get_auth_session(web_session_id)
+        self.assertEqual(str(before.get("status") or "").lower(), "active")
+
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+
+        revoke_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/revoke",
+            json={"reason": "owner_revoked_gateway"},
+        )
+        self.assertEqual(revoke_response.status_code, 200)
+
+        after = auth.get_auth_session(web_session_id)
+        self.assertEqual(str(after.get("status") or "").lower(), "active")
 
     def test_revoke_gateway_shuts_down_live_connection_when_available(self) -> None:
         registration_payload = self._register_gateway()

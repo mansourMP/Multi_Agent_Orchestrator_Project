@@ -26,6 +26,13 @@ def _entitlement_state(**entitlements):
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_account_shell_cache():
+    account_shell_service.ACCOUNT_SHELL_CACHE.clear()
+    yield
+    account_shell_service.ACCOUNT_SHELL_CACHE.clear()
+
+
 @pytest.mark.anyio
 async def test_build_account_shell_payload_uses_membership_truth_and_shell_derivation(
     monkeypatch: pytest.MonkeyPatch,
@@ -376,3 +383,138 @@ async def test_build_account_shell_payload_skips_invalid_memberships_without_fai
     assert payload["account"]["id"] == "user-1"
     assert [item["workspace"]["id"] for item in payload["workspaceMemberships"]] == ["ws-good"]
     assert payload["workspaceMemberships"][0]["membershipVersion"] == "11:12"
+
+
+@pytest.mark.anyio
+async def test_build_account_shell_payload_does_not_call_workspace_role_when_membership_role_present(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    current_user = {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "identity_versions": {"membership_version": 13},
+    }
+    membership_rows = [
+        {
+            "workspace_id": "ws-1",
+            "tenant_id": "tenant-1",
+            "role": "owner",
+            "workspace_name": "Primary Workspace",
+            "updated_at": 14,
+        }
+    ]
+
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "get_authenticated_user_record",
+        lambda current_user: {
+            "id": "user-1",
+            "email": "user@example.com",
+        },
+    )
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "list_authenticated_workspace_memberships",
+        lambda current_user: membership_rows,
+    )
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "get_authenticated_identity_versions",
+        lambda current_user: {"membership_version": 13, "auth_version": 1, "provider_scope_version": 1},
+    )
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "workspace_role",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("workspace_role should not be called")),
+    )
+
+    async def fake_get_workspace_by_id(_workspace_id: str):
+        return {
+            "workspace_id": "ws-1",
+            "tenant_id": "tenant-1",
+            "name": "Primary Workspace",
+            "workspace_type": "personal",
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(
+        account_shell_service.control_plane_repository,
+        "get_workspace_by_id",
+        fake_get_workspace_by_id,
+    )
+    monkeypatch.setattr(
+        account_shell_service.entitlements_service,
+        "resolve_workspace_entitlement_state_for_workspace_id",
+        lambda workspace_id, workspace=None: _entitlement_state(mobile_app_enabled=True),
+    )
+
+    payload = await account_shell_service.build_account_shell_payload(current_user)
+
+    assert payload["workspaceMemberships"][0]["role"] == "owner"
+
+
+@pytest.mark.anyio
+async def test_build_account_shell_payload_reuses_short_ttl_cache_for_identical_context(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    current_user = {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "identity_versions": {"membership_version": 15, "auth_version": 2, "provider_scope_version": 3},
+    }
+    membership_rows = [
+        {
+            "workspace_id": "ws-1",
+            "tenant_id": "tenant-1",
+            "role": "member",
+            "workspace_name": "Cached Workspace",
+            "updated_at": 100,
+        }
+    ]
+    workspace_fetch_count = {"count": 0}
+
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "get_authenticated_user_record",
+        lambda current_user: {
+            "id": "user-1",
+            "email": "user@example.com",
+        },
+    )
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "list_authenticated_workspace_memberships",
+        lambda current_user: membership_rows,
+    )
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "get_authenticated_identity_versions",
+        lambda current_user: {"membership_version": 15, "auth_version": 2, "provider_scope_version": 3},
+    )
+
+    async def fake_get_workspace_by_id(_workspace_id: str):
+        workspace_fetch_count["count"] += 1
+        return {
+            "workspace_id": "ws-1",
+            "tenant_id": "tenant-1",
+            "name": "Cached Workspace",
+            "workspace_type": "personal",
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(
+        account_shell_service.control_plane_repository,
+        "get_workspace_by_id",
+        fake_get_workspace_by_id,
+    )
+    monkeypatch.setattr(
+        account_shell_service.entitlements_service,
+        "resolve_workspace_entitlement_state_for_workspace_id",
+        lambda workspace_id, workspace=None: _entitlement_state(mobile_app_enabled=True),
+    )
+
+    first_payload = await account_shell_service.build_account_shell_payload(current_user)
+    second_payload = await account_shell_service.build_account_shell_payload(current_user)
+
+    assert workspace_fetch_count["count"] == 1
+    assert first_payload == second_payload

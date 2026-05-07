@@ -22,7 +22,7 @@ export class WorkspaceBootstrapError extends Error {
   }
 }
 
-const TRANSIENT_BOOTSTRAP_STATUSES = new Set([403, 429, 500, 502, 503, 504]);
+const TRANSIENT_BOOTSTRAP_STATUSES = new Set([429, 500, 502, 503, 504]);
 const WORKSPACE_BOOTSTRAP_CACHE_TTL_MS = 5_000;
 const WORKSPACE_BOOTSTRAP_TIMEOUT_MS = 12_000;
 

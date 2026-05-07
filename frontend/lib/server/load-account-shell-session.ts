@@ -11,7 +11,9 @@ import { controlPlaneBaseUrl } from '@/lib/server/control-plane-base-url';
 import type { AccountShellBootstrap } from '@/lib/shell/account-shell-store';
 import { parseAccountShellPayload } from '@/lib/shell/account-shell-payload';
 
-const RETRYABLE_ACCOUNT_SHELL_STATUSES = new Set([403, 429, 500, 502, 503, 504]);
+const RETRYABLE_ACCOUNT_SHELL_STATUSES = new Set([429, 500, 502, 503, 504]);
+const ACCOUNT_SHELL_RESULT_CACHE_TTL_MS = 3_000;
+const accountShellResultCache = new Map<string, { expiresAt: number; value: LoadedAccountShellSession }>();
 const accountShellInFlightRequests = new Map<string, Promise<LoadedAccountShellSession>>();
 
 export type DegradedAccountShellSession = {
@@ -116,6 +118,10 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
       forwardHeaders['x-forwarded-host'] ?? '',
       forwardHeaders['x-forwarded-proto'] ?? '',
     ].join('::');
+    const cached = accountShellResultCache.get(inFlightKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
     const existingRequest = accountShellInFlightRequests.get(inFlightKey);
     if (existingRequest) {
       return existingRequest;
@@ -127,7 +133,12 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
     });
     accountShellInFlightRequests.set(inFlightKey, requestPromise);
     try {
-      return await requestPromise;
+      const resolved = await requestPromise;
+      accountShellResultCache.set(inFlightKey, {
+        value: resolved,
+        expiresAt: Date.now() + ACCOUNT_SHELL_RESULT_CACHE_TTL_MS,
+      });
+      return resolved;
     } finally {
       if (accountShellInFlightRequests.get(inFlightKey) === requestPromise) {
         accountShellInFlightRequests.delete(inFlightKey);

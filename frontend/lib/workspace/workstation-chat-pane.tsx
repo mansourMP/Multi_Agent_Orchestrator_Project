@@ -4740,22 +4740,18 @@ export function WorkstationChatPane() {
                   onResolveApproval={handleResolveCodexApproval}
                 />
               ))}
+
+              {pinnedTimelineCells.map((cell, index) => (
+                <CodexChatCell
+                  key={`pinned:${cell.kind}:${cell.id}:${index}`}
+                  cell={cell}
+                  resolvingApprovalId={resolvingApprovalId}
+                  onResolveApproval={handleResolveCodexApproval}
+                />
+              ))}
             </div>
           </ScrollRegion>
         </section>
-
-        {pinnedTimelineCells.length > 0 ? (
-          <div className="app-chat-live-activity-dock" aria-live="polite">
-            {pinnedTimelineCells.map((cell, index) => (
-              <CodexChatCell
-                key={`pinned:${cell.kind}:${cell.id}:${index}`}
-                cell={cell}
-                resolvingApprovalId={resolvingApprovalId}
-                onResolveApproval={handleResolveCodexApproval}
-              />
-            ))}
-          </div>
-        ) : null}
 
         <div className="app-chat-notices">
           {sendFailureNotice ? (

@@ -204,6 +204,10 @@ function SystemInlineRow({
   state: 'running' | 'done' | 'error';
   dimmed: boolean;
 }) {
+  if (state === 'done') {
+    return null;
+  }
+
   return (
     <article
       data-chat-role="system"
@@ -262,6 +266,10 @@ export function ReasoningSummaryCell({
 }: {
   cell: Extract<CodexTranscriptCell, { kind: 'reasoning_summary' }>;
 }) {
+  if (!cell.isStreaming) {
+    return null;
+  }
+
   const text = cell.text.trim();
   const activityLine = compactSystemDetail(cell.activityLine || compactActivityPreview(text), 'Working');
 

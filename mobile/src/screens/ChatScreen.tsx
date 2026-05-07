@@ -1062,14 +1062,17 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
             paddingBottom: SPACING.md,
             backgroundColor: theme.colors.background,
           }}
+          ListFooterComponent={() => (
+            <>
+              {isLoading ? (
+                <View style={{ paddingHorizontal: SPACING.md, paddingTop: 8 }}>
+                  <KinThinkingIndicator theme={theme} />
+                </View>
+              ) : null}
+            </>
+          )}
           ListEmptyComponent={null}
         />
-
-        {isLoading ? (
-          <View style={{ paddingHorizontal: SPACING.md, paddingTop: 8 }}>
-            <KinThinkingIndicator theme={theme} />
-          </View>
-        ) : null}
 
         <View style={{ paddingBottom: 0 }}>
           <InputBar

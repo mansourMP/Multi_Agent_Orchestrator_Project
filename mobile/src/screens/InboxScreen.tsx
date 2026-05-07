@@ -30,16 +30,16 @@ export default function InboxScreen() {
       title: approval.action || "Action waiting for you",
       subtitle: approval.summary || "Sage is waiting for your decision before it continues.",
       timestamp: approval.requested_at,
-      actionLabel: "Open Agent",
+      actionLabel: "Open Chat",
       onPress: () => router.push("/chats"),
     }));
 
     const runItems: ActivityItem[] = runs.map((run) => ({
       id: `run-${run.run_id}`,
       title: run.summary || "Sage worked on something for you",
-      subtitle: "Open Agent to continue or review it.",
+      subtitle: "Open Chat to continue or review it.",
       timestamp: run.started_at,
-      actionLabel: "Open Agent",
+      actionLabel: "Open Chat",
       onPress: () => router.push("/chats"),
     }));
 

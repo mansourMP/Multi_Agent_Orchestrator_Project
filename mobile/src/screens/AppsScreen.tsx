@@ -80,7 +80,7 @@ function AppShelfCard({
             }}
             numberOfLines={2}
           >
-            {app.description || "Open your installed app."}
+            {app.description || "Open your installed tool."}
           </Text>
         </View>
       </View>
@@ -135,11 +135,11 @@ function DiscoverCard({
           }}
           numberOfLines={3}
         >
-          {app.description || "Open the store view to install this app."}
+          {app.description || "Open Discover to install this tool."}
         </Text>
       </View>
       <Text style={{ fontSize: 11.5, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary }}>
-        {app.category || "Mini App"}
+        {app.category || "Tool"}
       </Text>
     </MotionPressable>
   );
@@ -243,10 +243,10 @@ export default function AppsScreen() {
       showsVerticalScrollIndicator={false}
     >
       <PrimaryScreenHeader
-        title="Apps"
-        subtitle="Installed mini apps and new ones to try."
+        title="Discover"
+        subtitle="Installed tools and new things to try."
         action={{
-          accessibilityLabel: "Open App Store",
+          accessibilityLabel: "Open Discover Store",
           label: "Store",
           icon: "bag-handle-outline",
           onPress: () => router.push("/apps/store"),
@@ -306,10 +306,10 @@ export default function AppsScreen() {
             }}
           >
             <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-              No apps installed yet
+              Nothing installed yet
             </Text>
             <Text style={{ fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary }}>
-              Open the store to install your first mini app.
+              Open the store to install your first tool.
             </Text>
             <ActionButton
               label="Open Store"
@@ -334,7 +334,7 @@ export default function AppsScreen() {
           Discover
         </Text>
         <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-          Explore apps, agents, and marketplace installs from the same place.
+          Explore tools, builds, and marketplace installs from the same place.
         </Text>
       </View>
 
@@ -375,7 +375,7 @@ export default function AppsScreen() {
           }}
         >
           <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            No more apps are available right now
+            Nothing else is available right now
           </Text>
           <Text style={{ fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary }}>
             Your installed shelf stays here. Open the store to check again or install from the broader marketplace.

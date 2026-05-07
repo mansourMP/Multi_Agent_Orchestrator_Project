@@ -290,7 +290,7 @@ export default function LoginScreen() {
   return (
     <MobileScreen>
       <ScreenHeader
-        title="Set up your personal agent"
+        title="Set up Sage"
         subtitle="Sign in to continue on this phone."
       />
 

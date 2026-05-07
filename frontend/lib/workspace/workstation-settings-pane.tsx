@@ -484,12 +484,12 @@ export function WorkstationSettingsPane() {
                   )}
                   <AppSurfaceListItem
                     title="Google sign-in"
-                    subtitle={authProviders.google?.enabled === true ? 'Available on this environment' : 'Not enabled on this environment'}
-                    description="Google is the fastest sign-in path when the environment and runtime are both configured."
+                    subtitle={authProviders.google?.enabled === true ? 'Available for this workspace' : 'Not enabled for this workspace'}
+                    description="Google is the fastest sign-in path when this workspace has it enabled."
                   />
                   <AppSurfaceListItem
                     title="Apple sign-in"
-                    subtitle={authProviders.apple?.enabled === true ? 'Available on this environment' : 'Coming soon on web'}
+                    subtitle={authProviders.apple?.enabled === true ? 'Available for this workspace' : 'Coming soon on web'}
                     description="Apple will appear here as a real method once the web sign-in path is enabled."
                   />
                 </AppSurfaceList>
@@ -508,7 +508,7 @@ export function WorkstationSettingsPane() {
                   value={preferredRuntimeTarget ? preferredRuntimeTarget.label : 'Cloud'}
                 />
                 <FormReadout
-                  label="Local companion"
+                  label="This Computer"
                   value={localCompanionTarget?.online ? 'Connected' : localCompanionTarget ? 'Available but offline' : 'Not detected'}
                 />
                 <FormReadout
@@ -577,7 +577,7 @@ export function WorkstationSettingsPane() {
                     <strong className="settings-detail-card__title">AI model credentials</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    BYOK credentials are stored in the workspace vault and AI model choice should only change the reasoning model.
+                    User-provided AI credentials stay private to this workspace, and model choice should only change the reasoning model.
                   </p>
                 </article>
                 <article className="settings-detail-card">

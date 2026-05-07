@@ -56,7 +56,7 @@ export default function WelcomeScreen() {
               }}
             >
               <Text style={{ color: "#FFFFFF", fontSize: 15, fontFamily: "DMSans_700Bold" }}>
-                Set up your personal agent
+                Set up Sage
               </Text>
             </MotionPressable>
 
@@ -69,7 +69,7 @@ export default function WelcomeScreen() {
               }}
             >
               <Text style={{ color: theme.colors.textSecondary, fontSize: 14, lineHeight: 20 }}>
-                Or explore agents by others
+                Or open Discover
               </Text>
             </MotionPressable>
           </View>

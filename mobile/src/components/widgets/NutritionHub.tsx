@@ -38,7 +38,7 @@ export const NutritionHub: React.FC<NutritionHubProps> = ({ currentCalories, goa
         text: "You are consistent with your protein intake today. Adding 15g more would hit your optimal hypertrophy target.",
         confidence: 94
       }}
-      source="Health Sentinel Agent"
+      source="Health Coach"
     >
       <View style={styles.content}>
         <StatusCard

@@ -86,7 +86,7 @@ export function HeaderSearchButton() {
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 }}>
             <Ionicons name="search-outline" size={28} color={theme.colors.textSecondary} />
             <Text style={{ marginTop: 16, fontSize: 16, color: theme.colors.textSecondary, textAlign: "center", lineHeight: 24 }}>
-              Search agents, files, and conversations
+              Search chats, files, and activity
             </Text>
           </View>
         </View>

@@ -110,7 +110,7 @@ export async function configureNotificationChannelAsync() {
   if (Platform.OS !== "android") return;
 
   await Notifications.setNotificationChannelAsync("agent-alerts", {
-    name: "Agent alerts",
+    name: "Sage alerts",
     importance: Notifications.AndroidImportance.MAX,
     vibrationPattern: [0, 250, 250, 250],
     lightColor: "#111827",

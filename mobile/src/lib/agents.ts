@@ -17,7 +17,7 @@ export const PRIMARY_AGENT: AgentThread = {
   id: "assistant",
   label: "Sage",
   runtimeRole: "private-assistant",
-  subtitle: "Your personal agent for everyday help, plans, and follow-through.",
+  subtitle: "Your personal assistant for everyday help, plans, and follow-through.",
   icon: "sparkles",
   avatarColor: "#111827",
   intro: "I can help you think, plan, write, organize, and keep track of what matters to you.",

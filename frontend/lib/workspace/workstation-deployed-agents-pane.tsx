@@ -259,43 +259,43 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
 }> = [
   {
     id: 'overview',
-    label: 'Overview',
-    description: 'Name the specialist and describe the business job in plain language.',
+    label: 'Basics',
+    description: 'Name the assistant and describe the customer job in plain language.',
   },
   {
     id: 'knowledge',
     label: 'Knowledge',
-    description: 'Attach the menu, catalog, FAQ, sheet, or document source this specialist should trust.',
+    description: 'Add the menu, catalog, FAQ, sheet, or document this assistant should trust.',
   },
   {
     id: 'tools',
-    label: 'Tools',
-    description: 'Choose the minimum tools this specialist can use for the job.',
+    label: 'Actions',
+    description: 'Choose only the simple actions this assistant needs for the job.',
   },
   {
     id: 'channels',
-    label: 'Channels',
-    description: 'Bind the exact customer channel when the specialist is ready for live traffic.',
+    label: 'Customer channel',
+    description: 'Connect the customer inbox or bot when the assistant is ready for live traffic.',
   },
   {
     id: 'memory',
     label: 'Memory',
-    description: 'Decide whether this specialist remembers customers and how much context it can carry.',
+    description: 'Decide whether this assistant remembers customers across conversations.',
   },
   {
     id: 'safety',
     label: 'Safety',
-    description: 'Set escalation, restricted-domain handling, and customer limits.',
+    description: 'Set when this assistant should involve a human.',
   },
   {
     id: 'test',
-    label: 'Test',
-    description: 'Review the launch checklist before creating or saving the specialist.',
+    label: 'Review',
+    description: 'Review the simple launch checklist before creating the assistant.',
   },
   {
     id: 'deploy',
-    label: 'Deploy',
-    description: 'Choose AI model provider, model, budget guardrails, then save or launch when ready.',
+    label: 'Launch settings',
+    description: 'Set spending guardrails. Advanced model and computer choices are optional.',
   },
 ];
 
@@ -363,10 +363,10 @@ const SPECIALIST_OVERLAY_TABS: Array<{
   label: string;
 }> = [
   { id: 'overview', label: 'Overview' },
-  { id: 'tools', label: 'Tools' },
+  { id: 'tools', label: 'Actions' },
   { id: 'memory', label: 'Memory' },
-  { id: 'connectors', label: 'Integrations' },
-  { id: 'analytics', label: 'Analytics' },
+  { id: 'connectors', label: 'Customer channel' },
+  { id: 'analytics', label: 'Results' },
 ];
 
 const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
@@ -407,17 +407,35 @@ const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
 
 const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
   {
+    id: 'shop_assistant',
+    title: 'Shop Assistant',
+    category: 'Retail',
+    icon: 'SA',
+    outcome: 'Answers product questions, checks availability, and captures buyer details.',
+    description: 'Customer assistant for local shops, boutiques, auto-parts stores, and product catalogs.',
+    setupTime: '5 min setup',
+    channelLabel: 'Telegram / WhatsApp',
+    requiredConnectors: ['Customer channel', 'Product catalog'],
+    defaultName: 'Shop Assistant',
+    persona: 'Friendly shop assistant that helps customers choose products and asks before promising availability.',
+    systemPrompt: 'Answer product questions from approved catalog sources, ask clarifying questions when the customer is unsure, capture contact details, and escalate unavailable or uncertain items to a human.',
+    knowledgePlaceholder: 'Paste product catalog links, spreadsheet references, pricing notes, or availability rules here.',
+    selectedToolIds: ['spreadsheet_read', 'spreadsheet_append'],
+    memoryEnabled: true,
+    contextBudgetPreset: 'balanced',
+  },
+  {
     id: 'restaurant_orders',
     title: 'Restaurant Orders',
     category: 'Food service',
     icon: 'RO',
     outcome: 'Answers menu questions and confirms orders.',
-    description: 'Telegram ordering specialist for restaurants, cafes, and local kitchens.',
+    description: 'Ordering assistant for restaurants, cafes, and local kitchens.',
     setupTime: '5 min setup',
     channelLabel: 'Telegram',
     requiredConnectors: ['Telegram bot', 'Menu sheet'],
-    defaultName: 'Restaurant Order Specialist',
-    persona: 'Fast, friendly ordering specialist for a restaurant or cafe.',
+    defaultName: 'Restaurant Order Assistant',
+    persona: 'Fast, friendly ordering assistant for a restaurant or cafe.',
     systemPrompt: 'Answer menu questions, check availability from connected sheets, confirm orders clearly, and escalate uncertain cases to a human.',
     knowledgePlaceholder: 'Paste a menu PDF, Google Sheet, or daily specials source here.',
     selectedToolIds: ['spreadsheet_read', 'spreadsheet_append'],
@@ -425,20 +443,20 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     contextBudgetPreset: 'balanced',
   },
   {
-    id: 'auto_parts_sales',
-    title: 'Auto Parts Sales',
-    category: 'Retail',
-    icon: 'AP',
-    outcome: 'Qualifies car model, part, and availability.',
-    description: 'Sales assistant for shops that answer many Telegram or WhatsApp customer requests.',
-    setupTime: '7 min setup',
-    channelLabel: 'Telegram / WhatsApp',
-    requiredConnectors: ['Customer channel', 'Parts catalog'],
-    defaultName: 'Auto Parts Specialist',
-    persona: 'Practical sales specialist for an auto-parts shop.',
-    systemPrompt: 'Ask for the car make, model, year, and requested part. Check connected catalogs before answering availability, price, or next steps. Escalate unclear fitment to a human.',
-    knowledgePlaceholder: 'Add spreadsheet://parts-catalog or paste the catalog source customers should be matched against.',
-    selectedToolIds: ['spreadsheet_read', 'http_request'],
+    id: 'dental_receptionist',
+    title: 'Dental Receptionist',
+    category: 'Healthcare admin',
+    icon: 'DR',
+    outcome: 'Answers clinic FAQs, collects appointment needs, and routes urgent cases.',
+    description: 'Front-desk assistant for dental clinics that need safe intake, FAQ answers, and booking handoff.',
+    setupTime: '6 min setup',
+    channelLabel: 'Telegram / Email',
+    requiredConnectors: ['Clinic FAQ', 'Calendar'],
+    defaultName: 'Dental Receptionist',
+    persona: 'Polite dental front-desk assistant that answers only approved clinic information and routes medical uncertainty to staff.',
+    systemPrompt: 'Answer clinic FAQs from approved knowledge, collect preferred appointment times and contact details, avoid diagnosis or medical advice, and escalate pain, emergency, billing, or uncertain cases to the clinic team.',
+    knowledgePlaceholder: 'Paste clinic hours, services, insurance notes, booking rules, and emergency routing instructions here.',
+    selectedToolIds: ['calendar_write', 'gmail_send'],
     memoryEnabled: true,
     contextBudgetPreset: 'balanced',
   },
@@ -448,12 +466,12 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     category: 'Sales',
     icon: 'RE',
     outcome: 'Captures requirements and books follow-up.',
-    description: 'Lead intake specialist for brokers, agents, and property teams.',
+    description: 'Lead intake assistant for brokers, agents, and property teams.',
     setupTime: '6 min setup',
     channelLabel: 'Telegram / Email',
     requiredConnectors: ['Lead channel', 'Calendar'],
-    defaultName: 'Real Estate Lead Specialist',
-    persona: 'Calm, concise lead qualification specialist for real estate inquiries.',
+    defaultName: 'Real Estate Lead Assistant',
+    persona: 'Calm, concise lead qualification assistant for real estate inquiries.',
     systemPrompt: 'Ask for location, budget, timing, property type, and contact preference. Summarize qualified leads and schedule follow-up when calendar access is available.',
     knowledgePlaceholder: 'Paste listing sheet, neighborhood notes, or qualification rules here.',
     selectedToolIds: ['calendar_write', 'gmail_send', 'spreadsheet_append'],
@@ -466,12 +484,12 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     category: 'Customer support',
     icon: 'SF',
     outcome: 'Answers common questions and escalates edge cases.',
-    description: 'Support specialist for product, account, delivery, or policy questions.',
+    description: 'FAQ assistant for product, account, delivery, or policy questions.',
     setupTime: '4 min setup',
     channelLabel: 'Email / Chat',
     requiredConnectors: ['FAQ source', 'Support inbox'],
-    defaultName: 'Support FAQ Specialist',
-    persona: 'Clear support specialist that answers from approved knowledge only.',
+    defaultName: 'Support FAQ Assistant',
+    persona: 'Clear support assistant that answers from approved knowledge only.',
     systemPrompt: 'Answer only from approved knowledge sources. Ask clarifying questions when needed and escalate unsupported or account-sensitive issues to a human.',
     knowledgePlaceholder: 'Paste help center links, policy docs, or faq:// references here.',
     selectedToolIds: ['web_search', 'http_request', 'gmail_send'],
@@ -484,12 +502,12 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     category: 'Scheduling',
     icon: 'AB',
     outcome: 'Finds a time, confirms, and writes calendar events.',
-    description: 'Booking specialist for salons, clinics, services, and local businesses.',
+    description: 'Booking assistant for salons, clinics, services, and local businesses.',
     setupTime: '5 min setup',
     channelLabel: 'Telegram / Email',
     requiredConnectors: ['Calendar', 'Customer channel'],
-    defaultName: 'Appointment Booking Specialist',
-    persona: 'Polite scheduling specialist that confirms details before booking.',
+    defaultName: 'Appointment Booking Assistant',
+    persona: 'Polite scheduling assistant that confirms details before booking.',
     systemPrompt: 'Collect service type, preferred date and time, customer contact details, and confirmation. Write calendar events only after details are clear.',
     knowledgePlaceholder: 'Add service list, booking rules, and availability source here.',
     selectedToolIds: ['calendar_write', 'gmail_send'],
@@ -502,11 +520,11 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     category: 'Catalog',
     icon: 'SC',
     outcome: 'Looks up rows and answers from a live catalog.',
-    description: 'Specialist for products, SKUs, menus, inventory, or internal catalogs.',
+    description: 'Assistant for products, SKUs, menus, inventory, or internal catalogs.',
     setupTime: '3 min setup',
     channelLabel: 'Any channel',
     requiredConnectors: ['Spreadsheet'],
-    defaultName: 'Catalog Specialist',
+    defaultName: 'Catalog Assistant',
     persona: 'Accurate catalog assistant that prefers exact matches and asks when ambiguous.',
     systemPrompt: 'Use connected spreadsheets as the source of truth. Return exact row details when possible and ask for clarification when there are multiple matches.',
     knowledgePlaceholder: 'Add sheet://catalog or paste the spreadsheet reference here.',
@@ -524,8 +542,8 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     setupTime: '5 min setup',
     channelLabel: 'Telegram',
     requiredConnectors: ['Telegram bot', 'Sales notes'],
-    defaultName: 'Telegram Sales Specialist',
-    persona: 'Direct, friendly sales specialist for Telegram customer conversations.',
+    defaultName: 'Telegram Sales Assistant',
+    persona: 'Direct, friendly sales assistant for Telegram customer conversations.',
     systemPrompt: 'Answer product questions, qualify intent, capture contact details, and escalate high-intent or uncertain cases to a human.',
     knowledgePlaceholder: 'Paste product pages, pricing notes, or sales sheet references here.',
     selectedToolIds: ['spreadsheet_read', 'web_search', 'gmail_send'],
@@ -538,12 +556,12 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     category: 'Engineering',
     icon: 'GT',
     outcome: 'Summarizes issues and routes work.',
-    description: 'Engineering specialist for issue triage, release notes, and team summaries.',
+    description: 'Engineering assistant for issue triage, release notes, and team summaries.',
     setupTime: '8 min setup',
     channelLabel: 'GitHub / Email',
     requiredConnectors: ['GitHub', 'Email'],
-    defaultName: 'GitHub Triage Specialist',
-    persona: 'Precise engineering triage specialist that keeps summaries factual and actionable.',
+    defaultName: 'GitHub Triage Assistant',
+    persona: 'Precise engineering triage assistant that keeps summaries factual and actionable.',
     systemPrompt: 'Summarize issues, extract blockers, identify owners when available, and avoid changing code unless explicitly approved.',
     knowledgePlaceholder: 'Paste repository, issue board, or release-note source references here.',
     selectedToolIds: ['http_request', 'gmail_send'],
@@ -553,12 +571,18 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
 ];
 
 const DEFAULT_STUDIO_TEMPLATE = STUDIO_TEMPLATES[0]!;
+const PRIMARY_STUDIO_TEMPLATE_IDS = new Set([
+  'shop_assistant',
+  'restaurant_orders',
+  'dental_receptionist',
+  'support_faq',
+]);
 const CUSTOM_STUDIO_TEMPLATE: StudioTemplate = {
   id: 'custom_agent',
   title: 'Custom Agent',
   category: 'Blank',
   icon: '+',
-  outcome: 'Build a private specialist from your own instructions.',
+  outcome: 'Build a private assistant from your own instructions.',
   description: 'Start with a clean draft when none of the templates match the job.',
   setupTime: 'Custom setup',
   channelLabel: 'Choose later',
@@ -566,7 +590,7 @@ const CUSTOM_STUDIO_TEMPLATE: StudioTemplate = {
   defaultName: '',
   persona: '',
   systemPrompt: '',
-  knowledgePlaceholder: 'Add the trusted sources this specialist should use.',
+  knowledgePlaceholder: 'Add the trusted sources this assistant should use.',
   selectedToolIds: ['web_search'],
   memoryEnabled: false,
   contextBudgetPreset: 'balanced',
@@ -889,8 +913,8 @@ function mapStudioSeedToTemplate(seed: StudioProofAgentSeedRecord): StudioTempla
       .slice(0, 2)
       .map((part) => part.charAt(0).toUpperCase())
       .join('') || 'AI',
-    outcome: readString(seed.description, 'Customize and deploy this specialist.'),
-    description: readString(seed.description, 'Backend-defined specialist template.'),
+    outcome: readString(seed.description, 'Customize and deploy this assistant.'),
+    description: readString(seed.description, 'Backend-defined assistant template.'),
     setupTime: '5 min setup',
     channelLabel: channels.map((item) => readString(item.label, readString(item.channel_key))).filter(Boolean).slice(0, 3).join(' / ') || 'Choose later',
     requiredConnectors: requiredConnectors.length ? requiredConnectors.slice(0, 4) : ['Connect live data'],
@@ -914,8 +938,8 @@ function normalizeStudioTemplates(payload: unknown): StudioTemplate[] {
     return [...STUDIO_TEMPLATES];
   }
   return [
-    ...seedTemplates,
-    ...STUDIO_TEMPLATES.filter((template) => !seedTemplates.some((seed) => seed.id === template.id)),
+    ...STUDIO_TEMPLATES,
+    ...seedTemplates.filter((seed) => !STUDIO_TEMPLATES.some((template) => template.id === seed.id)),
   ];
 }
 
@@ -1174,7 +1198,7 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   return {
     name: readString(agent?.name),
     avatar: readString(agent?.avatar),
-    persona: readString(agent?.persona, isNewDraft ? 'Fast, friendly Telegram ordering specialist for a cafe or restaurant.' : ''),
+    persona: readString(agent?.persona, isNewDraft ? 'Fast, friendly customer assistant for a cafe, clinic, shop, or support desk.' : ''),
     systemPrompt: readString(
       agent?.system_prompt,
       isNewDraft
@@ -1571,7 +1595,7 @@ function summarizeStudioErrorMessage(message: string | null): string | null {
 function StudioTemplateCard({
   template,
   onSelect,
-  actionLabel = 'Use template',
+  actionLabel = 'Create assistant',
 }: {
   template: StudioTemplate;
   onSelect: (templateId: string) => void;
@@ -1606,7 +1630,7 @@ function DeployedAgentsSkeleton() {
   return (
     <ListDetailColumns
       primary={(
-        <ListDetailPanel eyebrow="Specialists" title="Loading specialists">
+        <ListDetailPanel eyebrow="Assistants" title="Loading assistants">
           <SkeletonBlock height="3rem" />
           <SkeletonBlock height="3rem" />
           <SkeletonBlock height="3rem" />
@@ -1614,7 +1638,7 @@ function DeployedAgentsSkeleton() {
       )}
       secondary={(
         <div className="app-stack-4">
-          <ListDetailPanel eyebrow="Detail" title="Loading specialist details">
+          <ListDetailPanel eyebrow="Detail" title="Loading assistant details">
             <SkeletonBlock height="4rem" />
             <SkeletonBlock height="5rem" />
           </ListDetailPanel>
@@ -1763,6 +1787,14 @@ export function WorkstationDeployedAgentsPane({
   const selectedStudioTemplate = useMemo(
     () => studioTemplateById(selectedTemplateId, studioTemplates),
     [selectedTemplateId, studioTemplates],
+  );
+  const primaryStudioTemplates = useMemo(
+    () => studioTemplates.filter((template) => PRIMARY_STUDIO_TEMPLATE_IDS.has(template.id)),
+    [studioTemplates],
+  );
+  const additionalStudioTemplates = useMemo(
+    () => studioTemplates.filter((template) => !PRIMARY_STUDIO_TEMPLATE_IDS.has(template.id)),
+    [studioTemplates],
   );
   const filteredConversations = useMemo(
     () => conversations.filter((conversation) => matchesConversationFilters(conversation, conversationFilters)),
@@ -2352,7 +2384,7 @@ export function WorkstationDeployedAgentsPane({
       return;
     }
     if (!wizardState.modelId.trim()) {
-      setErrorMessage('Choose a model before saving this specialist.');
+      setErrorMessage('Choose a model before saving this assistant.');
       return;
     }
     if (dailyMessageLimit) {
@@ -2396,7 +2428,7 @@ export function WorkstationDeployedAgentsPane({
     };
 
     if (!payload.name) {
-      setErrorMessage('A specialist needs a public name before it can be saved.');
+      setErrorMessage('An assistant needs a public name before it can be saved.');
       return;
     }
 
@@ -2411,7 +2443,7 @@ export function WorkstationDeployedAgentsPane({
         setSelectedAgentDetail(record);
         setSelectedAgentAnalytics(null);
         setSelectedAgentId(createdId || null);
-        setStatusMessage(`Created draft specialist ${readString(record.name, payload.name)}.`);
+        setStatusMessage(`Created assistant ${readString(record.name, payload.name)}.`);
         if (createdId) {
           await Promise.all([
             loadAgentAnalytics(createdId),
@@ -2422,7 +2454,7 @@ export function WorkstationDeployedAgentsPane({
       } else {
         const agentId = readString(selectedAgent?.id);
         if (!agentId) {
-          throw new Error('Select a specialist before editing it.');
+          throw new Error('Select an assistant before editing it.');
         }
         const updated = await services.client.updateDeployedAgent({
           deployedAgentId: agentId,
@@ -2436,11 +2468,11 @@ export function WorkstationDeployedAgentsPane({
           loadAgentAnalytics(agentId),
           loadTelegramReadiness(agentId),
         ]);
-        setStatusMessage(`Updated ${readString(record.name, 'specialist')} settings.`);
+        setStatusMessage(`Updated ${readString(record.name, 'assistant')} settings.`);
       }
       setIsWizardOpen(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'The specialist could not be saved.');
+      setErrorMessage(error instanceof Error ? error.message : 'The assistant could not be saved.');
     } finally {
       setIsSubmittingWizard(false);
     }
@@ -2480,8 +2512,8 @@ export function WorkstationDeployedAgentsPane({
       setSelectedAgentDetail(record);
       setStatusMessage(
         action === 'deploy'
-          ? `${readString(record.name, 'Specialist')} is now live on its configured channels.`
-          : `${readString(record.name, 'Specialist')} is paused and will no longer reply to live customer messages.`,
+          ? `${readString(record.name, 'Assistant')} is now live on its configured channels.`
+          : `${readString(record.name, 'Assistant')} is paused and will no longer reply to live customer messages.`,
       );
       await Promise.all([
         refreshAgentAnalytics(upsertAgentRecord(agents, record)),
@@ -2516,7 +2548,7 @@ export function WorkstationDeployedAgentsPane({
       const record = (updated ?? {}) as DeployedAgentRecord;
       setAgents((current) => upsertAgentRecord(current, record));
       setSelectedAgentDetail(record);
-      setStatusMessage(`Updated ${readString(record.name, 'specialist')}.`);
+      setStatusMessage(`Updated ${readString(record.name, 'assistant')}.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Overview changes could not be saved.');
     } finally {
@@ -2563,9 +2595,9 @@ export function WorkstationDeployedAgentsPane({
       setAgents((current) => upsertAgentRecord(current, record));
       setSelectedAgentDetail(record);
       setDetailConfigDraft(buildDetailConfigDraft(record));
-      setStatusMessage(`Updated ${readString(record.name, 'specialist')} tools and memory settings.`);
+      setStatusMessage(`Updated ${readString(record.name, 'assistant')} actions and memory settings.`);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Tools and memory settings could not be saved.');
+      setErrorMessage(error instanceof Error ? error.message : 'Actions and memory settings could not be saved.');
     } finally {
       setIsSavingDetailConfig(false);
     }
@@ -2577,15 +2609,15 @@ export function WorkstationDeployedAgentsPane({
     : [];
   const knowledgeSourceCount = selectedKnowledgeSources.length;
   const studioTitle = currentStudioSubview === 'agents'
-    ? 'Build · Studio'
+    ? 'Create assistants'
     : currentStudioSubview === 'inbox'
-      ? 'Build · Studio Inbox'
-      : 'Build · Studio Launch';
+      ? 'Assistant inbox'
+      : 'Assistant launch';
   const studioSubtitle = currentStudioSubview === 'agents'
-    ? 'Private specialists for business jobs. Sage stays the visible personal agent.'
+    ? 'Pick a business template, add your trusted info, then create one customer assistant.'
     : currentStudioSubview === 'inbox'
-      ? 'Customer sessions and escalations for Studio specialists working behind Sage.'
-      : 'Launch checks, AI model choice, and go-live controls for private specialists.';
+      ? 'Customer sessions and handoffs for assistants that are already working.'
+      : 'Go-live checks, spending guardrails, and optional advanced settings.';
   const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
   const showReadinessPanel = currentStudioSubview === 'deploy';
   const showDetailPanel = currentStudioSubview === 'deploy';
@@ -2639,7 +2671,7 @@ export function WorkstationDeployedAgentsPane({
       return;
     }
     const confirmed = window.confirm(
-      `Delete saved conversation data for ${selectedExternalUserLabel} from this specialist? This removes message history, memory summaries, and usage records for that user.`,
+      `Delete saved conversation data for ${selectedExternalUserLabel} from this assistant? This removes message history, memory summaries, and usage records for that user.`,
     );
     if (!confirmed) {
       return;
@@ -2660,7 +2692,7 @@ export function WorkstationDeployedAgentsPane({
         loadAgentAnalytics(agentId),
         loadMemoryEntries(agentId),
       ]);
-      setStatusMessage(`Deleted saved data for ${selectedExternalUserLabel} from ${readString(selectedAgent?.name, 'this specialist')}.`);
+      setStatusMessage(`Deleted saved data for ${selectedExternalUserLabel} from ${readString(selectedAgent?.name, 'this assistant')}.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Customer data could not be deleted.');
     } finally {
@@ -2694,7 +2726,7 @@ export function WorkstationDeployedAgentsPane({
         subtitle={studioSubtitle}
       >
         {statusMessage ? (
-          <StateBanner tone="success" title="Specialist updated">
+          <StateBanner tone="success" title="Assistant updated">
             {statusMessage}
           </StateBanner>
         ) : null}
@@ -2718,28 +2750,28 @@ export function WorkstationDeployedAgentsPane({
                   <>
                     <ListDetailPanel
                       className="studio-panel studio-panel--demo-path"
-                      eyebrow="Demo path"
-                      title="Build one working business specialist"
-                      subtitle="Start with a template, create a private draft, test it in chat, then deploy and use Activity plus credits as the proof path."
+                      eyebrow="Start here"
+                      title="Create one working business assistant"
+                      subtitle="Choose a common business job, add the facts it should trust, test privately, then go live."
                       actions={(
                         <AppButton type="button" tone="primary" onClick={() => openCreateWizard(selectedTemplateId)}>
-                          Create specialist
+                          Create assistant
                         </AppButton>
                       )}
                     >
-                      <div className="deployed-agents-card__badges" aria-label="Business specialist demo steps">
-                        <span className="deployed-agents-card__badge">1. Choose template</span>
-                        <span className="deployed-agents-card__badge">2. Test privately</span>
-                        <span className="deployed-agents-card__badge">3. Go live</span>
-                        <span className="deployed-agents-card__badge">4. Show Activity proof</span>
+                      <div className="deployed-agents-card__badges" aria-label="Business assistant creation steps">
+                        <span className="deployed-agents-card__badge">1. Pick business</span>
+                        <span className="deployed-agents-card__badge">2. Add trusted info</span>
+                        <span className="deployed-agents-card__badge">3. Test privately</span>
+                        <span className="deployed-agents-card__badge">4. Go live</span>
                       </div>
                     </ListDetailPanel>
 
                     <ListDetailPanel
                       className="studio-panel studio-panel--templates"
                       eyebrow="Templates"
-                      title="Start from a specialist template"
-                      subtitle="Pick the business job first. Build creates a private specialist that works behind Sage, with tools, memory, messaging, and go-live settings kept in focused tabs."
+                      title="What do you need?"
+                      subtitle="Most owners start with one of these four paths: shop assistant, restaurant orders, dental receptionist, or support FAQ."
                       actions={currentStudioSubview === 'agents' ? (
                         <div className="app-inline-actions app-inline-actions--tight">
                           <AppButton
@@ -2761,36 +2793,40 @@ export function WorkstationDeployedAgentsPane({
                       ) : undefined}
                     >
                       <div className="studio-template-grid" data-studio-template-grid="true">
-                        {studioTemplates.map((template) => (
+                        {primaryStudioTemplates.map((template) => (
                           <StudioTemplateCard
                             key={template.id}
                             template={template}
                             onSelect={openCreateWizard}
                           />
                         ))}
-                        <StudioTemplateCard
-                          template={CUSTOM_STUDIO_TEMPLATE}
-                          onSelect={openCreateWizard}
-                          actionLabel="Build custom"
-                        />
                       </div>
+                      {additionalStudioTemplates.length > 0 ? (
+                        <details className="app-stack-3">
+                          <summary>More assistant types</summary>
+                          <div className="studio-template-grid" data-studio-template-grid="more">
+                            {additionalStudioTemplates.map((template) => (
+                              <StudioTemplateCard
+                                key={template.id}
+                                template={template}
+                                onSelect={openCreateWizard}
+                              />
+                            ))}
+                          </div>
+                        </details>
+                      ) : null}
                     </ListDetailPanel>
 
                     <ListDetailPanel
                       className="studio-panel studio-panel--roster"
-                      eyebrow="Agents"
-                      title="My specialists"
-                      subtitle={`${agents.length} in this workspace. Open one to manage overview, tools, memory, channels, and analytics.`}
-                      actions={currentStudioSubview === 'agents' ? (
-                        <AppButton type="button" tone="secondary" onClick={() => openCreateWizard()}>
-                          Blank draft
-                        </AppButton>
-                      ) : undefined}
+                      eyebrow="Assistants"
+                      title="My assistants"
+                      subtitle={`${agents.length} in this workspace. Open one to manage its purpose, customer channel, and results.`}
                     >
                       {agents.length === 0 ? (
                         <EmptyPanel
-                          title="No specialists yet"
-                          body="Choose a template above to create a draft. AI model, billing, and Discover settings stay out of the first step."
+                          title="No assistants yet"
+                          body="Choose one of the templates above, then use Create assistant. Advanced model and computer settings stay out of the way."
                         />
                       ) : (
                       <div className="deployed-agents-card-grid">
@@ -2874,12 +2910,12 @@ export function WorkstationDeployedAgentsPane({
                     className="studio-panel studio-panel--readiness"
                     eyebrow="Readiness"
                     title="Launch readiness"
-                    subtitle="The live channel, runtime target, and go-live posture for the selected specialist."
+                    subtitle="The live channel and go-live posture for the selected assistant."
                   >
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />
                       <FormReadout label="Channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
-                      <FormReadout label="Computer target" value={humanizeToken(selectedAgent?.runtime_target, 'Cloud')} />
+                      <FormReadout label="Hosting" value={humanizeToken(selectedAgent?.runtime_target, 'Cloud')} />
                     </FormGrid>
                   </ListDetailPanel>
                 ) : null}
@@ -2891,8 +2927,8 @@ export function WorkstationDeployedAgentsPane({
                 <ListDetailPanel
                   className="studio-panel studio-panel--detail"
                   eyebrow="Detail"
-                  title={selectedAgent ? readString(selectedAgent.name, 'Specialist details') : 'Specialist details'}
-                  subtitle={selectedAgent ? 'Launch state, tools, memory, and cost posture for the selected specialist.' : 'Select a specialist.'}
+                  title={selectedAgent ? readString(selectedAgent.name, 'Assistant details') : 'Assistant details'}
+                  subtitle={selectedAgent ? 'Launch state, actions, memory, and cost posture for the selected assistant.' : 'Select an assistant.'}
                   actions={selectedAgent ? (
                     <div className="app-inline-actions app-inline-actions--tight">
                       <AppButton type="button" tone="secondary" onClick={openEditWizard}>
@@ -2951,7 +2987,7 @@ export function WorkstationDeployedAgentsPane({
                         </div>
                       </div>
                       <div className="studio-template-detail__group">
-                        <span className="studio-template-detail__label">Suggested tools</span>
+                        <span className="studio-template-detail__label">Suggested actions</span>
                         <div className="studio-template-card__tags">
                           {selectedStudioTemplate.selectedToolIds.map((toolId) => (
                             <span key={toolId} className="studio-template-card__tag">{toolLabel(toolId)}</span>
@@ -2961,7 +2997,7 @@ export function WorkstationDeployedAgentsPane({
                       <div className="studio-template-detail__group">
                         <span className="studio-template-detail__label">Launch checklist</span>
                         <ul className="studio-template-detail__checklist">
-                          <li>Name the specialist and review the behavior.</li>
+                          <li>Name the assistant and review the behavior.</li>
                           <li>Add the trusted source of truth.</li>
                           <li>Connect the customer channel only when ready.</li>
                           <li>Test privately before deploying live traffic.</li>
@@ -2969,7 +3005,7 @@ export function WorkstationDeployedAgentsPane({
                       </div>
                       <div className="app-inline-actions app-inline-actions--tight">
                         <AppButton type="button" onClick={() => openCreateWizard(selectedStudioTemplate.id)}>
-                          {selectedStudioTemplate.id === CUSTOM_STUDIO_TEMPLATE.id ? 'Build custom agent' : 'Use this template'}
+                          Create assistant
                         </AppButton>
                       </div>
                     </div>
@@ -2996,7 +3032,7 @@ export function WorkstationDeployedAgentsPane({
                       <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
                         <FormReadout label="State" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
                         <FormReadout label="Run environment" value={humanizeToken(selectedAgent.runtime_target, 'Cloud')} />
-                        <FormReadout label="AI model provider" value={humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
+                        <FormReadout label="AI model" value={humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
                         <FormReadout label="Model" value={selectedModelId(selectedAgent) || 'Not pinned'} />
                         <FormReadout label="Billing plan" value={humanizeToken(selectedAgent.billing_plan, 'Free')} />
                         <FormReadout
@@ -3015,17 +3051,17 @@ export function WorkstationDeployedAgentsPane({
                             ?? readRecord(selectedAgent.metadata).monthly_cost_cap_usd,
                           )}
                         />
-                        <FormReadout label="Specialist id" value={readString(selectedAgent.backing_install_id, 'pending')} />
+                        <FormReadout label="Assistant id" value={readString(selectedAgent.backing_install_id, 'pending')} />
                       </FormGrid>
                       <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
                         <FormReadout label="Live channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
                         <FormReadout
-                          label="Allowed tools"
+                          label="Allowed actions"
                           value={
                             normalizeToolIds(readRecord(readRecord(selectedAgent.config).tool_policy).enabled_tools ?? readRecord(selectedAgent.metadata).selected_tool_ids)
                               .map((item) => toolLabel(item))
                               .join(', ')
-                            || 'No tools selected'
+                            || 'No actions selected'
                           }
                         />
                         <FormReadout
@@ -3069,7 +3105,7 @@ export function WorkstationDeployedAgentsPane({
                       </div>
                       {detailConfigDraft ? (
                         <>
-                          <FormField label="Tools" hint="Choose the minimum allowed tools for this specialist after creation.">
+                          <FormField label="Actions" hint="Choose the minimum allowed actions for this assistant after creation.">
                             <div className="app-inline-actions studio-inline-wrap">
                               {STUDIO_TOOL_OPTIONS.map((tool) => {
                                 const selected = detailConfigDraft.selectedToolIds.includes(tool.id);
@@ -3100,7 +3136,7 @@ export function WorkstationDeployedAgentsPane({
                             </div>
                           </FormField>
                           <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                            <FormField label="Persistent memory" hint="Enable memory and adjust retention after the specialist has been created.">
+                            <FormField label="Persistent memory" hint="Enable memory and adjust retention after the assistant has been created.">
                               <FormSelect
                                 value={detailConfigDraft.memoryEnabled ? 'enabled' : 'disabled'}
                                 onChange={(event) => {
@@ -3118,7 +3154,7 @@ export function WorkstationDeployedAgentsPane({
                                 setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current);
                               }}
                             />
-                            <FormField label="Retention" hint="Controls how long this specialist can retain reusable memory state.">
+                            <FormField label="Retention" hint="Controls how long this assistant can retain reusable memory state.">
                               <FormSelect
                                 value={detailConfigDraft.retentionPreset}
                                 onChange={(event) => {
@@ -3143,10 +3179,10 @@ export function WorkstationDeployedAgentsPane({
                               {isSavingDetailConfig ? 'Saving…' : 'Save'}
                             </AppButton>
                             <FormReadout
-                              label="Selected tools"
+                              label="Selected actions"
                               value={detailConfigDraft.selectedToolIds.length > 0
                                 ? detailConfigDraft.selectedToolIds.map((toolId) => toolLabel(toolId)).join(', ')
-                                : 'No tools selected'}
+                                : 'No actions selected'}
                             />
                           </div>
                         </>
@@ -3169,12 +3205,12 @@ export function WorkstationDeployedAgentsPane({
                   className="studio-panel studio-panel--inbox"
                   eyebrow="Conversations"
                   title="Live conversation inbox"
-                  subtitle="Open customer sessions for the selected specialist, with filters for channel, escalation, and outcome."
+                  subtitle="Open customer sessions for the selected assistant, with filters for channel, handoff, and outcome."
                 >
                   {!selectedAgent ? (
                     <EmptyPanel
-                      title="Select a specialist first"
-                      body="Pick a specialist to open its inbox and review customer sessions."
+                      title="Select an assistant first"
+                      body="Pick an assistant to open its inbox and review customer sessions."
                     />
                   ) : isLoadingConversations ? (
                     <>
@@ -3384,7 +3420,7 @@ export function WorkstationDeployedAgentsPane({
         )}
 
         {currentStudioSubview === 'agents' && overlayAgent ? (
-          <div className="deployed-agents-overlay" role="dialog" aria-modal="true" aria-label="Specialist settings">
+          <div className="deployed-agents-overlay" role="dialog" aria-modal="true" aria-label="Assistant settings">
             <div className="deployed-agents-overlay__shell">
               <div className="deployed-agents-overlay__header">
                 <div className="deployed-agents-overlay__identity">
@@ -3392,7 +3428,7 @@ export function WorkstationDeployedAgentsPane({
                     {readString(overlayAgent.name, 'S').charAt(0).toUpperCase()}
                   </span>
                   <div className="deployed-agents-overlay__copy">
-                    <strong className="deployed-agents-overlay__title">{readString(overlayAgent.name, 'Specialist')}</strong>
+                    <strong className="deployed-agents-overlay__title">{readString(overlayAgent.name, 'Assistant')}</strong>
                     <div className="deployed-agents-overlay__status-row">
                       <span className={joinClassNames(
                         'deployed-agents-card__status',
@@ -3407,13 +3443,13 @@ export function WorkstationDeployedAgentsPane({
                   type="button"
                   className="deployed-agents-overlay__close"
                   onClick={() => setOverlayAgentId(null)}
-                  aria-label="Close specialist settings"
+                  aria-label="Close assistant settings"
                 >
                   <X size={16} strokeWidth={1.9} aria-hidden="true" />
                 </button>
               </div>
 
-              <div className="deployed-agents-overlay__tabs" role="tablist" aria-label="Specialist settings tabs">
+              <div className="deployed-agents-overlay__tabs" role="tablist" aria-label="Assistant settings tabs">
                 {SPECIALIST_OVERLAY_TABS.map((tab) => (
                   <button
                     key={tab.id}
@@ -3439,7 +3475,7 @@ export function WorkstationDeployedAgentsPane({
                         <FormInput
                           value={overlayName}
                           onChange={(event) => setOverlayName(event.currentTarget.value)}
-                          placeholder="Specialist name"
+                          placeholder="Assistant name"
                         />
                       </FormField>
                       <FormField label="Last active">
@@ -3632,7 +3668,7 @@ export function WorkstationDeployedAgentsPane({
                         <div className="deployed-agents-overlay__toggle-row">
                           <div className="sage-tool-row__copy">
                             <strong className="sage-tool-row__title">Persistent memory</strong>
-                            <p className="sage-tool-row__description">Keep reusable specialist context across customer sessions.</p>
+                            <p className="sage-tool-row__description">Keep reusable assistant context across customer sessions.</p>
                           </div>
                           <button
                             type="button"
@@ -3674,7 +3710,7 @@ export function WorkstationDeployedAgentsPane({
                               <SkeletonBlock height="4rem" />
                             </>
                           ) : overlayMemoryEntries.length === 0 ? (
-                            <div className="deployed-agents-overlay__empty">No customer memory yet — memory builds as customers chat with this specialist.</div>
+                            <div className="deployed-agents-overlay__empty">No customer memory yet — memory builds as customers chat with this assistant.</div>
                           ) : overlayMemoryEntries.map((entry) => (
                             <article key={readString(entry.id, `${readString(entry.channel)}-${readString(entry.external_user_id)}`)} className="deployed-agents-overlay__memory-entry">
                               <strong className="deployed-agents-overlay__memory-title">{truncateExternalUserId(entry.external_user_id)}</strong>
@@ -3734,11 +3770,11 @@ export function WorkstationDeployedAgentsPane({
 
       <CommandSheet
         open={isWizardOpen}
-        title={wizardMode === 'create' ? `New ${selectedStudioTemplate.title}` : 'Edit Specialist'}
+        title={wizardMode === 'create' ? `Create assistant · ${selectedStudioTemplate.title}` : 'Edit assistant'}
         description={
           wizardMode === 'create'
-            ? 'Create a draft from a template. Advanced tools, memory, channel, AI model, and go-live settings stay in focused steps.'
-            : 'Adjust the specialist configuration, customer channel, and launch settings.'
+            ? 'Start from the template, add the business facts, then create the assistant. Advanced choices stay optional.'
+            : 'Adjust the assistant, customer channel, and launch settings.'
         }
         onClose={closeWizard}
           actions={(
@@ -3769,7 +3805,7 @@ export function WorkstationDeployedAgentsPane({
                   }}
                   disabled={isSubmittingWizard}
                 >
-                  {wizardMode === 'create' ? 'Create Draft' : 'Save'}
+                  {wizardMode === 'create' ? 'Create assistant' : 'Save'}
                 </AppButton>
               )}
             </div>
@@ -3815,14 +3851,14 @@ export function WorkstationDeployedAgentsPane({
 
                     <div className="deployed-agents-wizard__quickstart">
                       <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                        <FormField label="Specialist name" hint="The name your team sees in Build.">
+                        <FormField label="Assistant name" hint="The name your team sees for this customer assistant.">
                           <FormInput
                             value={wizardState.name}
                             onChange={(event) => setWizardField('name', event.currentTarget.value)}
                             placeholder={selectedStudioTemplate.defaultName}
                           />
                         </FormField>
-                        <FormField label="Primary customer channel" hint="You can connect the exact bot or inbox in the next step.">
+                        <FormField label="Primary customer channel" hint="You can connect the exact bot or inbox later.">
                           <FormSelect
                             value={wizardState.telegramEnabled ? 'telegram' : 'draft'}
                             onChange={(event) => {
@@ -3838,7 +3874,7 @@ export function WorkstationDeployedAgentsPane({
                         </FormField>
                       </FormGrid>
 
-                      <FormField label="Business / use case" hint="Plain language is enough. The template turns it into the specialist behavior.">
+                      <FormField label="Business / use case" hint="Plain language is enough. The template turns it into assistant behavior.">
                         <FormTextarea
                           rows={3}
                           value={wizardState.persona}
@@ -3850,7 +3886,7 @@ export function WorkstationDeployedAgentsPane({
                   </div>
                 ) : (
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Specialist name" hint="The public restaurant or cafe name customers will see in Telegram.">
+                    <FormField label="Assistant name" hint="The public name customers will see.">
                       <FormInput
                         value={wizardState.name}
                         onChange={(event) => setWizardField('name', event.currentTarget.value)}
@@ -3864,17 +3900,17 @@ export function WorkstationDeployedAgentsPane({
                         placeholder="https://example.com/avatar.png"
                       />
                     </FormField>
-                    <FormField label="Persona" hint="Short description of how this ordering specialist should speak and behave.">
+                    <FormField label="Personality" hint="Short description of how this assistant should speak and behave.">
                       <FormTextarea
                         rows={4}
                         value={wizardState.persona}
                         onChange={(event) => setWizardField('persona', event.currentTarget.value)}
-                        placeholder="Fast, friendly Telegram ordering specialist for a cafe or restaurant."
+                        placeholder="Fast, friendly customer assistant for a cafe, clinic, shop, or support desk."
                       />
                       <div className="deployed-agents-wizard__memory-toggle">
                         <div className="sage-tool-row__copy">
                           <strong className="sage-tool-row__title">Enable persistent memory</strong>
-                          <p className="sage-tool-row__description">Specialist remembers each customer across conversations.</p>
+                          <p className="sage-tool-row__description">Assistant remembers each customer across conversations.</p>
                         </div>
                         <button
                           type="button"
@@ -3891,7 +3927,7 @@ export function WorkstationDeployedAgentsPane({
                         onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
                       />
                     </FormField>
-                    <FormField label="Purpose and behavior" hint="Core ordering, menu, and escalation instructions this specialist follows.">
+                    <FormField label="Purpose and behavior" hint="Core customer instructions this assistant follows.">
                       <FormTextarea
                         rows={6}
                         value={wizardState.systemPrompt}
@@ -3899,7 +3935,7 @@ export function WorkstationDeployedAgentsPane({
                         placeholder="Answer menu questions, check specials and availability, confirm orders clearly, and escalate edge cases to a human."
                       />
                     </FormField>
-                    <FormField label="Knowledge references" hint="Menu PDF or Google Sheet references, one per line.">
+                    <FormField label="Knowledge references" hint="Menu, catalog, FAQ, or Google Sheet references, one per line.">
                       <FormTextarea
                         rows={6}
                         value={wizardState.knowledgeSourceText}
@@ -3921,7 +3957,7 @@ export function WorkstationDeployedAgentsPane({
                       placeholder={selectedStudioTemplate.knowledgePlaceholder}
                     />
                   </FormField>
-                  <FormField label="Instructions" hint="Specific rules this specialist must follow when answering customers.">
+                  <FormField label="Instructions" hint="Specific rules this assistant must follow when answering customers.">
                     <FormTextarea
                       data-deployed-agent-instructions-input="true"
                       rows={6}
@@ -3939,7 +3975,7 @@ export function WorkstationDeployedAgentsPane({
                         placeholder="Quickly ask questions, check availability, and get help."
                       />
                     </FormField>
-                    <FormField label="Core value" hint="One sentence explaining what this specialist does for customers.">
+                    <FormField label="Core value" hint="One sentence explaining what this assistant does for customers.">
                       <FormTextarea
                         rows={3}
                         value={wizardState.welcomeCoreValue}
@@ -3953,7 +3989,7 @@ export function WorkstationDeployedAgentsPane({
 
               {wizardStep.id === 'tools' ? (
                 <div className="app-stack-3">
-                  <FormField label="Allowed tools" hint="Keep this narrow. Add only the tools this specialist needs for its job.">
+                  <FormField label="Actions this assistant can take" hint="Keep this narrow. Add only the actions needed for the job.">
                     <div className="deployed-agents-wizard__tool-grid">
                       {STUDIO_TOOL_OPTIONS.map((tool) => {
                         const selected = wizardState.selectedToolIds.includes(tool.id);
@@ -4005,7 +4041,7 @@ export function WorkstationDeployedAgentsPane({
                     <SkeletonBlock height="5rem" />
                   ) : null}
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Telegram state" hint="Enable Telegram when this specialist is ready for live customer conversations.">
+                    <FormField label="Telegram state" hint="Enable Telegram when this assistant is ready for live customer conversations.">
                       <FormSelect
                         value={wizardState.telegramEnabled ? 'enabled' : 'disabled'}
                         onChange={(event) => setWizardField('telegramEnabled', event.currentTarget.value === 'enabled')}
@@ -4046,7 +4082,7 @@ export function WorkstationDeployedAgentsPane({
                   {!isLoadingTelegramReadiness && (selectedTelegramReadiness?.connectors.length ?? 0) === 0 ? (
                     <div className="app-stack-3">
                       <StateBanner tone="neutral" title="No Telegram bot connected yet.">
-                        Build needs one Telegram bot before this specialist can go live.
+                        Build needs one Telegram bot before this assistant can go live.
                       </StateBanner>
                       <div className="app-inline-actions">
                         <AppButton
@@ -4089,7 +4125,7 @@ export function WorkstationDeployedAgentsPane({
                     <div className="sage-tool-row__copy">
                       <strong className="sage-tool-row__title">Persistent customer memory</strong>
                       <p className="sage-tool-row__description">
-                        Enable this only when the specialist benefits from remembering customers across conversations.
+                        Enable this only when the assistant benefits from remembering customers across conversations.
                       </p>
                     </div>
                     <button
@@ -4124,7 +4160,7 @@ export function WorkstationDeployedAgentsPane({
               {wizardStep.id === 'safety' ? (
                 <div className="app-stack-3">
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Escalation behavior" hint="When the specialist should involve a human.">
+                    <FormField label="Human handoff" hint="When the assistant should involve a human.">
                       <FormSelect
                         value={wizardState.escalationPreset}
                         onChange={(event) => setWizardField('escalationPreset', event.currentTarget.value)}
@@ -4153,7 +4189,7 @@ export function WorkstationDeployedAgentsPane({
                         placeholder="owner@example.com"
                       />
                     </FormField>
-                    <FormField label="Paused message" hint="What customers see when the specialist is paused.">
+                    <FormField label="Paused message" hint="What customers see when the assistant is paused.">
                       <FormInput
                         value={wizardState.pausedMessage}
                         onChange={(event) => setWizardField('pausedMessage', event.currentTarget.value)}
@@ -4162,7 +4198,7 @@ export function WorkstationDeployedAgentsPane({
                     </FormField>
                   </FormGrid>
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Sensitive-domain safety" hint="Enable for health, legal, finance, or restricted customer cases.">
+                    <FormField label="Sensitive-topic safety" hint="Enable for health, legal, finance, or restricted customer cases.">
                       <FormSelect
                         value={wizardState.healthSafetyEnabled ? 'enabled' : 'disabled'}
                         onChange={(event) => setWizardField('healthSafetyEnabled', event.currentTarget.value === 'enabled')}
@@ -4187,14 +4223,14 @@ export function WorkstationDeployedAgentsPane({
                   <StateBanner
                     tone="neutral"
                     title="Draft review"
-                    detail="This is the pre-launch checklist. Create the draft, test it privately, then deploy from the specialist detail panel."
+                    detail="This is the pre-launch checklist. Create the assistant, test it privately, then deploy from the detail panel."
                   />
                   <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                     <FormReadout label="Template" value={selectedStudioTemplate.title} />
-                    <FormReadout label="Specialist name" value={wizardState.name || 'Not named'} />
+                    <FormReadout label="Assistant name" value={wizardState.name || 'Not named'} />
                     <FormReadout label="Channel" value={wizardState.telegramEnabled ? 'Telegram enabled' : 'Draft only'} />
                     <FormReadout label="Knowledge" value={wizardState.knowledgeSourceText.trim() ? 'Source added' : 'Add later'} />
-                    <FormReadout label="Tools" value={`${wizardState.selectedToolIds.length} enabled`} />
+                    <FormReadout label="Actions" value={`${wizardState.selectedToolIds.length} enabled`} />
                     <FormReadout label="Memory" value={wizardState.memoryEnabled ? 'Enabled' : 'Disabled'} />
                   </FormGrid>
                 </div>
@@ -4202,97 +4238,105 @@ export function WorkstationDeployedAgentsPane({
 
               {wizardStep.id === 'deploy' ? (
                 <div className="app-stack-3">
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="AI model provider" hint="Choose the AI model provider for this assistant.">
-                      <FormSelect
-                        data-deployed-agent-provider-select="true"
-                        value={wizardState.providerId}
-                        onChange={(event) => {
-                          const nextProviderId = event.currentTarget.value;
-                          const nextProvider = providerCatalogIndex[nextProviderId] ?? null;
-                          const nextModelId = nextProvider?.defaultModel && nextProvider.models.some((item) => item.id === nextProvider.defaultModel)
-                            ? nextProvider.defaultModel
-                            : nextProvider?.models[0]?.id || '';
-                          setWizardState((current) => ({
-                            ...current,
-                            providerId: nextProviderId,
-                            modelId: nextModelId,
-                          }));
-                        }}
-                        disabled={isLoadingProviderCatalog || providerCatalog.length === 0}
-                      >
-                        <option value="">
-                          {isLoadingProviderCatalog ? 'Loading AI model providers…' : 'Select an AI model provider'}
-                        </option>
-                        {providerCatalog.map((provider) => (
-                          <option key={provider.id} value={provider.id}>
-                            {provider.label}
+                  <StateBanner
+                    tone="neutral"
+                    title="Default launch settings are selected automatically"
+                    detail="Most business owners only need the spending limits below. Open advanced settings only if you want to change model or computer choices."
+                  />
+                  <details className="app-stack-3">
+                    <summary>Advanced AI model and computer settings</summary>
+                    <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                      <FormField label="AI model provider" hint="Choose the AI model provider for this assistant.">
+                        <FormSelect
+                          data-deployed-agent-provider-select="true"
+                          value={wizardState.providerId}
+                          onChange={(event) => {
+                            const nextProviderId = event.currentTarget.value;
+                            const nextProvider = providerCatalogIndex[nextProviderId] ?? null;
+                            const nextModelId = nextProvider?.defaultModel && nextProvider.models.some((item) => item.id === nextProvider.defaultModel)
+                              ? nextProvider.defaultModel
+                              : nextProvider?.models[0]?.id || '';
+                            setWizardState((current) => ({
+                              ...current,
+                              providerId: nextProviderId,
+                              modelId: nextModelId,
+                            }));
+                          }}
+                          disabled={isLoadingProviderCatalog || providerCatalog.length === 0}
+                        >
+                          <option value="">
+                            {isLoadingProviderCatalog ? 'Loading AI model providers…' : 'Select an AI model provider'}
                           </option>
-                        ))}
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Model" hint="Choose the model this specialist should use.">
-                      <FormSelect
-                        data-deployed-agent-model-select="true"
-                        value={wizardState.modelId}
-                        onChange={(event) => setWizardField('modelId', event.currentTarget.value)}
-                        disabled={!selectedProviderCatalog || selectedProviderCatalog.models.length === 0}
-                      >
-                        <option value="">
-                          {selectedProviderCatalog ? 'Select a model' : 'Select an AI model provider first'}
-                        </option>
-                        {(selectedProviderCatalog?.models ?? []).map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {model.label}
+                          {providerCatalog.map((provider) => (
+                            <option key={provider.id} value={provider.id}>
+                              {provider.label}
+                            </option>
+                          ))}
+                        </FormSelect>
+                      </FormField>
+                      <FormField label="Model" hint="Choose the model this assistant should use.">
+                        <FormSelect
+                          data-deployed-agent-model-select="true"
+                          value={wizardState.modelId}
+                          onChange={(event) => setWizardField('modelId', event.currentTarget.value)}
+                          disabled={!selectedProviderCatalog || selectedProviderCatalog.models.length === 0}
+                        >
+                          <option value="">
+                            {selectedProviderCatalog ? 'Select a model' : 'Select an AI model provider first'}
                           </option>
-                        ))}
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Computer target" hint="Cloud is the default. Use local targets only for advanced private-computer cases.">
-                      <FormSelect
-                        value={wizardState.runtimeTarget}
-                        onChange={(event) => setWizardField('runtimeTarget', event.currentTarget.value)}
-                      >
-                        <option value="cloud">Cloud</option>
-                        <option value="local">This computer (advanced)</option>
-                        <option value="device">Managed computer (advanced)</option>
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Billing plan" hint="Choose the plan tied to this specialist.">
-                      <FormSelect
-                        value={wizardState.billingPlan}
-                        onChange={(event) => setWizardField('billingPlan', event.currentTarget.value)}
-                      >
-                        <option value="free">Free</option>
-                        <option value="pro">Pro</option>
-                        <option value="team">Team</option>
-                        <option value="enterprise">Enterprise</option>
-                      </FormSelect>
-                    </FormField>
-                  </FormGrid>
-                  <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-                    <FormReadout label="AI model provider state" value={humanizeToken(selectedProviderCatalog?.state, isLoadingProviderCatalog ? 'Loading' : 'Unknown')} />
-                    <FormReadout label="Privacy profile" value={selectedProviderCatalog?.privacyPosture || 'n/a'} />
-                    <FormReadout label="Jurisdiction" value={selectedProviderCatalog?.jurisdiction || 'n/a'} />
-                    <FormReadout label="Residency" value={selectedProviderCatalog?.residency || 'n/a'} />
-                    <FormReadout label="Context window" value={formatContextWindow(selectedProviderModelCatalog?.contextWindowTokens)} />
+                          {(selectedProviderCatalog?.models ?? []).map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {model.label}
+                            </option>
+                          ))}
+                        </FormSelect>
+                      </FormField>
+                      <FormField label="Computer target" hint="Cloud is the default. Use local targets only for advanced private-computer cases.">
+                        <FormSelect
+                          value={wizardState.runtimeTarget}
+                          onChange={(event) => setWizardField('runtimeTarget', event.currentTarget.value)}
+                        >
+                          <option value="cloud">Cloud</option>
+                          <option value="local">This computer (advanced)</option>
+                          <option value="device">Managed computer (advanced)</option>
+                        </FormSelect>
+                      </FormField>
+                      <FormField label="Billing plan" hint="Choose the plan tied to this assistant.">
+                        <FormSelect
+                          value={wizardState.billingPlan}
+                          onChange={(event) => setWizardField('billingPlan', event.currentTarget.value)}
+                        >
+                          <option value="free">Free</option>
+                          <option value="pro">Pro</option>
+                          <option value="team">Team</option>
+                          <option value="enterprise">Enterprise</option>
+                        </FormSelect>
+                      </FormField>
+                    </FormGrid>
+                    <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
+                      <FormReadout label="AI model provider state" value={humanizeToken(selectedProviderCatalog?.state, isLoadingProviderCatalog ? 'Loading' : 'Unknown')} />
+                      <FormReadout label="Privacy profile" value={selectedProviderCatalog?.privacyPosture || 'n/a'} />
+                      <FormReadout label="Jurisdiction" value={selectedProviderCatalog?.jurisdiction || 'n/a'} />
+                      <FormReadout label="Residency" value={selectedProviderCatalog?.residency || 'n/a'} />
+                      <FormReadout label="Context window" value={formatContextWindow(selectedProviderModelCatalog?.contextWindowTokens)} />
+                      <FormReadout
+                        label="Pricing"
+                        value={
+                          selectedProviderModelCatalog
+                            ? `${formatUsdPer1k(selectedProviderModelCatalog.inputCostPer1kUsd)} in · ${formatUsdPer1k(selectedProviderModelCatalog.outputCostPer1kUsd)} out`
+                            : 'n/a'
+                        }
+                      />
+                    </FormGrid>
                     <FormReadout
-                      label="Pricing"
-                      value={
-                        selectedProviderModelCatalog
-                          ? `${formatUsdPer1k(selectedProviderModelCatalog.inputCostPer1kUsd)} in · ${formatUsdPer1k(selectedProviderModelCatalog.outputCostPer1kUsd)} out`
-                          : 'n/a'
-                      }
-                    />
-                  </FormGrid>
-                  <FormReadout
                       label="Capabilities"
                       value={
                         selectedProviderModelCatalog?.capabilityLabels.join(', ')
-                      || selectedProviderCatalog?.capabilityLabels.join(', ')
-                      || 'No capability labels yet'
-                    }
-                  />
+                        || selectedProviderCatalog?.capabilityLabels.join(', ')
+                        || 'No capability labels yet'
+                      }
+                    />
+                  </details>
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                     <FormField label="Daily message limit" hint="Per external user, reset at UTC midnight. Leave blank to disable free-tier limits.">
                       <FormInput
@@ -4302,7 +4346,7 @@ export function WorkstationDeployedAgentsPane({
                         placeholder="25"
                       />
                     </FormField>
-                    <FormField label="Monthly cost cap (USD)" hint="Automatically pauses this specialist after reaching this monthly cap.">
+                    <FormField label="Monthly cost cap (USD)" hint="Automatically pauses this assistant after reaching this monthly cap.">
                       <FormInput
                         value={wizardState.monthlyCostCapUsd}
                         onChange={(event) => setWizardField('monthlyCostCapUsd', event.currentTarget.value)}
@@ -4330,7 +4374,7 @@ export function WorkstationDeployedAgentsPane({
                   {wizardMode === 'edit' && selectedAgent ? (
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Current state" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
-                      <FormReadout label="Specialist id" value={readString(selectedAgent.backing_install_id, 'pending')} />
+                      <FormReadout label="Assistant id" value={readString(selectedAgent.backing_install_id, 'pending')} />
                     </FormGrid>
                   ) : null}
                   {wizardMode === 'edit' && selectedAgent ? (

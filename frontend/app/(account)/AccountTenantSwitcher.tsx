@@ -98,6 +98,9 @@ function extractActiveDestinationId(pathname: string | null): WorkspaceNavDestin
   }
 
   const destinationId = getWorkspaceNavRouteDefinition(routeId).destinationId;
+  if (destinationId === 'gateway') {
+    return 'sage';
+  }
   if (WORKSPACE_NAV_DESTINATIONS.some((destination) => destination.id === destinationId)) {
     return destinationId;
   }

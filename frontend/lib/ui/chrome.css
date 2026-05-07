@@ -3872,7 +3872,7 @@ textarea {
 .app-shell-frame__sidebar {
   width: var(--app-shell-sidebar-width);
   min-width: var(--app-shell-sidebar-width);
-  min-width: 0;
+  box-sizing: border-box;
   min-height: 100dvh;
   position: fixed;
   inset: 0 auto 0 0;
@@ -4224,8 +4224,8 @@ textarea {
 
 .workstation-titlebar__nav {
   width: auto !important;
-  max-width: max-content;
-  min-width: auto;
+  max-width: min(100%, 720px);
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;

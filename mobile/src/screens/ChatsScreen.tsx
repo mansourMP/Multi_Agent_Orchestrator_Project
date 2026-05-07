@@ -201,8 +201,8 @@ export default function ChatsScreen() {
   const sageSubtitle = sageSession?.messages[sageSession.messages.length - 1]?.speech?.trim()
     || "Your personal AI assistant";
   const headerSubtitle = connected
-    ? "Open Sage or any of your deployed agents."
-    : "Pair this phone with your workspace to load Sage and your agents.";
+    ? "Open Sage or anything you are building."
+    : "Pair this phone with your workspace to load Sage and your builds.";
 
   return (
     <ScrollView
@@ -211,7 +211,7 @@ export default function ChatsScreen() {
       showsVerticalScrollIndicator={false}
     >
       <PrimaryScreenHeader
-        title="Agents"
+        title="Build"
         subtitle={headerSubtitle}
         action={{
           accessibilityLabel: "Start a new Sage thread",
@@ -281,7 +281,7 @@ export default function ChatsScreen() {
           letterSpacing: 1.1,
         }}
       >
-        Your Agents
+        Your Builds
       </Text>
 
       <View style={{ marginTop: 10, gap: 10 }}>
@@ -311,10 +311,10 @@ export default function ChatsScreen() {
             }}
           >
             <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-              No agents yet
+              No builds yet
             </Text>
             <Text style={{ marginTop: 4, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary }}>
-              Create a specialist in Studio and it will appear here as its own independent agent.
+              Create a specialist in Studio and it will appear here as its own focused workspace.
             </Text>
           </View>
         )}

@@ -150,7 +150,7 @@ export default function HomeScreen() {
 
   const briefTitle = connected ? continuity.title : "Connect your private core";
   const briefText = connected
-    ? `${continuity.detail} Sage has ${approvalQueue.length} approvals waiting, ${activeRuns.length} live runs, and ${recentCaptainActivity.length} recent captain updates${queuedWakeups > 0 ? ` with ${queuedWakeups} background wake${queuedWakeups === 1 ? "" : "s"} queued.` : "."}`
+    ? `${continuity.detail} Sage has ${approvalQueue.length} approvals waiting, ${activeRuns.length} live runs, and ${recentCaptainActivity.length} recent activity update${recentCaptainActivity.length === 1 ? "" : "s"}${queuedWakeups > 0 ? ` with ${queuedWakeups} background wake${queuedWakeups === 1 ? "" : "s"} queued.` : "."}`
     : "Connect your runtime to populate Home with live approvals, active work, and saved outputs.";
 
   return (
@@ -304,7 +304,7 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <SectionTitle title="Recent Captain Activity" />
+          <SectionTitle title="Recent Activity" />
           <View style={{ marginTop: 10, gap: 10 }}>
             {recentCaptainActivity.map((item) => (
               <View
@@ -324,7 +324,7 @@ export default function HomeScreen() {
                   color={activityColor(item)}
                 />
                 <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-                  {item.title || item.summary || "Captain activity"}
+                  {item.title || item.summary || "Activity"}
                 </Text>
                 <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
                   {item.summary || "A new bounded activity summary is ready."}
@@ -340,7 +340,7 @@ export default function HomeScreen() {
               </View>
             ))}
             {!chatContextQuery.isLoading && recentCaptainActivity.length === 0 ? (
-              <EmptyCard label="Captain activity summaries will appear here once Sage or a specialist finishes work." />
+              <EmptyCard label="Activity summaries will appear here once Sage or a specialist finishes work." />
             ) : null}
           </View>
 
@@ -503,7 +503,7 @@ export default function HomeScreen() {
         </>
       ) : null}
 
-      <SectionTitle title="Pinned Apps" />
+      <SectionTitle title="Pinned Tools" />
       <View style={{ marginTop: 10, flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
         {featuredApps.map((app) => {
           const needsUpdate = Boolean(app.latestVersion && app.latestVersion !== app.version);
@@ -541,7 +541,7 @@ export default function HomeScreen() {
             </TouchableOpacity>
           );
         })}
-        {!featuredApps.length ? <EmptyCard label="Pick active apps in Profile to pin them here." /> : null}
+        {!featuredApps.length ? <EmptyCard label="Pick active tools in Settings to pin them here." /> : null}
       </View>
     </ScrollView>
   );
@@ -750,7 +750,7 @@ function summarizeMemoryBoundary(unifiedMemory: UnifiedMemorySummary | undefined
 function formatActivityActor(item: ActivitySummary): string {
   if (item.actor_type === "sage") return "Sage";
   if (item.actor_type === "specialist") return item.actor_id ? `Specialist · ${humanizeToken(item.actor_id)}` : "Specialist";
-  if (item.actor_type === "application") return item.actor_id ? `App · ${humanizeToken(item.actor_id)}` : "Application";
+  if (item.actor_type === "application") return item.actor_id ? `Tool · ${humanizeToken(item.actor_id)}` : "Tool";
   return humanizeToken(item.actor_type || item.event_class || "activity");
 }
 

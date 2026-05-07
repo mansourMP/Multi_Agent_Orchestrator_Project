@@ -275,10 +275,10 @@ function sortBrowserSessions(items: GatewayBrowserSessionRecord[]): GatewayBrows
 
 function summarizeWhatsappState(state: PersonalChannelStateRecord | null | undefined): string {
   if (!state) {
-    return 'The local companion has not reported WhatsApp personal state yet.';
+    return 'This computer has not reported WhatsApp status yet.';
   }
   if (state.qr_code) {
-    return 'QR token is ready on the paired computer.';
+    return 'A WhatsApp pairing QR is ready on this computer.';
   }
   if (String(state.status ?? '').trim().toLowerCase() === 'connected') {
     const linkedName = readString(state.linked_name, '');
@@ -291,7 +291,7 @@ function summarizeWhatsappState(state: PersonalChannelStateRecord | null | undef
 
 function summarizeTelegramState(state: PersonalChannelStateRecord | null | undefined): string {
   if (!state) {
-    return 'The local companion has not reported Telegram personal state yet.';
+    return 'This computer has not reported Telegram status yet.';
   }
   if (state.login_hint) {
     return 'Telegram is waiting for a login code or confirmation.';
@@ -558,7 +558,7 @@ function summarizeMyComputerStatus(params: {
         id: 'pairing',
         label: 'Pairing',
         tone: 'warning',
-        detail: 'A short-lived connection request is ready. Run the local companion on this computer to finish pairing.',
+        detail: 'A short-lived connection request is ready. Open the desktop app on this computer to finish pairing.',
         primaryAction: {
           label: 'Connect this computer',
           tone: 'primary',
@@ -620,7 +620,7 @@ function summarizeMyComputerStatus(params: {
       id: 'reconnecting',
       label: 'Reconnecting',
       tone: 'warning',
-      detail: 'This computer is reconnecting or waiting for the local companion to finish attaching.',
+      detail: 'This computer is reconnecting or waiting for the desktop app to finish attaching.',
       primaryAction: {
         label: 'Reconnect',
         tone: 'primary',
@@ -685,7 +685,7 @@ function channelRecoveryLane(params: {
       id: 'channel_recovery',
       title: 'Channel recovery',
       subtitle: 'Needs attention',
-      description: 'A personal channel is offline or blocked. Recover it from this phone/web control surface without leaving the operator lane.',
+      description: 'A personal channel is offline or blocked. Recover it here without opening developer tools.',
       tone: 'danger',
     };
   }
@@ -703,7 +703,7 @@ function channelRecoveryLane(params: {
       id: 'channel_recovery',
       title: 'Channel recovery',
       subtitle: 'Ready',
-      description: 'Telegram and WhatsApp recovery stays governed from the phone/web control plane when the paired computer is online.',
+      description: 'Telegram and WhatsApp recovery stays available from phone and web when this computer is online.',
       tone: 'success',
     };
   }
@@ -711,7 +711,7 @@ function channelRecoveryLane(params: {
     id: 'channel_recovery',
     title: 'Channel recovery',
     subtitle: configured ? 'Standby' : 'Not configured',
-    description: 'Personal channels are optional. Configure them here only when you want the gateway lane to own recovery and delivery truth.',
+    description: 'Personal channels are optional. Configure them here when Sage should use this computer to deliver messages.',
     tone: configured ? 'neutral' : 'accent',
   };
 }
@@ -738,12 +738,12 @@ function buildCertificationLanes(params: {
       id: 'phone_web',
       title: 'Phone/web command center',
       subtitle: 'Ready',
-      description: 'Approvals, recovery, and runtime truth stay in the web shell so users can operate Sage without opening a laptop shell.',
+      description: 'Approvals, recovery, and computer status stay in the product so users do not need a terminal.',
       tone: 'success',
     },
     {
       id: 'gateway_truth',
-      title: 'Gateway online/offline truth',
+      title: 'Computer online/offline status',
       subtitle: params.myComputerStatus.label,
       description: params.myComputerStatus.detail,
       tone: params.myComputerStatus.tone,
@@ -1722,7 +1722,7 @@ export function WorkstationGatewayOperatorPane({
 
           <FormSection
             title="Launch certification lanes"
-            description="The phone/web control plane should make gateway truth, approvals, degraded states, and channel recovery obvious."
+            description="Phone and web should make computer status, approvals, recovery, and channel health obvious."
           >
             <WorkstationSurfaceList>
               {certificationLanes.map((lane) => (
@@ -1762,7 +1762,7 @@ export function WorkstationGatewayOperatorPane({
           {(readRecord(doctor?.checkpoint).status || readRecord(doctor?.browser).status || readRecord(doctor?.specialists).status || readRecord(doctor?.providers).status || readRecord(doctor?.quota).status) ? (
             <WorkstationSurfaceList>
               <WorkstationSurfaceListItem
-                title="Checkpoint readiness"
+                title="Resume readiness"
                 subtitle={checkpointStatus.status}
                 description={checkpointStatus.summary}
                 actions={(
@@ -1772,7 +1772,7 @@ export function WorkstationGatewayOperatorPane({
                 )}
               />
               <WorkstationSurfaceListItem
-                title="Browser attach lane"
+                title="Browser connection"
                 subtitle={browserLaneStatus.status}
                 description={browserLaneStatus.summary}
                 actions={(
@@ -1802,7 +1802,7 @@ export function WorkstationGatewayOperatorPane({
                 )}
               />
               <WorkstationSurfaceListItem
-                title="Quota state"
+                title="Usage limit"
                 subtitle={quotaStatus.status}
                 description={quotaStatus.summary}
                 actions={(
@@ -1868,7 +1868,7 @@ export function WorkstationGatewayOperatorPane({
           ) : (
             <EmptyPanel
               title="No device checks yet"
-              body="Pair and connect this computer to populate health, checkpoint, and personal channel status."
+              body="Pair and connect this computer to populate health and personal channel status."
             />
           )}
         </WorkstationSurfaceCard>
@@ -1895,8 +1895,8 @@ export function WorkstationGatewayOperatorPane({
             />
             {whatsapp?.state?.qr_code ? (
               <FormReadout
-                label="WhatsApp QR token"
-                value={<code>{readString(whatsapp.state.qr_code, 'Unavailable')}</code>}
+                label="WhatsApp pairing"
+                value="QR ready to scan on this computer"
               />
             ) : null}
             <WorkstationSurfaceListItem
@@ -1912,7 +1912,7 @@ export function WorkstationGatewayOperatorPane({
             {telegram?.state?.login_hint ? (
               <FormReadout
                 label="Telegram login hint"
-                value={readString(telegram.state.login_hint, 'Waiting for local companion confirmation.')}
+                value={readString(telegram.state.login_hint, 'Waiting for this computer to confirm Telegram login.')}
               />
             ) : null}
           </WorkstationSurfaceList>
@@ -1921,18 +1921,18 @@ export function WorkstationGatewayOperatorPane({
             description="Request local WhatsApp pairing on this computer, then send a controlled test message through the user-owned session."
           >
             <FormGrid columns="repeat(2, minmax(0, 1fr))">
-              <FormField label="Phone number" hint="Used only by the local companion to request WhatsApp pairing.">
+              <FormField label="Phone number" hint="Used only by this computer to request WhatsApp pairing.">
                 <FormInput
                   value={channelDrafts.whatsapp.phoneNumber}
                   onChange={(event) => updateChannelDraft('whatsapp', { phoneNumber: event.currentTarget.value })}
                   placeholder="8618657105303"
                 />
               </FormField>
-              <FormField label="Recipient JID" hint="Example: 8618657105303@s.whatsapp.net">
+              <FormField label="Recipient" hint="Phone number or chat identifier for the controlled test.">
                 <FormInput
                   value={channelDrafts.whatsapp.remoteJid}
                   onChange={(event) => updateChannelDraft('whatsapp', { remoteJid: event.currentTarget.value })}
-                  placeholder="recipient@s.whatsapp.net"
+                  placeholder="8618657105303"
                 />
               </FormField>
               <FormField label="Test message" hint="This is sent through the paired device and audited.">
@@ -1973,7 +1973,7 @@ export function WorkstationGatewayOperatorPane({
             description="Configure the local Telegram session on this computer, then send a controlled test message through the user-owned session."
           >
             <FormGrid columns="repeat(2, minmax(0, 1fr))">
-              <FormField label="API ID" hint="Telegram app API ID for this user-owned session.">
+              <FormField label="Telegram app ID" hint="Used only for this computer's Telegram login.">
                 <FormInput
                   type="number"
                   value={channelDrafts.telegram.apiId}
@@ -1981,12 +1981,12 @@ export function WorkstationGatewayOperatorPane({
                   placeholder="123456"
                 />
               </FormField>
-              <FormField label="API hash" hint="Stored only by the local companion configuration path.">
+              <FormField label="Telegram app secret" hint="Stored only in this computer's Telegram setup path.">
                 <FormInput
                   type="password"
                   value={channelDrafts.telegram.apiHash}
                   onChange={(event) => updateChannelDraft('telegram', { apiHash: event.currentTarget.value })}
-                  placeholder="Telegram API hash"
+                  placeholder="Telegram app secret"
                 />
               </FormField>
               <FormField label="Phone number" hint="Used by Telegram login on this computer.">
@@ -2009,7 +2009,7 @@ export function WorkstationGatewayOperatorPane({
                   onChange={(event) => updateChannelDraft('telegram', { password: event.currentTarget.value })}
                 />
               </FormField>
-              <FormField label="Recipient ID" hint="Telegram user, chat, or channel id understood by the local companion.">
+              <FormField label="Recipient" hint="Telegram user, chat, or channel for the controlled test.">
                 <FormInput
                   value={channelDrafts.telegram.remoteJid}
                   onChange={(event) => updateChannelDraft('telegram', { remoteJid: event.currentTarget.value })}
@@ -2118,7 +2118,7 @@ export function WorkstationGatewayOperatorPane({
           {browserItems.length === 0 ? (
             <EmptyPanel
               title="No device activity tracked"
-              body="Once the local companion starts or attaches a browser session, it will appear here with governed control actions."
+              body="Once this computer starts or attaches a browser session, it will appear here with governed control actions."
             />
           ) : (
             <WorkstationSurfaceList>

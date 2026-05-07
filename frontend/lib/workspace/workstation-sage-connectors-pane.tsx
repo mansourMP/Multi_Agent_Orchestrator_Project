@@ -1050,7 +1050,7 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Connect computer',
       statusTone: 'warning',
       detail: 'Pair this computer so Sage can use your personal channels and browser.',
-      summary: 'Sage needs one paired local companion before it can act through this computer.',
+      summary: 'Sage needs one paired computer before it can use your personal channels and browser.',
       nextStep: 'Open the device connection page and pair this computer.',
     };
   }
@@ -1068,7 +1068,7 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
   return {
     statusLabel: 'Needs attention',
     statusTone: 'danger',
-    detail: 'This computer is paired, but the local companion is offline or degraded.',
+    detail: 'This computer is paired, but the desktop app is offline or needs attention.',
     summary: 'Open the device connection page to reconnect this computer and clear device health issues.',
     nextStep: 'Open the device connection page to reconnect or inspect health.',
   };
@@ -1095,7 +1095,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Needs attention',
       statusTone: 'danger',
-      detail: 'This computer is paired, but the local companion is offline.',
+      detail: 'This computer is paired, but the desktop app is offline.',
       summary: 'Localhost pages, signed-in sites, and private browser sessions only work while the paired computer is online.',
       nextStep: 'Open the device connection page to reconnect this computer first.',
     };
@@ -1378,7 +1378,7 @@ function summarizePlannedSignalPersonalState(): {
     statusLabel: 'Coming next',
     statusTone: 'neutral',
     detail: 'Signal is the next personal channel planned for the paired computer.',
-    summary: 'Signal will stay in the same personal gateway lane as your Telegram and WhatsApp. It is not live yet.',
+    summary: 'Signal will appear beside Telegram and WhatsApp when it is ready for this computer.',
     nextStep: 'Use Telegram or WhatsApp today from the paired computer.',
   };
 }
@@ -2647,27 +2647,27 @@ export function WorkstationSageConnectorsPane({
                     onChange={(event) => updateChannelDraft('whatsapp', { phoneNumber: event.currentTarget.value })}
                   />
                 </FormField>
-                <FormField label="Recipient JID" hint="Example: 8618657105303@s.whatsapp.net">
+                <FormField label="Recipient" hint="Phone number or chat identifier for the controlled test.">
                   <FormInput
                     value={channelDraft.recipient}
-                    placeholder="recipient@s.whatsapp.net"
+                    placeholder="8618657105303"
                     onChange={(event) => updateChannelDraft('whatsapp', { recipient: event.currentTarget.value })}
                   />
                 </FormField>
               </>
             ) : (
               <>
-                <FormField label="Telegram API ID" hint="Stored through the local companion setup path.">
+                <FormField label="Telegram app ID" hint="Stored through this computer's setup path.">
                   <FormInput
                     value={channelDraft.apiId}
                     placeholder="123456"
                     onChange={(event) => updateChannelDraft('telegram', { apiId: event.currentTarget.value })}
                   />
                 </FormField>
-                <FormField label="Telegram API hash">
+                <FormField label="Telegram app secret">
                   <FormInput
                     value={channelDraft.apiHash}
-                    placeholder="Telegram API hash"
+                    placeholder="Telegram app secret"
                     onChange={(event) => updateChannelDraft('telegram', { apiHash: event.currentTarget.value })}
                   />
                 </FormField>
@@ -2691,7 +2691,7 @@ export function WorkstationSageConnectorsPane({
                     onChange={(event) => updateChannelDraft('telegram', { password: event.currentTarget.value })}
                   />
                 </FormField>
-                <FormField label="Recipient ID" hint="Telegram user, chat, or channel id understood by the local companion.">
+                <FormField label="Recipient" hint="Telegram user, chat, or channel for the controlled test.">
                   <FormInput
                     value={channelDraft.recipient}
                     placeholder="123456789"

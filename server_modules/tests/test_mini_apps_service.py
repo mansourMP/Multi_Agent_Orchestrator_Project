@@ -68,6 +68,22 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertEqual(payload["total_matches"], 1)
         self.assertEqual(payload["items"][0]["id"], "card-1")
 
+    def test_retrieve_records_without_narrow_filters_is_rejected(self) -> None:
+        mini_apps_service.upsert_mini_app_contract(
+            "ws-1",
+            "flashcards",
+            records=[
+                {"id": "card-1", "kind": "review", "summary": "Reviewed estar", "created_at": "2026-04-17T09:00:00Z"},
+            ],
+        )
+        with self.assertRaises(ValueError) as ctx:
+            mini_apps_service.retrieve_mini_app_records(
+                "ws-1",
+                "flashcards",
+                filters={},
+            )
+        self.assertIn("narrow user query", str(ctx.exception))
+
     def test_context_block_uses_compact_summaries_not_full_raw_history(self) -> None:
         mini_apps_service.upsert_mini_app_contract(
             "ws-1",
@@ -103,7 +119,7 @@ class MiniAppsServiceTests(unittest.TestCase):
             allowed_origins=["https://miniapps.example.com"],
             bridge_contracts={"app_to_sage": ["summary_request"]},
             context_envelope={"default_classes": ["user_selected_inputs"]},
-            permissions=["bridge.app_to_sage.summary_request"],
+            permissions=["app.bridge.sage.request"],
         )
 
         self.assertEqual(contract["delivery_mode"], "hosted")
@@ -118,6 +134,24 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertEqual(manifest["delivery_mode"], "hosted")
         self.assertEqual(manifest["hosted_app"]["bridge"]["request_type"], "empyralis.hosted_app.bridge.request")
         self.assertIn("read_sage_memory", manifest["hosted_app"]["bridge"]["denied_by_default"])
+        self.assertEqual(
+            manifest["hosted_app"]["embed"]["sandbox"],
+            ["allow-forms", "allow-modals", "allow-scripts"],
+        )
+        self.assertEqual(manifest["hosted_app"]["embed"]["allow"], [])
+        self.assertNotIn("allow-popups", manifest["hosted_app"]["embed"]["sandbox"])
+        self.assertNotIn("allow-popups-to-escape-sandbox", manifest["hosted_app"]["embed"]["sandbox"])
+        self.assertNotIn("allow-same-origin", manifest["hosted_app"]["embed"]["sandbox"])
+
+    def test_structured_apps_default_to_summary_read_permission(self) -> None:
+        contract = mini_apps_service.upsert_mini_app_contract(
+            "ws-1",
+            "calorie_tracking",
+            label="Calorie Tracking",
+            delivery_mode="structured",
+        )
+        self.assertIn("app.summary.read", contract["permissions"])
+        self.assertNotIn("app.records.read.raw", contract["permissions"])
 
 
 if __name__ == "__main__":

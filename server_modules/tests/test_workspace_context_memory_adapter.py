@@ -35,6 +35,10 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
                 "server_modules.sage_services_service.build_sage_services_memory_block",
                 return_value="",
             ),
+            patch(
+                "server_modules.mini_apps_service.build_mini_apps_context_block",
+                return_value="",
+            ),
         ):
             payload = workspace_context_memory_adapter.load_workspace_context_payload(
                 workspace_id="workspace-1",
@@ -68,6 +72,10 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
                     "server_modules.sage_services_service.build_sage_services_memory_block",
                     return_value="",
                 ),
+                patch(
+                    "server_modules.mini_apps_service.build_mini_apps_context_block",
+                    return_value="",
+                ),
             ):
                 payload = workspace_context_memory_adapter.load_workspace_context_payload(
                     workspace_id=str(root),
@@ -97,6 +105,10 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
                     "server_modules.sage_services_service.build_sage_services_memory_block",
                     return_value="Sage services\nFlashcards\n- HSK1 review due.",
                 ),
+                patch(
+                    "server_modules.mini_apps_service.build_mini_apps_context_block",
+                    return_value="",
+                ),
             ):
                 payload = workspace_context_memory_adapter.load_workspace_context_payload(
                     workspace_id=str(root),
@@ -118,6 +130,34 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
         self.assertIn("RED memory fact(s) stripped", text)
         self.assertNotIn("sk-secret123456789", text)
         self.assertNotIn("abcdefghijklmnopqrstuvwxyz123456", text)
+
+    def test_load_workspace_context_payload_includes_compact_mini_app_summary_only(self):
+        with (
+            patch("server_modules.workspace_context_memory_adapter.read_workspace_context_files", return_value={}),
+            patch("server_modules.memory_service.get_recent_logs", return_value=""),
+            patch("server_modules.memory_service.get_memory", return_value=""),
+            patch("server_modules.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_services_service.build_sage_services_memory_block", return_value=""),
+            patch(
+                "server_modules.mini_apps_service.build_mini_apps_context_block",
+                return_value=(
+                    "Mini App Summaries\n"
+                    "[Calorie Tracking]\n"
+                    "- Daily summary: calories: 1800\n"
+                    "- Retrieval hook: retrieve_records(filters) for narrow raw history slices."
+                ),
+            ),
+        ):
+            payload = workspace_context_memory_adapter.load_workspace_context_payload(
+                workspace_id="workspace-1",
+                policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
+            )
+
+        rendered = "\n\n".join(payload["contextual_blocks"])
+        self.assertIn("Mini App Summaries", rendered)
+        self.assertIn("Retrieval hook", rendered)
+        self.assertNotIn("raw transcript", rendered.lower())
+        self.assertEqual(payload["diagnostics"]["mini_app_summary_count"], 1)
 
 
 if __name__ == "__main__":

@@ -56,6 +56,7 @@ class CalorieEventLogRequest(BaseModel):
     notes: Optional[str] = None
     timestamp: Optional[str] = None
     tags: Optional[List[str]] = None
+    explicit_user_intent: bool = False
 
 
 class CalorieGoalsRequest(BaseModel):
@@ -63,6 +64,7 @@ class CalorieGoalsRequest(BaseModel):
     protein_goal_g: Optional[float] = Field(default=None, ge=0)
     carbs_goal_g: Optional[float] = Field(default=None, ge=0)
     fat_goal_g: Optional[float] = Field(default=None, ge=0)
+    explicit_user_intent: bool = False
 
 
 class FlashcardCreateRequest(BaseModel):
@@ -74,6 +76,7 @@ class FlashcardCreateRequest(BaseModel):
     difficulty: Optional[str] = None
     tags: Optional[List[str]] = None
     timestamp: Optional[str] = None
+    explicit_user_intent: bool = False
 
 
 class FlashcardDeckMetadataRequest(BaseModel):
@@ -84,6 +87,7 @@ class FlashcardDeckMetadataRequest(BaseModel):
     target_reviews_per_day: Optional[int] = Field(default=None, ge=0)
     tags: Optional[List[str]] = None
     timestamp: Optional[str] = None
+    explicit_user_intent: bool = False
 
 
 class FlashcardReviewRequest(BaseModel):
@@ -96,6 +100,7 @@ class FlashcardReviewRequest(BaseModel):
     response_ms: Optional[int] = Field(default=None, ge=0)
     tags: Optional[List[str]] = None
     timestamp: Optional[str] = None
+    explicit_user_intent: bool = False
 
 
 class FlashcardRetrieveRequest(BaseModel):
@@ -115,6 +120,7 @@ class FlashcardGenerateRequest(BaseModel):
     count: int = Field(default=flashcards_tracking_service.DEFAULT_GENERATED_CARD_COUNT, ge=1, le=flashcards_tracking_service.MAX_GENERATED_CARD_COUNT)
     provider: Optional[str] = None
     model: Optional[str] = None
+    explicit_user_intent: bool = False
 
 
 class MiniAppInvokeRequest(BaseModel):
@@ -132,6 +138,14 @@ class HostedMiniAppBridgeRequest(BaseModel):
     target: Optional[Dict[str, Any]] = None
     context_envelope: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
+
+
+def _write_authorization(current_user: Dict[str, Any], *, explicit_user_intent: bool) -> Dict[str, Any]:
+    return {
+        "explicit_user_intent": bool(explicit_user_intent),
+        "actor_user_id": str((current_user or {}).get("user_id") or "").strip() or None,
+        "approval_source": "mini_app_route",
+    }
 
 
 @router.get("/workspaces/{workspace_id}/mini-apps")
@@ -202,6 +216,8 @@ async def retrieve_mini_app_records(
             app_id,
             filters=body.model_dump(exclude_none=True),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -285,10 +301,17 @@ async def log_calorie_event(
     current_user=Depends(get_current_user),
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
-    return calorie_tracking_service.log_calorie_event(
-        resolved_workspace_id,
-        body.model_dump(exclude_none=True),
-    )
+    try:
+        return calorie_tracking_service.log_calorie_event(
+            resolved_workspace_id,
+            body.model_dump(exclude_none=True, exclude={"explicit_user_intent"}),
+            write_authorization=_write_authorization(
+                current_user,
+                explicit_user_intent=body.explicit_user_intent,
+            ),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.put("/workspaces/{workspace_id}/mini-apps/calorie_tracking/goals")
@@ -298,10 +321,17 @@ async def update_calorie_goals(
     current_user=Depends(get_current_user),
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
-    return calorie_tracking_service.update_calorie_goals(
-        resolved_workspace_id,
-        body.model_dump(exclude_unset=True, exclude_none=False),
-    )
+    try:
+        return calorie_tracking_service.update_calorie_goals(
+            resolved_workspace_id,
+            body.model_dump(exclude_unset=True, exclude_none=False, exclude={"explicit_user_intent"}),
+            write_authorization=_write_authorization(
+                current_user,
+                explicit_user_intent=body.explicit_user_intent,
+            ),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("/workspaces/{workspace_id}/mini-apps/calorie_tracking/overview")
@@ -324,10 +354,17 @@ async def create_flashcard(
     current_user=Depends(get_current_user),
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
-    return flashcards_tracking_service.create_flashcard(
-        resolved_workspace_id,
-        body.model_dump(exclude_none=True),
-    )
+    try:
+        return flashcards_tracking_service.create_flashcard(
+            resolved_workspace_id,
+            body.model_dump(exclude_none=True, exclude={"explicit_user_intent"}),
+            write_authorization=_write_authorization(
+                current_user,
+                explicit_user_intent=body.explicit_user_intent,
+            ),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/workspaces/{workspace_id}/mini-apps/flashcards/generate")
@@ -347,7 +384,13 @@ async def generate_flashcards(
             count=body.count,
             requested_provider=str(body.provider or "").strip(),
             requested_model=str(body.model or "").strip(),
+            write_authorization=_write_authorization(
+                current_user,
+                explicit_user_intent=body.explicit_user_intent,
+            ),
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -361,10 +404,17 @@ async def update_flashcard_deck_metadata(
     current_user=Depends(get_current_user),
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
-    return flashcards_tracking_service.update_deck_metadata(
-        resolved_workspace_id,
-        body.model_dump(exclude_none=True),
-    )
+    try:
+        return flashcards_tracking_service.update_deck_metadata(
+            resolved_workspace_id,
+            body.model_dump(exclude_none=True, exclude={"explicit_user_intent"}),
+            write_authorization=_write_authorization(
+                current_user,
+                explicit_user_intent=body.explicit_user_intent,
+            ),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/workspaces/{workspace_id}/mini-apps/flashcards/reviews")
@@ -374,10 +424,17 @@ async def log_flashcard_review_result(
     current_user=Depends(get_current_user),
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
-    return flashcards_tracking_service.log_review_result(
-        resolved_workspace_id,
-        body.model_dump(exclude_none=True),
-    )
+    try:
+        return flashcards_tracking_service.log_review_result(
+            resolved_workspace_id,
+            body.model_dump(exclude_none=True, exclude={"explicit_user_intent"}),
+            write_authorization=_write_authorization(
+                current_user,
+                explicit_user_intent=body.explicit_user_intent,
+            ),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("/workspaces/{workspace_id}/mini-apps/flashcards/overview")
@@ -400,12 +457,15 @@ async def retrieve_flashcard_records(
     current_user=Depends(get_current_user),
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
-    return flashcards_tracking_service.retrieve_flashcard_records(
-        resolved_workspace_id,
-        deck=body.deck,
-        topic=body.topic,
-        since=body.since,
-        until=body.until,
-        kind=body.kind,
-        limit=body.limit,
-    )
+    try:
+        return flashcards_tracking_service.retrieve_flashcard_records(
+            resolved_workspace_id,
+            deck=body.deck,
+            topic=body.topic,
+            since=body.since,
+            until=body.until,
+            kind=body.kind,
+            limit=body.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

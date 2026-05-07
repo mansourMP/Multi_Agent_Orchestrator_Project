@@ -124,6 +124,17 @@ def load_workspace_context_payload(
             services_memory_block = ""
         if services_memory_block:
             sections.append(services_memory_block)
+        try:
+            from server_modules import mini_apps_service
+
+            mini_apps_block = mini_apps_service.build_mini_apps_context_block(
+                workspace_id=workspace_id,
+            )
+        except Exception:
+            mini_apps_block = ""
+        if mini_apps_block:
+            sections.append(mini_apps_block)
+            mini_app_summary_count = mini_apps_block.count("\n[")
 
     return {
         "contextual_blocks": sections,

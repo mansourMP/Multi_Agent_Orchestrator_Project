@@ -356,10 +356,27 @@ def _load_records(workspace_id: str) -> List[Dict[str, Any]]:
     return records
 
 
+def _require_explicit_write_intent(write_authorization: Optional[Dict[str, Any]]) -> None:
+    payload = dict(write_authorization or {}) if isinstance(write_authorization, dict) else {}
+    explicit_intent = bool(
+        payload.get("explicit_user_intent")
+        or payload.get("confirm_write")
+        or payload.get("user_intent")
+    )
+    if explicit_intent:
+        return
+    raise PermissionError(
+        "Mini app write blocked. Provide explicit_user_intent=true for calorie tracking writes."
+    )
+
+
 def log_calorie_event(
     workspace_id: str,
     payload: Dict[str, Any],
+    *,
+    write_authorization: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _require_explicit_write_intent(write_authorization)
     record = _normalize_event(payload)
     existing = [item for item in _load_records(workspace_id) if str(item.get("id") or "").strip() != record["id"]]
     existing.insert(0, record)
@@ -378,7 +395,10 @@ def log_calorie_event(
 def update_calorie_goals(
     workspace_id: str,
     payload: Dict[str, Any],
+    *,
+    write_authorization: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _require_explicit_write_intent(write_authorization)
     records = _load_records(workspace_id)
     existing_goals = _load_existing_goals(workspace_id)
     goals = _normalize_goals(payload, base=existing_goals)

@@ -192,6 +192,20 @@ def _load_records(workspace_id: str) -> List[Dict[str, Any]]:
     return records
 
 
+def _require_explicit_write_intent(write_authorization: Optional[Dict[str, Any]]) -> None:
+    payload = dict(write_authorization or {}) if isinstance(write_authorization, dict) else {}
+    explicit_intent = bool(
+        payload.get("explicit_user_intent")
+        or payload.get("confirm_write")
+        or payload.get("user_intent")
+    )
+    if explicit_intent:
+        return
+    raise PermissionError(
+        "Mini app write blocked. Provide explicit_user_intent=true for flashcards writes."
+    )
+
+
 def _load_deck_metadata(workspace_id: str) -> Dict[str, Dict[str, Any]]:
     try:
         contract = mini_apps_service.get_mini_app_contract(workspace_id, FLASHCARDS_APP_ID)
@@ -502,7 +516,10 @@ def _write_flashcards_contract(
 def create_flashcard(
     workspace_id: str,
     payload: Dict[str, Any],
+    *,
+    write_authorization: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _require_explicit_write_intent(write_authorization)
     record = _normalize_create_card(payload)
     records = [item for item in _load_records(workspace_id) if str(item.get("id") or "").strip() != record["id"]]
     records.insert(0, record)
@@ -516,7 +533,10 @@ def create_flashcard(
 def update_deck_metadata(
     workspace_id: str,
     payload: Dict[str, Any],
+    *,
+    write_authorization: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _require_explicit_write_intent(write_authorization)
     record = _normalize_deck_metadata(payload)
     deck = str(record.get("deck") or "").strip() or "Default"
     records = [item for item in _load_records(workspace_id) if str(item.get("id") or "").strip() != record["id"]]
@@ -545,7 +565,10 @@ def update_deck_metadata(
 def log_review_result(
     workspace_id: str,
     payload: Dict[str, Any],
+    *,
+    write_authorization: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _require_explicit_write_intent(write_authorization)
     record = _normalize_review_result(payload)
     records = [item for item in _load_records(workspace_id) if str(item.get("id") or "").strip() != record["id"]]
     records.insert(0, record)
@@ -633,7 +656,9 @@ def generate_flashcards(
     count: int = DEFAULT_GENERATED_CARD_COUNT,
     requested_provider: str = "",
     requested_model: str = "",
+    write_authorization: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _require_explicit_write_intent(write_authorization)
     clean_deck = _compact(deck or "Default", limit=80) or "Default"
     clean_source = " ".join(str(source_text or "").split()).strip()
     clean_topic = _compact(topic or "", limit=80)

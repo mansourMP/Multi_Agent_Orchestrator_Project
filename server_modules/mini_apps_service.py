@@ -180,6 +180,26 @@ def _parse_isoish(value: Any) -> Optional[datetime]:
         return None
 
 
+def _has_narrow_retrieve_filters(payload: Dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if any(str(item).strip() for item in list(payload.get("ids") or [])):
+        return True
+    if str(payload.get("kind") or "").strip():
+        return True
+    if str(payload.get("tag") or "").strip():
+        return True
+    if any(str(item).strip() for item in list(payload.get("tags") or [])):
+        return True
+    if str(payload.get("since") or "").strip():
+        return True
+    if str(payload.get("until") or "").strip():
+        return True
+    if str(payload.get("text_query") or "").strip():
+        return True
+    return False
+
+
 def _normalize_record(record: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(record or {})
     if not isinstance(payload, dict):
@@ -410,6 +430,11 @@ def retrieve_mini_app_records(
     if not isinstance(entry, dict):
         raise KeyError(f"Mini app '{normalized_app_id}' was not found.")
     payload = dict(filters or {})
+    if not _has_narrow_retrieve_filters(payload):
+        raise ValueError(
+            "Raw mini-app record retrieval requires a narrow user query "
+            "(ids, kind, tag/tags, since/until, or text_query)."
+        )
     ids_filter = {
         str(item).strip()
         for item in list(payload.get("ids") or [])

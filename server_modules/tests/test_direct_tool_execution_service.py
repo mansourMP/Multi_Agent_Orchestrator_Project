@@ -284,6 +284,7 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
                                 "calories": 650,
                                 "protein_grams": 42,
                             },
+                            "explicit_user_intent": True,
                         },
                     },
                     workspace_id="workspace-1",

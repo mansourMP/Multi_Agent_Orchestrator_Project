@@ -27,6 +27,7 @@ class FlashcardsTrackingServiceTests(unittest.TestCase):
                 "front": "Conjugate ir (yo)",
                 "back": "voy",
             },
+            write_authorization={"explicit_user_intent": True},
         )
         flashcards_tracking_service.update_deck_metadata(
             "ws-1",
@@ -35,6 +36,7 @@ class FlashcardsTrackingServiceTests(unittest.TestCase):
                 "language": "Spanish",
                 "target_reviews_per_day": 60,
             },
+            write_authorization={"explicit_user_intent": True},
         )
         flashcards_tracking_service.log_review_result(
             "ws-1",
@@ -44,6 +46,7 @@ class FlashcardsTrackingServiceTests(unittest.TestCase):
                 "correct": False,
                 "quality": 2,
             },
+            write_authorization={"explicit_user_intent": True},
         )
 
         contract = mini_apps_service.get_mini_app_contract("ws-1", "flashcards")
@@ -61,6 +64,7 @@ class FlashcardsTrackingServiceTests(unittest.TestCase):
                 "correct": True,
                 "timestamp": "2026-04-16T09:00:00Z",
             },
+            write_authorization={"explicit_user_intent": True},
         )
         flashcards_tracking_service.log_review_result(
             "ws-1",
@@ -70,6 +74,7 @@ class FlashcardsTrackingServiceTests(unittest.TestCase):
                 "correct": False,
                 "timestamp": "2026-04-17T09:00:00Z",
             },
+            write_authorization={"explicit_user_intent": True},
         )
         flashcards_tracking_service.log_review_result(
             "ws-1",
@@ -79,6 +84,7 @@ class FlashcardsTrackingServiceTests(unittest.TestCase):
                 "correct": False,
                 "timestamp": "2026-04-17T10:00:00Z",
             },
+            write_authorization={"explicit_user_intent": True},
         )
 
         filtered = flashcards_tracking_service.retrieve_flashcard_records(
@@ -90,6 +96,17 @@ class FlashcardsTrackingServiceTests(unittest.TestCase):
         )
         self.assertEqual(filtered["total_matches"], 1)
         self.assertEqual(filtered["items"][0]["topic"], "food")
+
+    def test_write_requires_explicit_user_intent(self) -> None:
+        with self.assertRaises(PermissionError):
+            flashcards_tracking_service.create_flashcard(
+                "ws-1",
+                {
+                    "deck": "Spanish A1",
+                    "front": "hola",
+                    "back": "hello",
+                },
+            )
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ class CalorieTrackingServiceTests(unittest.TestCase):
                 "fat_g": 24,
                 "timestamp": now_ts,
             },
+            write_authorization={"explicit_user_intent": True},
         )
         calorie_tracking_service.update_calorie_goals(
             "ws-1",
@@ -39,6 +40,7 @@ class CalorieTrackingServiceTests(unittest.TestCase):
                 "calorie_goal": 2200,
                 "protein_goal_g": 180,
             },
+            write_authorization={"explicit_user_intent": True},
         )
 
         contract = mini_apps_service.get_mini_app_contract("ws-1", "calorie_tracking")
@@ -56,6 +58,7 @@ class CalorieTrackingServiceTests(unittest.TestCase):
                 "calories": 550,
                 "timestamp": "2026-04-16T08:00:00Z",
             },
+            write_authorization={"explicit_user_intent": True},
         )
         calorie_tracking_service.log_calorie_event(
             "ws-1",
@@ -65,6 +68,7 @@ class CalorieTrackingServiceTests(unittest.TestCase):
                 "calories": 900,
                 "timestamp": "2026-04-17T18:00:00Z",
             },
+            write_authorization={"explicit_user_intent": True},
         )
 
         overview = calorie_tracking_service.calorie_overview("ws-1", date_filter="2026-04-16")
@@ -72,6 +76,17 @@ class CalorieTrackingServiceTests(unittest.TestCase):
         self.assertEqual(overview["daily_summary"]["totals"]["calories"], 550.0)
         self.assertEqual(overview["records_preview_count"], 1)
         self.assertEqual(overview["records_preview"][0]["id"], "meal-a")
+
+    def test_write_requires_explicit_user_intent(self) -> None:
+        with self.assertRaises(PermissionError):
+            calorie_tracking_service.log_calorie_event(
+                "ws-1",
+                {
+                    "id": "meal-a",
+                    "meal_label": "Breakfast",
+                    "calories": 500,
+                },
+            )
 
 
 if __name__ == "__main__":

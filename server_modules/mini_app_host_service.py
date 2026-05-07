@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
-from server_modules import app_bridge_service
+from server_modules import app_bridge_service, external_content_guard
 
 
 DEFAULT_HOSTED_BRIDGE_MESSAGE_TYPE = "empyralis.hosted_app.bridge.request"
@@ -14,18 +14,35 @@ DEFAULT_HOSTED_BRIDGE_RESPONSE_TYPE = "empyralis.hosted_app.bridge.response"
 DEFAULT_HOSTED_BRIDGE_READY_TYPE = "empyralis.hosted_app.bridge.ready"
 _SUPPORTED_DELIVERY_MODES = {"structured", "hosted"}
 _SUPPORTED_EMBED_KINDS = {"iframe", "webview"}
+APP_PERMISSION_SUMMARY_READ = "app.summary.read"
+APP_PERMISSION_RECORDS_READ_RAW = "app.records.read.raw"
+APP_PERMISSION_RECORDS_WRITE = "app.records.write"
+APP_PERMISSION_PROFILE_WRITE = "app.profile.write"
+APP_PERMISSION_AI_INVOKE = "app.ai.invoke"
+APP_PERMISSION_BRIDGE_SAGE_REQUEST = "app.bridge.sage.request"
+APP_PERMISSION_BRIDGE_SPECIALIST_REQUEST = "app.bridge.specialist.request"
+APP_PERMISSION_CONNECTOR_INVOKE = "app.connector.invoke"
+_APP_PERMISSION_CLASSES = {
+    APP_PERMISSION_SUMMARY_READ,
+    APP_PERMISSION_RECORDS_READ_RAW,
+    APP_PERMISSION_RECORDS_WRITE,
+    APP_PERMISSION_PROFILE_WRITE,
+    APP_PERMISSION_AI_INVOKE,
+    APP_PERMISSION_BRIDGE_SAGE_REQUEST,
+    APP_PERMISSION_BRIDGE_SPECIALIST_REQUEST,
+    APP_PERMISSION_CONNECTOR_INVOKE,
+}
+_BRIDGE_KIND_REQUIRED_PERMISSION = {
+    "app_to_sage": APP_PERMISSION_BRIDGE_SAGE_REQUEST,
+    "app_to_specialist": APP_PERMISSION_BRIDGE_SPECIALIST_REQUEST,
+    "app_to_connector_runtime": APP_PERMISSION_CONNECTOR_INVOKE,
+}
 _DEFAULT_IFRAME_SANDBOX = [
     "allow-forms",
     "allow-modals",
-    "allow-popups",
-    "allow-popups-to-escape-sandbox",
-    "allow-same-origin",
     "allow-scripts",
 ]
-_DEFAULT_IFRAME_ALLOW = [
-    "clipboard-read",
-    "clipboard-write",
-]
+_DEFAULT_IFRAME_ALLOW: List[str] = []
 
 
 def _normalized_text(value: Any) -> str:
@@ -102,18 +119,37 @@ def _normalize_allowed_origins(value: Any, *, hosted_url: Optional[str]) -> List
 def _normalize_permission_tokens(
     value: Any,
     *,
+    delivery_mode: str,
     bridge_contracts: Dict[str, List[str]],
 ) -> List[str]:
     permissions: List[str] = []
     for item in value if isinstance(value, list) else []:
         token = _normalized_text(item).lower()
-        if token and token not in permissions:
+        if not token:
+            continue
+        if token.startswith("bridge.app_to_sage."):
+            token = APP_PERMISSION_BRIDGE_SAGE_REQUEST
+        elif token.startswith("bridge.app_to_specialist."):
+            token = APP_PERMISSION_BRIDGE_SPECIALIST_REQUEST
+        elif token.startswith("bridge.app_to_connector_runtime."):
+            token = APP_PERMISSION_CONNECTOR_INVOKE
+        elif token.startswith("bridge.sage_to_app."):
+            token = APP_PERMISSION_SUMMARY_READ
+        if token not in _APP_PERMISSION_CLASSES:
+            raise ValueError(f"Unsupported permission class '{token}'.")
+        if token not in permissions:
             permissions.append(token)
-    for bridge_kind, bridge_types in bridge_contracts.items():
-        for bridge_type in bridge_types:
-            token = f"bridge.{bridge_kind}.{bridge_type}"
-            if token not in permissions:
-                permissions.append(token)
+
+    is_first_party = delivery_mode == "structured"
+    if is_first_party and APP_PERMISSION_SUMMARY_READ not in permissions:
+        permissions.append(APP_PERMISSION_SUMMARY_READ)
+
+    for bridge_kind in bridge_contracts:
+        required = _BRIDGE_KIND_REQUIRED_PERMISSION.get(_normalized_text(bridge_kind).lower())
+        if required and required not in permissions:
+            raise ValueError(
+                f"Bridge kind '{bridge_kind}' requires explicit permission '{required}'."
+            )
     return permissions
 
 
@@ -179,6 +215,24 @@ def _normalize_context_envelope(value: Any) -> Dict[str, List[str]]:
     }
 
 
+def _should_allow_same_origin_in_iframe(
+    *,
+    app_contract: Dict[str, Any],
+    hosted_url: str,
+) -> bool:
+    parsed = urlparse(hosted_url)
+    hostname = _normalized_text(parsed.hostname).lower()
+    if _is_local_dev_host(hostname):
+        return True
+    policy = app_contract.get("verified_bridge_contract")
+    if not isinstance(policy, dict):
+        return False
+    verification_status = _normalized_text(policy.get("verification_status")).lower()
+    allow_same_origin_embed = bool(policy.get("allow_same_origin_embed"))
+    same_origin_trusted = bool(policy.get("same_origin_trusted") or app_contract.get("same_origin_trusted"))
+    return verification_status == "verified" and allow_same_origin_embed and same_origin_trusted
+
+
 def normalize_hosted_app_fields(
     *,
     app_id: str,
@@ -196,6 +250,7 @@ def normalize_hosted_app_fields(
     normalized_bridge_contracts = _normalize_bridge_contracts(bridge_contracts, app_id=app_id)
     normalized_permissions = _normalize_permission_tokens(
         permissions,
+        delivery_mode=normalized_delivery_mode,
         bridge_contracts=normalized_bridge_contracts,
     )
     normalized_context_envelope = _normalize_context_envelope(context_envelope)
@@ -229,6 +284,9 @@ def build_hosted_mini_app_manifest(
     permissions = [token for token in list(app_contract.get("permissions") or []) if _normalized_text(token)]
     allowed_origins = _normalize_allowed_origins(app_contract.get("allowed_origins"), hosted_url=hosted_url)
     context_envelope = app_contract.get("context_envelope") if isinstance(app_contract.get("context_envelope"), dict) else {}
+    iframe_sandbox = list(_DEFAULT_IFRAME_SANDBOX)
+    if _should_allow_same_origin_in_iframe(app_contract=app_contract, hosted_url=hosted_url):
+        iframe_sandbox.append("allow-same-origin")
     return {
         "app_id": app_id,
         "workspace_id": _normalized_text(workspace_id) or "default",
@@ -239,7 +297,7 @@ def build_hosted_mini_app_manifest(
             "allowed_origins": allowed_origins,
             "embed": {
                 "kind": _normalize_embed_kind(app_contract.get("embed_kind")),
-                "sandbox": list(_DEFAULT_IFRAME_SANDBOX),
+                "sandbox": iframe_sandbox,
                 "allow": list(_DEFAULT_IFRAME_ALLOW),
                 "referrer_policy": "origin",
             },
@@ -271,6 +329,19 @@ def _allowed_bridge_tokens(manifest: Dict[str, Any]) -> Dict[str, List[str]]:
         for kind, types in allowed.items()
         if _normalized_text(kind)
     }
+
+
+def _required_permission_for_bridge_kind(bridge_kind: str) -> Optional[str]:
+    return _BRIDGE_KIND_REQUIRED_PERMISSION.get(_normalized_text(bridge_kind).lower())
+
+
+def _hosted_app_to_sage_enabled_by_verified_contract(app_contract: Dict[str, Any]) -> bool:
+    policy = app_contract.get("verified_bridge_contract")
+    if not isinstance(policy, dict):
+        return False
+    verification_status = _normalized_text(policy.get("verification_status")).lower()
+    allow_app_to_sage = bool(policy.get("allow_hosted_app_to_sage"))
+    return verification_status == "verified" and allow_app_to_sage
 
 
 def _normalize_hosted_bridge_contract(
@@ -364,6 +435,16 @@ async def process_hosted_bridge_request(
     allowed_tokens = _allowed_bridge_tokens(manifest)
     if kind not in allowed_tokens or bridge_token not in allowed_tokens.get(kind, []):
         raise ValueError("Hosted mini app bridge contract is not allowed.")
+    required_permission = _required_permission_for_bridge_kind(kind)
+    granted_permissions = {
+        _normalized_text(item).lower()
+        for item in list(app_contract.get("permissions") or [])
+        if _normalized_text(item)
+    }
+    if required_permission and required_permission not in granted_permissions:
+        raise PermissionError(
+            f"Hosted mini app bridge '{kind}' requires explicit permission '{required_permission}'."
+        )
 
     bridge = _normalize_hosted_bridge_contract(
         app_id=_normalized_text(app_contract.get("app_id")),
@@ -379,8 +460,30 @@ async def process_hosted_bridge_request(
         },
     )
 
+    guarded_request = external_content_guard.wrap_external_content(
+        _normalized_text(request_text),
+        source="hosted_mini_app",
+        sender=_normalized_text(app_contract.get("app_id")) or "hosted-mini-app",
+        channel="hosted_mini_app_bridge",
+        source_event_id=_normalized_text((metadata or {}).get("request_id") if isinstance(metadata, dict) else "") or None,
+        metadata={
+            "workspace_id": _normalized_text(workspace_id),
+            "bridge_kind": kind,
+            "bridge_type": bridge_token,
+            "origin": normalized_origin,
+        },
+    )
+    guarded_request_text = guarded_request.text if _normalized_text(request_text) else ""
+
+    rejection_reason = ""
+    if kind == "app_to_sage" and not _hosted_app_to_sage_enabled_by_verified_contract(app_contract):
+        rejection_reason = (
+            "Hosted mini apps cannot invoke Sage turns by default. "
+            "A verified bridge contract must explicitly enable app_to_sage execution."
+        )
+
     turn_payload: Dict[str, Any] = {}
-    if kind == "app_to_sage" and _normalized_text(request_text):
+    if kind == "app_to_sage" and guarded_request_text and not rejection_reason:
         from server_modules import agent_registry_api
 
         master_install = await agent_registry_api.agent_registry_repository.get_workspace_master_agent_install(
@@ -393,7 +496,7 @@ async def process_hosted_bridge_request(
         turn_result = await agent_registry_api.execute_install_agent_turn(
             install_id=_normalized_text(master_install.get("id")),
             current_user=current_user,
-            message=_normalized_text(request_text),
+            message=guarded_request_text,
             channel="web",
             execution_mode="durable",
             response_mode="artifact",
@@ -402,6 +505,12 @@ async def process_hosted_bridge_request(
                 "app_id": bridge.get("app_id"),
                 "app_bridge": bridge,
                 "app_context_envelope": bridge.get("context_envelope"),
+                "external_content_guard": {
+                    "wrapper_id": guarded_request.wrapper_id,
+                    "source": guarded_request.metadata.source,
+                    "channel": guarded_request.metadata.channel,
+                    "suspicious_patterns": list(guarded_request.suspicious_patterns),
+                },
             },
         )
         if hasattr(turn_result, "model_dump"):
@@ -420,8 +529,18 @@ async def process_hosted_bridge_request(
         bridge_kind=_normalized_text(bridge.get("bridge_kind")),
         bridge_type=_normalized_text(bridge.get("bridge_type")),
         target=bridge.get("target") if isinstance(bridge.get("target"), dict) else None,
-        metadata={"source": "mini_apps.hosted_bridge", "origin": normalized_origin},
+        metadata={
+            "source": "mini_apps.hosted_bridge",
+            "origin": normalized_origin,
+            "bridge_status": "rejected" if rejection_reason else "accepted",
+            "bridge_rejection_reason": rejection_reason or None,
+            "external_content_guard_wrapper_id": guarded_request.wrapper_id if guarded_request_text else None,
+            "external_content_guard_suspicious_patterns": list(guarded_request.suspicious_patterns),
+        },
     )
+    if rejection_reason:
+        raise PermissionError(rejection_reason)
+
     return {
         "status": "ok",
         "workspace_id": workspace_id,

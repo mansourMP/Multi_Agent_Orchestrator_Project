@@ -751,6 +751,18 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
                         "type": "object",
                         "description": "Service-specific profile fields to store.",
                     },
+                    "explicit_user_intent": {
+                        "type": "boolean",
+                        "description": "Set true when the user explicitly asked to save profile changes.",
+                    },
+                    "approval_granted": {
+                        "type": "boolean",
+                        "description": "Set true when this write was approved by policy/runtime controls.",
+                    },
+                    "approval_id": {
+                        "type": "string",
+                        "description": "Optional approval reference for audit.",
+                    },
                 },
                 "required": ["service_id", "profile"],
             },
@@ -772,6 +784,18 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
                     "entry": {
                         "type": "object",
                         "description": "The service-specific entry payload to save.",
+                    },
+                    "explicit_user_intent": {
+                        "type": "boolean",
+                        "description": "Set true when the user explicitly asked to save this entry.",
+                    },
+                    "approval_granted": {
+                        "type": "boolean",
+                        "description": "Set true when this write was approved by policy/runtime controls.",
+                    },
+                    "approval_id": {
+                        "type": "string",
+                        "description": "Optional approval reference for audit.",
                     },
                 },
                 "required": ["service_id", "entry"],
@@ -2019,6 +2043,12 @@ def execute_single_direct_tool_call(
         profile = argument_payload.get("profile")
         if not service_id or not isinstance(profile, dict):
             raise RuntimeError("Tool 'sage_service__update_profile' requires service_id and profile.")
+        write_authorization = {
+            "explicit_user_intent": bool(argument_payload.get("explicit_user_intent") or argument_payload.get("confirm_write")),
+            "approval_granted": bool(argument_payload.get("approval_granted")),
+            "approval_id": str(argument_payload.get("approval_id") or "").strip() or None,
+            "approval_source": "direct_tool",
+        }
         result = callbacks.run_async_tool_call(
             sage_services_service.update_service_profile(
                 tenant_id=tenant_id,
@@ -2026,6 +2056,7 @@ def execute_single_direct_tool_call(
                 service_id=service_id,
                 profile=profile,
                 actor_user_id=None,
+                write_authorization=write_authorization,
             )
         )
         service_payload = result.get("service") if isinstance(result, dict) else result
@@ -2035,6 +2066,12 @@ def execute_single_direct_tool_call(
         entry = argument_payload.get("entry")
         if not service_id or not isinstance(entry, dict):
             raise RuntimeError("Tool 'sage_service__create_entry' requires service_id and entry.")
+        write_authorization = {
+            "explicit_user_intent": bool(argument_payload.get("explicit_user_intent") or argument_payload.get("confirm_write")),
+            "approval_granted": bool(argument_payload.get("approval_granted")),
+            "approval_id": str(argument_payload.get("approval_id") or "").strip() or None,
+            "approval_source": "direct_tool",
+        }
         result = callbacks.run_async_tool_call(
             sage_services_service.create_service_entry(
                 tenant_id=tenant_id,
@@ -2042,6 +2079,7 @@ def execute_single_direct_tool_call(
                 service_id=service_id,
                 entry=entry,
                 actor_user_id=None,
+                write_authorization=write_authorization,
             )
         )
         service_payload = result.get("service") if isinstance(result, dict) else result

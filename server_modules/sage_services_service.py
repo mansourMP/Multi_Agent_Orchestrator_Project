@@ -242,6 +242,7 @@ def _append_activity(
     summary: str,
     actor_user_id: Optional[str],
     entry_id: Optional[str] = None,
+    policy_metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     activity = list(service_state.get("activity") or [])
     activity.insert(0, {
@@ -250,10 +251,61 @@ def _append_activity(
         "summary": summary,
         "entry_id": entry_id,
         "actor_user_id": _coerce_text(actor_user_id) or None,
+        "policy": dict(policy_metadata or {}),
         "created_at": _utc_now_iso(),
     })
     service_state["activity"] = activity[:20]
     service_state["updated_at"] = _utc_now_iso()
+
+
+def _resolve_sage_write_policy(
+    *,
+    actor_user_id: Optional[str],
+    write_authorization: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    actor = _coerce_text(actor_user_id)
+    raw = dict(write_authorization or {}) if isinstance(write_authorization, dict) else {}
+    explicit_user_intent = bool(raw.get("explicit_user_intent") or raw.get("confirm_write") or raw.get("user_intent"))
+    approval_granted = bool(raw.get("approval_granted") or raw.get("approved"))
+    approval_id = _coerce_text(raw.get("approval_id")) or None
+    approval_source = _coerce_text(raw.get("approval_source")) or None
+    if actor:
+        return {
+            "enforced": True,
+            "allowed": True,
+            "mode": "actor_user",
+            "explicit_user_intent": True,
+            "approval_granted": bool(approval_granted or approval_id),
+            "approval_id": approval_id,
+            "approval_source": approval_source or "workspace_member_api",
+        }
+    if explicit_user_intent:
+        return {
+            "enforced": True,
+            "allowed": True,
+            "mode": "explicit_intent",
+            "explicit_user_intent": True,
+            "approval_granted": bool(approval_granted or approval_id),
+            "approval_id": approval_id,
+            "approval_source": approval_source,
+        }
+    if approval_granted or approval_id:
+        return {
+            "enforced": True,
+            "allowed": True,
+            "mode": "approval",
+            "explicit_user_intent": False,
+            "approval_granted": True,
+            "approval_id": approval_id,
+            "approval_source": approval_source or "runtime_approval",
+        }
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Sage service write blocked. "
+            "Provide explicit_user_intent=true or an approval grant before writing."
+        ),
+    )
 
 
 def _entry_preview(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -406,7 +458,12 @@ async def update_service_profile(
     service_id: str,
     profile: Dict[str, Any],
     actor_user_id: Optional[str],
+    write_authorization: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    write_policy = _resolve_sage_write_policy(
+        actor_user_id=actor_user_id,
+        write_authorization=write_authorization,
+    )
     state = _safe_read_json(_state_file(workspace_id))
     service_state = dict(state.get("services", {}).get(service_id) or _default_service_state(service_id))
     service_state["profile"] = _normalize_profile(service_id, profile)
@@ -415,6 +472,7 @@ async def update_service_profile(
         action="profile_updated",
         summary="Saved service preferences for Sage memory.",
         actor_user_id=actor_user_id,
+        policy_metadata=write_policy,
     )
     state["services"][service_id] = service_state
     _save_state(workspace_id, state)
@@ -426,6 +484,7 @@ async def update_service_profile(
         action="profile_updated",
         summary="Service preferences updated.",
         payload={"profile": service_state["profile"]},
+        policy_metadata=write_policy,
     )
     return get_sage_service(workspace_id=workspace_id, service_id=service_id)
 
@@ -437,7 +496,12 @@ async def create_service_entry(
     service_id: str,
     entry: Dict[str, Any],
     actor_user_id: Optional[str],
+    write_authorization: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    write_policy = _resolve_sage_write_policy(
+        actor_user_id=actor_user_id,
+        write_authorization=write_authorization,
+    )
     state = _safe_read_json(_state_file(workspace_id))
     service_state = dict(state.get("services", {}).get(service_id) or _default_service_state(service_id))
     normalized = _normalize_entry_payload(service_id, entry)
@@ -453,6 +517,7 @@ async def create_service_entry(
         summary=normalized["summary"],
         actor_user_id=actor_user_id,
         entry_id=normalized["id"],
+        policy_metadata=write_policy,
     )
     state["services"][service_id] = service_state
     _save_state(workspace_id, state)
@@ -464,6 +529,7 @@ async def create_service_entry(
         action="entry_created",
         summary=normalized["summary"],
         payload=normalized,
+        policy_metadata=write_policy,
     )
     return get_sage_service(workspace_id=workspace_id, service_id=service_id)
 
@@ -574,6 +640,7 @@ async def _publish_service_event(
     action: str,
     summary: str,
     payload: Dict[str, Any],
+    policy_metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     if action == "profile_updated":
         event_type = "saved_preference_updated"
@@ -587,6 +654,7 @@ async def _publish_service_event(
         "service_id": service_id,
         "action": action,
         "actor_user_id": _coerce_text(actor_user_id) or None,
+        "write_policy": dict(policy_metadata or {}),
     }
     try:
         await personal_context_engine.publish_event(

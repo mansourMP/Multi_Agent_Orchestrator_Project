@@ -161,6 +161,7 @@ class OperatorChatDirectToolTests(unittest.TestCase):
                                 "front": "SPA",
                                 "back": "Share Purchase Agreement",
                             },
+                            "explicit_user_intent": True,
                         },
                     },
                     workspace_id="workspace-1",

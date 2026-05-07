@@ -58,6 +58,66 @@ class AppBridgeServiceTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("captain_context", str(ctx.exception.detail))
 
+    def test_normalize_bridge_contract_rejects_nested_forbidden_target_key(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                app_bridge_service.normalize_bridge_contract(
+                    app_id="study",
+                    bridge_kind="app_to_sage",
+                    bridge_type="summary_request",
+                    target={
+                        "safe": {"steps": [1, 2, 3]},
+                        "payload": [
+                            {"kind": "safe"},
+                            {"nested": {"sage_memory": {"raw": "blocked"}}},
+                        ],
+                    },
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("sage_memory", str(ctx.exception.detail))
+        self.assertIn("bridge.target", str(ctx.exception.detail))
+
+    def test_normalize_bridge_contract_rejects_nested_forbidden_bridge_metadata_key(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                app_bridge_service.normalize_bridge_contract(
+                    app_id="study",
+                    bridge_kind="app_to_sage",
+                    bridge_type="summary_request",
+                    metadata={
+                        "events": [
+                            {"kind": "ok"},
+                            {"nested": [{"private_context": "blocked"}]},
+                        ]
+                    },
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("private_context", str(ctx.exception.detail))
+        self.assertIn("bridge.metadata", str(ctx.exception.detail))
+
+    def test_normalize_app_context_envelope_rejects_nested_forbidden_key(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            app_bridge_service.normalize_app_context_envelope(
+                {
+                    "user_selected_inputs": [
+                        {"kind": "document", "id": "doc-1"},
+                        {"meta": {"raw_memory": {"snippet": "blocked"}}},
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("raw_memory", str(ctx.exception.detail))
+        self.assertIn("context_envelope.user_selected_inputs", str(ctx.exception.detail))
+
     def test_enforce_app_metadata_contract_rejects_implicit_captain_context(self) -> None:
         with patch(
             "server_modules.app_bridge_service._resolve_registry_app_item",
@@ -89,6 +149,32 @@ class AppBridgeServiceTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("captain_profile", str(ctx.exception.detail))
+
+    def test_enforce_app_metadata_contract_rejects_nested_forbidden_bridge_payload_key(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                app_bridge_service.enforce_app_metadata_contract(
+                    metadata={
+                        "app_id": "study",
+                        "app_bridge": {
+                            "kind": "app_to_sage",
+                            "type": "summary_request",
+                            "target": {
+                                "nested": [
+                                    {"route": "safe"},
+                                    {"payload": {"specialist_memory": "blocked"}},
+                                ]
+                            },
+                        },
+                    }
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("specialist_memory", str(ctx.exception.detail))
+        self.assertIn("metadata.app_bridge", str(ctx.exception.detail))
 
     def test_enforce_app_metadata_contract_normalizes_context_and_bridge(self) -> None:
         with patch(

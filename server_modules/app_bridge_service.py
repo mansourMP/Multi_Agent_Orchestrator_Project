@@ -55,6 +55,37 @@ def _forbidden_bridge_key(raw_key: Any) -> Optional[str]:
     return None
 
 
+def _find_forbidden_bridge_key_path(payload: Any, *, root_path: str = "") -> Optional[tuple[str, str]]:
+    if isinstance(payload, dict):
+        for raw_key, raw_value in payload.items():
+            key_text = str(raw_key or "").strip()
+            path = f"{root_path}.{key_text}" if root_path else key_text
+            forbidden = _forbidden_bridge_key(raw_key)
+            if forbidden:
+                return forbidden, path
+            nested = _find_forbidden_bridge_key_path(raw_value, root_path=path)
+            if nested:
+                return nested
+    elif isinstance(payload, list):
+        for index, item in enumerate(payload):
+            path = f"{root_path}[{index}]" if root_path else f"[{index}]"
+            nested = _find_forbidden_bridge_key_path(item, root_path=path)
+            if nested:
+                return nested
+    return None
+
+
+def _assert_no_forbidden_bridge_keys(payload: Any, *, root_label: str) -> None:
+    violation = _find_forbidden_bridge_key_path(payload, root_path=root_label)
+    if not violation:
+        return
+    forbidden_key, path = violation
+    raise HTTPException(
+        status_code=400,
+        detail=f"{root_label} contains forbidden field '{forbidden_key}' at '{path}'.",
+    )
+
+
 def _read_contract_map() -> Dict[str, Any]:
     try:
         raw = json.loads(_CONTRACT_MAP_PATH.read_text(encoding="utf-8"))
@@ -200,6 +231,7 @@ def normalize_app_context_envelope(
             normalized_payload[key] = raw_value if isinstance(raw_value, (dict, list, str, int, float, bool)) or raw_value is None else str(raw_value)
         else:
             normalized_payload[key] = raw_value
+        _assert_no_forbidden_bridge_keys(normalized_payload[key], root_label=f"context_envelope.{key}")
     classes = sorted(key for key, value in normalized_payload.items() if value not in (None, "", [], {}))
     return {"classes": classes, "payload": normalized_payload}
 
@@ -223,10 +255,7 @@ def normalize_bridge_contract(
     if not bridge_token or bridge_token not in allowed_types:
         raise HTTPException(status_code=400, detail="Unsupported bridge_type for this bridge_kind.")
     target_payload = _coerce_dict(target)
-    for key in list(target_payload):
-        forbidden = _forbidden_bridge_key(key)
-        if forbidden:
-            raise HTTPException(status_code=400, detail=f"bridge target field '{key}' is not allowed.")
+    _assert_no_forbidden_bridge_keys(target_payload, root_label="bridge.target")
     if kind == "app_to_specialist" and not (
         str(target_payload.get("target_install_id") or "").strip()
         or str(target_payload.get("target_capability") or "").strip()
@@ -244,10 +273,7 @@ def normalize_bridge_contract(
     ):
         raise HTTPException(status_code=400, detail="App -> connector/runtime bridges require connector_id, workflow_id, or route_key.")
     normalized_metadata = _coerce_dict(metadata)
-    for key in normalized_metadata:
-        forbidden = _forbidden_bridge_key(key)
-        if forbidden:
-            raise HTTPException(status_code=400, detail=f"metadata.{key} is not allowed for explicit app bridges.")
+    _assert_no_forbidden_bridge_keys(normalized_metadata, root_label="bridge.metadata")
     normalized_envelope = normalize_app_context_envelope(context_envelope, contract=contract)
     return {
         "app_id": contract["app_id"],
@@ -269,6 +295,7 @@ def enforce_app_metadata_contract(*, metadata: Optional[Dict[str, Any]]) -> Dict
     for key in list(normalized):
         if key in _FORBIDDEN_IMPLICIT_METADATA_KEYS:
             raise HTTPException(status_code=400, detail=f"metadata.{key} is not allowed for applications without an explicit bridge.")
+    _assert_no_forbidden_bridge_keys(normalized, root_label="metadata")
     contract = resolve_app_runtime_contract(app_id, installed_only=False)
     envelope = normalized.get("app_context_envelope")
     if envelope is None and isinstance(normalized.get("app_context"), dict):
@@ -280,6 +307,7 @@ def enforce_app_metadata_contract(*, metadata: Optional[Dict[str, Any]]) -> Dict
     if bridge is not None:
         if not isinstance(bridge, dict):
             raise HTTPException(status_code=400, detail="metadata.app_bridge must be an object.")
+        _assert_no_forbidden_bridge_keys(bridge, root_label="metadata.app_bridge")
         normalized["app_bridge"] = normalize_bridge_contract(
             app_id=app_id,
             bridge_kind=str(bridge.get("bridge_kind") or bridge.get("kind") or "").strip(),

@@ -40,11 +40,33 @@ def summarize_messages(messages: List[Dict[str, Any]], *, max_chars: int = SUMMA
     )
 
 
+def _trim_tail_to_token_budget(
+    messages: List[Dict[str, Any]],
+    *,
+    budget_tokens: int,
+) -> List[Dict[str, Any]]:
+    safe_budget = max(200, int(budget_tokens or 0))
+    kept: List[Dict[str, Any]] = []
+    total = 0
+    for message in reversed(messages):
+        token_cost = estimate_message_tokens(message)
+        if kept and total + token_cost > safe_budget:
+            break
+        kept.append(message)
+        total += token_cost
+    if not kept and messages:
+        return [messages[-1]]
+    kept.reverse()
+    return kept
+
+
 def compact_conversation_history(
     messages: List[Dict[str, Any]],
     *,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     preserve_last_messages: int = DEFAULT_PRESERVE_LAST_MESSAGES,
+    recent_message_budget_tokens: int | None = None,
+    summary_max_chars: int | None = None,
 ) -> Dict[str, Any]:
     normalized_messages = [dict(item) for item in messages if isinstance(item, dict)]
     original_tokens = estimate_conversation_tokens(normalized_messages)
@@ -59,8 +81,17 @@ def compact_conversation_history(
 
     safe_preserve_last = max(1, int(preserve_last_messages or DEFAULT_PRESERVE_LAST_MESSAGES))
     tail = normalized_messages[-safe_preserve_last:]
+    tail_budget = int(
+        recent_message_budget_tokens
+        if recent_message_budget_tokens is not None
+        else max(800, safe_preserve_last * 600)
+    )
+    tail = _trim_tail_to_token_budget(tail, budget_tokens=tail_budget)
     head = normalized_messages[:-safe_preserve_last]
-    summary = summarize_messages(head)
+    summary = summarize_messages(
+        head,
+        max_chars=max(400, int(summary_max_chars or SUMMARY_MAX_CHARS)),
+    )
     compacted_messages: List[Dict[str, Any]] = []
     if summary:
         compacted_messages.append({"role": SUMMARY_MESSAGE_ROLE, "content": summary})

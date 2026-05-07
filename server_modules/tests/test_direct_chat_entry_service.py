@@ -219,6 +219,109 @@ class DirectChatEntryServiceTests(unittest.TestCase):
             ],
         )
 
+    def test_prepare_direct_chat_request_uses_model_aware_compaction_for_known_model(self) -> None:
+        captured_kwargs = {}
+
+        def _compact(messages, **kwargs):
+            captured_kwargs.update(kwargs)
+            return {"messages": list(messages), "compacted": False}
+
+        with patch.object(
+            direct_chat_entry_service.session_transcript_store,
+            "load_latest_session_transcript_messages",
+            return_value=[],
+        ):
+            direct_chat_entry_service.prepare_direct_chat_request(
+                resolved_turn_request=None,
+                session_ctx=None,
+                message="Continue",
+                workspace_id="default",
+                thread_id="thread-1",
+                requested_model="gpt-4.1",
+                requested_provider="openai",
+                prior_messages=[],
+                reasoning_effort="medium",
+                availability={"ai_ready": True},
+                approved_action=None,
+                max_iterations=4,
+                direct_chat_session_key_fn=lambda workspace_id, thread_id: f"{workspace_id}:{thread_id}",
+                resolved_chat_iteration_limit_fn=lambda value: int(value or 30),
+                session_model_preference_fn=lambda _session_key: {},
+                normalize_reasoning_effort_fn=lambda value: value,
+                parse_slash_command_fn=lambda _message: {"command": "", "remainder": ""},
+                set_session_model_preference_fn=lambda session_key, provider=None, model=None: None,
+                mark_thread_cleared_fn=lambda _session_key: None,
+                normalize_prior_messages_fn=lambda value: list(value or []),
+                consume_thread_cleared_fn=lambda _session_key: False,
+                compact_conversation_history_fn=_compact,
+                build_proactive_suggestions_fn=lambda _workspace_id: [],
+                direct_tool_session_key_fn=lambda workspace_id, thread_id: f"tool:{workspace_id}:{thread_id}",
+                resolve_direct_chat_availability_fn=lambda workspace_id, requested_provider, availability_override=None: {"ai_ready": True, "provider": requested_provider},
+                connected_system_labels_fn=lambda _availability: [],
+                context_tool_capabilities_fn=lambda _availability: [],
+                build_direct_chat_tools_fn=lambda _tool_capabilities: [],
+                build_local_direct_chat_tools_fn=lambda _availability: [],
+                build_builtin_direct_chat_tools_fn=lambda: [],
+                normalize_direct_approved_action_fn=lambda _value: None,
+                build_context_used_fn=lambda **kwargs: kwargs,
+                direct_chat_compaction_token_limit=8_000,
+            )
+
+        self.assertGreater(captured_kwargs.get("max_tokens", 0), 8_000)
+        self.assertGreater(captured_kwargs.get("recent_message_budget_tokens", 0), 0)
+        self.assertLessEqual(captured_kwargs.get("summary_max_chars", 0), 8_000)
+
+    def test_prepare_direct_chat_request_falls_back_to_default_budget_when_model_unknown(self) -> None:
+        captured_kwargs = {}
+
+        def _compact(messages, **kwargs):
+            captured_kwargs.update(kwargs)
+            return {"messages": list(messages), "compacted": False}
+
+        with patch.object(
+            direct_chat_entry_service.session_transcript_store,
+            "load_latest_session_transcript_messages",
+            return_value=[],
+        ):
+            direct_chat_entry_service.prepare_direct_chat_request(
+                resolved_turn_request=None,
+                session_ctx=None,
+                message="Continue",
+                workspace_id="default",
+                thread_id="thread-1",
+                requested_model="unknown-model",
+                requested_provider="openai",
+                prior_messages=[],
+                reasoning_effort="medium",
+                availability={"ai_ready": True},
+                approved_action=None,
+                max_iterations=4,
+                direct_chat_session_key_fn=lambda workspace_id, thread_id: f"{workspace_id}:{thread_id}",
+                resolved_chat_iteration_limit_fn=lambda value: int(value or 30),
+                session_model_preference_fn=lambda _session_key: {},
+                normalize_reasoning_effort_fn=lambda value: value,
+                parse_slash_command_fn=lambda _message: {"command": "", "remainder": ""},
+                set_session_model_preference_fn=lambda session_key, provider=None, model=None: None,
+                mark_thread_cleared_fn=lambda _session_key: None,
+                normalize_prior_messages_fn=lambda value: list(value or []),
+                consume_thread_cleared_fn=lambda _session_key: False,
+                compact_conversation_history_fn=_compact,
+                build_proactive_suggestions_fn=lambda _workspace_id: [],
+                direct_tool_session_key_fn=lambda workspace_id, thread_id: f"tool:{workspace_id}:{thread_id}",
+                resolve_direct_chat_availability_fn=lambda workspace_id, requested_provider, availability_override=None: {"ai_ready": True, "provider": requested_provider},
+                connected_system_labels_fn=lambda _availability: [],
+                context_tool_capabilities_fn=lambda _availability: [],
+                build_direct_chat_tools_fn=lambda _tool_capabilities: [],
+                build_local_direct_chat_tools_fn=lambda _availability: [],
+                build_builtin_direct_chat_tools_fn=lambda: [],
+                normalize_direct_approved_action_fn=lambda _value: None,
+                build_context_used_fn=lambda **kwargs: kwargs,
+                direct_chat_compaction_token_limit=8_000,
+            )
+
+        self.assertEqual(captured_kwargs.get("max_tokens"), 8_000)
+        self.assertEqual(captured_kwargs.get("preserve_last_messages"), 10)
+
 
 if __name__ == "__main__":
     unittest.main()

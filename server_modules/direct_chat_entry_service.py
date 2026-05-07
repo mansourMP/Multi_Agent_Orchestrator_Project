@@ -3,8 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules import provider_profiles
 from server_modules import session_transcript_store
-from server_modules.conversation_memory_policy import DIRECT_CHAT_PROFILE, get_memory_policy_profile
+from server_modules.conversation_memory_policy import (
+    DIRECT_CHAT_PROFILE,
+    build_model_aware_memory_policy,
+    get_memory_policy_profile,
+)
 
 
 @dataclass(slots=True)
@@ -133,20 +138,45 @@ def prepare_direct_chat_request(
         slash_command_name = ""
         slash_remainder = ""
 
+    base_direct_chat_policy = get_memory_policy_profile(DIRECT_CHAT_PROFILE)
+    context_window_tokens = provider_profiles.context_window_for_model(
+        normalized_requested_provider,
+        normalized_requested_model,
+    )
+    if context_window_tokens is None:
+        model_aware_direct_chat_policy = base_direct_chat_policy
+    else:
+        model_aware_direct_chat_policy = build_model_aware_memory_policy(
+            base_direct_chat_policy,
+            context_window_tokens=context_window_tokens,
+            runtime_lane="direct_chat",
+            trust_zone=str(
+                (
+                    session_ctx.get("meta", {}).get("trust_zone")
+                    if isinstance(session_ctx, dict) and isinstance(session_ctx.get("meta"), dict)
+                    else ""
+                )
+                or resolved_turn_metadata.get("trust_zone")
+                or "shared_cloud"
+            ),
+        )
+
     normalized_prior_messages = normalize_prior_messages_fn(prior_messages)
     if not normalized_prior_messages and normalized_thread_id:
         transcript_prior_messages = session_transcript_store.load_latest_session_transcript_messages(
             workspace_id=normalized_workspace_id,
             thread_id=normalized_thread_id,
-            limit=get_memory_policy_profile(DIRECT_CHAT_PROFILE).max_transcript_items,
+            limit=model_aware_direct_chat_policy.max_transcript_items,
         )
         normalized_prior_messages = normalize_prior_messages_fn(transcript_prior_messages)
     if consume_thread_cleared_fn(session_key):
         normalized_prior_messages = []
     compaction = compact_conversation_history_fn(
         normalized_prior_messages,
-        max_tokens=direct_chat_compaction_token_limit,
-        preserve_last_messages=get_memory_policy_profile(DIRECT_CHAT_PROFILE).preserve_last_messages,
+        max_tokens=model_aware_direct_chat_policy.max_prompt_tokens or direct_chat_compaction_token_limit,
+        preserve_last_messages=model_aware_direct_chat_policy.preserve_last_messages,
+        recent_message_budget_tokens=model_aware_direct_chat_policy.recent_message_budget_tokens,
+        summary_max_chars=model_aware_direct_chat_policy.max_summary_chars,
     )
     compacted_prior_messages = [
         item

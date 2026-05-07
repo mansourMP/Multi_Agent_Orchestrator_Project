@@ -47,6 +47,10 @@ class MemoryPolicyProfile:
     semantic_write_enabled: bool
     semantic_read_enabled: bool
     retention: MemoryRetentionContract
+    recent_message_budget_tokens: int = 0
+    output_reserve_tokens: int = 0
+    system_tool_reserve_tokens: int = 0
+    retrieval_reserve_tokens: int = 0
 
 
 _BASE_RETENTION = MemoryRetentionContract(
@@ -76,6 +80,12 @@ _RETENTION_PRESET_DAYS = {
     RETENTION_PRESET_STANDARD: 365,
     RETENTION_PRESET_EXTENDED: 730,
 }
+
+
+def _clamp(value: int, lower: int, upper: int) -> int:
+    if upper < lower:
+        return int(lower)
+    return max(int(lower), min(int(value), int(upper)))
 
 _PROFILE_REGISTRY: Dict[str, MemoryPolicyProfile] = {
     DIRECT_CHAT_PROFILE: MemoryPolicyProfile(
@@ -254,5 +264,64 @@ def _resolve_durable_run_profile() -> MemoryPolicyProfile:
             event_memory_days=retention_days,
             local_private_sync=_PROFILE_REGISTRY[DURABLE_RUN_PROFILE].retention.local_private_sync,
             cloud_safe_only=_PROFILE_REGISTRY[DURABLE_RUN_PROFILE].retention.cloud_safe_only,
+        ),
+    )
+
+
+def build_model_aware_memory_policy(
+    base_profile: MemoryPolicyProfile,
+    *,
+    context_window_tokens: int | None,
+    runtime_lane: str = "direct_chat",
+    trust_zone: str = "shared_cloud",
+) -> MemoryPolicyProfile:
+    window = int(context_window_tokens or 128_000)
+    window = max(8_000, window)
+
+    output_reserve = _clamp(int(window * 0.08), 2_048, 32_000)
+    system_tool_reserve = _clamp(int(window * 0.06), 2_000, 24_000)
+    retrieval_reserve = _clamp(int(window * 0.10), 2_000, 64_000)
+
+    usable_input = max(4_000, window - output_reserve)
+    conversation_budget = _clamp(
+        usable_input - system_tool_reserve - retrieval_reserve,
+        6_000,
+        int(window * 0.65),
+    )
+
+    summary_trigger_tokens = max(1_500, int(conversation_budget * 0.80))
+    recent_message_budget_tokens = min(int(conversation_budget * 0.35), 24_000)
+    max_summary_chars = _clamp(int(window / 80), 1_800, 8_000)
+    preserve_last_messages = _clamp(int(recent_message_budget_tokens / 600), 4, 20)
+    max_transcript_items = _clamp(preserve_last_messages + 2, 8, 40)
+    lane_token = str(runtime_lane or "").strip().lower() or "direct_chat"
+    trust_zone_token = str(trust_zone or "").strip().lower() or "shared_cloud"
+    cloud_safe_only = trust_zone_token == "shared_cloud"
+
+    return MemoryPolicyProfile(
+        name=base_profile.name,
+        max_prompt_tokens=conversation_budget,
+        preserve_last_messages=preserve_last_messages,
+        summary_trigger_messages=max(base_profile.summary_trigger_messages, preserve_last_messages + 2),
+        summary_trigger_tokens=summary_trigger_tokens,
+        recent_message_budget_tokens=recent_message_budget_tokens,
+        semantic_retrieval_k=base_profile.semantic_retrieval_k,
+        max_summary_chars=max_summary_chars,
+        output_reserve_tokens=output_reserve,
+        system_tool_reserve_tokens=system_tool_reserve,
+        retrieval_reserve_tokens=retrieval_reserve,
+        max_business_plan_chars=base_profile.max_business_plan_chars,
+        max_recent_log_days=base_profile.max_recent_log_days,
+        max_transcript_items=max_transcript_items,
+        raw_transcript_enabled=base_profile.raw_transcript_enabled,
+        semantic_write_enabled=base_profile.semantic_write_enabled,
+        semantic_read_enabled=base_profile.semantic_read_enabled,
+        retention=MemoryRetentionContract(
+            raw_transcript_days=base_profile.retention.raw_transcript_days,
+            summary_days=base_profile.retention.summary_days,
+            semantic_days=base_profile.retention.semantic_days,
+            event_memory_days=base_profile.retention.event_memory_days,
+            local_private_sync=base_profile.retention.local_private_sync,
+            cloud_safe_only=base_profile.retention.cloud_safe_only or cloud_safe_only or lane_token != "direct_chat",
         ),
     )

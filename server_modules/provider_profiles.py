@@ -1013,6 +1013,36 @@ def normalize_provider_model_id(
     return token
 
 
+def context_window_for_model(provider: str | None, model: str | None) -> int | None:
+    provider_id = normalize_provider_id(provider)
+    if not provider_id:
+        return None
+    try:
+        catalog_entry = provider_catalog_entry(provider_id)
+    except Exception:
+        catalog_entry = {}
+
+    model_token = normalize_provider_model_id(
+        provider_id,
+        model,
+        fallback_to_default=False,
+    )
+    if not model_token:
+        model_token = str(catalog_entry.get("default_model") or "").strip()
+    if not model_token:
+        return None
+
+    model_catalog = PROVIDER_MODEL_CATALOG.get(provider_id, {})
+    metadata = model_catalog.get(model_token) if isinstance(model_catalog, dict) else None
+    if not isinstance(metadata, dict):
+        return None
+    try:
+        resolved = int(metadata.get("context_window_tokens") or 0)
+    except Exception:
+        return None
+    return resolved if resolved > 0 else None
+
+
 def normalize_provider_id(provider: Any) -> str:
     provider_id = str(provider or "").strip().lower()
     return LEGACY_PROVIDER_ALIASES.get(provider_id, provider_id)

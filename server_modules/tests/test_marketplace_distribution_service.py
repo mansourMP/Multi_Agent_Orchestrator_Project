@@ -36,15 +36,47 @@ def test_empty_marketplace_returns_preview_packages(monkeypatch, tmp_path):
     template_payload = marketplace_distribution_service.list_marketplace_packages("ws-empty", kind="agent_template")
 
     assert payload["count"] >= 9
-    assert all(item["preview_only"] is True for item in payload["items"])
     package_ids = {item["package_id"] for item in payload["items"]}
     assert "preview-restaurant-orders" in package_ids
     assert "preview-deepseek-provider" in package_ids
     assert "studio-proof-shop-assistant" in package_ids
+    shop_assistant = next(item for item in payload["items"] if item["package_id"] == "studio-proof-shop-assistant")
+    assert shop_assistant["preview_only"] is False
+    assert shop_assistant["install_eligible"] is True
+    assert shop_assistant["install_blockers"] == []
+    assert shop_assistant["install_target"] == "template_catalog"
+    assert shop_assistant["runtime_truth"]["surface"] == "template_catalog"
+    assert shop_assistant["marketplace_proof"]["vertical"] == "retail_shop_assistant"
+    assert "answers_catalog_question_without_inventory_hallucination" in shop_assistant["marketplace_proof"]["golden_tests"]
+    assert shop_assistant["package"]["template_id"] == "shop-assistant"
+    assert shop_assistant["package"]["context_envelope"]["proof_agent_seed_contract"]["monetization_hint"]["suggested_offer"]
+    assert shop_assistant["package"]["context_envelope"]["proof_agent_seed_contract"]["analytics_events"]
+    assert all(item["preview_only"] is True for item in payload["items"] if item["package_id"] != "studio-proof-shop-assistant")
     assert provider_payload["count"] == 1
     assert provider_payload["items"][0]["package_id"] == "preview-deepseek-provider"
     assert template_payload["count"] == 3
     assert template_payload["items"][0]["kind"] == "agent_template"
+
+
+def test_installable_shop_assistant_seed_can_be_installed(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+
+    state = marketplace_distribution_service._safe_read_state("ws-empty")
+    state["packages"] = marketplace_distribution_service._preview_marketplace_packages()
+    marketplace_distribution_service._save_state("ws-empty", state)
+
+    installed = marketplace_distribution_service.install_marketplace_package(
+        "ws-empty",
+        package_id="studio-proof-shop-assistant",
+        actor_user_id="user-1",
+    )
+
+    assert installed["installed"] is True
+    assert installed["preview_only"] is False
+    assert installed["install"]["status"] == "installed"
+    assert installed["runtime_truth"]["surface"] == "template_catalog"
+    assert installed["runtime_truth"]["open_href"] == "/w/ws-empty/studio?proof_agent=shop-assistant"
+    assert installed["analytics"]["install_count"] == 1
 
 
 def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypatch, tmp_path):

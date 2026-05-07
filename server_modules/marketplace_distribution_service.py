@@ -27,6 +27,7 @@ INSTALL_TARGETS = {
     "provider": "provider_catalog",
     "skill": "skill_catalog",
 }
+INSTALLABLE_SEED_PACKAGE_IDS = {"studio-proof-shop-assistant"}
 DEFAULT_CATEGORIES = {
     "agent_template": "Specialist template",
     "app": "Applications",
@@ -567,8 +568,41 @@ def _preview_marketplace_packages() -> Dict[str, Dict[str, Any]]:
             package = _normalize_package_payload(payload)
         except ValueError:
             continue
-        package["preview_only"] = True
-        package["install_target"] = "preview"
+        package_id = str(package.get("package_id") or "").strip()
+        installable_seed = package_id in INSTALLABLE_SEED_PACKAGE_IDS
+        package["preview_only"] = not installable_seed
+        if installable_seed:
+            package["install_target"] = INSTALL_TARGETS.get(str(package.get("kind") or "").strip(), "marketplace_contract")
+            package["review_state"] = "approved"
+            package["verification_status"] = "verified"
+            package["policy_posture"] = "governed"
+            package["approval_required"] = False
+            package["marketplace_proof"] = {
+                "vertical": "retail_shop_assistant",
+                "required_integrations": ["product_catalog", "store_policies", "telegram", "whatsapp"],
+                "permissions": [
+                    "catalog.lookup",
+                    "order.intent_capture",
+                    "handoff.owner",
+                    "checkout.link_prepare_with_approval",
+                ],
+                "demo_data": {
+                    "catalog_rows": 3,
+                    "sample_customer_intents": ["price_check", "availability", "purchase_intent"],
+                },
+                "golden_tests": [
+                    "answers_catalog_question_without_inventory_hallucination",
+                    "captures_purchase_intent_without_sending_payment_link",
+                    "escalates_refund_discount_and_policy_exceptions",
+                ],
+                "monetization": {
+                    "kind": "monthly_subscription",
+                    "suggested_price_usd": 500,
+                    "metric": "qualified_purchase_intent",
+                },
+            }
+        else:
+            package["install_target"] = "preview"
         package["analytics"] = {
             "install_count": 0,
             "runtime_event_count": 0,
@@ -742,6 +776,7 @@ def _public_package_payload(workspace_id: str, package: Dict[str, Any], install:
         "install_eligible": not install_blockers,
         "install_blockers": install_blockers,
         "billing": _coerce_dict(package.get("billing")),
+        "marketplace_proof": _coerce_dict(package.get("marketplace_proof")),
         "analytics": {
             "install_count": int(analytics.get("install_count") or 0),
             "runtime_event_count": int(analytics.get("runtime_event_count") or 0),

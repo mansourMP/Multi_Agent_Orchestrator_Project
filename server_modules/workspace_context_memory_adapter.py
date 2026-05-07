@@ -41,6 +41,12 @@ def strip_red_facts_from_external_context(text: str) -> str:
     return stripped
 
 
+def _append_external_safe_section(sections: List[str], title: str, content: str) -> None:
+    sanitized = strip_red_facts_from_external_context(content)
+    if sanitized:
+        sections.append(f"{title}\n{sanitized}")
+
+
 def load_workspace_context_payload(
     *,
     workspace_id: str,
@@ -64,7 +70,7 @@ def load_workspace_context_payload(
     for filename in ("SOUL.md", "USER.md", "IDENTITY.md", "HEARTBEAT.md", "MEMORY.md"):
         content = str(context_files.get(filename) or "").strip()
         if content:
-            sections.append(f"{filename}\n{content}")
+            _append_external_safe_section(sections, filename, content)
 
     recent_logs = memory_service.get_recent_logs(
         workspace_id,
@@ -72,7 +78,7 @@ def load_workspace_context_payload(
         agent_install_id=agent_install_id,
     )
     if recent_logs:
-        sections.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
+        _append_external_safe_section(sections, "Recent Daily Logs", recent_logs[:6000].rstrip())
 
     normalized_query = str(memory_query or "").strip()
     if normalized_query:

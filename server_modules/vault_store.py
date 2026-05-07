@@ -10,7 +10,6 @@ import base64
 import json
 import os
 import secrets
-import subprocess
 from pathlib import Path
 from typing import Any, Dict
 
@@ -102,45 +101,15 @@ def _vault_derive_key(passphrase: str, salt: bytes, iterations: int) -> bytes:
 
 
 def _legacy_openssl_encrypt_with_passphrase(plaintext: str, passphrase: str) -> str:
-    cmd = [
-        "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-salt", "-a",
-        "-pass", f"pass:{passphrase}",
-    ]
-    try:
-        proc = subprocess.run(
-            cmd,
-            input=plaintext.encode("utf-8"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("OpenSSL is required for legacy encrypted credential vault.") from exc
-
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.decode("utf-8", errors="ignore") or "OpenSSL encryption failed.")
-    return proc.stdout.decode("utf-8", errors="ignore").strip()
+    raise RuntimeError(
+        "Legacy OpenSSL vault encryption is disabled because it exposed secrets through process arguments."
+    )
 
 
 def _legacy_openssl_decrypt_with_passphrase(ciphertext: str, passphrase: str) -> str:
-    cmd = [
-        "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-salt", "-a",
-        "-pass", f"pass:{passphrase}",
-    ]
-    try:
-        proc = subprocess.run(
-            cmd,
-            input=ciphertext.encode("utf-8"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("OpenSSL is required for legacy encrypted credential vault.") from exc
-
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.decode("utf-8", errors="ignore") or "OpenSSL decryption failed.")
-    return proc.stdout.decode("utf-8", errors="ignore")
+    raise RuntimeError(
+        "Legacy OpenSSL vault decryption is disabled. Re-encrypt credentials with the current vault format."
+    )
 
 
 def _vault_encrypt_with_passphrase(plaintext: str, passphrase: str) -> str:
@@ -208,12 +177,7 @@ def _vault_decrypt_v2_with_passphrase(ciphertext: str, passphrase: str) -> str:
 
 def _openssl_encrypt_with_passphrase(plaintext: str, passphrase: str) -> str:
     _init()
-    try:
-        return _vault_encrypt_with_passphrase(plaintext, passphrase)
-    except Exception:
-        if _server.ORION_VAULT_LEGACY_OPENSSL_ENCRYPT_FALLBACK:
-            return _legacy_openssl_encrypt_with_passphrase(plaintext, passphrase)
-        raise
+    return _vault_encrypt_with_passphrase(plaintext, passphrase)
 
 
 def _openssl_decrypt_with_passphrase(ciphertext: str, passphrase: str) -> str:
@@ -221,8 +185,6 @@ def _openssl_decrypt_with_passphrase(ciphertext: str, passphrase: str) -> str:
     value = str(ciphertext or "").strip()
     if value.startswith(_server.ORION_VAULT_CIPHER_PREFIX):
         return _vault_decrypt_v2_with_passphrase(value, passphrase)
-    if _server.ORION_VAULT_LEGACY_OPENSSL_DECRYPT:
-        return _legacy_openssl_decrypt_with_passphrase(value, passphrase)
     raise RuntimeError("Legacy OpenSSL vault decrypt is disabled.")
 
 

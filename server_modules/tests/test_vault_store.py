@@ -1,3 +1,4 @@
+import inspect
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,6 +9,18 @@ from server_modules import vault_store
 
 
 class VaultStoreTests(unittest.TestCase):
+    def test_vault_never_passes_secrets_through_process_arguments(self) -> None:
+        source = inspect.getsource(vault_store)
+        self.assertNotIn("subprocess", source)
+        self.assertNotIn("pass:", source)
+        self.assertNotIn("-pass", source)
+
+    def test_legacy_openssl_paths_are_disabled(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "disabled"):
+            vault_store._legacy_openssl_encrypt_with_passphrase("secret", "vault-key")
+        with self.assertRaisesRegex(RuntimeError, "disabled"):
+            vault_store._legacy_openssl_decrypt_with_passphrase("ciphertext", "vault-key")
+
     def test_vault_passphrase_requires_env_key_outside_local_dev(self) -> None:
         original_server = vault_store._server
         with TemporaryDirectory() as tmpdir:

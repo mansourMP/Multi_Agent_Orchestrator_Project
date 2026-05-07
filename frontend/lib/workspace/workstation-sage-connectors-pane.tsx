@@ -191,7 +191,7 @@ type ExternalIntegrationCardRecord = {
   nextStep: string | null;
   actionLabel?: string | null;
   secondaryActionLabel?: string | null;
-  actionTarget?: 'gateway' | 'ai' | 'close';
+  actionTarget?: 'gateway' | 'computer' | 'ai' | 'close';
   channel?: PersonalCommunicationChannel | null;
 };
 
@@ -1435,6 +1435,7 @@ export function WorkstationSageConnectorsPane({
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [providerDraftKeys, setProviderDraftKeys] = useState<Record<string, string>>({});
   const [providerPickerOpen, setProviderPickerOpen] = useState(false);
+  const [computerConnectOpen, setComputerConnectOpen] = useState(false);
   const [providerPickerDraftId, setProviderPickerDraftId] = useState<string | null>(null);
   const [connectorMemoryEnabled, setConnectorMemoryEnabled] = useState<Record<string, boolean>>({});
   const [providerModelOverrides, setProviderModelOverrides] = useState<Record<string, ProviderCatalogModelRecord[]>>({});
@@ -1764,56 +1765,27 @@ export function WorkstationSageConnectorsPane({
 
   const thisComputerCards = useMemo<ExternalIntegrationCardRecord[]>(() => {
     const device = personalCards.find((card) => card.id === 'device');
-    const browser = personalCards.find((card) => card.id === 'browser');
-    const shellAvailable = selectedGateway !== null || localCompanionOnline;
-    const localModelCard = providerCards.find((card) => card.provider.id === 'ollama');
     const cards: ExternalIntegrationCardRecord[] = [];
     if (device) {
       cards.push({
         ...device,
         id: 'computer_gateway',
         label: 'This Computer',
-        actionLabel: device.statusLabel === 'Connect computer' ? 'Connect This Computer' : 'Open This Computer setup',
-        secondaryActionLabel: device.statusTone === 'connected' ? 'Review advanced setup' : undefined,
+        detail: device.statusTone === 'connected'
+          ? 'Connected. Sage can use browser, files, apps, channels, and local AI from this machine when you ask.'
+          : 'Connect once. This machine gives Sage full local capability when you ask.',
+        summary: device.statusTone === 'connected'
+          ? 'This Computer is the local power layer for Sage. Capabilities stay on this machine and remain approval-gated where needed.'
+          : 'No capability picking here. Connect this machine and Sage gets the local power layer by default.',
+        nextStep: device.statusTone === 'connected'
+          ? 'Connected. Manage or revoke it only when needed.'
+          : 'Connect this computer to enable browser, files, personal apps, channels, and local models.',
+        actionLabel: device.statusTone === 'connected' ? 'Manage This Computer' : 'Connect This Computer',
+        actionTarget: 'computer',
       });
     }
-    if (browser) {
-      cards.push({
-        ...browser,
-        id: 'browser_attach',
-        label: 'My browser',
-        actionLabel: 'Open browser sessions',
-      });
-    }
-    cards.push(
-      {
-        id: 'local_files_shell',
-        label: 'Files on this computer',
-        image: '',
-        detail: shellAvailable ? 'Available on This Computer.' : 'Connect This Computer before Sage can use local files.',
-        statusLabel: shellAvailable ? 'Available' : 'Not connected',
-        statusTone: shellAvailable ? 'connected' : 'neutral',
-        summary: 'Files on this computer stay private until you ask Sage to use them and approve the work.',
-        nextStep: shellAvailable ? 'Ask Sage in chat when you want help with files on This Computer.' : 'Connect This Computer first.',
-        actionLabel: 'Open This Computer setup',
-      },
-      {
-        id: 'local_models',
-        label: 'AI on this computer',
-        image: '/integrations/ollama.png',
-        detail: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline)
-          ? `${providerActiveModelLabel(localModelCard)} available through Ollama.`
-          : 'Connect This Computer before local AI models are available.',
-        statusLabel: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline) ? 'Available' : 'Not available',
-        statusTone: localModelCard && providerPickerConnected(localModelCard, localCompanionOnline) ? 'connected' : 'neutral',
-        summary: 'Local AI models run on This Computer when you choose them.',
-        nextStep: 'Use the AI group to choose credits, your AI account, or local AI.',
-        actionLabel: 'Choose AI model',
-        actionTarget: 'ai',
-      },
-    );
     return cards;
-  }, [localCompanionOnline, personalCards, providerCards, selectedGateway]);
+  }, [personalCards]);
 
   const connectorCards = useMemo<ConnectorCardRecord[]>(() => {
     const latestConnectorById = new Map<string, VaultCredentialRecord>();
@@ -2268,6 +2240,11 @@ export function WorkstationSageConnectorsPane({
     window.location.assign(routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(workspaceId)}/gateway`);
   }
 
+  function openComputerConnectSheet() {
+    setExpandedCardId(null);
+    setComputerConnectOpen(true);
+  }
+
   function openWorkspaceRoute(routeId: 'gateway' | 'channels' | 'gatewayActivity' | 'gatewayApprovals') {
     if (typeof window === 'undefined') {
       return;
@@ -2414,6 +2391,15 @@ export function WorkstationSageConnectorsPane({
         type="button"
         className={joinClassNames('sage-unified-card', isExpanded && 'sage-unified-card--selected')}
         onClick={() => {
+          if (record.actionTarget === 'computer') {
+            openComputerConnectSheet();
+            return;
+          }
+          if (record.actionTarget === 'ai') {
+            setProviderPickerOpen(true);
+            setProviderPickerDraftId(null);
+            return;
+          }
           setExpandedCardId(isExpanded ? null : record.id);
         }}
       >
@@ -2774,6 +2760,10 @@ export function WorkstationSageConnectorsPane({
                   setAdvancedChannelId(advancedOpen ? null : channel);
                   return;
                 }
+                if (record.actionTarget === 'computer') {
+                  openComputerConnectSheet();
+                  return;
+                }
                 if (record.actionTarget === 'ai' || record.id === 'local_models') {
                   setProviderPickerOpen(true);
                   setProviderPickerDraftId(null);
@@ -2810,6 +2800,80 @@ export function WorkstationSageConnectorsPane({
         </div>
         {channel && channelDraft && advancedOpen ? renderPersonalChannelAdvanced(channel, channelDraft, channelBusy) : null}
       </MotionSlidePanel>
+    );
+  }
+
+  function renderComputerConnectSheet() {
+    const connected = selectedGateway !== null && readString(selectedGateway.connection_status || selectedGateway.status).toLowerCase() === 'online';
+    const trustState = readString(selectedGateway?.device_trust_state, connected ? 'verified' : 'not connected');
+    const lastSeen = selectedGateway ? formatRelativeTimestamp(selectedGateway.last_seen_at) : 'Not connected';
+    const statusLabel = connected ? 'Online and ready' : 'Not connected';
+    return (
+      <CommandSheet
+        open={computerConnectOpen}
+        title="Connect This Computer"
+        description="One connection gives Sage the full local power layer. No capability picking here."
+        className="sage-computer-connect-modal"
+        onClose={() => setComputerConnectOpen(false)}
+        actions={(
+          <>
+            <AppButton
+              type="button"
+              tone="ghost"
+              onClick={() => setComputerConnectOpen(false)}
+            >
+              Not now
+            </AppButton>
+            <AppButton
+              type="button"
+              onClick={openGatewaySurface}
+            >
+              {connected ? 'Manage This Computer' : 'Connect This Computer'}
+            </AppButton>
+          </>
+        )}
+      >
+        <div className="sage-computer-connect">
+          <div className="sage-computer-connect__hero">
+            <div className="sage-computer-connect__orb" aria-hidden="true">
+              <span>This Computer</span>
+            </div>
+            <div className="sage-computer-connect__copy">
+              <span className={joinClassNames('sage-computer-connect__status', connected && 'sage-computer-connect__status--online')}>
+                {statusLabel}
+              </span>
+              <strong>Default local capability for Sage.</strong>
+              <p>
+                Browser, files, shell, screenshots, personal channels, and local models stay on this machine.
+                Sage can use them only through the governed runtime when you ask.
+              </p>
+            </div>
+          </div>
+          <div className="sage-computer-connect__capabilities" aria-label="Included local capabilities">
+            {['Browser', 'Files', 'Shell', 'Screenshots', 'Personal apps', 'Telegram/WhatsApp', 'Local AI'].map((label) => (
+              <span key={label}>{label}</span>
+            ))}
+          </div>
+          <div className="sage-computer-connect__state">
+            <div>
+              <span>Status</span>
+              <strong>{statusLabel}</strong>
+            </div>
+            <div>
+              <span>Trust</span>
+              <strong>{trustState.replace(/_/g, ' ')}</strong>
+            </div>
+            <div>
+              <span>Last seen</span>
+              <strong>{lastSeen}</strong>
+            </div>
+          </div>
+          <details className="sage-computer-connect__advanced">
+            <summary>Advanced details</summary>
+            <p>Advanced setup is only for reconnecting, revoking, or debugging this machine. Normal users should only need the connect button.</p>
+          </details>
+        </div>
+      </CommandSheet>
     );
   }
 
@@ -3136,6 +3200,8 @@ export function WorkstationSageConnectorsPane({
           </section>
         ) : null}
       </div>
+
+      {renderComputerConnectSheet()}
 
       <CommandSheet
         open={providerPickerOpen}

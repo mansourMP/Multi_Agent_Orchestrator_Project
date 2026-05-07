@@ -8446,6 +8446,170 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
   margin-bottom: var(--space-xs);
 }
 
+.sage-computer-connect-modal {
+  position: relative;
+}
+
+.sage-computer-connect-modal::before {
+  content: "";
+  position: absolute;
+  inset: -22%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 24% 18%, color-mix(in srgb, var(--app-accent-soft) 54%, transparent) 0 18%, transparent 42%),
+    radial-gradient(circle at 78% 8%, color-mix(in srgb, var(--app-bg-panel-elevated) 72%, transparent) 0 16%, transparent 40%);
+  filter: blur(12px);
+  opacity: 0.92;
+}
+
+.sage-computer-connect {
+  display: grid;
+  gap: var(--app-space-4);
+}
+
+.sage-computer-connect__hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--app-space-4);
+  padding: var(--app-space-4);
+  border: 1px solid color-mix(in srgb, var(--app-border-subtle) 78%, transparent);
+  border-radius: var(--app-radius-xl);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 64%, var(--app-bg-panel) 36%);
+}
+
+.sage-computer-connect__orb {
+  width: 132px;
+  height: 132px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--app-radius-full);
+  color: var(--app-text-primary);
+  background:
+    radial-gradient(circle at 34% 28%, color-mix(in srgb, white 34%, transparent), transparent 32%),
+    linear-gradient(145deg, color-mix(in srgb, var(--app-accent-soft) 74%, var(--app-bg-panel) 26%), var(--app-bg-panel-elevated));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--app-border-subtle) 82%, transparent),
+    0 28px 54px -34px color-mix(in srgb, black 52%, transparent);
+}
+
+.sage-computer-connect__orb span {
+  max-width: 84px;
+  font-size: var(--app-font-13);
+  font-weight: var(--app-weight-semibold);
+  line-height: var(--line-height-tight);
+  text-align: center;
+}
+
+.sage-computer-connect__copy {
+  display: grid;
+  gap: var(--app-space-2);
+}
+
+.sage-computer-connect__copy strong {
+  color: var(--app-text-primary);
+  font-family: var(--app-font-heading);
+  font-size: var(--app-font-20);
+  line-height: var(--line-height-tight);
+}
+
+.sage-computer-connect__copy p {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: var(--line-height-relaxed);
+}
+
+.sage-computer-connect__status {
+  width: fit-content;
+  padding: var(--app-space-1) var(--app-space-2);
+  border-radius: var(--app-radius-pill);
+  background: color-mix(in srgb, var(--app-warning-muted) 62%, var(--app-bg-panel-elevated) 38%);
+  color: var(--app-warning);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+}
+
+.sage-computer-connect__status--online {
+  background: color-mix(in srgb, var(--app-success-muted) 62%, var(--app-bg-panel-elevated) 38%);
+  color: var(--app-success);
+}
+
+.sage-computer-connect__capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-2);
+}
+
+.sage-computer-connect__capabilities span {
+  padding: var(--app-space-2) var(--app-space-3);
+  border: 1px solid color-mix(in srgb, var(--app-border-subtle) 82%, transparent);
+  border-radius: var(--app-radius-pill);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 72%, transparent);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-medium);
+}
+
+.sage-computer-connect__state {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--app-space-2);
+}
+
+.sage-computer-connect__state div {
+  display: grid;
+  gap: var(--app-space-1);
+  padding: var(--app-space-3);
+  border-radius: var(--app-radius-md);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 54%, transparent);
+}
+
+.sage-computer-connect__state span,
+.sage-computer-connect__advanced p {
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-12);
+  line-height: var(--line-height-normal);
+}
+
+.sage-computer-connect__state strong {
+  color: var(--app-text-primary);
+  font-size: var(--app-font-13);
+  font-weight: var(--app-weight-semibold);
+  text-transform: capitalize;
+}
+
+.sage-computer-connect__advanced {
+  padding: var(--app-space-3);
+  border: 1px solid color-mix(in srgb, var(--app-border-subtle) 72%, transparent);
+  border-radius: var(--app-radius-md);
+  background: color-mix(in srgb, var(--app-bg-panel) 82%, transparent);
+}
+
+.sage-computer-connect__advanced summary {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+  cursor: pointer;
+}
+
+.sage-computer-connect__advanced p {
+  margin: var(--app-space-2) 0 0;
+}
+
+@media (max-width: 720px) {
+  .sage-computer-connect__hero,
+  .sage-computer-connect__state {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sage-computer-connect__orb {
+    width: 112px;
+    height: 112px;
+  }
+}
+
 .sage-unified-expand__tag-row {
   display: flex;
   align-items: center;

@@ -11,6 +11,7 @@ export function CommandSheet({
   onClose,
   children,
   actions,
+  className,
 }: {
   open: boolean;
   title: ReactNode;
@@ -18,6 +19,7 @@ export function CommandSheet({
   onClose: () => void;
   children: ReactNode;
   actions?: ReactNode;
+  className?: string;
 }) {
   return (
     <Modal
@@ -27,6 +29,7 @@ export function CommandSheet({
       onClose={onClose}
       size="large"
       actions={actions}
+      className={className}
     >
       {children}
     </Modal>

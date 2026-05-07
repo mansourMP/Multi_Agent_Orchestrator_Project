@@ -1,6 +1,8 @@
 import threading
 import time
 import unittest
+from pathlib import Path
+import tempfile
 
 from server_modules.runtime_lane_queue import RuntimeLaneQueue
 
@@ -78,6 +80,57 @@ class RuntimeLaneQueueTests(unittest.TestCase):
         drain_thread.join(timeout=2.0)
         self.assertFalse(drain_thread.is_alive())
         self.assertEqual(finished, ["slow", "fast"])
+
+    def test_run_backed_items_restore_from_durable_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "runtime.db"
+            release_event = threading.Event()
+
+            def _blocked_work():
+                release_event.wait(timeout=2.0)
+                return {"status": "completed", "summary": "blocked", "run_id": "run-1"}
+
+            queue = RuntimeLaneQueue(max_total_concurrency=1, state_db_path=db_path)
+            queue.enqueue(
+                lane="cron",
+                label="blocked",
+                metadata={"run_id": "run-1"},
+                work=_blocked_work,
+            )
+            queue.enqueue(
+                lane="cron",
+                label="waiting",
+                metadata={"run_id": "run-2"},
+                work=lambda: {"status": "completed", "summary": "waiting", "run_id": "run-2"},
+            )
+            _wait_until(lambda: queue.snapshot()["active_count"] == 1)
+            _wait_until(lambda: queue.snapshot()["pending_count"] == 1)
+
+            restored_run_ids = []
+
+            def _restore_work(item):
+                run_id = str(item.get("run_id") or "")
+
+                def _work():
+                    restored_run_ids.append(run_id)
+                    return {"status": "completed", "summary": f"restored {run_id}", "run_id": run_id}
+
+                return _work
+
+            restored = RuntimeLaneQueue(
+                max_total_concurrency=1,
+                state_db_path=db_path,
+                restore_work_factory=_restore_work,
+            )
+            snapshot = restored.snapshot()
+            self.assertEqual(snapshot["pending_count"], 2)
+            self.assertEqual([item["run_id"] for item in snapshot["lanes"]["cron"]["pending"]], ["run-1", "run-2"])
+
+            release_event.set()
+            queue.shutdown(wait=True, timeout=2.0)
+            restored.start()
+            restored.shutdown(wait=True, timeout=2.0)
+            self.assertEqual(restored_run_ids, ["run-1", "run-2"])
 
 
 if __name__ == "__main__":

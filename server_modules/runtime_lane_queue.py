@@ -7,11 +7,14 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Literal, Optional
 
+from server_modules import runtime_state_store
 
 RuntimeLane = Literal["main", "cron", "subagent", "system"]
 RuntimeLaneWork = Callable[[], Dict[str, Any]]
+RuntimeLaneRestoreWorkFactory = Callable[[Dict[str, Any]], RuntimeLaneWork]
 
 LANE_ORDER: tuple[RuntimeLane, ...] = ("main", "cron", "subagent", "system")
 DEFAULT_LANE_CONCURRENCY: Dict[RuntimeLane, int] = {
@@ -22,6 +25,7 @@ DEFAULT_LANE_CONCURRENCY: Dict[RuntimeLane, int] = {
 }
 DEFAULT_MAX_TOTAL_CONCURRENCY = 4
 DEFAULT_RECENT_ITEMS_LIMIT = 16
+DEFAULT_CHECKPOINT_KEY = "runtime_lane_queue.v1"
 
 
 def _utc_now() -> datetime:
@@ -82,6 +86,9 @@ class RuntimeLaneQueue:
         lane_concurrency: Optional[Dict[str, int]] = None,
         max_total_concurrency: int = DEFAULT_MAX_TOTAL_CONCURRENCY,
         recent_items_limit: int = DEFAULT_RECENT_ITEMS_LIMIT,
+        state_db_path: Optional[Path] = None,
+        checkpoint_key: str = DEFAULT_CHECKPOINT_KEY,
+        restore_work_factory: Optional[RuntimeLaneRestoreWorkFactory] = None,
     ) -> None:
         resolved_concurrency = dict(DEFAULT_LANE_CONCURRENCY)
         for key, value in dict(lane_concurrency or {}).items():
@@ -106,6 +113,10 @@ class RuntimeLaneQueue:
         self._draining = False
         self._shutdown = False
         self._lane_cursor = 0
+        self._state_db_path = Path(state_db_path).expanduser() if state_db_path is not None else None
+        self._checkpoint_key = str(checkpoint_key or DEFAULT_CHECKPOINT_KEY).strip() or DEFAULT_CHECKPOINT_KEY
+        self._restore_work_factory = restore_work_factory
+        self._restore_checkpoint()
 
     def start(self) -> None:
         with self._condition:
@@ -137,12 +148,14 @@ class RuntimeLaneQueue:
         if not callable(work):
             raise TypeError("Lane queue work must be callable.")
         resolved_lane = _coerce_lane(lane)
+        resolved_metadata = _coerce_metadata(metadata)
         item = RuntimeLaneQueueItem(
             id=f"lane_{uuid.uuid4().hex[:12]}",
             lane=resolved_lane,
             label=str(label or "").strip() or "Queued work",
             work=work,
-            metadata=_coerce_metadata(metadata),
+            metadata=resolved_metadata,
+            run_id=str(resolved_metadata.get("run_id") or "").strip() or None,
         )
         with self._condition:
             if not self._started:
@@ -151,6 +164,7 @@ class RuntimeLaneQueue:
                 raise RuntimeError("Runtime lane queue is shutting down.")
             self._pending[resolved_lane].append(item)
             self._items[item.id] = item
+            self._persist_checkpoint_locked()
             self._condition.notify_all()
             return {
                 "queued": True,
@@ -175,6 +189,7 @@ class RuntimeLaneQueue:
                     remaining = max(0.0, deadline - time.monotonic())
                     self._condition.wait(timeout=min(0.2, remaining))
             self._shutdown = True
+            self._persist_checkpoint_locked()
             self._condition.notify_all()
             snapshot = self._snapshot_locked()
         dispatcher = self._dispatcher
@@ -256,6 +271,7 @@ class RuntimeLaneQueue:
             item.summary = str(summary or "").strip() or item.summary
             item.error = str(error or "").strip() or item.error
             self._recent.appendleft(item)
+            self._persist_checkpoint_locked()
             self._condition.notify_all()
 
     def _next_dispatchable_item_locked(self) -> Optional[RuntimeLaneQueueItem]:
@@ -272,9 +288,63 @@ class RuntimeLaneQueue:
             item.status = "running"
             item.started_at = _utc_now_iso()
             self._active[lane][item.id] = item
+            self._persist_checkpoint_locked()
             self._lane_cursor = (self._lane_cursor + offset + 1) % len(LANE_ORDER)
             return item
         return None
+
+    def _restore_checkpoint(self) -> None:
+        if self._state_db_path is None or not callable(self._restore_work_factory):
+            return
+        try:
+            runtime_state_store.init_runtime_state_db(self._state_db_path)
+            state = runtime_state_store.get_local_app_state(self._state_db_path, self._checkpoint_key)
+            value = dict(state.get("value") or {}) if isinstance(state, dict) and isinstance(state.get("value"), dict) else {}
+            items = list(value.get("items") or [])
+        except Exception:
+            return
+        for raw_item in items:
+            payload = dict(raw_item or {}) if isinstance(raw_item, dict) else {}
+            run_id = str(payload.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            try:
+                lane = _coerce_lane(payload.get("lane"))
+                work = self._restore_work_factory(payload)
+            except Exception:
+                continue
+            if not callable(work):
+                continue
+            item = RuntimeLaneQueueItem(
+                id=str(payload.get("id") or f"lane_{uuid.uuid4().hex[:12]}").strip(),
+                lane=lane,
+                label=str(payload.get("label") or "Restored queued work").strip() or "Restored queued work",
+                work=work,
+                metadata=_coerce_metadata(payload.get("metadata")),
+                status="queued",
+                enqueued_at=str(payload.get("enqueued_at") or _utc_now_iso()).strip() or _utc_now_iso(),
+                run_id=run_id,
+                summary=str(payload.get("summary") or "").strip() or None,
+            )
+            self._pending[lane].append(item)
+            self._items[item.id] = item
+
+    def _persist_checkpoint_locked(self) -> None:
+        if self._state_db_path is None:
+            return
+        items: List[Dict[str, Any]] = []
+        for lane in LANE_ORDER:
+            items.extend(item.to_snapshot() for item in list(self._active[lane].values()) if item.run_id)
+            items.extend(item.to_snapshot() for item in list(self._pending[lane]) if item.run_id)
+        try:
+            runtime_state_store.init_runtime_state_db(self._state_db_path)
+            runtime_state_store.put_local_app_state(
+                self._state_db_path,
+                self._checkpoint_key,
+                {"items": items, "persisted_at": _utc_now_iso()},
+            )
+        except Exception:
+            return
 
     def _total_active_locked(self) -> int:
         return sum(len(items) for items in self._active.values())

@@ -4707,10 +4707,9 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
   z-index: var(--z-sticky);
   min-width: 0;
   padding: 0;
-  border-bottom: 0;
-  background: var(--app-bg-page) !important;
-  backdrop-filter: none;
-  box-shadow: none;
+  border-bottom: 1px solid var(--app-border-base);
+  background: var(--app-bg-page);
+  backdrop-filter: blur(8px);
   overflow: visible;
 }
 
@@ -4732,7 +4731,7 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   overflow-x: hidden;
-  padding: var(--app-space-5);
+  padding: 0;
   background: var(--app-bg-page);
 }
 
@@ -4747,10 +4746,6 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
   overflow: hidden;
   overflow-x: hidden;
   box-shadow: none;
-}
-
-.workstation-shell--chat .workstation-layout {
-  padding: 0;
 }
 
 .workstation-shell--chat .workstation-primary-canvas {
@@ -4806,18 +4801,23 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
     padding: var(--app-space-2);
   }
 
+  .workstation-shell {
+    gap: 0;
+  }
+
   .workstation-shell__topbar {
     position: sticky;
     top: 0;
     padding-top: env(safe-area-inset-top);
-    background: color-mix(in srgb, var(--app-bg-page) 96%, transparent) !important;
+    background: color-mix(in srgb, var(--app-bg-page) 96%, transparent);
+    border-bottom: 1px solid var(--app-border-base);
   }
 
   .workstation-mobile-destination-nav {
     display: flex;
     gap: var(--app-space-2);
     overflow-x: auto;
-    padding: 0 max(var(--app-space-3), env(safe-area-inset-right)) var(--app-space-2) max(var(--app-space-3), env(safe-area-inset-left));
+    padding: 0 max(var(--app-space-3), env(safe-area-inset-right)) 0 max(var(--app-space-3), env(safe-area-inset-left));
     border-bottom: 1px solid color-mix(in srgb, var(--app-border-muted) 72%, transparent);
     scroll-padding-inline: max(var(--app-space-3), env(safe-area-inset-left));
     touch-action: pan-x;
@@ -4856,7 +4856,7 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
     height: auto;
     grid-template-columns: minmax(0, 1fr);
     gap: var(--app-space-2);
-    padding: var(--app-space-2) max(var(--app-space-3), env(safe-area-inset-right)) var(--app-space-2) max(var(--app-space-3), env(safe-area-inset-left));
+    padding: var(--app-space-2) max(var(--app-space-3), env(safe-area-inset-right)) 0 max(var(--app-space-3), env(safe-area-inset-left));
   }
 
   .workstation-titlebar__brand {
@@ -4911,10 +4911,6 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
   }
 
   .workstation-layout {
-    padding: var(--app-space-2);
-  }
-
-  .workstation-shell--chat .workstation-layout {
     padding: 0;
   }
 

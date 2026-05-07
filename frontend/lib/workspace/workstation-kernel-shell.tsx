@@ -30,7 +30,7 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
 };
 
 const MOBILE_DESTINATION_NAV: readonly {
-  id: 'chat' | 'studio' | 'marketplace' | 'activity' | 'settings';
+  id: 'chat' | 'studio' | 'marketplace' | 'settings';
   label: string;
   defaultRouteId: WorkspaceRouteId;
   icon: LucideIcon;
@@ -38,7 +38,6 @@ const MOBILE_DESTINATION_NAV: readonly {
   { id: 'chat', label: 'Chat', defaultRouteId: 'chat', icon: Bot },
   { id: 'studio', label: 'Build', defaultRouteId: 'studio', icon: LayoutGrid },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
-  { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
   { id: 'settings', label: 'Settings', defaultRouteId: 'settings', icon: Settings2 },
 ];
 

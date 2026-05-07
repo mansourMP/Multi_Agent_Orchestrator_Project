@@ -39,11 +39,11 @@ body[data-emp-theme='dark'] {
   --app-text-tertiary: rgba(150, 167, 176, 0.72);
   --app-text-inverse: #091012;
 
-  --app-accent: #1f7f73;
-  --app-accent-strong: #2ea895;
-  --app-accent-muted: rgba(31, 127, 115, 0.3);
-  --app-accent-soft: rgba(46, 168, 149, 0.18);
-  --app-accent-text: #f3fcfa;
+  --app-accent: #1e3a8a;
+  --app-accent-strong: #1e40af;
+  --app-accent-muted: rgba(30, 58, 138, 0.3);
+  --app-accent-soft: rgba(30, 58, 138, 0.18);
+  --app-accent-text: #ffffff;
 
   --app-success: #4ec598;
   --app-success-muted: rgba(78, 197, 152, 0.18);
@@ -229,10 +229,10 @@ body.theme-light {
   --app-text-tertiary: rgba(30, 32, 36, 0.56);
   --app-text-inverse: #ffffff;
 
-  --app-accent: #0e1b3f;
-  --app-accent-strong: #16234e;
-  --app-accent-muted: rgba(14, 27, 63, 0.12);
-  --app-accent-soft: rgba(14, 27, 63, 0.08);
+  --app-accent: #0f172a;
+  --app-accent-strong: #1e293b;
+  --app-accent-muted: rgba(15, 23, 42, 0.12);
+  --app-accent-soft: rgba(15, 23, 42, 0.08);
   --app-accent-text: #ffffff;
 
   --app-success: #218e68;
@@ -506,14 +506,14 @@ textarea {
   justify-content: center;
   min-height: 44px;
   gap: var(--app-space-2);
-  padding: 0 calc(var(--app-space-3) + 2px);
+  padding: 0 var(--app-space-4);
   border: 1px solid transparent;
   border-radius: var(--app-radius-pill);
   font-family: var(--app-font-sans);
   font-size: var(--app-font-13);
-  font-weight: var(--app-weight-semibold);
+  font-weight: 500;
   line-height: 1;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
   cursor: pointer;
   transition:
     background-color var(--transition),
@@ -526,7 +526,6 @@ textarea {
 
 .app-button:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent 16%);
-  transform: translateY(-1px);
 }
 
 .app-button:disabled {
@@ -535,10 +534,10 @@ textarea {
 }
 
 .app-button--primary {
-  border-color: color-mix(in srgb, var(--app-accent) 72%, transparent 28%);
+  border-color: transparent;
   background: var(--app-accent);
   color: var(--app-accent-text);
-  box-shadow: 0 10px 24px -18px color-mix(in srgb, var(--app-accent) 55%, transparent);
+  box-shadow: none;
 }
 
 .app-button--primary:hover:not(:disabled) {
@@ -4712,8 +4711,10 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
   min-width: 0;
   padding: 0;
   border-bottom: 1px solid var(--app-border-base);
-  background: var(--app-bg-page);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--app-bg-page) 80%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 24px -8px color-mix(in srgb, black 30%, transparent);
   overflow: visible;
 }
 
@@ -4787,6 +4788,15 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
   }
 }
 
+.app-studio-shell .app-list-detail-columns--split {
+  grid-template-columns: minmax(320px, 1fr) minmax(0, 1.8fr);
+  gap: var(--app-space-8);
+}
+
+.app-studio-shell .app-list-detail-columns {
+  align-items: stretch;
+}
+
 @media (max-width: 767px) {
   .app-shell-frame {
     grid-template-columns: minmax(0, 1fr);
@@ -4814,8 +4824,11 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
     position: sticky;
     top: 0;
     padding-top: env(safe-area-inset-top);
-    background: color-mix(in srgb, var(--app-bg-page) 96%, transparent);
+    background: color-mix(in srgb, var(--app-bg-page) 80%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--app-border-base);
+    box-shadow: 0 4px 24px -8px color-mix(in srgb, black 30%, transparent);
   }
 
   .workstation-titlebar__mobile-menu-trigger {
@@ -5090,15 +5103,6 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
 
 .app-icon {
   display: block;
-}
-
-.app-studio-shell .app-list-detail-columns--split {
-  grid-template-columns: minmax(320px, 1fr) minmax(0, 1.8fr);
-  gap: var(--app-space-8);
-}
-
-.app-studio-shell .app-list-detail-columns {
-  align-items: stretch;
 }
 
 .app-studio-shell .app-list-detail-columns__secondary > .app-stack-4 {

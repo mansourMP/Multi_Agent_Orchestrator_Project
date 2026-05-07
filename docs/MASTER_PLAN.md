@@ -38,6 +38,22 @@ The next investment-readiness metric is not more architecture. It is 3-5 paying 
 
 Completed fixes do not stay in the active plan. Vault CLI secret exposure, RED external-context stripping, cross-agent memory isolation, and the first installable marketplace package are closed proof items. Keep their evidence in tests, commits, and certification notes; do not spend investor-demo time rebuilding them.
 
+### Proof Notes: Gateway Multi-Instance Evidence
+
+Gateway multi-instance operation has code-adjacent evidence from `.orion-stack/phase6-7-live-gateway/*` lock and state files, read and verified on 2026-05-02. This is proof of gateway runtime durability under multiple local instances, not a substitute for the remaining live reconnect certificate.
+
+| Evidence | Result |
+|---|---|
+| Instances observed | 9 gateway instances ran successfully from actual lock files: `phase6-7-live-gateway`, `prod-demo-gateway`, `live-cert-gateway`, `live-cert-gateway-dsm`, `live-cert-gateway-anthropic`, `phase4-closeout-gateway`, `phase4-closeout-gateway-2`, `phase4-gateway`, `live-cert-gateway-phase4` |
+| Primary session | `gsess_de008cd5349b458c8db77935b1424076` on `device_e739e480` (`Mansurs-MacBook-Air.local`) |
+| Platform and trust | `darwin-arm64` / macOS 25.5.0, device trust `verified` |
+| Capabilities | 35 registered capabilities including browser, shell, filesystem, screenshot, OCR, clipboard, mouse, keyboard, AppleScript, and channels |
+| Heartbeat sync | 30 heartbeat cycles, `lastAck: 30`, `lastServerSeq: 30` |
+| Outbox durability | 82 outbox messages, all acknowledged, zero failed, zero pending |
+| Channel evidence | WhatsApp moved through connecting -> connected -> disconnected with code 405; Telegram reached `authorization_required` because credentials were not present |
+| Persisted state files | `registration.json`, `checkpoints.json`, `outbox.json`, `journal.ndjson`, `presence.json`, `identity.json`, `browser-sessions.json`, `whatsapp-session.json`, `telegram-session.json`, `hello.json` |
+| Known caveat | Final health state was `degraded` due to `socket_closed:1006`; reconnect/live cert remains part of P1 |
+
 ### Combined Evaluator Priority Stack (2026-05-07)
 
 This stack combines the venture-capital, senior-engineering, visionary-product, and security-review feedback with current code checks. Treat this as the execution order until the investor demo is certified.

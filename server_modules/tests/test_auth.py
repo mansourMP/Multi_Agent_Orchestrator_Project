@@ -462,6 +462,26 @@ def test_workspace_tenant_resolution_prefers_authoritative_binding_over_stale_to
     ) == workspace_id
 
 
+def test_allowed_tenant_ids_reuses_workspace_access_without_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("tenant.fastpath@example.com", "password-123", name="Tenant Fastpath")
+    workspace_entry = created["workspace_access"][0]
+    workspace_id = workspace_entry["workspace_id"]
+    tenant_id = workspace_entry["tenant_id"]
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {created['token']}")
+
+    def _fail_rebuild(**_: object) -> dict[str, dict[str, object]]:
+        raise AssertionError("allowed_tenant_ids should not rebuild workspace access")
+
+    monkeypatch.setattr(auth, "_effective_workspace_access", _fail_rebuild)
+
+    assert auth.allowed_tenant_ids(current_user) == {tenant_id}
+    assert auth.workspace_tenant_id(current_user, workspace_id) == tenant_id
+
+
 def test_enterprise_settings_and_admin_provisioning_hooks(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
     finance_workspace_id = f"finance-{tmp_path.name}"

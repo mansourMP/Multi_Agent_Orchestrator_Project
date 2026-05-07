@@ -27,7 +27,13 @@ INSTALL_TARGETS = {
     "provider": "provider_catalog",
     "skill": "skill_catalog",
 }
-INSTALLABLE_SEED_PACKAGE_IDS = {"studio-proof-shop-assistant"}
+INSTALLABLE_SEED_PACKAGE_IDS = {
+    "studio-proof-shop-assistant",
+    "studio-proof-restaurant-order-taker",
+    "studio-proof-dental-receptionist",
+    "studio-proof-customer-support-faq",
+    "studio-proof-appointment-booking",
+}
 DEFAULT_CATEGORIES = {
     "agent_template": "Specialist template",
     "app": "Applications",
@@ -554,6 +560,69 @@ def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _unique_strings(values: List[Any]) -> List[str]:
+    seen = set()
+    result: List[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _proof_from_seed_contract(package: Dict[str, Any]) -> Dict[str, Any]:
+    agent_template = _coerce_dict(package.get("agent_template"))
+    context_envelope = _coerce_dict(agent_template.get("context_envelope"))
+    contract = _coerce_dict(context_envelope.get("proof_agent_seed_contract"))
+    slug = str(contract.get("slug") or agent_template.get("template_id") or "").strip()
+    data_sources = [item for item in contract.get("default_data_sources") or [] if isinstance(item, dict)]
+    channels = [item for item in contract.get("channels") or [] if isinstance(item, dict)]
+    tools = [item for item in contract.get("tools_skills") or [] if isinstance(item, dict)]
+    enabled_channels = [
+        str(channel.get("channel_key") or "").strip()
+        for channel in channels
+        if channel.get("default_enabled")
+    ]
+    monetization = _coerce_dict(contract.get("monetization_hint"))
+    business_metrics = _coerce_dict(contract.get("business_metrics"))
+    analytics_events = [item for item in contract.get("analytics_events") or [] if isinstance(item, dict)]
+    required_integrations = _unique_strings(
+        [source.get("source_id") for source in data_sources if source.get("required") or source.get("source_id")]
+        + enabled_channels
+    )
+    permissions = _unique_strings(
+        [
+            f"{str(tool.get('id') or '').strip()}_with_approval"
+            if tool.get("approval_required")
+            else str(tool.get("id") or "").strip()
+            for tool in tools
+            if str(tool.get("id") or "").strip()
+        ]
+    )
+    return {
+        "vertical": slug.replace("-", "_") or "proof_agent",
+        "required_integrations": required_integrations,
+        "permissions": permissions,
+        "demo_data": {
+            "data_sources": len(data_sources),
+            "channels": len(channels),
+            "sample_customer_intents": list(business_metrics.get("sample_customer_intents") or []),
+        },
+        "golden_tests": list(business_metrics.get("golden_tests") or []),
+        "monetization": {
+            "kind": monetization.get("kind") or "monthly_subscription",
+            "suggested_price_usd": int(business_metrics.get("suggested_price_usd") or 500),
+            "metric": monetization.get("metric") or business_metrics.get("primary_metric") or "qualified_outcomes",
+        },
+        "analytics": {
+            "events": analytics_events,
+            "business_metrics": business_metrics,
+        },
+    }
+
+
 def _preview_marketplace_packages() -> Dict[str, Dict[str, Any]]:
     packages: Dict[str, Dict[str, Any]] = {}
     seed_packages: List[Dict[str, Any]] = []
@@ -577,30 +646,7 @@ def _preview_marketplace_packages() -> Dict[str, Dict[str, Any]]:
             package["verification_status"] = "verified"
             package["policy_posture"] = "governed"
             package["approval_required"] = False
-            package["marketplace_proof"] = {
-                "vertical": "retail_shop_assistant",
-                "required_integrations": ["product_catalog", "store_policies", "telegram", "whatsapp"],
-                "permissions": [
-                    "catalog.lookup",
-                    "order.intent_capture",
-                    "handoff.owner",
-                    "checkout.link_prepare_with_approval",
-                ],
-                "demo_data": {
-                    "catalog_rows": 3,
-                    "sample_customer_intents": ["price_check", "availability", "purchase_intent"],
-                },
-                "golden_tests": [
-                    "answers_catalog_question_without_inventory_hallucination",
-                    "captures_purchase_intent_without_sending_payment_link",
-                    "escalates_refund_discount_and_policy_exceptions",
-                ],
-                "monetization": {
-                    "kind": "monthly_subscription",
-                    "suggested_price_usd": 500,
-                    "metric": "qualified_purchase_intent",
-                },
-            }
+            package["marketplace_proof"] = _proof_from_seed_contract(package)
         else:
             package["install_target"] = "preview"
         package["analytics"] = {

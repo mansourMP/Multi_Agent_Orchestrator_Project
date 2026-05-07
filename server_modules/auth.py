@@ -4253,12 +4253,12 @@ def allowed_tenant_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
         return None
     if bool(user.get("is_admin")) and auth_type not in {"bearer", "local_dev"}:
         return None
-    access = tenant_access_map(user)
-    if access:
+    workspace_access = workspace_access_map(user)
+    if workspace_access:
         resolved: set[str] = set()
-        for workspace_id, entry in workspace_access_map(user).items():
+        for workspace_id, entry in workspace_access.items():
             try:
-                resolved.add(workspace_tenant_id(user, workspace_id))
+                resolved.add(tenant_id_for_workspace(workspace_id))
             except HTTPException:
                 tenant_id = _normalize_tenant_token(
                     entry.get("tenant_id") if isinstance(entry, dict) else None,
@@ -4268,6 +4268,8 @@ def allowed_tenant_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
                     resolved.add(tenant_id)
         if resolved:
             return resolved
+    access = tenant_access_map(user)
+    if access:
         return set(access.keys())
     return {
         tenant_id_for_workspace(workspace_id)

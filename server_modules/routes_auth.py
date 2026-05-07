@@ -310,9 +310,22 @@ async def refresh_session(body: AuthRefreshRequest, request: Request, response: 
 
 
 @router.post("/auth/logout")
-async def logout(request: Request, response: Response, current_user=Depends(get_current_user)):
+async def logout(request: Request, response: Response):
     validate_csrf(request)
-    result = logout_authenticated_session(current_user)
+    result: dict[str, Any] = {"ok": True, "session_revoked": False}
+    try:
+        current_user = get_current_user(
+            request,
+            authorization=request.headers.get("authorization"),
+            x_api_key=request.headers.get("x-api-key"),
+        )
+        result = logout_authenticated_session(current_user)
+        if isinstance(result, dict):
+            result.setdefault("session_revoked", True)
+    except HTTPException:
+        # Logout must be able to clear broken/stale browser sessions. If session
+        # resolution fails, still remove cookies and let the user sign in again.
+        result = {"ok": True, "session_revoked": False}
     clear_auth_cookies(response, request=request)
     return result
 

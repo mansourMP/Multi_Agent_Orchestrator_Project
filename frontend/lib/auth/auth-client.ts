@@ -150,6 +150,26 @@ async function parseJson(response: Response): Promise<unknown> {
   return response.json();
 }
 
+function authFailureMessage(status: number, detail: string): string {
+  const normalized = detail.toLowerCase();
+  if (status >= 500 || /internal server|bad gateway|service unavailable|gateway timeout/.test(normalized)) {
+    return 'The auth service is warming up or temporarily unavailable. Try again in a moment.';
+  }
+  if (status === 429) {
+    return 'Too many auth attempts. Wait a minute, then try again.';
+  }
+  if (status === 401) {
+    return detail || 'Email or password was not accepted.';
+  }
+  if (status === 403) {
+    return detail || 'This account is not allowed to open this workspace.';
+  }
+  if (status === 404) {
+    return 'The auth route is not available in this environment.';
+  }
+  return detail || `Authentication request failed with status ${status}.`;
+}
+
 async function requestAuth<T>(path: string, options: AuthRequestOptions): Promise<T> {
   const controller = new AbortController();
   const timeoutHandle = window.setTimeout(() => {
@@ -182,7 +202,7 @@ async function requestAuth<T>(path: string, options: AuthRequestOptions): Promis
       payload && typeof payload === 'object' && !Array.isArray(payload)
         ? String((payload as Record<string, unknown>).detail || '').trim()
         : '';
-    throw new Error(detail || `Authentication request failed with status ${response.status}.`);
+    throw new Error(authFailureMessage(response.status, detail));
   }
   return payload as T;
 }

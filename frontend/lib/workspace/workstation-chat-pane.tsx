@@ -4481,6 +4481,9 @@ export function WorkstationChatPane() {
         setStreamingAssistantText('');
         setShowProjectedAssistant(false);
         setTimelineSettled(true);
+        setLiveTimelineEvents([]);
+        setLiveActivitySteps([]);
+        setLiveTrace(null);
         const rawMessage = error instanceof WorkstationClientError || error instanceof Error
           ? error.message
           : 'Could not send this message.';
@@ -4529,7 +4532,9 @@ export function WorkstationChatPane() {
           retryDraft: outboundMessage,
         });
       }
-      setLiveActivitySteps((current) => settleLiveActivitySteps(current, aborted ? 'done' : 'error'));
+      if (aborted || incompleteWithPartial) {
+        setLiveActivitySteps((current) => settleLiveActivitySteps(current, 'done'));
+      }
     } finally {
       if (activeTurnRequestIdRef.current === clientRequestId || activeTurnRequestIdRef.current === null) {
         submitInFlightRef.current = false;

@@ -18,7 +18,10 @@ import { AppleProviderIcon, GoogleProviderIcon } from '@/lib/auth/auth-provider-
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 function authErrorCopy(error: string): string {
-  const normalized = error.toLowerCase();
+  const unwrapped = error
+    .trim()
+    .replace(/^(signup request failed|create account request failed|authentication request failed|session readiness failed):\s*/i, '');
+  const normalized = unwrapped.toLowerCase();
   if (normalized.includes('google_not_configured')) {
     return 'Google sign-in is not configured for this environment yet.';
   }
@@ -36,6 +39,22 @@ function authErrorCopy(error: string): string {
   }
   if (normalized.includes('already') || normalized.includes('exists')) {
     return 'That email is already registered. Log in or use another email.';
+  }
+  if (normalized.includes('status 401')) {
+    return 'Email or password was not accepted.';
+  }
+  if (normalized.includes('status 403')) {
+    return 'This account cannot open the workspace yet. Sign in again or use an allowed account.';
+  }
+  if (normalized.includes('status 404')) {
+    return 'The auth route is not available in this environment.';
+  }
+  if (normalized.includes('status 429')) {
+    return 'Too many account attempts. Wait a minute, then try again.';
+  }
+  if (/(?:status\s*)?5\d\d/.test(normalized)
+    || /internal server|bad gateway|service unavailable|gateway timeout|temporarily unavailable|warming up/.test(normalized)) {
+    return 'The auth service is warming up or unavailable. Try again in a moment.';
   }
   if (normalized.includes('password')) {
     return 'Use a stronger password and try again.';

@@ -7935,7 +7935,7 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
 }
 
 .sage-provider-active__row--summary {
-  grid-template-columns: minmax(220px, 0.85fr) minmax(0, 1.4fr) auto;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(320px, 1.5fr) auto;
   align-items: stretch;
 }
 
@@ -7983,6 +7983,8 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
 }
 
 .sage-provider-active__summary-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--app-text-tertiary);
   font-size: 11px;
   line-height: 1.25;
@@ -7991,6 +7993,8 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
 }
 
 .sage-provider-active__summary-item strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--app-text-primary);
   font-size: 13px;
   font-weight: var(--app-weight-semibold);
@@ -7998,9 +8002,21 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
 }
 
 .sage-provider-active__summary-item small {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--app-text-secondary);
   font-size: 11px;
   line-height: 1.35;
+}
+
+@media (max-width: 1180px) {
+  .sage-provider-active__row--summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sage-provider-active__row--summary .sage-hosted-credits__actions {
+    justify-content: flex-start;
+  }
 }
 
 .sage-provider-picker {

@@ -21,7 +21,7 @@ import { AppButton, AppInput } from '@/lib/ui/primitives';
 function authErrorCopy(error: string): string {
   const unwrapped = error
     .trim()
-    .replace(/^(login request failed|session readiness failed):\s*/i, '');
+    .replace(/^(login request failed|session readiness failed|authentication request failed):\s*/i, '');
   const normalized = unwrapped.toLowerCase();
   if (normalized.includes('google_not_configured')) {
     return 'Google sign-in is not configured for this environment yet.';
@@ -50,7 +50,8 @@ function authErrorCopy(error: string): string {
   if (normalized.includes('status 429')) {
     return 'Too many sign-in attempts. Wait a minute, then try again.';
   }
-  if (/status 5\d\d/.test(normalized)) {
+  if (/(?:status\s*)?5\d\d/.test(normalized)
+    || /internal server|bad gateway|service unavailable|gateway timeout|temporarily unavailable|warming up/.test(normalized)) {
     return 'The auth service is warming up or unavailable. Try again in a moment.';
   }
   if (normalized.includes('password') || normalized.includes('credential') || normalized.includes('invalid')) {
@@ -157,7 +158,7 @@ function LoginPageContent() {
       await login(email, password);
     } catch (nextError) {
       const message = nextError instanceof Error ? nextError.message : 'Login failed.';
-      setError(`Login request failed: ${message}`);
+      setError(message);
       setSubmitting(false);
       return;
     }

@@ -595,15 +595,9 @@ SPREADSHEET_OPS_PACK_ID = "spreadsheet-ops-v1"
 DOCUMENT_STUDIO_PACK_ID = "document-studio-v1"
 LOCAL_EXECUTION_PACK_ID = "local-execution-v1"
 
-_NORMALIZED_CODE_OR_DATA_PACK_IDS = {
-    normalize_action_id(LOCAL_EXECUTION_PACK_ID),
-    normalize_action_id(SPREADSHEET_OPS_PACK_ID),
-    normalize_action_id(DOCUMENT_STUDIO_PACK_ID),
-}
-_NORMALIZED_CUSTOMER_WORKFLOW_PACK_ID = normalize_action_id(CUSTOMER_OPS_PACK_ID)
-_NORMALIZED_LOCAL_BIASED_PACK_IDS = set(_NORMALIZED_CODE_OR_DATA_PACK_IDS) | {
-    _NORMALIZED_CUSTOMER_WORKFLOW_PACK_ID,
-}
+# Normalized pack IDs are computed at call time inside each routing
+# function via normalize_action_id(). Module-level pre-computation
+# is unsafe because normalize_action_id is defined later in the file.
 SUPPORTED_OUTCOME_PACKS = {
     CUSTOMER_OPS_PACK_ID,
     WEEKLY_CONTENT_PACK_ID,
@@ -2556,7 +2550,11 @@ def _metadata_requests_code_or_data_job(metadata: Dict[str, Any]) -> bool:
     if bool(metadata.get("code_job")) or bool(metadata.get("data_job")):
         return True
     outcome_pack = normalize_action_id(metadata.get("outcome_pack"))
-    if outcome_pack in _NORMALIZED_CODE_OR_DATA_PACK_IDS:
+    if outcome_pack in {
+        normalize_action_id(LOCAL_EXECUTION_PACK_ID),
+        normalize_action_id(SPREADSHEET_OPS_PACK_ID),
+        normalize_action_id(DOCUMENT_STUDIO_PACK_ID),
+    }:
         return True
     operation_tools = _collect_pack_operation_tools(metadata)
     if any(tool in {"shell.execute", "filesystem.read_write"} for tool in operation_tools):
@@ -2568,7 +2566,7 @@ def _metadata_requests_enterprise_customer_workflow(metadata: Dict[str, Any]) ->
     if bool(metadata.get("enterprise_workflow")) or bool(metadata.get("customer_workflow")):
         return True
     outcome_pack = normalize_action_id(metadata.get("outcome_pack"))
-    if outcome_pack == _NORMALIZED_CUSTOMER_WORKFLOW_PACK_ID:
+    if outcome_pack == normalize_action_id(CUSTOMER_OPS_PACK_ID):
         return True
     if _metadata_has_connector_or_channel_work(metadata):
         return True
@@ -2640,7 +2638,12 @@ def _auto_cloud_capacity_fallback_allowed(metadata: Dict[str, Any]) -> tuple[boo
         return False, "Automatic route keeps local execution for file-backed or command-backed work."
 
     outcome_pack = normalize_action_id(metadata.get("outcome_pack"))
-    if outcome_pack in _NORMALIZED_LOCAL_BIASED_PACK_IDS:
+    if outcome_pack in {
+        normalize_action_id(LOCAL_EXECUTION_PACK_ID),
+        normalize_action_id(SPREADSHEET_OPS_PACK_ID),
+        normalize_action_id(DOCUMENT_STUDIO_PACK_ID),
+        normalize_action_id(CUSTOMER_OPS_PACK_ID),
+    }:
         return False, "Automatic route keeps local execution for this task type."
 
     return True, "Local machines are busy, so Hekor can use cloud runtime for this task."
@@ -2730,6 +2733,8 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
     runtime_choice_applied = False
     if requested == EXECUTION_TARGET_AUTO:
         requested_from_choice = runtime_choice_to_execution_target(runtime_choice.get("selected"))
+        if requested_from_choice == EXECUTION_TARGET_AUTO:
+            requested_from_choice = normalize_execution_target(runtime_choice.get("selected"))
         if requested_from_choice in {EXECUTION_TARGET_LOCAL_COMPANION, EXECUTION_TARGET_CLOUD}:
             requested = requested_from_choice
             runtime_choice_applied = True

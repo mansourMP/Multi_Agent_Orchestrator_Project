@@ -237,19 +237,57 @@ def apply_execution_route_metadata(metadata: Dict[str, Any], route: Dict[str, An
     metadata["execution_target_estimated_wait_band"] = str(route.get("estimated_wait_band") or "unknown")
     metadata["execution_target_waiting_for_runtime"] = bool(route.get("waiting_for_runtime"))
     metadata["execution_target_waiting_for_capacity"] = bool(route.get("waiting_for_capacity"))
+    if route.get("runtime_choice_requested"):
+        metadata["runtime_choice_requested"] = route.get("runtime_choice_requested")
+    else:
+        metadata.pop("runtime_choice_requested", None)
+    metadata["runtime_choice_selected"] = str(route.get("runtime_choice_selected") or runtime_policy.RUNTIME_CHOICE_LOCAL)
+    metadata["runtime_choice_reason"] = str(route.get("runtime_choice_reason") or "")
+    metadata["runtime_choice_source"] = str(route.get("runtime_choice_source") or "")
+    metadata["runtime_choice_applied"] = bool(route.get("runtime_choice_applied"))
+    if route.get("runtime_provider_requested"):
+        metadata["runtime_provider_requested"] = str(route.get("runtime_provider_requested"))
+    else:
+        metadata.pop("runtime_provider_requested", None)
+    metadata["runtime_contract_interface"] = str(route.get("runtime_contract_interface") or runtime_policy.RUNTIME_CONTRACT_INTERFACE_ID)
+    metadata["runtime_contract_kind"] = str(
+        route.get("runtime_contract_kind")
+        or runtime_policy._runtime_contract_kind_from_choice(route.get("runtime_choice_selected"))
+    )
+    metadata["runtime_contract_methods"] = list(route.get("runtime_contract_methods") or runtime_policy.RUNTIME_CONTRACT_METHODS)
+    metadata["runtime_contract_states"] = list(route.get("runtime_contract_states") or runtime_policy.RUNTIME_CONTRACT_STATES)
     return metadata
 
 
 def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str] = None) -> Dict[str, Any]:
     runtime_policy = _runtime_policy_module()
-    requested = normalize_execution_target(metadata.get("execution_target"))
+    clean_metadata = metadata if isinstance(metadata, dict) else {}
+    requested = normalize_execution_target(clean_metadata.get("execution_target"))
+    runtime_choice = runtime_policy.decide_runtime_choice(clean_metadata)
+    runtime_provider_requested = (
+        str(clean_metadata.get("runtime_provider_id") or clean_metadata.get("virtual_provider_id") or "").strip()
+        or None
+    )
+    runtime_choice_applied = False
+
     if requested == runtime_policy.EXECUTION_TARGET_AUTO:
-        connection_mode = str(metadata.get("connection_mode") or "").strip().lower()
+        requested_from_choice = runtime_policy.runtime_choice_to_execution_target(runtime_choice.get("selected"))
+        if requested_from_choice == runtime_policy.EXECUTION_TARGET_AUTO:
+            requested_from_choice = normalize_execution_target(runtime_choice.get("selected"))
+        if requested_from_choice in {
+            runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION,
+            runtime_policy.EXECUTION_TARGET_CLOUD,
+        }:
+            requested = requested_from_choice
+            runtime_choice_applied = True
+
+    if requested == runtime_policy.EXECUTION_TARGET_AUTO:
+        connection_mode = str(clean_metadata.get("connection_mode") or "").strip().lower()
         if connection_mode in {"local_companion", "local"}:
             requested = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
 
     capability_state = runtime_policy._local_runtime_capability_state(
-        runtime_policy._predict_required_capabilities_from_metadata(metadata)
+        runtime_policy._predict_required_capabilities_from_metadata(clean_metadata)
     )
     required_capabilities = list(capability_state.get("required_capabilities") or [])
     missing_capabilities = list(capability_state.get("missing_capabilities") or [])
@@ -272,6 +310,7 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
 
     if required_capabilities:
         capability_text = ", ".join(required_capabilities)
+        missing_text = ", ".join(missing_capabilities or required_capabilities)
         selected = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
         if available_runtime_ids:
             preferred_text = preferred_runtime_label or "a capable local runtime"
@@ -281,75 +320,113 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
         elif matching_runtime_ids:
             preferred_text = preferred_runtime_label or "a capable local runtime"
             if schedule_id:
-                reason = (
-                    f"Scheduled run requires local machine capabilities ({capability_text}) "
-                    f"and is waiting for machine capacity on {preferred_text}."
-                )
+                reason = f"Scheduled run requires local machine capabilities ({capability_text}) and is waiting for machine capacity on {preferred_text}."
             else:
-                reason = (
-                    f"Run requires local machine capabilities ({capability_text}) "
-                    f"and is waiting for machine capacity on {preferred_text}."
-                )
+                reason = f"Run requires local machine capabilities ({capability_text}) and is waiting for machine capacity on {preferred_text}."
             fallback = "Capable local machines are online, but they are currently busy."
             if queued_ahead_count > 0:
-                fallback = (
-                    f"{fallback} {queued_ahead_count} similar local run"
-                    f"{'s are' if queued_ahead_count != 1 else ' is'} ahead in the queue."
-                )
+                fallback = f"{fallback} {queued_ahead_count} similar local run{'s are' if queued_ahead_count != 1 else ' is'} ahead in the queue."
         else:
-            missing_text = ", ".join(missing_capabilities or required_capabilities)
             if schedule_id:
-                reason = (
-                    f"Scheduled run requires local machine capabilities ({capability_text}) "
-                    "and is waiting for a capable machine."
-                )
+                reason = f"Scheduled run requires local machine capabilities ({capability_text}) and is waiting for a capable machine."
             else:
-                reason = (
-                    f"Run requires local machine capabilities ({capability_text}) "
-                    "and is waiting for a capable machine."
-                )
-            fallback = f"No online local runtime currently exposes: {missing_text}."
-    elif requested == runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION:
-        selected = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
-        if bool(local_pool.get("online_count")):
-            reason = "Run is pinned to local companion execution."
+                reason = f"Run requires local machine capabilities ({capability_text}) and is waiting for a machine that reports: {missing_text}."
+            fallback = f"No online local machine currently reports required capabilities: {missing_text}."
+    elif selected == runtime_policy.EXECUTION_TARGET_AUTO:
+        if schedule_id or str(clean_metadata.get("source") or "").strip().lower() in {"weekly_scheduler", "scheduled"}:
+            selected = runtime_policy.EXECUTION_TARGET_CLOUD
+            reason = "Scheduled runs default to always-on cloud execution."
         else:
-            reason = "Run is pinned to local companion execution and no local runtime is online yet."
-            waiting_for_runtime = True
-            fallback = "Start or reconnect a local runtime to continue."
-    elif requested == runtime_policy.EXECUTION_TARGET_CLOUD:
-        selected = runtime_policy.EXECUTION_TARGET_CLOUD
-        reason = "Run is pinned to cloud execution."
-    else:
-        online_count = int(local_pool.get("online_count") or 0)
-        idle_count = int(local_pool.get("idle_count") or 0)
-        if idle_count > 0:
-            selected = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
-            reason = "Automatic route selected local companion because local capacity is available."
-        elif online_count > 0:
-            allowed, fallback_reason = runtime_policy._auto_cloud_capacity_fallback_allowed(metadata)
-            if allowed:
-                selected = runtime_policy.EXECUTION_TARGET_CLOUD
-                reason = fallback_reason
-                fallback = "Auto route used cloud because local capacity was busy."
+            if runtime_policy.ORION_LOCAL_COMPANION_ENABLED:
+                local_online_ids = list(local_pool.get("online_runtime_ids") or [])
+                local_available_ids = list(local_pool.get("available_runtime_ids") or [])
+                local_busy_ids = list(local_pool.get("busy_runtime_ids") or [])
+                local_busy_labels = list(local_pool.get("busy_runtime_labels") or [])
+                local_preferred_runtime_id = str(local_pool.get("preferred_runtime_id") or "").strip() or None
+                local_preferred_runtime_label = str(local_pool.get("preferred_runtime_label") or "").strip() or None
+                local_preferred_runtime_reason = str(local_pool.get("preferred_runtime_reason") or "").strip() or None
+                local_queued_ahead_count = int(local_pool.get("queued_ahead_count") or 0)
+                local_estimated_wait_band = str(local_pool.get("estimated_wait_band") or "unknown")
+                if local_available_ids:
+                    selected = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
+                    reason = f"Automatic route will use {local_preferred_runtime_label or 'a local machine'} because local execution is available now."
+                    matching_runtime_ids = local_online_ids
+                    available_runtime_ids = local_available_ids
+                    busy_matching_runtime_ids = local_busy_ids
+                    waiting_for_runtime = False
+                    waiting_for_capacity = False
+                    preferred_runtime_id = local_preferred_runtime_id
+                    preferred_runtime_label = local_preferred_runtime_label
+                    preferred_runtime_reason = local_preferred_runtime_reason
+                    busy_runtime_labels = local_busy_labels
+                    queued_ahead_count = local_queued_ahead_count
+                    estimated_wait_band = local_estimated_wait_band
+                elif local_online_ids:
+                    can_reroute_to_cloud, reroute_reason = runtime_policy._auto_cloud_capacity_fallback_allowed(clean_metadata)
+                    if can_reroute_to_cloud:
+                        selected = runtime_policy.EXECUTION_TARGET_CLOUD
+                        reason = reroute_reason
+                        fallback = f"{local_preferred_runtime_label or 'The local machine'} is busy right now, so Hekor is starting this in cloud runtime."
+                    else:
+                        selected = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
+                        reason = f"Automatic route prefers local execution and is waiting for capacity on {local_preferred_runtime_label or 'a local machine'}."
+                        fallback = reroute_reason
+                        matching_runtime_ids = local_online_ids
+                        available_runtime_ids = local_available_ids
+                        busy_matching_runtime_ids = local_busy_ids
+                        waiting_for_runtime = False
+                        waiting_for_capacity = True
+                        preferred_runtime_id = local_preferred_runtime_id
+                        preferred_runtime_label = local_preferred_runtime_label
+                        preferred_runtime_reason = local_preferred_runtime_reason
+                        busy_runtime_labels = local_busy_labels
+                        queued_ahead_count = local_queued_ahead_count
+                        estimated_wait_band = local_estimated_wait_band
+                        if queued_ahead_count > 0:
+                            fallback = f"{fallback} {queued_ahead_count} similar local run{'s are' if queued_ahead_count != 1 else ' is'} ahead in the queue."
+                else:
+                    selected = runtime_policy.EXECUTION_TARGET_CLOUD
+                    reason = "Default runtime route is cloud because no local machine is online."
+                    fallback = "Bring a local machine online if you want automatic tasks to prefer local execution."
             else:
-                selected = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
-                waiting_for_capacity = True
-                reason = "Automatic route is holding for local capacity."
-                fallback = fallback_reason
+                selected = runtime_policy.EXECUTION_TARGET_CLOUD
+                reason = "Default runtime route is cloud because local companion is unavailable."
+    elif selected == runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION:
+        if schedule_id:
+            selected = runtime_policy.EXECUTION_TARGET_CLOUD
+            reason = "Scheduled runs require cloud reliability."
+            fallback = "Local companion route requested, but schedules run in cloud mode."
+        elif runtime_policy.ORION_LOCAL_COMPANION_ENABLED:
+            reason = "Run requested on local companion."
         else:
             selected = runtime_policy.EXECUTION_TARGET_CLOUD
-            reason = "Automatic route selected cloud because no local runtime is online."
+            reason = "Local companion requested but not available; using cloud fallback."
+            fallback = "Local companion is not enabled on this runtime; using cloud fallback."
+    else:
+        reason = "Run requested in cloud mode."
 
     return {
         "requested": requested,
         "selected": selected,
         "reason": reason,
         "fallback": fallback,
+        "runtime_choice_requested": runtime_choice.get("requested"),
+        "runtime_choice_selected": runtime_choice.get("selected"),
+        "runtime_choice_reason": runtime_choice.get("reason"),
+        "runtime_choice_source": runtime_choice.get("source"),
+        "runtime_choice_applied": runtime_choice_applied,
+        "runtime_provider_requested": runtime_provider_requested,
+        "runtime_contract_interface": runtime_policy.RUNTIME_CONTRACT_INTERFACE_ID,
+        "runtime_contract_kind": runtime_policy._runtime_contract_kind_from_choice(runtime_choice.get("selected")),
+        "runtime_contract_methods": list(runtime_policy.RUNTIME_CONTRACT_METHODS),
+        "runtime_contract_states": list(runtime_policy.RUNTIME_CONTRACT_STATES),
+        "local_companion_enabled": runtime_policy.ORION_LOCAL_COMPANION_ENABLED,
         "required_capabilities": required_capabilities,
         "missing_capabilities": missing_capabilities,
         "matching_runtime_ids": matching_runtime_ids,
+        "matching_runtime_count": int(capability_state.get("matching_runtime_count") or 0),
         "available_runtime_ids": available_runtime_ids,
+        "available_runtime_count": int(capability_state.get("available_runtime_count") or 0),
         "busy_matching_runtime_ids": busy_matching_runtime_ids,
         "waiting_for_runtime": waiting_for_runtime,
         "waiting_for_capacity": waiting_for_capacity,

@@ -729,8 +729,6 @@ class LocalGatewayVirtualComputerRuntime:
         isolation = self._isolation_by_session.get(session_id)
         if isolation is not None:
             _assert_session_active(isolation)
-            if not isolation.profile.file_transfer_enabled:
-                raise RuntimeError("Artifact export is disabled by isolation profile.")
         cost_state = self._cost_by_session.get(session_id)
         if cost_state is not None:
             _assert_cost_quota_active(cost_state)
@@ -969,8 +967,6 @@ class InMemoryVirtualComputerRuntime:
         isolation = self._isolation_by_session.get(session_id)
         if isolation is not None:
             _assert_session_active(isolation)
-            if not isolation.profile.file_transfer_enabled:
-                raise RuntimeError("Artifact export is disabled by isolation profile.")
         cost_state = self._cost_by_session.get(session_id)
         if cost_state is not None:
             _assert_cost_quota_active(cost_state)

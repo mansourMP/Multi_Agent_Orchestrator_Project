@@ -58,6 +58,42 @@ class DirectToolApprovalServiceTests(unittest.TestCase):
             )
         )
 
+    def test_channel_send_action_requires_approval_without_capability_metadata(self) -> None:
+        self.assertTrue(
+            service.approval_required_for_direct_tool(
+                "telegram",
+                "send_message",
+                {"text": "hello"},
+                [],
+                compact_text=lambda value: str(value or "").strip().lower(),
+                http_request_requires_approval=lambda method, url: False,
+            )
+        )
+
+    def test_payment_like_action_requires_approval(self) -> None:
+        self.assertTrue(
+            service.approval_required_for_direct_tool(
+                "stripe",
+                "issue_refund",
+                {"amount": 10},
+                [],
+                compact_text=lambda value: str(value or "").strip().lower(),
+                http_request_requires_approval=lambda method, url: False,
+            )
+        )
+
+    def test_read_only_channel_action_does_not_require_approval_without_capability_flag(self) -> None:
+        self.assertFalse(
+            service.approval_required_for_direct_tool(
+                "slack",
+                "list_channels",
+                {},
+                [],
+                compact_text=lambda value: str(value or "").strip().lower(),
+                http_request_requires_approval=lambda method, url: False,
+            )
+        )
+
     def test_direct_tool_approval_delegates_to_policy_service(self) -> None:
         with patch(
             "server_modules.direct_tool_approval_service.policy_service.approval_required_for_direct_tool",

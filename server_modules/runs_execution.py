@@ -44,6 +44,7 @@ from server_modules.connectors.github_connector import (
     list_repos as github_list_repos,
 )
 from server_modules import usage_accounting_service
+from server_modules import security_audit_service
 from server_modules.connectors.dropbox_connector import (
     delete as dropbox_delete,
     download_file as dropbox_download_file,
@@ -4246,6 +4247,25 @@ def _execute_workflow_graph(
                         or ""
                     ).strip().lower()
                     if decision == "deny" or decision == "blocked":
+                        security_audit_service.emit_security_audit_event(
+                            action="tool_policy.rejected",
+                            status="blocked",
+                            tenant_id=_workflow_tool_tenant_id(context),
+                            workspace_id=_workflow_tool_workspace_id(context),
+                            run_id=str(run_id or "").strip() or None,
+                            detail=f"Tool node '{label}' blocked by runtime policy.",
+                            metadata={
+                                "node_id": str(node_id or "").strip() or None,
+                                "tool_id": str(tool_id or "").strip() or None,
+                                "variant": str(variant or "").strip() or None,
+                                "decision": decision,
+                                "reason": str(evaluation.get("reason") or "").strip() or None,
+                                "target": str(evaluation.get("target") or "").strip() or None,
+                                "policy_mode": str(evaluation.get("policy_mode") or "").strip() or None,
+                                "classification": _json_safe(evaluation.get("classification") or {}),
+                            },
+                            idempotency_key=f"tool_policy.rejected:{run_id}:{node_id}:{tool_id}:{decision}",
+                        )
                         raise RuntimeError(f"Tool node '{label}' is blocked by runtime policy.")
                     if decision == "require_confirmation" or decision == "approval_required":
                         approval_metadata = _connector_tool_node_approval_metadata(

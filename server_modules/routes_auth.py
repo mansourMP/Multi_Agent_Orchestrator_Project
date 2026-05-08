@@ -292,14 +292,21 @@ async def refresh_session(body: AuthRefreshRequest, request: Request, response: 
     ).strip()
     if not refresh_token:
         raise HTTPException(status_code=400, detail="refresh_token is required.")
-    payload = refresh_authenticated_session(
-        refresh_token,
-        device_id=body.device_id,
-        device_name=body.device_name,
-        device_platform=body.device_platform,
-        workspace_id=body.workspace_id,
-        session_ttl_seconds=body.session_ttl_seconds,
-    )
+    try:
+        payload = refresh_authenticated_session(
+            refresh_token,
+            device_id=body.device_id,
+            device_name=body.device_name,
+            device_platform=body.device_platform,
+            workspace_id=body.workspace_id,
+            session_ttl_seconds=body.session_ttl_seconds,
+        )
+    except HTTPException as exc:
+        if browser_session_request and exc.status_code in {401, 403}:
+            clear_auth_cookies(response, request=request)
+            response.status_code = exc.status_code
+            return {"detail": exc.detail}
+        raise
     response_channel = requested_channel or str(
         ((payload.get("auth_session") or {}).get("channel") if isinstance(payload, dict) else "") or ""
     ).strip()

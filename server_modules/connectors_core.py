@@ -4,6 +4,7 @@ from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules import secrets_broker
+from server_modules import secret_redaction_service
 from server_modules import provider_profiles as provider_profiles_service
 from server_modules.model_router import list_model_aliases
 
@@ -102,7 +103,7 @@ def _serialize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
         "failure_count": int(profile.get("failure_count", 0)),
         "created_at": profile.get("created_at"),
         "updated_at": profile.get("updated_at"),
-        "metadata": dict(profile.get("metadata") or {}) if isinstance(profile.get("metadata"), dict) else {},
+        "metadata": secret_redaction_service.sanitize_mapping(profile.get("metadata")),
     }
 
 async def list_provider_profiles(workspace_id: Optional[str] = None, provider: Optional[str] = None):

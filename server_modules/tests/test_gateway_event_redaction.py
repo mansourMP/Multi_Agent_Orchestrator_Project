@@ -82,3 +82,33 @@ def test_gateway_events_redact_personal_channel_text(tmp_path: Path) -> None:
     assert outbound["payload"]["payload"]["text"] == "[redacted]"
     assert outbound["payload"]["payload"]["delta"] == "[redacted]"
     assert outbound["payload"]["payload"]["remote_jid"] == "user-1"
+
+
+def test_gateway_events_redact_header_cookie_and_phone_values(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway-state.sqlite3"
+
+    gateway_state_repository.record_gateway_event(
+        gateway_id="gateway-1",
+        session_id="session-1",
+        direction="inbound",
+        frame_kind="request",
+        message_type="gateway.state.update",
+        payload={
+            "payload": {
+                "headers": {
+                    "authorization": "Bearer abc.def",
+                    "cookie": "sid=abc123",
+                },
+                "raw_header": "Authorization: Bearer my-token",
+                "phone_contact": "+1 415 555 1234",
+            }
+        },
+        db_path=db_path,
+    )
+
+    [event] = gateway_state_repository.list_gateway_events("gateway-1", db_path=db_path)
+    payload = event["payload"]["payload"]
+    assert payload["headers"]["authorization"] == "[redacted]"
+    assert payload["headers"]["cookie"] == "[redacted]"
+    assert payload["raw_header"] == "Authorization: [redacted]"
+    assert payload["phone_contact"] == "[redacted]"

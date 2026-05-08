@@ -277,7 +277,7 @@ function LoginPageContent() {
             </span>
           </label>
           {error ? <AuthErrorNotice title="Couldn’t sign in" message={error} /> : null}
-          <AppButton type="submit" disabled={submitting || !isHydrated} className="app-auth-submit">
+          <AppButton type="submit" disabled={submitting} className="app-auth-submit">
             <span>{submitting ? 'Signing in…' : 'Continue'}</span>
             <ArrowRight size={16} aria-hidden="true" />
           </AppButton>

@@ -198,6 +198,44 @@ def _runtime_action_policy_decision(
     )
 
 
+def _emit_tool_policy_denial_audit(
+    *,
+    tool_id: str,
+    metadata: Dict[str, Any],
+    reason: str,
+    target: str,
+    policy_mode: Optional[str],
+    classification: Dict[str, Any],
+) -> None:
+    tenant_id = str(metadata.get("tenant_id") or "").strip() or None
+    workspace_id = str(metadata.get("workspace_id") or "").strip() or None
+    if not tenant_id and not workspace_id:
+        return
+    try:
+        from server_modules import security_audit_service
+
+        security_audit_service.emit_security_audit_event(
+            action="tool_policy.rejected",
+            status="blocked",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=str(metadata.get("run_id") or metadata.get("request_id") or "").strip() or None,
+            detail=f"Tool '{tool_id}' rejected by policy.",
+            metadata={
+                "tool_id": tool_id,
+                "reason": reason,
+                "target": target,
+                "policy_mode": policy_mode,
+                "classification": classification if isinstance(classification, dict) else {},
+            },
+            idempotency_key=(
+                f"tool_policy.rejected:{workspace_id or 'default'}:{tool_id}:{target}:{reason or 'blocked'}"
+            ),
+        )
+    except Exception:
+        return
+
+
 def apply_execution_route_metadata(metadata: Dict[str, Any], route: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(metadata, dict):
         return metadata
@@ -449,6 +487,7 @@ def evaluate_action_policy(
     metadata = metadata if isinstance(metadata, dict) else {}
     policy = runtime_policy._action_policy_from_metadata(metadata)
     blocked_actions = set(policy.get("blocked_actions", set()))
+    approval_actions = set(policy.get("approval_actions", set()))
     allow_actions = set(policy.get("allow_actions", set()))
     block_cloud_critical = bool(policy.get("block_cloud_critical", True))
 
@@ -477,6 +516,9 @@ def evaluate_action_policy(
         if normalized in blocked_actions and normalized not in allow_actions:
             execution_decision = "deny"
             reasons.append("Blocked by action policy.")
+        elif normalized in approval_actions and normalized not in allow_actions:
+            execution_decision = "require_confirmation"
+            reasons.append("Approval required by action policy.")
 
         if (
             execution_decision != "deny"
@@ -642,6 +684,7 @@ def evaluate_tool_policy_decision(
     policy = runtime_policy._action_policy_from_metadata(metadata)
 
     blocked_actions = policy.get("blocked_actions", set())
+    approval_actions = policy.get("approval_actions", set())
     block_cloud_critical = bool(policy.get("block_cloud_critical", True))
 
     browser_policy = (
@@ -708,6 +751,12 @@ def evaluate_tool_policy_decision(
     ]
     uses_capability_path = clean_tool_id == "shell.execute" and bool(capability_details)
     uses_raw_command_path = clean_tool_id == "shell.execute" and not uses_capability_path
+    approval_candidates = set(requested_capability_ids)
+    if clean_tool_id:
+        approval_candidates.add(clean_tool_id)
+    requires_explicit_approval = any(
+        candidate in approval_actions for candidate in approval_candidates if candidate
+    )
     unsupported_capability = next(
         (
             detail
@@ -782,6 +831,9 @@ def evaluate_tool_policy_decision(
     elif clean_tool_id in blocked_actions and not uses_capability_path and not safe_raw_shell_command:
         execution_decision = "deny"
         reason = "blocked_by_action_policy"
+    elif requires_explicit_approval and not safe_raw_shell_command:
+        execution_decision = "require_confirmation"
+        reason = "approval_required_by_action_policy"
     elif (
         effective_target == runtime_policy.EXECUTION_TARGET_CLOUD
         and runtime_policy.TOOL_POLICY.is_critical(clean_tool_id)
@@ -829,7 +881,7 @@ def evaluate_tool_policy_decision(
                 else "browser_authenticated_requires_approval"
             )
 
-    return {
+    result = {
         "tool_id": clean_tool_id,
         "capability_ids": capability_ids or None,
         "capabilities": capability_details or None,
@@ -868,6 +920,16 @@ def evaluate_tool_policy_decision(
             and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
         ),
     }
+    if str(result.get("execution_decision") or "").strip().lower() == "deny":
+        _emit_tool_policy_denial_audit(
+            tool_id=clean_tool_id,
+            metadata=metadata,
+            reason=str(result.get("reason") or "").strip(),
+            target=effective_target,
+            policy_mode=effective_policy_mode,
+            classification=classification if isinstance(classification, dict) else {},
+        )
+    return result
 
 
 def compute_tool_policy_precheck(
@@ -1084,6 +1146,13 @@ def approval_required_for_direct_tool(
             arguments,
             compact_text=compact_text,
         )
+    if normalized_connector_id in {"telegram", "whatsapp", "slack", "discord", "email", "gmail", "imsg", "signal", "mail"}:
+        if normalized_action_id.startswith(("send", "post", "reply", "delete", "update", "upload", "create_thread", "add_reaction")):
+            return True
+    if any(token in normalized_action_id for token in {"charge", "refund", "payment", "payout", "transfer", "invoice"}):
+        return True
+    if normalized_action_id in {"invoke", "execute", "run"}:
+        return True
     return skills_service.tool_action_requires_approval(
         normalized_connector_id,
         normalized_action_id,

@@ -1,78 +1,17 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Dict, Optional
 import uuid
 
 from server_modules import outbox_service
+from server_modules import secret_redaction_service
 
 
 LOGGER = logging.getLogger(__name__)
 
-_SENSITIVE_KEY_PARTS = (
-    "api_key",
-    "apikey",
-    "access_token",
-    "refresh_token",
-    "auth_token",
-    "authorization",
-    "password",
-    "secret",
-    "credential",
-    "credentials",
-    "private_key",
-    "pairing_token",
-    "pairing_code",
-    "session_cookie",
-    "cookie",
-)
-
-_SENSITIVE_VALUE_PATTERNS = (
-    (re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE), "Bearer [redacted]"),
-    (re.compile(r"sk-[A-Za-z0-9][A-Za-z0-9_-]{8,}"), "[redacted-secret]"),
-    (re.compile(r"gpair_[A-Za-z0-9_-]+"), "[redacted-token]"),
-    (re.compile(r"AIza[0-9A-Za-z_-]{20,}"), "[redacted-secret]"),
-    (re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"), "[redacted-secret]"),
-    (re.compile(r"xox[baprs]-[A-Za-z0-9-]+"), "[redacted-secret]"),
-)
-
-
-def _is_sensitive_metadata_key(key: Any) -> bool:
-    normalized = re.sub(r"[^a-z0-9_]+", "_", str(key or "").strip().lower())
-    return any(part in normalized for part in _SENSITIVE_KEY_PARTS)
-
-
-def _redact_sensitive_text(value: str) -> str:
-    redacted = value
-    for pattern, replacement in _SENSITIVE_VALUE_PATTERNS:
-        redacted = pattern.sub(replacement, redacted)
-    return redacted
-
-
-def _sanitize_metadata_value(value: Any, *, depth: int = 0) -> Any:
-    if depth > 8:
-        return "[redacted-depth]"
-    if isinstance(value, dict):
-        sanitized: Dict[str, Any] = {}
-        for key, item in value.items():
-            sanitized[str(key)] = "[redacted]" if _is_sensitive_metadata_key(key) else _sanitize_metadata_value(item, depth=depth + 1)
-        return sanitized
-    if isinstance(value, list):
-        return [_sanitize_metadata_value(item, depth=depth + 1) for item in value[:100]]
-    if isinstance(value, tuple):
-        return [_sanitize_metadata_value(item, depth=depth + 1) for item in list(value)[:100]]
-    if isinstance(value, str):
-        return _redact_sensitive_text(value)
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return str(value)
-
-
 def sanitize_security_audit_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if not isinstance(metadata, dict):
-        return {}
-    return _sanitize_metadata_value(metadata)
+    return secret_redaction_service.sanitize_mapping(metadata)
 
 
 def emit_security_audit_event(

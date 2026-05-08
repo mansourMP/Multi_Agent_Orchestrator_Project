@@ -518,3 +518,87 @@ async def test_build_account_shell_payload_reuses_short_ttl_cache_for_identical_
 
     assert workspace_fetch_count["count"] == 1
     assert first_payload == second_payload
+
+
+@pytest.mark.anyio
+async def test_build_account_shell_payload_cache_is_user_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    account_shell_service.ACCOUNT_SHELL_CACHE.clear()
+    memberships_by_user = {
+        "user-1": [
+            {
+                "workspace_id": "ws-u1",
+                "tenant_id": "tenant-u1",
+                "role": "owner",
+                "workspace_name": "Workspace One",
+                "updated_at": 1,
+            }
+        ],
+        "user-2": [
+            {
+                "workspace_id": "ws-u2",
+                "tenant_id": "tenant-u2",
+                "role": "member",
+                "workspace_name": "Workspace Two",
+                "updated_at": 1,
+            }
+        ],
+    }
+
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "get_authenticated_user_record",
+        lambda current_user: {
+            "id": current_user["user_id"],
+            "email": f"{current_user['user_id']}@example.com",
+        },
+    )
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "list_authenticated_workspace_memberships",
+        lambda current_user: memberships_by_user[current_user["user_id"]],
+    )
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "get_authenticated_identity_versions",
+        lambda current_user: {"membership_version": 16},
+    )
+
+    async def fake_get_workspace_by_id(workspace_id: str):
+        if workspace_id == "ws-u1":
+            return {
+                "workspace_id": "ws-u1",
+                "tenant_id": "tenant-u1",
+                "name": "Workspace One",
+                "workspace_type": "personal",
+                "metadata": {},
+            }
+        return {
+            "workspace_id": "ws-u2",
+            "tenant_id": "tenant-u2",
+            "name": "Workspace Two",
+            "workspace_type": "personal",
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(
+        account_shell_service.control_plane_repository,
+        "get_workspace_by_id",
+        fake_get_workspace_by_id,
+    )
+    monkeypatch.setattr(
+        account_shell_service.entitlements_service,
+        "resolve_workspace_entitlement_state_for_workspace_id",
+        lambda workspace_id, workspace=None: _entitlement_state(mobile_app_enabled=True),
+    )
+
+    payload_user_1 = await account_shell_service.build_account_shell_payload(
+        {"auth_type": "bearer", "user_id": "user-1", "identity_versions": {"membership_version": 16}},
+    )
+    payload_user_2 = await account_shell_service.build_account_shell_payload(
+        {"auth_type": "bearer", "user_id": "user-2", "identity_versions": {"membership_version": 16}},
+    )
+
+    assert payload_user_1["workspaceMemberships"][0]["workspace"]["id"] == "ws-u1"
+    assert payload_user_2["workspaceMemberships"][0]["workspace"]["id"] == "ws-u2"

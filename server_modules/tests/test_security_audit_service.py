@@ -43,12 +43,35 @@ class SecurityAuditServiceTests(unittest.TestCase):
         self.assertEqual(metadata["nested"]["Authorization"], "[redacted]")
         self.assertEqual(metadata["nested"]["safe"], "kept")
         self.assertEqual(metadata["items"][0]["pairing_token"], "[redacted]")
-        self.assertIn("Bearer [redacted]", metadata["items"][0]["note"])
+        self.assertEqual(metadata["items"][0]["note"], "Authorization: [redacted]")
         self.assertEqual(captured["payload"]["actor_email"], "user@example.com")
 
     def test_sanitize_security_audit_metadata_handles_non_dict(self):
         self.assertEqual(security_audit_service.sanitize_security_audit_metadata(None), {})
         self.assertEqual(security_audit_service.sanitize_security_audit_metadata([]), {})
+
+    def test_sanitize_security_audit_metadata_redacts_headers_cookies_and_phone(self):
+        metadata = security_audit_service.sanitize_security_audit_metadata(
+            {
+                "headers": {
+                    "Authorization": "Bearer top-secret-token",
+                    "Cookie": "sessionid=abc123; csrftoken=def456",
+                    "X-Api-Key": "secret-key-1",
+                },
+                "raw_header_text": "Authorization: Bearer abc.def.ghi",
+                "set_cookie_line": "Set-Cookie: sid=abc; HttpOnly",
+                "customer_phone": "+1 (415) 555-1234",
+                "safe": "keep-me",
+            }
+        )
+
+        self.assertEqual(metadata["headers"]["Authorization"], "[redacted]")
+        self.assertEqual(metadata["headers"]["Cookie"], "[redacted]")
+        self.assertEqual(metadata["headers"]["X-Api-Key"], "[redacted]")
+        self.assertEqual(metadata["raw_header_text"], "Authorization: [redacted]")
+        self.assertEqual(metadata["set_cookie_line"], "[redacted]")
+        self.assertEqual(metadata["customer_phone"], "[redacted]")
+        self.assertEqual(metadata["safe"], "keep-me")
 
 
 if __name__ == "__main__":

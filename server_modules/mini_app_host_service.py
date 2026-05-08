@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import importlib
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -484,7 +485,7 @@ async def process_hosted_bridge_request(
 
     turn_payload: Dict[str, Any] = {}
     if kind == "app_to_sage" and guarded_request_text and not rejection_reason:
-        from server_modules import agent_registry_api
+        agent_registry_api = importlib.import_module("server_modules.agent_registry_api")
 
         master_install = await agent_registry_api.agent_registry_repository.get_workspace_master_agent_install(
             tenant_id=tenant_id,

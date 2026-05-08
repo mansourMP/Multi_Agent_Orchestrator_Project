@@ -108,6 +108,82 @@ async def test_mini_app_invoke_route_returns_thin_app_response(monkeypatch: pyte
 
 
 @pytest.mark.anyio
+async def test_mini_app_invoke_route_rate_limits_requests(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda workspace_id, app_id, user_input, requested_provider="", requested_model="": {"app_id": app_id, "reply": "ok"},
+    )
+    routes_mini_apps.MINI_APP_INVOKE_RATE_LIMIT_BUCKETS.clear()
+    monkeypatch.setattr(routes_mini_apps, "ORION_MINI_APP_INVOKE_RATE_LIMIT_PER_MINUTE", 1)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post(
+            "/api/workspaces/ws-1/mini-apps/writing/invoke",
+            json={"input": "one"},
+        )
+        second = await client.post(
+            "/api/workspaces/ws-1/mini-apps/writing/invoke",
+            json={"input": "two"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    payload = second.json()
+    assert payload["detail"]["code"] == "mini_app_invoke_rate_limited"
+
+
+@pytest.mark.anyio
+async def test_hosted_bridge_route_rate_limits_requests(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    monkeypatch.setattr(
+        routes_mini_apps.mini_apps_service,
+        "get_mini_app_contract",
+        lambda workspace_id, app_id: {"app_id": app_id, "permissions": ["app.bridge.specialist.request"]},
+    )
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_host_service,
+        "process_hosted_bridge_request",
+        AsyncMock(return_value={"status": "ok"}),
+    )
+    routes_mini_apps.MINI_APP_BRIDGE_RATE_LIMIT_BUCKETS.clear()
+    monkeypatch.setattr(routes_mini_apps, "ORION_MINI_APP_BRIDGE_RATE_LIMIT_PER_MINUTE", 1)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post(
+            "/api/workspaces/ws-1/mini-apps/writing/bridge/messages",
+            json={
+                "origin": "https://apps.empyralis.local",
+                "bridge_kind": "app_to_specialist",
+                "bridge_type": "request_specialist_run",
+                "request_text": "help",
+            },
+        )
+        second = await client.post(
+            "/api/workspaces/ws-1/mini-apps/writing/bridge/messages",
+            json={
+                "origin": "https://apps.empyralis.local",
+                "bridge_kind": "app_to_specialist",
+                "bridge_type": "request_specialist_run",
+                "request_text": "help again",
+            },
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    payload = second.json()
+    assert payload["detail"]["code"] == "mini_app_bridge_rate_limited"
+
+
+@pytest.mark.anyio
 async def test_calorie_routes_log_goal_overview_and_range_retrieval(monkeypatch: pytest.MonkeyPatch):
     app = _build_app()
     app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}

@@ -44,6 +44,49 @@ class GatewayProtocolServiceTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.error_code, "gateway_frame_not_object")
 
+    def test_scope_match_requires_all_scope_fields(self) -> None:
+        registration = {
+            "tenant_id": "tenant-1",
+            "workspace_id": "default",
+            "user_id": "owner-1",
+            "device_id": "device-1",
+            "gateway_id": "gateway-1",
+        }
+        matching_scope = {
+            "tenant_id": "tenant-1",
+            "workspace_id": "default",
+            "user_id": "owner-1",
+            "device_id": "device-1",
+            "gateway_id": "gateway-1",
+        }
+        missing_scope = {
+            "tenant_id": "tenant-1",
+            "workspace_id": "default",
+            "user_id": "owner-1",
+            "device_id": "device-1",
+        }
+
+        self.assertTrue(gateway_protocol_service._scope_matches_registration(matching_scope, registration))
+        self.assertFalse(gateway_protocol_service._scope_matches_registration(missing_scope, registration))
+
+    def test_normalize_frame_seq_ack_rejects_invalid_sequence(self) -> None:
+        with self.assertRaises(gateway_protocol_service.GatewayFrameValidationError) as raised:
+            gateway_protocol_service._normalize_frame_seq_ack({"seq": "bad"})
+        self.assertEqual(raised.exception.error_code, "gateway_frame_invalid_sequence")
+
+        with self.assertRaises(gateway_protocol_service.GatewayFrameValidationError) as raised_negative:
+            gateway_protocol_service._normalize_frame_seq_ack({"ack": -1})
+        self.assertEqual(raised_negative.exception.error_code, "gateway_frame_invalid_sequence")
+
+    def test_normalize_frame_seq_ack_accepts_positive_and_missing_values(self) -> None:
+        seq, ack = gateway_protocol_service._normalize_frame_seq_ack({"seq": "7", "ack": 3})
+        self.assertEqual(seq, 7)
+        self.assertEqual(ack, 3)
+
+        seq_missing, ack_missing = gateway_protocol_service._normalize_frame_seq_ack({})
+        self.assertIsNone(seq_missing)
+        self.assertIsNone(ack_missing)
+
 
 if __name__ == "__main__":
     unittest.main()

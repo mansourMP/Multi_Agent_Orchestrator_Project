@@ -1219,6 +1219,7 @@ textarea {
 
 .app-auth-page {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: var(--app-space-8);
@@ -1229,6 +1230,10 @@ textarea {
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0) 34%),
     radial-gradient(circle at bottom right, rgba(228, 232, 238, 0.56) 0%, rgba(228, 232, 238, 0) 40%),
     linear-gradient(180deg, #f6f6f5 0%, #f1f2f3 100%);
+  -webkit-user-select: text;
+  user-select: text;
+  touch-action: manipulation;
+  -webkit-touch-callout: default;
 }
 
 .app-auth-shell {
@@ -1717,6 +1722,8 @@ textarea {
 @media (max-width: 640px) {
   .app-auth-page {
     padding: var(--app-space-4);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .app-auth-card,

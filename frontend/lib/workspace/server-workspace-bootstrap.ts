@@ -43,6 +43,8 @@ function delay(ms: number): Promise<void> {
 export async function loadWorkspaceBootstrap(workspaceId: string): Promise<WorkspaceBootstrapPayload> {
   const requestHeaders = await headers();
   const url = `${controlPlaneBaseUrl()}/api/workspaces/${encodeURIComponent(workspaceId)}/bootstrap`;
+  const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
+  const proto = requestHeaders.get('x-forwarded-proto') ?? 'http';
   const forwardHeaders: Record<string, string> = {
     accept: 'application/json',
   };
@@ -54,10 +56,18 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
   if (authorization) {
     forwardHeaders.authorization = authorization;
   }
+  if (host) {
+    forwardHeaders['x-forwarded-host'] = host.split(',')[0].trim();
+  }
+  if (proto) {
+    forwardHeaders['x-forwarded-proto'] = proto.split(',')[0].trim() || 'http';
+  }
   const cacheKey = [
     workspaceId,
     cookie ?? '',
     authorization ?? '',
+    forwardHeaders['x-forwarded-host'] ?? '',
+    forwardHeaders['x-forwarded-proto'] ?? '',
   ].join('::');
   const cachedEntry = workspaceBootstrapCache.get(cacheKey);
   if (cachedEntry && cachedEntry.expiresAt > Date.now()) {

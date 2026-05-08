@@ -153,6 +153,36 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertIn("app.summary.read", contract["permissions"])
         self.assertNotIn("app.records.read.raw", contract["permissions"])
 
+    def test_export_and_wipe_state_support_workspace_data_retention(self) -> None:
+        mini_apps_service.upsert_mini_app_contract(
+            "ws-1",
+            "calorie_tracking",
+            label="Calorie Tracking",
+            records=[
+                {"id": "meal-1", "kind": "meal", "summary": "Chicken bowl", "created_at": "2026-04-17T08:00:00Z"},
+                {"id": "meal-2", "kind": "meal", "summary": "Protein yogurt", "created_at": "2026-04-16T08:00:00Z"},
+            ],
+        )
+        mini_apps_service.upsert_mini_app_contract(
+            "ws-1",
+            "flashcards",
+            label="Flashcards",
+            records=[
+                {"id": "card-1", "kind": "review", "summary": "Reviewed estar", "created_at": "2026-04-15T08:00:00Z"},
+            ],
+        )
+
+        exported = mini_apps_service.export_mini_apps_state("ws-1")
+        self.assertEqual(exported["count"], 2)
+        self.assertEqual(exported["total_records"], 3)
+
+        wiped = mini_apps_service.wipe_mini_apps_state("ws-1")
+        self.assertEqual(wiped["deleted_apps_count"], 2)
+        self.assertEqual(wiped["deleted_records_count"], 3)
+
+        listing = mini_apps_service.list_mini_app_contracts("ws-1")
+        self.assertEqual(listing["count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,27 @@ class ConnectorsCoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(result["models"], list)
         self.assertTrue(any(item.get("alias") == "gpt-4o-mini" for item in result["models"]))
 
+    async def test_serialize_profile_redacts_sensitive_metadata(self):
+        profile = connectors_core._serialize_profile(
+            {
+                "id": "profile-1",
+                "provider": "openai",
+                "label": "OpenAI",
+                "workspace_id": "default",
+                "priority": 100,
+                "enabled": True,
+                "metadata": {
+                    "authorization": "Bearer abc.def.ghi",
+                    "session_cookie": "sid=123",
+                    "safe": "ok",
+                },
+            }
+        )
+
+        self.assertEqual(profile["metadata"]["authorization"], "[redacted]")
+        self.assertEqual(profile["metadata"]["session_cookie"], "[redacted]")
+        self.assertEqual(profile["metadata"]["safe"], "ok")
+
 
 if __name__ == "__main__":
     unittest.main()

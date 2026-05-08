@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from server_modules import secret_redaction_service
 
 LoadVaultFn = Callable[[], Dict[str, Any]]
 DecryptFn = Callable[[str], str]
@@ -45,7 +46,7 @@ def list_vault_credentials(
                 "provider": entry.get("provider"),
                 "mode": entry.get("mode", "byok"),
                 "workspace_id": entry.get("workspace_id"),
-                "metadata": entry.get("metadata", {}),
+                "metadata": secret_redaction_service.sanitize_mapping(entry.get("metadata")),
                 "created_at": entry.get("created_at"),
                 "updated_at": entry.get("updated_at"),
             }
@@ -71,7 +72,7 @@ def list_vault_connectors(
                 "label": entry.get("label"),
                 "connector": provider,
                 "workspace_id": entry.get("workspace_id"),
-                "metadata": entry.get("metadata", {}),
+                "metadata": secret_redaction_service.sanitize_mapping(entry.get("metadata")),
                 "created_at": entry.get("created_at"),
                 "updated_at": entry.get("updated_at"),
             }

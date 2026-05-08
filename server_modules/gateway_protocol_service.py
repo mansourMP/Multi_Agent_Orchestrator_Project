@@ -347,9 +347,38 @@ def _scope_matches_registration(frame_scope: Dict[str, Any], registration: Dict[
     expected = gateway_registry_service.gateway_scope_payload(registration)
     for key, value in expected.items():
         raw = str(frame_scope.get(key) or "").strip()
-        if raw and raw != value:
+        if raw != value:
             return False
     return True
+
+
+def _normalize_frame_seq_ack(frame: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
+    def _normalize(name: str) -> Optional[int]:
+        if name not in frame:
+            return None
+        value = frame.get(name)
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            raise GatewayFrameValidationError(
+                error_code="gateway_frame_invalid_sequence",
+                reason=f"Gateway frame {name} must be an integer.",
+            )
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError) as exc:
+            raise GatewayFrameValidationError(
+                error_code="gateway_frame_invalid_sequence",
+                reason=f"Gateway frame {name} must be an integer.",
+            ) from exc
+        if normalized < 0:
+            raise GatewayFrameValidationError(
+                error_code="gateway_frame_invalid_sequence",
+                reason=f"Gateway frame {name} must be non-negative.",
+            )
+        return normalized
+
+    return (_normalize("seq"), _normalize("ack"))
 
 
 async def _validate_gateway_binding(
@@ -464,12 +493,14 @@ async def handle_gateway_websocket(
     session_id = str(session.get("session_id") or "")
     scope = gateway_registry_service.gateway_scope_payload(registration)
     server_event_seq = 0
+    last_client_seq: Optional[int] = None
     disconnected = False
     await websocket.accept()
 
     try:
         try:
             first_frame = _parse_frame(await websocket.receive_text())
+            first_seq, first_ack = _normalize_frame_seq_ack(first_frame)
         except GatewayFrameValidationError as exc:
             await websocket.close(code=exc.close_code, reason=exc.reason)
             disconnected = True
@@ -482,8 +513,8 @@ async def handle_gateway_websocket(
             frame_kind=str(first_frame.get("kind") or ""),
             message_type=_normalized_request_type(first_frame),
             payload=first_frame,
-            seq=first_frame.get("seq"),
-            ack=first_frame.get("ack"),
+            seq=first_seq,
+            ack=first_ack,
         )
         if str(first_frame.get("kind") or "").strip() != "request" or _normalized_request_type(first_frame) != "gateway.connect":
             await websocket.send_json(
@@ -516,8 +547,8 @@ async def handle_gateway_websocket(
         gateway_state_repository.touch_gateway_session(
             session_id=session_id,
             gateway_id=gateway_id,
-            seq=first_frame.get("seq"),
-            ack=first_frame.get("ack"),
+            seq=first_seq,
+            ack=first_ack,
             journal_cursor=connect_payload.get("journal_cursor"),
             checkpoint_cursor=connect_payload.get("checkpoint_cursor"),
             metadata={
@@ -561,7 +592,7 @@ async def handle_gateway_websocket(
                 "scope": scope,
             },
             seq=server_event_seq,
-            ack=first_frame.get("ack"),
+            ack=first_ack,
         )
         gateway_state_repository.record_gateway_event(
             gateway_id=gateway_id,
@@ -571,7 +602,7 @@ async def handle_gateway_websocket(
             message_type="gateway.hello",
             payload=hello_frame,
             seq=server_event_seq,
-            ack=first_frame.get("ack"),
+            ack=first_ack,
         )
         await websocket.send_json(hello_frame)
         server_event_seq += 1
@@ -580,7 +611,7 @@ async def handle_gateway_websocket(
             scope=scope,
             payload={"status": "online", "gateway_id": gateway_id},
             seq=server_event_seq,
-            ack=first_frame.get("ack"),
+            ack=first_ack,
         )
         gateway_state_repository.record_gateway_event(
             gateway_id=gateway_id,
@@ -590,7 +621,7 @@ async def handle_gateway_websocket(
             message_type="gateway.presence",
             payload=presence_frame,
             seq=server_event_seq,
-            ack=first_frame.get("ack"),
+            ack=first_ack,
         )
         await websocket.send_json(presence_frame)
         await gateway_activity_service.emit_gateway_presence_activity(
@@ -601,10 +632,12 @@ async def handle_gateway_websocket(
             status="online",
             payload={"session_id": session_id, "scope": scope},
         )
+        last_client_seq = first_seq
 
         while True:
             try:
                 frame = _parse_frame(await websocket.receive_text())
+                frame_seq, frame_ack = _normalize_frame_seq_ack(frame)
             except GatewayFrameValidationError as exc:
                 await websocket.send_json(
                     _response_frame(
@@ -617,6 +650,23 @@ async def handle_gateway_websocket(
                 disconnected = True
                 gateway_state_repository.mark_gateway_session_disconnected(session_id, reason=exc.error_code)
                 break
+            if frame_seq is not None and last_client_seq is not None and frame_seq <= last_client_seq:
+                await websocket.send_json(
+                    _response_frame(
+                        str(frame.get("id") or "replayed"),
+                        ok=False,
+                        error={
+                            "code": "gateway_frame_replayed",
+                            "message": "Gateway frame sequence must be strictly increasing.",
+                        },
+                    )
+                )
+                disconnected = True
+                gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="gateway_frame_replayed")
+                await websocket.close(code=4408, reason="gateway frame replay detected")
+                break
+            if frame_seq is not None:
+                last_client_seq = frame_seq
             frame_kind = str(frame.get("kind") or "").strip()
             message_type = _normalized_request_type(frame)
             payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
@@ -637,8 +687,8 @@ async def handle_gateway_websocket(
                 frame_kind=frame_kind,
                 message_type=message_type,
                 payload=frame,
-                seq=frame.get("seq"),
-                ack=frame.get("ack"),
+                seq=frame_seq,
+                ack=frame_ack,
             )
             if frame_kind == "response":
                 if message_type == "channel.outbound.result":
@@ -665,8 +715,8 @@ async def handle_gateway_websocket(
                     gateway_state_repository.touch_gateway_session(
                         session_id=session_id,
                         gateway_id=gateway_id,
-                        seq=frame.get("seq"),
-                        ack=frame.get("ack"),
+                        seq=frame_seq,
+                        ack=frame_ack,
                         metadata={"last_personal_channel_event": "channel.inbound"},
                     )
                     continue
@@ -700,8 +750,8 @@ async def handle_gateway_websocket(
                 gateway_state_repository.touch_gateway_session(
                     session_id=session_id,
                     gateway_id=gateway_id,
-                    seq=frame.get("seq"),
-                    ack=frame.get("ack"),
+                    seq=frame_seq,
+                    ack=frame_ack,
                     health_state=payload.get("health_state"),
                     journal_cursor=payload.get("journal_cursor"),
                     checkpoint_cursor=payload.get("checkpoint_cursor"),
@@ -739,8 +789,8 @@ async def handle_gateway_websocket(
                 gateway_state_repository.touch_gateway_session(
                     session_id=session_id,
                     gateway_id=gateway_id,
-                    seq=frame.get("seq"),
-                    ack=frame.get("ack"),
+                    seq=frame_seq,
+                    ack=frame_ack,
                     health_state=payload.get("health_state"),
                     journal_cursor=payload.get("journal_cursor"),
                     checkpoint_cursor=payload.get("checkpoint_cursor"),
@@ -779,7 +829,7 @@ async def handle_gateway_websocket(
                         "state": payload,
                     },
                     seq=server_event_seq,
-                    ack=frame.get("ack"),
+                    ack=frame_ack,
                 )
                 gateway_state_repository.record_gateway_event(
                     gateway_id=gateway_id,
@@ -789,7 +839,7 @@ async def handle_gateway_websocket(
                     message_type="gateway.presence",
                     payload=state_event,
                     seq=server_event_seq,
-                    ack=frame.get("ack"),
+                    ack=frame_ack,
                 )
                 await websocket.send_json(state_event)
                 continue

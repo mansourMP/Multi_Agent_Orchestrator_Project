@@ -40,6 +40,8 @@ LOGIN_RATE_LIMIT_LOCK = threading.Lock()
 LOGIN_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
 USER_RATE_LIMIT_LOCK = threading.Lock()
 USER_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
+CSRF_FAILURE_RATE_LIMIT_LOCK = threading.Lock()
+CSRF_FAILURE_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
 JWT_EXP_SECONDS = int(os.getenv("ORION_JWT_EXP_SECONDS", "3600"))
 MOBILE_JWT_EXP_SECONDS = int(os.getenv("ORION_MOBILE_JWT_EXP_SECONDS", str(60 * 60 * 24 * 30)))
 MOBILE_REFRESH_EXP_SECONDS = int(os.getenv("ORION_MOBILE_REFRESH_EXP_SECONDS", str(60 * 60 * 24 * 180)))
@@ -53,6 +55,15 @@ ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE = int(
 )
 ORION_MOBILE_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE = int(
     os.getenv("ORION_MOBILE_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE", "600")
+)
+ORION_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE = int(
+    os.getenv("ORION_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE", "180")
+)
+ORION_MOBILE_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE = int(
+    os.getenv("ORION_MOBILE_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE", "120")
+)
+ORION_AUTH_CSRF_FAILURE_RATE_LIMIT_PER_MINUTE = int(
+    os.getenv("ORION_AUTH_CSRF_FAILURE_RATE_LIMIT_PER_MINUTE", "30")
 )
 ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED = str(
     os.getenv("ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED", "1")
@@ -68,6 +79,14 @@ AUTH_REFRESH_COOKIE_NAME = str(os.getenv("EMPYRALIS_AUTH_REFRESH_COOKIE", "empyr
 AUTH_CSRF_COOKIE_NAME = str(os.getenv("EMPYRALIS_AUTH_CSRF_COOKIE", "empyralis_csrf_token")).strip() or "empyralis_csrf_token"
 AUTH_CSRF_HEADER_NAME = "x-csrf-token"
 AUTH_COOKIE_PATH = "/"
+AUTH_ACCESS_COOKIE_MAX_AGE_SECONDS = max(
+    int(os.getenv("EMPYRALIS_AUTH_ACCESS_COOKIE_MAX_AGE_SECONDS", str(60 * 60 * 24))),
+    60,
+)
+AUTH_REFRESH_COOKIE_MAX_AGE_SECONDS = max(
+    int(os.getenv("EMPYRALIS_AUTH_REFRESH_COOKIE_MAX_AGE_SECONDS", str(60 * 60 * 24 * 30))),
+    60,
+)
 BROWSER_AUTH_SESSION_CHANNELS = {"web", "desktop"}
 PROVIDER_JWKS_CACHE_LOCK = threading.Lock()
 PROVIDER_JWKS_CACHE: Dict[str, dict[str, Any]] = {}
@@ -155,12 +174,33 @@ def _request_scheme(request: Request) -> str:
 
 
 def _cookie_secure(request: Request) -> bool:
+    if _environment_is_production():
+        return True
     return _request_scheme(request) == "https"
 
 
 def _cookie_domain() -> Optional[str]:
     raw_domain = str(os.getenv("EMPYRALIS_AUTH_COOKIE_DOMAIN") or "").strip()
     return raw_domain or None
+
+
+def _cookie_samesite() -> str:
+    raw_samesite = str(os.getenv("EMPYRALIS_AUTH_COOKIE_SAMESITE") or "").strip().lower()
+    if raw_samesite in {"lax", "strict", "none"}:
+        return raw_samesite
+    return "strict" if _environment_is_production() else "lax"
+
+
+def _bounded_cookie_max_age(raw_max_age: Any, *, hard_cap_seconds: int) -> int:
+    try:
+        max_age = int(raw_max_age)
+    except Exception:
+        max_age = 60
+    if max_age < 60:
+        max_age = 60
+    if max_age > hard_cap_seconds:
+        return hard_cap_seconds
+    return max_age
 
 
 def issue_csrf_token() -> str:
@@ -191,14 +231,25 @@ def set_auth_cookies(
         return
     token_payload = _decode_token_payload(access_token)
     now_ts = int(time.time())
-    access_max_age = max(int(token_payload.get("exp") or now_ts) - now_ts, 60)
+    access_max_age = _bounded_cookie_max_age(
+        int(token_payload.get("exp") or now_ts) - now_ts,
+        hard_cap_seconds=AUTH_ACCESS_COOKIE_MAX_AGE_SECONDS,
+    )
 
     refresh_payload = payload.get("session_recovery") if isinstance(payload.get("session_recovery"), dict) else {}
     refresh_token = str(refresh_payload.get("refresh_token") or "").strip()
-    refresh_max_age = max(int(refresh_payload.get("refresh_expires_at") or now_ts) - now_ts, 60) if refresh_token else None
+    refresh_max_age = (
+        _bounded_cookie_max_age(
+            int(refresh_payload.get("refresh_expires_at") or now_ts) - now_ts,
+            hard_cap_seconds=AUTH_REFRESH_COOKIE_MAX_AGE_SECONDS,
+        )
+        if refresh_token
+        else None
+    )
     csrf_token = issue_csrf_token()
     secure = _cookie_secure(request)
     domain = _cookie_domain()
+    samesite = _cookie_samesite()
 
     response.set_cookie(
         key=AUTH_ACCESS_COOKIE_NAME,
@@ -206,7 +257,7 @@ def set_auth_cookies(
         max_age=access_max_age,
         httponly=True,
         secure=secure,
-        samesite="lax",
+        samesite=samesite,
         path=AUTH_COOKIE_PATH,
         domain=domain,
     )
@@ -217,7 +268,7 @@ def set_auth_cookies(
             max_age=refresh_max_age,
             httponly=True,
             secure=secure,
-            samesite="lax",
+            samesite=samesite,
             path=AUTH_COOKIE_PATH,
             domain=domain,
         )
@@ -227,7 +278,7 @@ def set_auth_cookies(
         max_age=refresh_max_age or access_max_age,
         httponly=False,
         secure=secure,
-        samesite="lax",
+        samesite=samesite,
         path=AUTH_COOKIE_PATH,
         domain=domain,
     )
@@ -236,13 +287,14 @@ def set_auth_cookies(
 def clear_auth_cookies(response: Response, *, request: Request) -> None:
     secure = _cookie_secure(request)
     domain = _cookie_domain()
+    samesite = _cookie_samesite()
     for cookie_name in (AUTH_ACCESS_COOKIE_NAME, AUTH_REFRESH_COOKIE_NAME, AUTH_CSRF_COOKIE_NAME):
         response.delete_cookie(
             key=cookie_name,
             path=AUTH_COOKIE_PATH,
             domain=domain,
             secure=secure,
-            samesite="lax",
+            samesite=samesite,
         )
 
 
@@ -254,6 +306,14 @@ def validate_csrf(request: Request) -> bool:
     csrf_cookie = str(request.cookies.get(AUTH_CSRF_COOKIE_NAME) or "").strip()
     csrf_header = str(request.headers.get(AUTH_CSRF_HEADER_NAME) or "").strip()
     if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+        _enforce_window_limit(
+            request=request,
+            buckets=CSRF_FAILURE_RATE_LIMIT_BUCKETS,
+            lock=CSRF_FAILURE_RATE_LIMIT_LOCK,
+            key=f"csrf:{_client_ip(request)}",
+            limit=max(1, int(ORION_AUTH_CSRF_FAILURE_RATE_LIMIT_PER_MINUTE or 30)),
+            profile_name=quota_policy_service.AUTH_CSRF_FAILURE_PROFILE.name,
+        )
         raise HTTPException(status_code=403, detail="CSRF validation failed.")
     return True
 
@@ -4665,13 +4725,20 @@ def _should_rate_limit_authenticated_api_path(request_path: Any) -> bool:
         "/api/v1/auth/account-shell",
         "/sessions",
         "/api/sessions",
-        "/turn",
-        "/api/turn",
     }:
         return False
-    if (path.startswith("/threads/") or path.startswith("/api/threads/")) and path.endswith("/turns"):
-        return False
     return True
+
+
+def _is_model_invocation_path(request_path: Any) -> bool:
+    path = str(request_path or "").strip().rstrip("/") or "/"
+    if path in {"/turn", "/api/turn"}:
+        return True
+    if path.startswith("/threads/") and path.endswith("/turns"):
+        return True
+    if path.startswith("/api/threads/") and path.endswith("/turns"):
+        return True
+    return False
 
 
 def _authenticated_api_limit_for_channel(channel: Any) -> int:
@@ -4679,6 +4746,30 @@ def _authenticated_api_limit_for_channel(channel: Any) -> int:
     if normalized == "mobile":
         return max(int(ORION_MOBILE_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE or 0), 1)
     return max(int(ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE or 0), 1)
+
+
+def _model_invocation_limit_for_channel(channel: Any) -> int:
+    normalized = _normalize_auth_session_channel(channel, default="web")
+    if normalized == "mobile":
+        return max(int(ORION_MOBILE_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE or 0), 1)
+    return max(int(ORION_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE or 0), 1)
+
+
+def _enforce_model_invocation_rate_limit(
+    *,
+    request: Request,
+    actor_id: str,
+    channel: Any,
+) -> None:
+    _enforce_window_limit(
+        request=request,
+        buckets=USER_RATE_LIMIT_BUCKETS,
+        lock=USER_RATE_LIMIT_LOCK,
+        key=f"model:{str(actor_id or '').strip() or 'unknown'}",
+        limit=_model_invocation_limit_for_channel(channel),
+        profile_name=quota_policy_service.MODEL_INVOCATION_PROFILE.name,
+        actor_id=str(actor_id or "").strip() or None,
+    )
 
 
 def limit_login_requests(request: Request) -> None:
@@ -5431,6 +5522,12 @@ def get_current_user(
                 profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
                 actor_id=str(user.get("user_id") or "").strip() or None,
             )
+        if _is_model_invocation_path(request_path):
+            _enforce_model_invocation_rate_limit(
+                request=request,
+                actor_id=str(user.get("user_id") or "").strip() or "local-dev",
+                channel=user.get("channel"),
+            )
         return user
 
     auth_header = str(authorization or "").strip()
@@ -5471,6 +5568,12 @@ def get_current_user(
                 ),
                 profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
                 actor_id=user_id,
+            )
+        if _is_model_invocation_path(request_path):
+            _enforce_model_invocation_rate_limit(
+                request=request,
+                actor_id=user_id,
+                channel=payload.get("channel") or (context.get("auth_session") or {}).get("channel"),
             )
         return {
             "user_id": user_id,

@@ -67,6 +67,26 @@ CONTROL_PLANE_MUTATION_PROFILE = QuotaPolicyProfile(
     surface_kind="control_plane_mutation",
     deny_reason="control_plane_rate_limited",
 )
+AUTH_CSRF_FAILURE_PROFILE = QuotaPolicyProfile(
+    name="auth_csrf_failure",
+    surface_kind="auth_csrf",
+    deny_reason="auth_csrf_rate_limited",
+)
+MODEL_INVOCATION_PROFILE = QuotaPolicyProfile(
+    name="model_invocation",
+    surface_kind="model_invocation",
+    deny_reason="model_invocation_rate_limited",
+)
+MINI_APP_BRIDGE_PROFILE = QuotaPolicyProfile(
+    name="mini_app_bridge",
+    surface_kind="mini_app_bridge",
+    deny_reason="mini_app_bridge_rate_limited",
+)
+MINI_APP_INVOKE_PROFILE = QuotaPolicyProfile(
+    name="mini_app_invoke",
+    surface_kind="mini_app_invoke",
+    deny_reason="mini_app_invoke_rate_limited",
+)
 DEPLOYED_AGENT_PUBLIC_TURN_PROFILE = QuotaPolicyProfile(
     name="deployed_agent_public_turn",
     surface_kind="deployed_agent_channel",
@@ -82,6 +102,10 @@ _PROFILES = {
     AUTHENTICATED_API_PROFILE.name: AUTHENTICATED_API_PROFILE,
     SERVICE_API_PROFILE.name: SERVICE_API_PROFILE,
     CONTROL_PLANE_MUTATION_PROFILE.name: CONTROL_PLANE_MUTATION_PROFILE,
+    AUTH_CSRF_FAILURE_PROFILE.name: AUTH_CSRF_FAILURE_PROFILE,
+    MODEL_INVOCATION_PROFILE.name: MODEL_INVOCATION_PROFILE,
+    MINI_APP_BRIDGE_PROFILE.name: MINI_APP_BRIDGE_PROFILE,
+    MINI_APP_INVOKE_PROFILE.name: MINI_APP_INVOKE_PROFILE,
     DEPLOYED_AGENT_PUBLIC_TURN_PROFILE.name: DEPLOYED_AGENT_PUBLIC_TURN_PROFILE,
     DEPLOYED_AGENT_INTERNAL_TRANSPORT_PROFILE.name: DEPLOYED_AGENT_INTERNAL_TRANSPORT_PROFILE,
 }
@@ -92,6 +116,10 @@ _RESPONSE_CLASS_BY_REASON = {
     "authenticated_api_rate_limited": "http_rate_limited",
     "service_api_rate_limited": "http_rate_limited",
     "control_plane_rate_limited": "http_rate_limited",
+    "auth_csrf_rate_limited": "http_rate_limited",
+    "model_invocation_rate_limited": "http_rate_limited",
+    "mini_app_bridge_rate_limited": "http_rate_limited",
+    "mini_app_invoke_rate_limited": "http_rate_limited",
     "deployed_agent_daily_limit_exceeded": "upgrade_required",
     "thread_busy": "thread_busy",
     "agent_limit_exceeded": "specialist_busy",
@@ -106,6 +134,10 @@ _SCOPE_BY_REASON = {
     "authenticated_api_rate_limited": "authenticated_api_actor_window",
     "service_api_rate_limited": "service_api_actor_window",
     "control_plane_rate_limited": "control_plane_identity_window",
+    "auth_csrf_rate_limited": "auth_csrf_failure_ip_window",
+    "model_invocation_rate_limited": "model_invocation_actor_window",
+    "mini_app_bridge_rate_limited": "mini_app_bridge_actor_window",
+    "mini_app_invoke_rate_limited": "mini_app_invoke_actor_window",
     "deployed_agent_daily_limit_exceeded": "deployed_agent_external_user_day",
     "thread_busy": "conversation_thread",
     "agent_limit_exceeded": "agent_active_threads",

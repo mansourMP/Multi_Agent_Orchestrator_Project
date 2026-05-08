@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi import FastAPI
 from starlette.responses import Response
+from starlette.requests import Request
 
 from server_modules import auth
 from server_modules import routes_auth
@@ -86,6 +88,43 @@ async def test_browser_refresh_requires_csrf_when_using_cookie_session():
 
     assert response.status_code == 403
     assert response.json()["detail"] == "CSRF validation failed."
+
+
+@pytest.mark.anyio
+async def test_browser_refresh_csrf_failures_are_rate_limited(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    auth.CSRF_FAILURE_RATE_LIMIT_BUCKETS.clear()
+    monkeypatch.setattr(auth, "ORION_AUTH_CSRF_FAILURE_RATE_LIMIT_PER_MINUTE", 2)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for _ in range(2):
+            failure = await client.post(
+                "/auth/refresh",
+                json={"channel": "web"},
+                cookies={
+                    "empyralis_access_token": "access-cookie",
+                    "empyralis_refresh_token": "refresh-cookie",
+                    "empyralis_csrf_token": "csrf-cookie",
+                },
+            )
+            assert failure.status_code == 403
+
+        limited = await client.post(
+            "/auth/refresh",
+            json={"channel": "web"},
+            cookies={
+                "empyralis_access_token": "access-cookie",
+                "empyralis_refresh_token": "refresh-cookie",
+                "empyralis_csrf_token": "csrf-cookie",
+            },
+        )
+
+    assert limited.status_code == 429
+    payload = limited.json()
+    detail = payload.get("detail") if isinstance(payload, dict) else {}
+    assert isinstance(detail, dict)
+    assert detail.get("code") == "auth_csrf_rate_limited"
 
 
 @pytest.mark.anyio
@@ -198,6 +237,16 @@ async def test_auth_me_accepts_access_token_cookie(monkeypatch: pytest.MonkeyPat
         },
     )
     monkeypatch.setattr(
+        auth,
+        "tenant_access_map",
+        lambda *_args, **_kwargs: {
+            "tenant-1": {
+                "tenant_id": "tenant-1",
+                "role": "member",
+            }
+        },
+    )
+    monkeypatch.setattr(
         routes_auth,
         "get_authenticated_user_profile",
         lambda current_user: {"ok": True, "user": {"id": current_user["user_id"]}},
@@ -212,3 +261,141 @@ async def test_auth_me_accepts_access_token_cookie(monkeypatch: pytest.MonkeyPat
 
     assert response.status_code == 200
     assert response.json()["user"]["id"] == "user-1"
+
+
+def test_set_auth_cookies_enforces_production_secure_defaults_and_bounded_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now_ts = 1_700_000_000
+    monkeypatch.setenv("ORION_ENV", "production")
+    monkeypatch.delenv("EMPYRALIS_AUTH_COOKIE_SAMESITE", raising=False)
+    monkeypatch.setattr(auth.time, "time", lambda: float(now_ts))
+    monkeypatch.setattr(
+        auth,
+        "_decode_token_payload",
+        lambda token: {"exp": now_ts + (auth.AUTH_ACCESS_COOKIE_MAX_AGE_SECONDS * 10)},
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/auth/login",
+            "raw_path": b"/auth/login",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+        }
+    )
+    response = Response()
+    payload = {
+        "token": "header.payload.signature",
+        "session_recovery": {
+            "refresh_token": "refresh-token-1",
+            "refresh_expires_at": now_ts + (auth.AUTH_REFRESH_COOKIE_MAX_AGE_SECONDS * 10),
+        },
+    }
+    auth.set_auth_cookies(response, payload, request=request, channel="web")
+    cookie_headers = response.headers.getlist("set-cookie")
+    access_header = next(item for item in cookie_headers if item.startswith("empyralis_access_token="))
+    refresh_header = next(item for item in cookie_headers if item.startswith("empyralis_refresh_token="))
+    csrf_header = next(item for item in cookie_headers if item.startswith("empyralis_csrf_token="))
+
+    assert "Secure" in access_header
+    assert "HttpOnly" in access_header
+    assert "SameSite=strict" in access_header
+    assert f"Max-Age={auth.AUTH_ACCESS_COOKIE_MAX_AGE_SECONDS}" in access_header
+
+    assert "Secure" in refresh_header
+    assert "HttpOnly" in refresh_header
+    assert "SameSite=strict" in refresh_header
+    assert f"Max-Age={auth.AUTH_REFRESH_COOKIE_MAX_AGE_SECONDS}" in refresh_header
+
+    assert "Secure" in csrf_header
+    assert "SameSite=strict" in csrf_header
+
+
+@pytest.mark.anyio
+async def test_browser_refresh_clears_cookies_when_refresh_token_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    app = _build_app()
+
+    def _stale_refresh(*args, **kwargs):
+        raise HTTPException(status_code=401, detail="Refresh token is no longer active.")
+
+    monkeypatch.setattr(routes_auth, "refresh_authenticated_session", _stale_refresh)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/auth/refresh",
+            json={"channel": "web"},
+            headers={"x-csrf-token": "csrf-cookie"},
+            cookies={
+                "empyralis_access_token": "access-cookie",
+                "empyralis_refresh_token": "refresh-cookie",
+                "empyralis_csrf_token": "csrf-cookie",
+            },
+        )
+
+    assert response.status_code == 401
+    set_cookie_headers = response.headers.get_list("set-cookie")
+    assert any("empyralis_access_token=" in header and "Max-Age=0" in header for header in set_cookie_headers)
+    assert any("empyralis_refresh_token=" in header and "Max-Age=0" in header for header in set_cookie_headers)
+    assert any("empyralis_csrf_token=" in header and "Max-Age=0" in header for header in set_cookie_headers)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("post", "/auth/channel-pairing/intents", {"provider": "telegram"}),
+        ("post", "/auth/channel-pairing/links/link-1/revoke", {"confirm": True}),
+        ("patch", "/auth/me", {"name": "Updated Name"}),
+        (
+            "post",
+            "/auth/admin/provision/users",
+            {
+                "email": "member@example.com",
+                "tenant_id": "tenant-1",
+                "workspace_roles": {"ws-1": "viewer"},
+            },
+        ),
+    ],
+)
+async def test_state_changing_auth_routes_require_csrf_for_browser_session(
+    method: str,
+    path: str,
+    json_body: dict[str, object],
+):
+    app = _build_app()
+    app.dependency_overrides[routes_auth.get_current_user] = lambda: {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "role": "owner",
+        "is_admin": True,
+    }
+    app.dependency_overrides[routes_auth.require_admin_access] = lambda: {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "role": "owner",
+        "is_admin": True,
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await getattr(client, method)(
+            path,
+            json=json_body,
+            cookies={
+                "empyralis_access_token": "access-cookie",
+                "empyralis_csrf_token": "csrf-cookie",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "CSRF validation failed."

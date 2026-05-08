@@ -305,6 +305,132 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertEqual(blocked_response.status_code, 429)
         self.assertIn("too many pending gateway pairing requests", blocked_response.json()["detail"].lower())
 
+    def test_gateway_pairing_token_is_one_time_use(self) -> None:
+        pairing_response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={"workspace_id": "default", "display_name": "Mansur Mac", "platform": "macos"},
+        )
+        self.assertEqual(pairing_response.status_code, 200)
+        pairing_token = pairing_response.json()["pairing_token"]
+        first_registration = self.client.post(
+            "/api/gateway/registrations",
+            json={
+                "pairing_token": pairing_token,
+                "device_id": "device-local-1",
+                "display_name": "Mansur Mac",
+                "platform": "macos-arm64",
+                "capabilities": ["screen.read"],
+            },
+        )
+        self.assertEqual(first_registration.status_code, 200)
+
+        reused_registration = self.client.post(
+            "/api/gateway/registrations",
+            json={
+                "pairing_token": pairing_token,
+                "device_id": "device-local-2",
+                "display_name": "Mansur Mac 2",
+                "platform": "macos-arm64",
+                "capabilities": ["screen.read"],
+            },
+        )
+        self.assertEqual(reused_registration.status_code, 400)
+        self.assertIn("no longer active", reused_registration.json().get("detail", "").lower())
+
+    def test_gateway_connect_rejects_scope_mismatch(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_token = registration_payload["gateway_token"]
+
+        session_response = self.client.post(
+            "/api/gateway/sessions",
+            json={"gateway_id": gateway_id, "gateway_token": gateway_token},
+        )
+        self.assertEqual(session_response.status_code, 200)
+        session_payload = session_response.json()
+        bad_scope = dict(session_payload["scope"])
+        bad_scope.pop("gateway_id", None)
+
+        ws_path = f"/api/gateway/ws?gateway_id={gateway_id}&session_token={session_payload['session_token']}"
+        with self.client.websocket_connect(ws_path) as websocket:
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "req-connect-bad-scope",
+                    "type": "gateway.connect",
+                    "scope": bad_scope,
+                    "payload": {"gateway_version": "0.1.0"},
+                }
+            )
+            response = websocket.receive_json()
+            self.assertFalse(response["ok"])
+            self.assertEqual(response["error"]["code"], "scope_mismatch")
+
+        latest_session = gateway_state_repository.get_latest_gateway_session(gateway_id, include_revoked=True)
+        self.assertIsNotNone(latest_session)
+        metadata = dict((latest_session or {}).get("metadata") or {})
+        self.assertEqual(metadata.get("disconnect_reason"), "scope_mismatch")
+
+    def test_gateway_replay_sequence_is_rejected(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_token = registration_payload["gateway_token"]
+
+        session_response = self.client.post(
+            "/api/gateway/sessions",
+            json={"gateway_id": gateway_id, "gateway_token": gateway_token},
+        )
+        self.assertEqual(session_response.status_code, 200)
+        session_payload = session_response.json()
+        ws_path = f"/api/gateway/ws?gateway_id={gateway_id}&session_token={session_payload['session_token']}"
+        with self.client.websocket_connect(ws_path) as websocket:
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "req-connect-1",
+                    "type": "gateway.connect",
+                    "seq": 1,
+                    "scope": session_payload["scope"],
+                    "payload": {"gateway_version": "0.1.0"},
+                }
+            )
+            connect_ack = websocket.receive_json()
+            self.assertTrue(connect_ack["ok"])
+            websocket.receive_json()
+            websocket.receive_json()
+
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "hb-1",
+                    "type": "gateway.heartbeat",
+                    "seq": 2,
+                    "scope": session_payload["scope"],
+                    "payload": {"health_state": "online"},
+                }
+            )
+            heartbeat_ack = websocket.receive_json()
+            self.assertTrue(heartbeat_ack["ok"])
+
+            websocket.send_json(
+                {
+                    "kind": "request",
+                    "id": "hb-replay",
+                    "type": "gateway.heartbeat",
+                    "seq": 2,
+                    "scope": session_payload["scope"],
+                    "payload": {"health_state": "online"},
+                }
+            )
+            replay_response = websocket.receive_json()
+            self.assertFalse(replay_response["ok"])
+            self.assertEqual(replay_response["error"]["code"], "gateway_frame_replayed")
+
+        latest_session = gateway_state_repository.get_latest_gateway_session(gateway_id, include_revoked=True)
+        self.assertIsNotNone(latest_session)
+        metadata = dict((latest_session or {}).get("metadata") or {})
+        self.assertEqual(metadata.get("disconnect_reason"), "gateway_frame_replayed")
+
     @patch(
         "server_modules.personal_channels_service.gateway_execution_service.execute_tool_via_gateway",
         new_callable=AsyncMock,

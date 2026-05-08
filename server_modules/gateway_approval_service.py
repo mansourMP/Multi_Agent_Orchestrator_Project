@@ -8,6 +8,7 @@ from server_modules import (
     gateway_execution_service,
     gateway_state_repository,
 )
+from server_modules.capability_registry import canonical_capability_id, resolve_capability
 
 
 RISKY_LOCAL_CAPABILITIES = {
@@ -22,7 +23,15 @@ RISKY_LOCAL_CAPABILITIES = {
 
 
 def capability_requires_owner_approval(capability_id: str) -> bool:
-    return str(capability_id or "").strip() in RISKY_LOCAL_CAPABILITIES
+    normalized = canonical_capability_id(capability_id)
+    if normalized in RISKY_LOCAL_CAPABILITIES:
+        return True
+    contract = resolve_capability(normalized, enforce_kill_switch=False) if normalized else None
+    if contract is not None:
+        if bool(contract.requires_approval):
+            return True
+        return str(contract.risk_level or "").strip().lower() in {"high", "critical"}
+    return True
 
 
 def get_gateway_tool_approval(approval_id: str) -> Optional[Dict[str, Any]]:

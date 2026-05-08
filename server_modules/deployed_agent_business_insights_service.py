@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from server_modules import auth as auth_module
 from server_modules import control_plane_repository
 from server_modules import entitlements_service
+from server_modules import secret_redaction_service
 
 
 BUSINESS_INSIGHT_STATUSES = {"candidate", "approved", "dismissed", "archived", "applied"}
@@ -15,7 +16,21 @@ BUSINESS_INSIGHT_STATUSES = {"candidate", "approved", "dismissed", "archived", "
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{6,}\d)(?!\w)")
 _LONG_DIGIT_RE = re.compile(r"\b\d{5,}\b")
+_NAME_PATTERN_RE = re.compile(r"\b(my name is|i am|i'm|this is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b")
 _WHITESPACE_RE = re.compile(r"\s+")
+_FORBIDDEN_INSIGHT_METADATA_KEYS = {
+    "external_user_id",
+    "session_id",
+    "session_key",
+    "phone",
+    "phone_number",
+    "name",
+    "customer_name",
+    "email",
+    "authorization",
+    "token",
+    "access_token",
+}
 
 
 def _normalize_text(value: Any) -> str:
@@ -28,9 +43,11 @@ def _lower_text(value: Any) -> str:
 
 def _redact_example(value: Any, *, limit: int = 180) -> str:
     text = _normalize_text(value)
+    text = secret_redaction_service.redact_text(text)
     text = _EMAIL_RE.sub("[email]", text)
     text = _PHONE_RE.sub("[phone]", text)
     text = _LONG_DIGIT_RE.sub("[number]", text)
+    text = _NAME_PATTERN_RE.sub(lambda match: f"{match.group(1)} [name]", text)
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
@@ -144,6 +161,17 @@ async def record_deployed_agent_turn_insights(
     )
     recorded: List[Dict[str, Any]] = []
     for candidate in candidates:
+        sanitized_metadata = secret_redaction_service.sanitize_mapping(candidate.get("metadata"))
+        sanitized_metadata = {
+            key: value
+            for key, value in dict(sanitized_metadata or {}).items()
+            if str(key or "").strip().lower() not in _FORBIDDEN_INSIGHT_METADATA_KEYS
+        }
+        sanitized_examples = [
+            _redact_example(item)
+            for item in list(candidate.get("redacted_examples") or [])
+            if _normalize_text(item)
+        ][:5]
         payload = await control_plane_repository.upsert_deployed_agent_business_insight_candidate(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -156,8 +184,8 @@ async def record_deployed_agent_turn_insights(
             sensitivity=str(candidate.get("sensitivity") or "yellow"),
             channel_key=channel_key,
             confidence=float(candidate.get("confidence") or 0.0),
-            redacted_examples=list(candidate.get("redacted_examples") or []),
-            metadata=dict(candidate.get("metadata") or {}),
+            redacted_examples=sanitized_examples,
+            metadata=sanitized_metadata,
         )
         if isinstance(payload, dict):
             recorded.append(payload)

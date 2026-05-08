@@ -40,6 +40,7 @@ class AuthHardeningTests(unittest.TestCase):
         routes_connectors = importlib.import_module("server_modules.routes_connectors")
         auth.USER_RATE_LIMIT_BUCKETS.clear()
         auth.LOGIN_RATE_LIMIT_BUCKETS.clear()
+        auth.CSRF_FAILURE_RATE_LIMIT_BUCKETS.clear()
 
     def test_get_current_user_rejects_missing_auth_when_enabled(self):
         request = _request()
@@ -207,6 +208,18 @@ class AuthHardeningTests(unittest.TestCase):
             second = auth.get_current_user(request=request, authorization=f"Bearer {token}")
         self.assertEqual(first["user_id"], "user-1")
         self.assertEqual(second["user_id"], "user-1")
+
+    def test_turn_path_consumes_model_invocation_window(self):
+        request = _request(path="/api/turn")
+        token = auth.issue_token("user-1", email="user@example.com", role="member")
+        with patch.object(auth, "ORION_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE", 1):
+            first = auth.get_current_user(request=request, authorization=f"Bearer {token}")
+            self.assertEqual(first["user_id"], "user-1")
+            with self.assertRaises(HTTPException) as ctx:
+                auth.get_current_user(request=request, authorization=f"Bearer {token}")
+        self.assertEqual(ctx.exception.status_code, 429)
+        detail = ctx.exception.detail if isinstance(ctx.exception.detail, dict) else {}
+        self.assertEqual(detail.get("code"), "model_invocation_rate_limited")
 
 
 class ConnectorRouteAuthHardeningTests(unittest.IsolatedAsyncioTestCase):

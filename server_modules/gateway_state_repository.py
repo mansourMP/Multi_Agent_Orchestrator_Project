@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from server_modules import secret_redaction_service
+
 
 EMPYRALIS_STATE_HOME = Path(
     os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
@@ -262,21 +264,7 @@ def _gateway_event_key_is_sensitive(key: str) -> bool:
         return False
     if normalized_key in _SENSITIVE_GATEWAY_EVENT_KEYS:
         return True
-    return any(
-        marker in normalized_key
-        for marker in (
-            "api_key",
-            "api_hash",
-            "auth_token",
-            "bot_token",
-            "credential",
-            "login_code",
-            "password",
-            "private_key",
-            "secret",
-            "session_token",
-        )
-    )
+    return secret_redaction_service.is_sensitive_key(normalized_key)
 
 
 def _gateway_event_is_personal_channel_payload(message_type: str, payload: Any) -> bool:
@@ -318,6 +306,8 @@ def _redact_gateway_event_payload_value(value: Any, *, personal_channel_payload:
             )
             for item in value
         ]
+    if isinstance(value, str):
+        return secret_redaction_service.redact_text(value)
     return value
 
 

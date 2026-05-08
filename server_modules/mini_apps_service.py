@@ -519,6 +519,66 @@ def list_mini_app_records(
     return records
 
 
+def export_mini_apps_state(workspace_id: str) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    state = _safe_read_state(normalized_workspace_id)
+    apps = []
+    total_records = 0
+    for app_id, entry in sorted((state.get("apps") or {}).items()):
+        if not isinstance(entry, dict):
+            continue
+        records = [
+            _normalize_record(item)
+            for item in list(entry.get("records") or [])
+            if isinstance(item, dict)
+        ]
+        records.sort(key=lambda record: _record_timestamp(record), reverse=True)
+        total_records += len(records)
+        contract = _normalized_contract_payload(normalized_workspace_id, entry)
+        apps.append(
+            {
+                "app_id": app_id,
+                "label": contract.get("label"),
+                "description": contract.get("description"),
+                "delivery_mode": contract.get("delivery_mode"),
+                "permissions": list(contract.get("permissions") or []),
+                "records_count": len(records),
+                "records": records,
+                "current_state": dict(entry.get("current_state") or {}),
+                "daily_summary": dict(entry.get("daily_summary") or {}),
+                "weekly_summary": dict(entry.get("weekly_summary") or {}),
+                "long_term_facts": list(entry.get("long_term_facts") or []),
+                "updated_at": str(entry.get("updated_at") or "").strip() or None,
+            }
+        )
+    return {
+        "workspace_id": normalized_workspace_id,
+        "export_type": "mini_apps_state",
+        "exported_at": _utc_now_iso(),
+        "apps": apps,
+        "count": len(apps),
+        "total_records": total_records,
+    }
+
+
+def wipe_mini_apps_state(workspace_id: str) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    state = _safe_read_state(normalized_workspace_id)
+    apps = state.get("apps") if isinstance(state.get("apps"), dict) else {}
+    deleted_apps_count = len(apps)
+    deleted_records_count = 0
+    for entry in apps.values():
+        if isinstance(entry, dict):
+            deleted_records_count += len(list(entry.get("records") or []))
+    _save_state(normalized_workspace_id, _default_state())
+    return {
+        "workspace_id": normalized_workspace_id,
+        "deleted_apps_count": deleted_apps_count,
+        "deleted_records_count": deleted_records_count,
+        "wiped_at": _utc_now_iso(),
+    }
+
+
 def build_mini_apps_context_block(
     workspace_id: str,
     *,

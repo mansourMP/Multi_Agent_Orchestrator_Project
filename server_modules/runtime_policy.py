@@ -666,6 +666,10 @@ ACTION_RISK_LEVELS: Dict[str, str] = {
     "screenshot.capture": _registry_risk_level("screenshot.capture", "medium"),
     "computer_control": _registry_risk_level("computer_control", "critical"),
     "shell.execute": _registry_risk_level("shell.execute", "critical"),
+    "http_request": _registry_risk_level("http_request", "high"),
+    "connector.action.read": _registry_risk_level("connector.action.read", "low"),
+    "connector.action.write": _registry_risk_level("connector.action.write", "high"),
+    "connector.action.execute": _registry_risk_level("connector.action.execute", "high"),
     "delete_files": "critical",
     "delete_records": "critical",
     "transfer_funds": "critical",
@@ -678,6 +682,13 @@ DEFAULT_ACTION_POLICY = {
         "draft_email",
         "create_calendar_event",
         "publish_content",
+        "filesystem.read_write",
+        "browser_automation.interactive",
+        "screenshot.capture",
+        "computer_control",
+        "http_request",
+        "connector.action.write",
+        "connector.action.execute",
         "spreadsheet_update",
         "spreadsheet_append",
         "spreadsheet_create",
@@ -1788,6 +1799,7 @@ def decide_runtime_action_execution(
     action_type = str(clean_classification.get("action_type") or ACTION_TYPE_REVERSIBLE_WRITE).strip().lower()
     external_visibility = bool(clean_classification.get("external_visibility"))
     destructive_risk = bool(clean_classification.get("destructive_risk"))
+    requires_contract_approval = bool(clean_classification.get("requires_contract_approval"))
     allowed_classes = set(elevated.get("allowed_action_classes") or [])
     denied_classes = set(elevated.get("denied_action_classes") or [])
     runtime_trust_zone = str(elevated.get("runtime_trust_zone") or RUNTIME_TRUST_ZONE_SHARED_CLOUD)
@@ -1804,6 +1816,14 @@ def decide_runtime_action_execution(
         return {
             "execution_decision": "require_confirmation",
             "reason": f"Elevated access excludes {action_type} actions.",
+            "runtime_trust_zone": elevated.get("runtime_trust_zone"),
+            "elevated": elevated,
+        }
+
+    if requires_contract_approval:
+        return {
+            "execution_decision": "require_confirmation",
+            "reason": "Capability contract requires approval before execution.",
             "runtime_trust_zone": elevated.get("runtime_trust_zone"),
             "elevated": elevated,
         }
@@ -2114,6 +2134,34 @@ def classify_runtime_action(
             "external_visibility": False,
             "destructive_risk": True,
         },
+        "http_request": {
+            "action_type": ACTION_TYPE_EXTERNAL_SEND,
+            "target_system": "external_system",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "connector.action.read": {
+            "action_type": ACTION_TYPE_READ,
+            "target_system": "external_system",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+        },
+        "connector.action.write": {
+            "action_type": ACTION_TYPE_EXTERNAL_SEND,
+            "target_system": "external_system",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "connector.action.execute": {
+            "action_type": ACTION_TYPE_EXTERNAL_SEND,
+            "target_system": "external_system",
+            "reversibility": False,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
         "delete_files": {
             "action_type": ACTION_TYPE_DESTRUCTIVE,
             "target_system": "local_workspace",
@@ -2150,6 +2198,9 @@ def classify_runtime_action(
     )
     if contract is not None:
         base["reversibility"] = bool(contract.reversible)
+        base["requires_contract_approval"] = bool(contract.requires_approval)
+    else:
+        base["requires_contract_approval"] = False
     base["action_id"] = normalized
     base["bulk_risk"] = bool(int(count or 0) > 5)
     base["target"] = normalize_execution_target(target)

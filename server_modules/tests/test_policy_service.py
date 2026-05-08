@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from server_modules import policy_service
 from server_modules import runtime_policy
@@ -25,7 +26,7 @@ class PolicyServiceTests(unittest.TestCase):
         self.assertEqual(resolved["runtime_id"], "runtime-1")
         self.assertEqual(resolved["source"], "runtime_registration")
 
-    def test_evaluate_tool_policy_decision_allows_safe_raw_shell_command(self) -> None:
+    def test_evaluate_tool_policy_decision_requires_confirmation_for_safe_raw_shell_command(self) -> None:
         evaluation = policy_service.evaluate_tool_policy_decision(
             tool_id="shell.execute",
             trust_mode="guarded",
@@ -43,8 +44,8 @@ class PolicyServiceTests(unittest.TestCase):
             capability_ids=[],
         )
 
-        self.assertEqual(evaluation["execution_decision"], "allow")
-        self.assertEqual(evaluation["reason"], "Internal reversible actions auto-run in default mode.")
+        self.assertEqual(evaluation["execution_decision"], "require_confirmation")
+        self.assertEqual(evaluation["reason"], "Capability contract requires approval before execution.")
         self.assertTrue(evaluation["safe_raw_shell_command"])
 
     def test_compute_tool_policy_precheck_aggregates_items_and_counts(self) -> None:
@@ -69,10 +70,10 @@ class PolicyServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(precheck["blocked_count"], 0)
-        self.assertEqual(precheck["approval_required_count"], 1)
-        self.assertEqual(precheck["allow_count"], 1)
+        self.assertEqual(precheck["approval_required_count"], 2)
+        self.assertEqual(precheck["allow_count"], 0)
         self.assertIn("browser_automation.interactive", precheck["approval_required"])
-        self.assertIn("filesystem.read_write", precheck["allowed"])
+        self.assertIn("filesystem.read_write", precheck["approval_required"])
 
     def test_approval_required_for_direct_tool_uses_capability_policy(self) -> None:
         requires_approval = policy_service.approval_required_for_direct_tool(
@@ -85,6 +86,84 @@ class PolicyServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(requires_approval)
+
+    def test_evaluate_tool_policy_decision_blocks_shell_execute_by_default(self) -> None:
+        evaluation = policy_service.evaluate_tool_policy_decision(
+            tool_id="shell.execute",
+            trust_mode="guarded",
+            target="local_companion",
+            metadata={},
+            capability_ids=[],
+        )
+        self.assertEqual(evaluation["execution_decision"], "deny")
+
+    def test_evaluate_tool_policy_decision_requires_confirmation_for_filesystem_write(self) -> None:
+        evaluation = policy_service.evaluate_tool_policy_decision(
+            tool_id="filesystem.read_write",
+            trust_mode="guarded",
+            target="local_companion",
+            metadata={},
+            capability_ids=[],
+        )
+        self.assertEqual(evaluation["execution_decision"], "require_confirmation")
+        self.assertEqual(evaluation["reason"], "approval_required_by_action_policy")
+
+    def test_evaluate_tool_policy_decision_requires_confirmation_for_browser_automation(self) -> None:
+        evaluation = policy_service.evaluate_tool_policy_decision(
+            tool_id="browser_automation.interactive",
+            trust_mode="guarded",
+            target="local_companion",
+            metadata={},
+            capability_ids=[],
+        )
+        self.assertEqual(evaluation["execution_decision"], "require_confirmation")
+
+    def test_evaluate_tool_policy_decision_requires_confirmation_for_channel_send(self) -> None:
+        evaluation = policy_service.evaluate_tool_policy_decision(
+            tool_id="send_message",
+            trust_mode="guarded",
+            target="local_companion",
+            metadata={},
+            capability_ids=[],
+        )
+        self.assertEqual(evaluation["execution_decision"], "require_confirmation")
+
+    def test_evaluate_tool_policy_decision_denies_payment_transfer_without_approval(self) -> None:
+        evaluation = policy_service.evaluate_tool_policy_decision(
+            tool_id="transfer_funds",
+            trust_mode="guarded",
+            target="local_companion",
+            metadata={},
+            capability_ids=[],
+        )
+        self.assertEqual(evaluation["execution_decision"], "deny")
+
+    def test_evaluate_tool_policy_decision_allows_read_only_connector_action(self) -> None:
+        evaluation = policy_service.evaluate_tool_policy_decision(
+            tool_id="connector.action.read",
+            trust_mode="guarded",
+            target="local_companion",
+            metadata={},
+            capability_ids=[],
+        )
+        self.assertEqual(evaluation["execution_decision"], "allow")
+
+    def test_evaluate_tool_policy_decision_emits_rejected_action_audit_event(self) -> None:
+        with patch(
+            "server_modules.security_audit_service.emit_security_audit_event"
+        ) as emit_audit:
+            evaluation = policy_service.evaluate_tool_policy_decision(
+                tool_id="shell.execute",
+                trust_mode="guarded",
+                target="local_companion",
+                metadata={"tenant_id": "tenant-1", "workspace_id": "ws-1", "run_id": "run-1"},
+                capability_ids=[],
+            )
+
+        self.assertEqual(evaluation["execution_decision"], "deny")
+        emit_audit.assert_called_once()
+        self.assertEqual(emit_audit.call_args.kwargs.get("action"), "tool_policy.rejected")
+        self.assertEqual(emit_audit.call_args.kwargs.get("status"), "blocked")
 
 
 if __name__ == "__main__":

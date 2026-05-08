@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
+import threading
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from server_modules import auth as auth_module
@@ -11,10 +13,63 @@ from server_modules import calorie_tracking_service
 from server_modules import flashcards_tracking_service
 from server_modules import mini_app_invoke_service
 from server_modules import mini_apps_service
+from server_modules import quota_policy_service, quota_response_service
 
 
 router = APIRouter()
 get_current_user = auth_module.get_current_user
+MINI_APP_BRIDGE_RATE_LIMIT_LOCK = threading.Lock()
+MINI_APP_BRIDGE_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
+MINI_APP_INVOKE_RATE_LIMIT_LOCK = threading.Lock()
+MINI_APP_INVOKE_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
+ORION_MINI_APP_BRIDGE_RATE_LIMIT_PER_MINUTE = int(
+    os.getenv("ORION_MINI_APP_BRIDGE_RATE_LIMIT_PER_MINUTE", "60")
+)
+ORION_MINI_APP_INVOKE_RATE_LIMIT_PER_MINUTE = int(
+    os.getenv("ORION_MINI_APP_INVOKE_RATE_LIMIT_PER_MINUTE", "90")
+)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if isinstance(forwarded, str) and forwarded.strip():
+        return forwarded.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _enforce_mini_app_request_limit(
+    *,
+    request: Request,
+    current_user: Optional[Dict[str, Any]],
+    profile_name: str,
+    buckets: Dict[str, list[float]],
+    lock: threading.Lock,
+    limit: int,
+) -> None:
+    workspace_hint = str(
+        (request.path_params or {}).get("workspace_id")
+        or (request.query_params.get("workspace_id") if request.query_params else "")
+        or ""
+    ).strip() or "default"
+    actor_id = str((current_user or {}).get("user_id") or "").strip() or "anonymous"
+    decision = quota_policy_service.evaluate_request_window_quota(
+        profile_name=profile_name,
+        subject=quota_policy_service.QuotaSubject(
+            surface_kind=quota_policy_service.get_quota_policy_profile(profile_name).surface_kind,
+            request_path=str(request.url.path or "/"),
+            client_ip=_client_ip(request),
+            actor_id=actor_id,
+            workspace_id=workspace_hint,
+        ),
+        buckets=buckets,
+        lock=lock,
+        key=f"{workspace_hint}:{actor_id}",
+        limit=max(1, int(limit or 1)),
+    )
+    if not decision.allowed:
+        raise quota_response_service.http_exception_from_quota_decision(decision)
 
 
 class MiniAppContractUpsertRequest(BaseModel):
@@ -242,8 +297,17 @@ async def bridge_hosted_mini_app_message(
     workspace_id: str,
     app_id: str,
     body: HostedMiniAppBridgeRequest,
+    request: Request,
     current_user=Depends(get_current_user),
 ):
+    _enforce_mini_app_request_limit(
+        request=request,
+        current_user=current_user,
+        profile_name=quota_policy_service.MINI_APP_BRIDGE_PROFILE.name,
+        buckets=MINI_APP_BRIDGE_RATE_LIMIT_BUCKETS,
+        lock=MINI_APP_BRIDGE_RATE_LIMIT_LOCK,
+        limit=ORION_MINI_APP_BRIDGE_RATE_LIMIT_PER_MINUTE,
+    )
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
     tenant_id = auth_module.workspace_tenant_id(current_user, resolved_workspace_id)
     try:
@@ -274,8 +338,17 @@ async def invoke_mini_app(
     workspace_id: str,
     app_id: str,
     body: MiniAppInvokeRequest,
+    request: Request,
     current_user=Depends(get_current_user),
 ):
+    _enforce_mini_app_request_limit(
+        request=request,
+        current_user=current_user,
+        profile_name=quota_policy_service.MINI_APP_INVOKE_PROFILE.name,
+        buckets=MINI_APP_INVOKE_RATE_LIMIT_BUCKETS,
+        lock=MINI_APP_INVOKE_RATE_LIMIT_LOCK,
+        limit=ORION_MINI_APP_INVOKE_RATE_LIMIT_PER_MINUTE,
+    )
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
     body_input = str(body.input or body.prompt or "").strip()
     try:

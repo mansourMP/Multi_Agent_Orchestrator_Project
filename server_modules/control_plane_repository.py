@@ -5480,6 +5480,275 @@ async def delete_deployed_agent_external_user_data(
     }
 
 
+async def build_workspace_data_retention_inventory(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+) -> Dict[str, Any]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return {
+                "tenant_id": resolved_tenant_id,
+                "workspace_id": resolved_workspace_id,
+                "stores": {},
+            }
+        row = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM deployed_agent_conversation_memory
+                  WHERE tenant_id = $1 AND workspace_id = $2) AS deployed_agent_conversation_memory_count,
+                (SELECT COUNT(*) FROM deployed_agent_daily_message_usage
+                  WHERE tenant_id = $1 AND workspace_id = $2) AS deployed_agent_daily_message_usage_count,
+                (SELECT COUNT(*) FROM channel_user_acquisition_touches
+                  WHERE tenant_id = $1 AND workspace_id = $2) AS channel_user_acquisition_touches_count,
+                (SELECT COUNT(*) FROM deployed_agent_upgrade_click_events
+                  WHERE tenant_id = $1 AND workspace_id = $2) AS deployed_agent_upgrade_click_events_count,
+                (SELECT COUNT(*) FROM deployed_agent_business_insights
+                  WHERE tenant_id = $1 AND workspace_id = $2) AS deployed_agent_business_insights_count,
+                (SELECT COUNT(*) FROM external_user_privacy_requests
+                  WHERE tenant_id = $1 AND workspace_id = $2) AS external_user_privacy_requests_count,
+                (SELECT COUNT(*) FROM external_user_privacy_delete_audits
+                  WHERE tenant_id = $1 AND workspace_id = $2) AS external_user_privacy_delete_audits_count,
+                (SELECT COUNT(*) FROM agent_channel_events
+                  WHERE tenant_id = $1 AND workspace_id = $2) AS agent_channel_events_count,
+                (SELECT COUNT(*) FROM activity_ledger_events
+                  WHERE tenant_id = $1 AND workspace_id = $2) AS activity_ledger_events_count
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+        )
+    return {
+        "tenant_id": resolved_tenant_id,
+        "workspace_id": resolved_workspace_id,
+        "stores": dict(row) if row is not None else {},
+    }
+
+
+async def delete_deployed_agent_scope_data(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+) -> Dict[str, int]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return {
+                "deleted_channel_event_count": 0,
+                "deleted_memory_count": 0,
+                "deleted_daily_usage_count": 0,
+                "deleted_acquisition_touch_count": 0,
+                "deleted_upgrade_click_count": 0,
+                "deleted_business_insight_count": 0,
+                "deleted_privacy_request_count": 0,
+                "deleted_privacy_audit_count": 0,
+                "deleted_activity_event_count": 0,
+            }
+        row = await connection.fetchrow(
+            """
+            WITH deleted_events AS (
+                DELETE FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND COALESCE(metadata->>'deployed_agent_id', '') = $3
+                RETURNING 1
+            ),
+            deleted_memory AS (
+                DELETE FROM deployed_agent_conversation_memory
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $3
+                RETURNING 1
+            ),
+            deleted_daily_usage AS (
+                DELETE FROM deployed_agent_daily_message_usage
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $3
+                RETURNING 1
+            ),
+            deleted_acquisition AS (
+                DELETE FROM channel_user_acquisition_touches
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $3
+                RETURNING 1
+            ),
+            deleted_upgrade_clicks AS (
+                DELETE FROM deployed_agent_upgrade_click_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $3
+                RETURNING 1
+            ),
+            deleted_insights AS (
+                DELETE FROM deployed_agent_business_insights
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $3
+                RETURNING 1
+            ),
+            deleted_privacy_requests AS (
+                DELETE FROM external_user_privacy_requests
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $3
+                RETURNING 1
+            ),
+            deleted_privacy_audits AS (
+                DELETE FROM external_user_privacy_delete_audits
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $3
+                RETURNING 1
+            ),
+            deleted_activity_events AS (
+                DELETE FROM activity_ledger_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND (
+                    (COALESCE(actor_type, '') = 'deployed_agent' AND COALESCE(actor_id, '') = $3)
+                    OR COALESCE(metadata->>'deployed_agent_id', '') = $3
+                  )
+                RETURNING 1
+            )
+            SELECT
+                (SELECT COUNT(*)::int FROM deleted_events) AS deleted_channel_event_count,
+                (SELECT COUNT(*)::int FROM deleted_memory) AS deleted_memory_count,
+                (SELECT COUNT(*)::int FROM deleted_daily_usage) AS deleted_daily_usage_count,
+                (SELECT COUNT(*)::int FROM deleted_acquisition) AS deleted_acquisition_touch_count,
+                (SELECT COUNT(*)::int FROM deleted_upgrade_clicks) AS deleted_upgrade_click_count,
+                (SELECT COUNT(*)::int FROM deleted_insights) AS deleted_business_insight_count,
+                (SELECT COUNT(*)::int FROM deleted_privacy_requests) AS deleted_privacy_request_count,
+                (SELECT COUNT(*)::int FROM deleted_privacy_audits) AS deleted_privacy_audit_count,
+                (SELECT COUNT(*)::int FROM deleted_activity_events) AS deleted_activity_event_count
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+        )
+    payload = dict(row or {})
+    return {
+        "deleted_channel_event_count": int(payload.get("deleted_channel_event_count") or 0),
+        "deleted_memory_count": int(payload.get("deleted_memory_count") or 0),
+        "deleted_daily_usage_count": int(payload.get("deleted_daily_usage_count") or 0),
+        "deleted_acquisition_touch_count": int(payload.get("deleted_acquisition_touch_count") or 0),
+        "deleted_upgrade_click_count": int(payload.get("deleted_upgrade_click_count") or 0),
+        "deleted_business_insight_count": int(payload.get("deleted_business_insight_count") or 0),
+        "deleted_privacy_request_count": int(payload.get("deleted_privacy_request_count") or 0),
+        "deleted_privacy_audit_count": int(payload.get("deleted_privacy_audit_count") or 0),
+        "deleted_activity_event_count": int(payload.get("deleted_activity_event_count") or 0),
+    }
+
+
+async def delete_workspace_scope_data(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+) -> Dict[str, int]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return {
+                "deleted_channel_event_count": 0,
+                "deleted_memory_count": 0,
+                "deleted_daily_usage_count": 0,
+                "deleted_acquisition_touch_count": 0,
+                "deleted_upgrade_click_count": 0,
+                "deleted_business_insight_count": 0,
+                "deleted_privacy_request_count": 0,
+                "deleted_privacy_audit_count": 0,
+                "deleted_activity_event_count": 0,
+            }
+        row = await connection.fetchrow(
+            """
+            WITH deleted_events AS (
+                DELETE FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                RETURNING 1
+            ),
+            deleted_memory AS (
+                DELETE FROM deployed_agent_conversation_memory
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                RETURNING 1
+            ),
+            deleted_daily_usage AS (
+                DELETE FROM deployed_agent_daily_message_usage
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                RETURNING 1
+            ),
+            deleted_acquisition AS (
+                DELETE FROM channel_user_acquisition_touches
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                RETURNING 1
+            ),
+            deleted_upgrade_clicks AS (
+                DELETE FROM deployed_agent_upgrade_click_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                RETURNING 1
+            ),
+            deleted_insights AS (
+                DELETE FROM deployed_agent_business_insights
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                RETURNING 1
+            ),
+            deleted_privacy_requests AS (
+                DELETE FROM external_user_privacy_requests
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                RETURNING 1
+            ),
+            deleted_privacy_audits AS (
+                DELETE FROM external_user_privacy_delete_audits
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                RETURNING 1
+            ),
+            deleted_activity_events AS (
+                DELETE FROM activity_ledger_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                RETURNING 1
+            )
+            SELECT
+                (SELECT COUNT(*)::int FROM deleted_events) AS deleted_channel_event_count,
+                (SELECT COUNT(*)::int FROM deleted_memory) AS deleted_memory_count,
+                (SELECT COUNT(*)::int FROM deleted_daily_usage) AS deleted_daily_usage_count,
+                (SELECT COUNT(*)::int FROM deleted_acquisition) AS deleted_acquisition_touch_count,
+                (SELECT COUNT(*)::int FROM deleted_upgrade_clicks) AS deleted_upgrade_click_count,
+                (SELECT COUNT(*)::int FROM deleted_insights) AS deleted_business_insight_count,
+                (SELECT COUNT(*)::int FROM deleted_privacy_requests) AS deleted_privacy_request_count,
+                (SELECT COUNT(*)::int FROM deleted_privacy_audits) AS deleted_privacy_audit_count,
+                (SELECT COUNT(*)::int FROM deleted_activity_events) AS deleted_activity_event_count
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+        )
+    payload = dict(row or {})
+    return {
+        "deleted_channel_event_count": int(payload.get("deleted_channel_event_count") or 0),
+        "deleted_memory_count": int(payload.get("deleted_memory_count") or 0),
+        "deleted_daily_usage_count": int(payload.get("deleted_daily_usage_count") or 0),
+        "deleted_acquisition_touch_count": int(payload.get("deleted_acquisition_touch_count") or 0),
+        "deleted_upgrade_click_count": int(payload.get("deleted_upgrade_click_count") or 0),
+        "deleted_business_insight_count": int(payload.get("deleted_business_insight_count") or 0),
+        "deleted_privacy_request_count": int(payload.get("deleted_privacy_request_count") or 0),
+        "deleted_privacy_audit_count": int(payload.get("deleted_privacy_audit_count") or 0),
+        "deleted_activity_event_count": int(payload.get("deleted_activity_event_count") or 0),
+    }
+
+
 async def summarize_deployed_agent_monthly_cost_ledger(
     *,
     tenant_id: str,

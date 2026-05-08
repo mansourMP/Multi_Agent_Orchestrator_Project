@@ -20,6 +20,10 @@ _HTTP_DETAIL_BY_REASON = {
     "authenticated_api_rate_limited": "Sage is receiving too many requests right now. Please try again shortly.",
     "service_api_rate_limited": "Sage is receiving too many requests right now. Please try again shortly.",
     "control_plane_rate_limited": "Setup services are busy right now. Please try again in a moment.",
+    "auth_csrf_rate_limited": "Too many invalid security token attempts. Please wait a moment and try again.",
+    "model_invocation_rate_limited": "Sage is receiving too many generation requests right now. Please try again shortly.",
+    "mini_app_bridge_rate_limited": "Mini-app bridge traffic is currently limited. Please retry in a moment.",
+    "mini_app_invoke_rate_limited": "Mini-app invoke traffic is currently limited. Please retry in a moment.",
 }
 
 _CHANNEL_REPLY_BY_REASON = {

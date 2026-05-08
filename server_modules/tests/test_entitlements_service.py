@@ -262,6 +262,39 @@ class EntitlementsServiceTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.reason, "hosted_ai_cap_reached")
 
+    def test_chat_model_tier_policy_applies_free_plan_defaults(self) -> None:
+        state = entitlements_service.resolve_workspace_entitlement_state(
+            workspace={"metadata": {"billing": {"plan": "free"}}},
+        )
+        policy = entitlements_service.chat_model_tier_policy(state=state)
+
+        self.assertTrue(policy["tiers"]["light"]["enabled"])
+        self.assertTrue(policy["tiers"]["pro"]["enabled"])
+        self.assertFalse(policy["tiers"]["max"]["enabled"])
+        self.assertFalse(policy["virtual_computer_runtime_enabled"])
+        self.assertEqual(policy["tiers"]["pro"]["monthly_credit_cap"], 350)
+
+    def test_chat_model_tier_policy_allows_workspace_overrides(self) -> None:
+        state = entitlements_service.resolve_workspace_entitlement_state(
+            workspace={
+                "metadata": {
+                    "billing": {
+                        "plan": "pro",
+                        "overrides": {
+                            "chat_tier_max_enabled": False,
+                            "virtual_computer_runtime_enabled": True,
+                            "enterprise_admin_controls_enabled": True,
+                        },
+                    }
+                }
+            },
+        )
+        policy = entitlements_service.chat_model_tier_policy(state=state)
+
+        self.assertFalse(policy["tiers"]["max"]["enabled"])
+        self.assertTrue(policy["virtual_computer_runtime_enabled"])
+        self.assertTrue(policy["enterprise_admin_controls_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

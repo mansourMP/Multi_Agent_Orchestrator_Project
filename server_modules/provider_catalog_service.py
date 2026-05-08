@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from server_modules import entitlements_service
 from server_modules import marketplace_distribution_service
 from server_modules import model_router
-from server_modules import provider_profiles
+from server_modules import empyralis_model_tier_routing_service, provider_profiles
 
 ANTHROPIC_MODEL_ALIASES = {
     "claude-3-7-sonnet-latest": "claude-3-7-sonnet-20250219",
@@ -171,6 +171,17 @@ def resolve_provider_model_selection(
         "provider": raw_provider or None,
         "model": normalized_model or None,
     }
+
+
+def resolve_empyralis_model_tier_selection(
+    *,
+    public_tier: Any,
+    include_internal_route: bool = False,
+) -> Dict[str, Any]:
+    return empyralis_model_tier_routing_service.resolve_model_tier_route(
+        public_tier,
+        include_internal_route=include_internal_route,
+    )
 
 
 def _provider_catalog_projection(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -414,6 +425,9 @@ async def list_workspace_provider_catalog(
     hosted_access_state = entitlements_service.hosted_sage_ai_access_state_for_workspace_id(
         workspace_id=normalized_workspace_id,
     )
+    model_tier_policy = entitlements_service.chat_model_tier_policy_for_workspace_id(
+        workspace_id=normalized_workspace_id,
+    )
     providers = [
         _provider_catalog_projection(
             _apply_hosted_ai_policy(
@@ -432,6 +446,7 @@ async def list_workspace_provider_catalog(
         "workspace_id": normalized_workspace_id,
         "hosted_ai_enabled": bool(hosted_access_state.get("allowed")),
         "hosted_sage_ai": hosted_access_state,
+        "model_tier_policy": model_tier_policy,
         "summary": summary,
         "providers": providers,
     }

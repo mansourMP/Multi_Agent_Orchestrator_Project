@@ -6,6 +6,7 @@ from server_modules import direct_chat_provider_facade_service as service
 class DirectChatProviderFacadeServiceTests(unittest.TestCase):
     def test_normalize_reasoning_effort_accepts_known_levels(self) -> None:
         self.assertEqual(service.normalize_reasoning_effort(" high "), "high")
+        self.assertEqual(service.normalize_reasoning_effort(" max "), "max")
         self.assertIsNone(service.normalize_reasoning_effort("turbo"))
 
     def test_direct_chat_error_reply_formats_iteration_limit(self) -> None:

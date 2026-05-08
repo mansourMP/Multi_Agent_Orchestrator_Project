@@ -41,6 +41,12 @@ export type ComposerToolGroup = {
   items: ComposerToolItem[];
 };
 
+export type ComposerPreRunCostEstimate = {
+  estimateLabel: string;
+  detail: string;
+  warnings: string[];
+};
+
 function isComposerOptionGroup(option: ComposerModelOption): option is ComposerOptionGroup {
   return 'options' in option;
 }
@@ -59,10 +65,6 @@ function composerOptionLabel(options: ComposerModelOption[], value: string): str
     }
   }
   return '';
-}
-
-function flattenComposerOptions(options: ComposerModelOption[]): ComposerOption[] {
-  return options.flatMap((option) => (isComposerOptionGroup(option) ? option.options : [option]));
 }
 
 function compactModelLabel(label: string, fallback: string): string {
@@ -115,6 +117,7 @@ export function ChatComposer({
   toolGroups = [],
   smallModelWarning = null,
   onDismissSmallModelWarning,
+  preRunCostEstimate = null,
 }: {
   draft: string;
   onDraftChange: (nextDraft: string) => void;
@@ -151,6 +154,7 @@ export function ChatComposer({
   toolGroups?: ComposerToolGroup[];
   smallModelWarning?: string | null;
   onDismissSmallModelWarning?: () => void;
+  preRunCostEstimate?: ComposerPreRunCostEstimate | null;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const runtimePickerRef = useRef<HTMLDivElement | null>(null);
@@ -163,7 +167,6 @@ export function ChatComposer({
   const showSendButton = busy || hasDraft;
   const selectedModelLabel = composerOptionLabel(modelOptions, model);
   const selectedReasoningOption = reasoningOptions.find((option) => option.value === reasoningEffort);
-  const flatModelOptions = flattenComposerOptions(modelOptions);
   const compactSelectedModelLabel = compactModelLabel(selectedModelLabel, model || 'Auto route');
   const reasoningLabel = selectedReasoningOption?.label ?? reasoningEffort;
   const runtimePillLabel = [compactSelectedModelLabel, reasoningLabel].filter(Boolean).join(' · ');
@@ -265,6 +268,24 @@ export function ChatComposer({
           </div>
         ) : null}
 
+        {preRunCostEstimate ? (
+          <div className="app-chat-composer__cost-estimate" role="status" aria-live="polite">
+            <div className="app-chat-composer__cost-estimate-copy">
+              <strong>{preRunCostEstimate.estimateLabel}</strong>
+              <span>{preRunCostEstimate.detail}</span>
+            </div>
+            {preRunCostEstimate.warnings.length > 0 ? (
+              <div className="app-chat-composer__cost-estimate-warnings">
+                {preRunCostEstimate.warnings.map((warning) => (
+                  <span key={warning} className="app-chat-composer__cost-estimate-warning">
+                    {warning}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="app-chat-composer__toolbar">
           <div className="app-chat-composer__toolbar-left">
             <div className="app-chat-composer__runtime" ref={runtimePickerRef}>
@@ -315,28 +336,59 @@ export function ChatComposer({
 
                   <div className="app-chat-composer__runtime-section">
                     <div className="app-chat-composer__runtime-section-title">Model</div>
-                    {flatModelOptions.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => {
-                          onModelChange(option.value);
-                          setRuntimePickerOpen(false);
-                        }}
-                        disabled={controlsDisabled || busy || option.disabled}
-                        className={joinClassNames(
-                          'app-chat-composer__runtime-menu-row',
-                          model === option.value && 'app-chat-composer__runtime-menu-row--active',
-                        )}
-                      >
-                        <span>{compactModelLabel(option.label, option.value)}</span>
-                        {model === option.value ? (
-                          <Check size={18} strokeWidth={2.1} aria-hidden="true" />
-                        ) : (
-                          <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
-                        )}
-                      </button>
-                    ))}
+                    {modelOptions.map((optionGroupOrItem, index) => {
+                      if (isComposerOptionGroup(optionGroupOrItem)) {
+                        return (
+                          <div key={`group:${optionGroupOrItem.label}:${index}`}>
+                            <div className="app-chat-composer__runtime-section-title">{optionGroupOrItem.label}</div>
+                            {optionGroupOrItem.options.map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  onModelChange(option.value);
+                                  setRuntimePickerOpen(false);
+                                }}
+                                disabled={controlsDisabled || busy || option.disabled}
+                                className={joinClassNames(
+                                  'app-chat-composer__runtime-menu-row',
+                                  model === option.value && 'app-chat-composer__runtime-menu-row--active',
+                                )}
+                              >
+                                <span>{compactModelLabel(option.label, option.value)}</span>
+                                {model === option.value ? (
+                                  <Check size={18} strokeWidth={2.1} aria-hidden="true" />
+                                ) : (
+                                  <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      }
+                      return (
+                        <button
+                          key={optionGroupOrItem.value}
+                          type="button"
+                          onClick={() => {
+                            onModelChange(optionGroupOrItem.value);
+                            setRuntimePickerOpen(false);
+                          }}
+                          disabled={controlsDisabled || busy || optionGroupOrItem.disabled}
+                          className={joinClassNames(
+                            'app-chat-composer__runtime-menu-row',
+                            model === optionGroupOrItem.value && 'app-chat-composer__runtime-menu-row--active',
+                          )}
+                        >
+                          <span>{compactModelLabel(optionGroupOrItem.label, optionGroupOrItem.value)}</span>
+                          {model === optionGroupOrItem.value ? (
+                            <Check size={18} strokeWidth={2.1} aria-hidden="true" />
+                          ) : (
+                            <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               ) : null}

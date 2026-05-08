@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from server_modules import db as runtime_db
+from server_modules import credit_ledger_contract
 from server_modules.sqlite_helpers import connect_sqlite_rw
 
 
@@ -5859,6 +5860,7 @@ async def summarize_workspace_billing_usage(
                 "specialist_external_messages_today": 0,
                 "specialist_external_users_today": 0,
                 "daily_quota_subjects_today": 0,
+                "credit_line_items_monthly": [],
             }
         cost_row = await connection.fetchrow(
             """
@@ -5909,6 +5911,24 @@ async def summarize_workspace_billing_usage(
             resolved_workspace_id,
             resolved_usage_month,
         )
+        line_item_rows = await connection.fetch(
+            """
+            SELECT total_tokens, estimated_cost_usd, metadata
+            FROM deployed_agent_monthly_cost_ledger
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND usage_month = $3::date
+            UNION ALL
+            SELECT total_tokens, estimated_cost_usd, metadata
+            FROM workspace_hosted_ai_monthly_cost_ledger
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND usage_month = $3::date
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_usage_month,
+        )
     cost_payload = dict(cost_row or {})
     sage_cost_payload = dict(sage_cost_row or {})
     daily_payload = dict(daily_message_row or {})
@@ -5917,6 +5937,57 @@ async def summarize_workspace_billing_usage(
     hosted_total_tokens = int(cost_payload.get("hosted_total_tokens_monthly") or 0) + int(sage_cost_payload.get("hosted_sage_total_tokens_monthly") or 0)
     hosted_cost_usd = round(float(cost_payload.get("hosted_cost_usd_monthly") or 0.0) + float(sage_cost_payload.get("hosted_sage_cost_usd_monthly") or 0.0), 6)
     hosted_runs = int(cost_payload.get("hosted_runs_monthly") or 0) + int(sage_cost_payload.get("hosted_sage_runs_monthly") or 0)
+    line_item_summary: Dict[str, Dict[str, Any]] = {}
+    for row in list(line_item_rows or []):
+        row_payload = dict(row or {})
+        metadata = _decode_json_object(row_payload.get("metadata"))
+        line_item = credit_ledger_contract.build_credit_ledger_line_item(
+            metadata=metadata,
+            total_tokens=int(row_payload.get("total_tokens") or 0),
+        )
+        credit_item_type = str(line_item.get("credit_item_type") or "").strip().lower() or "ai_pro_tokens"
+        bucket = line_item_summary.setdefault(
+            credit_item_type,
+            {
+                "credit_item_type": credit_item_type,
+                "quantity": 0.0,
+                "quantity_unit": str(line_item.get("quantity_unit") or "tokens").strip().lower() or "tokens",
+                "estimated_cost_usd": 0.0,
+                "entries_count": 0,
+                "billing_sources": set(),
+            },
+        )
+        bucket["quantity"] = round(float(bucket["quantity"]) + float(line_item.get("quantity") or 0.0), 6)
+        bucket["estimated_cost_usd"] = round(
+            float(bucket["estimated_cost_usd"]) + float(row_payload.get("estimated_cost_usd") or 0.0),
+            6,
+        )
+        bucket["entries_count"] = int(bucket["entries_count"]) + 1
+        billing_source = str(line_item.get("billing_source") or "").strip().lower()
+        if billing_source:
+            bucket["billing_sources"].add(billing_source)
+    ordered_line_items: List[Dict[str, Any]] = []
+    order_index = {
+        item_type: idx
+        for idx, item_type in enumerate(credit_ledger_contract.CREDIT_LEDGER_ITEM_TYPES)
+    }
+    for item in sorted(
+        line_item_summary.values(),
+        key=lambda payload: (
+            order_index.get(str(payload.get("credit_item_type") or "").strip().lower(), len(order_index) + 99),
+            str(payload.get("credit_item_type") or ""),
+        ),
+    ):
+        ordered_line_items.append(
+            {
+                "credit_item_type": str(item.get("credit_item_type") or "").strip().lower() or "ai_pro_tokens",
+                "quantity": round(float(item.get("quantity") or 0.0), 6),
+                "quantity_unit": str(item.get("quantity_unit") or "tokens").strip().lower() or "tokens",
+                "estimated_cost_usd": round(float(item.get("estimated_cost_usd") or 0.0), 6),
+                "entries_count": int(item.get("entries_count") or 0),
+                "billing_sources": sorted(str(value) for value in item.get("billing_sources") or [] if str(value).strip()),
+            }
+        )
     return {
         "tenant_id": resolved_tenant_id,
         "workspace_id": resolved_workspace_id,
@@ -5935,6 +6006,7 @@ async def summarize_workspace_billing_usage(
         "specialist_external_messages_today": int(daily_payload.get("specialist_external_messages_today") or 0),
         "specialist_external_users_today": int(daily_payload.get("specialist_external_users_today") or 0),
         "daily_quota_subjects_today": int(daily_payload.get("daily_quota_subjects_today") or 0),
+        "credit_line_items_monthly": ordered_line_items,
     }
 
 

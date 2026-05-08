@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from server_modules import control_plane_repository, usage_accounting_service
+from server_modules import (
+    control_plane_repository,
+    credit_ledger_contract,
+    empyralis_model_tier_routing_service,
+    usage_accounting_service,
+)
 from server_modules.direct_tool_config_service import run_async_tool_call
 
 
@@ -45,6 +50,16 @@ def _session_tenant_id(session_ctx: Optional[Dict[str, Any]], workspace_id: str)
     return resolved or None
 
 
+def _session_turn_metadata(session_ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    payload = _coerce_dict(session_ctx)
+    turn_request = _coerce_dict(payload.get("agent_turn_request"))
+    context_hints = _coerce_dict(turn_request.get("context_hints"))
+    metadata = _coerce_dict(context_hints.get("metadata"))
+    if metadata:
+        return metadata
+    return _coerce_dict(payload.get("metadata"))
+
+
 def persist_direct_chat_hosted_usage_best_effort(
     *,
     workspace_id: str,
@@ -74,6 +89,26 @@ def persist_direct_chat_hosted_usage_best_effort(
         return
 
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    turn_metadata = _session_turn_metadata(session_ctx)
+    tier_route = empyralis_model_tier_routing_service.resolve_requested_empyralis_tier(
+        requested_provider=requested_provider,
+        requested_model=requested_model,
+        metadata=turn_metadata,
+    )
+    line_item_metadata = credit_ledger_contract.build_credit_ledger_line_item(
+        metadata={
+            "public_tier": _text(turn_metadata.get("public_tier") or turn_metadata.get("model_tier") or turn_metadata.get("empyralis_model_tier")),
+            "billing_source": _text(
+                turn_metadata.get("billing_source")
+                or (tier_route.get("billing_source") if isinstance(tier_route, dict) else "")
+            ),
+        },
+        public_tier=(tier_route or {}).get("public_tier") if isinstance(tier_route, dict) else None,
+        billing_source=(tier_route or {}).get("billing_source") if isinstance(tier_route, dict) else None,
+        credit_multiplier=(tier_route or {}).get("credit_multiplier") if isinstance(tier_route, dict) else None,
+        total_tokens=usage.get("total_tokens")
+        or _coerce_dict(usage.get("usage_accounting")).get("total_tokens"),
+    )
     snapshot = {
         "run_id": request_id,
         "workspace_id": workspace_token,
@@ -107,6 +142,12 @@ def persist_direct_chat_hosted_usage_best_effort(
                 "thread_id": thread_token,
                 "request_id": request_id,
                 "credential_plane": "platform_runtime",
+                "billing_source": line_item_metadata.get("billing_source"),
+                "public_tier": line_item_metadata.get("public_tier"),
+                "credit_item_type": line_item_metadata.get("credit_item_type"),
+                "credit_quantity": line_item_metadata.get("quantity"),
+                "credit_quantity_unit": line_item_metadata.get("quantity_unit"),
+                "credit_multiplier": line_item_metadata.get("credit_multiplier"),
             },
         }
     else:
@@ -123,6 +164,12 @@ def persist_direct_chat_hosted_usage_best_effort(
                 "thread_id": thread_token,
                 "request_id": request_id,
                 "credential_plane": "platform_runtime",
+                "billing_source": line_item_metadata.get("billing_source"),
+                "public_tier": line_item_metadata.get("public_tier"),
+                "credit_item_type": line_item_metadata.get("credit_item_type"),
+                "credit_quantity": line_item_metadata.get("quantity"),
+                "credit_quantity_unit": line_item_metadata.get("quantity_unit"),
+                "credit_multiplier": line_item_metadata.get("credit_multiplier"),
             },
         }
 
@@ -150,6 +197,12 @@ def persist_direct_chat_hosted_usage_best_effort(
                     "credential_plane": "platform_runtime",
                     "requested_provider": _text(requested_provider) or None,
                     "requested_model": _text(requested_model) or None,
+                    "billing_source": line_item_metadata.get("billing_source"),
+                    "public_tier": line_item_metadata.get("public_tier"),
+                    "credit_item_type": line_item_metadata.get("credit_item_type"),
+                    "credit_quantity": line_item_metadata.get("quantity"),
+                    "credit_quantity_unit": line_item_metadata.get("quantity_unit"),
+                    "credit_multiplier": line_item_metadata.get("credit_multiplier"),
                 },
             )
         )

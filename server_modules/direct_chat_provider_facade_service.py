@@ -88,7 +88,7 @@ def direct_chat_credentials(
 
 def normalize_reasoning_effort(value: str = "") -> Optional[str]:
     normalized = str(value or "").strip().lower()
-    if normalized in {"low", "medium", "high"}:
+    if normalized in {"low", "medium", "high", "max"}:
         return normalized
     return None
 

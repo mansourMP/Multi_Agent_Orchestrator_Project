@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from server_modules import provider_profiles
+from server_modules import (
+    empyralis_model_tier_contract,
+    empyralis_model_tier_routing_service,
+    entitlements_service,
+    provider_profiles,
+)
 from server_modules import session_transcript_store
 from server_modules.conversation_memory_policy import (
     DIRECT_CHAT_PROFILE,
@@ -34,6 +39,17 @@ class PreparedDirectChatRequest:
     slash_command_name: str
     slash_remainder: str
     resolved_chat_max_iterations: int
+
+
+def _highest_allowed_empyralis_tier(
+    tier_policy: Dict[str, Any],
+) -> Optional[str]:
+    tiers = tier_policy.get("tiers") if isinstance(tier_policy.get("tiers"), dict) else {}
+    for candidate in ("max", "pro", "light"):
+        record = tiers.get(candidate) if isinstance(tiers, dict) else None
+        if isinstance(record, dict) and bool(record.get("enabled")):
+            return candidate
+    return None
 
 
 def prepare_direct_chat_request(
@@ -137,6 +153,92 @@ def prepare_direct_chat_request(
         normalized_message = slash_remainder
         slash_command_name = ""
         slash_remainder = ""
+
+    migrated_public_tier = empyralis_model_tier_routing_service.infer_migrated_public_tier_from_legacy_selection(
+        requested_provider=normalized_requested_provider,
+        requested_model=normalized_requested_model,
+        metadata=resolved_turn_metadata,
+    )
+    empyralis_tier_route = empyralis_model_tier_routing_service.resolve_requested_empyralis_tier(
+        requested_provider=normalized_requested_provider,
+        requested_model=normalized_requested_model,
+        metadata={
+            **resolved_turn_metadata,
+            **(
+                {"public_tier": migrated_public_tier}
+                if migrated_public_tier
+                else {}
+            ),
+        },
+    )
+    if empyralis_tier_route:
+        requested_public_tier = empyralis_model_tier_contract.normalize_model_tier(
+            empyralis_tier_route.get("public_tier") or normalized_requested_model or "pro",
+            fallback="pro",
+        )
+        requested_tier_contract = empyralis_model_tier_contract.model_tier_contract(requested_public_tier)
+        if requested_tier_contract.user_owned:
+            if requested_public_tier == "local_ai":
+                normalized_requested_provider = "ollama"
+                normalized_requested_model = (
+                    normalized_requested_model
+                    or str(provider_profiles.provider_catalog_entry("ollama").get("default_model") or "").strip()
+                )
+            if requested_public_tier == "my_ai_account" and not normalized_requested_provider:
+                normalized_requested_provider = "openai-codex"
+            if not normalized_requested_provider and requested_public_tier == "my_api_key":
+                normalized_requested_provider = "openai"
+            if not normalized_requested_model and normalized_requested_provider:
+                normalized_requested_model = str(
+                    provider_profiles.provider_catalog_entry(normalized_requested_provider).get("default_model") or ""
+                ).strip()
+            if not normalized_reasoning_effort:
+                normalized_reasoning_effort = normalize_reasoning_effort_fn(
+                    str(requested_tier_contract.reasoning_effort or "")
+                )
+        else:
+            normalized_requested_provider = str(empyralis_tier_route.get("provider") or "").strip().lower()
+            normalized_requested_model = str(empyralis_tier_route.get("model") or "").strip()
+            if not normalized_reasoning_effort:
+                normalized_reasoning_effort = normalize_reasoning_effort_fn(
+                    str(empyralis_tier_route.get("reasoning_effort") or "")
+                )
+        try:
+            tier_policy = entitlements_service.chat_model_tier_policy_for_workspace_id(
+                workspace_id=normalized_workspace_id,
+            )
+        except Exception:
+            tier_policy = {
+                "tiers": {
+                    "light": {"enabled": True},
+                    "pro": {"enabled": True},
+                    "max": {"enabled": True},
+                }
+            }
+
+        requested_tier_record = (
+            tier_policy.get("tiers", {}).get(requested_public_tier)
+            if isinstance(tier_policy.get("tiers"), dict)
+            else None
+        )
+        requested_tier_enabled = bool(
+            isinstance(requested_tier_record, dict)
+            and requested_tier_record.get("enabled")
+        )
+        if (
+            requested_public_tier in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS
+            and not requested_tier_enabled
+        ):
+            fallback_tier = _highest_allowed_empyralis_tier(tier_policy)
+            if fallback_tier and fallback_tier != requested_public_tier:
+                empyralis_tier_route = empyralis_model_tier_routing_service.resolve_backend_provider_model_for_tier(
+                    fallback_tier
+                )
+                normalized_requested_provider = str(empyralis_tier_route.get("provider") or "").strip().lower()
+                normalized_requested_model = str(empyralis_tier_route.get("model") or "").strip()
+                normalized_reasoning_effort = normalize_reasoning_effort_fn(
+                    str(empyralis_tier_route.get("reasoning_effort") or "")
+                )
 
     base_direct_chat_policy = get_memory_policy_profile(DIRECT_CHAT_PROFILE)
     context_window_tokens = provider_profiles.context_window_for_model(

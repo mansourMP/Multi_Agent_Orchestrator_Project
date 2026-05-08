@@ -52,6 +52,10 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
         self.assertEqual(kwargs["prompt_tokens"], 10)
         self.assertEqual(kwargs["completion_tokens"], 6)
         self.assertEqual(kwargs["total_tokens"], 16)
+        self.assertEqual(kwargs["metadata"]["credit_item_type"], "ai_pro_tokens")
+        self.assertEqual(kwargs["metadata"]["credit_quantity"], 16.0)
+        self.assertEqual(kwargs["metadata"]["credit_quantity_unit"], "tokens")
+        self.assertEqual(kwargs["metadata"]["billing_source"], "empyralis_credits")
 
     def test_persist_direct_chat_hosted_usage_best_effort_ignores_non_platform_runtime(self) -> None:
         with patch(

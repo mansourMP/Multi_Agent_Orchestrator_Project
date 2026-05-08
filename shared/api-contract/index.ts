@@ -4,6 +4,18 @@ export type ApiTurnActor = {
   display_name: string;
 };
 
+export type {
+  EmpyralisModelBillingSource,
+  EmpyralisModelTier,
+  EmpyralisModelTierContract,
+} from './model-tier-contract';
+export {
+  EMPYRALIS_HOSTED_MODEL_TIERS,
+  EMPYRALIS_MODEL_TIERS,
+  USER_OWNED_MODEL_TIERS,
+  exposesProviderModelToOrdinaryUi,
+} from './model-tier-contract';
+
 export type ApiTurnAttachment = {
   kind: string;
   uri: string;

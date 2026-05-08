@@ -113,7 +113,7 @@ export type SendFailureNotice = {
 
 export type ChatMachineTrust = 'personal' | 'agent';
 export type ChatAutonomyMode = 'approval' | 'full';
-export type ChatReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ChatReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type ChatModelOption = {
   id: string;
@@ -123,6 +123,10 @@ export type ChatModelOption = {
   supportsReasoning: boolean;
   reasoningLevels: ChatReasoningEffort[];
   contextWindowTokens: number | null;
+  routeProviderId?: string | null;
+  routeModelId?: string | null;
+  defaultReasoningEffort?: ChatReasoningEffort | null;
+  uiSection?: 'empyralis' | 'local_ai' | 'my_api_key' | 'my_ai_account' | 'system';
 };
 
 export type SageMemoryDraft = {

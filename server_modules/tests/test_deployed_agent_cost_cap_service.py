@@ -121,6 +121,10 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ledger_metadata["pricing_known"])
         self.assertEqual(ledger_metadata["pricing_registry_version"], "2026-04-13")
         self.assertEqual(ledger_metadata["source_surface"], "deployed_agent_channel")
+        self.assertEqual(ledger_metadata["credit_item_type"], "ai_pro_tokens")
+        self.assertEqual(ledger_metadata["credit_quantity"], 2000.0)
+        self.assertEqual(ledger_metadata["credit_quantity_unit"], "tokens")
+        self.assertEqual(ledger_metadata["billing_source"], "empyralis_credits")
         budget_cycle = update_mock.await_args.kwargs["updates"]["operational_state"]["current_budget_cycle"]
         self.assertEqual(budget_cycle["current_burn_usd"], 8.0)
         self.assertEqual(budget_cycle["percent_used"], 80.0)
@@ -196,6 +200,8 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ledger_kwargs["provider"], "openai")
         self.assertEqual(ledger_kwargs["model"], "gpt-4.1")
         self.assertEqual(ledger_kwargs["metadata"]["usage_record_id"], "uacct_run-usage-accounting")
+        self.assertEqual(ledger_kwargs["metadata"]["credit_item_type"], "ai_pro_tokens")
+        self.assertEqual(ledger_kwargs["metadata"]["credit_quantity"], 2000.0)
 
     async def test_settle_skips_duplicate_80_percent_notification_with_same_cap(self) -> None:
         deployed_agent = _deployed_agent(

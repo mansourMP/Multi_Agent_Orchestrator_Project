@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, Optional
 
-from server_modules import control_plane_repository, deployed_agent_config_schema, outbox_service, usage_accounting_service
+from server_modules import (
+    control_plane_repository,
+    credit_ledger_contract,
+    deployed_agent_config_schema,
+    outbox_service,
+    usage_accounting_service,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -354,6 +360,31 @@ async def settle_deployed_agent_monthly_cost_cap(
         )
 
     usage_month = _month_start_iso(usage_row.get("timestamp") or now_iso)
+    line_item_metadata = credit_ledger_contract.build_credit_ledger_line_item(
+        metadata={
+            **(
+                usage_row.get("metadata")
+                if isinstance(usage_row.get("metadata"), dict)
+                else {}
+            ),
+            "source_surface": _normalize_optional_text(usage_row.get("source_surface")),
+        },
+        public_tier=_normalize_optional_text(
+            (
+                usage_row.get("metadata")
+                if isinstance(usage_row.get("metadata"), dict)
+                else {}
+            ).get("public_tier")
+        ),
+        billing_source=_normalize_optional_text(
+            (
+                usage_row.get("metadata")
+                if isinstance(usage_row.get("metadata"), dict)
+                else {}
+            ).get("billing_source")
+        ),
+        total_tokens=int(usage_row.get("total_tokens") or 0),
+    )
     try:
         await control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry(
             tenant_id=tenant_id,
@@ -377,6 +408,12 @@ async def settle_deployed_agent_monthly_cost_cap(
                 "estimation_mode": _normalize_optional_text(usage_row.get("estimation_mode")),
                 "source_surface": _normalize_optional_text(usage_row.get("source_surface")),
                 "cost_band": _normalize_optional_text(usage_row.get("cost_band")),
+                "billing_source": line_item_metadata.get("billing_source"),
+                "public_tier": line_item_metadata.get("public_tier"),
+                "credit_item_type": line_item_metadata.get("credit_item_type"),
+                "credit_quantity": line_item_metadata.get("quantity"),
+                "credit_quantity_unit": line_item_metadata.get("quantity_unit"),
+                "credit_multiplier": line_item_metadata.get("credit_multiplier"),
             },
         )
         summary = await control_plane_repository.summarize_deployed_agent_monthly_cost_ledger(

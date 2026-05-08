@@ -794,7 +794,27 @@ function providerActiveModelLabel(record: ProviderCardRecord | null): string {
   if (!record) {
     return 'No model selected';
   }
-  return readString(record.profile?.model)
+  const selectedModel = readString(record.profile?.model);
+  const credentialPlane = readString(record.provider.credentialPlane).toLowerCase();
+  const activeSource = readString(record.provider.activeSource).toLowerCase();
+  const hostedEmpyralis = credentialPlane === 'platform_runtime'
+    || record.provider.hostedSageAiPolicy === 'allowed'
+    || record.provider.hostedSageAiPolicy === 'enabled_with_cap'
+    || activeSource.includes('platform')
+    || activeSource.includes('hosted');
+  if (hostedEmpyralis) {
+    const tierToken = selectedModel.toLowerCase();
+    if (tierToken === 'light') {
+      return 'Light';
+    }
+    if (tierToken === 'pro') {
+      return 'Pro';
+    }
+    if (tierToken === 'max') {
+      return 'Max';
+    }
+  }
+  return selectedModel
     || readString(record.provider.defaultModel)
     || readString(record.provider.models[0]?.label)
     || readString(record.provider.models[0]?.id)

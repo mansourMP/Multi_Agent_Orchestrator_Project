@@ -58,6 +58,13 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "label": "Free",
         "hosted_runtime_enabled": False,
         "hosted_ai_enabled": True,
+        "chat_tier_light_enabled": True,
+        "chat_tier_pro_enabled": True,
+        "chat_tier_max_enabled": False,
+        "chat_tier_pro_monthly_credit_cap": 350,
+        "chat_tier_max_monthly_credit_cap": 0,
+        "virtual_computer_runtime_enabled": False,
+        "enterprise_admin_controls_enabled": False,
         "hosted_runtime_minutes_monthly": 0,
         "concurrent_hosted_executions": 0,
         "background_event_triggers_per_hour": 2,
@@ -88,6 +95,13 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "label": "Pro",
         "hosted_runtime_enabled": True,
         "hosted_ai_enabled": True,
+        "chat_tier_light_enabled": True,
+        "chat_tier_pro_enabled": True,
+        "chat_tier_max_enabled": True,
+        "chat_tier_pro_monthly_credit_cap": 20_000,
+        "chat_tier_max_monthly_credit_cap": 5_000,
+        "virtual_computer_runtime_enabled": False,
+        "enterprise_admin_controls_enabled": False,
         "hosted_runtime_minutes_monthly": 1_500,
         "concurrent_hosted_executions": 4,
         "background_event_triggers_per_hour": 8,
@@ -502,6 +516,135 @@ def hosted_sage_ai_access_state_for_workspace_id(
     resolved_workspace = dict(workspace) if isinstance(workspace, dict) else _load_workspace_record(workspace_id)
     state = resolve_workspace_entitlement_state(workspace=resolved_workspace, install=install)
     return hosted_sage_ai_access_state(state=state)
+
+
+def _coerce_non_negative_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < 0:
+        return 0
+    return parsed
+
+
+def _tier_enabled_with_credit_cap(
+    *,
+    enabled: bool,
+    monthly_credit_cap: Optional[int],
+    monthly_credits_used: int,
+) -> tuple[bool, Optional[str]]:
+    if not enabled:
+        return False, "plan_disabled"
+    if monthly_credit_cap is None:
+        return True, None
+    if monthly_credit_cap <= 0:
+        return False, "monthly_credit_cap_reached"
+    if monthly_credits_used >= monthly_credit_cap:
+        return False, "monthly_credit_cap_reached"
+    return True, None
+
+
+def chat_model_tier_policy(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+    state: Optional[WorkspaceEntitlementState] = None,
+) -> Dict[str, Any]:
+    resolved_state = state or resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    entitlements = resolved_state.entitlements
+    hosted_state = hosted_sage_ai_access_state(state=resolved_state)
+    hosted_enabled = bool(hosted_state.get("allowed"))
+    monthly_credits_used = int(hosted_state.get("monthly_credits_used") or 0)
+
+    light_enabled = _coerce_bool(entitlements.get("chat_tier_light_enabled"), True)
+    pro_enabled = _coerce_bool(entitlements.get("chat_tier_pro_enabled"), True)
+    max_enabled = _coerce_bool(
+        entitlements.get("chat_tier_max_enabled"),
+        resolved_state.plan_id != "free",
+    )
+    pro_monthly_credit_cap = _coerce_non_negative_int(
+        entitlements.get("chat_tier_pro_monthly_credit_cap"),
+        None,
+    )
+    max_monthly_credit_cap = _coerce_non_negative_int(
+        entitlements.get("chat_tier_max_monthly_credit_cap"),
+        None,
+    )
+
+    light_allowed, light_reason = _tier_enabled_with_credit_cap(
+        enabled=hosted_enabled and light_enabled,
+        monthly_credit_cap=None,
+        monthly_credits_used=monthly_credits_used,
+    )
+    pro_allowed, pro_reason = _tier_enabled_with_credit_cap(
+        enabled=hosted_enabled and pro_enabled,
+        monthly_credit_cap=pro_monthly_credit_cap,
+        monthly_credits_used=monthly_credits_used,
+    )
+    max_allowed, max_reason = _tier_enabled_with_credit_cap(
+        enabled=hosted_enabled and max_enabled,
+        monthly_credit_cap=max_monthly_credit_cap,
+        monthly_credits_used=monthly_credits_used,
+    )
+
+    return {
+        "plan_id": resolved_state.plan_id,
+        "hosted_ai_enabled": hosted_enabled,
+        "monthly_credits_used": monthly_credits_used,
+        "tiers": {
+            "light": {
+                "enabled": bool(light_allowed),
+                "monthly_credit_cap": None,
+                "reason": light_reason,
+            },
+            "pro": {
+                "enabled": bool(pro_allowed),
+                "monthly_credit_cap": pro_monthly_credit_cap,
+                "reason": pro_reason,
+            },
+            "max": {
+                "enabled": bool(max_allowed),
+                "monthly_credit_cap": max_monthly_credit_cap,
+                "reason": max_reason,
+            },
+        },
+        "user_owned": {
+            "local_ai": bool(
+                _coerce_bool(
+                    entitlements.get("local_runtime_mode"),
+                    bool(NON_GATED_CAPABILITIES.get("local_runtime_mode", True)),
+                )
+            ),
+            "my_api_key": bool(
+                _coerce_bool(
+                    entitlements.get("byo_provider_mode"),
+                    bool(NON_GATED_CAPABILITIES.get("byo_provider_mode", True)),
+                )
+            ),
+            "my_ai_account": True,
+        },
+        "virtual_computer_runtime_enabled": bool(
+            _coerce_bool(entitlements.get("virtual_computer_runtime_enabled"), False)
+        ),
+        "enterprise_admin_controls_enabled": bool(
+            _coerce_bool(entitlements.get("enterprise_admin_controls_enabled"), False)
+            or _coerce_bool(entitlements.get("admin_security_features_enabled"), False)
+        ),
+    }
+
+
+def chat_model_tier_policy_for_workspace_id(
+    *,
+    workspace_id: str,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_workspace = dict(workspace) if isinstance(workspace, dict) else _load_workspace_record(workspace_id)
+    resolved_state = resolve_workspace_entitlement_state(workspace=resolved_workspace, install=install)
+    return chat_model_tier_policy(state=resolved_state)
 
 
 def workspace_capability_flags(

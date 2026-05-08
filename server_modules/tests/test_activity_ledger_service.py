@@ -212,6 +212,8 @@ class ActivityLedgerServiceTests(unittest.TestCase):
         self.assertEqual(item["visible_activity"]["used_credits"], 8.0)
         self.assertEqual(item["visible_activity"]["virtual_browser_minutes"], 8.0)
         self.assertTrue(item["visible_activity"]["owner_approval_required_for_payment"])
+        self.assertNotIn("raw_provider", item["visible_activity"])
+        self.assertNotIn("raw_model", item["visible_activity"])
         self.assertEqual(item["admin_audit"]["raw_provider"], "deepseek")
         self.assertEqual(item["admin_audit"]["raw_model"], "deepseek-v4-pro")
         self.assertEqual(item["admin_audit"]["fallback_model"], "deepseek-v4-flash")

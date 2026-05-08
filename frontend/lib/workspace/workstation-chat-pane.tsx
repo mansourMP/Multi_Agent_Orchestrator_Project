@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   SquarePen,
@@ -13,7 +13,11 @@ import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { AppButton, AppNotice, AppShinyText } from '@/lib/ui/primitives';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
-import { ChatComposer, type ComposerToolGroup } from '@/lib/workspace/chat-composer';
+import {
+  ChatComposer,
+  type ComposerPreRunCostEstimate,
+  type ComposerToolGroup,
+} from '@/lib/workspace/chat-composer';
 import type {
   WorkstationChatArtifactReference,
   WorkstationChatMessageRecord,
@@ -113,7 +117,7 @@ type GatewayReadinessRegistration = Record<string, unknown> & {
 
 type ChatRuntimeTrustZone = 'shared_cloud' | 'user_owned_local' | 'owned_dedicated_runtime';
 
-const VALID_REASONING_LEVELS: ChatReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const VALID_REASONING_LEVELS: ChatReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 const PRIMARY_THREAD_ID = 'primary';
 const CHAT_READ_TIMEOUT_MS = 8_000;
@@ -919,6 +923,35 @@ function isCatalogProviderRecord(provider: ProviderCatalogRecord): boolean {
 
 const LAUNCH_CHAT_PROVIDER_PRIORITY = ['deepseek', 'gemini', 'openai', 'ollama_cloud', 'ollama'] as const;
 const LAUNCH_CHAT_PROVIDER_IDS = new Set<string>(LAUNCH_CHAT_PROVIDER_PRIORITY);
+const EMPYRALIS_TIER_IDS = ['light', 'pro', 'max'] as const;
+const EMPYRALIS_TIER_SET = new Set<string>(EMPYRALIS_TIER_IDS);
+const EMPYRALIS_TIER_LABELS: Record<typeof EMPYRALIS_TIER_IDS[number], string> = {
+  light: 'Light',
+  pro: 'Pro',
+  max: 'Max',
+};
+const USER_OWNED_SECTION_LABELS: Record<'local_ai' | 'my_api_key' | 'my_ai_account', string> = {
+  local_ai: 'Local AI',
+  my_api_key: 'My API Key',
+  my_ai_account: 'My AI Account',
+};
+const EMPYRALIS_TIER_ESTIMATED_CREDITS: Record<typeof EMPYRALIS_TIER_IDS[number], number> = {
+  light: 6,
+  pro: 12,
+  max: 24,
+};
+const VIRTUAL_RUNTIME_ESTIMATED_CREDITS: Record<'virtual_browser' | 'virtual_desktop' | 'virtual_code_sandbox', number> = {
+  virtual_browser: 8,
+  virtual_desktop: 15,
+  virtual_code_sandbox: 10,
+};
+const ARTIFACT_ESTIMATED_CREDITS = 2;
+
+type ChatHostedCreditState = {
+  monthlyCreditCap: number;
+  monthlyCreditsUsed: number;
+  monthlyCreditsRemaining: number;
+};
 
 function chatProviderPriority(provider: ProviderCatalogRecord): number {
   const providerId = readString(provider.id).toLowerCase();
@@ -939,6 +972,74 @@ function sortLaunchChatProviders(providers: ProviderCatalogRecord[]): ProviderCa
     }
     return (readString(left.label) || readString(left.id)).localeCompare(readString(right.label) || readString(right.id));
   });
+}
+
+type ChatRouteKind = 'empyralis' | 'local_ai' | 'my_api_key' | 'my_ai_account';
+
+type ChatModelTierPolicyRecord = {
+  hostedAiEnabled: boolean;
+  tierAllowed: Record<'light' | 'pro' | 'max', boolean>;
+  userOwnedAllowed: Record<'local_ai' | 'my_api_key' | 'my_ai_account', boolean>;
+};
+
+function normalizeChatModelTierPolicy(payload: unknown): ChatModelTierPolicyRecord {
+  const source = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const tiers = source.tiers && typeof source.tiers === 'object'
+    ? source.tiers as Record<string, unknown>
+    : {};
+  const userOwned = source.user_owned && typeof source.user_owned === 'object'
+    ? source.user_owned as Record<string, unknown>
+    : {};
+
+  const readTierEnabled = (tier: 'light' | 'pro' | 'max', fallback: boolean): boolean => {
+    const record = tiers[tier];
+    if (!record || typeof record !== 'object') {
+      return fallback;
+    }
+    const enabled = (record as Record<string, unknown>).enabled;
+    return typeof enabled === 'boolean' ? enabled : fallback;
+  };
+
+  const readUserOwnedEnabled = (
+    route: 'local_ai' | 'my_api_key' | 'my_ai_account',
+    fallback: boolean,
+  ): boolean => {
+    const value = userOwned[route];
+    return typeof value === 'boolean' ? value : fallback;
+  };
+
+  const hostedAiEnabled = typeof source.hosted_ai_enabled === 'boolean' ? source.hosted_ai_enabled : true;
+  return {
+    hostedAiEnabled,
+    tierAllowed: {
+      light: hostedAiEnabled && readTierEnabled('light', true),
+      pro: hostedAiEnabled && readTierEnabled('pro', true),
+      max: hostedAiEnabled && readTierEnabled('max', false),
+    },
+    userOwnedAllowed: {
+      local_ai: readUserOwnedEnabled('local_ai', true),
+      my_api_key: readUserOwnedEnabled('my_api_key', true),
+      my_ai_account: readUserOwnedEnabled('my_ai_account', true),
+    },
+  };
+}
+
+function providerRouteKind(provider: ProviderCatalogRecord): ChatRouteKind {
+  const providerId = readString(provider.id).toLowerCase();
+  const credentialPlane = readString(provider.credential_plane).toLowerCase();
+  const defaultAuthMode = readString(provider.default_auth_mode).toLowerCase();
+  const runtimeSource = readString(provider.runtime_active_source).toLowerCase();
+
+  if (providerId === 'openai-codex' || runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
+    return 'my_ai_account';
+  }
+  if (providerId === 'ollama' || provider.local_only === true || credentialPlane === 'local_runtime') {
+    return 'local_ai';
+  }
+  if (credentialPlane === 'platform_runtime') {
+    return 'empyralis';
+  }
+  return 'my_api_key';
 }
 
 function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): boolean {
@@ -1179,6 +1280,16 @@ function modelOptionDisplayLabel(
   option: ChatModelOption,
   providerRecord: ProviderCatalogRecord | null,
 ): string {
+  if (option.uiSection === 'empyralis' && EMPYRALIS_TIER_SET.has(readString(option.id).toLowerCase())) {
+    return `${option.label} · Empyralis credits`;
+  }
+  if (
+    option.uiSection === 'local_ai'
+    || option.uiSection === 'my_api_key'
+    || option.uiSection === 'my_ai_account'
+  ) {
+    return readString(option.label) || readString(option.id) || 'Model';
+  }
   const baseLabel = option.id ? compactComposerLabel(option.label, option.id) : option.label;
   const providerLabel = compactComposerLabel(option.providerLabel || readString(providerRecord?.label), option.providerId || '');
   const routeSuffix = providerRouteSuffix(providerRecord);
@@ -1205,6 +1316,7 @@ function modelOptionDisplayLabel(
 
 function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const tierPolicy = normalizeChatModelTierPolicy(record.model_tier_policy);
   const providers = Array.isArray(record.providers)
     ? record.providers.filter((item): item is ProviderCatalogRecord => Boolean(item) && typeof item === 'object')
     : [];
@@ -1214,36 +1326,102 @@ function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
     return [disconnectedModelOption()];
   }
 
-  const workspaceDefault = workspaceDefaultModelOption(connectedProviders);
-  const seen = new Set<string>();
+  const hostedProviders = connectedProviders.filter((provider) => providerRouteKind(provider) === 'empyralis');
+  const userOwnedProviders = connectedProviders.filter((provider) => providerRouteKind(provider) !== 'empyralis');
+  const hostedProvider = hostedProviders[0] ?? null;
+  const allowedHostedTiers = EMPYRALIS_TIER_IDS.filter((tierId) => tierPolicy.tierAllowed[tierId]);
+  const tierOptions: ChatModelOption[] = hostedProvider ? allowedHostedTiers.map((tierId) => {
+    const preferredModelId = tierId === 'light' ? 'deepseek-v4-flash' : 'deepseek-v4-pro';
+    const models = Array.isArray(hostedProvider.models)
+      ? hostedProvider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
+      : [];
+    const routeModel = models.find((item) => readString(item.id).toLowerCase() === preferredModelId) ?? null;
+    const routeModelId = tierId;
+    const contextWindowTokens = resolveModelContextWindow(
+      routeModel?.id,
+      Number(routeModel?.context_window_tokens ?? 0) || null,
+    );
+    const reasoningLevels: ChatReasoningEffort[] = tierId === 'light'
+      ? ['medium']
+      : tierId === 'pro'
+        ? ['high']
+        : ['max'];
+    const defaultReasoningEffort: ChatReasoningEffort = tierId === 'light'
+      ? 'medium'
+      : tierId === 'pro'
+        ? 'high'
+        : 'max';
+    return {
+      id: tierId,
+      label: EMPYRALIS_TIER_LABELS[tierId],
+      providerId: readString(hostedProvider.id) || 'empyralis',
+      providerLabel: readString(hostedProvider.label) || 'Empyralis',
+      routeProviderId: 'empyralis',
+      routeModelId,
+      supportsReasoning: true,
+      reasoningLevels,
+      contextWindowTokens,
+      defaultReasoningEffort,
+      uiSection: 'empyralis',
+    };
+  }) : [];
 
-  const options = connectedProviders.flatMap((provider) => {
+  const userOwnedOptions = userOwnedProviders.flatMap((provider) => {
     const models = Array.isArray(provider.models)
       ? provider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
       : [];
-    const providerId = readString(provider.id) || null;
+    const providerId = readString(provider.id);
     const providerLabel = readString(provider.label) || providerId;
-
+    const routeKind = providerRouteKind(provider);
+    if (routeKind === 'empyralis') {
+      return [];
+    }
+    if (!tierPolicy.userOwnedAllowed[routeKind]) {
+      return [];
+    }
+    const routePathLabel = routeKind === 'local_ai'
+      ? 'This Computer'
+      : routeKind === 'my_ai_account'
+        ? 'My AI Account'
+        : 'My API Key';
     return models.flatMap((model) => {
       const modelId = readString(model.id);
-      if (!modelId || seen.has(modelId)) {
+      if (!modelId || !providerId) {
         return [];
       }
-      seen.add(modelId);
       const supportsReasoning = model.supports_reasoning !== false;
+      const label = `${providerLabel} · ${readString(model.label) || modelId} · ${routePathLabel}`;
+      const defaultReasoningEffort: ChatReasoningEffort | null = supportsReasoning ? 'medium' : null;
       return [{
-        id: modelId,
-        label: readString(model.label) || modelId,
-        providerId: readString(model.provider) || providerId,
+        id: `${routeKind}:${providerId}:${modelId}`,
+        label,
+        providerId,
         providerLabel: providerLabel || null,
+        routeProviderId: providerId,
+        routeModelId: modelId,
         supportsReasoning,
         reasoningLevels: resolveReasoningLevels(model, providerId, modelId, supportsReasoning),
         contextWindowTokens: resolveModelContextWindow(modelId, Number(model.context_window_tokens ?? 0) || null),
+        defaultReasoningEffort,
+        uiSection: routeKind,
       }];
     });
   });
 
-  return [workspaceDefault, ...options];
+  const uniqueUserOwned = new Map<string, ChatModelOption>();
+  for (const option of userOwnedOptions) {
+    if (!uniqueUserOwned.has(option.id)) {
+      uniqueUserOwned.set(option.id, option);
+    }
+  }
+  const normalizedUserOwned = Array.from(uniqueUserOwned.values());
+  if (tierOptions.length > 0) {
+    return [...tierOptions, ...normalizedUserOwned];
+  }
+  if (normalizedUserOwned.length > 0) {
+    return normalizedUserOwned;
+  }
+  return [disconnectedModelOption()];
 }
 
 function compactComposerLabel(label: string, fallback: string): string {
@@ -1263,6 +1441,171 @@ function compactComposerLabel(label: string, fallback: string): string {
 
   const trimmed = source.split(/[(/]/, 1)[0]?.trim() || source;
   return trimmed.length > 18 ? `${trimmed.slice(0, 18).trim()}…` : trimmed;
+}
+
+function normalizeHostedCreditValueForChat(
+  record: Record<string, unknown>,
+  usdKey: string,
+  creditKey: string,
+): number {
+  const explicitCredits = readNumber(record[creditKey], Number.NaN);
+  if (Number.isFinite(explicitCredits)) {
+    return Math.max(0, explicitCredits);
+  }
+  const creditsPerUsd = Math.max(1, readNumber(record.credits_per_usd, 1000));
+  return Math.max(0, readNumber(record[usdKey], 0) * creditsPerUsd);
+}
+
+function normalizeHostedCreditStateForChat(summary: Record<string, unknown> | null): ChatHostedCreditState {
+  const hosted = readObject(summary?.hosted_sage_ai);
+  return {
+    monthlyCreditCap: normalizeHostedCreditValueForChat(hosted, 'monthly_cap_usd', 'monthly_credit_cap'),
+    monthlyCreditsUsed: normalizeHostedCreditValueForChat(hosted, 'monthly_cost_usd', 'monthly_credits_used'),
+    monthlyCreditsRemaining: normalizeHostedCreditValueForChat(hosted, 'monthly_remaining_usd', 'monthly_credits_remaining'),
+  };
+}
+
+function hasArtifactStorageIntent(message: string): boolean {
+  const normalized = readString(message).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return [
+    'screenshot',
+    'recording',
+    'artifact',
+    'download',
+    'export',
+    'pdf',
+    'csv',
+    'save file',
+    'upload file',
+    'trace',
+  ].some((marker) => normalized.includes(marker));
+}
+
+function resolveVirtualRuntimeKind(
+  executionPlacement: string,
+  message: string,
+): 'virtual_browser' | 'virtual_desktop' | 'virtual_code_sandbox' | null {
+  const runtimeToken = readString(executionPlacement).toLowerCase();
+  const draftToken = readString(message).toLowerCase();
+  if (runtimeToken.includes('virtual_desktop')) {
+    return 'virtual_desktop';
+  }
+  if (runtimeToken.includes('virtual_code_sandbox') || runtimeToken.includes('sandbox')) {
+    return 'virtual_code_sandbox';
+  }
+  if (runtimeToken.includes('virtual_browser') || runtimeToken.includes('browser')) {
+    return 'virtual_browser';
+  }
+  if (
+    runtimeToken.includes('cloud')
+    && [
+      'website',
+      'portal',
+      'browser',
+      'crawl',
+      'scrape',
+      'monitor',
+      'web',
+    ].some((marker) => draftToken.includes(marker))
+  ) {
+    return 'virtual_browser';
+  }
+  return null;
+}
+
+function estimatedAiTierCredits(tierId: string, draft: string): number {
+  const tier = readString(tierId).toLowerCase() as typeof EMPYRALIS_TIER_IDS[number];
+  if (!EMPYRALIS_TIER_SET.has(tier)) {
+    return 0;
+  }
+  const base = EMPYRALIS_TIER_ESTIMATED_CREDITS[tier];
+  const draftLength = Math.max(0, readString(draft).length);
+  const lengthMultiplier = Math.min(2.5, 1 + draftLength / 1600);
+  return Math.max(0, Math.round(base * lengthMultiplier));
+}
+
+function buildPreRunCostEstimate({
+  selectedModelOption,
+  selectedExecutionPlacement,
+  draft,
+  hostedCreditState,
+}: {
+  selectedModelOption: ChatModelOption;
+  selectedExecutionPlacement: string;
+  draft: string;
+  hostedCreditState: ChatHostedCreditState;
+}): ComposerPreRunCostEstimate | null {
+  const selectedTierId = readString(selectedModelOption.id).toLowerCase();
+  const hostedTierSelected = selectedModelOption.uiSection === 'empyralis'
+    && EMPYRALIS_TIER_SET.has(selectedTierId as typeof EMPYRALIS_TIER_IDS[number]);
+  const aiCredits = hostedTierSelected ? estimatedAiTierCredits(selectedTierId, draft) : 0;
+  const virtualRuntimeKind = resolveVirtualRuntimeKind(selectedExecutionPlacement, draft);
+  const runtimeCredits = virtualRuntimeKind ? VIRTUAL_RUNTIME_ESTIMATED_CREDITS[virtualRuntimeKind] : 0;
+  const artifactCredits = hasArtifactStorageIntent(draft) ? ARTIFACT_ESTIMATED_CREDITS : 0;
+  const totalCredits = Math.max(0, aiCredits + runtimeCredits + artifactCredits);
+
+  const detailParts: string[] = [];
+  if (aiCredits > 0) {
+    detailParts.push(`${readString(selectedModelOption.label) || 'Pro'} AI`);
+  } else if (selectedModelOption.uiSection === 'my_api_key') {
+    detailParts.push('My API Key route');
+  } else if (selectedModelOption.uiSection === 'my_ai_account') {
+    detailParts.push('My AI Account route');
+  } else if (selectedModelOption.uiSection === 'local_ai') {
+    detailParts.push('Local AI route');
+  }
+  if (runtimeCredits > 0) {
+    if (virtualRuntimeKind === 'virtual_browser') {
+      detailParts.push('virtual browser time');
+    } else if (virtualRuntimeKind === 'virtual_desktop') {
+      detailParts.push('virtual desktop time');
+    } else {
+      detailParts.push('virtual code sandbox time');
+    }
+  }
+  if (artifactCredits > 0) {
+    detailParts.push('artifact/storage');
+  }
+
+  const warnings: string[] = [];
+  if (hostedTierSelected && hostedCreditState.monthlyCreditCap > 0) {
+    const utilization = hostedCreditState.monthlyCreditsUsed / hostedCreditState.monthlyCreditCap;
+    if (utilization >= 0.85) {
+      warnings.push('Monthly cap near limit');
+    }
+    if (hostedCreditState.monthlyCreditsRemaining <= Math.max(totalCredits * 3, 75)) {
+      warnings.push('Low balance');
+    }
+  }
+  if (selectedTierId === 'max') {
+    warnings.push('Max tier cost warning');
+  }
+  if (
+    runtimeCredits > 0
+    && (
+      readString(draft).length > 300
+      || /(monitor|crawl|scrape|batch|all pages|every item|run all)/i.test(draft)
+    )
+  ) {
+    warnings.push('Long virtual computer task warning');
+  }
+
+  const detail = detailParts.length > 0
+    ? `Includes ${detailParts.join(' + ')}`
+    : 'No hosted AI credits expected for this route';
+
+  if (!readString(draft) && warnings.length === 0) {
+    return null;
+  }
+
+  return {
+    estimateLabel: `Estimated: ~${Math.max(0, Math.round(totalCredits))} credits`,
+    detail,
+    warnings,
+  };
 }
 
 function inferReasoningLevels(
@@ -1340,6 +1683,8 @@ function reasoningLabel(value: ChatReasoningEffort): string {
       return 'High';
     case 'xhigh':
       return 'Extra high';
+    case 'max':
+      return 'Max';
     default:
       return 'Medium';
   }
@@ -2220,11 +2565,13 @@ function resolveProviderModelContext({
   selectedModelId,
   selectedModelLabel,
   selectedProviderId,
+  modelOptions,
 }: {
   providers: ProviderCatalogRecord[];
   selectedModelId: string;
   selectedModelLabel: string;
   selectedProviderId: string | null;
+  modelOptions: ChatModelOption[];
 }): {
   providerId: string | null;
   providerLabel: string | null;
@@ -2234,6 +2581,9 @@ function resolveProviderModelContext({
   const availableProviders = sortLaunchChatProviders(providers.filter(isProviderEligibleForModelSelector));
   const workspaceDefaultProviders = sortLaunchChatProviders(providers.filter(isProviderEligibleForWorkspaceDefault));
   const normalizedSelectedProviderId = readString(selectedProviderId);
+  const selectedOption = modelOptions.find((option) => option.id === selectedModelId) ?? null;
+  const selectedRouteProviderId = readString(selectedOption?.routeProviderId || selectedOption?.providerId);
+  const selectedRouteModelId = readString(selectedOption?.routeModelId || selectedModelId);
 
   const findModelInProvider = (provider: ProviderCatalogRecord, modelId: string) => {
     const models = Array.isArray(provider.models)
@@ -2243,6 +2593,16 @@ function resolveProviderModelContext({
   };
 
   if (selectedModelId !== 'default') {
+    if (selectedOption && selectedRouteProviderId && selectedRouteModelId) {
+      const providerRecord = availableProviders.find((provider) => readString(provider.id) === selectedRouteProviderId) ?? null;
+      const providerLabel = readString(providerRecord?.label) || readString(selectedOption.providerLabel) || selectedRouteProviderId;
+      return {
+        providerId: selectedRouteProviderId,
+        providerLabel: providerLabel || null,
+        modelLabel: readString(selectedOption.label) || selectedModelLabel || selectedRouteModelId,
+        modelId: selectedRouteModelId,
+      };
+    }
     for (const provider of availableProviders) {
       const model = findModelInProvider(provider, selectedModelId);
       if (!model) {
@@ -2315,6 +2675,9 @@ function resolvePersistedSelectedModelId({
   profiles: ProviderProfileRecord[];
   modelOptions: ChatModelOption[];
 }): string {
+  const optionById = new Map(
+    modelOptions.map((option) => [readString(option.id), option] as const),
+  );
   const availableModelIds = new Set(
     modelOptions
       .map((option) => readString(option.id))
@@ -2334,9 +2697,22 @@ function resolvePersistedSelectedModelId({
     }
     const metadata = profileMetadataRecord(profile);
     const selectionMode = readString(metadata.chat_model_selection).toLowerCase();
+    const modelTier = readString(metadata.chat_model_tier).toLowerCase();
+    if (selectionMode === 'explicit' && modelTier && availableModelIds.has(modelTier)) {
+      return modelTier;
+    }
     const modelId = readString(profile.model);
     if (selectionMode === 'explicit' && modelId && availableModelIds.has(modelId)) {
       return modelId;
+    }
+    if (selectionMode === 'explicit' && modelId) {
+      const matchingOption = modelOptions.find((option) =>
+        readString(option.routeProviderId || option.providerId) === providerId
+        && readString(option.routeModelId || option.id) === modelId
+      );
+      if (matchingOption && optionById.has(readString(matchingOption.id))) {
+        return readString(matchingOption.id);
+      }
     }
   }
 
@@ -2483,6 +2859,7 @@ export function WorkstationChatPane() {
     pendingDeleteMemoryId,
     setPendingDeleteMemoryId,
   } = useChatMemoryEditorState(defaultSageMemoryDraft());
+  const [billingSummary, setBillingSummary] = useState<Record<string, unknown> | null>(null);
   const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
@@ -2589,6 +2966,13 @@ export function WorkstationChatPane() {
     setBrowserGatewayDoctor(doctorPayload && typeof doctorPayload === 'object' ? doctorPayload : null);
   }, [bootstrap.workspace.id, services.client, services.queryClient]);
 
+  const refreshBillingSummary = useCallback(async () => {
+    const payload = await services.queryClient.run('chat:billing-summary', async () => {
+      return await services.client.getBillingSummary();
+    }).catch(() => null);
+    setBillingSummary(payload && typeof payload === 'object' ? payload : null);
+  }, [services.client, services.queryClient]);
+
   const persistSelectedModelPreference = useCallback(async (nextModelId: string) => {
     const sortedProfiles = sortProviderProfiles(providerProfiles).filter((profile) => {
       const providerId = readString(profile.provider);
@@ -2603,7 +2987,7 @@ export function WorkstationChatPane() {
     const targetOption = nextModelId === 'default'
       ? null
       : modelOptions.find((option) => option.id === nextModelId) ?? null;
-    const targetProviderId = readString(targetOption?.providerId);
+    const targetProviderId = readString(targetOption?.providerId || targetOption?.routeProviderId);
     const targetProfile = targetProviderId
       ? sortedProfiles.find((profile) => readString(profile.provider) === targetProviderId && profile.enabled !== false) ?? null
       : null;
@@ -2613,9 +2997,17 @@ export function WorkstationChatPane() {
     }
 
     await Promise.all(sortedProfiles.map((profile) => {
+      const optionIsSelected = readString(profile.id) === readString(targetProfile?.id);
+      const selectedTier = optionIsSelected
+        && targetOption
+        && targetOption.uiSection === 'empyralis'
+        && EMPYRALIS_TIER_SET.has(readString(targetOption.id).toLowerCase())
+        ? readString(targetOption.id).toLowerCase()
+        : null;
       const metadata = {
         ...profileMetadataRecord(profile),
-        chat_model_selection: readString(profile.id) === readString(targetProfile?.id) ? 'explicit' : 'default',
+        chat_model_selection: optionIsSelected ? 'explicit' : 'default',
+        chat_model_tier: selectedTier,
       };
       return services.client.upsertProviderProfile({
         id: readString(profile.id) || null,
@@ -2625,8 +3017,8 @@ export function WorkstationChatPane() {
         authMode: readString(profile.auth_mode) || null,
         priority: Number(profile.priority ?? 100),
         enabled: profile.enabled !== false,
-        model: readString(profile.id) === readString(targetProfile?.id)
-          ? readString(targetOption?.id) || readString(profile.model) || null
+        model: optionIsSelected
+          ? readString(targetOption?.routeModelId || targetOption?.id) || readString(profile.model) || null
           : readString(profile.model) || null,
         metadata,
       });
@@ -3266,6 +3658,10 @@ export function WorkstationChatPane() {
       supportsReasoning: false,
       reasoningLevels: ['low', 'medium', 'high'],
       contextWindowTokens: null,
+      routeProviderId: null,
+      routeModelId: null,
+      defaultReasoningEffort: 'medium',
+      uiSection: 'system',
     },
     [modelOptions, selectedModel],
   );
@@ -3281,8 +3677,9 @@ export function WorkstationChatPane() {
       selectedModelId: effectiveSelectedModel,
       selectedModelLabel: selectedModelOption.label,
       selectedProviderId: selectedModelOption.providerId,
+      modelOptions,
     }),
-    [effectiveSelectedModel, providerCatalog, selectedModelOption.label, selectedModelOption.providerId],
+    [effectiveSelectedModel, modelOptions, providerCatalog, selectedModelOption.label, selectedModelOption.providerId],
   );
   const selectedProviderRecord = useMemo(
     () => providerCatalog.find((provider) => readString(provider.id) === readString(selectedProviderContext.providerId)) ?? null,
@@ -3467,42 +3864,40 @@ export function WorkstationChatPane() {
   );
   const composerModelOptions = useMemo(
     () => {
-      const connectedProviders = sortLaunchChatProviders(providerCatalog.filter(isProviderEligibleForModelSelector));
       const providerById = new Map(
         providerCatalog.map((provider) => [readString(provider.id), provider] as const),
       );
-      if (connectedProviders.length <= 1) {
-        return modelOptions.map((option) => ({
-          value: option.id,
-          label: modelOptionDisplayLabel(option, providerById.get(readString(option.providerId)) ?? null),
-          disabled: !option.id,
-        }));
-      }
-
       const groupedOptions: ({ value: string; label: string; disabled: boolean } | { label: string; options: { value: string; label: string; disabled: boolean }[] })[] = [];
-      const defaultOption = modelOptions.find((option) => option.id === 'default') ?? null;
-      if (defaultOption) {
-        groupedOptions.push({
-          value: defaultOption.id,
-          label: modelOptionDisplayLabel(defaultOption, providerById.get(readString(defaultOption.providerId)) ?? null),
-          disabled: !defaultOption.id,
-        });
-      }
-      for (const provider of connectedProviders) {
-        const providerId = readString(provider.id);
-        const providerLabel = readString(provider.label) || providerId;
-        const options = modelOptions
-          .filter((option) => option.id !== 'default' && option.providerId === providerId)
+      const sectionOrder: Array<'empyralis' | 'local_ai' | 'my_api_key' | 'my_ai_account'> = [
+        'empyralis',
+        'local_ai',
+        'my_api_key',
+        'my_ai_account',
+      ];
+      for (const section of sectionOrder) {
+        const sectionItems = modelOptions
+          .filter((option) => option.id !== 'default' && option.uiSection === section)
           .map((option) => ({
             value: option.id,
-            label: modelOptionDisplayLabel(option, provider),
+            label: modelOptionDisplayLabel(option, providerById.get(readString(option.providerId)) ?? null),
             disabled: !option.id,
           }));
-        if (options.length > 0) {
-          groupedOptions.push({
-            label: providerLabel,
-            options,
-          });
+        if (sectionItems.length === 0) {
+          continue;
+        }
+        groupedOptions.push({
+          label: section === 'empyralis' ? 'Empyralis credits' : USER_OWNED_SECTION_LABELS[section],
+          options: sectionItems,
+        });
+      }
+      if (groupedOptions.length === 0) {
+        const defaultOption = modelOptions.find((option) => option.id === 'default') ?? null;
+        if (defaultOption) {
+          return [{
+            value: defaultOption.id,
+            label: modelOptionDisplayLabel(defaultOption, providerById.get(readString(defaultOption.providerId)) ?? null),
+            disabled: !defaultOption.id,
+          }];
         }
       }
       return groupedOptions;
@@ -3619,10 +4014,13 @@ export function WorkstationChatPane() {
   );
   const localRuntimeTargetId = localCompanionOnline ? readString(localRuntimeTarget?.id) : null;
   const defaultReasoningEffort = useMemo<ChatReasoningEffort>(
-    () => (selectedModelOption.reasoningLevels.includes('medium')
+    () => (selectedModelOption.defaultReasoningEffort
+      && selectedModelOption.reasoningLevels.includes(selectedModelOption.defaultReasoningEffort)
+      ? selectedModelOption.defaultReasoningEffort
+      : selectedModelOption.reasoningLevels.includes('medium')
       ? 'medium'
       : selectedModelOption.reasoningLevels[0] ?? 'medium'),
-    [selectedModelOption.reasoningLevels],
+    [selectedModelOption.defaultReasoningEffort, selectedModelOption.reasoningLevels],
   );
   const contextReasoningLabel = useMemo(() => {
     switch (reasoningEffort) {
@@ -3677,6 +4075,15 @@ export function WorkstationChatPane() {
     }
     return pills;
   }, [browserGatewayDoctor, localToolingOnline, selectedProviderContext.providerLabel]);
+  const preRunCostEstimate = useMemo<ComposerPreRunCostEstimate | null>(
+    () => buildPreRunCostEstimate({
+      selectedModelOption,
+      selectedExecutionPlacement,
+      draft,
+      hostedCreditState: normalizeHostedCreditStateForChat(billingSummary),
+    }),
+    [billingSummary, draft, selectedExecutionPlacement, selectedModelOption],
+  );
   const showContextStrip = false;
   const showHeaderReadinessStrip = false;
 
@@ -3691,10 +4098,11 @@ export function WorkstationChatPane() {
       });
     void refreshToolingState().catch(() => undefined);
     void refreshBrowserGatewayReadiness().catch(() => undefined);
+    void refreshBillingSummary().catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
+  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
 
   useEffect(() => subscribeWorkstationProviderChanged((detail) => {
     if (detail.workspaceId !== bootstrap.workspace.id) {
@@ -3703,7 +4111,8 @@ export function WorkstationChatPane() {
     void refreshProviderCatalog();
     void refreshToolingState();
     void refreshBrowserGatewayReadiness();
-  }), [bootstrap.workspace.id, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
+    void refreshBillingSummary();
+  }), [bootstrap.workspace.id, refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -3713,12 +4122,14 @@ export function WorkstationChatPane() {
       void refreshProviderCatalog();
       void refreshToolingState();
       void refreshBrowserGatewayReadiness();
+      void refreshBillingSummary();
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void refreshProviderCatalog();
         void refreshToolingState();
         void refreshBrowserGatewayReadiness();
+        void refreshBillingSummary();
       }
     };
     window.addEventListener('focus', handleFocus);
@@ -3727,7 +4138,7 @@ export function WorkstationChatPane() {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
+  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
 
   useEffect(() => {
     if (isPersistingModelSelection) {
@@ -3743,18 +4154,23 @@ export function WorkstationChatPane() {
 
   useEffect(() => {
     if (!selectedModelOption.reasoningLevels.includes(reasoningEffort)) {
-      setReasoningEffort(selectedModelOption.reasoningLevels.includes('medium')
-        ? 'medium'
-        : selectedModelOption.reasoningLevels[0] ?? 'medium');
+      setReasoningEffort(defaultReasoningEffort);
     }
-  }, [reasoningEffort, selectedModelOption.reasoningLevels]);
+  }, [defaultReasoningEffort, reasoningEffort, selectedModelOption.reasoningLevels]);
 
   const handleModelChange = useCallback((nextModelId: string) => {
     if (!nextModelId || nextModelId === selectedModel || isSending || isPersistingModelSelection) {
       return;
     }
     const previousModelId = selectedModel;
+    const nextOption = modelOptions.find((option) => option.id === nextModelId) ?? null;
     setSelectedModel(nextModelId);
+    if (
+      nextOption?.defaultReasoningEffort
+      && nextOption.reasoningLevels.includes(nextOption.defaultReasoningEffort)
+    ) {
+      setReasoningEffort(nextOption.defaultReasoningEffort);
+    }
     setStatusMessage(null);
     setIsPersistingModelSelection(true);
     void persistSelectedModelPreference(nextModelId)
@@ -3780,7 +4196,9 @@ export function WorkstationChatPane() {
     persistSelectedModelPreference,
     refreshProviderCatalog,
     selectedModel,
+    setReasoningEffort,
     services.queryClient,
+    modelOptions,
   ]);
 
   const finalizePartialAssistantResponse = useCallback((threadId: string) => {
@@ -4818,6 +5236,7 @@ export function WorkstationChatPane() {
         smallModelWarning={smallModelWarningVisible
           ? "You're using a small model. For best results with tools and complex tasks, we recommend switching to a larger model (7B+)."
           : null}
+        preRunCostEstimate={preRunCostEstimate}
         onDismissSmallModelWarning={() => {
           setSmallModelWarningVisible(false);
         }}

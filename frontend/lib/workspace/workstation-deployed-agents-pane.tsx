@@ -74,6 +74,10 @@ type WizardState = {
   persona: string;
   systemPrompt: string;
   knowledgeSourceText: string;
+  aiTier: 'light' | 'pro' | 'max';
+  runtimePlacement: 'cloud' | 'local_computer' | 'virtual_computer';
+  approvalMode: 'guarded' | 'balanced' | 'autonomous';
+  customerChannel: 'telegram' | 'whatsapp' | 'web_widget' | 'draft';
   telegramEnabled: boolean;
   telegramConnectorId: string;
   telegramEndpointKey: string;
@@ -295,8 +299,38 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   {
     id: 'deploy',
     label: 'Launch settings',
-    description: 'Set spending guardrails. Advanced model and computer choices are optional.',
+    description: 'Choose AI tier, runtime, spending guardrails, and approval posture before launch.',
   },
+];
+
+const STUDIO_AI_TIER_OPTIONS: ReadonlyArray<{
+  value: WizardState['aiTier'];
+  label: string;
+  hint: string;
+}> = [
+  { value: 'light', label: 'Light', hint: 'Fast and low-cost for routine customer replies.' },
+  { value: 'pro', label: 'Pro', hint: 'Default quality for production customer support.' },
+  { value: 'max', label: 'Max', hint: 'Highest quality tier with higher credit burn.' },
+];
+
+const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
+  value: WizardState['runtimePlacement'];
+  label: string;
+  hint: string;
+}> = [
+  { value: 'cloud', label: 'Cloud', hint: 'Managed by Empyralis cloud runtime.' },
+  { value: 'local_computer', label: 'Local Computer', hint: 'Runs on your connected machine when needed.' },
+  { value: 'virtual_computer', label: 'Virtual Computer', hint: 'Runs inside isolated cloud computer sessions.' },
+];
+
+const STUDIO_APPROVAL_MODE_OPTIONS: ReadonlyArray<{
+  value: WizardState['approvalMode'];
+  label: string;
+  hint: string;
+}> = [
+  { value: 'guarded', label: 'Guarded', hint: 'Escalate early and require more owner confirmation.' },
+  { value: 'balanced', label: 'Balanced', hint: 'Default approval posture for most assistants.' },
+  { value: 'autonomous', label: 'Autonomous', hint: 'Allow more automated handling before handoff.' },
 ];
 
 const STUDIO_TOOL_OPTIONS: ReadonlyArray<{
@@ -959,6 +993,7 @@ function normalizeStudioTemplates(payload: unknown): StudioTemplate[] {
 }
 
 function applyStudioTemplate(state: WizardState, template: StudioTemplate): WizardState {
+  const usesTelegram = template.channelLabel.toLowerCase().includes('telegram');
   return {
     ...state,
     name: template.defaultName || state.name,
@@ -968,7 +1003,8 @@ function applyStudioTemplate(state: WizardState, template: StudioTemplate): Wiza
     selectedToolIds: template.selectedToolIds,
     memoryEnabled: template.memoryEnabled,
     contextBudgetPreset: template.contextBudgetPreset,
-    telegramEnabled: template.channelLabel.toLowerCase().includes('telegram'),
+    customerChannel: usesTelegram ? 'telegram' : state.customerChannel,
+    telegramEnabled: usesTelegram,
   };
 }
 
@@ -1167,6 +1203,142 @@ function formatDeploymentModelLabel(
   return model?.label ?? modelId ?? provider?.label ?? humanizeToken(providerId, providerId || 'Model');
 }
 
+function normalizeWizardAiTier(value: unknown): WizardState['aiTier'] {
+  const token = readString(value).toLowerCase().replace('-', '_');
+  if (token === 'light' || token === 'pro' || token === 'max') {
+    return token;
+  }
+  return 'pro';
+}
+
+function normalizeRuntimePlacement(value: unknown): WizardState['runtimePlacement'] {
+  const token = readString(value).toLowerCase().replace('-', '_');
+  if (token === 'local' || token === 'local_secure' || token === 'local_companion' || token === 'local_computer') {
+    return 'local_computer';
+  }
+  if (
+    token === 'virtual'
+    || token === 'virtual_computer'
+    || token === 'virtual_browser'
+    || token === 'virtual_desktop'
+    || token === 'virtual_code_sandbox'
+  ) {
+    return 'virtual_computer';
+  }
+  return 'cloud';
+}
+
+function runtimeTargetForPlacement(value: WizardState['runtimePlacement']): string {
+  if (value === 'local_computer') {
+    return 'local';
+  }
+  if (value === 'virtual_computer') {
+    return 'virtual_computer';
+  }
+  return 'cloud';
+}
+
+function normalizeApprovalModeFromPolicies(escalationPreset: unknown, handoffMode: unknown): WizardState['approvalMode'] {
+  const escalation = readString(escalationPreset).toLowerCase();
+  const handoff = readString(handoffMode).toLowerCase();
+  if (escalation === 'conservative' || handoff === 'pause_thread') {
+    return 'guarded';
+  }
+  if (escalation === 'autonomous' || handoff === 'summary_only') {
+    return 'autonomous';
+  }
+  return 'balanced';
+}
+
+function applyApprovalModeToWizardState(
+  mode: WizardState['approvalMode'],
+  current: Pick<WizardState, 'escalationPreset' | 'handoffMode'>,
+): Pick<WizardState, 'escalationPreset' | 'handoffMode'> {
+  if (mode === 'guarded') {
+    return {
+      escalationPreset: 'conservative',
+      handoffMode: 'pause_thread',
+    };
+  }
+  if (mode === 'autonomous') {
+    return {
+      escalationPreset: 'autonomous',
+      handoffMode: 'summary_only',
+    };
+  }
+  return {
+    escalationPreset: 'standard',
+    handoffMode: current.handoffMode === 'summary_only' ? 'notify_owner' : current.handoffMode || 'notify_owner',
+  };
+}
+
+function inferCustomerChannel(channels: Record<string, unknown>): WizardState['customerChannel'] {
+  if (readRecord(channels.telegram).enabled === true) {
+    return 'telegram';
+  }
+  if (readRecord(channels.whatsapp).enabled === true) {
+    return 'whatsapp';
+  }
+  if (readRecord(channels.web_widget).enabled === true) {
+    return 'web_widget';
+  }
+  return 'draft';
+}
+
+function inferAiTierFromProviderModel(providerId: string, modelId: string): WizardState['aiTier'] {
+  const provider = providerId.trim().toLowerCase();
+  const model = modelId.trim().toLowerCase();
+  if (provider === 'deepseek' && model.includes('flash')) {
+    return 'light';
+  }
+  if (provider === 'deepseek' && model.includes('pro')) {
+    return 'pro';
+  }
+  return 'pro';
+}
+
+function resolveProviderModelForTier(
+  tier: WizardState['aiTier'],
+  catalog: ProviderCatalogSnapshot[],
+): { providerId: string; modelId: string } {
+  const catalogByProvider = providerCatalogById(catalog);
+  const deepseek = catalogByProvider.deepseek ?? null;
+  if (deepseek && deepseek.models.length > 0) {
+    const preferredModelId = tier === 'light'
+      ? (
+        deepseek.models.find((item) => item.id === 'deepseek-v4-flash')
+        ?? deepseek.models.find((item) => item.id.toLowerCase().includes('flash'))
+        ?? deepseek.models[0]
+      )?.id
+      : (
+        deepseek.models.find((item) => item.id === 'deepseek-v4-pro')
+        ?? deepseek.models.find((item) => item.id.toLowerCase().includes('pro'))
+        ?? deepseek.models.find((item) => !item.id.toLowerCase().includes('flash'))
+        ?? deepseek.models[0]
+      )?.id;
+    if (preferredModelId) {
+      return {
+        providerId: deepseek.id,
+        modelId: preferredModelId,
+      };
+    }
+  }
+  const fallbackProvider = catalogByProvider.gemini ? catalogByProvider.gemini : catalog[0] ?? null;
+  if (!fallbackProvider) {
+    return {
+      providerId: '',
+      modelId: '',
+    };
+  }
+  const fallbackModel = fallbackProvider.defaultModel && fallbackProvider.models.some((item) => item.id === fallbackProvider.defaultModel)
+    ? fallbackProvider.defaultModel
+    : fallbackProvider.models[0]?.id || '';
+  return {
+    providerId: fallbackProvider.id,
+    modelId: fallbackModel,
+  };
+}
+
 function applyProviderCatalogDefaults(
   state: WizardState,
   catalog: ProviderCatalogSnapshot[],
@@ -1174,20 +1346,22 @@ function applyProviderCatalogDefaults(
   if (catalog.length === 0) {
     return state;
   }
+  const tierRoute = resolveProviderModelForTier(state.aiTier, catalog);
   const catalogByProvider = providerCatalogById(catalog);
-  const preferredProviderId = catalogByProvider.gemini ? 'gemini' : catalog[0]?.id || '';
+  const preferredProviderId = tierRoute.providerId || (catalogByProvider.gemini ? 'gemini' : catalog[0]?.id || '');
   const providerId = state.providerId && catalogByProvider[state.providerId]
     ? state.providerId
     : preferredProviderId;
   const provider = catalogByProvider[providerId] ?? null;
   const availableModels = provider?.models ?? [];
+  const preferredModelId = providerId === tierRoute.providerId ? tierRoute.modelId : '';
   const nextModelId = state.modelId && availableModels.some((item) => item.id === state.modelId)
     ? state.modelId
-    : availableModels.some((item) => item.id === 'gemini-2.5-flash')
-      ? 'gemini-2.5-flash'
-    : provider?.defaultModel && availableModels.some((item) => item.id === provider.defaultModel)
-      ? provider.defaultModel
-      : availableModels[0]?.id || '';
+    : preferredModelId && availableModels.some((item) => item.id === preferredModelId)
+      ? preferredModelId
+      : provider?.defaultModel && availableModels.some((item) => item.id === provider.defaultModel)
+        ? provider.defaultModel
+        : availableModels[0]?.id || '';
   if (providerId === state.providerId && nextModelId === state.modelId) {
     return state;
   }
@@ -1209,6 +1383,25 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   const commercePolicy = readRecord(config.commerce_policy);
   const escalationPolicy = readRecord(config.escalation_policy);
   const metadata = readRecord(agent?.metadata);
+  const providerId = readString(agent?.provider ?? metadata.provider);
+  const modelId = readString(agent?.model ?? metadata.model);
+  const aiTier = normalizeWizardAiTier(
+    metadata.public_tier
+    ?? metadata.model_tier
+    ?? metadata.empyralis_model_tier
+    ?? inferAiTierFromProviderModel(providerId, modelId),
+  );
+  const customerChannel = inferCustomerChannel(channels);
+  const runtimePlacement = normalizeRuntimePlacement(
+    metadata.runtime_placement
+    ?? metadata.studio_runtime
+    ?? metadata.runtime
+    ?? agent?.runtime_target,
+  );
+  const approvalMode = normalizeApprovalModeFromPolicies(
+    escalationPolicy.preset ?? metadata.escalation_preset,
+    escalationPolicy.handoff_mode ?? metadata.handoff_mode,
+  );
   const selectedToolIds = normalizeToolIds(readRecord(config.tool_policy).enabled_tools ?? metadata.selected_tool_ids);
   return {
     name: readString(agent?.name),
@@ -1221,12 +1414,16 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
         : '',
     ),
     knowledgeSourceText: serializeKnowledgeSources(agent?.knowledge_sources),
-    telegramEnabled: telegram.enabled === true,
+    aiTier,
+    runtimePlacement,
+    approvalMode,
+    customerChannel,
+    telegramEnabled: customerChannel === 'telegram' && telegram.enabled === true,
     telegramConnectorId: readString(telegram.connector_id ?? telegram.credential_id),
     telegramEndpointKey: readString(telegram.endpoint_key),
-    providerId: readString(agent?.provider ?? metadata.provider),
-    modelId: readString(agent?.model ?? metadata.model),
-    runtimeTarget: readString(agent?.runtime_target, 'cloud'),
+    providerId,
+    modelId,
+    runtimeTarget: readString(agent?.runtime_target, runtimeTargetForPlacement(runtimePlacement)),
     billingPlan: readString(agent?.billing_plan, 'free'),
     selectedToolIds: selectedToolIds.length > 0 ? selectedToolIds : ['spreadsheet_read', 'spreadsheet_append'],
     memoryEnabled: agent
@@ -1264,15 +1461,18 @@ function truncateExternalUserId(value: unknown): string {
 }
 
 function buildChannelPayload(state: WizardState): Record<string, unknown> {
+  const telegramEnabled = state.customerChannel === 'telegram' && state.telegramEnabled;
+  const whatsappEnabled = state.customerChannel === 'whatsapp';
+  const webWidgetEnabled = state.customerChannel === 'web_widget';
   return {
     telegram: {
-      enabled: state.telegramEnabled,
+      enabled: telegramEnabled,
       connector_id: state.telegramConnectorId.trim() || undefined,
       credential_id: state.telegramConnectorId.trim() || undefined,
       endpoint_key: state.telegramEndpointKey.trim() || undefined,
     },
     whatsapp: {
-      enabled: false,
+      enabled: whatsappEnabled,
       availability: 'roadmap',
     },
     instagram: {
@@ -1280,7 +1480,7 @@ function buildChannelPayload(state: WizardState): Record<string, unknown> {
       availability: 'roadmap',
     },
     web_widget: {
-      enabled: false,
+      enabled: webWidgetEnabled,
       availability: 'roadmap',
     },
   };
@@ -2396,12 +2596,9 @@ export function WorkstationDeployedAgentsPane({
   async function persistWizard() {
     const dailyMessageLimit = wizardState.dailyMessageLimit.trim();
     const monthlyCostCapUsd = wizardState.monthlyCostCapUsd.trim();
-    if (!wizardState.providerId.trim()) {
-      setErrorMessage('Choose an AI model provider before saving this assistant.');
-      return;
-    }
-    if (!wizardState.modelId.trim()) {
-      setErrorMessage('Choose a model before saving this assistant.');
+    const route = resolveProviderModelForTier(wizardState.aiTier, providerCatalog);
+    if (!route.providerId || !route.modelId) {
+      setErrorMessage('AI tier route is unavailable. Refresh provider catalog and try again.');
       return;
     }
     if (dailyMessageLimit) {
@@ -2426,10 +2623,15 @@ export function WorkstationDeployedAgentsPane({
         return;
       }
     }
-    if (wizardState.telegramEnabled && !wizardState.telegramConnectorId.trim()) {
+    if (wizardState.customerChannel === 'telegram' && wizardState.telegramEnabled && !wizardState.telegramConnectorId.trim()) {
       setErrorMessage('Choose a Telegram connected app before saving a live-ready assistant.');
       return;
     }
+    const approvalPolicy = applyApprovalModeToWizardState(wizardState.approvalMode, {
+      escalationPreset: wizardState.escalationPreset,
+      handoffMode: wizardState.handoffMode,
+    });
+    const resolvedRuntimeTarget = runtimeTargetForPlacement(wizardState.runtimePlacement);
     const payload = {
       name: wizardState.name.trim(),
       avatar: wizardState.avatar.trim() || null,
@@ -2437,11 +2639,24 @@ export function WorkstationDeployedAgentsPane({
       systemPrompt: wizardState.systemPrompt.trim(),
       channels: buildChannelPayload(wizardState),
       knowledgeSources: parseKnowledgeSources(wizardState.knowledgeSourceText),
-      runtimeTarget: wizardState.runtimeTarget,
+      runtimeTarget: resolvedRuntimeTarget,
       billingPlan: wizardState.billingPlan,
-      provider: wizardState.providerId,
-      model: wizardState.modelId,
-      config: buildDeploymentConfig(wizardState),
+      provider: route.providerId,
+      model: route.modelId,
+      config: buildDeploymentConfig({
+        ...wizardState,
+        runtimeTarget: resolvedRuntimeTarget,
+        escalationPreset: approvalPolicy.escalationPreset,
+        handoffMode: approvalPolicy.handoffMode,
+      }),
+      metadata: {
+        public_tier: wizardState.aiTier,
+        model_tier: wizardState.aiTier,
+        empyralis_model_tier: wizardState.aiTier,
+        runtime_placement: wizardState.runtimePlacement,
+        approval_mode: wizardState.approvalMode,
+        customer_channel: wizardState.customerChannel,
+      },
     };
 
     if (!payload.name) {
@@ -3922,10 +4137,14 @@ export function WorkstationDeployedAgentsPane({
                         </FormField>
                         <FormField label="Primary customer channel" hint="You can connect the exact bot or inbox later.">
                           <FormSelect
-                            value={wizardState.telegramEnabled ? 'telegram' : 'draft'}
+                            value={wizardState.customerChannel}
                             onChange={(event) => {
-                              const nextChannel = event.currentTarget.value;
-                              setWizardField('telegramEnabled', nextChannel === 'telegram');
+                              const nextChannel = event.currentTarget.value as WizardState['customerChannel'];
+                              setWizardState((current) => ({
+                                ...current,
+                                customerChannel: nextChannel,
+                                telegramEnabled: nextChannel === 'telegram' ? current.telegramEnabled : false,
+                              }));
                             }}
                           >
                             <option value="draft">Draft only</option>
@@ -4106,7 +4325,16 @@ export function WorkstationDeployedAgentsPane({
                     <FormField label="Telegram state" hint="Enable Telegram when this assistant is ready for live customer conversations.">
                       <FormSelect
                         value={wizardState.telegramEnabled ? 'enabled' : 'disabled'}
-                        onChange={(event) => setWizardField('telegramEnabled', event.currentTarget.value === 'enabled')}
+                        onChange={(event) => {
+                          const enabled = event.currentTarget.value === 'enabled';
+                          setWizardState((current) => ({
+                            ...current,
+                            telegramEnabled: enabled,
+                            customerChannel: enabled
+                              ? 'telegram'
+                              : (current.customerChannel === 'telegram' ? 'draft' : current.customerChannel),
+                          }));
+                        }}
                       >
                         <option value="disabled">Keep disabled</option>
                         <option value="enabled">Ready for live deploy</option>
@@ -4290,7 +4518,7 @@ export function WorkstationDeployedAgentsPane({
                   <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                     <FormReadout label="Template" value={selectedStudioTemplate.title} />
                     <FormReadout label="Assistant name" value={wizardState.name || 'Not named'} />
-                    <FormReadout label="Channel" value={wizardState.telegramEnabled ? 'Telegram enabled' : 'Draft only'} />
+                    <FormReadout label="Channel" value={wizardState.customerChannel === 'telegram' ? 'Telegram bot' : wizardState.customerChannel === 'draft' ? 'Draft only' : humanizeToken(wizardState.customerChannel, 'Draft only')} />
                     <FormReadout label="Knowledge" value={wizardState.knowledgeSourceText.trim() ? 'Source added' : 'Add later'} />
                     <FormReadout label="Actions" value={`${wizardState.selectedToolIds.length} enabled`} />
                     <FormReadout label="Memory" value={wizardState.memoryEnabled ? 'Enabled' : 'Disabled'} />
@@ -4302,11 +4530,105 @@ export function WorkstationDeployedAgentsPane({
                 <div className="app-stack-3">
                   <StateBanner
                     tone="neutral"
-                    title="Default launch settings are selected automatically"
-                    detail="Most business owners only need the spending limits below. Open advanced settings only if you want to change model or computer choices."
+                    title="Launch contract for this business assistant"
+                    detail="Set AI tier, runtime, budget cap, approval mode, and customer channel. Raw provider/model is kept in advanced overrides."
                   />
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="AI tier" hint="Product-level capability for this assistant.">
+                      <FormSelect
+                        value={wizardState.aiTier}
+                        onChange={(event) => {
+                          const nextTier = normalizeWizardAiTier(event.currentTarget.value);
+                          const route = resolveProviderModelForTier(nextTier, providerCatalog);
+                          setWizardState((current) => ({
+                            ...current,
+                            aiTier: nextTier,
+                            providerId: route.providerId || current.providerId,
+                            modelId: route.modelId || current.modelId,
+                          }));
+                        }}
+                      >
+                        {STUDIO_AI_TIER_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </FormSelect>
+                      <div className="app-surface-field-help">
+                        {STUDIO_AI_TIER_OPTIONS.find((item) => item.value === wizardState.aiTier)?.hint}
+                      </div>
+                    </FormField>
+                    <FormField label="Runtime" hint="Where this assistant executes actions.">
+                      <FormSelect
+                        value={wizardState.runtimePlacement}
+                        onChange={(event) => {
+                          const nextRuntime = normalizeRuntimePlacement(event.currentTarget.value);
+                          setWizardState((current) => ({
+                            ...current,
+                            runtimePlacement: nextRuntime,
+                            runtimeTarget: runtimeTargetForPlacement(nextRuntime),
+                          }));
+                        }}
+                      >
+                        {STUDIO_RUNTIME_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </FormSelect>
+                      <div className="app-surface-field-help">
+                        {STUDIO_RUNTIME_OPTIONS.find((item) => item.value === wizardState.runtimePlacement)?.hint}
+                      </div>
+                    </FormField>
+                    <FormField label="Approval mode" hint="How much autonomy this assistant gets before human handoff.">
+                      <FormSelect
+                        value={wizardState.approvalMode}
+                        onChange={(event) => {
+                          const nextMode = readString(event.currentTarget.value) as WizardState['approvalMode'];
+                          const normalizedMode = nextMode === 'guarded' || nextMode === 'autonomous' ? nextMode : 'balanced';
+                          const mapping = applyApprovalModeToWizardState(normalizedMode, {
+                            escalationPreset: wizardState.escalationPreset,
+                            handoffMode: wizardState.handoffMode,
+                          });
+                          setWizardState((current) => ({
+                            ...current,
+                            approvalMode: normalizedMode,
+                            escalationPreset: mapping.escalationPreset,
+                            handoffMode: mapping.handoffMode,
+                          }));
+                        }}
+                      >
+                        {STUDIO_APPROVAL_MODE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </FormSelect>
+                      <div className="app-surface-field-help">
+                        {STUDIO_APPROVAL_MODE_OPTIONS.find((item) => item.value === wizardState.approvalMode)?.hint}
+                      </div>
+                    </FormField>
+                    <FormField label="Customer channel" hint="Primary live channel for this assistant.">
+                      <FormSelect
+                        value={wizardState.customerChannel}
+                        onChange={(event) => {
+                          const nextChannel = readString(event.currentTarget.value) as WizardState['customerChannel'];
+                          setWizardState((current) => ({
+                            ...current,
+                            customerChannel: nextChannel,
+                            telegramEnabled: nextChannel === 'telegram' ? current.telegramEnabled : false,
+                          }));
+                        }}
+                      >
+                        <option value="telegram">Telegram bot</option>
+                        <option value="draft">Draft only</option>
+                        <option value="whatsapp" disabled>WhatsApp Business soon</option>
+                        <option value="web_widget" disabled>Web chat soon</option>
+                      </FormSelect>
+                    </FormField>
+                  </FormGrid>
                   <details className="app-stack-3">
-                    <summary>Advanced AI model and computer settings</summary>
+                    <summary>Advanced provider/model overrides</summary>
                     <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                       <FormField label="AI model provider" hint="Choose the AI model provider for this assistant.">
                         <FormSelect
@@ -4322,6 +4644,7 @@ export function WorkstationDeployedAgentsPane({
                               ...current,
                               providerId: nextProviderId,
                               modelId: nextModelId,
+                              aiTier: inferAiTierFromProviderModel(nextProviderId, nextModelId),
                             }));
                           }}
                           disabled={isLoadingProviderCatalog || providerCatalog.length === 0}
@@ -4340,7 +4663,14 @@ export function WorkstationDeployedAgentsPane({
                         <FormSelect
                           data-deployed-agent-model-select="true"
                           value={wizardState.modelId}
-                          onChange={(event) => setWizardField('modelId', event.currentTarget.value)}
+                          onChange={(event) => {
+                            const nextModelId = event.currentTarget.value;
+                            setWizardState((current) => ({
+                              ...current,
+                              modelId: nextModelId,
+                              aiTier: inferAiTierFromProviderModel(current.providerId, nextModelId),
+                            }));
+                          }}
                           disabled={!selectedProviderCatalog || selectedProviderCatalog.models.length === 0}
                         >
                           <option value="">
@@ -4356,10 +4686,18 @@ export function WorkstationDeployedAgentsPane({
                       <FormField label="Computer target" hint="Cloud is the default. Use local targets only for advanced private-computer cases.">
                         <FormSelect
                           value={wizardState.runtimeTarget}
-                          onChange={(event) => setWizardField('runtimeTarget', event.currentTarget.value)}
+                          onChange={(event) => {
+                            const nextRuntimeTarget = event.currentTarget.value;
+                            setWizardState((current) => ({
+                              ...current,
+                              runtimeTarget: nextRuntimeTarget,
+                              runtimePlacement: normalizeRuntimePlacement(nextRuntimeTarget),
+                            }));
+                          }}
                         >
                           <option value="cloud">Cloud</option>
-                          <option value="local">This computer (advanced)</option>
+                          <option value="local">Local Computer (advanced)</option>
+                          <option value="virtual_computer">Virtual Computer (advanced)</option>
                           <option value="device">Managed computer (advanced)</option>
                         </FormSelect>
                       </FormField>
@@ -4400,20 +4738,20 @@ export function WorkstationDeployedAgentsPane({
                     />
                   </details>
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Budget cap (USD)" hint="Automatic monthly pause threshold for this assistant.">
+                      <FormInput
+                        value={wizardState.monthlyCostCapUsd}
+                        onChange={(event) => setWizardField('monthlyCostCapUsd', event.currentTarget.value)}
+                        inputMode="decimal"
+                        placeholder="250"
+                      />
+                    </FormField>
                     <FormField label="Daily message limit" hint="Per external user, reset at UTC midnight. Leave blank to disable free-tier limits.">
                       <FormInput
                         value={wizardState.dailyMessageLimit}
                         onChange={(event) => setWizardField('dailyMessageLimit', event.currentTarget.value)}
                         inputMode="numeric"
                         placeholder="25"
-                      />
-                    </FormField>
-                    <FormField label="Monthly cost cap (USD)" hint="Automatically pauses this assistant after reaching this monthly cap.">
-                      <FormInput
-                        value={wizardState.monthlyCostCapUsd}
-                        onChange={(event) => setWizardField('monthlyCostCapUsd', event.currentTarget.value)}
-                        inputMode="decimal"
-                        placeholder="25.00"
                       />
                     </FormField>
                   </FormGrid>

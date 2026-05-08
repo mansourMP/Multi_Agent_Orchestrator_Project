@@ -76,6 +76,8 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["workspace_id"], "ws-1")
         self.assertEqual(payload["summary"]["provider_total"], 2)
+        self.assertIn("model_tier_policy", payload)
+        self.assertIn("tiers", payload["model_tier_policy"])
         providers = {item["id"]: item for item in payload["providers"]}
         self.assertIn("privacy_posture", providers["openai"])
         self.assertIn("jurisdiction", providers["openai"])
@@ -228,6 +230,15 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(selection, {"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"})
 
+    def test_my_api_key_route_exposes_provider_and_model_selection(self) -> None:
+        selection = provider_catalog_service.resolve_provider_model_selection(
+            provider="openai",
+            model="gpt-4.1",
+        )
+
+        self.assertEqual(selection["provider"], "openai")
+        self.assertEqual(selection["model"], "gpt-4.1")
+
     def test_resolve_provider_model_selection_accepts_cached_live_model_ids(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(
             provider="anthropic",
@@ -275,6 +286,23 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
                 provider="deepseek",
                 model="gpt-4o",
             )
+
+    def test_resolve_empyralis_model_tier_selection_hides_raw_route_by_default(self) -> None:
+        route = provider_catalog_service.resolve_empyralis_model_tier_selection(public_tier="pro")
+
+        self.assertEqual(route["public_tier"], "pro")
+        self.assertIsNone(route["internal_provider"])
+        self.assertIsNone(route["internal_model"])
+
+    def test_resolve_empyralis_model_tier_selection_exposes_admin_route(self) -> None:
+        route = provider_catalog_service.resolve_empyralis_model_tier_selection(
+            public_tier="pro",
+            include_internal_route=True,
+        )
+
+        self.assertEqual(route["internal_provider"], "deepseek")
+        self.assertEqual(route["internal_model"], "deepseek-v4-pro")
+        self.assertEqual(route["reasoning_effort"], "high")
 
 
 if __name__ == "__main__":

@@ -199,6 +199,18 @@ def _project_timeline_item(row: Dict[str, Any]) -> Dict[str, Any]:
     actor_id = str(row.get("actor_id") or "system").strip() or "system"
     install_id = str(row.get("install_id") or "").strip() or None
     app_id = str(row.get("app_id") or "").strip() or None
+    metadata = _coerce_dict(row.get("metadata"))
+    payload = _coerce_dict(row.get("payload"))
+    visible_activity = _project_visible_activity(
+        row=row,
+        metadata=metadata,
+        payload=payload,
+    )
+    admin_audit = _project_admin_audit(
+        row=row,
+        metadata=metadata,
+        payload=payload,
+    )
     return {
         "id": str(row.get("id") or "").strip() or None,
         "ts": ts,
@@ -228,8 +240,135 @@ def _project_timeline_item(row: Dict[str, Any]) -> Dict[str, Any]:
             "app_id": app_id,
         },
         "artifacts": _coerce_artifacts(row.get("artifacts")),
-        "metadata": _coerce_dict(row.get("metadata")),
-        "payload": _coerce_dict(row.get("payload")),
+        "metadata": metadata,
+        "payload": payload,
+        "visible_activity": visible_activity,
+        "admin_audit": admin_audit,
+    }
+
+
+def _read_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not parsed or parsed < 0:
+        return 0.0
+    return round(parsed, 6)
+
+
+def _read_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return 0
+    return parsed
+
+
+def _normalize_public_tier(value: Any) -> Optional[str]:
+    token = str(value or "").strip().lower().replace("-", "_")
+    return token or None
+
+
+def _title_case_tier(value: Optional[str]) -> Optional[str]:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    return token.replace("_", " ").title()
+
+
+def _project_visible_activity(
+    *,
+    row: Dict[str, Any],
+    metadata: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    public_tier = (
+        _normalize_public_tier(metadata.get("public_tier"))
+        or _normalize_public_tier(metadata.get("model_tier"))
+        or _normalize_public_tier(metadata.get("empyralis_model_tier"))
+    )
+    credit_quantity = _read_float(metadata.get("credit_quantity"))
+    credit_multiplier = _read_float(metadata.get("credit_multiplier"))
+    used_credits = 0.0
+    if credit_quantity is not None and credit_multiplier is not None and credit_multiplier > 0:
+        used_credits = round(float(credit_quantity) * float(credit_multiplier), 3)
+    runtime_minutes = 0.0
+    if str(metadata.get("credit_item_type") or "").strip().lower() == "virtual_browser_minutes":
+        runtime_minutes = _read_float(metadata.get("credit_quantity")) or 0.0
+    review_required = bool(row.get("review_required") or metadata.get("review_required"))
+    payment_related = (
+        str(row.get("action") or "").strip().lower().startswith("payment")
+        or str(row.get("event_class") or "").strip().lower().startswith("payment")
+        or "payment" in str(row.get("title") or "").strip().lower()
+        or "payment" in str(row.get("summary") or "").strip().lower()
+    )
+    return {
+        "sage_tier": _title_case_tier(public_tier),
+        "used_credits": used_credits if used_credits > 0 else None,
+        "virtual_browser_minutes": runtime_minutes if runtime_minutes > 0 else None,
+        "owner_approval_required_for_payment": bool(review_required and payment_related),
+        "owner_approval_required": review_required,
+    }
+
+
+def _project_admin_audit(
+    *,
+    row: Dict[str, Any],
+    metadata: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    usage_accounting = _coerce_dict(metadata.get("usage_accounting")) or _coerce_dict(payload.get("usage_accounting"))
+    duration_seconds = _read_float(
+        metadata.get("runtime_duration_seconds")
+        or payload.get("runtime_duration_seconds")
+        or metadata.get("duration_seconds")
+        or payload.get("duration_seconds")
+    )
+    if duration_seconds is None:
+        duration_ms = _read_float(metadata.get("duration_ms") or payload.get("duration_ms"))
+        duration_seconds = round((duration_ms or 0.0) / 1000.0, 6) if duration_ms is not None else None
+    prompt_tokens = _read_int(
+        usage_accounting.get("input_tokens")
+        or usage_accounting.get("prompt_tokens")
+        or metadata.get("prompt_tokens")
+        or payload.get("prompt_tokens")
+    )
+    completion_tokens = _read_int(
+        usage_accounting.get("output_tokens")
+        or usage_accounting.get("completion_tokens")
+        or metadata.get("completion_tokens")
+        or payload.get("completion_tokens")
+    )
+    total_tokens = _read_int(
+        usage_accounting.get("total_tokens")
+        or metadata.get("total_tokens")
+        or payload.get("total_tokens")
+    )
+    ledger_item_ids: List[str] = []
+    row_id = str(row.get("id") or "").strip()
+    if row_id:
+        ledger_item_ids.append(row_id)
+    extra_ledger_ids = metadata.get("ledger_item_ids") or payload.get("ledger_item_ids")
+    if isinstance(extra_ledger_ids, list):
+        for value in extra_ledger_ids:
+            token = str(value or "").strip()
+            if token and token not in ledger_item_ids:
+                ledger_item_ids.append(token)
+    return {
+        "raw_provider": str(metadata.get("effective_provider") or metadata.get("requested_provider") or row.get("channel") or "").strip() or None,
+        "raw_model": str(metadata.get("effective_model") or metadata.get("requested_model") or "").strip() or None,
+        "fallback_provider": str(metadata.get("fallback_provider") or payload.get("fallback_provider") or "").strip() or None,
+        "fallback_model": str(metadata.get("fallback_model") or payload.get("fallback_model") or "").strip() or None,
+        "token_usage": {
+            "prompt_tokens": prompt_tokens or 0,
+            "completion_tokens": completion_tokens or 0,
+            "total_tokens": total_tokens or 0,
+        },
+        "runtime_duration_seconds": duration_seconds,
+        "ledger_item_ids": ledger_item_ids,
     }
 
 

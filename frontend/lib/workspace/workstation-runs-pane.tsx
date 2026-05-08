@@ -47,6 +47,17 @@ type ActivityProofItem = {
   occurredAt: string | null;
   source: string;
   threadId: string | null;
+  adminAudit: {
+    rawProvider: string | null;
+    rawModel: string | null;
+    fallbackProvider: string | null;
+    fallbackModel: string | null;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    runtimeDurationSeconds: number | null;
+    ledgerItemIds: string[];
+  } | null;
 };
 
 type ActivityFilterId = 'all' | ActivityProofType;
@@ -70,6 +81,24 @@ const ACTIVITY_FILTERS: Array<{ id: ActivityFilterId; label: string }> = [
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function readNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function activeThreadStorageKey(workspaceId: string): string {
@@ -235,14 +264,18 @@ function eventSummary(type: ActivityProofType, event: Record<string, unknown>): 
 function proofItemsFromActivity(payload: unknown): ActivityProofItem[] {
   return normalizeRecordItems(payload).map((event, index) => {
     const type = eventProofType(event);
+    const visibleProof = readRecord(event.visible_activity);
+    const proofSummary = buildVisibleActivitySummary(visibleProof);
+    const adminAudit = normalizeAdminAudit(readRecord(event.admin_audit));
     return {
       id: readString(event.id, `activity-${index}`),
       type,
       title: eventTitle(type, event),
-      summary: eventSummary(type, event),
+      summary: proofSummary || eventSummary(type, event),
       occurredAt: readString(event.created_at) || readString(event.ts) || null,
       source: 'Activity',
       threadId: readString(event.thread_id) || null,
+      adminAudit,
     };
   });
 }
@@ -256,6 +289,7 @@ function proofItemsFromThreads(threads: ThreadRecord[]): ActivityProofItem[] {
     occurredAt: thread.occurredAt,
     source: 'Chat',
     threadId: thread.id,
+    adminAudit: null,
   }));
 }
 
@@ -264,6 +298,7 @@ function proofItemsFromRuns(payload: unknown): ActivityProofItem[] {
     const status = readString(run.status, 'recorded').replace(/_/g, ' ');
     const title = readString(run.title) || readString(run.name) || readString(run.kind);
     const summary = readString(run.summary) || readString(run.result_summary) || readString(run.error);
+    const adminAudit = normalizeRunAudit(run);
     return {
       id: `run-${readString(run.id, String(index))}`,
       type: status === 'completed' || status === 'failed' ? 'outcome' : 'tool',
@@ -272,6 +307,7 @@ function proofItemsFromRuns(payload: unknown): ActivityProofItem[] {
       occurredAt: readString(run.updated_at) || readString(run.created_at) || null,
       source: 'Run',
       threadId: readString(run.thread_id) || null,
+      adminAudit,
     };
   });
 }
@@ -288,7 +324,86 @@ function proofItemsFromApprovals(payload: unknown): ActivityProofItem[] {
       occurredAt: readString(approval.created_at) || readString(approval.updated_at) || null,
       source: 'Approval',
       threadId: readString(approval.thread_id) || null,
+      adminAudit: null,
     };
+  });
+}
+
+function buildVisibleActivitySummary(visibleProof: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const tier = readString(visibleProof.sage_tier);
+  const usedCredits = readNumber(visibleProof.used_credits, 0);
+  const virtualMinutes = readNumber(visibleProof.virtual_browser_minutes, 0);
+  const paymentApproval = visibleProof.owner_approval_required_for_payment === true;
+  if (tier) {
+    parts.push(`Sage used ${tier}`);
+  }
+  if (usedCredits > 0) {
+    parts.push(`Used ${Math.round(usedCredits)} credits`);
+  }
+  if (virtualMinutes > 0) {
+    const rounded = Math.max(1, Math.round(virtualMinutes));
+    parts.push(`Virtual browser ran for ${rounded} minute${rounded === 1 ? '' : 's'}`);
+  }
+  if (paymentApproval) {
+    parts.push('Owner approval required for payment');
+  }
+  return parts.join(' · ');
+}
+
+function normalizeAdminAudit(value: Record<string, unknown>): ActivityProofItem['adminAudit'] {
+  const tokenUsage = readRecord(value.token_usage);
+  const ledgerItemIds = readList(value.ledger_item_ids)
+    .map((item) => readString(item))
+    .filter(Boolean);
+  const record: ActivityProofItem['adminAudit'] = {
+    rawProvider: readString(value.raw_provider) || null,
+    rawModel: readString(value.raw_model) || null,
+    fallbackProvider: readString(value.fallback_provider) || null,
+    fallbackModel: readString(value.fallback_model) || null,
+    promptTokens: Math.max(0, Math.round(readNumber(tokenUsage.prompt_tokens, 0))),
+    completionTokens: Math.max(0, Math.round(readNumber(tokenUsage.completion_tokens, 0))),
+    totalTokens: Math.max(0, Math.round(readNumber(tokenUsage.total_tokens, 0))),
+    runtimeDurationSeconds: readNumber(value.runtime_duration_seconds, Number.NaN),
+    ledgerItemIds,
+  };
+  if (
+    !record.rawProvider
+    && !record.rawModel
+    && !record.fallbackProvider
+    && !record.fallbackModel
+    && record.promptTokens <= 0
+    && record.completionTokens <= 0
+    && record.totalTokens <= 0
+    && !Number.isFinite(record.runtimeDurationSeconds as number)
+    && record.ledgerItemIds.length === 0
+  ) {
+    return null;
+  }
+  return {
+    ...record,
+    runtimeDurationSeconds: Number.isFinite(record.runtimeDurationSeconds as number)
+      ? Math.max(0, Number(record.runtimeDurationSeconds))
+      : null,
+  };
+}
+
+function normalizeRunAudit(run: Record<string, unknown>): ActivityProofItem['adminAudit'] {
+  const raw = readRecord(run.raw);
+  const metadata = readRecord(raw.metadata);
+  const usage = readRecord(raw.usage_accounting);
+  return normalizeAdminAudit({
+    raw_provider: run.provider ?? raw.provider ?? usage.effective_provider ?? metadata.effective_provider,
+    raw_model: run.model ?? raw.model ?? usage.effective_model ?? metadata.effective_model,
+    fallback_provider: metadata.fallback_provider ?? raw.fallback_provider,
+    fallback_model: metadata.fallback_model ?? raw.fallback_model,
+    token_usage: {
+      prompt_tokens: run.prompt_tokens ?? usage.input_tokens ?? usage.prompt_tokens ?? raw.prompt_tokens,
+      completion_tokens: run.completion_tokens ?? usage.output_tokens ?? usage.completion_tokens ?? raw.completion_tokens,
+      total_tokens: run.total_tokens ?? usage.total_tokens ?? raw.total_tokens,
+    },
+    runtime_duration_seconds: raw.runtime_duration_seconds ?? metadata.runtime_duration_seconds ?? raw.duration_seconds,
+    ledger_item_ids: metadata.ledger_item_ids,
   });
 }
 
@@ -349,6 +464,40 @@ function formatHistoryDate(value: string | null): string {
   });
 }
 
+function buildAdminAuditLine(audit: NonNullable<ActivityProofItem['adminAudit']>): string {
+  const parts: string[] = [];
+  if (audit.rawProvider || audit.rawModel) {
+    const providerModel = [audit.rawProvider, audit.rawModel].filter(Boolean).join(' · ');
+    if (providerModel) {
+      parts.push(providerModel);
+    }
+  }
+  if (audit.fallbackProvider || audit.fallbackModel) {
+    const fallback = [audit.fallbackProvider, audit.fallbackModel].filter(Boolean).join(' · ');
+    if (fallback) {
+      parts.push(`Fallback ${fallback}`);
+    }
+  }
+  if (audit.totalTokens > 0) {
+    parts.push(
+      `${audit.totalTokens} tokens (${Math.max(0, audit.promptTokens)} in / ${Math.max(0, audit.completionTokens)} out)`,
+    );
+  }
+  if (audit.runtimeDurationSeconds !== null && Number.isFinite(audit.runtimeDurationSeconds)) {
+    parts.push(`${Math.max(0, Math.round(audit.runtimeDurationSeconds))}s runtime`);
+  }
+  if (audit.ledgerItemIds.length > 0) {
+    const preview = audit.ledgerItemIds.slice(0, 2);
+    const extra = audit.ledgerItemIds.length - preview.length;
+    parts.push(
+      extra > 0
+        ? `Ledger ${preview.join(', ')} +${extra} more`
+        : `Ledger ${preview.join(', ')}`,
+    );
+  }
+  return parts.join(' · ');
+}
+
 export function WorkstationRunsPane() {
   const router = useRouter();
   const { routeManifest, workspaceId } = useWorkspaceBoundary();
@@ -361,6 +510,7 @@ export function WorkstationRunsPane() {
   const [threads, setThreads] = useState<ThreadListItem[]>(() => cachedThreads ?? []);
   const [activityItems, setActivityItems] = useState<ActivityProofItem[]>(() => cachedActivity ?? []);
   const [activeFilter, setActiveFilter] = useState<ActivityFilterId>('all');
+  const [showAdminAudit, setShowAdminAudit] = useState(false);
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
   const [isLoading, setIsLoading] = useState(() => cachedThreads === null || cachedActivity === null);
   const [error, setError] = useState<string | null>(null);
@@ -443,6 +593,7 @@ export function WorkstationRunsPane() {
   const approvalCount = activityItems.filter((item) => item.type === 'approval').length;
   const channelCount = activityItems.filter((item) => item.type === 'channel').length;
   const providerCount = activityItems.filter((item) => item.type === 'provider').length;
+  const adminAuditCount = activityItems.filter((item) => item.adminAudit !== null).length;
 
   return (
     <WorkstationSurfaceRoot surface="activity">
@@ -491,6 +642,15 @@ export function WorkstationRunsPane() {
                       {filter.label}
                     </button>
                   ))}
+                  {adminAuditCount > 0 ? (
+                    <button
+                      type="button"
+                      className={`app-filter-pill${showAdminAudit ? ' app-filter-pill--active' : ''}`}
+                      onClick={() => setShowAdminAudit((current) => !current)}
+                    >
+                      {showAdminAudit ? 'Hide admin audit' : 'Show admin audit'}
+                    </button>
+                  ) : null}
                 </div>
                 {visibleActivityItems.length > 0 ? (
                   <div className="app-runs-minimal-list app-runs-minimal-list--flat" aria-label="Activity proof timeline">
@@ -511,6 +671,14 @@ export function WorkstationRunsPane() {
                         <span className="app-runs-minimal-row__preview" title={`${item.title}: ${item.summary}`}>
                           {item.title} · {item.summary}
                         </span>
+                        {showAdminAudit && item.adminAudit ? (
+                          <span
+                            className="app-runs-minimal-row__time"
+                            title={buildAdminAuditLine(item.adminAudit)}
+                          >
+                            {buildAdminAuditLine(item.adminAudit)}
+                          </span>
+                        ) : null}
                         <span className="app-runs-minimal-row__time">{item.source} · {formatHistoryDate(item.occurredAt)}</span>
                       </button>
                     ))}

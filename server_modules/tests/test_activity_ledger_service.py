@@ -163,6 +163,62 @@ class ActivityLedgerServiceTests(unittest.TestCase):
         self.assertEqual(item["artifacts"][0]["label"], "Knowledge summary")
         self.assertEqual(item["artifacts"][0]["preview_url"], "/preview/out")
 
+    def test_list_activity_timeline_payload_projects_visible_and_admin_audit_fields(self) -> None:
+        created_at = datetime(2026, 4, 10, 9, 5, tzinfo=timezone.utc)
+        with patch(
+            "server_modules.activity_ledger_service.control_plane_repository.list_activity_ledger_events",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "aevt-ledger-1",
+                        "workspace_id": "workspace-1",
+                        "actor_type": "sage",
+                        "actor_id": "install-sage",
+                        "event_class": "payment_request",
+                        "detail_level": "timeline_detail",
+                        "action": "payment_authorization_requested",
+                        "summary": "Payment approval requested.",
+                        "review_required": True,
+                        "metadata": {
+                            "public_tier": "pro",
+                            "credit_quantity": 8,
+                            "credit_multiplier": 1,
+                            "credit_item_type": "virtual_browser_minutes",
+                            "effective_provider": "deepseek",
+                            "effective_model": "deepseek-v4-pro",
+                            "fallback_provider": "deepseek",
+                            "fallback_model": "deepseek-v4-flash",
+                            "prompt_tokens": 80,
+                            "completion_tokens": 20,
+                            "total_tokens": 100,
+                            "runtime_duration_seconds": 180,
+                            "ledger_item_ids": ["shost_abc"],
+                        },
+                        "payload": {},
+                        "created_at": created_at,
+                    }
+                ]
+            ),
+        ):
+            payload = asyncio.run(
+                activity_ledger_service.list_activity_timeline_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+            )
+
+        item = payload["items"][0]
+        self.assertEqual(item["visible_activity"]["sage_tier"], "Pro")
+        self.assertEqual(item["visible_activity"]["used_credits"], 8.0)
+        self.assertEqual(item["visible_activity"]["virtual_browser_minutes"], 8.0)
+        self.assertTrue(item["visible_activity"]["owner_approval_required_for_payment"])
+        self.assertEqual(item["admin_audit"]["raw_provider"], "deepseek")
+        self.assertEqual(item["admin_audit"]["raw_model"], "deepseek-v4-pro")
+        self.assertEqual(item["admin_audit"]["fallback_model"], "deepseek-v4-flash")
+        self.assertEqual(item["admin_audit"]["token_usage"]["total_tokens"], 100)
+        self.assertEqual(item["admin_audit"]["runtime_duration_seconds"], 180.0)
+        self.assertEqual(item["admin_audit"]["ledger_item_ids"], ["aevt-ledger-1", "shost_abc"])
+
     def test_list_activity_timeline_payload_applies_workspace_history_window(self) -> None:
         with patch(
             "server_modules.activity_ledger_service.control_plane_repository.list_activity_ledger_events",

@@ -594,6 +594,16 @@ COMPETITOR_BRIEF_PACK_ID = "competitor-brief-digest"
 SPREADSHEET_OPS_PACK_ID = "spreadsheet-ops-v1"
 DOCUMENT_STUDIO_PACK_ID = "document-studio-v1"
 LOCAL_EXECUTION_PACK_ID = "local-execution-v1"
+
+_NORMALIZED_CODE_OR_DATA_PACK_IDS = {
+    normalize_action_id(LOCAL_EXECUTION_PACK_ID),
+    normalize_action_id(SPREADSHEET_OPS_PACK_ID),
+    normalize_action_id(DOCUMENT_STUDIO_PACK_ID),
+}
+_NORMALIZED_CUSTOMER_WORKFLOW_PACK_ID = normalize_action_id(CUSTOMER_OPS_PACK_ID)
+_NORMALIZED_LOCAL_BIASED_PACK_IDS = set(_NORMALIZED_CODE_OR_DATA_PACK_IDS) | {
+    _NORMALIZED_CUSTOMER_WORKFLOW_PACK_ID,
+}
 SUPPORTED_OUTCOME_PACKS = {
     CUSTOMER_OPS_PACK_ID,
     WEEKLY_CONTENT_PACK_ID,
@@ -2546,7 +2556,7 @@ def _metadata_requests_code_or_data_job(metadata: Dict[str, Any]) -> bool:
     if bool(metadata.get("code_job")) or bool(metadata.get("data_job")):
         return True
     outcome_pack = normalize_action_id(metadata.get("outcome_pack"))
-    if outcome_pack in {LOCAL_EXECUTION_PACK_ID, SPREADSHEET_OPS_PACK_ID, DOCUMENT_STUDIO_PACK_ID}:
+    if outcome_pack in _NORMALIZED_CODE_OR_DATA_PACK_IDS:
         return True
     operation_tools = _collect_pack_operation_tools(metadata)
     if any(tool in {"shell.execute", "filesystem.read_write"} for tool in operation_tools):
@@ -2558,7 +2568,7 @@ def _metadata_requests_enterprise_customer_workflow(metadata: Dict[str, Any]) ->
     if bool(metadata.get("enterprise_workflow")) or bool(metadata.get("customer_workflow")):
         return True
     outcome_pack = normalize_action_id(metadata.get("outcome_pack"))
-    if outcome_pack == CUSTOMER_OPS_PACK_ID:
+    if outcome_pack == _NORMALIZED_CUSTOMER_WORKFLOW_PACK_ID:
         return True
     if _metadata_has_connector_or_channel_work(metadata):
         return True
@@ -2630,7 +2640,7 @@ def _auto_cloud_capacity_fallback_allowed(metadata: Dict[str, Any]) -> tuple[boo
         return False, "Automatic route keeps local execution for file-backed or command-backed work."
 
     outcome_pack = normalize_action_id(metadata.get("outcome_pack"))
-    if outcome_pack in {LOCAL_EXECUTION_PACK_ID, SPREADSHEET_OPS_PACK_ID, DOCUMENT_STUDIO_PACK_ID, CUSTOMER_OPS_PACK_ID}:
+    if outcome_pack in _NORMALIZED_LOCAL_BIASED_PACK_IDS:
         return False, "Automatic route keeps local execution for this task type."
 
     return True, "Local machines are busy, so Hekor can use cloud runtime for this task."

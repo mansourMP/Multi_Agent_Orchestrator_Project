@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from server_modules import config_defaults_service
 from server_modules import conversation_memory_policy
+from server_modules import deployed_agent_runtime_contract_service
 
 
 KNOWN_OWNER_METADATA_KEYS = frozenset(
@@ -32,6 +33,8 @@ KNOWN_OWNER_METADATA_KEYS = frozenset(
         "model",
         "selected_tool_ids",
         "config_schema_version",
+        "runtime_placement",
+        "computer_automation",
     }
 )
 
@@ -111,9 +114,18 @@ def _normalize_runtime_target(value: Any) -> str:
         return "cloud"
     if token in {"local", "local_secure", "local_only", "local_companion"}:
         return "local"
+    if token in {"self_hosted", "self_hosted_business", "self_hosted_business_node", "customer_hosted"}:
+        return "self_hosted"
     if token in {"device", "desktop", "privileged_device"}:
         return "device"
     return token or config_defaults_service.default_deployed_agent_runtime_target()
+
+
+def _normalize_runtime_placement(value: Any, *, runtime_target: Any = None) -> str:
+    return deployed_agent_runtime_contract_service.normalize_runtime_placement(
+        value,
+        runtime_target=runtime_target,
+    )
 
 
 def _normalize_tool_ids(value: Any) -> List[str]:
@@ -207,6 +219,20 @@ class DeployedAgentToolPolicy(BaseModel):
     enabled_tools: List[str] = Field(default_factory=list)
 
 
+class DeployedAgentComputerAutomationPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    runtime_class: Optional[str] = None
+    allowed_domains: List[str] = Field(default_factory=list)
+    max_concurrent_sessions: int = 0
+    daily_budget_usd: Optional[float] = None
+    monthly_budget_usd: Optional[float] = None
+    requires_owner_approval: bool = True
+    idle_timeout_seconds: int = 0
+    max_session_runtime_seconds: int = 0
+
+
 class DeployedAgentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -215,6 +241,9 @@ class DeployedAgentConfig(BaseModel):
     avatar: Optional[str] = None
     persona: str = ""
     system_prompt: str = ""
+    runtime_placement: str = Field(
+        default_factory=lambda: deployed_agent_runtime_contract_service.RUNTIME_PLACEMENT_MANAGED_CLOUD
+    )
     runtime_target: str = Field(default_factory=config_defaults_service.default_deployed_agent_runtime_target)
     billing_plan: str = Field(default_factory=config_defaults_service.default_deployed_agent_billing_plan)
     provider: Optional[str] = None
@@ -228,6 +257,7 @@ class DeployedAgentConfig(BaseModel):
     escalation_policy: DeployedAgentEscalationPolicy = Field(default_factory=DeployedAgentEscalationPolicy)
     commerce_policy: DeployedAgentCommercePolicy = Field(default_factory=DeployedAgentCommercePolicy)
     tool_policy: DeployedAgentToolPolicy = Field(default_factory=DeployedAgentToolPolicy)
+    computer_automation: DeployedAgentComputerAutomationPolicy = Field(default_factory=DeployedAgentComputerAutomationPolicy)
 
 
 class DeployedAgentOperationalState(BaseModel):
@@ -278,6 +308,26 @@ def deployed_agent_config_from_record(
     escalation_policy_payload = _coerce_dict(config_payload.get("escalation_policy"))
     commerce_policy_payload = _coerce_dict(config_payload.get("commerce_policy"))
     tool_policy_payload = _coerce_dict(config_payload.get("tool_policy"))
+    computer_automation_payload = _coerce_dict(
+        config_payload.get("computer_automation")
+        if "computer_automation" in config_payload
+        else metadata.get("computer_automation")
+    )
+    runtime_target_value = (
+        config_payload.get("runtime_target")
+        if "runtime_target" in config_payload
+        else payload.get("runtime_target")
+    )
+    runtime_placement = _normalize_runtime_placement(
+        config_payload.get("runtime_placement")
+        if "runtime_placement" in config_payload
+        else metadata.get("runtime_placement"),
+        runtime_target=runtime_target_value,
+    )
+    runtime_target = _normalize_runtime_target(
+        runtime_target_value
+        or deployed_agent_runtime_contract_service.runtime_target_for_placement(runtime_placement)
+    )
     customer_policy = {
         "paused_message": _optional_text(
             customer_policy_payload.get("paused_message")
@@ -339,11 +389,8 @@ def deployed_agent_config_from_record(
             "system_prompt": _text(
                 config_payload.get("system_prompt") if "system_prompt" in config_payload else payload.get("system_prompt")
             ),
-            "runtime_target": _normalize_runtime_target(
-                config_payload.get("runtime_target")
-                if "runtime_target" in config_payload
-                else payload.get("runtime_target")
-            ),
+            "runtime_placement": runtime_placement,
+            "runtime_target": runtime_target,
             "billing_plan": _text(config_payload.get("billing_plan") if "billing_plan" in config_payload else payload.get("billing_plan"))
             or config_defaults_service.default_deployed_agent_billing_plan(),
             "provider": _optional_text(config_payload.get("provider") if "provider" in config_payload else metadata.get("provider")),
@@ -429,6 +476,9 @@ def deployed_agent_config_from_record(
                     else metadata.get("selected_tool_ids")
                 ),
             },
+            "computer_automation": deployed_agent_runtime_contract_service.normalize_computer_automation_config(
+                computer_automation_payload
+            ),
         }
     )
 
@@ -471,6 +521,8 @@ def metadata_from_deployed_agent_config(
     payload = {
         **preserved,
         "config_schema_version": config.schema_version,
+        "runtime_placement": config.runtime_placement,
+        "computer_automation": config.computer_automation.model_dump(exclude_none=True),
         "memory_enabled": bool(config.memory_policy.memory_enabled),
         "context_budget_preset": config.memory_policy.context_budget_preset,
         "retention_preset": config.memory_policy.retention_preset,

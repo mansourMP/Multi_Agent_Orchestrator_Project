@@ -75,7 +75,13 @@ type WizardState = {
   systemPrompt: string;
   knowledgeSourceText: string;
   aiTier: 'light' | 'pro' | 'max';
-  runtimePlacement: 'cloud' | 'local_computer' | 'virtual_computer';
+  runtimePlacement: 'managed_cloud' | 'customer_local' | 'customer_hosted';
+  computerAutomationEnabled: boolean;
+  computerAutomationRuntimeClass: 'virtual_browser' | 'virtual_desktop' | 'virtual_code_sandbox' | 'local_browser' | 'local_desktop';
+  computerAutomationAllowedDomains: string;
+  computerAutomationMaxSessions: string;
+  computerAutomationDailyBudgetUsd: string;
+  computerAutomationMonthlyBudgetUsd: string;
   approvalMode: 'guarded' | 'balanced' | 'autonomous';
   customerChannel: 'telegram' | 'whatsapp' | 'web_widget' | 'draft';
   telegramEnabled: boolean;
@@ -318,9 +324,9 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   label: string;
   hint: string;
 }> = [
-  { value: 'cloud', label: 'Cloud', hint: 'Managed by Empyralis cloud runtime.' },
-  { value: 'local_computer', label: 'Local Computer', hint: 'Runs on your connected machine when needed.' },
-  { value: 'virtual_computer', label: 'Virtual Computer', hint: 'Runs inside isolated cloud computer sessions.' },
+  { value: 'managed_cloud', label: 'Managed Cloud', hint: 'Empyralis hosts this assistant as a governed business worker.' },
+  { value: 'customer_local', label: 'Customer Local Runtime', hint: 'Runs through the customer paired machine, with scoped workspace policy.' },
+  { value: 'customer_hosted', label: 'Customer-Hosted Runtime', hint: 'Runs on a customer-controlled worker while Empyralis remains the control plane.' },
 ];
 
 const STUDIO_APPROVAL_MODE_OPTIONS: ReadonlyArray<{
@@ -1213,29 +1219,41 @@ function normalizeWizardAiTier(value: unknown): WizardState['aiTier'] {
 
 function normalizeRuntimePlacement(value: unknown): WizardState['runtimePlacement'] {
   const token = readString(value).toLowerCase().replace('-', '_');
-  if (token === 'local' || token === 'local_secure' || token === 'local_companion' || token === 'local_computer') {
-    return 'local_computer';
+  if (
+    token === 'local'
+    || token === 'local_secure'
+    || token === 'local_companion'
+    || token === 'local_computer'
+    || token === 'customer_local'
+    || token === 'this_computer'
+  ) {
+    return 'customer_local';
   }
   if (
-    token === 'virtual'
-    || token === 'virtual_computer'
-    || token === 'virtual_browser'
-    || token === 'virtual_desktop'
-    || token === 'virtual_code_sandbox'
+    token === 'self_hosted'
+    || token === 'self_hosted_business'
+    || token === 'self_host_runtime'
+    || token === 'customer_hosted'
+    || token === 'self_hosted_business_node'
   ) {
-    return 'virtual_computer';
+    return 'customer_hosted';
+  }
+  return 'managed_cloud';
+}
+
+function runtimeTargetForPlacement(value: WizardState['runtimePlacement']): string {
+  if (value === 'customer_local') {
+    return 'local';
+  }
+  if (value === 'customer_hosted') {
+    return 'self_hosted';
   }
   return 'cloud';
 }
 
-function runtimeTargetForPlacement(value: WizardState['runtimePlacement']): string {
-  if (value === 'local_computer') {
-    return 'local';
-  }
-  if (value === 'virtual_computer') {
-    return 'virtual_computer';
-  }
-  return 'cloud';
+function runtimePlacementLabel(value: unknown): string {
+  const placement = normalizeRuntimePlacement(value);
+  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Managed Cloud';
 }
 
 function normalizeApprovalModeFromPolicies(escalationPreset: unknown, handoffMode: unknown): WizardState['approvalMode'] {
@@ -1382,6 +1400,7 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   const safetyPolicy = readRecord(config.safety_policy);
   const commercePolicy = readRecord(config.commerce_policy);
   const escalationPolicy = readRecord(config.escalation_policy);
+  const computerAutomation = readRecord(config.computer_automation ?? readRecord(agent?.metadata).computer_automation);
   const metadata = readRecord(agent?.metadata);
   const providerId = readString(agent?.provider ?? metadata.provider);
   const modelId = readString(agent?.model ?? metadata.model);
@@ -1393,7 +1412,8 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   );
   const customerChannel = inferCustomerChannel(channels);
   const runtimePlacement = normalizeRuntimePlacement(
-    metadata.runtime_placement
+    config.runtime_placement
+    ?? metadata.runtime_placement
     ?? metadata.studio_runtime
     ?? metadata.runtime
     ?? agent?.runtime_target,
@@ -1416,6 +1436,14 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     knowledgeSourceText: serializeKnowledgeSources(agent?.knowledge_sources),
     aiTier,
     runtimePlacement,
+    computerAutomationEnabled: computerAutomation.enabled === true,
+    computerAutomationRuntimeClass: readString(computerAutomation.runtime_class, 'virtual_browser') as WizardState['computerAutomationRuntimeClass'],
+    computerAutomationAllowedDomains: Array.isArray(computerAutomation.allowed_domains)
+      ? computerAutomation.allowed_domains.map((item) => readString(item)).filter(Boolean).join(', ')
+      : '',
+    computerAutomationMaxSessions: readIntegerString(computerAutomation.max_concurrent_sessions) || '1',
+    computerAutomationDailyBudgetUsd: readPositiveDecimalString(computerAutomation.daily_budget_usd),
+    computerAutomationMonthlyBudgetUsd: readPositiveDecimalString(computerAutomation.monthly_budget_usd),
     approvalMode,
     customerChannel,
     telegramEnabled: customerChannel === 'telegram' && telegram.enabled === true,
@@ -1489,7 +1517,15 @@ function buildChannelPayload(state: WizardState): Record<string, unknown> {
 function buildDeploymentConfig(state: WizardState): Record<string, unknown> {
   const dailyMessageLimit = state.dailyMessageLimit.trim();
   const monthlyCostCapUsd = state.monthlyCostCapUsd.trim();
+  const automationDailyBudget = state.computerAutomationDailyBudgetUsd.trim();
+  const automationMonthlyBudget = state.computerAutomationMonthlyBudgetUsd.trim();
+  const automationMaxSessions = state.computerAutomationMaxSessions.trim();
+  const automationAllowedDomains = state.computerAutomationAllowedDomains
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
   return {
+    runtime_placement: state.runtimePlacement,
     customer_policy: {
       paused_message: state.pausedMessage.trim() || null,
       public_intro: state.welcomeIntro.trim() || null,
@@ -1514,6 +1550,15 @@ function buildDeploymentConfig(state: WizardState): Record<string, unknown> {
     },
     tool_policy: {
       enabled_tools: state.selectedToolIds,
+    },
+    computer_automation: {
+      enabled: state.computerAutomationEnabled,
+      runtime_class: state.computerAutomationEnabled ? state.computerAutomationRuntimeClass : null,
+      allowed_domains: state.computerAutomationEnabled ? automationAllowedDomains : [],
+      max_concurrent_sessions: state.computerAutomationEnabled && automationMaxSessions ? Number(automationMaxSessions) : 0,
+      daily_budget_usd: state.computerAutomationEnabled && automationDailyBudget ? Number(automationDailyBudget) : null,
+      monthly_budget_usd: state.computerAutomationEnabled && automationMonthlyBudget ? Number(automationMonthlyBudget) : null,
+      requires_owner_approval: true,
     },
     escalation_policy: {
       preset: state.escalationPreset,
@@ -2623,6 +2668,17 @@ export function WorkstationDeployedAgentsPane({
         return;
       }
     }
+    if (wizardState.computerAutomationEnabled) {
+      if (!wizardState.computerAutomationAllowedDomains.trim()) {
+        setErrorMessage('Computer Automation needs at least one allowed domain.');
+        return;
+      }
+      const parsedSessions = Number(wizardState.computerAutomationMaxSessions.trim());
+      if (!Number.isFinite(parsedSessions) || parsedSessions < 1) {
+        setErrorMessage('Computer Automation needs at least one allowed session.');
+        return;
+      }
+    }
     if (wizardState.customerChannel === 'telegram' && wizardState.telegramEnabled && !wizardState.telegramConnectorId.trim()) {
       setErrorMessage('Choose a Telegram connected app before saving a live-ready assistant.');
       return;
@@ -2654,6 +2710,7 @@ export function WorkstationDeployedAgentsPane({
         model_tier: wizardState.aiTier,
         empyralis_model_tier: wizardState.aiTier,
         runtime_placement: wizardState.runtimePlacement,
+        computer_automation_enabled: wizardState.computerAutomationEnabled,
         approval_mode: wizardState.approvalMode,
         customer_channel: wizardState.customerChannel,
       },
@@ -3192,7 +3249,7 @@ export function WorkstationDeployedAgentsPane({
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />
                       <FormReadout label="Channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
-                      <FormReadout label="Hosting" value={humanizeToken(selectedAgent?.runtime_target, 'Cloud')} />
+                      <FormReadout label="Runtime placement" value={runtimePlacementLabel(readRecord(selectedAgent?.config).runtime_placement ?? readRecord(selectedAgent?.metadata).runtime_placement ?? selectedAgent?.runtime_target)} />
                     </FormGrid>
                   </ListDetailPanel>
                 ) : null}
@@ -3308,7 +3365,7 @@ export function WorkstationDeployedAgentsPane({
                       ) : null}
                       <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
                         <FormReadout label="State" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
-                        <FormReadout label="Run environment" value={humanizeToken(selectedAgent.runtime_target, 'Cloud')} />
+                        <FormReadout label="Runtime placement" value={runtimePlacementLabel(readRecord(selectedAgent.config).runtime_placement ?? readRecord(selectedAgent.metadata).runtime_placement ?? selectedAgent.runtime_target)} />
                         <FormReadout label="AI model" value={humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
                         <FormReadout label="Model" value={selectedModelId(selectedAgent) || 'Not pinned'} />
                         <FormReadout label="Billing plan" value={humanizeToken(selectedAgent.billing_plan, 'Free')} />
@@ -4558,7 +4615,7 @@ export function WorkstationDeployedAgentsPane({
                         {STUDIO_AI_TIER_OPTIONS.find((item) => item.value === wizardState.aiTier)?.hint}
                       </div>
                     </FormField>
-                    <FormField label="Runtime" hint="Where this assistant executes actions.">
+                    <FormField label="Runtime placement" hint="Where this assistant worker runs. Computer/browser automation is a separate add-on.">
                       <FormSelect
                         value={wizardState.runtimePlacement}
                         onChange={(event) => {
@@ -4628,6 +4685,76 @@ export function WorkstationDeployedAgentsPane({
                     </FormField>
                   </FormGrid>
                   <details className="app-stack-3">
+                    <summary>Computer Automation Add-on</summary>
+                    <p className="app-surface-field-help">
+                      Off by default. Enable only when this assistant must operate websites or apps without APIs.
+                    </p>
+                    <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                      <FormField label="Automation" hint="Customer messages cannot start computer sessions while this is off.">
+                        <FormSelect
+                          value={wizardState.computerAutomationEnabled ? 'enabled' : 'disabled'}
+                          onChange={(event) => setWizardState((current) => ({
+                            ...current,
+                            computerAutomationEnabled: event.currentTarget.value === 'enabled',
+                          }))}
+                        >
+                          <option value="disabled">Off</option>
+                          <option value="enabled">On — approval gated</option>
+                        </FormSelect>
+                      </FormField>
+                      <FormField label="Automation runtime" hint="Choose the isolated computer class for this add-on.">
+                        <FormSelect
+                          value={wizardState.computerAutomationRuntimeClass}
+                          disabled={!wizardState.computerAutomationEnabled}
+                          onChange={(event) => setWizardField('computerAutomationRuntimeClass', event.currentTarget.value as WizardState['computerAutomationRuntimeClass'])}
+                        >
+                          <option value="virtual_browser">Virtual browser</option>
+                          <option value="virtual_desktop">Virtual desktop</option>
+                          <option value="virtual_code_sandbox">Virtual code sandbox</option>
+                          <option value="local_browser">Local browser</option>
+                          <option value="local_desktop">Local desktop</option>
+                        </FormSelect>
+                      </FormField>
+                      <FormField label="Allowed domains" hint="Comma-separated domains. Required when automation is on.">
+                        <FormInput
+                          value={wizardState.computerAutomationAllowedDomains}
+                          disabled={!wizardState.computerAutomationEnabled}
+                          onChange={(event) => setWizardField('computerAutomationAllowedDomains', event.currentTarget.value)}
+                          placeholder="supplier.example.com, portal.example.com"
+                        />
+                      </FormField>
+                      <FormField label="Max active sessions" hint="Many agents can be registered; active sessions stay capped and the rest queue.">
+                        <FormInput
+                          type="number"
+                          min="1"
+                          value={wizardState.computerAutomationMaxSessions}
+                          disabled={!wizardState.computerAutomationEnabled}
+                          onChange={(event) => setWizardField('computerAutomationMaxSessions', event.currentTarget.value)}
+                        />
+                      </FormField>
+                      <FormField label="Daily budget" hint="Stops automation when the daily cloud-computer budget is hit.">
+                        <FormInput
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={wizardState.computerAutomationDailyBudgetUsd}
+                          disabled={!wizardState.computerAutomationEnabled}
+                          onChange={(event) => setWizardField('computerAutomationDailyBudgetUsd', event.currentTarget.value)}
+                        />
+                      </FormField>
+                      <FormField label="Monthly budget" hint="Stops automation when the monthly cloud-computer budget is hit.">
+                        <FormInput
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={wizardState.computerAutomationMonthlyBudgetUsd}
+                          disabled={!wizardState.computerAutomationEnabled}
+                          onChange={(event) => setWizardField('computerAutomationMonthlyBudgetUsd', event.currentTarget.value)}
+                        />
+                      </FormField>
+                    </FormGrid>
+                  </details>
+                  <details className="app-stack-3">
                     <summary>Advanced provider/model overrides</summary>
                     <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                       <FormField label="AI model provider" hint="Choose the AI model provider for this assistant.">
@@ -4681,24 +4808,6 @@ export function WorkstationDeployedAgentsPane({
                               {model.label}
                             </option>
                           ))}
-                        </FormSelect>
-                      </FormField>
-                      <FormField label="Computer target" hint="Cloud is the default. Use local targets only for advanced private-computer cases.">
-                        <FormSelect
-                          value={wizardState.runtimeTarget}
-                          onChange={(event) => {
-                            const nextRuntimeTarget = event.currentTarget.value;
-                            setWizardState((current) => ({
-                              ...current,
-                              runtimeTarget: nextRuntimeTarget,
-                              runtimePlacement: normalizeRuntimePlacement(nextRuntimeTarget),
-                            }));
-                          }}
-                        >
-                          <option value="cloud">Cloud</option>
-                          <option value="local">Local Computer (advanced)</option>
-                          <option value="virtual_computer">Virtual Computer (advanced)</option>
-                          <option value="device">Managed computer (advanced)</option>
                         </FormSelect>
                       </FormField>
                       <FormField label="Billing plan" hint="Choose the plan tied to this assistant.">

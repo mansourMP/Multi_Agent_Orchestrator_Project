@@ -409,6 +409,9 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertTrue(payload["routing_contract"]["cloud_computer_requires_explicit_selection"])
         self.assertTrue(payload["routing_contract"]["cloud_computer_metered"])
         self.assertFalse(payload["routing_contract"]["agent_definition_allocates_runtime"])
+        self.assertTrue(payload["routing_contract"]["runtime_placement_separate_from_computer_automation"])
+        self.assertEqual(payload["routing_contract"]["studio_agent_computer_automation_default"], "disabled")
+        self.assertTrue(payload["routing_contract"]["registered_agents_active_agents_queue_when_over_capacity"])
         targets = {item["target_id"]: item for item in payload["targets"]}
         self.assertTrue(targets["sage_cloud_computer"]["available"])
         self.assertTrue(targets["sage_cloud_computer"]["metered"])

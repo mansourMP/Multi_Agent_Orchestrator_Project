@@ -504,6 +504,11 @@ def _customization_contract() -> Dict[str, Any]:
                         "needs_website_login": {"type": "boolean"},
                         "needs_payments": {"type": "boolean"},
                         "needs_approval": {"type": "boolean"},
+                        "needs_api_connector": {"type": "boolean"},
+                        "needs_business_channel": {"type": "boolean"},
+                        "needs_knowledge_base": {"type": "boolean"},
+                        "needs_computer_automation": {"type": "boolean"},
+                        "computer_automation_reason": {"type": ["string", "null"]},
                     },
                 },
             },
@@ -513,11 +518,30 @@ def _customization_contract() -> Dict[str, Any]:
 
 def _studio_runtime_options() -> List[Dict[str, Any]]:
     return [
-        {"option_id": "cloud_lite", "label": "Cloud Lite"},
-        {"option_id": "cloud_agent", "label": "Cloud Agent"},
-        {"option_id": "local_computer", "label": "Local Computer"},
-        {"option_id": "dedicated_agent", "label": "Dedicated Agent"},
-        {"option_id": "virtual_computer", "label": "Virtual Computer"},
+        {
+            "option_id": "managed_cloud",
+            "label": "Managed Cloud",
+            "runtime_placement": "managed_cloud",
+            "computer_automation_default": "disabled",
+        },
+        {
+            "option_id": "customer_local",
+            "label": "Customer Local Runtime",
+            "runtime_placement": "customer_local",
+            "computer_automation_default": "disabled",
+        },
+        {
+            "option_id": "customer_hosted",
+            "label": "Customer-Hosted Runtime",
+            "runtime_placement": "customer_hosted",
+            "computer_automation_default": "disabled",
+        },
+        {
+            "option_id": "computer_automation_add_on",
+            "label": "Computer Automation Add-on",
+            "computer_automation_default": "disabled",
+            "requires_explicit_enablement": True,
+        },
     ]
 
 
@@ -530,6 +554,11 @@ def _template_runtime_requirements_for(contract: Dict[str, Any]) -> Dict[str, bo
             "needs_website_login": bool(explicit.get("needs_website_login")),
             "needs_payments": bool(explicit.get("needs_payments")),
             "needs_approval": bool(explicit.get("needs_approval")),
+            "needs_api_connector": bool(explicit.get("needs_api_connector")),
+            "needs_business_channel": bool(explicit.get("needs_business_channel")),
+            "needs_knowledge_base": bool(explicit.get("needs_knowledge_base")),
+            "needs_computer_automation": bool(explicit.get("needs_computer_automation")),
+            "computer_automation_reason": str(explicit.get("computer_automation_reason") or "").strip() or None,
         }
     tools = contract.get("tools_skills") if isinstance(contract.get("tools_skills"), list) else []
     tool_ids = [str(item.get("id") or "").strip().lower() for item in tools if isinstance(item, dict)]
@@ -542,12 +571,9 @@ def _template_runtime_requirements_for(contract: Dict[str, Any]) -> Dict[str, bo
         or any("checkout" in item for item in tool_ids)
         or any("payment" in str(item or "").lower() for item in approval_list)
     )
-    needs_browser = bool(
-        slug == "shop-assistant"
-        or any("order.status" in item for item in tool_ids)
-        or any("catalog.lookup" in item for item in tool_ids)
-    )
-    needs_website_login = bool(slug == "shop-assistant")
+    needs_computer_automation = bool("supplier_portal" in str(contract.get("variant") or "").strip().lower())
+    needs_browser = needs_computer_automation
+    needs_website_login = needs_computer_automation
     needs_files = bool(contract.get("default_data_sources"))
     needs_approval = bool(approval_required_tools or approval_list)
     return {
@@ -556,6 +582,11 @@ def _template_runtime_requirements_for(contract: Dict[str, Any]) -> Dict[str, bo
         "needs_website_login": needs_website_login,
         "needs_payments": needs_payments,
         "needs_approval": needs_approval,
+        "needs_api_connector": bool(any(item for item in tool_ids if "." in item)),
+        "needs_business_channel": bool(contract.get("channels")),
+        "needs_knowledge_base": needs_files,
+        "needs_computer_automation": needs_computer_automation,
+        "computer_automation_reason": None,
     }
 
 

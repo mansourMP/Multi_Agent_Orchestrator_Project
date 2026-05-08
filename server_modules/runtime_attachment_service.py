@@ -657,6 +657,9 @@ def build_workspace_runtime_targets(
         "routing_contract": {
             "product_default_target_id": "cloud_default",
             "business_default_mode": "cloud_first",
+            "runtime_placement_separate_from_computer_automation": True,
+            "studio_agent_computer_automation_default": "disabled",
+            "registered_agents_active_agents_queue_when_over_capacity": True,
             "business_private_runtime_optional": True,
             "self_host_runtime_requires_explicit_selection": True,
             "cloud_computer_requires_explicit_selection": True,

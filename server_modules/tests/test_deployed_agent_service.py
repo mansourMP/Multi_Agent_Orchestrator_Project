@@ -793,6 +793,98 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(specialist_kwargs["metadata"]["platform_cta_url"], "https://example.com/start")
         self.assertEqual(specialist_kwargs["metadata"]["public_intro"], "Fast help for shoppers.")
 
+    async def test_create_draft_deployed_agent_separates_runtime_placement_from_computer_automation(self) -> None:
+        backing_install = _backing_install()
+        persisted_row = _deployed_agent_row(
+            metadata={
+                "runtime_placement": "managed_cloud",
+                "computer_automation": {"enabled": False, "allowed_domains": []},
+            }
+        )
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
+                new=AsyncMock(return_value=backing_install),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.create_deployed_agent",
+                new=AsyncMock(return_value=persisted_row),
+            ) as create_deployed_agent_mock,
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(return_value=backing_install),
+            ),
+        ):
+            created = await deployed_agent_service.create_draft_deployed_agent(
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                name="Store Assistant",
+                config={
+                    "runtime_placement": "managed_cloud",
+                    "computer_automation": {
+                        "enabled": False,
+                        "runtime_class": "virtual_browser",
+                        "allowed_domains": ["supplier.example.com"],
+                        "max_concurrent_sessions": 1,
+                    },
+                },
+            )
+
+        persisted_kwargs = create_deployed_agent_mock.await_args.kwargs
+        self.assertEqual(persisted_kwargs["runtime_target"], "cloud")
+        self.assertEqual(persisted_kwargs["metadata"]["runtime_placement"], "managed_cloud")
+        self.assertFalse(persisted_kwargs["metadata"]["computer_automation"]["enabled"])
+        self.assertFalse(created["config"]["computer_automation"]["enabled"])
+        self.assertFalse(created["config"]["agent_workspace"]["isolation"]["sage_memory_access"])
+
+    async def test_create_draft_deployed_agent_supports_customer_hosted_without_cloud_computer(self) -> None:
+        backing_install = _backing_install()
+        persisted_row = _deployed_agent_row(
+            metadata={"runtime_placement": "customer_hosted"},
+        )
+        persisted_row["runtime_target"] = "self_hosted"
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
+                new=AsyncMock(return_value=backing_install),
+            ) as create_specialist_mock,
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.create_deployed_agent",
+                new=AsyncMock(return_value=persisted_row),
+            ) as create_deployed_agent_mock,
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(return_value=backing_install),
+            ),
+        ):
+            await deployed_agent_service.create_draft_deployed_agent(
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                name="Store Assistant",
+                config={"runtime_placement": "customer_hosted"},
+            )
+
+        self.assertEqual(create_deployed_agent_mock.await_args.kwargs["runtime_target"], "self_hosted")
+        self.assertEqual(create_specialist_mock.await_args.kwargs["runtime_mode"], "hosted_secure")
+
     async def test_create_draft_deployed_agent_enforces_free_specialist_limit(self) -> None:
         with (
             patch(

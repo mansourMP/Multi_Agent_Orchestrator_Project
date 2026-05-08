@@ -17,11 +17,10 @@ class VirtualComputerAgentStudioIntegrationTests(unittest.TestCase):
         )
         options = route.get("studio_runtime_options") or []
         option_ids = {str(item.get("option_id") or "") for item in options if isinstance(item, dict)}
-        self.assertIn("cloud_lite", option_ids)
-        self.assertIn("cloud_agent", option_ids)
-        self.assertIn("local_computer", option_ids)
-        self.assertIn("dedicated_agent", option_ids)
-        self.assertIn("virtual_computer", option_ids)
+        self.assertIn("managed_cloud", option_ids)
+        self.assertIn("customer_local", option_ids)
+        self.assertIn("customer_hosted", option_ids)
+        self.assertIn("computer_automation_add_on", option_ids)
 
     def test_template_requirements_route_runtime_choice(self):
         browser_route = runtime_policy.decide_execution_target(

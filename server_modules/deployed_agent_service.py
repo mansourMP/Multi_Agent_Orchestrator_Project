@@ -11,6 +11,7 @@ from server_modules import auth as auth_module
 from server_modules import config_defaults_service
 from server_modules import control_plane_repository
 from server_modules import deployed_agent_config_schema
+from server_modules import deployed_agent_runtime_contract_service
 from server_modules import deployed_agent_analytics_service
 from server_modules import entitlements_service
 from server_modules import external_user_privacy_service
@@ -168,6 +169,8 @@ def _normalize_runtime_target(value: Any) -> str:
         return "cloud"
     if token in {"local", "local_secure", "local_only", "local_companion"}:
         return "local"
+    if token in {"self_hosted", "self_hosted_business", "self_hosted_business_node", "customer_hosted"}:
+        return "self_hosted"
     if token in {"device", "desktop", "privileged_device"}:
         return "device"
     return token or config_defaults_service.default_deployed_agent_runtime_target()
@@ -180,6 +183,14 @@ def _runtime_target_to_specialist_mode(runtime_target: Any) -> str:
     if token == "device":
         return "privileged_device"
     return "hosted_secure"
+
+
+def _deployed_agent_workspace_contract(deployed_agent: Dict[str, Any]) -> Dict[str, Any]:
+    return deployed_agent_runtime_contract_service.build_deployed_agent_workspace_contract(
+        tenant_id=deployed_agent.get("tenant_id"),
+        workspace_id=deployed_agent.get("owner_workspace_id"),
+        deployed_agent_id=deployed_agent.get("id"),
+    )
 
 
 def _normalize_deployment_state(value: Any, *, default: str = "draft") -> str:
@@ -645,7 +656,15 @@ def _apply_workspace_admin_defaults_to_config(
 ) -> deployed_agent_config_schema.DeployedAgentConfig:
     owner_metadata = _coerce_dict(legacy_metadata)
     payload = config.model_dump(exclude_none=True)
-    if not runtime_target_supplied and not _config_field_present(config_payload, "runtime_target"):
+    if (
+        not runtime_target_supplied
+        and not _config_field_present(config_payload, "runtime_target")
+        and _config_field_present(config_payload, "runtime_placement")
+    ):
+        payload["runtime_target"] = deployed_agent_runtime_contract_service.runtime_target_for_placement(
+            payload.get("runtime_placement")
+        )
+    elif not runtime_target_supplied and not _config_field_present(config_payload, "runtime_target"):
         payload["runtime_target"] = str(workspace_defaults.runtime_target or config.runtime_target).strip() or config.runtime_target
     if not billing_plan_supplied and not _config_field_present(config_payload, "billing_plan"):
         payload["billing_plan"] = str(workspace_defaults.billing_plan or config.billing_plan).strip() or config.billing_plan
@@ -1457,6 +1476,7 @@ def project_deployed_agent(
         deployed_agent=deployed_agent,
         config=config,
     )
+    config_payload["agent_workspace"] = _deployed_agent_workspace_contract(deployed_agent)
     projected["config"] = config_payload
     projected["operational_state"] = _operational_state_payload(operational_state)
     if include_internal:
@@ -1597,6 +1617,8 @@ async def mirror_deployed_agent_to_backing_specialist(
             "id": deployed_agent.get("id"),
             "owner_workspace_id": workspace_id,
             "runtime_target": runtime_target,
+            "runtime_placement": config.runtime_placement,
+            "computer_automation": config.computer_automation.model_dump(exclude_none=True),
             "provider": selected_provider,
             "model": selected_model,
         },

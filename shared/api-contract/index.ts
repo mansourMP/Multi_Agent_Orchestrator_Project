@@ -23,6 +23,44 @@ export type ApiTurnAttachment = {
   metadata?: Record<string, unknown>;
 };
 
+export type DeployedAgentRuntimePlacement =
+  | 'managed_cloud'
+  | 'customer_local'
+  | 'customer_hosted';
+
+export type DeployedAgentComputerAutomationConfig = {
+  enabled: boolean;
+  runtime_class?: 'virtual_browser' | 'virtual_desktop' | 'virtual_code_sandbox' | 'local_browser' | 'local_desktop' | null;
+  allowed_domains?: string[];
+  max_concurrent_sessions?: number;
+  daily_budget_usd?: number | null;
+  monthly_budget_usd?: number | null;
+  requires_owner_approval?: boolean;
+  idle_timeout_seconds?: number;
+  max_session_runtime_seconds?: number;
+};
+
+export type DeployedAgentWorkspaceContract = {
+  schema_version: number;
+  workspace_root: string;
+  files_root: string;
+  artifacts_root: string;
+  browser_profile_root: string;
+  logs_root: string;
+  state_root: string;
+  customer_scope_key?: string | null;
+  customer_root?: string | null;
+  session_scope_key?: string | null;
+  session_root?: string | null;
+  isolation: {
+    scope: 'deployed_agent';
+    cross_agent_read: false;
+    cross_customer_read: false;
+    host_filesystem_default: 'workspace_root_only';
+    sage_memory_access: false;
+  };
+};
+
 export type AgentTurnPolicyContext = {
   trust_mode?: 'auto' | 'guarded' | 'strict' | 'cost_guard' | 'sensitive_guard';
   session_mode?: 'copilot' | 'agent';

@@ -495,8 +495,67 @@ def _customization_contract() -> Dict[str, Any]:
                 "channel_bindings": {"type": "object", "additionalProperties": True},
                 "tool_overrides": {"type": "object", "additionalProperties": True},
                 "approval_policy_overrides": {"type": "object", "additionalProperties": True},
+                "template_requirements": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "needs_browser": {"type": "boolean"},
+                        "needs_files": {"type": "boolean"},
+                        "needs_website_login": {"type": "boolean"},
+                        "needs_payments": {"type": "boolean"},
+                        "needs_approval": {"type": "boolean"},
+                    },
+                },
             },
         },
+    }
+
+
+def _studio_runtime_options() -> List[Dict[str, Any]]:
+    return [
+        {"option_id": "cloud_lite", "label": "Cloud Lite"},
+        {"option_id": "cloud_agent", "label": "Cloud Agent"},
+        {"option_id": "local_computer", "label": "Local Computer"},
+        {"option_id": "dedicated_agent", "label": "Dedicated Agent"},
+        {"option_id": "virtual_computer", "label": "Virtual Computer"},
+    ]
+
+
+def _template_runtime_requirements_for(contract: Dict[str, Any]) -> Dict[str, bool]:
+    explicit = contract.get("template_runtime_requirements")
+    if isinstance(explicit, dict):
+        return {
+            "needs_browser": bool(explicit.get("needs_browser")),
+            "needs_files": bool(explicit.get("needs_files")),
+            "needs_website_login": bool(explicit.get("needs_website_login")),
+            "needs_payments": bool(explicit.get("needs_payments")),
+            "needs_approval": bool(explicit.get("needs_approval")),
+        }
+    tools = contract.get("tools_skills") if isinstance(contract.get("tools_skills"), list) else []
+    tool_ids = [str(item.get("id") or "").strip().lower() for item in tools if isinstance(item, dict)]
+    approval_required_tools = [item for item in tools if isinstance(item, dict) and bool(item.get("approval_required"))]
+    approval_policy = contract.get("approval_policy") if isinstance(contract.get("approval_policy"), dict) else {}
+    approval_list = approval_policy.get("owner_approval_required_for") if isinstance(approval_policy.get("owner_approval_required_for"), list) else []
+    slug = str(contract.get("slug") or "").strip().lower()
+    needs_payments = bool(
+        any("payment" in item for item in tool_ids)
+        or any("checkout" in item for item in tool_ids)
+        or any("payment" in str(item or "").lower() for item in approval_list)
+    )
+    needs_browser = bool(
+        slug == "shop-assistant"
+        or any("order.status" in item for item in tool_ids)
+        or any("catalog.lookup" in item for item in tool_ids)
+    )
+    needs_website_login = bool(slug == "shop-assistant")
+    needs_files = bool(contract.get("default_data_sources"))
+    needs_approval = bool(approval_required_tools or approval_list)
+    return {
+        "needs_browser": needs_browser,
+        "needs_files": needs_files,
+        "needs_website_login": needs_website_login,
+        "needs_payments": needs_payments,
+        "needs_approval": needs_approval,
     }
 
 
@@ -633,6 +692,8 @@ def _with_contract_defaults(contract: Dict[str, Any]) -> Dict[str, Any]:
     payload["contract_version"] = STUDIO_PROOF_AGENT_SEED_VERSION
     payload["customization"] = _customization_contract()
     payload["proof_agent"] = True
+    payload["studio_runtime_options"] = _studio_runtime_options()
+    payload["template_runtime_requirements"] = _template_runtime_requirements_for(payload)
     payload.setdefault("business_metrics", _business_metrics_for(payload))
     if str(payload.get("slug") or "").strip() == "shop-assistant":
         payload["revenue_proof"] = _shop_assistant_revenue_proof_block(payload)

@@ -55,6 +55,9 @@ class VirtualComputerProviderAbstractionTests(unittest.TestCase):
                 {
                     "session_id": created.get("session_id"),
                     "action": "run_command",
+                    "approval_id": "appr_provider_swap",
+                    "risk_policy": {"red_policy": "owner_approval"},
+                    "policy_metadata": {"owner_role": "owner", "owner_is_admin": True},
                     "action_args": {"command": "echo hello"},
                 }
             )

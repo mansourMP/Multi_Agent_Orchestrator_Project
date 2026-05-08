@@ -530,6 +530,15 @@ def resolve_vault_credential(credential_id, workspace_id=None, **scope):
         actor_type=scope.get("actor_type"),
         actor_id=scope.get("actor_id"),
         purpose=scope.get("purpose"),
+        target_domain=scope.get("target_domain"),
+        allowed_domains=scope.get("allowed_domains"),
+        allowed_tools=scope.get("allowed_tools"),
+        session_id=scope.get("session_id"),
+        require_approval=scope.get("require_approval"),
+        approval_id=scope.get("approval_id"),
+        approval_actor_id=scope.get("approval_actor_id"),
+        approval_reason=scope.get("approval_reason"),
+        credential_risk_tags=scope.get("credential_risk_tags"),
         ttl_seconds=scope.get("ttl_seconds") or secrets_broker.DEFAULT_SECRET_GRANT_TTL_SECONDS,
     )
 
@@ -549,6 +558,15 @@ def resolve_default_vault_credential(provider, workspace_id=None, **scope):
         actor_type=scope.get("actor_type"),
         actor_id=scope.get("actor_id"),
         purpose=scope.get("purpose"),
+        target_domain=scope.get("target_domain"),
+        allowed_domains=scope.get("allowed_domains"),
+        allowed_tools=scope.get("allowed_tools"),
+        session_id=scope.get("session_id"),
+        require_approval=scope.get("require_approval"),
+        approval_id=scope.get("approval_id"),
+        approval_actor_id=scope.get("approval_actor_id"),
+        approval_reason=scope.get("approval_reason"),
+        credential_risk_tags=scope.get("credential_risk_tags"),
         ttl_seconds=scope.get("ttl_seconds") or secrets_broker.DEFAULT_SECRET_GRANT_TTL_SECONDS,
     )
 

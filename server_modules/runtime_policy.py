@@ -468,16 +468,21 @@ RUNTIME_CHOICE_ALIASES = {
     "local_companion": RUNTIME_CHOICE_LOCAL,
     "localcompanion": RUNTIME_CHOICE_LOCAL,
     "mac": RUNTIME_CHOICE_LOCAL,
+    "local_computer": RUNTIME_CHOICE_LOCAL,
     "virtual_browser": RUNTIME_CHOICE_VIRTUAL_BROWSER,
     "virtual-browser": RUNTIME_CHOICE_VIRTUAL_BROWSER,
     "virtualbrowser": RUNTIME_CHOICE_VIRTUAL_BROWSER,
     "browser_vm": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+    "cloud_lite": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+    "virtual_computer": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+    "cloud_agent": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
     "virtual_desktop": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
     "virtual-desktop": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
     "virtualdesktop": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
     "virtual_workspace": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
     "virtual-workspace": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
     "dedicated_virtual_workspace": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+    "dedicated_agent": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
     "virtual_code_sandbox": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
     "virtual-code-sandbox": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
     "virtualcodesandbox": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
@@ -2597,6 +2602,87 @@ def _metadata_requests_browser_automation(metadata: Dict[str, Any]) -> bool:
     return False
 
 
+def _metadata_requests_unknown_or_untrusted_web(metadata: Dict[str, Any]) -> bool:
+    if bool(metadata.get("unknown_website")) or bool(metadata.get("untrusted_website")):
+        return True
+    if bool(metadata.get("untrusted_file")) or bool(metadata.get("untrusted_files")):
+        return True
+    if bool(metadata.get("scraping")) or bool(metadata.get("web_scraping")) or bool(metadata.get("scrape_job")):
+        return True
+    url = str(metadata.get("url") or metadata.get("target_url") or "").strip().lower()
+    if url.startswith("http://"):
+        return True
+    if "pastebin" in url or "raw.githubusercontent.com" in url:
+        return True
+    return False
+
+
+def _studio_runtime_options_catalog() -> List[Dict[str, Any]]:
+    return [
+        {
+            "option_id": "cloud_lite",
+            "label": "Cloud Lite",
+            "runtime_choice": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+            "execution_target": EXECUTION_TARGET_CLOUD,
+        },
+        {
+            "option_id": "cloud_agent",
+            "label": "Cloud Agent",
+            "runtime_choice": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+            "execution_target": EXECUTION_TARGET_CLOUD,
+        },
+        {
+            "option_id": "local_computer",
+            "label": "Local Computer",
+            "runtime_choice": RUNTIME_CHOICE_LOCAL,
+            "execution_target": EXECUTION_TARGET_LOCAL_COMPANION,
+        },
+        {
+            "option_id": "dedicated_agent",
+            "label": "Dedicated Agent",
+            "runtime_choice": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+            "execution_target": EXECUTION_TARGET_CLOUD,
+        },
+        {
+            "option_id": "virtual_computer",
+            "label": "Virtual Computer",
+            "runtime_choice": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+            "execution_target": EXECUTION_TARGET_CLOUD,
+        },
+    ]
+
+
+def _studio_template_requirements(metadata: Dict[str, Any]) -> Dict[str, bool]:
+    req = metadata.get("template_requirements") if isinstance(metadata.get("template_requirements"), dict) else {}
+    runtime_req = (
+        metadata.get("template_runtime_requirements")
+        if isinstance(metadata.get("template_runtime_requirements"), dict)
+        else {}
+    )
+    merged = {**runtime_req, **req}
+    return {
+        "needs_browser": bool(merged.get("needs_browser") or metadata.get("needs_browser")),
+        "needs_files": bool(merged.get("needs_files") or metadata.get("needs_files")),
+        "needs_website_login": bool(merged.get("needs_website_login") or metadata.get("needs_website_login")),
+        "needs_payments": bool(merged.get("needs_payments") or metadata.get("needs_payments")),
+        "needs_approval": bool(merged.get("needs_approval") or metadata.get("needs_approval")),
+    }
+
+
+def _metadata_requests_shop_assistant_virtual_browser(metadata: Dict[str, Any]) -> bool:
+    template_slug = str(metadata.get("template_slug") or metadata.get("agent_template_slug") or "").strip().lower()
+    agent_kind = str(metadata.get("agent_kind") or metadata.get("agent_type") or "").strip().lower()
+    is_shop_assistant = template_slug == "shop-assistant" or agent_kind == "shop_assistant"
+    if not is_shop_assistant:
+        return False
+    if bool(metadata.get("supplier_portal")) or bool(metadata.get("supplier_portal_login")):
+        return True
+    if bool(metadata.get("order_status_lookup")) or bool(metadata.get("order_status_workflow")):
+        return True
+    requirements = _studio_template_requirements(metadata)
+    return bool(requirements.get("needs_browser") or requirements.get("needs_website_login"))
+
+
 def _metadata_requests_code_or_data_job(metadata: Dict[str, Any]) -> bool:
     if bool(metadata.get("code_job")) or bool(metadata.get("data_job")):
         return True
@@ -2629,12 +2715,28 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         metadata.get("runtime_choice")
         or metadata.get("execution_runtime_choice")
     )
+    def _override_warning(selected: str) -> str:
+        if selected == RUNTIME_CHOICE_LOCAL and (
+            _metadata_requests_browser_automation(metadata)
+            or _metadata_requests_unknown_or_untrusted_web(metadata)
+            or _metadata_requests_code_or_data_job(metadata)
+            or _metadata_requests_enterprise_customer_workflow(metadata)
+        ):
+            return "Local override conflicts with virtual-first policy for risky or untrusted workloads."
+        if selected != RUNTIME_CHOICE_LOCAL and _metadata_has_personal_local_context(metadata):
+            return "Virtual override conflicts with local-first policy for personal device context."
+        return ""
     if requested:
+        warning = _override_warning(requested)
         return {
             "requested": requested,
             "selected": requested,
             "reason": "Runtime choice was explicitly requested in metadata.",
             "source": "explicit",
+            "override_requested": True,
+            "policy_warning": warning or None,
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": _studio_template_requirements(metadata),
         }
 
     if _metadata_has_personal_local_context(metadata):
@@ -2643,6 +2745,55 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
             "selected": RUNTIME_CHOICE_LOCAL,
             "reason": "Task uses personal apps/files/session context and stays local by default.",
             "source": "router_rule_personal_local",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": _studio_template_requirements(metadata),
+        }
+
+    template_requirements = _studio_template_requirements(metadata)
+    if _metadata_requests_shop_assistant_virtual_browser(metadata):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+            "reason": "Shop Assistant supplier portal/order-status workflow runs in virtual browser without touching owner local machine.",
+            "source": "router_rule_shop_assistant_virtual_browser",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": template_requirements,
+        }
+    if template_requirements.get("needs_website_login"):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+            "reason": "Template needs website login; routing to isolated virtual browser runtime.",
+            "source": "router_rule_template_website_login",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": template_requirements,
+        }
+    if template_requirements.get("needs_browser"):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+            "reason": "Template declares browser dependency; routing to virtual browser runtime.",
+            "source": "router_rule_template_browser",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": template_requirements,
+        }
+    if template_requirements.get("needs_files"):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+            "reason": "Template declares files dependency; routing to virtual code sandbox runtime.",
+            "source": "router_rule_template_files",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": template_requirements,
+        }
+    if template_requirements.get("needs_payments"):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+            "reason": "Template declares payments dependency; routing to dedicated virtual desktop workflow lane.",
+            "source": "router_rule_template_payments",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": template_requirements,
         }
 
     if _metadata_requests_browser_automation(metadata):
@@ -2651,6 +2802,18 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
             "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
             "reason": "Risky or privileged browser automation is routed to virtual browser isolation.",
             "source": "router_rule_virtual_browser",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": template_requirements,
+        }
+
+    if _metadata_requests_unknown_or_untrusted_web(metadata):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+            "reason": "Unknown/untrusted websites, files, and scraping routes default to virtual browser isolation.",
+            "source": "router_rule_virtual_browser_untrusted",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": template_requirements,
         }
 
     if _metadata_requests_code_or_data_job(metadata):
@@ -2659,6 +2822,8 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
             "selected": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
             "reason": "Code/data style work is routed to virtual code sandbox execution.",
             "source": "router_rule_virtual_code_sandbox",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": template_requirements,
         }
 
     if _metadata_requests_enterprise_customer_workflow(metadata):
@@ -2667,6 +2832,8 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
             "selected": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
             "reason": "Enterprise/customer workflow is routed to dedicated virtual workspace class.",
             "source": "router_rule_virtual_desktop",
+            "studio_runtime_options": _studio_runtime_options_catalog(),
+            "studio_template_requirements": template_requirements,
         }
 
     return {
@@ -2674,6 +2841,8 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         "selected": RUNTIME_CHOICE_LOCAL,
         "reason": "No virtual runtime routing rule matched; defaulting to local computer.",
         "source": "router_rule_default_local",
+        "studio_runtime_options": _studio_runtime_options_catalog(),
+        "studio_template_requirements": template_requirements,
     }
 
 
@@ -2698,6 +2867,18 @@ def _auto_cloud_capacity_fallback_allowed(metadata: Dict[str, Any]) -> tuple[boo
         return False, "Automatic route keeps local execution for this task type."
 
     return True, "Local machines are busy, so Hekor can use cloud runtime for this task."
+
+
+def _local_fallback_risk_allows_runtime(metadata: Dict[str, Any]) -> tuple[bool, str]:
+    if _metadata_requests_enterprise_customer_workflow(metadata):
+        return False, "Local fallback blocked for enterprise/customer workflow route."
+    if _metadata_requests_code_or_data_job(metadata):
+        return False, "Local fallback blocked for sandboxed code/data route."
+    if _metadata_requests_browser_automation(metadata):
+        return False, "Local fallback blocked for risky browser automation route."
+    if _metadata_requests_unknown_or_untrusted_web(metadata):
+        return False, "Local fallback blocked for unknown/untrusted web/file route."
+    return True, "Virtual runtime unavailable; local fallback is allowed for low-risk route."
 
 
 def apply_execution_route_metadata(metadata: Dict[str, Any], route: Dict[str, Any]) -> Dict[str, Any]:
@@ -2764,6 +2945,19 @@ def apply_execution_route_metadata(metadata: Dict[str, Any], route: Dict[str, An
         metadata["runtime_provider_requested"] = str(route.get("runtime_provider_requested"))
     else:
         metadata.pop("runtime_provider_requested", None)
+    metadata["runtime_choice_override_requested"] = bool(route.get("runtime_choice_override_requested"))
+    if route.get("runtime_choice_policy_warning"):
+        metadata["runtime_choice_policy_warning"] = str(route.get("runtime_choice_policy_warning"))
+    else:
+        metadata.pop("runtime_choice_policy_warning", None)
+    if route.get("studio_runtime_options"):
+        metadata["studio_runtime_options"] = list(route.get("studio_runtime_options") or [])
+    else:
+        metadata.pop("studio_runtime_options", None)
+    if route.get("studio_template_requirements"):
+        metadata["studio_template_requirements"] = dict(route.get("studio_template_requirements") or {})
+    else:
+        metadata.pop("studio_template_requirements", None)
     metadata["runtime_contract_interface"] = str(route.get("runtime_contract_interface") or RUNTIME_CONTRACT_INTERFACE_ID)
     metadata["runtime_contract_kind"] = str(
         route.get("runtime_contract_kind")
@@ -2852,6 +3046,10 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
             "runtime_choice_reason": runtime_choice.get("reason"),
             "runtime_choice_source": runtime_choice.get("source"),
             "runtime_choice_applied": runtime_choice_applied,
+            "runtime_choice_override_requested": bool(runtime_choice.get("override_requested")),
+            "runtime_choice_policy_warning": str(runtime_choice.get("policy_warning") or ""),
+            "studio_runtime_options": list(runtime_choice.get("studio_runtime_options") or []),
+            "studio_template_requirements": dict(runtime_choice.get("studio_template_requirements") or {}),
             "runtime_provider_requested": runtime_provider_requested,
             "runtime_contract_interface": RUNTIME_CONTRACT_INTERFACE_ID,
             "runtime_contract_kind": _runtime_contract_kind_from_choice(runtime_choice.get("selected")),
@@ -2950,11 +3148,36 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
                 selected = EXECUTION_TARGET_LOCAL_COMPANION
                 reason = "Run requested on local companion."
             else:
-                selected = EXECUTION_TARGET_CLOUD
-                reason = "Local companion requested but not available; using cloud fallback."
-                fallback = "Local companion is not enabled on this runtime; using cloud fallback."
+                can_fallback_to_cloud, fallback_reason = _auto_cloud_capacity_fallback_allowed(metadata)
+                if can_fallback_to_cloud:
+                    selected = EXECUTION_TARGET_CLOUD
+                    reason = "Local companion requested but not available; using cloud fallback."
+                    fallback = "Local companion is not enabled on this runtime; using cloud fallback."
+                else:
+                    selected = EXECUTION_TARGET_LOCAL_COMPANION
+                    reason = "Local companion requested but unavailable; fallback to cloud is blocked by policy."
+                    fallback = fallback_reason
+                    waiting_for_runtime = True
+                    waiting_for_capacity = False
     else:
         reason = "Run requested in cloud mode."
+        virtual_runtime_unavailable = bool(
+            metadata.get("virtual_runtime_unavailable")
+            or metadata.get("cloud_runtime_unavailable")
+            or metadata.get("virtual_runtime_down")
+        )
+        if virtual_runtime_unavailable:
+            allow_local_fallback, local_fallback_reason = _local_fallback_risk_allows_runtime(metadata)
+            if allow_local_fallback:
+                selected = EXECUTION_TARGET_LOCAL_COMPANION
+                reason = "Virtual runtime unavailable; local fallback selected for low-risk route."
+                fallback = local_fallback_reason
+            else:
+                selected = EXECUTION_TARGET_CLOUD
+                reason = "Virtual runtime unavailable and local fallback blocked by risk policy."
+                fallback = local_fallback_reason
+                waiting_for_runtime = True
+                waiting_for_capacity = False
 
     return {
         "requested": requested,
@@ -2966,6 +3189,10 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
         "runtime_choice_reason": runtime_choice.get("reason"),
         "runtime_choice_source": runtime_choice.get("source"),
         "runtime_choice_applied": runtime_choice_applied,
+        "runtime_choice_override_requested": bool(runtime_choice.get("override_requested")),
+        "runtime_choice_policy_warning": str(runtime_choice.get("policy_warning") or ""),
+        "studio_runtime_options": list(runtime_choice.get("studio_runtime_options") or []),
+        "studio_template_requirements": dict(runtime_choice.get("studio_template_requirements") or {}),
         "runtime_provider_requested": runtime_provider_requested,
         "runtime_contract_interface": RUNTIME_CONTRACT_INTERFACE_ID,
         "runtime_contract_kind": _runtime_contract_kind_from_choice(runtime_choice.get("selected")),

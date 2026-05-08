@@ -37,8 +37,8 @@ class RuntimePolicyShellCommandTests(unittest.TestCase):
             capability_ids=[],
         )
 
-        self.assertEqual(evaluation.get("execution_decision"), "allow")
-        self.assertEqual(evaluation.get("reason"), "Internal reversible actions auto-run in default mode.")
+        self.assertEqual(evaluation.get("execution_decision"), "require_confirmation")
+        self.assertEqual(evaluation.get("reason"), "Capability contract requires approval before execution.")
         self.assertTrue(evaluation.get("uses_raw_command_path"))
         self.assertTrue(evaluation.get("safe_raw_shell_command"))
 

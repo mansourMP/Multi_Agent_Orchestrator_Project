@@ -287,6 +287,19 @@ def apply_execution_route_metadata(metadata: Dict[str, Any], route: Dict[str, An
         metadata["runtime_provider_requested"] = str(route.get("runtime_provider_requested"))
     else:
         metadata.pop("runtime_provider_requested", None)
+    metadata["runtime_choice_override_requested"] = bool(route.get("runtime_choice_override_requested"))
+    if route.get("runtime_choice_policy_warning"):
+        metadata["runtime_choice_policy_warning"] = str(route.get("runtime_choice_policy_warning"))
+    else:
+        metadata.pop("runtime_choice_policy_warning", None)
+    if route.get("studio_runtime_options"):
+        metadata["studio_runtime_options"] = list(route.get("studio_runtime_options") or [])
+    else:
+        metadata.pop("studio_runtime_options", None)
+    if route.get("studio_template_requirements"):
+        metadata["studio_template_requirements"] = dict(route.get("studio_template_requirements") or {})
+    else:
+        metadata.pop("studio_template_requirements", None)
     metadata["runtime_contract_interface"] = str(route.get("runtime_contract_interface") or runtime_policy.RUNTIME_CONTRACT_INTERFACE_ID)
     metadata["runtime_contract_kind"] = str(
         route.get("runtime_contract_kind")
@@ -437,11 +450,36 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
         elif runtime_policy.ORION_LOCAL_COMPANION_ENABLED:
             reason = "Run requested on local companion."
         else:
-            selected = runtime_policy.EXECUTION_TARGET_CLOUD
-            reason = "Local companion requested but not available; using cloud fallback."
-            fallback = "Local companion is not enabled on this runtime; using cloud fallback."
+            can_fallback_to_cloud, fallback_reason = runtime_policy._auto_cloud_capacity_fallback_allowed(clean_metadata)
+            if can_fallback_to_cloud:
+                selected = runtime_policy.EXECUTION_TARGET_CLOUD
+                reason = "Local companion requested but not available; using cloud fallback."
+                fallback = "Local companion is not enabled on this runtime; using cloud fallback."
+            else:
+                selected = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
+                reason = "Local companion requested but unavailable; fallback to cloud is blocked by policy."
+                fallback = fallback_reason
+                waiting_for_runtime = True
+                waiting_for_capacity = False
     else:
         reason = "Run requested in cloud mode."
+        virtual_runtime_unavailable = bool(
+            clean_metadata.get("virtual_runtime_unavailable")
+            or clean_metadata.get("cloud_runtime_unavailable")
+            or clean_metadata.get("virtual_runtime_down")
+        )
+        if virtual_runtime_unavailable:
+            allow_local_fallback, local_fallback_reason = runtime_policy._local_fallback_risk_allows_runtime(clean_metadata)
+            if allow_local_fallback:
+                selected = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
+                reason = "Virtual runtime unavailable; local fallback selected for low-risk route."
+                fallback = local_fallback_reason
+            else:
+                selected = runtime_policy.EXECUTION_TARGET_CLOUD
+                reason = "Virtual runtime unavailable and local fallback blocked by risk policy."
+                fallback = local_fallback_reason
+                waiting_for_runtime = True
+                waiting_for_capacity = False
 
     return {
         "requested": requested,
@@ -453,6 +491,10 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
         "runtime_choice_reason": runtime_choice.get("reason"),
         "runtime_choice_source": runtime_choice.get("source"),
         "runtime_choice_applied": runtime_choice_applied,
+        "runtime_choice_override_requested": bool(runtime_choice.get("override_requested")),
+        "runtime_choice_policy_warning": str(runtime_choice.get("policy_warning") or ""),
+        "studio_runtime_options": list(runtime_choice.get("studio_runtime_options") or []),
+        "studio_template_requirements": dict(runtime_choice.get("studio_template_requirements") or {}),
         "runtime_provider_requested": runtime_provider_requested,
         "runtime_contract_interface": runtime_policy.RUNTIME_CONTRACT_INTERFACE_ID,
         "runtime_contract_kind": runtime_policy._runtime_contract_kind_from_choice(runtime_choice.get("selected")),

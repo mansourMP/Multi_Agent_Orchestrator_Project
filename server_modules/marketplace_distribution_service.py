@@ -42,6 +42,33 @@ DEFAULT_CATEGORIES = {
     "provider": "Models",
     "skill": "Skills",
 }
+VALID_MARKETPLACE_RUNTIME_REQUIREMENTS = {
+    "local",
+    "virtual_browser",
+    "virtual_desktop",
+    "virtual_code_sandbox",
+    "cloud",
+    "auto",
+}
+VALID_ARTIFACT_TYPES = {
+    "screenshot",
+    "pdf",
+    "csv",
+    "downloaded_file",
+    "generated_document",
+    "browser_trace",
+    "terminal_log",
+}
+EXCESSIVE_PERMISSION_MARKERS = {
+    "*",
+    "admin:*",
+    "shell:execute",
+    "filesystem:write",
+    "computer_control",
+    "payment:execute",
+}
+MAX_MARKETPLACE_PERMISSION_COUNT = 24
+MAX_MARKETPLACE_DOMAIN_COUNT = 32
 
 
 PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
@@ -493,6 +520,153 @@ def _normalize_skill_payload(package_id: str, value: Any) -> Dict[str, Any]:
     }
 
 
+def _coerce_positive_int(value: Any, default: int, minimum: int = 1, maximum: Optional[int] = None) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    parsed = max(parsed, minimum)
+    if maximum is not None:
+        parsed = min(parsed, maximum)
+    return parsed
+
+
+def _normalize_marketplace_contract_allowed_domains(value: Any) -> List[str]:
+    out: List[str] = []
+    for raw in _normalize_list_of_strings(value):
+        token = raw.strip().lower()
+        if token and token not in out:
+            out.append(token)
+    return out[:MAX_MARKETPLACE_DOMAIN_COUNT]
+
+
+def _normalize_marketplace_contract_artifact_types(value: Any) -> List[str]:
+    raw_values = _normalize_list_of_strings(value)
+    normalized: List[str] = []
+    for item in raw_values:
+        token = str(item or "").strip().lower().replace("-", "_")
+        if token in VALID_ARTIFACT_TYPES and token not in normalized:
+            normalized.append(token)
+    return normalized
+
+
+def _derive_required_permissions(package_kind: str, package_payload: Dict[str, Any], fallback_permissions: List[str]) -> List[str]:
+    if fallback_permissions:
+        return fallback_permissions
+    if package_kind in {"app", "mini_app"}:
+        return _normalize_list_of_strings(package_payload.get("permissions"))
+    if package_kind == "connector":
+        return _unique_strings(
+            _normalize_list_of_strings(package_payload.get("scopes"))
+            + _normalize_list_of_strings(package_payload.get("actions"))
+        )
+    if package_kind == "skill":
+        return _normalize_list_of_strings(package_payload.get("permissions"))
+    if package_kind == "agent_template":
+        return _normalize_list_of_strings(package_payload.get("suggested_tools"))
+    return []
+
+
+def _derive_required_runtime(package_kind: str, package_payload: Dict[str, Any], explicit_runtime: str) -> str:
+    if explicit_runtime in VALID_MARKETPLACE_RUNTIME_REQUIREMENTS:
+        return explicit_runtime
+    if package_kind == "provider":
+        return "cloud"
+    if package_kind == "connector":
+        return "cloud"
+    if package_kind == "skill":
+        runtime = str(package_payload.get("runtime") or "").strip().lower()
+        if runtime in VALID_MARKETPLACE_RUNTIME_REQUIREMENTS:
+            return runtime
+        return "cloud"
+    if package_kind == "agent_template":
+        return "auto"
+    return "cloud"
+
+
+def _normalize_marketplace_contract(
+    payload: Dict[str, Any],
+    *,
+    package_kind: str,
+    package_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    source = _coerce_dict(payload.get("marketplace_contract") or payload.get("package_manifest"))
+    explicit_runtime = str(
+        source.get("required_runtime")
+        or source.get("runtime")
+        or payload.get("required_runtime")
+        or payload.get("runtime")
+        or ""
+    ).strip().lower()
+    required_runtime = _derive_required_runtime(package_kind, package_payload, explicit_runtime)
+    required_permissions = _derive_required_permissions(
+        package_kind,
+        package_payload,
+        _normalize_list_of_strings(
+            source.get("required_permissions")
+            or source.get("permissions")
+            or payload.get("required_permissions")
+            or payload.get("permissions")
+        ),
+    )
+    allowed_domains = _normalize_marketplace_contract_allowed_domains(
+        source.get("allowed_domains")
+        or source.get("egress_domains")
+        or package_payload.get("allowed_origins")
+        or package_payload.get("egress_domains")
+    )
+    artifact_types = _normalize_marketplace_contract_artifact_types(
+        source.get("artifact_types")
+        or source.get("allowed_artifact_types")
+    ) or ["screenshot", "pdf", "csv"]
+    max_runtime_seconds = _coerce_positive_int(
+        source.get("max_runtime_seconds") or source.get("max_runtime") or source.get("runtime_limit_seconds"),
+        3600,
+        60,
+        24 * 60 * 60,
+    )
+    approval_policy = _coerce_dict(source.get("approval_policy"))
+    if not approval_policy:
+        approval_policy = {
+            "default_mode": "guarded",
+            "requires_owner_approval": bool(payload.get("approval_required")),
+        }
+    data_retention = _coerce_dict(source.get("data_retention"))
+    if not data_retention:
+        data_retention = {
+            "retention_class": "audit_plus_ephemeral",
+            "artifact_ttl_seconds": 7 * 24 * 60 * 60,
+            "session_ttl_seconds": 24 * 60 * 60,
+        }
+    return {
+        "required_runtime": required_runtime,
+        "required_permissions": required_permissions,
+        "allowed_domains": allowed_domains,
+        "artifact_types": artifact_types,
+        "max_runtime_seconds": max_runtime_seconds,
+        "approval_policy": approval_policy,
+        "data_retention": data_retention,
+    }
+
+
+def _marketplace_contract_review_findings(contract: Dict[str, Any]) -> List[str]:
+    findings: List[str] = []
+    required_permissions = _normalize_list_of_strings(contract.get("required_permissions"))
+    normalized_permission_markers = {str(item or "").strip().lower() for item in required_permissions}
+    if len(required_permissions) > MAX_MARKETPLACE_PERMISSION_COUNT:
+        findings.append("excessive_permission_count")
+    if any(marker in normalized_permission_markers for marker in EXCESSIVE_PERMISSION_MARKERS):
+        findings.append("excessive_permissions_requested")
+    allowed_domains = _normalize_list_of_strings(contract.get("allowed_domains"))
+    if len(allowed_domains) > MAX_MARKETPLACE_DOMAIN_COUNT:
+        findings.append("excessive_domain_scope")
+    if str(contract.get("required_runtime") or "").strip().lower() == "local" and any(
+        marker in normalized_permission_markers for marker in {"shell:execute", "filesystem:write", "payment:execute"}
+    ):
+        findings.append("unsafe_local_runtime_permission_combo")
+    return findings
+
+
 def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     package_kind = str(payload.get("kind") or "").strip().lower()
     if package_kind not in PACKAGE_KINDS:
@@ -533,6 +707,12 @@ def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         package_payload = _normalize_skill_payload(package_id, payload.get("skill"))
     else:
         package_payload = _normalize_provider_payload(package_id, payload.get("provider"))
+    marketplace_contract = _normalize_marketplace_contract(
+        payload,
+        package_kind=package_kind,
+        package_payload=package_payload,
+    )
+    review_findings = _marketplace_contract_review_findings(marketplace_contract)
     install_target = INSTALL_TARGETS[package_kind]
     return {
         "package_id": package_id,
@@ -547,6 +727,8 @@ def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "health_state": _normalize_health_state(payload.get("health_state")),
         "policy_posture": _normalize_policy_posture(payload.get("policy_posture")),
         "approval_required": bool(payload.get("approval_required")),
+        "marketplace_contract": marketplace_contract,
+        "marketplace_review_findings": review_findings,
         "install_target": install_target,
         "billing": _normalize_billing(payload.get("billing")),
         "analytics": {
@@ -798,12 +980,20 @@ def _install_blockers(package: Dict[str, Any]) -> List[str]:
         blockers.append("policy_restricted")
     if bool(package.get("approval_required")):
         blockers.append("manual_approval_required")
+    review_findings = _normalize_list_of_strings(package.get("marketplace_review_findings"))
+    if "excessive_permissions_requested" in review_findings or "excessive_permission_count" in review_findings:
+        blockers.append("excessive_permissions_requested")
+    if "excessive_domain_scope" in review_findings:
+        blockers.append("excessive_domain_scope")
+    if "unsafe_local_runtime_permission_combo" in review_findings:
+        blockers.append("unsafe_local_runtime_permission_combo")
     return blockers
 
 
 def _public_package_payload(workspace_id: str, package: Dict[str, Any], install: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     analytics = _coerce_dict(package.get("analytics"))
     install_blockers = _install_blockers(package)
+    contract = _coerce_dict(package.get("marketplace_contract"))
     return {
         "package_id": str(package.get("package_id") or "").strip(),
         "kind": str(package.get("kind") or "").strip(),
@@ -822,6 +1012,17 @@ def _public_package_payload(workspace_id: str, package: Dict[str, Any], install:
         "install_eligible": not install_blockers,
         "install_blockers": install_blockers,
         "billing": _coerce_dict(package.get("billing")),
+        "marketplace_contract": contract,
+        "install_permissions": {
+            "required_runtime": str(contract.get("required_runtime") or "cloud"),
+            "required_permissions": _normalize_list_of_strings(contract.get("required_permissions")),
+            "allowed_domains": _normalize_list_of_strings(contract.get("allowed_domains")),
+            "artifact_types": _normalize_list_of_strings(contract.get("artifact_types")),
+            "max_runtime_seconds": int(contract.get("max_runtime_seconds") or 0),
+            "approval_policy": _coerce_dict(contract.get("approval_policy")),
+            "data_retention": _coerce_dict(contract.get("data_retention")),
+        },
+        "marketplace_review_findings": _normalize_list_of_strings(package.get("marketplace_review_findings")),
         "marketplace_proof": _coerce_dict(package.get("marketplace_proof")),
         "analytics": {
             "install_count": int(analytics.get("install_count") or 0),

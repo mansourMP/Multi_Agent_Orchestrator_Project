@@ -27,6 +27,17 @@ DEFAULT_SECRET_GRANT_TTL_SECONDS = 30
 _SUPPORTED_SECRET_KINDS = {"connector_credential", "provider_credential"}
 _SUPPORTED_CONNECTOR_CLASSES = {"api_connector", "browser_connector", "media_generation_connector"}
 _LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
+_HIGH_RISK_CREDENTIAL_TOKENS = {
+    "admin",
+    "administrator",
+    "root",
+    "privileged",
+    "financial",
+    "finance",
+    "billing",
+    "payment",
+    "payout",
+}
 _INSECURE_BROKER_SECRETS = {
     "empyralis-dev-tool-broker-secret",
     "empyralis-dev-secrets-broker-secret",
@@ -46,6 +57,10 @@ _HOSTED_OPENAI_BEARER_KEYS = [
     ("env_access_token", "access_token"),
     ("env_api_key", "api_key"),
 ]
+_REVOCATION_LOCK = threading.Lock()
+_REVOKED_GRANT_IDS: set[str] = set()
+_REVOKED_SESSION_IDS: set[str] = set()
+_REVOKED_RUN_IDS: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -147,6 +162,122 @@ def _normalize_allowed_fields(fields: Optional[List[str]]) -> List[str]:
     return _ordered_unique([str(item or "").strip() for item in list(fields or []) if str(item or "").strip()])
 
 
+def _normalize_domain(raw_value: Any) -> str:
+    token = str(raw_value or "").strip().lower()
+    if not token:
+        return ""
+    if "://" in token:
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(token)
+            token = str(parsed.hostname or "").strip().lower()
+        except Exception:
+            token = ""
+    if "/" in token:
+        token = token.split("/", 1)[0].strip().lower()
+    if ":" in token:
+        token = token.split(":", 1)[0].strip().lower()
+    return token
+
+
+def _normalize_allowed_domains(domains: Optional[List[str]]) -> List[str]:
+    out: List[str] = []
+    for item in list(domains or []):
+        token = _normalize_domain(item)
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
+def _normalize_allowed_tools(tools: Optional[List[str]]) -> List[str]:
+    out: List[str] = []
+    for item in list(tools or []):
+        token = str(item or "").strip().lower()
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
+def _domain_in_scope(domain: str, allowed_domains: List[str]) -> bool:
+    token = _normalize_domain(domain)
+    if not token:
+        return False
+    for entry in allowed_domains:
+        scope = _normalize_domain(entry)
+        if not scope:
+            continue
+        if scope.startswith("*."):
+            suffix = scope[2:]
+            if token.endswith(f".{suffix}"):
+                return True
+            continue
+        if token == scope or token.endswith(f".{scope}"):
+            return True
+    return False
+
+
+def _claim_is_revoked(claims: Dict[str, Any]) -> bool:
+    access_id = str(claims.get("access_id") or "").strip()
+    session_id = str(claims.get("session_id") or "").strip()
+    run_id = str(claims.get("run_id") or "").strip()
+    with _REVOCATION_LOCK:
+        if access_id and access_id in _REVOKED_GRANT_IDS:
+            return True
+        if session_id and session_id in _REVOKED_SESSION_IDS:
+            return True
+        if run_id and run_id in _REVOKED_RUN_IDS:
+            return True
+    return False
+
+
+def _collect_risk_tokens(*values: Any) -> List[str]:
+    tokens: List[str] = []
+    for raw in values:
+        if isinstance(raw, list):
+            for item in raw:
+                token = str(item or "").strip().lower()
+                if token:
+                    tokens.append(token)
+            continue
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                key_token = str(key or "").strip().lower()
+                if key_token:
+                    tokens.append(key_token)
+                val_token = str(value or "").strip().lower()
+                if val_token:
+                    tokens.append(val_token)
+            continue
+        token = str(raw or "").strip().lower()
+        if token:
+            tokens.append(token)
+    return tokens
+
+
+def _requires_high_risk_approval(
+    *,
+    provider_id: Optional[str],
+    connector_id: Optional[str],
+    metadata: Optional[Dict[str, Any]],
+    explicit_tags: Optional[List[str]],
+) -> bool:
+    all_tokens = _collect_risk_tokens(
+        provider_id,
+        connector_id,
+        explicit_tags or [],
+        metadata or {},
+        (metadata or {}).get("risk_tags"),
+        (metadata or {}).get("sensitivity"),
+        (metadata or {}).get("credential_class"),
+        (metadata or {}).get("scope"),
+        (metadata or {}).get("privilege"),
+        (metadata or {}).get("role"),
+    )
+    joined = " ".join(all_tokens)
+    return any(marker in joined for marker in _HIGH_RISK_CREDENTIAL_TOKENS)
+
+
 def issue_connector_secret_grant(
     *,
     tenant_id: Optional[str],
@@ -162,6 +293,11 @@ def issue_connector_secret_grant(
     actor_type: Optional[str] = None,
     actor_id: Optional[str] = None,
     purpose: Optional[str] = None,
+    allowed_domains: Optional[List[str]] = None,
+    allowed_tools: Optional[List[str]] = None,
+    target_domain: Optional[str] = None,
+    session_id: Optional[str] = None,
+    approval_id: Optional[str] = None,
     ttl_seconds: int = DEFAULT_SECRET_GRANT_TTL_SECONDS,
 ) -> SecretAccessGrant:
     issued_at = int(time.time())
@@ -186,6 +322,11 @@ def issue_connector_secret_grant(
             "id": str(actor_id or "").strip() or None,
         },
         "purpose": str(purpose or "").strip().lower() or "connector_secret_resolution",
+        "allowed_domains": _normalize_allowed_domains(allowed_domains),
+        "allowed_tools": _normalize_allowed_tools(allowed_tools),
+        "target_domain": _normalize_domain(target_domain) or None,
+        "session_id": str(session_id or "").strip() or None,
+        "approval_id": str(approval_id or "").strip() or None,
         "issued_at": issued_at,
         "expires_at": expires_at,
     }
@@ -207,6 +348,11 @@ def issue_provider_secret_grant(
     actor_type: Optional[str] = None,
     actor_id: Optional[str] = None,
     purpose: Optional[str] = None,
+    allowed_domains: Optional[List[str]] = None,
+    allowed_tools: Optional[List[str]] = None,
+    target_domain: Optional[str] = None,
+    session_id: Optional[str] = None,
+    approval_id: Optional[str] = None,
     ttl_seconds: int = DEFAULT_SECRET_GRANT_TTL_SECONDS,
 ) -> SecretAccessGrant:
     issued_at = int(time.time())
@@ -230,6 +376,11 @@ def issue_provider_secret_grant(
             "id": str(actor_id or "").strip() or None,
         },
         "purpose": str(purpose or "").strip().lower() or "provider_secret_resolution",
+        "allowed_domains": _normalize_allowed_domains(allowed_domains),
+        "allowed_tools": _normalize_allowed_tools(allowed_tools),
+        "target_domain": _normalize_domain(target_domain) or None,
+        "session_id": str(session_id or "").strip() or None,
+        "approval_id": str(approval_id or "").strip() or None,
         "issued_at": issued_at,
         "expires_at": expires_at,
     }
@@ -245,6 +396,9 @@ def verify_secret_access_token(
     expected_workspace_id: Optional[str] = None,
     expected_credential_id: Optional[str] = None,
     expected_provider_id: Optional[str] = None,
+    expected_tool_name: Optional[str] = None,
+    expected_domain: Optional[str] = None,
+    expected_session_id: Optional[str] = None,
     now: Optional[int] = None,
 ) -> Dict[str, Any]:
     raw = str(token or "").strip()
@@ -264,8 +418,14 @@ def verify_secret_access_token(
         raise SecretAccessDeniedError("invalid_token_version", "Secret access token version is invalid.")
     if _normalize_secret_kind(claims.get("secret_kind")) != _normalize_secret_kind(expected_secret_kind):
         raise SecretAccessDeniedError("secret_kind_mismatch", "Secret access token does not authorize this secret kind.")
+    if _claim_is_revoked(claims):
+        raise SecretAccessDeniedError("grant_revoked", "Secret access token was revoked.")
     current_time = int(now if now is not None else time.time())
     if current_time >= int(claims.get("expires_at") or 0):
+        access_id = str(claims.get("access_id") or "").strip()
+        if access_id:
+            with _REVOCATION_LOCK:
+                _REVOKED_GRANT_IDS.add(access_id)
         raise SecretAccessDeniedError("token_expired", "Secret access token expired before the secret was resolved.")
     if expected_workspace_id is not None:
         actual_workspace_id = normalize_workspace_id(claims.get("workspace_id"))
@@ -275,7 +435,63 @@ def verify_secret_access_token(
         raise SecretAccessDeniedError("credential_mismatch", "Secret access token does not match the credential id.")
     if expected_provider_id and str(claims.get("provider_id") or "").strip().lower() != str(expected_provider_id or "").strip().lower():
         raise SecretAccessDeniedError("provider_mismatch", "Secret access token does not match the provider.")
+    if expected_tool_name:
+        claim_tool = str(claims.get("tool_name") or "").strip().lower()
+        if claim_tool and claim_tool != str(expected_tool_name or "").strip().lower():
+            raise SecretAccessDeniedError("tool_scope_mismatch", "Secret access token tool scope mismatch.")
+        allowed_tools = _normalize_allowed_tools(list(claims.get("allowed_tools") or []))
+        expected_tool = str(expected_tool_name or "").strip().lower()
+        if allowed_tools and expected_tool not in allowed_tools:
+            raise SecretAccessDeniedError("tool_scope_denied", "Tool is outside the secret grant scope.")
+    if expected_domain:
+        claim_target_domain = _normalize_domain(claims.get("target_domain"))
+        normalized_expected_domain = _normalize_domain(expected_domain)
+        if claim_target_domain and claim_target_domain != normalized_expected_domain:
+            raise SecretAccessDeniedError("domain_scope_mismatch", "Secret access token domain scope mismatch.")
+        allowed_domains = _normalize_allowed_domains(list(claims.get("allowed_domains") or []))
+        if allowed_domains and not _domain_in_scope(normalized_expected_domain, allowed_domains):
+            raise SecretAccessDeniedError("domain_scope_denied", "Domain is outside the secret grant scope.")
+    if expected_session_id:
+        if str(claims.get("session_id") or "").strip() != str(expected_session_id or "").strip():
+            raise SecretAccessDeniedError("session_scope_mismatch", "Secret access token does not match the session.")
     return claims
+
+
+def revoke_secret_grant_scope(
+    *,
+    access_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    added_access = False
+    added_session = False
+    added_run = False
+    access_token = str(access_id or "").strip()
+    session_token = str(session_id or "").strip()
+    run_token = str(run_id or "").strip()
+    with _REVOCATION_LOCK:
+        if access_token and access_token not in _REVOKED_GRANT_IDS:
+            _REVOKED_GRANT_IDS.add(access_token)
+            added_access = True
+        if session_token and session_token not in _REVOKED_SESSION_IDS:
+            _REVOKED_SESSION_IDS.add(session_token)
+            added_session = True
+        if run_token and run_token not in _REVOKED_RUN_IDS:
+            _REVOKED_RUN_IDS.add(run_token)
+            added_run = True
+    return {
+        "ok": True,
+        "access_revoked": added_access,
+        "session_revoked": added_session,
+        "run_revoked": added_run,
+    }
+
+
+def reset_secret_grant_revocations_for_tests() -> None:
+    with _REVOCATION_LOCK:
+        _REVOKED_GRANT_IDS.clear()
+        _REVOKED_SESSION_IDS.clear()
+        _REVOKED_RUN_IDS.clear()
 
 
 def _project_secret_payload(payload: Dict[str, Any], allowed_fields: List[str]) -> Dict[str, Any]:
@@ -669,8 +885,19 @@ def resolve_connector_secret(
     actor_type: Optional[str] = None,
     actor_id: Optional[str] = None,
     purpose: Optional[str] = None,
+    target_domain: Optional[str] = None,
+    allowed_domains: Optional[List[str]] = None,
+    allowed_tools: Optional[List[str]] = None,
+    session_id: Optional[str] = None,
+    require_approval: Optional[bool] = None,
+    approval_id: Optional[str] = None,
+    approval_actor_id: Optional[str] = None,
+    approval_reason: Optional[str] = None,
+    credential_risk_tags: Optional[List[str]] = None,
     ttl_seconds: int = DEFAULT_SECRET_GRANT_TTL_SECONDS,
 ) -> Dict[str, Any]:
+    normalized_tool_name = str(tool_name or "").strip().lower() or None
+    normalized_target_domain = _normalize_domain(target_domain) or None
     grant = issue_connector_secret_grant(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -678,13 +905,18 @@ def resolve_connector_secret(
         connector_id=connector_id,
         connector_class=connector_class,
         action_id=action_id,
-        tool_name=tool_name,
+        tool_name=normalized_tool_name,
         run_id=run_id,
         runtime_mode=runtime_mode,
         allowed_fields=allowed_fields,
         actor_type=actor_type,
         actor_id=actor_id,
         purpose=purpose,
+        allowed_domains=allowed_domains,
+        allowed_tools=allowed_tools,
+        target_domain=normalized_target_domain,
+        session_id=session_id,
+        approval_id=approval_id,
         ttl_seconds=ttl_seconds,
     )
     try:
@@ -693,6 +925,9 @@ def resolve_connector_secret(
             expected_secret_kind="connector_credential",
             expected_workspace_id=workspace_id,
             expected_credential_id=credential_id,
+            expected_tool_name=normalized_tool_name,
+            expected_domain=normalized_target_domain,
+            expected_session_id=session_id,
         )
         expected_connector_id = str(claims.get("connector_id") or connector_id or "").strip().lower()
         if expected_connector_id:
@@ -706,6 +941,22 @@ def resolve_connector_secret(
         resolved_provider = str(secret.get("_provider") or "").strip().lower()
         if expected_connector_id and resolved_provider and resolved_provider != expected_connector_id:
             raise SecretAccessDeniedError("connector_mismatch", "Resolved credential does not match the requested connector.")
+        metadata = secret.get("_metadata") if isinstance(secret.get("_metadata"), dict) else {}
+        requires_approval = (
+            bool(require_approval)
+            if require_approval is not None
+            else _requires_high_risk_approval(
+                provider_id=resolved_provider or None,
+                connector_id=expected_connector_id or None,
+                metadata=metadata,
+                explicit_tags=credential_risk_tags,
+            )
+        )
+        if requires_approval and not str(approval_id or "").strip():
+            raise SecretAccessDeniedError(
+                "approval_required",
+                "High-risk credential access requires explicit approval before injection.",
+            )
         projected = _project_secret_payload(secret, _normalize_allowed_fields(list(claims.get("allowed_fields") or [])))
         _append_secret_access_audit(
             claims,
@@ -714,6 +965,13 @@ def resolve_connector_secret(
                 "purpose": claims.get("purpose"),
                 "projected": bool(claims.get("allowed_fields")),
                 "resolved_provider": resolved_provider or None,
+                "target_domain": normalized_target_domain,
+                "allowed_domains": _normalize_allowed_domains(list(claims.get("allowed_domains") or [])),
+                "allowed_tools": _normalize_allowed_tools(list(claims.get("allowed_tools") or [])),
+                "requires_approval": requires_approval,
+                "approval_id": str(approval_id or "").strip() or None,
+                "approval_actor_id": str(approval_actor_id or "").strip() or None,
+                "approval_reason": str(approval_reason or "").strip() or None,
             },
         )
         return projected
@@ -742,21 +1000,37 @@ def resolve_provider_secret(
     actor_type: Optional[str] = None,
     actor_id: Optional[str] = None,
     purpose: Optional[str] = None,
+    target_domain: Optional[str] = None,
+    allowed_domains: Optional[List[str]] = None,
+    allowed_tools: Optional[List[str]] = None,
+    session_id: Optional[str] = None,
+    require_approval: Optional[bool] = None,
+    approval_id: Optional[str] = None,
+    approval_actor_id: Optional[str] = None,
+    approval_reason: Optional[str] = None,
+    credential_risk_tags: Optional[List[str]] = None,
     ttl_seconds: int = DEFAULT_SECRET_GRANT_TTL_SECONDS,
 ) -> Dict[str, Any]:
     normalized_provider_id = str(provider_id or "").strip().lower()
+    normalized_tool_name = str(tool_name or "").strip().lower() or None
+    normalized_target_domain = _normalize_domain(target_domain) or None
     grant = issue_provider_secret_grant(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         provider_id=normalized_provider_id,
         credential_id=credential_id,
-        tool_name=tool_name,
+        tool_name=normalized_tool_name,
         run_id=run_id,
         runtime_mode=runtime_mode,
         allowed_fields=allowed_fields,
         actor_type=actor_type,
         actor_id=actor_id,
         purpose=purpose,
+        allowed_domains=allowed_domains,
+        allowed_tools=allowed_tools,
+        target_domain=normalized_target_domain,
+        session_id=session_id,
+        approval_id=approval_id,
         ttl_seconds=ttl_seconds,
     )
     try:
@@ -766,6 +1040,9 @@ def resolve_provider_secret(
             expected_workspace_id=workspace_id,
             expected_credential_id=credential_id,
             expected_provider_id=normalized_provider_id,
+            expected_tool_name=normalized_tool_name,
+            expected_domain=normalized_target_domain,
+            expected_session_id=session_id,
         )
         _raise_if_connector_access_disabled(
             tenant_id=tenant_id,
@@ -780,6 +1057,22 @@ def resolve_provider_secret(
         resolved_provider = str(secret.get("_provider") or "").strip().lower()
         if resolved_provider and resolved_provider != normalized_provider_id:
             raise SecretAccessDeniedError("provider_mismatch", "Resolved credential does not match the requested provider.")
+        metadata = secret.get("_metadata") if isinstance(secret.get("_metadata"), dict) else {}
+        requires_approval = (
+            bool(require_approval)
+            if require_approval is not None
+            else _requires_high_risk_approval(
+                provider_id=resolved_provider or normalized_provider_id,
+                connector_id=None,
+                metadata=metadata,
+                explicit_tags=credential_risk_tags,
+            )
+        )
+        if requires_approval and not str(approval_id or "").strip():
+            raise SecretAccessDeniedError(
+                "approval_required",
+                "High-risk credential access requires explicit approval before injection.",
+            )
         projected = _project_secret_payload(secret, _normalize_allowed_fields(list(claims.get("allowed_fields") or [])))
         _append_secret_access_audit(
             claims,
@@ -788,6 +1081,13 @@ def resolve_provider_secret(
                 "purpose": claims.get("purpose"),
                 "projected": bool(claims.get("allowed_fields")),
                 "resolved_provider": resolved_provider or normalized_provider_id,
+                "target_domain": normalized_target_domain,
+                "allowed_domains": _normalize_allowed_domains(list(claims.get("allowed_domains") or [])),
+                "allowed_tools": _normalize_allowed_tools(list(claims.get("allowed_tools") or [])),
+                "requires_approval": requires_approval,
+                "approval_id": str(approval_id or "").strip() or None,
+                "approval_actor_id": str(approval_actor_id or "").strip() or None,
+                "approval_reason": str(approval_reason or "").strip() or None,
             },
         )
         return projected

@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -41,8 +42,18 @@ def _load_vault():
 
 
 class SecretsBrokerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._env_patch = patch.dict(
+            os.environ,
+            {"EMPYRALIS_SECRETS_BROKER_SECRET": "test-secrets-broker-secret-value"},
+            clear=False,
+        )
+        self._env_patch.start()
+
     def tearDown(self) -> None:
+        self._env_patch.stop()
         safe_mode_service.reset_state_for_tests()
+        secrets_broker.reset_secret_grant_revocations_for_tests()
 
     def test_verify_secret_access_token_rejects_expired_grant(self):
         grant = secrets_broker.issue_connector_secret_grant(
@@ -235,6 +246,96 @@ class SecretsBrokerTests(unittest.TestCase):
                 )
 
         self.assertEqual(raised.exception.code, "credential_rotated")
+
+    def test_resolve_provider_secret_rejects_domain_outside_scope(self):
+        with patch(
+            "server_modules.secrets_broker.control_plane_repository.append_agent_secret_access_event",
+            new=AsyncMock(return_value={"id": "sevt-domain"}),
+        ):
+            with self.assertRaises(secrets_broker.SecretAccessDeniedError) as raised:
+                secrets_broker.resolve_provider_secret(
+                    _load_vault,
+                    lambda encrypted: encrypted,
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    provider_id="openai",
+                    tool_name="provider_inference",
+                    target_domain="api.not-openai.com",
+                    allowed_domains=["api.openai.com"],
+                )
+
+        self.assertEqual(raised.exception.code, "domain_scope_denied")
+
+    def test_resolve_provider_secret_requires_approval_for_high_risk_credentials(self):
+        def _load_risky_vault():
+            payload = _load_vault()
+            for entry in payload.get("credentials", []):
+                if entry.get("id") == "cred-openai":
+                    entry["metadata"] = {"sensitivity": "financial_admin"}
+            return payload
+
+        with patch(
+            "server_modules.secrets_broker.control_plane_repository.append_agent_secret_access_event",
+            new=AsyncMock(return_value={"id": "sevt-approval"}),
+        ):
+            with self.assertRaises(secrets_broker.SecretAccessDeniedError) as raised:
+                secrets_broker.resolve_provider_secret(
+                    _load_risky_vault,
+                    lambda encrypted: encrypted,
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    provider_id="openai",
+                    tool_name="provider_inference",
+                )
+
+        self.assertEqual(raised.exception.code, "approval_required")
+
+        with patch(
+            "server_modules.secrets_broker.control_plane_repository.append_agent_secret_access_event",
+            new=AsyncMock(return_value={"id": "sevt-approval-ok"}),
+        ):
+            secret = secrets_broker.resolve_provider_secret(
+                _load_risky_vault,
+                lambda encrypted: encrypted,
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                provider_id="openai",
+                tool_name="provider_inference",
+                approval_id="appr_123",
+                approval_actor_id="owner_1",
+                approval_reason="approved_for_billing_automation",
+            )
+
+        self.assertEqual(secret.get("access_token"), "openai-secret")
+
+    def test_resolve_provider_secret_denies_revoked_session_scope(self):
+        with patch(
+            "server_modules.secrets_broker.control_plane_repository.append_agent_secret_access_event",
+            new=AsyncMock(return_value={"id": "sevt-session"}),
+        ):
+            first = secrets_broker.resolve_provider_secret(
+                _load_vault,
+                lambda encrypted: encrypted,
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                provider_id="openai",
+                tool_name="provider_inference",
+                session_id="vcsess_1",
+            )
+            self.assertEqual(first.get("access_token"), "openai-secret")
+            secrets_broker.revoke_secret_grant_scope(session_id="vcsess_1")
+            with self.assertRaises(secrets_broker.SecretAccessDeniedError) as raised:
+                secrets_broker.resolve_provider_secret(
+                    _load_vault,
+                    lambda encrypted: encrypted,
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    provider_id="openai",
+                    tool_name="provider_inference",
+                    session_id="vcsess_1",
+                )
+
+        self.assertEqual(raised.exception.code, "grant_revoked")
 
 
 if __name__ == "__main__":

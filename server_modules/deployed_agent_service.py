@@ -16,8 +16,10 @@ from server_modules import deployed_agent_analytics_service
 from server_modules import entitlements_service
 from server_modules import external_user_privacy_service
 from server_modules import provider_catalog_service
+from server_modules import product_catalog_live_data_service
 from server_modules import run_state_repository
 from server_modules import session_service
+from server_modules import shop_assistant_revenue_agent_service
 from server_modules import workspace_config_schema
 from server_modules.connectors.autopilot_runtime_exports import _autopilot_connector_shell_service
 from server_modules.connectors.autopilot_status_service import AutopilotStatusService
@@ -1850,6 +1852,99 @@ async def get_deployed_agent_detail(
         **dict(project_deployed_agent(deployed_agent, include_internal=True) or {}),
         "backing_install": backing_install,
     }
+
+
+async def execute_deployed_agent_catalog_action(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    action_id: str,
+    arguments: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent is unavailable.")
+    try:
+        return product_catalog_live_data_service.execute_read_only_catalog_action(
+            deployed_agent,
+            workspace_id=resolved_workspace_id,
+            action_id=action_id,
+            arguments=arguments,
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise _http_bad_request(str(error)) from error
+
+
+async def evaluate_deployed_shop_assistant_customer_question(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    customer_message: str,
+    connector_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent is unavailable.")
+    try:
+        result = shop_assistant_revenue_agent_service.evaluate_shop_assistant_customer_question(
+            deployed_agent,
+            workspace_id=resolved_workspace_id,
+            customer_message=customer_message,
+            connector_id=connector_id,
+        )
+        metadata = _coerce_dict(deployed_agent.get("metadata"))
+        provider_metadata = {
+            "effective_provider": metadata.get("effective_provider") or metadata.get("provider"),
+            "effective_model": metadata.get("effective_model") or metadata.get("model"),
+            "fallback_provider": metadata.get("fallback_provider"),
+            "fallback_model": metadata.get("fallback_model"),
+        }
+        result["activity_billing_evidence"] = (
+            shop_assistant_revenue_agent_service.build_shop_assistant_activity_billing_evidence(
+                result,
+                public_tier=_normalize_text(metadata.get("public_tier"), default="pro"),
+                total_tokens=int(metadata.get("last_total_tokens") or metadata.get("estimated_total_tokens") or 900),
+                provider_metadata={key: value for key, value in provider_metadata.items() if value},
+                runtime_metadata={
+                    "runtime_target": _normalize_text(deployed_agent.get("runtime_target"), default="cloud"),
+                    "runtime_placement": _normalize_text(metadata.get("runtime_placement"), default="managed_cloud"),
+                    "runtime_supply": _normalize_text(metadata.get("runtime_supply"), default="empyralis"),
+                },
+            )
+        )
+        return result
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise _http_bad_request(str(error)) from error
 
 
 async def get_deployed_agent_telegram_readiness(

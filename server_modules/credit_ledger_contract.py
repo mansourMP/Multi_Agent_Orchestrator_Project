@@ -19,6 +19,7 @@ CREDIT_LEDGER_ITEM_TYPES: tuple[str, ...] = (
     "snapshot_storage",
     "gateway_relay",
     "channel_message",
+    "connector_read",
 )
 
 _TOKEN_ITEM_TYPES = {"ai_light_tokens", "ai_pro_tokens", "ai_max_tokens", "local_ai_tokens"}
@@ -152,6 +153,8 @@ def build_credit_ledger_line_item(
             quantity = _float_count(runtime_minutes or payload.get("runtime_minutes"))
         elif item_type == "channel_message":
             quantity = float(max(1, _token_count(payload.get("message_count"))))
+        elif item_type == "connector_read":
+            quantity = float(max(1, _token_count(payload.get("read_count"))))
         elif item_type == "gateway_relay":
             quantity = _float_count(payload.get("relay_events") or 1.0)
         elif item_type in {"artifact_storage", "snapshot_storage"}:
@@ -167,6 +170,8 @@ def build_credit_ledger_line_item(
         quantity_unit = "mb"
     elif item_type == "channel_message":
         quantity_unit = "messages"
+    elif item_type == "connector_read":
+        quantity_unit = "reads"
     elif item_type == "gateway_relay":
         quantity_unit = "relay_events"
     else:

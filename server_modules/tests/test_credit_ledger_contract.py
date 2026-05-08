@@ -66,6 +66,18 @@ def test_virtual_runtime_minutes_use_runtime_line_items() -> None:
     assert item["billing_source"] == "virtual_runtime_credits"
 
 
+def test_connector_read_usage_maps_to_read_line_item() -> None:
+    item = credit_ledger_contract.build_credit_ledger_line_item(
+        metadata={"credit_item_type": "connector_read", "read_count": 3, "connector_kind": "google_sheets"},
+        billing_source="empyralis_credits",
+    )
+
+    assert item["credit_item_type"] == "connector_read"
+    assert item["quantity"] == 3.0
+    assert item["quantity_unit"] == "reads"
+    assert item["connector_kind"] == "google_sheets"
+
+
 def test_unknown_hosted_tier_defaults_to_ai_pro_tokens() -> None:
     item = credit_ledger_contract.build_credit_ledger_line_item(
         metadata={},

@@ -430,6 +430,61 @@ VALID_EXECUTION_TARGETS = {
     EXECUTION_TARGET_LOCAL_COMPANION,
 }
 
+RUNTIME_CHOICE_LOCAL = "local"
+RUNTIME_CHOICE_VIRTUAL_BROWSER = "virtual_browser"
+RUNTIME_CHOICE_VIRTUAL_DESKTOP = "virtual_desktop"
+RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX = "virtual_code_sandbox"
+VALID_RUNTIME_CHOICES = {
+    RUNTIME_CHOICE_LOCAL,
+    RUNTIME_CHOICE_VIRTUAL_BROWSER,
+    RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+    RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+}
+RUNTIME_CONTRACT_INTERFACE_ID = "virtual_computer_runtime.v1"
+RUNTIME_CONTRACT_METHODS = [
+    "create_session",
+    "resume_session",
+    "pause_session",
+    "terminate_session",
+    "execute_action",
+    "stream_screenshot",
+    "collect_artifact",
+    "snapshot_session",
+]
+RUNTIME_CONTRACT_STATES = [
+    "provisioning",
+    "ready",
+    "running",
+    "paused",
+    "degraded",
+    "expired",
+    "terminated",
+    "failed",
+]
+RUNTIME_CONTRACT_KIND_LOCAL_GATEWAY = "local_gateway_runtime"
+RUNTIME_CONTRACT_KIND_VIRTUAL_COMPUTER = "virtual_computer_runtime"
+RUNTIME_CHOICE_ALIASES = {
+    "local": RUNTIME_CHOICE_LOCAL,
+    "local_companion": RUNTIME_CHOICE_LOCAL,
+    "localcompanion": RUNTIME_CHOICE_LOCAL,
+    "mac": RUNTIME_CHOICE_LOCAL,
+    "virtual_browser": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+    "virtual-browser": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+    "virtualbrowser": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+    "browser_vm": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+    "virtual_desktop": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+    "virtual-desktop": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+    "virtualdesktop": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+    "virtual_workspace": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+    "virtual-workspace": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+    "dedicated_virtual_workspace": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+    "virtual_code_sandbox": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+    "virtual-code-sandbox": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+    "virtualcodesandbox": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+    "code_sandbox": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+    "sandbox": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+}
+
 RUNTIME_TRUST_ZONE_SHARED_CLOUD = "shared_cloud"
 RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL = "user_owned_local"
 RUNTIME_TRUST_ZONE_OWNED_DEDICATED_RUNTIME = "owned_dedicated_runtime"
@@ -1522,11 +1577,56 @@ def normalize_execution_target(raw_value: Any) -> str:
     raw = str(raw_value or "").strip().lower()
     if raw in {"local", "local-worker", "local_worker", "companion", "localcompanion", "local_companion"}:
         return EXECUTION_TARGET_LOCAL_COMPANION
+    if raw in {
+        "virtual_browser",
+        "virtual-browser",
+        "virtualbrowser",
+        "virtual_desktop",
+        "virtual-desktop",
+        "virtualdesktop",
+        "virtual_workspace",
+        "virtual-workspace",
+        "virtual_code_sandbox",
+        "virtual-code-sandbox",
+        "virtualcodesandbox",
+        "sandbox",
+    }:
+        return EXECUTION_TARGET_CLOUD
     if raw in {"cloud", "server", "managed"}:
         return EXECUTION_TARGET_CLOUD
     if raw in {"auto", "hybrid", ""}:
         return EXECUTION_TARGET_AUTO
     return EXECUTION_TARGET_AUTO
+
+
+def normalize_runtime_choice(raw_value: Any) -> str:
+    raw = str(raw_value or "").strip().lower()
+    if not raw:
+        return ""
+    normalized = RUNTIME_CHOICE_ALIASES.get(raw, raw)
+    if normalized in VALID_RUNTIME_CHOICES:
+        return normalized
+    return ""
+
+
+def runtime_choice_to_execution_target(runtime_choice: Any) -> str:
+    normalized_choice = normalize_runtime_choice(runtime_choice)
+    if normalized_choice == RUNTIME_CHOICE_LOCAL:
+        return EXECUTION_TARGET_LOCAL_COMPANION
+    if normalized_choice in {
+        RUNTIME_CHOICE_VIRTUAL_BROWSER,
+        RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+        RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+    }:
+        return EXECUTION_TARGET_CLOUD
+    return EXECUTION_TARGET_AUTO
+
+
+def _runtime_contract_kind_from_choice(runtime_choice: Any) -> str:
+    normalized_choice = normalize_runtime_choice(runtime_choice)
+    if normalized_choice == RUNTIME_CHOICE_LOCAL:
+        return RUNTIME_CONTRACT_KIND_LOCAL_GATEWAY
+    return RUNTIME_CONTRACT_KIND_VIRTUAL_COMPUTER
 
 
 def normalize_runtime_trust_zone(raw_value: Any, *, target: Optional[str] = None) -> str:
@@ -2390,6 +2490,134 @@ def _metadata_has_local_artifact_hints(metadata: Dict[str, Any]) -> bool:
     return False
 
 
+def _collect_pack_operation_tools(metadata: Dict[str, Any]) -> List[str]:
+    pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
+    operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
+    tools: List[str] = []
+    for item in operations:
+        if not isinstance(item, dict):
+            continue
+        token = normalize_action_id(item.get("tool") or item.get("action"))
+        if token:
+            tools.append(token)
+    return tools
+
+
+def _metadata_has_personal_local_context(metadata: Dict[str, Any]) -> bool:
+    connection_mode = str(metadata.get("connection_mode") or "").strip().lower()
+    if connection_mode in {"local", "local_companion"}:
+        return True
+    if bool(metadata.get("personal_mode")):
+        return True
+    browser_session_mode = str(metadata.get("browser_session_mode") or "").strip().lower()
+    if browser_session_mode == "existing_session_attach":
+        return True
+    source_channel = str(metadata.get("source_channel") or metadata.get("channel") or "").strip().lower()
+    if source_channel.startswith("personal_"):
+        return True
+    if _metadata_has_local_artifact_hints(metadata):
+        return True
+    return False
+
+
+def _metadata_requests_browser_automation(metadata: Dict[str, Any]) -> bool:
+    if bool(metadata.get("risky_web_automation")):
+        return True
+    operation_tools = _collect_pack_operation_tools(metadata)
+    if "browser_automation.interactive" in operation_tools:
+        browser_policy = (
+            metadata.get("browser_automation_policy")
+            if isinstance(metadata.get("browser_automation_policy"), dict)
+            else {}
+        )
+        if bool(browser_policy.get("requires_approval")):
+            return True
+        if bool(browser_policy.get("privileged_actions")):
+            return True
+        if bool(metadata.get("browser_sensitive_access")):
+            return True
+        if bool(metadata.get("browser_reviewed_approval_required")):
+            return True
+        return True
+    return False
+
+
+def _metadata_requests_code_or_data_job(metadata: Dict[str, Any]) -> bool:
+    if bool(metadata.get("code_job")) or bool(metadata.get("data_job")):
+        return True
+    outcome_pack = normalize_action_id(metadata.get("outcome_pack"))
+    if outcome_pack in {LOCAL_EXECUTION_PACK_ID, SPREADSHEET_OPS_PACK_ID, DOCUMENT_STUDIO_PACK_ID}:
+        return True
+    operation_tools = _collect_pack_operation_tools(metadata)
+    if any(tool in {"shell.execute", "filesystem.read_write"} for tool in operation_tools):
+        return True
+    return False
+
+
+def _metadata_requests_enterprise_customer_workflow(metadata: Dict[str, Any]) -> bool:
+    if bool(metadata.get("enterprise_workflow")) or bool(metadata.get("customer_workflow")):
+        return True
+    outcome_pack = normalize_action_id(metadata.get("outcome_pack"))
+    if outcome_pack == CUSTOMER_OPS_PACK_ID:
+        return True
+    if _metadata_has_connector_or_channel_work(metadata):
+        return True
+    return False
+
+
+def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    requested = normalize_runtime_choice(
+        metadata.get("runtime_choice")
+        or metadata.get("execution_runtime_choice")
+    )
+    if requested:
+        return {
+            "requested": requested,
+            "selected": requested,
+            "reason": "Runtime choice was explicitly requested in metadata.",
+            "source": "explicit",
+        }
+
+    if _metadata_has_personal_local_context(metadata):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_LOCAL,
+            "reason": "Task uses personal apps/files/session context and stays local by default.",
+            "source": "router_rule_personal_local",
+        }
+
+    if _metadata_requests_browser_automation(metadata):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+            "reason": "Risky or privileged browser automation is routed to virtual browser isolation.",
+            "source": "router_rule_virtual_browser",
+        }
+
+    if _metadata_requests_code_or_data_job(metadata):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+            "reason": "Code/data style work is routed to virtual code sandbox execution.",
+            "source": "router_rule_virtual_code_sandbox",
+        }
+
+    if _metadata_requests_enterprise_customer_workflow(metadata):
+        return {
+            "requested": "",
+            "selected": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+            "reason": "Enterprise/customer workflow is routed to dedicated virtual workspace class.",
+            "source": "router_rule_virtual_desktop",
+        }
+
+    return {
+        "requested": "",
+        "selected": RUNTIME_CHOICE_LOCAL,
+        "reason": "No virtual runtime routing rule matched; defaulting to local computer.",
+        "source": "router_rule_default_local",
+    }
+
+
 def _auto_cloud_capacity_fallback_allowed(metadata: Dict[str, Any]) -> tuple[bool, str]:
     trust_mode = normalize_trust_mode(metadata.get("trust_mode"))
     if trust_mode != TRUST_MODE_AUTO:
@@ -2460,12 +2688,41 @@ def apply_execution_route_metadata(metadata: Dict[str, Any], route: Dict[str, An
 
     metadata["execution_target_waiting_for_runtime"] = bool(route.get("waiting_for_runtime"))
     metadata["execution_target_waiting_for_capacity"] = bool(route.get("waiting_for_capacity"))
+    if route.get("runtime_choice_requested"):
+        metadata["runtime_choice_requested"] = route.get("runtime_choice_requested")
+    else:
+        metadata.pop("runtime_choice_requested", None)
+    metadata["runtime_choice_selected"] = str(route.get("runtime_choice_selected") or RUNTIME_CHOICE_LOCAL)
+    metadata["runtime_choice_reason"] = str(route.get("runtime_choice_reason") or "")
+    metadata["runtime_choice_source"] = str(route.get("runtime_choice_source") or "")
+    metadata["runtime_choice_applied"] = bool(route.get("runtime_choice_applied"))
+    if route.get("runtime_provider_requested"):
+        metadata["runtime_provider_requested"] = str(route.get("runtime_provider_requested"))
+    else:
+        metadata.pop("runtime_provider_requested", None)
+    metadata["runtime_contract_interface"] = str(route.get("runtime_contract_interface") or RUNTIME_CONTRACT_INTERFACE_ID)
+    metadata["runtime_contract_kind"] = str(
+        route.get("runtime_contract_kind")
+        or _runtime_contract_kind_from_choice(route.get("runtime_choice_selected"))
+    )
+    metadata["runtime_contract_methods"] = list(route.get("runtime_contract_methods") or RUNTIME_CONTRACT_METHODS)
+    metadata["runtime_contract_states"] = list(route.get("runtime_contract_states") or RUNTIME_CONTRACT_STATES)
     return metadata
 
 
 def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str] = None) -> Dict[str, Any]:
     _init()
     requested = normalize_execution_target(metadata.get("execution_target"))
+    runtime_choice = decide_runtime_choice(metadata if isinstance(metadata, dict) else {})
+    runtime_provider_requested = (
+        str(metadata.get("runtime_provider_id") or metadata.get("virtual_provider_id") or "").strip() or None
+    )
+    runtime_choice_applied = False
+    if requested == EXECUTION_TARGET_AUTO:
+        requested_from_choice = runtime_choice_to_execution_target(runtime_choice.get("selected"))
+        if requested_from_choice in {EXECUTION_TARGET_LOCAL_COMPANION, EXECUTION_TARGET_CLOUD}:
+            requested = requested_from_choice
+            runtime_choice_applied = True
     if requested == EXECUTION_TARGET_AUTO:
         # Respect explicit connection-mode intent if present.
         connection_mode = str(metadata.get("connection_mode") or "").strip().lower()
@@ -2524,6 +2781,16 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
             "selected": selected,
             "reason": reason,
             "fallback": fallback,
+            "runtime_choice_requested": runtime_choice.get("requested"),
+            "runtime_choice_selected": runtime_choice.get("selected"),
+            "runtime_choice_reason": runtime_choice.get("reason"),
+            "runtime_choice_source": runtime_choice.get("source"),
+            "runtime_choice_applied": runtime_choice_applied,
+            "runtime_provider_requested": runtime_provider_requested,
+            "runtime_contract_interface": RUNTIME_CONTRACT_INTERFACE_ID,
+            "runtime_contract_kind": _runtime_contract_kind_from_choice(runtime_choice.get("selected")),
+            "runtime_contract_methods": list(RUNTIME_CONTRACT_METHODS),
+            "runtime_contract_states": list(RUNTIME_CONTRACT_STATES),
             "local_companion_enabled": ORION_LOCAL_COMPANION_ENABLED,
             "required_capabilities": required_capabilities,
             "missing_capabilities": missing_capabilities,
@@ -2628,6 +2895,16 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
         "selected": selected,
         "reason": reason,
         "fallback": fallback,
+        "runtime_choice_requested": runtime_choice.get("requested"),
+        "runtime_choice_selected": runtime_choice.get("selected"),
+        "runtime_choice_reason": runtime_choice.get("reason"),
+        "runtime_choice_source": runtime_choice.get("source"),
+        "runtime_choice_applied": runtime_choice_applied,
+        "runtime_provider_requested": runtime_provider_requested,
+        "runtime_contract_interface": RUNTIME_CONTRACT_INTERFACE_ID,
+        "runtime_contract_kind": _runtime_contract_kind_from_choice(runtime_choice.get("selected")),
+        "runtime_contract_methods": list(RUNTIME_CONTRACT_METHODS),
+        "runtime_contract_states": list(RUNTIME_CONTRACT_STATES),
         "local_companion_enabled": ORION_LOCAL_COMPANION_ENABLED,
         "required_capabilities": required_capabilities,
         "missing_capabilities": missing_capabilities,

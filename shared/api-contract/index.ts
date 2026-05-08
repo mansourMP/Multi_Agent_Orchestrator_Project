@@ -25,8 +25,14 @@ export type ApiTurnAttachment = {
 
 export type DeployedAgentRuntimePlacement =
   | 'managed_cloud'
+  | 'hosted_hardware_pool'
   | 'customer_local'
   | 'customer_hosted';
+
+export type DeployedAgentRuntimeSupplierKind =
+  | 'empyralis'
+  | 'customer'
+  | 'third_party_certified';
 
 export type DeployedAgentComputerAutomationConfig = {
   enabled: boolean;
@@ -58,6 +64,40 @@ export type DeployedAgentWorkspaceContract = {
     cross_customer_read: false;
     host_filesystem_default: 'workspace_root_only';
     sage_memory_access: false;
+  };
+};
+
+export type DeployedAgentRuntimeSupplyContract = {
+  schema_version: number;
+  supplier: {
+    kind: DeployedAgentRuntimeSupplierKind;
+    id: string;
+    label: string;
+    owner_workspace_id?: string | null;
+  };
+  placement: {
+    kind: DeployedAgentRuntimePlacement;
+    runtime_target: 'cloud' | 'local' | 'self_hosted';
+    trust_zone: 'empyralis_managed_cloud' | 'empyralis_owned_hardware' | 'customer_owned' | 'certified_third_party';
+  };
+  computer_automation: DeployedAgentComputerAutomationConfig;
+  marketplace_policy: {
+    visibility: string;
+    third_party_runtime_allowed: boolean;
+    review_state: string;
+    verification_status: string;
+    install_eligible: boolean;
+    install_blockers: string[];
+  };
+  model_tier: {
+    public_tier: string;
+    public_label: string;
+    billing_source: string;
+  };
+  provider_binding: {
+    internal_provider?: string | null;
+    internal_model?: string | null;
+    expose_provider_model_to_ordinary_ui: boolean;
   };
 };
 

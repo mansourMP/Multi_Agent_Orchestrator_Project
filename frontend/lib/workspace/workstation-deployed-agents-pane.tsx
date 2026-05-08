@@ -75,7 +75,12 @@ type WizardState = {
   systemPrompt: string;
   knowledgeSourceText: string;
   aiTier: 'light' | 'pro' | 'max';
-  runtimePlacement: 'managed_cloud' | 'customer_local' | 'customer_hosted';
+  runtimeSupplierKind: 'empyralis' | 'customer' | 'third_party_certified';
+  runtimeSupplierId: string;
+  runtimeSupplierLabel: string;
+  runtimePlacement: 'managed_cloud' | 'hosted_hardware_pool' | 'customer_local' | 'customer_hosted';
+  marketplacePublishAllowed: boolean;
+  thirdPartyRuntimeAllowed: boolean;
   computerAutomationEnabled: boolean;
   computerAutomationRuntimeClass: 'virtual_browser' | 'virtual_desktop' | 'virtual_code_sandbox' | 'local_browser' | 'local_desktop';
   computerAutomationAllowedDomains: string;
@@ -323,10 +328,12 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   value: WizardState['runtimePlacement'];
   label: string;
   hint: string;
+  supplier: WizardState['runtimeSupplierKind'];
 }> = [
-  { value: 'managed_cloud', label: 'Managed Cloud', hint: 'Empyralis hosts this assistant as a governed business worker.' },
-  { value: 'customer_local', label: 'Customer Local Runtime', hint: 'Runs through the customer paired machine, with scoped workspace policy.' },
-  { value: 'customer_hosted', label: 'Customer-Hosted Runtime', hint: 'Runs on a customer-controlled worker while Empyralis remains the control plane.' },
+  { value: 'managed_cloud', label: 'Managed Cloud', supplier: 'empyralis', hint: 'Empyralis hosts this assistant as a governed business worker.' },
+  { value: 'hosted_hardware_pool', label: 'Empyralis Hosted Hardware', supplier: 'empyralis', hint: 'Runs on Empyralis-owned hardware capacity with checkpoint and queue controls.' },
+  { value: 'customer_local', label: 'Customer Local Runtime', supplier: 'customer', hint: 'Runs through the customer paired machine, with scoped workspace policy.' },
+  { value: 'customer_hosted', label: 'Customer-Hosted Runtime', supplier: 'customer', hint: 'Runs on a customer-controlled worker while Empyralis remains the control plane.' },
 ];
 
 const STUDIO_APPROVAL_MODE_OPTIONS: ReadonlyArray<{
@@ -1220,6 +1227,14 @@ function normalizeWizardAiTier(value: unknown): WizardState['aiTier'] {
 function normalizeRuntimePlacement(value: unknown): WizardState['runtimePlacement'] {
   const token = readString(value).toLowerCase().replace('-', '_');
   if (
+    token === 'hosted_hardware_pool'
+    || token === 'empyralis_hosted'
+    || token === 'empyralis_hosted_device'
+    || token === 'empyralis_hardware_pool'
+  ) {
+    return 'hosted_hardware_pool';
+  }
+  if (
     token === 'local'
     || token === 'local_secure'
     || token === 'local_companion'
@@ -1249,6 +1264,10 @@ function runtimeTargetForPlacement(value: WizardState['runtimePlacement']): stri
     return 'self_hosted';
   }
   return 'cloud';
+}
+
+function runtimeSupplierForPlacement(value: WizardState['runtimePlacement']): WizardState['runtimeSupplierKind'] {
+  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === value)?.supplier ?? 'empyralis';
 }
 
 function runtimePlacementLabel(value: unknown): string {
@@ -1402,6 +1421,9 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   const escalationPolicy = readRecord(config.escalation_policy);
   const computerAutomation = readRecord(config.computer_automation ?? readRecord(agent?.metadata).computer_automation);
   const metadata = readRecord(agent?.metadata);
+  const runtimeSupply = readRecord(config.runtime_supply ?? metadata.runtime_supply);
+  const runtimeSupplySupplier = readRecord(runtimeSupply.supplier);
+  const runtimeSupplyMarketplace = readRecord(runtimeSupply.marketplace_policy);
   const providerId = readString(agent?.provider ?? metadata.provider);
   const modelId = readString(agent?.model ?? metadata.model);
   const aiTier = normalizeWizardAiTier(
@@ -1412,12 +1434,18 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   );
   const customerChannel = inferCustomerChannel(channels);
   const runtimePlacement = normalizeRuntimePlacement(
-    config.runtime_placement
+    readRecord(runtimeSupply.placement).kind
+    ?? config.runtime_placement
     ?? metadata.runtime_placement
     ?? metadata.studio_runtime
     ?? metadata.runtime
     ?? agent?.runtime_target,
   );
+  const runtimeSupplierKind = readString(runtimeSupplySupplier.kind) === 'customer'
+    ? 'customer'
+    : readString(runtimeSupplySupplier.kind) === 'third_party_certified'
+      ? 'third_party_certified'
+      : runtimeSupplierForPlacement(runtimePlacement);
   const approvalMode = normalizeApprovalModeFromPolicies(
     escalationPolicy.preset ?? metadata.escalation_preset,
     escalationPolicy.handoff_mode ?? metadata.handoff_mode,
@@ -1435,7 +1463,12 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     ),
     knowledgeSourceText: serializeKnowledgeSources(agent?.knowledge_sources),
     aiTier,
+    runtimeSupplierKind,
+    runtimeSupplierId: readString(runtimeSupplySupplier.id, runtimeSupplierKind),
+    runtimeSupplierLabel: readString(runtimeSupplySupplier.label, runtimeSupplierKind === 'empyralis' ? 'Empyralis' : 'Customer runtime'),
     runtimePlacement,
+    marketplacePublishAllowed: readString(runtimeSupplyMarketplace.visibility) === 'marketplace',
+    thirdPartyRuntimeAllowed: runtimeSupplyMarketplace.third_party_runtime_allowed === true,
     computerAutomationEnabled: computerAutomation.enabled === true,
     computerAutomationRuntimeClass: readString(computerAutomation.runtime_class, 'virtual_browser') as WizardState['computerAutomationRuntimeClass'],
     computerAutomationAllowedDomains: Array.isArray(computerAutomation.allowed_domains)
@@ -1524,8 +1557,46 @@ function buildDeploymentConfig(state: WizardState): Record<string, unknown> {
     .split(',')
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
+  const runtimeSupplier = runtimeSupplierForPlacement(state.runtimePlacement);
+  const computerAutomation = {
+    enabled: state.computerAutomationEnabled,
+    runtime_class: state.computerAutomationEnabled ? state.computerAutomationRuntimeClass : null,
+    allowed_domains: state.computerAutomationEnabled ? automationAllowedDomains : [],
+    max_concurrent_sessions: state.computerAutomationEnabled && automationMaxSessions ? Number(automationMaxSessions) : 0,
+    daily_budget_usd: state.computerAutomationEnabled && automationDailyBudget ? Number(automationDailyBudget) : null,
+    monthly_budget_usd: state.computerAutomationEnabled && automationMonthlyBudget ? Number(automationMonthlyBudget) : null,
+    requires_owner_approval: true,
+  };
   return {
     runtime_placement: state.runtimePlacement,
+    runtime_supplier: runtimeSupplier,
+    runtime_supply: {
+      schema_version: 1,
+      supplier: {
+        kind: runtimeSupplier,
+        id: runtimeSupplier === 'empyralis' ? 'empyralis' : state.runtimeSupplierId.trim() || runtimeSupplier,
+        label: runtimeSupplier === 'empyralis' ? 'Empyralis' : state.runtimeSupplierLabel.trim() || 'Customer runtime',
+      },
+      placement: {
+        kind: state.runtimePlacement,
+        runtime_target: runtimeTargetForPlacement(state.runtimePlacement),
+      },
+      computer_automation: computerAutomation,
+      marketplace_policy: {
+        visibility: state.marketplacePublishAllowed ? 'marketplace' : 'private',
+        third_party_runtime_allowed: state.thirdPartyRuntimeAllowed,
+      },
+      model_tier: {
+        public_tier: state.aiTier,
+        public_label: STUDIO_AI_TIER_OPTIONS.find((item) => item.value === state.aiTier)?.label ?? 'Pro',
+        billing_source: 'empyralis_credits',
+      },
+      provider_binding: {
+        internal_provider: state.providerId || null,
+        internal_model: state.modelId || null,
+        expose_provider_model_to_ordinary_ui: false,
+      },
+    },
     customer_policy: {
       paused_message: state.pausedMessage.trim() || null,
       public_intro: state.welcomeIntro.trim() || null,
@@ -1551,15 +1622,7 @@ function buildDeploymentConfig(state: WizardState): Record<string, unknown> {
     tool_policy: {
       enabled_tools: state.selectedToolIds,
     },
-    computer_automation: {
-      enabled: state.computerAutomationEnabled,
-      runtime_class: state.computerAutomationEnabled ? state.computerAutomationRuntimeClass : null,
-      allowed_domains: state.computerAutomationEnabled ? automationAllowedDomains : [],
-      max_concurrent_sessions: state.computerAutomationEnabled && automationMaxSessions ? Number(automationMaxSessions) : 0,
-      daily_budget_usd: state.computerAutomationEnabled && automationDailyBudget ? Number(automationDailyBudget) : null,
-      monthly_budget_usd: state.computerAutomationEnabled && automationMonthlyBudget ? Number(automationMonthlyBudget) : null,
-      requires_owner_approval: true,
-    },
+    computer_automation: computerAutomation,
     escalation_policy: {
       preset: state.escalationPreset,
       handoff_mode: state.handoffMode,
@@ -2710,6 +2773,7 @@ export function WorkstationDeployedAgentsPane({
         model_tier: wizardState.aiTier,
         empyralis_model_tier: wizardState.aiTier,
         runtime_placement: wizardState.runtimePlacement,
+        runtime_supplier: runtimeSupplierForPlacement(wizardState.runtimePlacement),
         computer_automation_enabled: wizardState.computerAutomationEnabled,
         approval_mode: wizardState.approvalMode,
         customer_channel: wizardState.customerChannel,

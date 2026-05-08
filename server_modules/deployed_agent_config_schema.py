@@ -34,6 +34,8 @@ KNOWN_OWNER_METADATA_KEYS = frozenset(
         "selected_tool_ids",
         "config_schema_version",
         "runtime_placement",
+        "runtime_supply",
+        "runtime_supplier",
         "computer_automation",
     }
 )
@@ -244,6 +246,7 @@ class DeployedAgentConfig(BaseModel):
     runtime_placement: str = Field(
         default_factory=lambda: deployed_agent_runtime_contract_service.RUNTIME_PLACEMENT_MANAGED_CLOUD
     )
+    runtime_supply: Dict[str, Any] = Field(default_factory=dict)
     runtime_target: str = Field(default_factory=config_defaults_service.default_deployed_agent_runtime_target)
     billing_plan: str = Field(default_factory=config_defaults_service.default_deployed_agent_billing_plan)
     provider: Optional[str] = None
@@ -312,6 +315,11 @@ def deployed_agent_config_from_record(
         config_payload.get("computer_automation")
         if "computer_automation" in config_payload
         else metadata.get("computer_automation")
+    )
+    runtime_supply_payload = _coerce_dict(
+        config_payload.get("runtime_supply")
+        if "runtime_supply" in config_payload
+        else metadata.get("runtime_supply")
     )
     runtime_target_value = (
         config_payload.get("runtime_target")
@@ -390,6 +398,17 @@ def deployed_agent_config_from_record(
                 config_payload.get("system_prompt") if "system_prompt" in config_payload else payload.get("system_prompt")
             ),
             "runtime_placement": runtime_placement,
+            "runtime_supply": deployed_agent_runtime_contract_service.normalize_runtime_supply_contract(
+                runtime_supply_payload,
+                runtime_supplier=config_payload.get("runtime_supplier") or metadata.get("runtime_supplier"),
+                runtime_placement=runtime_placement,
+                runtime_target=runtime_target,
+                computer_automation=computer_automation_payload,
+                public_tier=metadata.get("public_tier") or metadata.get("model_tier") or metadata.get("empyralis_model_tier"),
+                billing_source=metadata.get("billing_source"),
+                provider=config_payload.get("provider") if "provider" in config_payload else metadata.get("provider"),
+                model=config_payload.get("model") if "model" in config_payload else metadata.get("model"),
+            ),
             "runtime_target": runtime_target,
             "billing_plan": _text(config_payload.get("billing_plan") if "billing_plan" in config_payload else payload.get("billing_plan"))
             or config_defaults_service.default_deployed_agent_billing_plan(),
@@ -522,6 +541,7 @@ def metadata_from_deployed_agent_config(
         **preserved,
         "config_schema_version": config.schema_version,
         "runtime_placement": config.runtime_placement,
+        "runtime_supply": config.runtime_supply,
         "computer_automation": config.computer_automation.model_dump(exclude_none=True),
         "memory_enabled": bool(config.memory_policy.memory_enabled),
         "context_budget_preset": config.memory_policy.context_budget_preset,

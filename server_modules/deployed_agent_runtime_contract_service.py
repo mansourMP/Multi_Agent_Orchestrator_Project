@@ -8,12 +8,23 @@ from urllib.parse import urlparse
 
 
 RUNTIME_PLACEMENT_MANAGED_CLOUD = "managed_cloud"
+RUNTIME_PLACEMENT_HOSTED_HARDWARE_POOL = "hosted_hardware_pool"
 RUNTIME_PLACEMENT_CUSTOMER_LOCAL = "customer_local"
 RUNTIME_PLACEMENT_CUSTOMER_HOSTED = "customer_hosted"
 RUNTIME_PLACEMENTS = {
     RUNTIME_PLACEMENT_MANAGED_CLOUD,
+    RUNTIME_PLACEMENT_HOSTED_HARDWARE_POOL,
     RUNTIME_PLACEMENT_CUSTOMER_LOCAL,
     RUNTIME_PLACEMENT_CUSTOMER_HOSTED,
+}
+
+RUNTIME_SUPPLIER_EMPYRALIS = "empyralis"
+RUNTIME_SUPPLIER_CUSTOMER = "customer"
+RUNTIME_SUPPLIER_THIRD_PARTY_CERTIFIED = "third_party_certified"
+RUNTIME_SUPPLIERS = {
+    RUNTIME_SUPPLIER_EMPYRALIS,
+    RUNTIME_SUPPLIER_CUSTOMER,
+    RUNTIME_SUPPLIER_THIRD_PARTY_CERTIFIED,
 }
 
 COMPUTER_AUTOMATION_CLASSES = {
@@ -22,6 +33,13 @@ COMPUTER_AUTOMATION_CLASSES = {
     "virtual_code_sandbox",
     "local_browser",
     "local_desktop",
+}
+
+RUNTIME_PLACEMENT_TARGETS = {
+    RUNTIME_PLACEMENT_MANAGED_CLOUD: "cloud",
+    RUNTIME_PLACEMENT_HOSTED_HARDWARE_POOL: "cloud",
+    RUNTIME_PLACEMENT_CUSTOMER_LOCAL: "local",
+    RUNTIME_PLACEMENT_CUSTOMER_HOSTED: "self_hosted",
 }
 
 DEFAULT_AGENT_WORKSPACE_BASE = "~/.empyralis/agents"
@@ -98,6 +116,14 @@ def normalize_runtime_placement(value: Any, *, runtime_target: Any = None) -> st
     if token in {"managed_cloud", "cloud", "cloud_default", "cloud_worker", "hosted_secure", "cloud_only"}:
         return RUNTIME_PLACEMENT_MANAGED_CLOUD
     if token in {
+        "hosted_hardware_pool",
+        "empyralis_hosted",
+        "empyralis_hosted_device",
+        "empyralis_hardware_pool",
+        "owned_hardware_pool",
+    }:
+        return RUNTIME_PLACEMENT_HOSTED_HARDWARE_POOL
+    if token in {
         "customer_local",
         "local",
         "local_secure",
@@ -121,13 +147,33 @@ def normalize_runtime_placement(value: Any, *, runtime_target: Any = None) -> st
     return RUNTIME_PLACEMENT_MANAGED_CLOUD
 
 
+def normalize_runtime_supplier(value: Any, *, runtime_placement: Any = None) -> str:
+    token = _text(value).lower().replace("-", "_")
+    if token in {"empyralis", "platform", "platform_owned", "empyralis_owned"}:
+        return RUNTIME_SUPPLIER_EMPYRALIS
+    if token in {"customer", "owner", "workspace_owner", "bring_your_own_runtime", "byor"}:
+        return RUNTIME_SUPPLIER_CUSTOMER
+    if token in {"third_party_certified", "certified_third_party", "marketplace_runtime_provider"}:
+        return RUNTIME_SUPPLIER_THIRD_PARTY_CERTIFIED
+    placement = normalize_runtime_placement(runtime_placement)
+    if placement in {RUNTIME_PLACEMENT_CUSTOMER_LOCAL, RUNTIME_PLACEMENT_CUSTOMER_HOSTED}:
+        return RUNTIME_SUPPLIER_CUSTOMER
+    return RUNTIME_SUPPLIER_EMPYRALIS
+
+
 def runtime_target_for_placement(value: Any) -> str:
     placement = normalize_runtime_placement(value)
-    if placement == RUNTIME_PLACEMENT_CUSTOMER_LOCAL:
-        return "local"
-    if placement == RUNTIME_PLACEMENT_CUSTOMER_HOSTED:
-        return "self_hosted"
-    return "cloud"
+    return RUNTIME_PLACEMENT_TARGETS.get(placement, "cloud")
+
+
+def _runtime_trust_zone(supplier: str, placement: str) -> str:
+    if supplier == RUNTIME_SUPPLIER_CUSTOMER:
+        return "customer_owned"
+    if supplier == RUNTIME_SUPPLIER_THIRD_PARTY_CERTIFIED:
+        return "certified_third_party"
+    if placement == RUNTIME_PLACEMENT_HOSTED_HARDWARE_POOL:
+        return "empyralis_owned_hardware"
+    return "empyralis_managed_cloud"
 
 
 def normalize_computer_automation_config(value: Any) -> Dict[str, Any]:
@@ -155,6 +201,207 @@ def normalize_computer_automation_config(value: Any) -> Dict[str, Any]:
             payload.get("max_session_runtime_seconds"),
             default=1800 if enabled else 0,
         ),
+    }
+
+
+def normalize_runtime_supply_contract(
+    value: Any = None,
+    *,
+    runtime_supplier: Any = None,
+    runtime_placement: Any = None,
+    runtime_target: Any = None,
+    computer_automation: Any = None,
+    public_tier: Any = None,
+    billing_source: Any = None,
+    provider: Any = None,
+    model: Any = None,
+) -> Dict[str, Any]:
+    payload = dict(value or {}) if isinstance(value, dict) else {}
+    supplier_payload = payload.get("supplier") if isinstance(payload.get("supplier"), dict) else {}
+    placement_payload = payload.get("placement") if isinstance(payload.get("placement"), dict) else {}
+    marketplace_payload = payload.get("marketplace_policy") if isinstance(payload.get("marketplace_policy"), dict) else {}
+    model_tier_payload = payload.get("model_tier") if isinstance(payload.get("model_tier"), dict) else {}
+    provider_binding_payload = payload.get("provider_binding") if isinstance(payload.get("provider_binding"), dict) else {}
+
+    placement = normalize_runtime_placement(
+        runtime_placement if runtime_placement is not None else placement_payload.get("kind"),
+        runtime_target=runtime_target or placement_payload.get("runtime_target"),
+    )
+    supplier_kind = normalize_runtime_supplier(
+        runtime_supplier if runtime_supplier is not None else supplier_payload.get("kind"),
+        runtime_placement=placement,
+    )
+    automation = normalize_computer_automation_config(
+        computer_automation if computer_automation is not None else payload.get("computer_automation")
+        if "computer_automation" in payload
+        else payload.get("automation")
+    )
+    tier = _text(public_tier or model_tier_payload.get("public_tier") or payload.get("public_tier") or "pro").lower()
+    if tier not in {"light", "pro", "max", "local_ai", "my_api_key", "my_ai_account"}:
+        tier = "pro"
+    resolved_billing_source = _text(billing_source or model_tier_payload.get("billing_source") or "empyralis_credits")
+    third_party_runtime_allowed = _bool(marketplace_payload.get("third_party_runtime_allowed"), default=False)
+    visibility = _text(marketplace_payload.get("visibility"), default="private").lower()
+    install_blockers: List[str] = [
+        _text(item)
+        for item in list(marketplace_payload.get("install_blockers") or [])
+        if _text(item)
+    ]
+    if supplier_kind == RUNTIME_SUPPLIER_CUSTOMER and visibility == "marketplace":
+        install_blockers.append("customer_runtime_requires_installer_opt_in")
+    if supplier_kind == RUNTIME_SUPPLIER_THIRD_PARTY_CERTIFIED and not third_party_runtime_allowed:
+        install_blockers.append("third_party_runtime_not_allowed")
+
+    return {
+        "schema_version": 1,
+        "supplier": {
+            "kind": supplier_kind,
+            "id": _text(supplier_payload.get("id"), default=supplier_kind),
+            "label": _text(supplier_payload.get("label"), default="Empyralis" if supplier_kind == RUNTIME_SUPPLIER_EMPYRALIS else "Customer runtime"),
+            "owner_workspace_id": _text(supplier_payload.get("owner_workspace_id")) or None,
+        },
+        "placement": {
+            "kind": placement,
+            "runtime_target": runtime_target_for_placement(placement),
+            "trust_zone": _runtime_trust_zone(supplier_kind, placement),
+        },
+        "computer_automation": automation,
+        "marketplace_policy": {
+            "visibility": visibility,
+            "third_party_runtime_allowed": third_party_runtime_allowed,
+            "review_state": _text(marketplace_payload.get("review_state"), default="not_submitted"),
+            "verification_status": _text(marketplace_payload.get("verification_status"), default="unverified"),
+            "install_eligible": not install_blockers,
+            "install_blockers": sorted(set(install_blockers)),
+        },
+        "model_tier": {
+            "public_tier": tier,
+            "public_label": _text(model_tier_payload.get("public_label"), default=tier.replace("_", " ").title()),
+            "billing_source": resolved_billing_source,
+        },
+        "provider_binding": {
+            "internal_provider": _text(provider or provider_binding_payload.get("internal_provider")) or None,
+            "internal_model": _text(model or provider_binding_payload.get("internal_model")) or None,
+            "expose_provider_model_to_ordinary_ui": _bool(
+                provider_binding_payload.get("expose_provider_model_to_ordinary_ui"),
+                default=tier in {"local_ai", "my_api_key", "my_ai_account"},
+            ),
+        },
+    }
+
+
+def build_runtime_provider_spec(
+    *,
+    provider_id: Any,
+    supplier_kind: Any,
+    placement: Any,
+    label: Any = None,
+    capabilities: Any = None,
+    available_slots: Any = 0,
+    max_concurrency: Any = 0,
+    estimated_unit_cost: Any = 0,
+    trust_tier: Any = "standard",
+    supports_checkpoint: Any = False,
+    preemptible: Any = False,
+    region: Any = None,
+) -> Dict[str, Any]:
+    placement_kind = normalize_runtime_placement(placement)
+    supplier = normalize_runtime_supplier(supplier_kind, runtime_placement=placement_kind)
+    slots = _positive_int(available_slots, default=0)
+    max_slots = _positive_int(max_concurrency, default=slots)
+    return {
+        "provider_id": _text(provider_id, default=f"{supplier}:{placement_kind}"),
+        "supplier_kind": supplier,
+        "placement": placement_kind,
+        "runtime_target": runtime_target_for_placement(placement_kind),
+        "label": _text(label, default=f"{supplier} {placement_kind}".replace("_", " ").title()),
+        "capabilities": _list_text(capabilities),
+        "available_slots": slots,
+        "max_concurrency": max_slots,
+        "estimated_unit_cost": float(_positive_float(estimated_unit_cost) or 0.0),
+        "trust_tier": _text(trust_tier, default="standard"),
+        "supports_checkpoint": _bool(supports_checkpoint),
+        "preemptible": _bool(preemptible),
+        "region": _text(region) or None,
+    }
+
+
+def choose_runtime_provider_for_job(
+    providers: Any,
+    *,
+    required_placement: Any = None,
+    required_capabilities: Any = None,
+    max_estimated_unit_cost: Any = None,
+    allow_preemptible: bool = False,
+) -> Dict[str, Any]:
+    required = normalize_runtime_placement(required_placement) if required_placement else None
+    capabilities = set(_list_text(required_capabilities))
+    budget = _positive_float(max_estimated_unit_cost)
+    candidates: List[Dict[str, Any]] = []
+    for raw_provider in list(providers or []):
+        provider = build_runtime_provider_spec(**raw_provider) if isinstance(raw_provider, dict) else None
+        if not provider:
+            continue
+        if required and provider["placement"] != required:
+            continue
+        if capabilities and not capabilities.issubset(set(provider["capabilities"])):
+            continue
+        if not allow_preemptible and provider["preemptible"]:
+            continue
+        if budget is not None and float(provider["estimated_unit_cost"]) > budget:
+            continue
+        if int(provider["available_slots"]) <= 0:
+            continue
+        candidates.append(provider)
+    if not candidates:
+        return {
+            "status": "queued",
+            "reason": "waiting_for_capacity",
+            "provider": None,
+        }
+    candidates.sort(
+        key=lambda item: (
+            float(item["estimated_unit_cost"]),
+            1 if item["preemptible"] else 0,
+            -int(item["available_slots"]),
+            item["provider_id"],
+        )
+    )
+    selected = candidates[0]
+    return {
+        "status": "selected",
+        "reason": "capacity_available",
+        "provider": selected,
+        "estimated_unit_cost": selected["estimated_unit_cost"],
+    }
+
+
+def build_hardware_pool_job_contract(
+    *,
+    job_id: Any,
+    supplier_id: Any,
+    hardware_pool_id: Any,
+    checkpoint_uri: Any = None,
+    checkpoint_generation: Any = 0,
+    preemptible: Any = False,
+    preemption_deadline_at: Any = None,
+    resume_target: Any = None,
+) -> Dict[str, Any]:
+    return {
+        "job_id": _text(job_id, default="job"),
+        "supplier_id": _text(supplier_id, default=RUNTIME_SUPPLIER_EMPYRALIS),
+        "hardware_pool_id": _text(hardware_pool_id, default="default"),
+        "checkpoint": {
+            "enabled": bool(_text(checkpoint_uri)),
+            "uri": _text(checkpoint_uri) or None,
+            "generation": _positive_int(checkpoint_generation, default=0),
+        },
+        "preemption": {
+            "preemptible": _bool(preemptible),
+            "deadline_at": _text(preemption_deadline_at) or None,
+            "resume_target": _text(resume_target) or None,
+            "safe_resume_required": True,
+        },
     }
 
 

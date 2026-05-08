@@ -42,6 +42,31 @@ def test_deployed_agent_schema_splits_owner_config_from_operational_state() -> N
     assert "current_budget_cycle" not in metadata
 
 
+def test_deployed_agent_schema_accepts_runtime_supply_contract_without_enabling_automation() -> None:
+    config = deployed_agent_config_schema.deployed_agent_config_from_record(
+        {
+            "name": "Store Assistant",
+            "config": {
+                "runtime_placement": "hosted_hardware_pool",
+                "runtime_supply": {
+                    "supplier": {"kind": "empyralis", "id": "home-linux-pool"},
+                    "placement": {"kind": "hosted_hardware_pool"},
+                    "marketplace_policy": {"visibility": "private"},
+                },
+                "computer_automation": {"enabled": False},
+            },
+        }
+    )
+    metadata = deployed_agent_config_schema.metadata_from_deployed_agent_config(config)
+
+    assert config.runtime_placement == "hosted_hardware_pool"
+    assert config.runtime_target == "cloud"
+    assert config.runtime_supply["supplier"]["kind"] == "empyralis"
+    assert config.runtime_supply["placement"]["kind"] == "hosted_hardware_pool"
+    assert config.runtime_supply["computer_automation"]["enabled"] is False
+    assert metadata["runtime_supply"]["supplier"]["id"] == "home-linux-pool"
+
+
 def test_workspace_policy_schema_normalizes_legacy_payload() -> None:
     config = workspace_config_schema.workspace_policy_config_from_legacy(
         {

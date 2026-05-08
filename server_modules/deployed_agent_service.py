@@ -1618,6 +1618,7 @@ async def mirror_deployed_agent_to_backing_specialist(
             "owner_workspace_id": workspace_id,
             "runtime_target": runtime_target,
             "runtime_placement": config.runtime_placement,
+            "runtime_supply": config.runtime_supply,
             "computer_automation": config.computer_automation.model_dump(exclude_none=True),
             "provider": selected_provider,
             "model": selected_model,

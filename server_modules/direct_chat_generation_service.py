@@ -9,6 +9,7 @@ from server_modules import agent_trace_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_execution_service
 from server_modules import healthguide_safety_service
+from server_modules import response_leak_guard_service
 from server_modules.direct_chat_context_service import is_public_generation_error_message
 from server_modules.direct_chat_intervention_service import build_intervention
 from server_modules.direct_tool_config_service import run_async_tool_call
@@ -351,7 +352,7 @@ def stream_provider_backed_direct_chat(
         ):
             event_type = str(event.get("type") or "").strip().lower()
             if event_type == "chunk":
-                delta = str(event.get("delta") or "")
+                delta = response_leak_guard_service.guard_stream_delta(event.get("delta") or "")
                 if delta:
                     iteration_reply += delta
                     yield {"type": "chunk", "delta": delta}
@@ -882,6 +883,17 @@ def stream_provider_backed_direct_chat(
                             **conversation_messages[-1],
                             "content": final_reply,
                         }
+                leak_guard = response_leak_guard_service.guard_model_response(final_reply)
+                final_reply = leak_guard.text
+                if (
+                    conversation_messages
+                    and isinstance(conversation_messages[-1], dict)
+                    and str(conversation_messages[-1].get("role") or "").strip() == "assistant"
+                ):
+                    conversation_messages[-1] = {
+                        **conversation_messages[-1],
+                        "content": final_reply,
+                    }
                 trace_plan_answer_done = _emit_trace_event(
                     trace_context,
                     event_type="plan.item.updated",
@@ -934,6 +946,7 @@ def stream_provider_backed_direct_chat(
                         "model": actual_model,
                         "attempted_providers": attempted_providers,
                         "error": llm_error,
+                        "response_leak_guard": leak_guard.metadata(),
                         "context_used": services.build_context_used(
                             workspace_id=normalized_workspace_id,
                             requested_provider=normalized_requested_provider,

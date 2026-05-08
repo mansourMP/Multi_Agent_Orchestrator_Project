@@ -306,10 +306,138 @@ def _scan_python_ast(source: _Source) -> List[Dict[str, Any]]:
     return findings
 
 
+_JS_TS_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx"}
+
+
+def _js_token_view(text: str) -> str:
+    token_view = str(text or "")
+    token_view = re.sub(r"/\*.*?\*/", " ", token_view, flags=re.S)
+    token_view = re.sub(r"//[^\n\r]*", " ", token_view)
+    token_view = re.sub(
+        r"(['\"])([A-Za-z0-9_:@./-]{1,80})\1\s*\+\s*(['\"])([A-Za-z0-9_:@./-]{1,80})\3",
+        lambda match: f'"{match.group(2)}{match.group(4)}"',
+        token_view,
+    )
+    return token_view
+
+
+def _scan_js_ts_conservative(source: _Source) -> List[Dict[str, Any]]:
+    if source.path.suffix.lower() not in _JS_TS_EXTENSIONS:
+        return []
+    text = _js_token_view(source.text)
+    findings: List[Dict[str, Any]] = []
+
+    high_risk_patterns: tuple[tuple[str, str, str, str], ...] = (
+        (
+            r"\brequire\s*\(\s*['\"](?:node:)?child_process['\"]\s*\)|\bfrom\s+['\"](?:node:)?child_process['\"]",
+            "js_child_process_import",
+            "Node child_process import",
+            "JS/TS skill imports child_process, which can execute local commands.",
+        ),
+        (
+            r"\bimport\s*\(\s*['\"](?:node:)?child_process['\"]\s*\)|\bmodule\.constructor\._load\s*\(\s*['\"](?:node:)?child_process['\"]",
+            "js_dynamic_child_process_import",
+            "Dynamic child_process import",
+            "JS/TS skill dynamically imports child_process, which can hide command execution intent.",
+        ),
+        (
+            r"\bprocess\.mainModule\.require\s*\(\s*['\"](?:node:)?child_process['\"]\s*\)",
+            "js_process_mainmodule_require",
+            "process.mainModule require",
+            "JS/TS skill uses process.mainModule.require to bypass normal import scanning.",
+        ),
+        (
+            r"\bprocess\.mainModule\.require\b|\bmodule\.constructor\._load\b",
+            "js_process_mainmodule_require",
+            "Dynamic module loader",
+            "JS/TS skill uses a dynamic Node module loader that can hide dangerous imports.",
+        ),
+        (
+            r"\b(?:eval|globalThis\s*\[\s*['\"]eval['\"]\s*|window\s*\[\s*['\"]eval['\"]\s*)\s*\(",
+            "dynamic_code_eval",
+            "Dynamic code evaluation",
+            "JS/TS skill invokes eval directly or through a global alias.",
+        ),
+        (
+            r"\b(?:Function|globalThis\s*\[\s*['\"]Function['\"]\s*\]|window\s*\[\s*['\"]Function['\"]\s*\])\s*\(",
+            "dynamic_function_constructor",
+            "Dynamic Function constructor",
+            "JS/TS skill constructs executable code dynamically.",
+        ),
+        (
+            r"\b(?:net|node:net|tls|node:tls)\s*\.\s*(connect|createConnection)\s*\(|\bdgram\s*\.\s*createSocket\s*\(",
+            "js_raw_network_socket",
+            "Raw network socket",
+            "JS/TS skill opens raw sockets, which can bypass normal connector and egress controls.",
+        ),
+        (
+            r"\bnew\s+WebSocket\s*\(",
+            "js_websocket_tunnel",
+            "WebSocket tunnel",
+            "JS/TS skill opens a WebSocket connection that can be used as a command or exfiltration channel.",
+        ),
+    )
+    for pattern, code, title, detail in high_risk_patterns:
+        _add_regex_findings(
+            findings,
+            source,
+            pattern=pattern,
+            severity="critical",
+            code=code,
+            title=title,
+            detail=detail,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+    if _has(r"child_process", text) and _has(r"\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(", text):
+        findings.append(
+            _finding(
+                severity="critical",
+                code="dangerous_process_exec",
+                title="Shell process execution",
+                source=source,
+                offset=_first_offset(r"\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(", text),
+                detail="JS/TS skill resolves child_process and executes a process, including obfuscated module strings.",
+            )
+        )
+
+    if _has(r"\b(fs|node:fs)\s*\.\s*(readFileSync|readFile|promises\.readFile)\b|\brequire\s*\(\s*['\"](?:node:)?fs['\"]\s*\)", text) and _has(
+        r"\b(fetch|XMLHttpRequest|axios\.(post|put|request)|https?\.request|new\s+WebSocket)\b|wss?://",
+        text,
+    ):
+        findings.append(
+            _finding(
+                severity="critical",
+                code="js_file_network_exfiltration",
+                title="File read with network send",
+                source=source,
+                offset=_first_offset(r"\b(fs|node:fs)\b|\breadFile", text),
+                detail="JS/TS skill reads local files and sends data over a network path.",
+            )
+        )
+    if _has(r"\bprocess\.env\b|\bdotenv\b", text) and _has(
+        r"\b(fetch|XMLHttpRequest|axios\.(post|put|request)|https?\.request|new\s+WebSocket)\b|wss?://",
+        text,
+    ):
+        findings.append(
+            _finding(
+                severity="critical",
+                code="env_network_send",
+                title="Environment harvesting with network send",
+                source=source,
+                offset=_first_offset(r"\bprocess\.env\b|\bdotenv\b", text),
+                detail="JS/TS skill reads environment variables and sends data over a network path.",
+            )
+        )
+
+    return findings
+
+
 def _scan_source(source: _Source) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
     text = source.text
     findings.extend(_scan_python_ast(source))
+    findings.extend(_scan_js_ts_conservative(source))
 
     _add_regex_findings(
         findings,
@@ -404,7 +532,7 @@ def _scan_source(source: _Source) -> List[Dict[str, Any]]:
     if _has(file_read_pattern, text) and _has(network_send_pattern, text):
         findings.append(
             _finding(
-                severity="warning",
+                severity="critical" if source.path.suffix.lower() in _JS_TS_EXTENSIONS else "warning",
                 code="file_read_network_send",
                 title="File read with network send",
                 source=source,

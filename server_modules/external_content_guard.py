@@ -86,11 +86,38 @@ class GuardedExternalContent:
     wrapper_id: str
     suspicious_patterns: tuple[str, ...]
     metadata: ExternalContentMetadata
+    injection_score: int = 0
+    injection_severity: str = "none"
 
 
 def detect_suspicious_patterns(content: str) -> tuple[str, ...]:
     raw_content = str(content or "")
     return tuple(name for name, pattern in _SUSPICIOUS_PATTERNS if pattern.search(raw_content))
+
+
+def score_prompt_injection_risk(content: str) -> dict[str, Any]:
+    raw_content = str(content or "")
+    patterns = detect_suspicious_patterns(raw_content)
+    score = min(100, len(patterns) * 15)
+    lowered = raw_content.lower()
+    if "ignore" in lowered and ("instruction" in lowered or "prompt" in lowered):
+        score = min(100, score + 20)
+    if any(token in lowered for token in ("reveal secret", "show secret", "api key", "password", "exfiltrate")):
+        score = min(100, score + 25)
+    if "<<<external_untrusted_content" in _fold_marker_text(raw_content).lower():
+        score = min(100, score + 20)
+    severity = "none"
+    if score >= 70:
+        severity = "high"
+    elif score >= 35:
+        severity = "medium"
+    elif score > 0:
+        severity = "low"
+    return {
+        "score": score,
+        "severity": severity,
+        "patterns": list(patterns),
+    }
 
 
 def sanitize_external_content_markers(content: str) -> str:
@@ -132,6 +159,7 @@ def wrap_external_content(
 ) -> GuardedExternalContent:
     raw_content = str(content or "")
     suspicious_patterns = detect_suspicious_patterns(raw_content)
+    injection_risk = score_prompt_injection_risk(raw_content)
     sanitized_content = sanitize_external_content_markers(raw_content)
     wrapper_id = str(uuid.uuid4())
     content_metadata = ExternalContentMetadata(
@@ -159,6 +187,8 @@ def wrap_external_content(
         wrapper_id=wrapper_id,
         suspicious_patterns=suspicious_patterns,
         metadata=content_metadata,
+        injection_score=int(injection_risk["score"]),
+        injection_severity=str(injection_risk["severity"]),
     )
 
 

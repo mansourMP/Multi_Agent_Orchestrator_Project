@@ -87,6 +87,56 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "final")
         self.assertEqual(events[-1]["payload"]["reply"], "Hello")
         self.assertEqual(events[-1]["payload"]["provider"], "openai")
+        self.assertFalse(events[-1]["payload"]["response_leak_guard"]["redacted"])
+
+    def test_stream_provider_backed_direct_chat_redacts_response_leaks(self) -> None:
+        events = list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=self._services(
+                    stream_events=[
+                        {
+                            "type": "result",
+                            "reply": "Sensitivity: RED\nAPI key is sk-testsecret123",
+                            "usage_masked": {"provider": "openai"},
+                            "provider": "openai",
+                            "model": "gpt-5.4",
+                            "attempted_providers": "openai",
+                            "error": "",
+                            "tool_calls": [],
+                        }
+                    ]
+                ),
+                context={"provider": "openai"},
+                metadata={"provider": "openai", "model": "gpt-5.4"},
+                system_prompt="System prompt",
+                normalized_workspace_id="default",
+                normalized_requested_provider="openai",
+                normalized_requested_model="gpt-5.4",
+                normalized_reasoning_effort="medium",
+                normalized_thread_id="thread-1",
+                normalized_message="hello",
+                compacted_prior_messages=[],
+                prior_messages_used=False,
+                history_mode="none",
+                connected_systems=[],
+                tool_capabilities=[],
+                availability_payload={"ai_ready": True},
+                tools=[],
+                direct_chat_credentials={},
+                proactive_suggestions=[],
+                tool_loop_session_key="session-1",
+                fallback_reason=None,
+                session_ctx=None,
+                trace_context=None,
+                resolved_chat_max_iterations=1,
+                direct_tool_result_summary_system_message="Summarize tool results.",
+            )
+        )
+
+        final_payload = events[-1]["payload"]
+        self.assertNotIn("sk-testsecret123", final_payload["reply"])
+        self.assertTrue(final_payload["response_leak_guard"]["redacted"])
+        self.assertIn("red_sensitivity_label", final_payload["response_leak_guard"]["findings"])
 
     def test_stream_provider_backed_direct_chat_persists_hosted_usage_before_final(self) -> None:
         recorded: list[dict[str, object]] = []

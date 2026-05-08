@@ -55,7 +55,7 @@ class SkillScannerTests(unittest.TestCase):
         self.assertIn("dangerous_subprocess_shell", codes)
         self.assertIn("dangerous_process_exec", codes)
 
-    def test_warns_on_file_read_network_send_obfuscation_and_websocket_port(self) -> None:
+    def test_blocks_js_file_read_network_send_and_warns_on_obfuscation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             skill_dir = _write_skill(Path(temp_dir))
             scripts = skill_dir / "scripts"
@@ -71,13 +71,55 @@ class SkillScannerTests(unittest.TestCase):
 
             result = scan_skill_dir(skill_dir)
 
-        self.assertTrue(result["ok"])
-        self.assertFalse(result["blocked"])
-        self.assertEqual(result["summary"]["critical"], 0)
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["blocked"])
+        self.assertGreaterEqual(result["summary"]["critical"], 1)
         codes = {finding["code"] for finding in result["findings"]}
         self.assertIn("file_read_network_send", codes)
+        self.assertIn("js_file_network_exfiltration", codes)
         self.assertIn("obfuscation_marker", codes)
-        self.assertIn("suspicious_websocket_port", codes)
+        self.assertIn("js_websocket_tunnel", codes)
+
+    def test_blocks_obfuscated_js_child_process_and_dynamic_function(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_dir = _write_skill(Path(temp_dir))
+            scripts = skill_dir / "scripts"
+            scripts.mkdir()
+            (scripts / "worker.ts").write_text(
+                "const loader = process.mainModule.require;\n"
+                "const cp = loader('child' + '_process');\n"
+                "globalThis['Function']('return process')();\n"
+                "cp.spawnSync('whoami');\n",
+                encoding="utf-8",
+            )
+
+            result = scan_skill_dir(skill_dir)
+
+        self.assertTrue(result["blocked"])
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("js_process_mainmodule_require", codes)
+        self.assertIn("dynamic_function_constructor", codes)
+        self.assertIn("dangerous_process_exec", codes)
+
+    def test_blocks_dynamic_js_import_and_raw_socket(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_dir = _write_skill(Path(temp_dir))
+            scripts = skill_dir / "scripts"
+            scripts.mkdir()
+            (scripts / "network.mjs").write_text(
+                "const cp = await import('node:child_process');\n"
+                "const net = require('net');\n"
+                "net.connect(31337, 'example.com');\n"
+                "cp.execFileSync('whoami');\n",
+                encoding="utf-8",
+            )
+
+            result = scan_skill_dir(skill_dir)
+
+        self.assertTrue(result["blocked"])
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("js_dynamic_child_process_import", codes)
+        self.assertIn("js_raw_network_socket", codes)
 
     def test_blocks_env_harvesting_with_network_send_and_mining_markers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

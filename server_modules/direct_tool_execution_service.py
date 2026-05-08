@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from server_modules import security_audit_service
 from server_modules import skills_service
+from server_modules import tool_broker_guard_service
 
 _BROWSER_CAPTURE_ACTIONS = {"screenshot", "pdf"}
 _BROWSER_MUTATION_ACTIONS = {"click", "fill", "execute_js", "download_file"}
@@ -396,6 +397,18 @@ def _direct_tool_governance_metadata(
     }
 
 
+def _broker_action_class_for_direct_tool(governance: Dict[str, Any]) -> str:
+    action_class = str(governance.get("action_class") or "").strip().lower()
+    risk_level = str(governance.get("risk_level") or "").strip().lower()
+    if action_class in {"shell_execute", "device_control", "credential_change", "local_delete"}:
+        return "execute"
+    if risk_level in {"critical", "high"}:
+        return "execute"
+    if bool(governance.get("external_side_effect")) or action_class in {"local_write", "browser_mutation", "channel_send"}:
+        return "write"
+    return "read"
+
+
 def _parse_web_search_results(result_text: str) -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
     for block in re.split(r"\n\s*\n", str(result_text or "").strip()):
@@ -530,6 +543,7 @@ def execute_single_direct_tool_call(
         or session_metadata.get("client_request_id")
         or ""
     ).strip() or None
+    governance_metadata = _direct_tool_governance_metadata(connector_id, action_id, argument_payload)
     audit_metadata = {
         "tool_name": tool_name or None,
         "connector_id": str(connector_id or "").strip() or None,
@@ -548,8 +562,33 @@ def execute_single_direct_tool_call(
             or ""
         )
         or None,
-        **_direct_tool_governance_metadata(connector_id, action_id, argument_payload),
+        **governance_metadata,
     }
+    broker_decision = tool_broker_guard_service.evaluate_tool_call(
+        claims={
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "manifest_id": session_metadata.get("manifest_id") or session_metadata.get("agent_manifest_id") or "direct_chat",
+            "agent_install_id": session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or "sage",
+            "grant_id": session_metadata.get("grant_id") or run_id or thread_id,
+        },
+        tool_key=tool_name or _infer_trace_capability_id(connector_id, action_id),
+        action_class=_broker_action_class_for_direct_tool(governance_metadata),
+        connector_scope=str(connector_id or "").strip().lower(),
+        surface="connector" if str(connector_id or "").strip().lower() in _CHANNEL_CONNECTORS else "direct_tool",
+    )
+    if not broker_decision.allowed:
+        security_audit_service.emit_security_audit_event(
+            action="direct_tool.blocked",
+            status="blocked",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            detail=broker_decision.detail,
+            metadata={**audit_metadata, "broker_guard": broker_decision.snapshot, "broker_code": broker_decision.code},
+            idempotency_key=f"direct_tool.blocked:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}:{broker_decision.code}",
+        )
+        raise RuntimeError(broker_decision.detail or "Direct tool call was blocked by broker guard.")
     security_audit_service.emit_security_audit_event(
         action="direct_tool.started",
         status="started",

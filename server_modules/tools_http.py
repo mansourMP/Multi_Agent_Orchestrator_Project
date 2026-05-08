@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import httpx
 
 from server_modules import egress_policy
+from server_modules.url_security import assert_safe_outbound_url
 
 
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -110,6 +111,7 @@ async def http_request(
         raise RuntimeError("http_request requires a URL.")
 
     normalized_method = _normalize_method(method)
+    assert_safe_outbound_url(normalized_url)
     egress_policy.enforce_outbound_request(url=normalized_url, method=normalized_method)
     normalized_headers = _normalize_mapping(headers)
     normalized_params = params if isinstance(params, dict) else None
@@ -133,6 +135,10 @@ async def http_request(
     factory = client_factory or httpx.AsyncClient
     async with factory(timeout=max(1, int(timeout or DEFAULT_TIMEOUT_SECONDS)), follow_redirects=True) as client:
         response = await client.request(**request_kwargs)
+        final_url = str(getattr(response, "url", "") or "").strip()
+        if final_url:
+            assert_safe_outbound_url(final_url)
+            egress_policy.enforce_outbound_request(url=final_url, method=normalized_method)
         raw_bytes = await response.aread()
 
     body_payload, truncated = _response_body(raw_bytes, response.headers.get("content-type", ""))

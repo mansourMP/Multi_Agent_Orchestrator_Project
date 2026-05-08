@@ -2719,6 +2719,8 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(execution["result"]["run_id"], "run-1")
         self.assertEqual(captured_metadata["runtime_attachment_id"], "local_companion:profile-local")
         self.assertEqual(captured_metadata["machine_target"], "machine-local")
+        self.assertEqual(captured_metadata["execution_target_selected"], "local_companion")
+        self.assertEqual(captured_metadata["runtime_attachment_kind"], "local_companion")
         self.assertEqual(captured_metadata["runtime_scope"]["mode"], "local_secure")
         self.assertEqual(captured_metadata["runtime_selection"]["execution_target_selected"], "local_companion")
 

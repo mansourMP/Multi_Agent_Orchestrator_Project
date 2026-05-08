@@ -21,10 +21,11 @@ spec.loader.exec_module(operator_chat)
 
 
 class _FakeResponse:
-    def __init__(self, *, status_code: int = 200, headers: dict | None = None, body: bytes = b"") -> None:
+    def __init__(self, *, status_code: int = 200, headers: dict | None = None, body: bytes = b"", url: str = "") -> None:
         self.status_code = status_code
         self.headers = headers or {}
         self._body = body
+        self.url = url
 
     async def aread(self) -> bytes:
         return self._body
@@ -145,6 +146,19 @@ class HttpToolTests(unittest.TestCase):
             self.assertEqual(append_mock.await_args.kwargs["status"], "denied")
 
         asyncio.run(_run())
+
+    def test_http_request_rechecks_final_redirect_url_for_private_hosts(self):
+        _FakeAsyncClient.response = _FakeResponse(
+            status_code=200,
+            headers={"content-type": "text/plain"},
+            body=b"private",
+            url="http://127.0.0.1/private",
+        )
+        with patch("server_modules.tools_http.httpx.AsyncClient", _FakeAsyncClient):
+            with self.assertRaises(RuntimeError) as raised:
+                asyncio.run(tools_http.http_request(method="GET", url="https://example.com/redirect"))
+
+        self.assertIn("Outbound HTTP URL is not allowed", str(raised.exception))
 
     def test_http_request_allows_allowlisted_provider_under_active_egress_policy(self):
         async def _run() -> None:

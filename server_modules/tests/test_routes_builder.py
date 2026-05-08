@@ -384,6 +384,26 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(any(issue.get("code") == "browser_url_missing" for issue in payload.get("issues", [])))
 
+    def test_parse_workflow_payload_flags_browser_tool_private_url(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "browser",
+                  "config": {
+                    "url": "http://127.0.0.1:8000/admin"
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(any(issue.get("code") == "browser_private_url_disallowed" for issue in payload.get("issues", [])))
+
     def test_parse_workflow_payload_flags_instagram_reply_without_comment_id(self):
         payload = _parse_workflow_payload(
             """

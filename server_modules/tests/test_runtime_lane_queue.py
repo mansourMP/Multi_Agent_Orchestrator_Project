@@ -105,6 +105,9 @@ class RuntimeLaneQueueTests(unittest.TestCase):
             )
             _wait_until(lambda: queue.snapshot()["active_count"] == 1)
             _wait_until(lambda: queue.snapshot()["pending_count"] == 1)
+            checkpoint_snapshot = queue.snapshot()
+            self.assertTrue(checkpoint_snapshot["checkpoint"]["enabled"])
+            self.assertIsNone(checkpoint_snapshot["checkpoint"]["last_error"])
 
             restored_run_ids = []
 
@@ -123,6 +126,8 @@ class RuntimeLaneQueueTests(unittest.TestCase):
                 restore_work_factory=_restore_work,
             )
             snapshot = restored.snapshot()
+            self.assertTrue(snapshot["checkpoint"]["enabled"])
+            self.assertIsNone(snapshot["checkpoint"]["last_error"])
             self.assertEqual(snapshot["pending_count"], 2)
             self.assertEqual([item["run_id"] for item in snapshot["lanes"]["cron"]["pending"]], ["run-1", "run-2"])
 

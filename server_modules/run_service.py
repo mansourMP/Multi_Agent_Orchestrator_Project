@@ -6068,6 +6068,7 @@ async def execute_durable_turn_request(
             decide_execution_target_fn=decide_execution_target,
             apply_execution_route_metadata_fn=apply_execution_route_metadata,
         )
+        req.metadata = dict(metadata)
         if created_trace_context and trace_context is not None:
             await agent_trace_service.emit_trace_routed(
                 trace_context,

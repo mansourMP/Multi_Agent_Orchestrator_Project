@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 
 from server_modules import app_bridge_service, external_content_guard
+from server_modules.url_security import obvious_private_url_reason
 
 
 DEFAULT_HOSTED_BRIDGE_MESSAGE_TYPE = "empyralis.hosted_app.bridge.request"
@@ -60,7 +61,7 @@ def _is_local_dev_host(hostname: str) -> bool:
         parsed = ipaddress.ip_address(normalized)
     except ValueError:
         return False
-    return bool(parsed.is_private or parsed.is_loopback)
+    return bool(parsed.is_loopback)
 
 
 def _normalize_origin(value: Any) -> Optional[str]:
@@ -84,6 +85,9 @@ def _normalize_hosted_url(value: Any) -> Optional[str]:
         raise ValueError("hosted_url must be an absolute http(s) URL.")
     if parsed.scheme != "https" and not _is_local_dev_host(parsed.hostname or ""):
         raise ValueError("hosted_url must use https unless it targets a local development host.")
+    private_url_reason = obvious_private_url_reason(token)
+    if private_url_reason and not _is_local_dev_host(parsed.hostname or ""):
+        raise ValueError(f"hosted_url cannot target private or unsupported hosts ({private_url_reason}).")
     return token
 
 

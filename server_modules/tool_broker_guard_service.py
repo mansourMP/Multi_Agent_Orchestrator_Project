@@ -13,6 +13,7 @@ DEFAULT_SESSION_LIMIT = 80
 DEFAULT_TOOL_LIMIT = 30
 DEFAULT_EXECUTE_LIMIT = 10
 DEFAULT_CONNECTOR_WRITE_LIMIT = 12
+DEFAULT_ACTION_CLASS_LIMIT = 20
 
 _LOCK = threading.Lock()
 _EVENTS: Deque["_BrokerEvent"] = deque()
@@ -151,6 +152,7 @@ def evaluate_tool_call(
         "EMPYRALIS_TOOL_BROKER_CONNECTOR_WRITE_LIMIT",
         DEFAULT_CONNECTOR_WRITE_LIMIT,
     )
+    action_class_limit = _env_int("EMPYRALIS_TOOL_BROKER_ACTION_CLASS_LIMIT", DEFAULT_ACTION_CLASS_LIMIT)
     session_key = _session_key(claims)
     normalized_tool = _normalize(tool_key)
     normalized_action = _normalize(action_class, default="read")
@@ -163,6 +165,7 @@ def evaluate_tool_call(
         session_events = [event for event in _EVENTS if event.session_key == session_key]
         same_tool_events = [event for event in session_events if event.tool_key == normalized_tool]
         execute_events = [event for event in session_events if event.action_class == "execute"]
+        same_action_events = [event for event in session_events if event.action_class == normalized_action]
         connector_write_events = [
             event
             for event in session_events
@@ -173,10 +176,12 @@ def evaluate_tool_call(
             "session_count": len(session_events),
             "tool_count": len(same_tool_events),
             "execute_count": len(execute_events),
+            "action_class_count": len(same_action_events),
             "connector_write_count": len(connector_write_events),
             "session_limit": session_limit,
             "tool_limit": tool_limit,
             "execute_limit": execute_limit,
+            "action_class_limit": action_class_limit,
             "connector_write_limit": connector_write_limit,
             "tool_key": normalized_tool,
             "action_class": normalized_action,
@@ -198,6 +203,11 @@ def evaluate_tool_call(
             denial = (
                 "broker_execute_circuit_breaker",
                 "Execute-class tool calls tripped the broker circuit breaker.",
+            )
+        elif len(same_action_events) >= action_class_limit:
+            denial = (
+                "broker_action_class_rate_limited",
+                f"{normalized_action.title()}-class tool calls repeated too many times in a short window.",
             )
         elif normalized_surface == "connector" and normalized_action in {"write", "execute"} and len(connector_write_events) >= connector_write_limit:
             denial = (
@@ -223,6 +233,7 @@ def evaluate_tool_call(
             snapshot["tool_count"] += 1
             if normalized_action == "execute":
                 snapshot["execute_count"] += 1
+            snapshot["action_class_count"] += 1
             if normalized_surface == "connector" and normalized_action in {"write", "execute"}:
                 snapshot["connector_write_count"] += 1
             return BrokerGuardDecision(True, snapshot=snapshot)

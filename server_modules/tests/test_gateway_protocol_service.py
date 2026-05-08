@@ -28,6 +28,26 @@ class GatewayProtocolServiceTests(unittest.TestCase):
         self.assertEqual(raised.exception.error_code, "gateway_frame_too_large")
         self.assertEqual(raised.exception.close_code, 4409)
 
+    def test_parse_frame_accepts_exact_size_boundary(self) -> None:
+        base = {"kind": "request", "id": "a", "type": "gateway.heartbeat", "payload": {"padding": ""}}
+        raw = json.dumps(base, separators=(",", ":"))
+        remaining = gateway_protocol_service.MAX_GATEWAY_FRAME_BYTES - len(raw.encode("utf-8"))
+        base["payload"]["padding"] = "x" * max(0, remaining)
+        raw = json.dumps(base, separators=(",", ":"))
+        while len(raw.encode("utf-8")) > gateway_protocol_service.MAX_GATEWAY_FRAME_BYTES:
+            base["payload"]["padding"] = base["payload"]["padding"][:-1]
+            raw = json.dumps(base, separators=(",", ":"))
+
+        frame = gateway_protocol_service._parse_frame(raw)
+
+        self.assertEqual(frame["type"], "gateway.heartbeat")
+
+    def test_parse_frame_rejects_invalid_json(self) -> None:
+        with self.assertRaises(gateway_protocol_service.GatewayFrameValidationError) as raised:
+            gateway_protocol_service._parse_frame("{not-json")
+
+        self.assertEqual(raised.exception.error_code, "gateway_frame_invalid_json")
+
     def test_parse_frame_rejects_deeply_nested_json(self) -> None:
         value = "leaf"
         for _ in range(gateway_protocol_service.MAX_GATEWAY_JSON_DEPTH + 2):
@@ -86,6 +106,19 @@ class GatewayProtocolServiceTests(unittest.TestCase):
         seq_missing, ack_missing = gateway_protocol_service._normalize_frame_seq_ack({})
         self.assertIsNone(seq_missing)
         self.assertIsNone(ack_missing)
+
+    def test_live_connection_rejects_duplicate_inbound_frame_ids(self) -> None:
+        connection = gateway_protocol_service._LiveGatewayConnection(
+            websocket=object(),
+            gateway_id="gateway-1",
+            session_id="session-1",
+            scope={"tenant_id": "tenant-1", "workspace_id": "workspace-1"},
+        )
+
+        self.assertTrue(connection.remember_inbound_frame_id("frame-1"))
+        self.assertFalse(connection.remember_inbound_frame_id("frame-1"))
+        self.assertTrue(connection.remember_inbound_frame_id("frame-2"))
+        self.assertTrue(connection.remember_inbound_frame_id(""))
 
 
 if __name__ == "__main__":

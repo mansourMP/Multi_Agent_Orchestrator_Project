@@ -88,6 +88,18 @@ def test_hosted_manifest_allows_same_origin_for_local_dev():
     assert "allow-same-origin" in manifest["hosted_app"]["embed"]["sandbox"]
 
 
+def test_normalize_hosted_fields_rejects_private_non_dev_hosted_url():
+    with pytest.raises(ValueError) as exc_info:
+        mini_app_host_service.normalize_hosted_app_fields(
+            app_id="private_hosted_app",
+            delivery_mode="hosted",
+            hosted_url="https://10.0.0.5/app",
+            allowed_origins=["https://10.0.0.5"],
+        )
+
+    assert "private" in str(exc_info.value)
+
+
 def test_normalize_hosted_fields_defaults_summary_read_for_first_party_structured():
     fields = mini_app_host_service.normalize_hosted_app_fields(
         app_id="calorie_tracking",

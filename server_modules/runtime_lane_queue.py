@@ -116,6 +116,7 @@ class RuntimeLaneQueue:
         self._state_db_path = Path(state_db_path).expanduser() if state_db_path is not None else None
         self._checkpoint_key = str(checkpoint_key or DEFAULT_CHECKPOINT_KEY).strip() or DEFAULT_CHECKPOINT_KEY
         self._restore_work_factory = restore_work_factory
+        self._last_checkpoint_error: Optional[str] = None
         self._restore_checkpoint()
 
     def start(self) -> None:
@@ -301,7 +302,9 @@ class RuntimeLaneQueue:
             state = runtime_state_store.get_local_app_state(self._state_db_path, self._checkpoint_key)
             value = dict(state.get("value") or {}) if isinstance(state, dict) and isinstance(state.get("value"), dict) else {}
             items = list(value.get("items") or [])
-        except Exception:
+            self._last_checkpoint_error = None
+        except Exception as exc:
+            self._last_checkpoint_error = str(exc)
             return
         for raw_item in items:
             payload = dict(raw_item or {}) if isinstance(raw_item, dict) else {}
@@ -343,7 +346,9 @@ class RuntimeLaneQueue:
                 self._checkpoint_key,
                 {"items": items, "persisted_at": _utc_now_iso()},
             )
-        except Exception:
+            self._last_checkpoint_error = None
+        except Exception as exc:
+            self._last_checkpoint_error = str(exc)
             return
 
     def _total_active_locked(self) -> int:
@@ -372,6 +377,11 @@ class RuntimeLaneQueue:
             "max_total_concurrency": self._max_total_concurrency,
             "pending_count": sum(len(self._pending[lane]) for lane in LANE_ORDER),
             "active_count": self._total_active_locked(),
+            "checkpoint": {
+                "enabled": self._state_db_path is not None,
+                "key": self._checkpoint_key if self._state_db_path is not None else None,
+                "last_error": self._last_checkpoint_error,
+            },
             "lanes": lane_payload,
             "recent": [item.to_snapshot() for item in list(self._recent)[:6]],
         }

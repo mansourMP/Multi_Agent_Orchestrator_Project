@@ -519,6 +519,10 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
         if variant == "browser" and not _clean_text(config.get("url"), 1200):
             issues.append({"code": "browser_url_missing", "message": "Browser tool nodes require a URL."})
         if variant == "browser":
+            browser_url = _clean_text(config.get("url"), 1200)
+            private_url_reason = obvious_private_url_reason(browser_url) if browser_url else None
+            if private_url_reason:
+                issues.append({"code": "browser_private_url_disallowed", "message": f"Browser tool nodes cannot target private or unsupported hosts ({private_url_reason})."})
             browser_permissions = config.get("permissions", {}).get("browser_permissions") if isinstance(config.get("permissions"), dict) and isinstance(config.get("permissions", {}).get("browser_permissions"), dict) else {}
             browser_allowed = bool(browser_permissions.get("allow"))
             session_profile = _clean_text(config.get("session_profile"), 160)

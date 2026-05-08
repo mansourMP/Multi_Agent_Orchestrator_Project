@@ -59,6 +59,7 @@ class _LiveGatewayConnection:
         self.session_id = str(session_id or "").strip()
         self.scope = dict(scope or {})
         self._pending_requests: Dict[str, _PendingGatewayRequest] = {}
+        self._seen_inbound_frame_ids: set[str] = set()
         self._send_lock = asyncio.Lock()
         self._closed = False
 
@@ -111,6 +112,17 @@ class _LiveGatewayConnection:
         if not pending.future.done():
             pending.loop.call_soon_threadsafe(pending.future.set_result, dict(frame or {}))
         return pending.message_type
+
+    def remember_inbound_frame_id(self, frame_id: Any) -> bool:
+        normalized = str(frame_id or "").strip()
+        if not normalized:
+            return True
+        if normalized in self._seen_inbound_frame_ids:
+            return False
+        if len(self._seen_inbound_frame_ids) >= 2048:
+            self._seen_inbound_frame_ids.clear()
+        self._seen_inbound_frame_ids.add(normalized)
+        return True
 
     def fail_pending(self, reason: str) -> None:
         if self._closed:
@@ -670,6 +682,21 @@ async def handle_gateway_websocket(
             frame_kind = str(frame.get("kind") or "").strip()
             message_type = _normalized_request_type(frame)
             payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
+            if frame_kind == "request" and connection is not None and not connection.remember_inbound_frame_id(frame.get("id")):
+                await websocket.send_json(
+                    _response_frame(
+                        str(frame.get("id") or "replayed"),
+                        ok=False,
+                        error={
+                            "code": "gateway_frame_replayed",
+                            "message": "Gateway frame id was already processed.",
+                        },
+                    )
+                )
+                disconnected = True
+                gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="gateway_frame_replayed")
+                await websocket.close(code=4408, reason="gateway frame replay detected")
+                break
             if frame_kind == "response" and connection is not None:
                 resolved_message_type = connection.resolve_response(frame)
                 if resolved_message_type == "tool.invoke":

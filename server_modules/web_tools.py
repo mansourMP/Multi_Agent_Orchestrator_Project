@@ -10,6 +10,8 @@ from typing import Any, Dict, List
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
+from server_modules.url_security import assert_safe_outbound_url
+
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -19,6 +21,7 @@ DEFAULT_USER_AGENT = (
 
 def _fetch_url(url: str, *, timeout: int = 15) -> str:
     normalized_url = str(url or "").strip()
+    assert_safe_outbound_url(normalized_url)
     request = urlrequest.Request(
         normalized_url,
         headers={
@@ -70,6 +73,7 @@ def web_fetch(url: str) -> str:
     normalized_url = str(url or "").strip()
     if not normalized_url:
         raise RuntimeError("web_fetch requires a URL.")
+    assert_safe_outbound_url(normalized_url)
     raw_html = _fetch_url(normalized_url)
     cleaned = _strip_html(raw_html)
     if not cleaned:

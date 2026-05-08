@@ -1,11 +1,13 @@
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from server_modules import direct_tool_execution_service as service
+from server_modules import tool_broker_guard_service
 
 
 def _callbacks() -> service.DirectToolExecutionCallbacks:
@@ -41,6 +43,9 @@ def _callbacks() -> service.DirectToolExecutionCallbacks:
 
 
 class DirectToolExecutionServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tool_broker_guard_service.reset_state_for_tests()
+
     def test_direct_tool_step_payload_formats_computer_click(self) -> None:
         payload = service.direct_tool_step_payload(
             "computer",
@@ -235,6 +240,43 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertTrue(metadata["requires_approval"])
         self.assertEqual(metadata["approval_reason"], "Browser mutation")
         self.assertEqual(metadata["argument_target"], "#email")
+
+    def test_execute_single_direct_tool_call_uses_broker_guard_for_execute_actions(self) -> None:
+        callbacks = _callbacks()
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(callbacks),
+                "build_direct_local_tool_config": lambda connector_id, action_id, arguments: (
+                    "read",
+                    {"connector": connector_id, "action": action_id},
+                ),
+            }
+        )
+
+        with patch.dict(os.environ, {"EMPYRALIS_TOOL_BROKER_EXECUTE_LIMIT": "1"}, clear=False), patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ) as emit_audit, patch(
+            "server_modules.skills_service._execute_safe_direct_local_tool_call",
+            return_value="ok",
+        ):
+            first = service.execute_single_direct_tool_call(
+                tool_call={"name": "shell_exec", "arguments": {"command": "echo one"}},
+                workspace_id="workspace-1",
+                thread_id="thread-1",
+                callbacks=callbacks,
+                session_ctx={"tenant_id": "tenant-1", "request_id": "req-guard"},
+            )
+            self.assertEqual(first, "ok")
+            with self.assertRaises(RuntimeError):
+                service.execute_single_direct_tool_call(
+                    tool_call={"name": "shell_exec", "arguments": {"command": "echo two"}},
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={"tenant_id": "tenant-1", "request_id": "req-guard"},
+                )
+
+        self.assertIn("direct_tool.blocked", [call.kwargs["action"] for call in emit_audit.call_args_list])
 
     def test_execute_single_direct_tool_call_emits_failed_audit_event(self) -> None:
         callbacks = _callbacks()

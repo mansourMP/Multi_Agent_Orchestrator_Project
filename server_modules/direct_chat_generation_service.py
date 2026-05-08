@@ -113,6 +113,13 @@ def _public_generation_error_code(llm_error: str) -> str:
     detail = str(llm_error or "").strip()
     if detail.startswith("max_tool_iterations_reached:"):
         return detail
+    if detail.startswith("provider_"):
+        return detail
+    lowered = detail.lower()
+    if "http_429" in lowered or "rate limit" in lowered or "too many requests" in lowered:
+        return "provider_rate_limited"
+    if "direct_chat_transport_unavailable" in lowered:
+        return "provider_transport_unavailable"
     return "provider_generation_failed" if detail else "unknown_error"
 
 

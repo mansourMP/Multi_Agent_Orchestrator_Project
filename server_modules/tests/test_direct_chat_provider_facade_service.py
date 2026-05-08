@@ -18,6 +18,24 @@ class DirectChatProviderFacadeServiceTests(unittest.TestCase):
 
         self.assertEqual(reply, "limit 17")
 
+    def test_direct_chat_error_reply_handles_rate_limited_provider(self) -> None:
+        reply = service.direct_chat_error_reply(
+            "openai generation failed: http_429: too many requests",
+            chat_iteration_limit_reply_fn=lambda limit: f"limit {limit}",
+            safe_positive_int_fn=lambda value, default: int(value) if str(value).isdigit() else default,
+            chat_max_iterations_default=30,
+        )
+        self.assertIn("rate-limited", reply.lower())
+
+    def test_direct_chat_error_reply_handles_transport_unavailable(self) -> None:
+        reply = service.direct_chat_error_reply(
+            "direct_chat_transport_unavailable: codex_cli_backend_unavailable: timeout",
+            chat_iteration_limit_reply_fn=lambda limit: f"limit {limit}",
+            safe_positive_int_fn=lambda value, default: int(value) if str(value).isdigit() else default,
+            chat_max_iterations_default=30,
+        )
+        self.assertIn("transport", reply.lower())
+
     def test_provider_unavailable_response_delegates(self) -> None:
         payload = service.provider_unavailable_response(
             "openai",

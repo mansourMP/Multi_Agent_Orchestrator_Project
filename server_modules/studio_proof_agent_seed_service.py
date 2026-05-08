@@ -57,6 +57,146 @@ _SUGGESTED_PRICE_BY_SLUG = {
     "appointment-booking": 550,
 }
 
+_ACTIVE_PROOF_AGENT_SLUGS = (
+    "shop-assistant",
+    "dental-receptionist",
+    "restaurant-order-taker",
+)
+
+_SHOP_ASSISTANT_PRODUCT_CATALOG_SCHEMA = {
+    "schema_version": "1.0",
+    "row_identity": ["sku"],
+    "required_columns": [
+        {"key": "sku", "type": "string", "example": "SHOE-AIRMAX-42-BLK"},
+        {"key": "product_name", "type": "string", "example": "Nike Air Max 90"},
+        {"key": "category", "type": "string", "example": "shoes"},
+        {"key": "price", "type": "number", "example": 129.0},
+        {"key": "currency", "type": "string", "example": "USD"},
+        {"key": "quantity_available", "type": "integer", "example": 8},
+    ],
+    "optional_columns": [
+        {"key": "variant", "type": "string", "example": "black / size 42"},
+        {"key": "brand", "type": "string", "example": "Nike"},
+        {"key": "shipping_eta_days", "type": "integer", "example": 2},
+        {"key": "last_updated_at", "type": "iso8601", "example": "2026-05-08T10:00:00Z"},
+    ],
+}
+
+_SHOP_ASSISTANT_DEMO_CATALOG_ROWS = [
+    {
+        "sku": "SHOE-AIRMAX-42-BLK",
+        "product_name": "Nike Air Max 90",
+        "category": "shoes",
+        "price": 129.0,
+        "currency": "USD",
+        "quantity_available": 8,
+        "variant": "black / size 42",
+        "brand": "Nike",
+        "shipping_eta_days": 2,
+    },
+    {
+        "sku": "SHOE-ULTRABOOST-41-WHT",
+        "product_name": "Adidas Ultraboost 23",
+        "category": "shoes",
+        "price": 149.0,
+        "currency": "USD",
+        "quantity_available": 5,
+        "variant": "white / size 41",
+        "brand": "Adidas",
+        "shipping_eta_days": 3,
+    },
+    {
+        "sku": "ACC-SOCK-3PK-WHT",
+        "product_name": "Performance Socks 3-Pack",
+        "category": "accessories",
+        "price": 19.0,
+        "currency": "USD",
+        "quantity_available": 40,
+        "variant": "white",
+        "brand": "Empyralis Basics",
+        "shipping_eta_days": 1,
+    },
+]
+
+_SHOP_ASSISTANT_FAQ_SEED = [
+    {
+        "question": "How long does shipping take?",
+        "answer": "Standard shipping is typically 2-3 business days.",
+    },
+    {
+        "question": "Can I return worn shoes?",
+        "answer": "Returns are accepted only for unworn items within 14 days.",
+    },
+    {
+        "question": "Do you offer price matching?",
+        "answer": "Price-match exceptions require owner approval.",
+    },
+]
+
+_SHOP_ASSISTANT_GOLDEN_CONVERSATIONS = [
+    {
+        "id": "catalog_availability",
+        "user": "Do you have Nike Air Max 90 in black size 42?",
+        "expected_agent_behavior": [
+            "Checks catalog data before answering",
+            "Returns quantity when available",
+            "Does not invent unavailable variants",
+        ],
+    },
+    {
+        "id": "discount_exception",
+        "user": "Can you give me 25% discount if I buy two pairs now?",
+        "expected_agent_behavior": [
+            "Explains policy briefly",
+            "Escalates discount exception for owner approval",
+            "Does not auto-apply discount",
+        ],
+    },
+    {
+        "id": "payment_link_request",
+        "user": "Send me a payment link and I'll pay now.",
+        "expected_agent_behavior": [
+            "Captures purchase intent",
+            "Requests owner approval before payment link action",
+            "Confirms next step without promising auto-send",
+        ],
+    },
+    {
+        "id": "order_status_request",
+        "user": "Order #A-2041 still shows pending, can you check status?",
+        "expected_agent_behavior": [
+            "Checks connected order status source",
+            "Returns current known status with timestamp",
+            "Escalates only if source is unavailable or inconsistent",
+        ],
+    },
+]
+
+_SHOP_ASSISTANT_ROI_DEFAULT_ASSUMPTIONS = {
+    "avg_order_value_usd": 65.0,
+    "close_rate_from_intent": 0.35,
+    "gross_margin_rate": 0.40,
+    "monthly_subscription_cost_usd": 99.0,
+}
+
+
+def _to_non_negative_int(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, parsed)
+
+
+def _to_positive_float(value: Any, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if parsed <= 0:
+        return float(default)
+    return float(parsed)
+
 
 _PROOF_AGENT_SEED_CONTRACTS: List[Dict[str, Any]] = [
     {
@@ -79,6 +219,7 @@ _PROOF_AGENT_SEED_CONTRACTS: List[Dict[str, Any]] = [
             {"source_id": "product_catalog", "label": "Product catalog", "kind": "spreadsheet_or_inventory", "required": False},
             {"source_id": "store_policies", "label": "Store policies", "kind": "document", "required": False},
             {"source_id": "order_faq", "label": "Order and shipping FAQ", "kind": "document", "required": False},
+            {"source_id": "order_status_ledger", "label": "Order status ledger", "kind": "spreadsheet_or_order_api", "required": False},
         ],
         "channels": [
             {"channel_key": "web_chat", "label": "Website chat", "default_enabled": True},
@@ -88,6 +229,8 @@ _PROOF_AGENT_SEED_CONTRACTS: List[Dict[str, Any]] = [
         ],
         "tools_skills": [
             {"id": "catalog.lookup", "label": "Catalog lookup", "default_enabled": True, "approval_required": False},
+            {"id": "pricing.quote", "label": "Pricing quote", "default_enabled": True, "approval_required": False},
+            {"id": "order.status_lookup", "label": "Order status lookup", "default_enabled": True, "approval_required": False},
             {"id": "order.intent_capture", "label": "Purchase intent capture", "default_enabled": True, "approval_required": False},
             {"id": "handoff.owner", "label": "Owner handoff", "default_enabled": True, "approval_required": False},
             {"id": "checkout.link_prepare", "label": "Prepare checkout link", "default_enabled": False, "approval_required": True},
@@ -99,7 +242,7 @@ _PROOF_AGENT_SEED_CONTRACTS: List[Dict[str, Any]] = [
         },
         "approval_policy": {
             "default_mode": "guarded",
-            "owner_approval_required_for": ["refunds", "discounts", "payment_links", "policy_exceptions", "order_cancellations"],
+            "owner_approval_required_for": ["refunds", "discounts", "payment_links", "policy_exceptions", "order_cancellations", "mass_messages"],
             "customer_live_requires_published_version": True,
         },
         "analytics_events": [
@@ -380,21 +523,134 @@ def _business_metrics_for(contract: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def build_shop_assistant_roi_snapshot(
+    *,
+    event_counts: Optional[Dict[str, Any]] = None,
+    assumptions: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    counts = dict(event_counts or {})
+    configured_assumptions = dict(_SHOP_ASSISTANT_ROI_DEFAULT_ASSUMPTIONS)
+    configured_assumptions.update(dict(assumptions or {}))
+
+    conversations = _to_non_negative_int(
+        counts.get("studio.proof.shop_assistant.conversation_handled")
+        or counts.get("conversations_handled")
+    )
+    qualified_intents = _to_non_negative_int(
+        counts.get("studio.proof.shop_assistant.intent_captured")
+        or counts.get("qualified_purchase_intent")
+    )
+    owner_handoffs = _to_non_negative_int(
+        counts.get("studio.proof.shop_assistant.owner_handoff")
+        or counts.get("owner_handoffs")
+    )
+
+    close_rate = _to_positive_float(
+        configured_assumptions.get("close_rate_from_intent"),
+        default=_SHOP_ASSISTANT_ROI_DEFAULT_ASSUMPTIONS["close_rate_from_intent"],
+    )
+    avg_order_value = _to_positive_float(
+        configured_assumptions.get("avg_order_value_usd"),
+        default=_SHOP_ASSISTANT_ROI_DEFAULT_ASSUMPTIONS["avg_order_value_usd"],
+    )
+    margin_rate = _to_positive_float(
+        configured_assumptions.get("gross_margin_rate"),
+        default=_SHOP_ASSISTANT_ROI_DEFAULT_ASSUMPTIONS["gross_margin_rate"],
+    )
+    monthly_cost = _to_positive_float(
+        configured_assumptions.get("monthly_subscription_cost_usd"),
+        default=_SHOP_ASSISTANT_ROI_DEFAULT_ASSUMPTIONS["monthly_subscription_cost_usd"],
+    )
+
+    estimated_orders = round(float(qualified_intents) * close_rate, 2)
+    estimated_revenue = round(estimated_orders * avg_order_value, 2)
+    estimated_gross_profit = round(estimated_revenue * margin_rate, 2)
+    estimated_net_value = round(estimated_gross_profit - monthly_cost, 2)
+    roi_multiple = round((estimated_gross_profit / monthly_cost), 2) if monthly_cost > 0 else None
+
+    return {
+        "event_counts": {
+            "conversations_handled": conversations,
+            "qualified_purchase_intent": qualified_intents,
+            "owner_handoffs": owner_handoffs,
+        },
+        "assumptions": {
+            "avg_order_value_usd": avg_order_value,
+            "close_rate_from_intent": close_rate,
+            "gross_margin_rate": margin_rate,
+            "monthly_subscription_cost_usd": monthly_cost,
+        },
+        "results": {
+            "estimated_orders": estimated_orders,
+            "estimated_revenue_usd": estimated_revenue,
+            "estimated_gross_profit_usd": estimated_gross_profit,
+            "estimated_net_value_usd": estimated_net_value,
+            "roi_multiple": roi_multiple,
+            "payback_months": round(monthly_cost / estimated_gross_profit, 2) if estimated_gross_profit > 0 else None,
+        },
+    }
+
+
+def _shop_assistant_revenue_proof_block(contract: Dict[str, Any]) -> Dict[str, Any]:
+    channel_paths = [
+        item
+        for item in [
+            {"channel_key": "telegram", "path": "telegram.personal_or_bot", "enabled_by_default": True},
+            {"channel_key": "whatsapp", "path": "whatsapp.personal_or_business", "enabled_by_default": False},
+            {"channel_key": "web_chat", "path": "web.chat_widget", "enabled_by_default": True},
+        ]
+    ]
+    activity_events = list(contract.get("analytics_events") or [])
+    activity_events.append(
+        {"event": "studio.proof.shop_assistant.conversation_handled", "purpose": "Track customer conversations completed"}
+    )
+
+    return {
+        "vertical": "shop_assistant",
+        "product_catalog_schema": deepcopy(_SHOP_ASSISTANT_PRODUCT_CATALOG_SCHEMA),
+        "inventory_data_connectors": [
+            {"id": "google_sheets", "label": "Google Sheets", "mode": "live_sync"},
+            {"id": "excel_csv_upload", "label": "Excel/CSV upload", "mode": "manual_or_scheduled"},
+        ],
+        "faq_and_policy_seed": deepcopy(_SHOP_ASSISTANT_FAQ_SEED),
+        "demo_catalog_rows": deepcopy(_SHOP_ASSISTANT_DEMO_CATALOG_ROWS),
+        "channel_paths": channel_paths,
+        "owner_approval_policy": deepcopy(contract.get("approval_policy") or {}),
+        "golden_conversations": deepcopy(_SHOP_ASSISTANT_GOLDEN_CONVERSATIONS),
+        "activity_events": activity_events,
+        "roi_snapshot": build_shop_assistant_roi_snapshot(
+            event_counts={
+                "conversations_handled": 320,
+                "qualified_purchase_intent": 78,
+                "owner_handoffs": 19,
+            }
+        ),
+    }
+
+
 def _with_contract_defaults(contract: Dict[str, Any]) -> Dict[str, Any]:
     payload = deepcopy(contract)
     payload["contract_version"] = STUDIO_PROOF_AGENT_SEED_VERSION
     payload["customization"] = _customization_contract()
     payload["proof_agent"] = True
     payload.setdefault("business_metrics", _business_metrics_for(payload))
+    if str(payload.get("slug") or "").strip() == "shop-assistant":
+        payload["revenue_proof"] = _shop_assistant_revenue_proof_block(payload)
     return payload
 
 
 def list_studio_proof_agent_seed_contracts() -> List[Dict[str, Any]]:
-    return [_with_contract_defaults(contract) for contract in _PROOF_AGENT_SEED_CONTRACTS]
+    return [
+        _with_contract_defaults(contract)
+        for contract in _PROOF_AGENT_SEED_CONTRACTS
+        if str(contract.get("slug") or "").strip() in _ACTIVE_PROOF_AGENT_SLUGS
+    ]
 
 
 def get_studio_proof_agent_seed_contract(slug: str) -> Optional[Dict[str, Any]]:
     normalized_slug = str(slug or "").strip().lower()
+    if normalized_slug not in _ACTIVE_PROOF_AGENT_SLUGS:
+        return None
     for contract in _PROOF_AGENT_SEED_CONTRACTS:
         if contract["slug"] == normalized_slug:
             return _with_contract_defaults(contract)

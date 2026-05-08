@@ -356,6 +356,93 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
 
         self.assertEqual(order, ["openai"])
 
+    def test_provider_order_honors_configured_fallback_provider(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ORION_LOCAL_WORKER_PROVIDER_FALLBACK": "1",
+                "ORION_LOCAL_WORKER_FALLBACK_PROVIDER": "anthropic",
+            },
+            clear=False,
+        ):
+            with patch.object(
+                worker_llm,
+                "provider_has_key",
+                side_effect=lambda provider: provider in {"openai", "anthropic", "codex_cli"},
+            ):
+                order = worker_llm.provider_order_for_run({"provider": "openai"}, {})
+
+        self.assertGreaterEqual(len(order), 2)
+        self.assertEqual(order[0], "openai")
+        self.assertEqual(order[1], "anthropic")
+
+    def test_openai_chat_text_applies_provider_output_cap_to_payload(self):
+        captured_payload: dict[str, object] = {}
+
+        def _mock_request(*, base_url, api_key, payload, timeout_seconds):
+            captured_payload.update(payload)
+            return {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            }
+
+        with patch.object(worker_llm, "resolve_openai_compatible_api_key", return_value="k"), patch.object(
+            worker_llm,
+            "resolve_openai_compatible_base_url",
+            return_value="https://api.example.com/v1",
+        ), patch.object(
+            worker_llm,
+            "_provider_limit_policy",
+            return_value={"max_output_tokens": 777, "max_retry_attempts": 1, "backoff_base_seconds": 1.0, "backoff_max_seconds": 4.0, "supports_retry_after": True},
+        ), patch.object(worker_llm, "_openai_compatible_chat_completion_request", side_effect=_mock_request):
+            text, usage, model, error = worker_llm.openai_chat_text(
+                "You are concise.",
+                "Say hello",
+                model_override="gpt-4.1",
+                provider="openai",
+            )
+
+        self.assertEqual(text, "ok")
+        self.assertEqual(error, "")
+        self.assertEqual(model, "gpt-4.1")
+        self.assertEqual(captured_payload.get("max_tokens"), 777)
+        self.assertEqual(usage, {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8})
+
+    def test_generate_chat_retries_rate_limited_provider_before_fallback(self):
+        with patch.object(worker_llm, "provider_order_for_run", return_value=["openai", "anthropic"]), patch.object(
+            worker_llm,
+            "_provider_limit_policy",
+            side_effect=lambda provider, model=None: {
+                "max_output_tokens": 1200,
+                "max_retry_attempts": 2 if str(provider) == "openai" else 1,
+                "backoff_base_seconds": 0.01,
+                "backoff_max_seconds": 0.02,
+                "supports_retry_after": True,
+            },
+        ), patch.object(worker_llm, "should_use_openai_chat_completions", return_value=True), patch.object(
+            worker_llm,
+            "openai_chat_text",
+            return_value=("", None, "gpt-4.1", "http_429: retry-after 1"),
+        ) as openai_mock, patch.object(
+            worker_llm,
+            "anthropic_chat_text",
+            return_value=("fallback reply", {"input_tokens": 3, "output_tokens": 4}, "claude-3-7-sonnet-20250219", ""),
+        ) as anthropic_mock, patch.object(worker_llm.time, "sleep") as sleep_mock:
+            text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                context={"provider": "openai"},
+                metadata={},
+                user_goal="hello",
+                system_prompt="You are concise.",
+            )
+
+        self.assertEqual(text, "fallback reply")
+        self.assertEqual(error, "")
+        self.assertEqual(attempted, "openai,anthropic")
+        self.assertEqual(openai_mock.call_count, 2)
+        anthropic_mock.assert_called_once()
+        sleep_mock.assert_called_once()
+        self.assertIsNotNone(usage)
+
     def test_generate_chat_logs_when_requested_provider_is_overridden(self):
         with patch.object(worker_llm, "provider_order_for_run", return_value=["codex_cli"]):
             with patch.object(

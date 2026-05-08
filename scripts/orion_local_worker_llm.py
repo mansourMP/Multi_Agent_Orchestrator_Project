@@ -5,6 +5,7 @@ import http.client
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -49,6 +50,8 @@ ANTHROPIC_RETIRED_MODEL_ALIASES = {
     "claude-3-7-sonnet-latest",
     "claude-3-5-sonnet-20241022",
 }
+_RETRY_AFTER_RE = re.compile(r"(?:retry[-_ ]after)\D*(\d+)", re.IGNORECASE)
+_RETRY_SECONDS_RE = re.compile(r"(\d+)\s*(?:s|sec|secs|second|seconds)\b", re.IGNORECASE)
 
 
 def ensure_trailing_slashless(url: str) -> str:
@@ -67,6 +70,127 @@ def to_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _provider_limit_policy(provider: str, model: Optional[str] = None) -> Dict[str, Any]:
+    defaults = {
+        "provider": str(provider or "").strip().lower(),
+        "max_output_tokens": 1200,
+        "max_retry_attempts": 1,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 4.0,
+        "supports_retry_after": True,
+    }
+    try:
+        from server_modules import provider_profiles as _provider_profiles
+
+        policy = _provider_profiles.provider_limit_policy(provider, model)
+        merged = dict(defaults)
+        merged.update(policy if isinstance(policy, dict) else {})
+        return merged
+    except Exception:
+        return defaults
+
+
+def _env_max_tokens_override() -> Optional[int]:
+    raw = str(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except Exception:
+        return None
+    return value if value > 0 else None
+
+
+def _resolved_output_token_cap(provider: str, model: Optional[str]) -> int:
+    policy = _provider_limit_policy(provider, model)
+    cap = max(256, to_int(policy.get("max_output_tokens"), 1200))
+    env_override = _env_max_tokens_override()
+    if env_override is not None:
+        cap = max(256, min(cap, env_override))
+    return cap
+
+
+def _parse_retry_after_seconds(error_text: Any) -> Optional[float]:
+    normalized = " ".join(str(error_text or "").strip().split())
+    if not normalized:
+        return None
+    match = _RETRY_AFTER_RE.search(normalized)
+    if match:
+        value = to_float(match.group(1), 0.0)
+        return value if value > 0 else None
+    retry_seconds_match = _RETRY_SECONDS_RE.search(normalized)
+    if retry_seconds_match and ("rate limit" in normalized.lower() or "http_429" in normalized.lower()):
+        value = to_float(retry_seconds_match.group(1), 0.0)
+        return value if value > 0 else None
+    return None
+
+
+def _is_provider_rate_limited(error_text: Any) -> bool:
+    normalized = str(error_text or "").strip().lower()
+    if not normalized:
+        return False
+    return (
+        "http_429" in normalized
+        or "rate limit" in normalized
+        or "too many requests" in normalized
+    )
+
+
+def _should_retry_provider_error(
+    provider: str,
+    error_text: Any,
+    *,
+    attempt_index: int,
+    max_attempts: int,
+) -> bool:
+    if attempt_index + 1 >= max_attempts:
+        return False
+    if _is_provider_rate_limited(error_text):
+        return True
+    return is_retryable_provider_transport_error(error_text)
+
+
+def _provider_retry_delay_seconds(
+    provider: str,
+    error_text: Any,
+    *,
+    attempt_index: int,
+    model: Optional[str] = None,
+) -> float:
+    policy = _provider_limit_policy(provider, model)
+    if bool(policy.get("supports_retry_after", True)):
+        retry_after = _parse_retry_after_seconds(error_text)
+        if retry_after is not None:
+            return max(0.0, retry_after)
+    base = max(0.1, to_float(policy.get("backoff_base_seconds"), 1.0))
+    max_backoff = max(base, to_float(policy.get("backoff_max_seconds"), base))
+    return min(max_backoff, base * (2 ** max(0, attempt_index)))
+
+
+def _sleep_provider_retry_delay(
+    provider: str,
+    error_text: Any,
+    *,
+    attempt_index: int,
+    model: Optional[str] = None,
+) -> None:
+    delay_seconds = _provider_retry_delay_seconds(
+        provider,
+        error_text,
+        attempt_index=attempt_index,
+        model=model,
+    )
+    if delay_seconds <= 0:
+        return
+    LOGGER.info(
+        "Provider retry backoff: provider=%s attempt=%s delay_seconds=%.2f",
+        provider,
+        attempt_index + 1,
+        delay_seconds,
+    )
+    time.sleep(delay_seconds)
 
 
 def parse_json_object_loose(text: str) -> Optional[Dict[str, Any]]:
@@ -1539,6 +1663,7 @@ def openai_chat_json(
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
     base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override)
+    max_tokens = _resolved_output_token_cap(provider, model)
 
     messages: List[Dict[str, str]] = []
     if str(system_prompt or "").strip():
@@ -1547,6 +1672,7 @@ def openai_chat_json(
     payload = {
         "model": model,
         "temperature": temperature,
+        "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
         "messages": messages,
     }
@@ -1591,6 +1717,7 @@ def openai_chat_text(
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
     base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override)
+    max_tokens = _resolved_output_token_cap(provider, model)
 
     messages: List[Dict[str, str]] = []
     if str(system_prompt or "").strip():
@@ -1599,6 +1726,7 @@ def openai_chat_text(
     payload = {
         "model": model,
         "temperature": temperature,
+        "max_tokens": max_tokens,
         "messages": messages,
     }
     try:
@@ -1684,6 +1812,7 @@ def iter_openai_compatible_chat_events(
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
     base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override)
+    max_tokens = _resolved_output_token_cap(provider, model)
 
     messages = _build_openai_compatible_messages(user_prompt, prior_messages=prior_messages)
     if str(system_prompt or "").strip():
@@ -1691,6 +1820,7 @@ def iter_openai_compatible_chat_events(
     payload: Dict[str, Any] = {
         "model": model,
         "temperature": temperature,
+        "max_tokens": max_tokens,
         "messages": messages,
     }
     tool_specs = _tool_spec_items(tools)
@@ -1769,7 +1899,7 @@ def iter_anthropic_chat_events(
 
     model = normalize_anthropic_model(model_override)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
-    max_tokens = max(256, to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 1200))
+    max_tokens = _resolved_output_token_cap("anthropic", model)
     api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_URL") or "https://api.anthropic.com")
     payload: Dict[str, Any] = {
         "model": model,
@@ -1839,6 +1969,7 @@ def iter_gemini_chat_events(
     api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_GEMINI_URL") or "https://generativelanguage.googleapis.com/v1beta")
     payload: Dict[str, Any] = {
         "contents": _build_gemini_contents(user_prompt, prior_messages=prior_messages),
+        "generationConfig": {"maxOutputTokens": _resolved_output_token_cap("gemini", model)},
     }
     if str(system_prompt or "").strip():
         payload["system_instruction"] = {"parts": [{"text": str(system_prompt).strip()}]}
@@ -2093,6 +2224,7 @@ def iter_openai_codex_backend_events(
         "model": model,
         "store": False,
         "stream": True,
+        "max_output_tokens": _resolved_output_token_cap("codex_cli", model),
         "input": _build_responses_input(user_prompt, prior_messages=prior_messages),
         "instructions": codex_instructions(system_prompt),
         "text": {"verbosity": "low"},
@@ -2266,6 +2398,7 @@ def openai_responses_text(
     payload = {
         "model": model,
         "input": _build_responses_input(user_prompt, prior_messages=prior_messages),
+        "max_output_tokens": _resolved_output_token_cap("openai", model),
     }
     if str(system_prompt or "").strip():
         payload["instructions"] = str(system_prompt).strip()
@@ -2476,7 +2609,7 @@ def anthropic_chat_text(
 
     model = normalize_anthropic_model(model_override)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
-    max_tokens = max(256, to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 1200))
+    max_tokens = _resolved_output_token_cap("anthropic", model)
     api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_URL") or "https://api.anthropic.com")
     payload = {
         "model": model,
@@ -2526,7 +2659,7 @@ def anthropic_chat_json(
 
     model = normalize_anthropic_model(model_override)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
-    max_tokens = max(256, to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 1200))
+    max_tokens = _resolved_output_token_cap("anthropic", model)
     api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_URL") or "https://api.anthropic.com")
     payload = {
         "model": model,
@@ -2585,6 +2718,7 @@ def gemini_chat_text(
             {"role": item["role"], "parts": [{"text": item["content"]}]}
             for item in _build_chat_messages(user_prompt, prior_messages=prior_messages, assistant_role="model")
         ],
+        "generationConfig": {"maxOutputTokens": _resolved_output_token_cap("gemini", model)},
     }
     if str(system_prompt or "").strip():
         payload["system_instruction"] = {"parts": [{"text": str(system_prompt).strip()}]}
@@ -2639,6 +2773,7 @@ def gemini_chat_json(
             {"role": item["role"], "parts": [{"text": item["content"]}]}
             for item in _build_chat_messages(user_prompt, prior_messages=prior_messages, assistant_role="model")
         ],
+        "generationConfig": {"maxOutputTokens": _resolved_output_token_cap("gemini", model)},
     }
     if str(system_prompt or "").strip():
         payload["system_instruction"] = {"parts": [{"text": str(system_prompt).strip()}]}
@@ -2695,7 +2830,7 @@ def ollama_chat_text(
         128,
         to_int(
             os.getenv("ORION_LOCAL_WORKER_OLLAMA_NUM_PREDICT"),
-            to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 700),
+            _resolved_output_token_cap("ollama", model),
         ),
     )
 
@@ -2749,7 +2884,7 @@ def ollama_chat_json(
         128,
         to_int(
             os.getenv("ORION_LOCAL_WORKER_OLLAMA_NUM_PREDICT"),
-            to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 700),
+            _resolved_output_token_cap("ollama", model),
         ),
     )
 
@@ -3094,6 +3229,12 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
         or context.get("disable_provider_fallback")
         or ""
     ).strip().lower() in {"1", "true", "yes", "on"}
+    configured_fallback_provider = str(
+        metadata.get("fallback_provider")
+        or context.get("fallback_provider")
+        or os.getenv("ORION_LOCAL_WORKER_FALLBACK_PROVIDER")
+        or ""
+    ).strip().lower()
 
     base = list(requested_order)
     if provider_hint and provider_hint != "auto" and provider_hint in SUPPORTED_PROVIDERS and provider_hint not in base:
@@ -3129,7 +3270,14 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
     if provider_hint and provider_hint != "auto" and provider_hint in SUPPORTED_PROVIDERS and not fallback_enabled:
         return [provider_hint] if provider_has_usable_credentials(provider_hint, context, metadata) else []
 
-    return [pid for pid in base if provider_has_usable_credentials(pid, context, metadata)]
+    available = [pid for pid in base if provider_has_usable_credentials(pid, context, metadata)]
+    if fallback_enabled and configured_fallback_provider in available and configured_fallback_provider in SUPPORTED_PROVIDERS:
+        available = [pid for pid in available if pid != configured_fallback_provider]
+        insert_index = 1 if available else 0
+        if context_provider and context_provider in available:
+            insert_index = available.index(context_provider) + 1
+        available.insert(insert_index, configured_fallback_provider)
+    return available
 
 
 def _log_provider_override(
@@ -3163,6 +3311,36 @@ def generate_pack_with_provider_fallback(
     requested_provider = resolve_requested_provider(context, metadata)
     requested_model = resolve_requested_model(context, metadata)
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
+
+    def _run_json_with_limits(
+        provider_id: str,
+        provider_model: Optional[str],
+        call_fn: Any,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
+        policy = _provider_limit_policy(provider_id, provider_model)
+        max_attempts = max(1, to_int(policy.get("max_retry_attempts"), 1))
+        last_result: Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str] = (None, None, provider_model or "", "unknown_error")
+        for attempt_index in range(max_attempts):
+            result = call_fn()
+            payload, usage, model, provider_error = result
+            if isinstance(payload, dict):
+                return payload, usage, model, ""
+            last_result = result
+            if not _should_retry_provider_error(
+                provider_id,
+                provider_error,
+                attempt_index=attempt_index,
+                max_attempts=max_attempts,
+            ):
+                return last_result
+            _sleep_provider_retry_delay(
+                provider_id,
+                provider_error,
+                attempt_index=attempt_index,
+                model=model or provider_model,
+            )
+        return last_result
+
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         _log_provider_override(
@@ -3173,61 +3351,93 @@ def generate_pack_with_provider_fallback(
         )
         provider_model = coerce_requested_model_for_provider(requested_model, provider)
         if provider == "codex_cli":
-            result, usage, model, provider_error = codex_exec_json(
-                system_prompt,
-                user_prompt,
-                model_override=provider_model,
-                credential_override=credential_override,
+            result, usage, model, provider_error = _run_json_with_limits(
+                provider,
+                provider_model,
+                lambda: codex_exec_json(
+                    system_prompt,
+                    user_prompt,
+                    model_override=provider_model,
+                    credential_override=credential_override,
+                ),
             )
         elif provider == "claude_code_cli":
-            result, usage, model, provider_error = anthropic_chat_json(
-                system_prompt,
-                user_prompt,
-                model_override=provider_model,
-                credential_override=credential_override,
+            result, usage, model, provider_error = _run_json_with_limits(
+                provider,
+                provider_model,
+                lambda: anthropic_chat_json(
+                    system_prompt,
+                    user_prompt,
+                    model_override=provider_model,
+                    credential_override=credential_override,
+                ),
             )
         elif provider == "openai":
             direct_auth_error = openai_direct_auth_error(context, metadata)
             if direct_auth_error:
                 last_error = direct_auth_error
                 continue
-            result, usage, model, provider_error = openai_chat_json(
-                system_prompt,
-                user_prompt,
-                model_override=provider_model,
-                provider="openai",
-                credential_override=credential_override,
+            result, usage, model, provider_error = _run_json_with_limits(
+                provider,
+                provider_model,
+                lambda: openai_chat_json(
+                    system_prompt,
+                    user_prompt,
+                    model_override=provider_model,
+                    provider="openai",
+                    credential_override=credential_override,
+                ),
             )
         elif provider in {"qwen", "deepseek", "mistral"}:
-            result, usage, model, provider_error = openai_chat_json(
-                system_prompt,
-                user_prompt,
-                model_override=provider_model,
-                provider=provider,
-                credential_override=credential_override,
+            result, usage, model, provider_error = _run_json_with_limits(
+                provider,
+                provider_model,
+                lambda: openai_chat_json(
+                    system_prompt,
+                    user_prompt,
+                    model_override=provider_model,
+                    provider=provider,
+                    credential_override=credential_override,
+                ),
             )
         elif provider == "anthropic":
-            result, usage, model, provider_error = anthropic_chat_json(
-                system_prompt,
-                user_prompt,
-                model_override=provider_model,
-                credential_override=credential_override,
+            result, usage, model, provider_error = _run_json_with_limits(
+                provider,
+                provider_model,
+                lambda: anthropic_chat_json(
+                    system_prompt,
+                    user_prompt,
+                    model_override=provider_model,
+                    credential_override=credential_override,
+                ),
             )
         elif provider == "gemini":
-            result, usage, model, provider_error = gemini_chat_json(
-                system_prompt,
-                user_prompt,
-                model_override=provider_model,
-                credential_override=credential_override,
+            result, usage, model, provider_error = _run_json_with_limits(
+                provider,
+                provider_model,
+                lambda: gemini_chat_json(
+                    system_prompt,
+                    user_prompt,
+                    model_override=provider_model,
+                    credential_override=credential_override,
+                ),
             )
         elif provider == "ollama":
-            result, usage, model, provider_error = ollama_chat_json(system_prompt, user_prompt, model_override=provider_model)
+            result, usage, model, provider_error = _run_json_with_limits(
+                provider,
+                provider_model,
+                lambda: ollama_chat_json(system_prompt, user_prompt, model_override=provider_model),
+            )
         elif provider == "ollama_cloud":
-            result, usage, model, provider_error = ollama_cloud_chat_json(
-                system_prompt,
-                user_prompt,
-                model_override=provider_model,
-                credential_override=credential_override,
+            result, usage, model, provider_error = _run_json_with_limits(
+                provider,
+                provider_model,
+                lambda: ollama_cloud_chat_json(
+                    system_prompt,
+                    user_prompt,
+                    model_override=provider_model,
+                    credential_override=credential_override,
+                ),
             )
         else:
             continue
@@ -3255,6 +3465,36 @@ def generate_chat_reply_with_provider_fallback(
     requested_model = resolve_requested_model(context, metadata)
     requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
+
+    def _run_text_with_limits(
+        provider_id: str,
+        provider_model: Optional[str],
+        call_fn: Any,
+    ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+        policy = _provider_limit_policy(provider_id, provider_model)
+        max_attempts = max(1, to_int(policy.get("max_retry_attempts"), 1))
+        last_result: Tuple[str, Optional[Dict[str, Any]], str, str] = ("", None, provider_model or "", "unknown_error")
+        for attempt_index in range(max_attempts):
+            result = call_fn()
+            text, usage, model, provider_error = result
+            if text:
+                return text, usage, model, ""
+            last_result = result
+            if not _should_retry_provider_error(
+                provider_id,
+                provider_error,
+                attempt_index=attempt_index,
+                max_attempts=max_attempts,
+            ):
+                return last_result
+            _sleep_provider_retry_delay(
+                provider_id,
+                provider_error,
+                attempt_index=attempt_index,
+                model=model or provider_model,
+            )
+        return last_result
+
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         _log_provider_override(
@@ -3265,13 +3505,17 @@ def generate_chat_reply_with_provider_fallback(
         )
         provider_model = coerce_requested_model_for_provider(requested_model, provider)
         if provider == "codex_cli":
-            text, usage, model, provider_error = openai_codex_backend_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                reasoning_effort_override=requested_reasoning_effort or None,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: openai_codex_backend_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    reasoning_effort_override=requested_reasoning_effort or None,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                ),
             )
             if text:
                 return (
@@ -3286,12 +3530,16 @@ def generate_chat_reply_with_provider_fallback(
             )
             continue
         if provider == "claude_code_cli":
-            text, usage, model, provider_error = anthropic_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: anthropic_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                ),
             )
             if text:
                 return (
@@ -3323,13 +3571,17 @@ def generate_chat_reply_with_provider_fallback(
                     )
             else:
                 provider_error = ""
-            text, usage_chat, model_chat, provider_error_chat = openai_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                provider="openai",
-                credential_override=credential_override,
+            text, usage_chat, model_chat, provider_error_chat = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: openai_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    provider="openai",
+                    credential_override=credential_override,
+                ),
             )
             if text:
                 return (
@@ -3344,48 +3596,68 @@ def generate_chat_reply_with_provider_fallback(
             )
             continue
         if provider in {"qwen", "deepseek", "mistral"}:
-            text, usage, model, provider_error = openai_chat_text_with_retries(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                provider=provider,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: openai_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    provider=provider,
+                    credential_override=credential_override,
+                ),
             )
             if text:
                 return text, build_usage_masked_from_provider(provider, usage, model), ",".join(attempted), ""
             last_error = f"{provider} generation failed: {provider_error or 'unknown_error'}"
             continue
         if provider == "anthropic":
-            text, usage, model, provider_error = anthropic_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: anthropic_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                ),
             )
         elif provider == "gemini":
-            text, usage, model, provider_error = gemini_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: gemini_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                ),
             )
         elif provider == "ollama":
-            text, usage, model, provider_error = ollama_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
+            text, usage, model, provider_error = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: ollama_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                ),
             )
         elif provider == "ollama_cloud":
-            text, usage, model, provider_error = ollama_cloud_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: ollama_cloud_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                ),
             )
         else:
             continue
@@ -3442,6 +3714,72 @@ def generate_chat_reply_stream_with_provider_fallback(
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
     requested_tools = resolve_requested_tools(context, metadata)
 
+    def _run_text_with_limits(
+        provider_id: str,
+        provider_model: Optional[str],
+        call_fn: Any,
+    ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+        policy = _provider_limit_policy(provider_id, provider_model)
+        max_attempts = max(1, to_int(policy.get("max_retry_attempts"), 1))
+        last_result: Tuple[str, Optional[Dict[str, Any]], str, str] = ("", None, provider_model or "", "unknown_error")
+        for attempt_index in range(max_attempts):
+            result = call_fn()
+            text, usage, model, provider_error = result
+            if text:
+                return text, usage, model, ""
+            last_result = result
+            if not _should_retry_provider_error(
+                provider_id,
+                provider_error,
+                attempt_index=attempt_index,
+                max_attempts=max_attempts,
+            ):
+                return last_result
+            _sleep_provider_retry_delay(
+                provider_id,
+                provider_error,
+                attempt_index=attempt_index,
+                model=model or provider_model,
+            )
+        return last_result
+
+    def _run_structured_with_limits(
+        provider_id: str,
+        provider_model: Optional[str],
+        call_fn: Any,
+    ) -> Dict[str, Any]:
+        policy = _provider_limit_policy(provider_id, provider_model)
+        max_attempts = max(1, to_int(policy.get("max_retry_attempts"), 1))
+        last_result: Dict[str, Any] = {
+            "ok": False,
+            "text": "",
+            "deltas": [],
+            "usage": None,
+            "model": provider_model or "",
+            "tool_calls": [],
+            "error": "unknown_error",
+        }
+        for attempt_index in range(max_attempts):
+            result = call_fn()
+            if bool(result.get("ok")):
+                return result
+            last_result = dict(result or {})
+            provider_error = str(last_result.get("error") or "").strip()
+            if not _should_retry_provider_error(
+                provider_id,
+                provider_error,
+                attempt_index=attempt_index,
+                max_attempts=max_attempts,
+            ):
+                return last_result
+            _sleep_provider_retry_delay(
+                provider_id,
+                provider_error,
+                attempt_index=attempt_index,
+                model=str(last_result.get("model") or provider_model or "").strip() or provider_model,
+            )
+        return last_result
+
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         attempted_str = ",".join(attempted)
@@ -3454,69 +3792,93 @@ def generate_chat_reply_stream_with_provider_fallback(
         provider_model = coerce_requested_model_for_provider(requested_model, provider)
 
         if provider == "codex_cli":
-            streamed_parts: list[str] = []
-            final_usage: Optional[Dict[str, Any]] = None
-            final_model = provider_model
-            for event in iter_openai_codex_backend_events(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                reasoning_effort_override=requested_reasoning_effort or None,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
-                tools=requested_tools,
-            ):
-                event_type = str(event.get("type") or "").strip().lower()
-                if event_type == "delta":
-                    delta = str(event.get("delta") or "")
-                    if delta:
-                        streamed_parts.append(delta)
-                        yield {"type": "chunk", "delta": delta}
+            policy = _provider_limit_policy("codex_cli", provider_model)
+            max_attempts = max(1, to_int(policy.get("max_retry_attempts"), 1))
+            for attempt_index in range(max_attempts):
+                streamed_parts: list[str] = []
+                final_usage: Optional[Dict[str, Any]] = None
+                final_model = provider_model
+                provider_error = ""
+                for event in iter_openai_codex_backend_events(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    reasoning_effort_override=requested_reasoning_effort or None,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                    tools=requested_tools,
+                ):
+                    event_type = str(event.get("type") or "").strip().lower()
+                    if event_type == "delta":
+                        delta = str(event.get("delta") or "")
+                        if delta:
+                            streamed_parts.append(delta)
+                            yield {"type": "chunk", "delta": delta}
+                        continue
+                    if event_type == "done":
+                        final_usage = event.get("usage") if isinstance(event.get("usage"), dict) else None
+                        final_model = str(event.get("model") or final_model or "").strip() or final_model
+                        tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
+                        final_text = str(event.get("text") or "").strip() or "".join(streamed_parts).strip()
+                        if final_text or tool_calls:
+                            yield {
+                                "type": "result",
+                                "reply": final_text,
+                                "usage_masked": build_usage_masked_from_provider("codex_cli", final_usage, final_model),
+                                "provider": "codex_cli",
+                                "model": final_model,
+                                "attempted_providers": attempted_str,
+                                "error": "",
+                                "tool_calls": tool_calls,
+                            }
+                            return
+                        provider_error = "codex_empty_output"
+                        break
+                    if event_type == "error":
+                        final_model = str(event.get("model") or final_model or "").strip() or final_model
+                        provider_error = str(event.get("error") or "unknown_error").strip() or "unknown_error"
+                        if streamed_parts:
+                            yield {
+                                "type": "result",
+                                "reply": "".join(streamed_parts).strip(),
+                                "usage_masked": build_usage_masked_from_provider("codex_cli", final_usage, final_model),
+                                "provider": "codex_cli",
+                                "model": final_model,
+                                "attempted_providers": attempted_str,
+                                "error": provider_error,
+                            }
+                            return
+                        break
+                if not provider_error:
+                    provider_error = "unknown_error"
+                last_error = f"{DIRECT_CHAT_TRANSPORT_UNAVAILABLE}: codex_cli_backend_unavailable: {provider_error}"
+                if _should_retry_provider_error(
+                    "codex_cli",
+                    provider_error,
+                    attempt_index=attempt_index,
+                    max_attempts=max_attempts,
+                ):
+                    _sleep_provider_retry_delay(
+                        "codex_cli",
+                        provider_error,
+                        attempt_index=attempt_index,
+                        model=provider_model,
+                    )
                     continue
-                if event_type == "done":
-                    final_usage = event.get("usage") if isinstance(event.get("usage"), dict) else None
-                    final_model = str(event.get("model") or final_model or "").strip() or final_model
-                    tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
-                    final_text = str(event.get("text") or "").strip() or "".join(streamed_parts).strip()
-                    if final_text or tool_calls:
-                        yield {
-                            "type": "result",
-                            "reply": final_text,
-                            "usage_masked": build_usage_masked_from_provider("codex_cli", final_usage, final_model),
-                            "provider": "codex_cli",
-                            "model": final_model,
-                            "attempted_providers": attempted_str,
-                            "error": "",
-                            "tool_calls": tool_calls,
-                        }
-                        return
-                    last_error = f"{DIRECT_CHAT_TRANSPORT_UNAVAILABLE}: codex_cli_backend_unavailable: codex_empty_output"
-                    break
-                if event_type == "error":
-                    final_model = str(event.get("model") or final_model or "").strip() or final_model
-                    error_text = str(event.get("error") or "unknown_error").strip() or "unknown_error"
-                    if streamed_parts:
-                        yield {
-                            "type": "result",
-                            "reply": "".join(streamed_parts).strip(),
-                            "usage_masked": build_usage_masked_from_provider("codex_cli", final_usage, final_model),
-                            "provider": "codex_cli",
-                            "model": final_model,
-                            "attempted_providers": attempted_str,
-                            "error": error_text,
-                        }
-                        return
-                    last_error = f"{DIRECT_CHAT_TRANSPORT_UNAVAILABLE}: codex_cli_backend_unavailable: {error_text}"
-                    break
+                break
             continue
 
         if provider == "claude_code_cli":
-            text, usage, model, provider_error = anthropic_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: anthropic_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                ),
             )
             if text:
                 yield {"type": "chunk", "delta": text}
@@ -3539,16 +3901,20 @@ def generate_chat_reply_stream_with_provider_fallback(
                 last_error = f"openai generation failed: {direct_auth_error}"
                 continue
             if requested_tools:
-                provider_result = run_tool_capable_provider_with_prompt_fallback(
-                    system_prompt=system_prompt,
-                    stream_factory=lambda prompt_variant: iter_openai_compatible_chat_events(
-                        prompt_variant,
-                        user_goal,
-                        model_override=provider_model,
-                        prior_messages=prior_messages,
-                        provider="openai",
-                        credential_override=credential_override,
-                        tools=requested_tools,
+                provider_result = _run_structured_with_limits(
+                    "openai",
+                    provider_model,
+                    lambda: run_tool_capable_provider_with_prompt_fallback(
+                        system_prompt=system_prompt,
+                        stream_factory=lambda prompt_variant: iter_openai_compatible_chat_events(
+                            prompt_variant,
+                            user_goal,
+                            model_override=provider_model,
+                            prior_messages=prior_messages,
+                            provider="openai",
+                            credential_override=credential_override,
+                            tools=requested_tools,
+                        ),
                     ),
                 )
                 if provider_result.get("ok"):
@@ -3572,20 +3938,28 @@ def generate_chat_reply_stream_with_provider_fallback(
             model = provider_model
             provider_error = ""
             if not prefer_openai_chat:
-                text, usage, model, provider_error = openai_responses_text(
-                    system_prompt,
-                    user_goal,
-                    model_override=provider_model,
-                    prior_messages=prior_messages,
+                text, usage, model, provider_error = _run_text_with_limits(
+                    "openai",
+                    provider_model,
+                    lambda: openai_responses_text(
+                        system_prompt,
+                        user_goal,
+                        model_override=provider_model,
+                        prior_messages=prior_messages,
+                    ),
                 )
             if not text:
-                text, usage, model, provider_error = openai_chat_text(
-                    system_prompt,
-                    user_goal,
-                    model_override=provider_model,
-                    prior_messages=prior_messages,
-                    provider="openai",
-                    credential_override=credential_override,
+                text, usage, model, provider_error = _run_text_with_limits(
+                    "openai",
+                    provider_model,
+                    lambda: openai_chat_text(
+                        system_prompt,
+                        user_goal,
+                        model_override=provider_model,
+                        prior_messages=prior_messages,
+                        provider="openai",
+                        credential_override=credential_override,
+                    ),
                 )
             if text:
                 yield {"type": "chunk", "delta": text}
@@ -3604,16 +3978,20 @@ def generate_chat_reply_stream_with_provider_fallback(
 
         if provider in {"qwen", "deepseek", "mistral"}:
             if requested_tools:
-                provider_result = run_tool_capable_provider_with_prompt_fallback(
-                    system_prompt=system_prompt,
-                    stream_factory=lambda prompt_variant: iter_openai_compatible_chat_events(
-                        prompt_variant,
-                        user_goal,
-                        model_override=provider_model,
-                        prior_messages=prior_messages,
-                        provider=provider,
-                        credential_override=credential_override,
-                        tools=requested_tools,
+                provider_result = _run_structured_with_limits(
+                    provider,
+                    provider_model,
+                    lambda: run_tool_capable_provider_with_prompt_fallback(
+                        system_prompt=system_prompt,
+                        stream_factory=lambda prompt_variant: iter_openai_compatible_chat_events(
+                            prompt_variant,
+                            user_goal,
+                            model_override=provider_model,
+                            prior_messages=prior_messages,
+                            provider=provider,
+                            credential_override=credential_override,
+                            tools=requested_tools,
+                        ),
                     ),
                 )
                 if provider_result.get("ok"):
@@ -3632,13 +4010,17 @@ def generate_chat_reply_stream_with_provider_fallback(
                     return
                 last_error = f"{provider} generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
                 continue
-            text, usage, model, provider_error = openai_chat_text_with_retries(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                provider=provider,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                provider,
+                provider_model,
+                lambda: openai_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    provider=provider,
+                    credential_override=credential_override,
+                ),
             )
             if text:
                 yield {"type": "chunk", "delta": text}
@@ -3657,15 +4039,19 @@ def generate_chat_reply_stream_with_provider_fallback(
 
         if provider == "anthropic":
             if requested_tools:
-                provider_result = run_tool_capable_provider_with_prompt_fallback(
-                    system_prompt=system_prompt,
-                    stream_factory=lambda prompt_variant: iter_anthropic_chat_events(
-                        prompt_variant,
-                        user_goal,
-                        model_override=provider_model,
-                        prior_messages=prior_messages,
-                        credential_override=credential_override,
-                        tools=requested_tools,
+                provider_result = _run_structured_with_limits(
+                    "anthropic",
+                    provider_model,
+                    lambda: run_tool_capable_provider_with_prompt_fallback(
+                        system_prompt=system_prompt,
+                        stream_factory=lambda prompt_variant: iter_anthropic_chat_events(
+                            prompt_variant,
+                            user_goal,
+                            model_override=provider_model,
+                            prior_messages=prior_messages,
+                            credential_override=credential_override,
+                            tools=requested_tools,
+                        ),
                     ),
                 )
                 if provider_result.get("ok"):
@@ -3684,24 +4070,32 @@ def generate_chat_reply_stream_with_provider_fallback(
                     return
                 last_error = f"anthropic generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
                 continue
-            text, usage, model, provider_error = anthropic_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                "anthropic",
+                provider_model,
+                lambda: anthropic_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                ),
             )
         elif provider == "gemini":
             if requested_tools:
-                provider_result = run_tool_capable_provider_with_prompt_fallback(
-                    system_prompt=system_prompt,
-                    stream_factory=lambda prompt_variant: iter_gemini_chat_events(
-                        prompt_variant,
-                        user_goal,
-                        model_override=provider_model,
-                        prior_messages=prior_messages,
-                        tools=requested_tools,
-                        credential_override=credential_override,
+                provider_result = _run_structured_with_limits(
+                    "gemini",
+                    provider_model,
+                    lambda: run_tool_capable_provider_with_prompt_fallback(
+                        system_prompt=system_prompt,
+                        stream_factory=lambda prompt_variant: iter_gemini_chat_events(
+                            prompt_variant,
+                            user_goal,
+                            model_override=provider_model,
+                            prior_messages=prior_messages,
+                            tools=requested_tools,
+                            credential_override=credential_override,
+                        ),
                     ),
                 )
                 if provider_result.get("ok"):
@@ -3720,23 +4114,31 @@ def generate_chat_reply_stream_with_provider_fallback(
                     return
                 last_error = f"gemini generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
                 continue
-            text, usage, model, provider_error = gemini_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                "gemini",
+                provider_model,
+                lambda: gemini_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                ),
             )
         elif provider == "ollama":
             if requested_tools:
-                provider_result = run_tool_capable_provider_with_prompt_fallback(
-                    system_prompt=system_prompt,
-                    stream_factory=lambda prompt_variant: iter_ollama_chat_events(
-                        prompt_variant,
-                        user_goal,
-                        model_override=provider_model,
-                        prior_messages=prior_messages,
-                        tools=requested_tools,
+                provider_result = _run_structured_with_limits(
+                    "ollama",
+                    provider_model,
+                    lambda: run_tool_capable_provider_with_prompt_fallback(
+                        system_prompt=system_prompt,
+                        stream_factory=lambda prompt_variant: iter_ollama_chat_events(
+                            prompt_variant,
+                            user_goal,
+                            model_override=provider_model,
+                            prior_messages=prior_messages,
+                            tools=requested_tools,
+                        ),
                     ),
                 )
                 if provider_result.get("ok"):
@@ -3755,23 +4157,31 @@ def generate_chat_reply_stream_with_provider_fallback(
                     return
                 last_error = f"ollama generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
                 continue
-            text, usage, model, provider_error = ollama_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
+            text, usage, model, provider_error = _run_text_with_limits(
+                "ollama",
+                provider_model,
+                lambda: ollama_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                ),
             )
         elif provider == "ollama_cloud":
             if requested_tools:
-                provider_result = run_tool_capable_provider_with_prompt_fallback(
-                    system_prompt=system_prompt,
-                    stream_factory=lambda prompt_variant: iter_ollama_cloud_chat_events(
-                        prompt_variant,
-                        user_goal,
-                        model_override=provider_model,
-                        prior_messages=prior_messages,
-                        credential_override=credential_override,
-                        tools=requested_tools,
+                provider_result = _run_structured_with_limits(
+                    "ollama_cloud",
+                    provider_model,
+                    lambda: run_tool_capable_provider_with_prompt_fallback(
+                        system_prompt=system_prompt,
+                        stream_factory=lambda prompt_variant: iter_ollama_cloud_chat_events(
+                            prompt_variant,
+                            user_goal,
+                            model_override=provider_model,
+                            prior_messages=prior_messages,
+                            credential_override=credential_override,
+                            tools=requested_tools,
+                        ),
                     ),
                 )
                 if provider_result.get("ok"):
@@ -3790,12 +4200,16 @@ def generate_chat_reply_stream_with_provider_fallback(
                     return
                 last_error = f"ollama_cloud generation failed: {str(provider_result.get('error') or 'unknown_error').strip() or 'unknown_error'}"
                 continue
-            text, usage, model, provider_error = ollama_cloud_chat_text(
-                system_prompt,
-                user_goal,
-                model_override=provider_model,
-                prior_messages=prior_messages,
-                credential_override=credential_override,
+            text, usage, model, provider_error = _run_text_with_limits(
+                "ollama_cloud",
+                provider_model,
+                lambda: ollama_cloud_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                    credential_override=credential_override,
+                ),
             )
         else:
             continue

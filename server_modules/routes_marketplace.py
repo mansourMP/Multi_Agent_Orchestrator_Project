@@ -98,6 +98,49 @@ async def list_workspace_studio_templates(
     }
 
 
+@router.get("/workspaces/{workspace_id}/studio/templates/shop-assistant/revenue-proof")
+async def get_shop_assistant_revenue_proof(
+    workspace_id: str,
+    conversations_handled: int = Query(default=0, ge=0),
+    qualified_purchase_intent: int = Query(default=0, ge=0),
+    owner_handoffs: int = Query(default=0, ge=0),
+    avg_order_value_usd: Optional[float] = Query(default=None, gt=0),
+    close_rate_from_intent: Optional[float] = Query(default=None, gt=0),
+    gross_margin_rate: Optional[float] = Query(default=None, gt=0),
+    monthly_subscription_cost_usd: Optional[float] = Query(default=None, gt=0),
+    current_user=Depends(get_current_user),
+):
+    auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+    contract = studio_proof_agent_seed_service.get_studio_proof_agent_seed_contract("shop-assistant")
+    if not isinstance(contract, dict):
+        raise HTTPException(status_code=404, detail="Shop Assistant template is unavailable.")
+    event_counts = {
+        "conversations_handled": conversations_handled,
+        "qualified_purchase_intent": qualified_purchase_intent,
+        "owner_handoffs": owner_handoffs,
+    }
+    assumptions = {
+        key: value
+        for key, value in {
+            "avg_order_value_usd": avg_order_value_usd,
+            "close_rate_from_intent": close_rate_from_intent,
+            "gross_margin_rate": gross_margin_rate,
+            "monthly_subscription_cost_usd": monthly_subscription_cost_usd,
+        }.items()
+        if value is not None
+    }
+    roi_snapshot = studio_proof_agent_seed_service.build_shop_assistant_roi_snapshot(
+        event_counts=event_counts,
+        assumptions=assumptions,
+    )
+    return {
+        "workspace_id": workspace_id,
+        "template_slug": "shop-assistant",
+        "revenue_proof": contract.get("revenue_proof"),
+        "roi_snapshot": roi_snapshot,
+    }
+
+
 @router.post("/workspaces/{workspace_id}/marketplace/providers")
 async def register_workspace_marketplace_provider(
     workspace_id: str,

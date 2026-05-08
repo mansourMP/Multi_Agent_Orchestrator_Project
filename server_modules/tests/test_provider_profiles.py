@@ -10,6 +10,21 @@ from server_modules import usage_reporting
 
 
 class ProviderProfilesTests(unittest.TestCase):
+    def test_provider_limit_policy_covers_required_runtime_providers(self) -> None:
+        openai_limits = provider_profiles.provider_limit_policy("openai", "gpt-4.1")
+        codex_limits = provider_profiles.provider_limit_policy("codex_cli", "gpt-5.4")
+        anthropic_limits = provider_profiles.provider_limit_policy("anthropic", "claude-3-7-sonnet-20250219")
+        deepseek_limits = provider_profiles.provider_limit_policy("deepseek", "deepseek-chat")
+        gemini_limits = provider_profiles.provider_limit_policy("gemini", "gemini-2.5-flash")
+        ollama_limits = provider_profiles.provider_limit_policy("ollama", "llama3.2")
+
+        self.assertGreaterEqual(int(openai_limits["max_output_tokens"]), 512)
+        self.assertGreaterEqual(int(codex_limits["max_output_tokens"]), int(openai_limits["max_output_tokens"]))
+        self.assertGreaterEqual(int(anthropic_limits["max_retry_attempts"]), 1)
+        self.assertGreaterEqual(int(deepseek_limits["max_retry_attempts"]), int(openai_limits["max_retry_attempts"]))
+        self.assertGreaterEqual(int(gemini_limits["max_output_tokens"]), 512)
+        self.assertLessEqual(int(ollama_limits["max_output_tokens"]), int(openai_limits["max_output_tokens"]))
+
     def test_gemini_provider_defaults_to_25_flash_and_keeps_25_pro_available(self) -> None:
         gemini_entry = provider_profiles.provider_catalog_entry("gemini")
         model_ids = [item["id"] for item in provider_profiles.provider_model_catalog("gemini")]

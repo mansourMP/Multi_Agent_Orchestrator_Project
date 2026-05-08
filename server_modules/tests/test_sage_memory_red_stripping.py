@@ -113,6 +113,51 @@ class SageMemoryRedStrippingTests(unittest.TestCase):
         self.assertIn("RED memory fact(s) stripped", rendered_blocks)
         self.assertNotIn("sk-mini-app-secret-123456", rendered_blocks)
 
+    def test_workspace_context_payload_strips_red_facts_from_semantic_hits(self) -> None:
+        with (
+            patch(
+                "server_modules.workspace_context_memory_adapter.read_workspace_context_files",
+                return_value={},
+            ),
+            patch(
+                "server_modules.memory_service.get_recent_logs",
+                return_value="",
+            ),
+            patch(
+                "server_modules.memory_service.semantic_search",
+                return_value=[
+                    {"key": "pricing_note", "content": "RED: discount token abcdefghijklmnopqrstuvwxyz123456"},
+                    {"key": "safe_note", "content": "ask owner before discount over 15%"},
+                ],
+            ),
+            patch(
+                "server_modules.memory_service.get_memory",
+                return_value="",
+            ),
+            patch(
+                "server_modules.sage_memory_service.build_sage_memory_context_block",
+                return_value="",
+            ),
+            patch(
+                "server_modules.sage_services_service.build_sage_services_memory_block",
+                return_value="",
+            ),
+            patch(
+                "server_modules.mini_apps_service.build_mini_apps_context_block",
+                return_value="",
+            ),
+        ):
+            payload = workspace_context_memory_adapter.load_workspace_context_payload(
+                workspace_id="workspace-1",
+                memory_query="pricing",
+                policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
+            )
+
+        rendered_blocks = "\n\n".join(payload["contextual_blocks"])
+        self.assertIn("ask owner before discount over 15%", rendered_blocks)
+        self.assertIn("RED memory fact(s) stripped", rendered_blocks)
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz123456", rendered_blocks)
+
 
 if __name__ == "__main__":
     unittest.main()

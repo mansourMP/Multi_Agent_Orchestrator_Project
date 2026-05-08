@@ -63,14 +63,27 @@ def build_system_prompt(
     return prompt or None
 
 
-def combine_workspace_context(*, system_prompt: str | None, workspace_context_text: str) -> str | None:
+def combine_workspace_context(
+    *,
+    system_prompt: str | None,
+    workspace_context_text: str,
+    identity_guardrail: str | None = None,
+) -> str | None:
     context = str(workspace_context_text or "").strip()
     prompt = str(system_prompt or "").strip()
-    if context and prompt:
-        return f"{prompt}\n\n## Workspace Context\n{context}"
-    if context:
+    guardrail = str(identity_guardrail or "").strip()
+    if context and not prompt and not guardrail:
         return context
-    return prompt or None
+    sections: list[str] = []
+    if prompt:
+        sections.append(prompt)
+    if guardrail:
+        sections.append(guardrail)
+    if context:
+        sections.append(f"## Workspace Context\n{context}")
+    if sections:
+        return "\n\n".join(sections)
+    return None
 
 
 def build_runtime_identity_guardrail(*, provider: str, model: str | None = None) -> str:

@@ -19,7 +19,7 @@ class WorkspaceContextMiniAppsTests(unittest.TestCase):
         self._workspace_patch.stop()
         self._tmpdir.cleanup()
 
-    def test_workspace_context_payload_does_not_include_mini_app_block_by_default(self) -> None:
+    def test_workspace_context_payload_includes_compact_mini_app_summaries_without_raw_history(self) -> None:
         mini_apps_service.upsert_mini_app_contract(
             "ws-1",
             "flashcards",
@@ -40,9 +40,10 @@ class WorkspaceContextMiniAppsTests(unittest.TestCase):
             )
 
         rendered = "\n\n".join(payload["contextual_blocks"])
-        self.assertNotIn("Mini App Summaries", rendered)
-        self.assertNotIn("active deck: Spanish verbs", rendered)
-        self.assertEqual(payload["diagnostics"]["mini_app_summary_count"], 0)
+        self.assertIn("Mini App Summaries", rendered)
+        self.assertIn("active deck: Spanish verbs", rendered)
+        self.assertEqual(payload["diagnostics"]["mini_app_summary_count"], 1)
+        self.assertIn("retrieve_records(filters) for narrow raw history slices", rendered)
         self.assertNotIn("full raw history should stay retrievable", rendered)
 
 

@@ -716,6 +716,69 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["payload"]["provider"], "ollama")
         self.assertEqual(events[-1]["payload"]["context_used"]["effective_provider"], "ollama")
 
+    def test_build_direct_operator_reply_orders_system_identity_and_workspace_context(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="hello",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="openai",
+            normalized_requested_model="gpt-5.4",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=1,
+        )
+        services = self._runtime_services(prepared)
+        services.direct_chat_workspace_context_text = (
+            lambda workspace_id, memory_query="": "Stable Memory Summary\nStable block\n\nRetrieved Relevant Memory\nDynamic block"
+        )
+        captured: dict[str, object] = {}
+
+        def _provider_stream(**kwargs):
+            captured["system_prompt"] = kwargs.get("system_prompt")
+            yield {
+                "type": "result",
+                "reply": "ok",
+                "provider": "openai",
+                "model": "gpt-5.4",
+                "tool_calls": [],
+                "attempted_providers": "openai",
+                "error": "",
+                "usage_masked": {},
+            }
+
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = _provider_stream
+
+        list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message="hello",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+            )
+        )
+
+        assembled = str(captured.get("system_prompt") or "")
+        system_index = assembled.index("system prompt")
+        identity_index = assembled.index("## Runtime Identity")
+        workspace_index = assembled.index("## Workspace Context")
+        stable_index = assembled.index("Stable Memory Summary")
+        retrieved_index = assembled.index("Retrieved Relevant Memory")
+        self.assertLess(system_index, identity_index)
+        self.assertLess(identity_index, workspace_index)
+        self.assertLess(stable_index, retrieved_index)
+
 
 if __name__ == "__main__":
     unittest.main()

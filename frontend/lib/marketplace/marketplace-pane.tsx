@@ -456,6 +456,8 @@ type AgentTemplateProofSnapshot = {
   channels: string[];
   dataNeeds: string[];
   moneyModel: string;
+  runtimeTier: string;
+  safetyPolicy: string;
 };
 
 function readAgentTemplateProofDetails(packagePayload: Record<string, unknown>): AgentTemplateProofSnapshot {
@@ -474,14 +476,23 @@ function readAgentTemplateProofDetails(packagePayload: Record<string, unknown>):
       .filter(Boolean)
     : [];
   const monetizationHint = readRecord(proofContract.monetization_hint);
+  const runtimeTierRecommendation = readRecord(proofContract.runtime_tier_recommendation);
+  const approvalPolicy = readRecord(proofContract.approval_policy);
   const fallbackMoneyModel = readString(monetizationHint.kind, readString(packagePayload.specialist_kind, 'service'));
   const fallbackOffer = readString(monetizationHint.suggested_offer);
   const moneyModel = fallbackOffer || (fallbackMoneyModel ? humanizeToken(fallbackMoneyModel) : 'Revenue model pending');
+  const runtimeTierToken = readString(runtimeTierRecommendation.tier, readString(packagePayload.runtime_tier, 'hosted_secure'));
+  const runtimeTier = runtimeTierToken ? humanizeToken(runtimeTierToken) : 'Hosted secure';
+  const safetyPolicy = readString(approvalPolicy.default_mode)
+    ? `${humanizeToken(readString(approvalPolicy.default_mode))} (${readStringList(approvalPolicy.owner_approval_required_for).length} owner approvals)`
+    : 'Owner approval policy defined in template';
   return {
     does: readString(proofContract.description, readString(packagePayload.description, 'Business behavior is defined in this template contract.')),
     channels: channels.length ? channels : readStringList(packagePayload.required_connectors),
     dataNeeds: dataNeeds.length ? dataNeeds : readStringList(packagePayload.required_connectors),
     moneyModel,
+    runtimeTier,
+    safetyPolicy,
   };
 }
 
@@ -1340,6 +1351,14 @@ export function MarketplacePane() {
                                 <div className="marketplace-pane__detail-list-row">
                                   <span className="marketplace-pane__detail-label">How it makes money</span>
                                   <span className="marketplace-pane__detail-value">{proof.moneyModel}</span>
+                                </div>
+                                <div className="marketplace-pane__detail-list-row">
+                                  <span className="marketplace-pane__detail-label">Runtime tier</span>
+                                  <span className="marketplace-pane__detail-value">{proof.runtimeTier}</span>
+                                </div>
+                                <div className="marketplace-pane__detail-list-row">
+                                  <span className="marketplace-pane__detail-label">Safety policy</span>
+                                  <span className="marketplace-pane__detail-value">{proof.safetyPolicy}</span>
                                 </div>
                               </div>
                               <div className="marketplace-pane__token-row">

@@ -1208,18 +1208,14 @@ def build_direct_operator_reply(
         normalized_workspace_id,
         memory_query=normalized_message,
     )
-    system_prompt = direct_chat_prompt_service.combine_workspace_context(
-        system_prompt=system_prompt,
-        workspace_context_text=workspace_context_text,
-    )
     identity_guardrail = direct_chat_prompt_service.build_runtime_identity_guardrail(
         provider=provider,
         model=selected_model or None,
     )
-    system_prompt = (
-        f"{system_prompt}\n\n{identity_guardrail}".strip()
-        if str(system_prompt or "").strip()
-        else identity_guardrail
+    system_prompt = direct_chat_prompt_service.combine_workspace_context(
+        system_prompt=system_prompt,
+        workspace_context_text=workspace_context_text,
+        identity_guardrail=identity_guardrail,
     )
     history_mode = "compacted_messages" if compaction.get("compacted") else ("raw_messages" if compacted_prior_messages else "none")
     prior_messages_used = bool(compacted_prior_messages)

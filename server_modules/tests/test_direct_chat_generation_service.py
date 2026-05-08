@@ -199,6 +199,48 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["payload"]["error"], "provider_generation_failed")
         self.assertEqual(events[-1]["payload"]["attempted_providers"], "openai")
 
+    def test_stream_provider_backed_direct_chat_flags_rate_limit_errors(self) -> None:
+        events = list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=self._services(
+                    stream_events=[
+                        {
+                            "type": "failure",
+                            "attempted_providers": "openai,anthropic",
+                            "error": "openai generation failed: http_429: rate limit",
+                        }
+                    ]
+                ),
+                context={"provider": "openai"},
+                metadata={"provider": "openai", "model": "gpt-5.4"},
+                system_prompt="System prompt",
+                normalized_workspace_id="default",
+                normalized_requested_provider="openai",
+                normalized_requested_model="gpt-5.4",
+                normalized_reasoning_effort="medium",
+                normalized_thread_id="thread-1",
+                normalized_message="hello",
+                compacted_prior_messages=[],
+                prior_messages_used=False,
+                history_mode="none",
+                connected_systems=[],
+                tool_capabilities=[],
+                availability_payload={"ai_ready": True},
+                tools=[],
+                direct_chat_credentials={},
+                proactive_suggestions=[],
+                tool_loop_session_key="session-1",
+                fallback_reason=None,
+                session_ctx=None,
+                trace_context=None,
+                resolved_chat_max_iterations=1,
+                direct_tool_result_summary_system_message="Summarize tool results.",
+            )
+        )
+
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(events[-1]["payload"]["error"], "provider_rate_limited")
+
     def test_stream_provider_backed_direct_chat_recovers_from_invalid_non_codex_tool_call(self) -> None:
         call_count = {"value": 0}
 

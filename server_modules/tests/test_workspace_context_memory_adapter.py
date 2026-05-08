@@ -159,6 +159,47 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
         self.assertNotIn("raw transcript", rendered.lower())
         self.assertEqual(payload["diagnostics"]["mini_app_summary_count"], 1)
 
+    def test_load_workspace_context_payload_separates_stable_and_retrieved_blocks(self):
+        with (
+            patch(
+                "server_modules.workspace_context_memory_adapter.read_workspace_context_files",
+                return_value={"USER.md": "# User\n- Preferred tone: concise"},
+            ),
+            patch("server_modules.memory_service.get_recent_logs", return_value="Recent line"),
+            patch(
+                "server_modules.memory_service.semantic_search",
+                return_value=[{"key": "inventory", "content": "nike air max in stock"}],
+            ),
+            patch("server_modules.memory_service.get_memory", return_value=""),
+            patch("server_modules.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_services_service.build_sage_services_memory_block", return_value=""),
+            patch("server_modules.mini_apps_service.build_mini_apps_context_block", return_value=""),
+        ):
+            payload = workspace_context_memory_adapter.load_workspace_context_payload(
+                workspace_id="workspace-1",
+                memory_query="inventory",
+                policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
+            )
+
+        stable = payload["stable_contextual_blocks"]
+        retrieved = payload["retrieved_contextual_blocks"]
+        self.assertTrue(any("USER.md" in block for block in stable))
+        self.assertTrue(any("Recent Daily Logs" in block for block in retrieved))
+        self.assertTrue(any("Retrieved Relevant Memory" in block for block in retrieved))
+        self.assertEqual(payload["diagnostics"]["stable_context_block_count"], len(stable))
+        self.assertEqual(payload["diagnostics"]["retrieved_context_block_count"], len(retrieved))
+
+    def test_render_workspace_context_text_places_retrieved_section_after_stable(self):
+        rendered = workspace_context_memory_adapter.render_workspace_context_text(
+            [],
+            stable_blocks=["USER.md\n- Preferred tone: concise"],
+            retrieved_blocks=["Retrieved Relevant Memory\n- timezone: Asia/Shanghai"],
+        )
+
+        stable_index = rendered.index("Stable Memory Summary")
+        retrieved_index = rendered.index("Retrieved Relevant Memory")
+        self.assertLess(stable_index, retrieved_index)
+
 
 if __name__ == "__main__":
     unittest.main()

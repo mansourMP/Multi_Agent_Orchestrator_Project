@@ -108,14 +108,14 @@ async def test_marketplace_routes_register_install_and_track_runtime(monkeypatch
                     "review_state": "approved",
                     "health_state": "healthy",
                     "publisher": {"label": "Signal Forge"},
-                    "app": {
-                        "app_id": "signalforge_console",
-                        "hosted_url": "https://apps.signalforge.example/embed",
-                        "allowed_origins": ["https://apps.signalforge.example"],
-                        "permissions": ["app_bridge.read"],
+                        "app": {
+                            "app_id": "signalforge_console",
+                            "hosted_url": "https://apps.signalforge.example/embed",
+                            "allowed_origins": ["https://apps.signalforge.example"],
+                            "permissions": ["app.summary.read"],
+                        },
                     },
-                },
-            )
+                )
             assert create_app.status_code == 200
             app_package_id = create_app.json()["package_id"]
 
@@ -173,3 +173,40 @@ async def test_marketplace_route_lists_backend_seed_agent_templates(monkeypatch:
             assert set(items) == {"shop-assistant", "dental-receptionist", "restaurant-order-taker"}
             assert items["shop-assistant"]["kind"] == "agent_template"
             assert items["shop-assistant"]["runtime_truth"]["open_href"] == "/w/ws-1/studio?proof_agent=shop-assistant"
+
+
+@pytest.mark.anyio
+async def test_marketplace_route_returns_shop_assistant_revenue_proof(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_marketplace.get_current_user] = lambda: {
+        "user_id": "user-1",
+        "workspace_access": {"ws-1": {"tenant_id": "tenant-1", "role": "owner"}},
+    }
+    monkeypatch.setattr(
+        routes_marketplace.auth_module,
+        "enforce_workspace_access",
+        lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="marketplace-revenue-proof-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.get(
+                "/api/workspaces/ws-1/studio/templates/shop-assistant/revenue-proof",
+                params={
+                    "conversations_handled": 100,
+                    "qualified_purchase_intent": 20,
+                    "owner_handoffs": 5,
+                    "avg_order_value_usd": 90,
+                    "close_rate_from_intent": 0.4,
+                    "gross_margin_rate": 0.5,
+                    "monthly_subscription_cost_usd": 120,
+                },
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["template_slug"] == "shop-assistant"
+            assert payload["revenue_proof"]["vertical"] == "shop_assistant"
+            assert payload["roi_snapshot"]["event_counts"]["qualified_purchase_intent"] == 20
+            assert payload["roi_snapshot"]["results"]["estimated_orders"] == 8.0

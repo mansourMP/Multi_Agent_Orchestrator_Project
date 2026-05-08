@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   SquarePen,
@@ -20,11 +20,6 @@ import type {
 } from '@/lib/workspace/chat-message';
 import { CodexChatCell, type CodexApprovalAction } from '@/lib/workspace/codex-chat/cell-components';
 import type { CodexTranscriptCell } from '@/lib/workspace/codex-chat/cells';
-import { workstationMessageToCodexCell } from '@/lib/workspace/codex-chat/message-adapter';
-import {
-  projectCodexTimeline,
-  type TimelineProjectionEvent,
-} from '@/lib/workspace/codex-chat/timeline-reducer';
 import {
   resolveModelContextWindow,
 } from '@/lib/workspace/model-capabilities';
@@ -56,104 +51,43 @@ import {
   type WorkstationTurnStreamAbortHandle,
   type WorkstationTurnResponse,
 } from '@/lib/workspace/workstation-client';
-
-type CanonicalChatThreadState = {
-  threadId: string;
-  title: string;
-  messages: WorkstationChatMessageRecord[];
-  session: WorkstationSessionRecord | null;
-};
-
-type CanonicalRunSummary = Record<string, unknown> & {
-  run_id?: string | null;
-  status?: string | null;
-  created_at?: string | null;
-};
-
-type CanonicalApprovalSummary = Record<string, unknown> & {
-  approval_id?: string | null;
-  id?: string | null;
-  status?: string | null;
-  prompt?: string | null;
-};
-
-type LiveTraceTransport = 'external' | 'trace-stream';
-
-type LiveTraceState = {
-  traceId: string | null;
-  transport: LiveTraceTransport;
-  trace: WorkstationAgentTraceRecord | null;
-  events: WorkstationAgentTraceEvent[];
-};
-
-type LiveActivityStepState = {
-  id: string;
-  kind: string;
-  label: string;
-  detail: string;
-  status: string;
-  toolCallId: string | null;
-  createdAt: string;
-};
-
-type SageMemoryCategoryRecord = {
-  id: string;
-  label: string;
-  description: string;
-  count: number;
-};
-
-type SageMemorySnapshot = {
-  items: WorkstationSageMemoryRecord[];
-  categories: SageMemoryCategoryRecord[];
-  summary: Record<string, unknown>;
-  updatedAt: string | null;
-};
-
-type SageProfileSnapshot = {
-  profile: {
-    user_name: string;
-    identity_summary: string;
-    communication_style: string;
-    recurring_responsibility: string;
-    standing_rules: string[];
-    standing_rules_text: string;
-  };
-  bootstrap: {
-    complete: boolean;
-    answered_count: number;
-    total_count: number;
-    progress_label: string;
-    current_question: {
-      id: string;
-      prompt: string;
-      placeholder: string;
-    } | null;
-  };
-};
-
-type SageSetupSurfaceState = 'loading' | 'required' | 'unavailable' | 'ready';
-
-type RecentThreadSummary = {
-  threadId: string;
-  title: string;
-  updatedAt: string | null;
-};
+import {
+  type CanonicalApprovalSummary,
+  type CanonicalChatThreadState,
+  type CanonicalRunSummary,
+  type ChatAutonomyMode,
+  type ChatMachineTrust,
+  type ChatModelOption,
+  type ChatReasoningEffort,
+  type GatewayReadinessDoctorPayload,
+  type LiveActivityStepState,
+  type SageMemoryCategoryRecord,
+  type LiveTraceState,
+  type RecentThreadSummary,
+  type SageMemoryDraft,
+  type SageMemorySnapshot,
+  type SageProfileSnapshot,
+  type SageSetupSurfaceState,
+  type SageToolPolicyRecord,
+  type SendFailureNotice,
+  refreshProviderModelCatalog,
+  useChatComposerState,
+  useChatMemoryEditorState,
+  useChatMemoryProfileState,
+  useChatProviderModelState,
+  useChatRunAndApprovalState,
+  useChatStreamRunState,
+  useChatThreadState,
+  useChatUiPanelsState,
+} from '@/lib/workspace/workstation-chat-pane-hooks';
+import {
+  isApprovalsPlanError,
+  loadChatMemorySnapshot,
+  loadChatProfileSnapshot,
+} from '@/lib/workspace/workstation-chat-memory-loaders';
+import { useWorkstationTimelineProjection } from '@/lib/workspace/workstation-chat-timeline-projection';
 
 type StatusNoticeTone = 'neutral' | 'success' | 'warning';
-
-type SageMemoryDraft = {
-  entryId: string | null;
-  category: string;
-  title: string;
-  content: string;
-  pinned: boolean;
-};
-
-type SageToolPolicyRecord = {
-  key: string;
-  enabled: boolean;
-};
 
 type RuntimeSummaryCard = {
   tone: 'neutral' | 'accent' | 'success' | 'warning';
@@ -177,39 +111,7 @@ type GatewayReadinessRegistration = Record<string, unknown> & {
   connection_status?: string | null;
 };
 
-type GatewayReadinessDoctorPayload = Record<string, unknown> & {
-  status?: string | null;
-  browser?: Record<string, unknown> | null;
-  browser_attach?: Record<string, unknown> | null;
-};
-
-type SendFailureNotice = {
-  message: string;
-  retryable: boolean;
-  retryDraft?: string | null;
-  actions?: {
-    label: string;
-    target: 'gateway' | 'integrations';
-  }[];
-};
-
-type ChatMachineTrust = 'personal' | 'agent';
-
-type ChatAutonomyMode = 'approval' | 'full';
-
 type ChatRuntimeTrustZone = 'shared_cloud' | 'user_owned_local' | 'owned_dedicated_runtime';
-
-type ChatReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-
-type ChatModelOption = {
-  id: string;
-  label: string;
-  providerId: string | null;
-  providerLabel: string | null;
-  supportsReasoning: boolean;
-  reasoningLevels: ChatReasoningEffort[];
-  contextWindowTokens: number | null;
-};
 
 const VALID_REASONING_LEVELS: ChatReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
@@ -2436,102 +2338,137 @@ export function WorkstationChatPane() {
     display_name: bootstrap.account.displayName ?? bootstrap.account.email,
   }), [bootstrap.account.displayName, bootstrap.account.email, bootstrap.account.id]);
 
-  const [activeThreadId, setActiveThreadId] = useState<string>(() => {
-    const cachedThreadId = services.queryClient.peek<string>(ACTIVE_THREAD_QUERY_KEY);
-    const persistedThreadId = readPersistedActiveThread(bootstrap.workspace.id);
-    return cachedThreadId ?? persistedThreadId ?? PRIMARY_THREAD_ID;
+  const {
+    activeThreadId,
+    setActiveThreadId,
+    activeThreadIdRef,
+    thread,
+    setThread,
+    threadRef,
+    recentThreads,
+    setRecentThreads,
+  } = useChatThreadState({
+    queryClient: services.queryClient,
+    activeThreadQueryKey: ACTIVE_THREAD_QUERY_KEY,
+    recentThreadsQueryKey: RECENT_THREADS_QUERY_KEY,
+    workspaceStorageKey: activeThreadStorageKey(bootstrap.workspace.id),
+    primaryThreadId: PRIMARY_THREAD_ID,
+    threadQueryKey,
   });
-  const [thread, setThread] = useState<CanonicalChatThreadState>(() =>
-    services.queryClient.peek<CanonicalChatThreadState>(threadQueryKey(activeThreadId)) ?? {
-      threadId: activeThreadId,
-      title: 'Chat',
-      messages: [],
-      session: null,
-    },
+  const {
+    draft,
+    setDraft,
+    statusMessage,
+    setStatusMessage,
+    sendFailureNotice,
+    setSendFailureNotice,
+    isSending,
+    setIsSending,
+  } = useChatComposerState();
+  const { runs, setRuns, approvals, setApprovals } = useChatRunAndApprovalState(
+    services.queryClient,
+    RUNS_QUERY_KEY,
+    APPROVALS_QUERY_KEY,
   );
-  const [draft, setDraft] = useState('');
-  const [runs, setRuns] = useState<CanonicalRunSummary[]>(
-    () => services.queryClient.peek<CanonicalRunSummary[]>(RUNS_QUERY_KEY) ?? [],
-  );
-  const [approvals, setApprovals] = useState<CanonicalApprovalSummary[]>(
-    () => services.queryClient.peek<CanonicalApprovalSummary[]>(APPROVALS_QUERY_KEY) ?? [],
-  );
-  const [recentThreads, setRecentThreads] = useState<RecentThreadSummary[]>(
-    () => services.queryClient.peek<RecentThreadSummary[]>(RECENT_THREADS_QUERY_KEY) ?? [{
-      threadId: PRIMARY_THREAD_ID,
-      title: 'Primary thread',
-      updatedAt: null,
-    }],
-  );
-  const [profileSnapshot, setProfileSnapshot] = useState<SageProfileSnapshot>(
-    () => services.queryClient.peek<SageProfileSnapshot>(SAGE_PROFILE_QUERY_KEY) ?? defaultSageProfileSnapshot(),
-  );
-  const [sageSetupState, setSageSetupState] = useState<SageSetupSurfaceState>('loading');
-  const [sageSetupMessage, setSageSetupMessage] = useState<string | null>(null);
-  const [bootstrapAnswer, setBootstrapAnswer] = useState('');
-  const [memorySnapshot, setMemorySnapshot] = useState<SageMemorySnapshot>(
-    () => services.queryClient.peek<SageMemorySnapshot>(SAGE_MEMORY_QUERY_KEY) ?? normalizeSageMemorySnapshot(null),
-  );
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [sendFailureNotice, setSendFailureNotice] = useState<SendFailureNotice | null>(null);
-  const [titlebarActionsHost, setTitlebarActionsHost] = useState<HTMLElement | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSending, setIsSending] = useState(false);
-  const [isSubmittingBootstrap, setIsSubmittingBootstrap] = useState(false);
-  const [isRetryingSageSetup, setIsRetryingSageSetup] = useState(false);
-  const [hasEnteredConversationFlow, setHasEnteredConversationFlow] = useState(false);
-  const [smallModelWarningVisible, setSmallModelWarningVisible] = useState(false);
-  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
-  const [mutatingMemory, setMutatingMemory] = useState<string | null>(null);
-  const [pendingUserMessage, setPendingUserMessage] = useState<WorkstationChatMessageRecord | null>(null);
-  const [streamingAssistantText, setStreamingAssistantText] = useState('');
-  const [liveTimelineEvents, setLiveTimelineEvents] = useState<TimelineProjectionEvent[]>([]);
-  const [showProjectedAssistant, setShowProjectedAssistant] = useState(false);
-  const [timelineSettled, setTimelineSettled] = useState(false);
-  const [liveActivitySteps, setLiveActivitySteps] = useState<LiveActivityStepState[]>([]);
-  const [liveTrace, setLiveTrace] = useState<LiveTraceState | null>(null);
-  const [memoryFilter, setMemoryFilter] = useState<string>('all');
-  const [selectedExecutionPlacement] = useState<'local'>('local');
-  const [machineTrust, setMachineTrust] = useState<ChatMachineTrust>('personal');
-  const [autonomyMode, setAutonomyMode] = useState<ChatAutonomyMode>('approval');
-  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([
-    disconnectedModelOption(),
-  ]);
-  const [selectedModel, setSelectedModel] = useState<string>('default');
-  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);
-  const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRecord[]>([]);
-  const [toolPolicy, setToolPolicy] = useState<SageToolPolicyRecord[]>([]);
-  const [connectorCredentials, setConnectorCredentials] = useState<VaultCredentialRecord[]>([]);
-  const [browserGatewayDoctor, setBrowserGatewayDoctor] = useState<GatewayReadinessDoctorPayload | null>(null);
-  const [reasoningEffort, setReasoningEffort] = useState<ChatReasoningEffort>('medium');
-  const [isPersistingModelSelection, setIsPersistingModelSelection] = useState(false);
-  const [isApprovalsSheetOpen, setIsApprovalsSheetOpen] = useState(false);
-  const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
-  const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultSageMemoryDraft());
-  const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<string | null>(null);
-  const activeThreadIdRef = useRef(activeThreadId);
-  const threadRef = useRef(thread);
-  const pendingUserMessageRef = useRef<WorkstationChatMessageRecord | null>(pendingUserMessage);
-  const streamingAssistantTextRef = useRef(streamingAssistantText);
-  const liveActivityStepsRef = useRef<LiveActivityStepState[]>(liveActivitySteps);
-  const lastTurnActivityAtRef = useRef<number>(0);
+  const {
+    profileSnapshot,
+    setProfileSnapshot,
+    sageSetupState,
+    setSageSetupState,
+    sageSetupMessage,
+    setSageSetupMessage,
+    bootstrapAnswer,
+    setBootstrapAnswer,
+    memorySnapshot,
+    setMemorySnapshot,
+  } = useChatMemoryProfileState({
+    queryClient: services.queryClient,
+    profileQueryKey: SAGE_PROFILE_QUERY_KEY,
+    memoryQueryKey: SAGE_MEMORY_QUERY_KEY,
+    defaultProfile: defaultSageProfileSnapshot(),
+    defaultMemory: normalizeSageMemorySnapshot(null),
+  });
+  const {
+    pendingUserMessage,
+    setPendingUserMessage,
+    pendingUserMessageRef,
+    streamingAssistantText,
+    setStreamingAssistantText,
+    streamingAssistantTextRef,
+    liveTimelineEvents,
+    setLiveTimelineEvents,
+    showProjectedAssistant,
+    setShowProjectedAssistant,
+    timelineSettled,
+    setTimelineSettled,
+    liveActivitySteps,
+    setLiveActivitySteps,
+    liveActivityStepsRef,
+    liveTrace,
+    setLiveTrace,
+    markTurnActivity,
+    lastTurnActivityAtRef,
+  } = useChatStreamRunState();
+  const {
+    selectedExecutionPlacement,
+    machineTrust,
+    setMachineTrust,
+    autonomyMode,
+    setAutonomyMode,
+    modelOptions,
+    setModelOptions,
+    selectedModel,
+    setSelectedModel,
+    providerCatalog,
+    setProviderCatalog,
+    providerProfiles,
+    setProviderProfiles,
+    toolPolicy,
+    setToolPolicy,
+    connectorCredentials,
+    setConnectorCredentials,
+    browserGatewayDoctor,
+    setBrowserGatewayDoctor,
+    reasoningEffort,
+    setReasoningEffort,
+    isPersistingModelSelection,
+    setIsPersistingModelSelection,
+  } = useChatProviderModelState(disconnectedModelOption());
+  const {
+    titlebarActionsHost,
+    setTitlebarActionsHost,
+    isLoading,
+    setIsLoading,
+    isSubmittingBootstrap,
+    setIsSubmittingBootstrap,
+    isRetryingSageSetup,
+    setIsRetryingSageSetup,
+    hasEnteredConversationFlow,
+    setHasEnteredConversationFlow,
+    smallModelWarningVisible,
+    setSmallModelWarningVisible,
+    resolvingApprovalId,
+    setResolvingApprovalId,
+    mutatingMemory,
+    setMutatingMemory,
+    memoryFilter,
+    setMemoryFilter,
+    isApprovalsSheetOpen,
+    setIsApprovalsSheetOpen,
+    isMemorySheetOpen,
+    setIsMemorySheetOpen,
+  } = useChatUiPanelsState();
+  const {
+    memoryDraft,
+    setMemoryDraft,
+    pendingDeleteMemoryId,
+    setPendingDeleteMemoryId,
+  } = useChatMemoryEditorState(defaultSageMemoryDraft());
   const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
   const streamInFlightRef = useRef(false);
   const activeTurnRequestIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    activeThreadIdRef.current = activeThreadId;
-  }, [activeThreadId]);
-
-  useEffect(() => {
-    threadRef.current = thread;
-  }, [thread]);
-
-  useEffect(() => {
-    pendingUserMessageRef.current = pendingUserMessage;
-  }, [pendingUserMessage]);
 
   const updatePendingUserMessage = useCallback((message: WorkstationChatMessageRecord | null) => {
     pendingUserMessageRef.current = message;
@@ -2548,17 +2485,6 @@ export function WorkstationChatPane() {
     }
   }, [pendingUserMessage, thread.messages, updatePendingUserMessage]);
 
-  useEffect(() => {
-    streamingAssistantTextRef.current = streamingAssistantText;
-  }, [streamingAssistantText]);
-
-  useEffect(() => {
-    liveActivityStepsRef.current = liveActivitySteps;
-  }, [liveActivitySteps]);
-
-  const markTurnActivity = useCallback(() => {
-    lastTurnActivityAtRef.current = Date.now();
-  }, []);
 
   const refreshProviderCatalog = useCallback(async () => {
     const payload = await services.queryClient.run('chat:provider-catalog', async () => {
@@ -2588,23 +2514,16 @@ export function WorkstationChatPane() {
       return;
     }
 
-    const normalizedProviders = normalizeProviderCatalogRecords(
-      (payload as { catalogPayload?: unknown }).catalogPayload,
-    );
-    const normalizedProfiles = normalizeProviderProfiles(
-      (payload as { profilesPayload?: unknown }).profilesPayload,
-    );
-    const effectiveProviders = normalizedProviders.length > 0
-      ? normalizedProviders
-      : [hostedCreditsFallbackProvider()];
-    setProviderCatalog(effectiveProviders);
-    setProviderProfiles(normalizedProfiles);
-    const nextOptions = normalizeChatModelOptions(
-      normalizedProviders.length > 0
-        ? (payload as { catalogPayload?: unknown }).catalogPayload
-        : { providers: effectiveProviders },
-    );
-    setModelOptions(nextOptions.length > 0 ? nextOptions : [workspaceDefaultModelOption(effectiveProviders)]);
+    const nextCatalog = refreshProviderModelCatalog(payload, {
+      normalizeProviderCatalogRecords,
+      normalizeProviderProfiles,
+      normalizeChatModelOptions,
+      hostedCreditsFallbackProvider,
+      workspaceDefaultModelOption,
+    });
+    setProviderCatalog(nextCatalog.providers);
+    setProviderProfiles(nextCatalog.profiles);
+    setModelOptions(nextCatalog.options);
   }, [services.client, services.queryClient]);
 
   const refreshToolingState = useCallback(async () => {
@@ -2795,20 +2714,7 @@ export function WorkstationChatPane() {
     const approvalsRequest = services.client.listApprovals({
       limit: 24,
     }).then(normalizeCanonicalApprovalItems).catch((error) => {
-      if (
-        error instanceof WorkstationClientError
-        && error.status === 403
-        && (
-          (typeof error.detail === 'string'
-            && error.detail.includes('Approvals are not included in this workspace plan.'))
-          || (
-            typeof error.detail === 'object'
-            && error.detail
-            && typeof (error.detail as { message?: unknown }).message === 'string'
-            && String((error.detail as { message?: unknown }).message).includes('Approvals are not included in this workspace plan.')
-          )
-        )
-      ) {
+      if (isApprovalsPlanError(error)) {
         return [] satisfies CanonicalApprovalSummary[];
       }
       if (isTransientBackgroundReadError(error)) {
@@ -2846,48 +2752,34 @@ export function WorkstationChatPane() {
 
   const loadMemory = async () => {
     const cachedSnapshot = services.queryClient.peek<SageMemorySnapshot>(SAGE_MEMORY_QUERY_KEY) ?? memorySnapshot;
-    const payload = await withTimeout(services.queryClient.run('chat:canonical:memory', async () =>
-      services.client.listSageMemory().catch((error) => {
-        if (isTransientBackgroundReadError(error)) {
-          return null;
-        }
-        throw error;
-      }),
-    ), CHAT_READ_TIMEOUT_MS, 'Memory took too long to load.');
-    const nextSnapshot = payload === null
-      ? cachedSnapshot
-      : normalizeSageMemorySnapshot(payload);
-    writeMemorySnapshot(nextSnapshot);
-    return nextSnapshot;
+    return loadChatMemorySnapshot({
+      services,
+      memoryQueryKey: SAGE_MEMORY_QUERY_KEY,
+      timeoutMs: CHAT_READ_TIMEOUT_MS,
+      cachedSnapshot,
+      normalizeSnapshot: normalizeSageMemorySnapshot,
+      writeSnapshot: writeMemorySnapshot,
+      withTimeout,
+      shouldUseFallback: isTransientBackgroundReadError,
+    });
   };
 
   const loadProfile = async () => {
     const cachedProfile = services.queryClient.peek<SageProfileSnapshot>(SAGE_PROFILE_QUERY_KEY) ?? profileSnapshot;
-    let profileError: unknown = null;
-    let payload: WorkstationSageProfileRecord | null = null;
-    try {
-      payload = await withTimeout(services.queryClient.run('chat:canonical:sage-profile', async () =>
-        services.client.getSageProfile().catch((error) => {
-          if (isTransientBackgroundReadError(error)) {
-            return null;
-          }
-          profileError = error;
-          return null;
-        }),
-      ), SAGE_SETUP_TIMEOUT_MS, 'Sage setup timed out.');
-    } catch (error) {
-      profileError = error;
-    }
-    if (profileError) {
-      setSageSetupState('unavailable');
-      setSageSetupMessage(humanizeSageSetupFailure(profileError, 'load'));
-      return cachedProfile;
-    }
-    const nextProfile = payload === null
-      ? cachedProfile
-      : normalizeSageProfileSnapshot(payload);
-    writeProfileSnapshot(nextProfile);
-    return nextProfile;
+    return loadChatProfileSnapshot({
+      services,
+      timeoutMs: SAGE_SETUP_TIMEOUT_MS,
+      cachedProfile,
+      normalizeSnapshot: (payload) => payload === null
+        ? cachedProfile
+        : normalizeSageProfileSnapshot(payload),
+      writeSnapshot: writeProfileSnapshot,
+      setSetupState: setSageSetupState,
+      setSetupMessage: setSageSetupMessage,
+      humanizeFailure: humanizeSageSetupFailure,
+      withTimeout,
+      shouldUseFallback: isTransientBackgroundReadError,
+    });
   };
 
   const refreshCanonicalState = async (requestedThreadId = activeThreadId) => {
@@ -3272,85 +3164,28 @@ export function WorkstationChatPane() {
     };
   }, [activeThreadId, bootstrap.workspace.id]);
 
-  const projectedTimelineProjection = useMemo(
-    () => projectCodexTimeline(liveTimelineEvents),
-    [liveTimelineEvents],
-  );
-
-  const projectedTimelineCells = projectedTimelineProjection.cells;
-
-  const projectedSystemCells = useMemo(
-    () => projectedTimelineCells.filter((cell) => (
-      (
-        cell.kind === 'reasoning_summary'
-        || cell.kind === 'exec'
-        || cell.kind === 'tool'
-        || cell.kind === 'web_search'
-        || cell.kind === 'file_change'
-        || cell.kind === 'screenshot'
-        || cell.kind === 'approval_request'
-        || cell.kind === 'status'
-        || cell.kind === 'error'
-      ) && !isProviderGateSystemCell(cell)
-    )),
-    [projectedTimelineCells],
-  );
-
-  const projectedAssistantCell = useMemo(
-    () => {
-      const candidate = projectedTimelineCells.find((cell): cell is Extract<CodexTranscriptCell, { kind: 'assistant' }> => cell.kind === 'assistant') ?? null;
-      return projectedAssistantLooksSynthetic(candidate) ? null : candidate;
-    },
-    [projectedTimelineCells],
-  );
-
-  const pinnedTimelineCells = isSending ? projectedSystemCells : [];
-
-  const pendingApprovalCells = useMemo<CodexTranscriptCell[]>(() => (
-    approvals.map((approval, index) => {
-      const approvalId = readString(approval.approval_id || approval.id) || `approval-${index}`;
-      const approvalRecord = approval as Record<string, unknown>;
-      return {
-        id: approvalId,
-        kind: 'approval_request',
-        prompt: readString(approval.prompt) || `Approval ${index + 1}`,
-        actions: ['allow_once', 'allow_session', 'deny'],
-        status: 'waiting',
-        createdAt: readString(approvalRecord.created_at) || null,
-        metadata: {
-          ...approval,
-          approval_id: approvalId,
-        },
-      };
-    })
-  ), [approvals]);
-
-  const visibleTranscriptCells = useMemo(() => {
-    const canonicalMessages = thread.messages.filter((message) => !isSyntheticTranscriptMessage(message));
-    const nextCells = canonicalMessages
-      .map(workstationMessageToCodexCell)
-      .filter((cell) => !isProviderGateTranscriptCell(cell));
-    if (pendingUserMessage && !canonicalIncludesMessage(canonicalMessages, pendingUserMessage)) {
-      nextCells.push(workstationMessageToCodexCell(pendingUserMessage));
-    }
-    const trailingCell = nextCells[nextCells.length - 1] ?? null;
-    const scrollableSystemCells = isSending ? [] : projectedSystemCells;
-    const shouldInsertStepsBeforeFinalAssistant = scrollableSystemCells.length > 0
-      && trailingCell?.kind === 'assistant';
-    if (shouldInsertStepsBeforeFinalAssistant && trailingCell) {
-      nextCells.pop();
-      nextCells.push(...scrollableSystemCells, trailingCell);
-    } else if (scrollableSystemCells.length > 0) {
-      nextCells.push(...scrollableSystemCells);
-    }
-    if (showProjectedAssistant && projectedAssistantCell) {
-      nextCells.push(projectedAssistantCell);
-    }
-    if (pendingApprovalCells.length > 0) {
-      nextCells.push(...pendingApprovalCells);
-    }
-    return nextCells;
-  }, [isSending, pendingApprovalCells, pendingUserMessage, projectedAssistantCell, projectedSystemCells, showProjectedAssistant, thread.messages]);
+  const {
+    projectedTimelineProjection,
+    projectedTimelineCells,
+    projectedSystemCells,
+    projectedAssistantCell,
+    pinnedTimelineCells,
+    pendingApprovalCells,
+    visibleTranscriptCells,
+  } = useWorkstationTimelineProjection({
+    approvals,
+    threadMessages: thread.messages,
+    pendingUserMessage,
+    isSending,
+    liveTimelineEvents,
+    showProjectedAssistant,
+    isSyntheticTranscriptMessage,
+    canonicalIncludesMessage,
+    isProviderGateTranscriptCell,
+    isProviderGateSystemCell,
+    projectedAssistantLooksSynthetic,
+    readString,
+  });
 
   const hasConversationContent = visibleTranscriptCells.length > 0
     || Boolean(liveTrace);
@@ -3718,6 +3553,45 @@ export function WorkstationChatPane() {
     })),
     [runs],
   );
+  const recentThreadRows = useMemo(() => {
+    const normalized = [
+      {
+        threadId: activeThreadId,
+        title: readString(thread.title) || 'Current chat',
+        updatedAt: null as string | null,
+      },
+      ...recentThreads.map((item) => ({
+        threadId: readString(item.threadId),
+        title: readString(item.title) || 'Chat',
+        updatedAt: readString(item.updatedAt) || null,
+      })),
+    ].filter((item) => item.threadId.length > 0);
+
+    const deduped = new Map<string, {
+      threadId: string;
+      title: string;
+      updatedAt: string | null;
+    }>();
+    for (const item of normalized) {
+      if (!deduped.has(item.threadId)) {
+        deduped.set(item.threadId, item);
+      }
+    }
+
+    return Array.from(deduped.values())
+      .sort((left, right) => {
+        if (left.threadId === activeThreadId) {
+          return -1;
+        }
+        if (right.threadId === activeThreadId) {
+          return 1;
+        }
+        const leftTs = left.updatedAt ? Date.parse(left.updatedAt) : 0;
+        const rightTs = right.updatedAt ? Date.parse(right.updatedAt) : 0;
+        return rightTs - leftTs;
+      })
+      .slice(0, 8);
+  }, [activeThreadId, recentThreads, thread.title]);
   const visibleMemoryItems = filteredMemoryItems.slice(0, 6);
   const pendingDeleteMemory = pendingDeleteMemoryId
     ? memoryItems.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null
@@ -4631,6 +4505,44 @@ export function WorkstationChatPane() {
               ))}
             </div>
           ) : null}
+          <div className="app-chat-history-bar" aria-label="Recent chats">
+            <div className="app-chat-history-bar__head">
+              <span className="app-chat-history-bar__title">Recent chats</span>
+              <AppButton
+                type="button"
+                tone="secondary"
+                onClick={() => {
+                  void startNewThread();
+                }}
+                disabled={isSending}
+              >
+                New chat
+              </AppButton>
+            </div>
+            <div className="app-chat-history-bar__list" role="list">
+              {recentThreadRows.map((item) => {
+                const isActive = item.threadId === activeThreadId;
+                return (
+                  <button
+                    key={item.threadId}
+                    type="button"
+                    role="listitem"
+                    className={`app-chat-history-pill${isActive ? ' app-chat-history-pill--active' : ''}`}
+                    onClick={() => {
+                      void openRecentThread(item.threadId);
+                    }}
+                    disabled={isSending || isActive}
+                    aria-current={isActive ? 'true' : undefined}
+                  >
+                    <span className="app-chat-history-pill__label">{item.title}</span>
+                    <span className="app-chat-history-pill__time">
+                      {isActive ? 'Current' : formatRelativeTime(item.updatedAt)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <ScrollRegion className="app-chat-thread__scroll">
             <div className="app-chat-thread__body">
               {showSageSetupLoadingCard ? (

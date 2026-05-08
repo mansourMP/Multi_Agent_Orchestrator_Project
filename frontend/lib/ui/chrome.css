@@ -1950,6 +1950,88 @@ textarea {
   background: color-mix(in srgb, currentColor 14%, var(--app-bg-panel) 86%);
 }
 
+.app-chat-history-bar {
+  width: min(100%, var(--chat-content-width));
+  margin: 0 auto;
+  padding: 10px 0 2px;
+  display: grid;
+  gap: var(--app-space-2);
+}
+
+.app-chat-history-bar__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-2);
+}
+
+.app-chat-history-bar__title {
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.app-chat-history-bar__list {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-2);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding-bottom: 2px;
+}
+
+.app-chat-history-bar__list::-webkit-scrollbar {
+  display: none;
+}
+
+.app-chat-history-pill {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 72%, transparent 28%);
+  border-radius: var(--app-radius-full);
+  background: color-mix(in srgb, var(--app-bg-panel) 78%, transparent 22%);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  flex: 0 0 auto;
+  max-width: 220px;
+  transition: border-color var(--transition), background-color var(--transition), color var(--transition);
+}
+
+.app-chat-history-pill:hover,
+.app-chat-history-pill:focus-visible {
+  border-color: color-mix(in srgb, var(--app-border-subtle) 92%, transparent 8%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 76%, var(--app-bg-panel) 24%);
+}
+
+.app-chat-history-pill--active {
+  border-color: color-mix(in srgb, var(--color-primary) 52%, var(--app-border-subtle) 48%);
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--app-bg-panel) 90%);
+}
+
+.app-chat-history-pill__label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text-primary);
+  font-size: var(--app-font-13);
+  font-weight: var(--app-weight-medium);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-chat-history-pill__time {
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-11);
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
 .app-chat-thread__body {
   width: min(100%, var(--chat-content-width));
   min-height: 100%;
@@ -3544,6 +3626,14 @@ textarea {
 
   .app-chat-thread__body {
     padding-top: 20px;
+  }
+
+  .app-chat-history-bar {
+    padding-top: 8px;
+  }
+
+  .app-chat-history-bar__head {
+    flex-wrap: wrap;
   }
 
   .app-chat-composer__surface {

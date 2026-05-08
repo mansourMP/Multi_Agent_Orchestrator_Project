@@ -14,8 +14,6 @@ INSTALLABLE_PROOF_PACKAGES = {
     "studio-proof-shop-assistant": "shop-assistant",
     "studio-proof-restaurant-order-taker": "restaurant-order-taker",
     "studio-proof-dental-receptionist": "dental-receptionist",
-    "studio-proof-customer-support-faq": "customer-support-faq",
-    "studio-proof-appointment-booking": "appointment-booking",
 }
 
 
@@ -76,7 +74,7 @@ def test_empty_marketplace_returns_preview_packages(monkeypatch, tmp_path):
     )
     assert provider_payload["count"] == 1
     assert provider_payload["items"][0]["package_id"] == "preview-deepseek-provider"
-    assert template_payload["count"] == 5
+    assert template_payload["count"] == 3
     assert template_payload["items"][0]["kind"] == "agent_template"
 
 
@@ -133,7 +131,7 @@ def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypa
                 "app_id": "weather_console",
                 "hosted_url": "https://apps.weather.example/embed",
                 "allowed_origins": ["https://apps.weather.example"],
-                "permissions": ["app_bridge.read"],
+                "permissions": ["app.summary.read", "app.bridge.sage.request"],
                 "bridge_contracts": {"app_to_sage": ["summary_request"]},
                 "context_envelope": {"user_selected_inputs": ["location"]},
             },
@@ -167,7 +165,8 @@ def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypa
     hosted_contract = mini_apps_service.get_mini_app_contract("ws-1", "weather_console")
     assert hosted_contract["hosted_url"] == "https://apps.weather.example/embed"
     assert hosted_contract["delivery_mode"] == "hosted"
-    assert "app_bridge.read" in hosted_contract["permissions"]
+    assert "app.summary.read" in hosted_contract["permissions"]
+    assert "app.bridge.sage.request" in hosted_contract["permissions"]
 
 
 def test_install_marketplace_provider_projects_into_provider_catalog(monkeypatch, tmp_path):
@@ -331,7 +330,7 @@ def test_governed_package_contracts_cover_templates_connectors_skills_and_mini_a
                 "app_id": "booking_board",
                 "hosted_url": "https://apps.example/booking-board",
                 "allowed_origins": ["https://apps.example"],
-                "permissions": ["mini_app.read"],
+                "permissions": ["app.summary.read"],
                 "bridge_contracts": {"bookings": ["read"]},
             },
         },

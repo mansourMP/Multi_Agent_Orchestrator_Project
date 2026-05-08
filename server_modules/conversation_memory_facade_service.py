@@ -58,6 +58,8 @@ class ConversationMemoryPersistRequest:
 class ConversationMemoryContext:
     prior_messages: List[Dict[str, str]] = field(default_factory=list)
     contextual_blocks: List[str] = field(default_factory=list)
+    stable_contextual_blocks: List[str] = field(default_factory=list)
+    retrieved_contextual_blocks: List[str] = field(default_factory=list)
     semantic_hits: List[Dict[str, Any]] = field(default_factory=list)
     rolled_summary: Optional[str] = None
     business_plan: Optional[str] = None
@@ -91,6 +93,8 @@ def load_context(
         )
         return ConversationMemoryContext(
             contextual_blocks=list(payload.get("contextual_blocks") or []),
+            stable_contextual_blocks=list(payload.get("stable_contextual_blocks") or []),
+            retrieved_contextual_blocks=list(payload.get("retrieved_contextual_blocks") or []),
             semantic_hits=list(payload.get("semantic_hits") or []),
             diagnostics=dict(payload.get("diagnostics") or {}),
         )
@@ -250,6 +254,12 @@ def build_workspace_context_text(
         policy_profile,
         query_text=query_text,
     )
+    if context.stable_contextual_blocks or context.retrieved_contextual_blocks:
+        return workspace_context_memory_adapter.render_workspace_context_text(
+            context.contextual_blocks,
+            stable_blocks=context.stable_contextual_blocks,
+            retrieved_blocks=context.retrieved_contextual_blocks,
+        )
     return workspace_context_memory_adapter.render_workspace_context_text(context.contextual_blocks)
 
 

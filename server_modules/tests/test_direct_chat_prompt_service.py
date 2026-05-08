@@ -59,6 +59,18 @@ class DirectChatPromptServiceTests(unittest.TestCase):
         )
         self.assertEqual(context_only, "Workspace context")
 
+    def test_combine_workspace_context_places_identity_before_workspace_context(self) -> None:
+        combined = direct_chat_prompt_service.combine_workspace_context(
+            system_prompt="Base prompt",
+            workspace_context_text="Workspace context",
+            identity_guardrail="Identity guardrail",
+        )
+
+        self.assertEqual(
+            combined,
+            "Base prompt\n\nIdentity guardrail\n\n## Workspace Context\nWorkspace context",
+        )
+
     def test_time_of_day_suggestion_varies_by_hour(self) -> None:
         self.assertEqual(
             direct_chat_prompt_service.time_of_day_suggestion(

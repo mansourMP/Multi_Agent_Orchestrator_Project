@@ -906,6 +906,77 @@ PROVIDER_MODEL_CATALOG = {
     },
 }
 
+PROVIDER_LIMIT_POLICY = {
+    "openai": {
+        "max_output_tokens": 1600,
+        "max_retry_attempts": 2,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 8.0,
+        "supports_retry_after": True,
+    },
+    "openai-codex": {
+        "max_output_tokens": 1800,
+        "max_retry_attempts": 2,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 8.0,
+        "supports_retry_after": True,
+    },
+    "anthropic": {
+        "max_output_tokens": 1600,
+        "max_retry_attempts": 2,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 8.0,
+        "supports_retry_after": True,
+    },
+    "gemini": {
+        "max_output_tokens": 1700,
+        "max_retry_attempts": 2,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 8.0,
+        "supports_retry_after": True,
+    },
+    "deepseek": {
+        "max_output_tokens": 1400,
+        "max_retry_attempts": 3,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 10.0,
+        "supports_retry_after": True,
+    },
+    "qwen": {
+        "max_output_tokens": 1400,
+        "max_retry_attempts": 2,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 8.0,
+        "supports_retry_after": True,
+    },
+    "mistral": {
+        "max_output_tokens": 1400,
+        "max_retry_attempts": 2,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 8.0,
+        "supports_retry_after": True,
+    },
+    "ollama": {
+        "max_output_tokens": 900,
+        "max_retry_attempts": 1,
+        "backoff_base_seconds": 0.5,
+        "backoff_max_seconds": 2.0,
+        "supports_retry_after": False,
+    },
+    "ollama_cloud": {
+        "max_output_tokens": 1400,
+        "max_retry_attempts": 2,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 8.0,
+        "supports_retry_after": True,
+    },
+}
+
+PROVIDER_LIMIT_ALIASES = {
+    "codex_cli": "openai-codex",
+    "claude_code_cli": "anthropic",
+}
+
 
 @lru_cache(maxsize=1)
 def _platform_provider_catalog_config() -> platform_config_schema.PlatformProviderCatalogConfig:
@@ -1041,6 +1112,39 @@ def context_window_for_model(provider: str | None, model: str | None) -> int | N
     except Exception:
         return None
     return resolved if resolved > 0 else None
+
+
+def provider_limit_policy(provider: str | None, model: str | None = None) -> Dict[str, Any]:
+    provider_token = str(provider or "").strip().lower()
+    provider_id = PROVIDER_LIMIT_ALIASES.get(provider_token, normalize_provider_id(provider_token))
+    defaults = {
+        "max_output_tokens": 1200,
+        "max_retry_attempts": 1,
+        "backoff_base_seconds": 1.0,
+        "backoff_max_seconds": 4.0,
+        "supports_retry_after": True,
+    }
+    policy = dict(defaults)
+    policy.update(dict(PROVIDER_LIMIT_POLICY.get(provider_id) or {}))
+    context_window = context_window_for_model(provider_id, model)
+    if context_window and context_window > 0:
+        model_cap = max(512, min(12000, int(context_window * 0.15)))
+        policy["max_output_tokens"] = max(
+            256,
+            min(
+                int(policy.get("max_output_tokens") or defaults["max_output_tokens"]),
+                model_cap,
+            ),
+        )
+    policy["max_retry_attempts"] = max(1, int(policy.get("max_retry_attempts") or 1))
+    policy["backoff_base_seconds"] = max(0.1, float(policy.get("backoff_base_seconds") or 1.0))
+    policy["backoff_max_seconds"] = max(
+        policy["backoff_base_seconds"],
+        float(policy.get("backoff_max_seconds") or policy["backoff_base_seconds"]),
+    )
+    policy["supports_retry_after"] = bool(policy.get("supports_retry_after", True))
+    policy["provider"] = provider_id
+    return policy
 
 
 def normalize_provider_id(provider: Any) -> str:

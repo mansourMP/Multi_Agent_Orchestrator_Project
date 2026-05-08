@@ -4802,10 +4802,17 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
   padding: 0;
   border-bottom: 1px solid var(--app-border-base);
   background: color-mix(in srgb, var(--app-bg-page) 80%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 4px 24px -8px color-mix(in srgb, black 30%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 4px 30px -10px rgba(0, 0, 0, 0.3);
   overflow: visible;
+}
+
+:root[data-emp-theme='light'] .workstation-shell__topbar,
+body[data-emp-theme='light'] .workstation-shell__topbar,
+body.theme-light .workstation-shell__topbar {
+  background: rgba(255, 255, 255, 0.75);
+  box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.12), 0 1px 0 0 rgba(0, 0, 0, 0.05);
 }
 
 .workstation-shell__body {
@@ -4915,10 +4922,17 @@ body[data-emp-theme='dark'] .account-switcher__link--active {
     top: 0;
     padding-top: env(safe-area-inset-top);
     background: color-mix(in srgb, var(--app-bg-page) 80%, transparent);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
     border-bottom: 1px solid var(--app-border-base);
-    box-shadow: 0 4px 24px -8px color-mix(in srgb, black 30%, transparent);
+    box-shadow: 0 4px 30px -10px rgba(0, 0, 0, 0.3);
+  }
+
+  :root[data-emp-theme='light'] .workstation-shell__topbar,
+  body[data-emp-theme='light'] .workstation-shell__topbar,
+  body.theme-light .workstation-shell__topbar {
+    background: rgba(255, 255, 255, 0.75);
+    box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.12), 0 1px 0 0 rgba(0, 0, 0, 0.05);
   }
 
   .workstation-titlebar__mobile-menu-trigger {

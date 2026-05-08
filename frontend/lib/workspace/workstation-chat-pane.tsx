@@ -863,6 +863,25 @@ function deriveRecentThreads(
   return Array.from(ordered.values());
 }
 
+function summarizeThreadForHistory(thread: CanonicalChatThreadState, fallbackThreadId: string): RecentThreadSummary | null {
+  const threadId = readString(thread.threadId) || readString(fallbackThreadId);
+  if (!threadId) {
+    return null;
+  }
+  const explicitTitle = readString(thread.title);
+  const title = explicitTitle && explicitTitle !== 'Chat'
+    ? explicitTitle
+    : threadId === PRIMARY_THREAD_ID
+      ? 'Primary thread'
+      : threadId;
+  const latestMessage = [...thread.messages].reverse().find((message) => readString(message.createdAt));
+  return {
+    threadId,
+    title,
+    updatedAt: readString(latestMessage?.createdAt) || null,
+  };
+}
+
 function readExecutionTarget(metadata: Record<string, unknown>): string {
   const selected = metadata.execution_target_selected ?? metadata.execution_target;
   return typeof selected === 'string' ? selected.trim().toLowerCase() : '';
@@ -3025,6 +3044,7 @@ export function WorkstationChatPane() {
     }
     setHasEnteredConversationFlow(true);
     const nextThreadId = `thread-${Date.now()}`;
+    const previousThread = summarizeThreadForHistory(threadRef.current, activeThreadIdRef.current || activeThreadId);
     setDraft('');
     setStatusMessage(null);
     updatePendingUserMessage(null);
@@ -3039,14 +3059,11 @@ export function WorkstationChatPane() {
       activeThreadIdRef.current = nextThreadId;
       setActiveThreadId(nextThreadId);
       await refreshCanonicalState(nextThreadId);
-      writeRecentThreads([
-        {
-          threadId: nextThreadId,
-          title: readString(seed?.title) || 'New thread',
-          updatedAt: new Date().toISOString(),
-        },
-        ...recentThreads.filter((item) => item.threadId !== nextThreadId).slice(0, 7),
-      ]);
+      const nextRecentThreads = [
+        previousThread,
+        ...recentThreads.filter((item) => item.threadId !== nextThreadId && item.threadId !== previousThread?.threadId),
+      ].filter((item): item is RecentThreadSummary => item !== null).slice(0, 8);
+      writeRecentThreads(nextRecentThreads);
       if (readString(seed?.sourceRunId) || readString(seed?.sourceThreadId)) {
         setStatusMessage('Started a new thread from recent activity.');
       }

@@ -43,4 +43,21 @@ test.describe('launch sage-first smoke', () => {
       expect(visibleText.includes(term.toLowerCase())).toBeFalsy();
     }
   });
+
+  test('web chat exposes recent chats and preserves the previous chat when starting a new one', async ({ page }) => {
+    await loginAsOwner(page);
+    await page.goto('/', { waitUntil: 'networkidle' });
+
+    const historyBar = page.getByLabel('Recent chats');
+    await expect(historyBar).toBeVisible();
+    await expect(historyBar.getByText('Recent chats')).toBeVisible();
+    await expect(historyBar.getByRole('button', { name: /new chat/i })).toBeVisible();
+    await expect(historyBar.locator('.app-chat-history-pill--active')).toContainText(/current/i);
+
+    await historyBar.getByRole('button', { name: /new chat/i }).click();
+
+    await expect(historyBar.locator('.app-chat-history-pill')).toHaveCount(2);
+    await expect(historyBar.getByText('Primary thread')).toBeVisible();
+    await expect(historyBar.locator('.app-chat-history-pill--active')).toContainText(/current/i);
+  });
 });

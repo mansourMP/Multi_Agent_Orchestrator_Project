@@ -3,7 +3,12 @@ from __future__ import annotations
 import csv
 import io
 import re
+import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from server_modules import google_drive_api
+from server_modules import vault_store
+from server_modules import vault_helpers
 
 
 REQUIRED_PRODUCT_CATALOG_COLUMNS = (
@@ -117,6 +122,46 @@ def parse_product_catalog_csv(csv_text: str) -> List[Dict[str, Any]]:
     return rows
 
 
+_CATALOG_CACHE: Dict[str, Dict[str, Any]] = {}
+_CATALOG_CACHE_TTL_SECONDS = 300
+
+
+def _catalog_cache_key(workspace_id: str, deployed_agent_id: str, connector_id: Optional[str], spreadsheet_id: Optional[str]) -> str:
+    return f"catalog:{workspace_id}:{deployed_agent_id}:{connector_id or 'none'}:{spreadsheet_id or 'none'}"
+
+
+def _get_cached_catalog_rows(cache_key: str) -> Optional[Dict[str, Any]]:
+    entry = _CATALOG_CACHE.get(cache_key)
+    if not isinstance(entry, dict):
+        return None
+    if time.time() > entry.get("expires_at", 0):
+        _CATALOG_CACHE.pop(cache_key, None)
+        return None
+    return entry
+
+
+def _set_cached_catalog_rows(cache_key: str, rows: List[Dict[str, Any]]) -> None:
+    _CATALOG_CACHE[cache_key] = {
+        "rows": rows,
+        "last_synced_at": time.time(),
+        "expires_at": time.time() + _CATALOG_CACHE_TTL_SECONDS,
+    }
+
+
+def _resolve_connector_credentials(credential_id: str, workspace_id: str) -> Optional[Dict[str, Any]]:
+    """Resolve a connector credential only when it belongs to this workspace."""
+    try:
+        return vault_helpers.resolve_vault_credential(
+            vault_store.load_vault,
+            vault_store._openssl_decrypt,
+            credential_id,
+            workspace_id=workspace_id,
+        )
+    except Exception:
+        pass
+    return None
+
+
 def _source_candidates(metadata: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     live_data = _coerce_dict(metadata.get("live_data_connectors"))
     for key in ("product_catalog", "catalog", "inventory"):
@@ -174,27 +219,53 @@ def resolve_deployed_agent_product_catalog(
         if source_agent_id and source_agent_id != agent_id:
             raise PermissionError("Product catalog source is outside this deployed agent.")
 
+        last_synced_at: Optional[float] = None
         if isinstance(source.get("rows"), list):
             rows = [normalize_product_catalog_row(_coerce_dict(item)) for item in _coerce_list(source.get("rows"))]
         elif _normalize_optional_text(source.get("csv_text")):
             rows = parse_product_catalog_csv(_normalize_text(source.get("csv_text")))
+        elif _normalize_optional_text(source.get("spreadsheet_id")):
+            spreadsheet_id = _normalize_text(source.get("spreadsheet_id"))
+            source_connector_id = _normalize_optional_text(source.get("connector_id"))
+            cache_key = _catalog_cache_key(requested_workspace_id, agent_id, source_connector_id, spreadsheet_id)
+            cached = _get_cached_catalog_rows(cache_key)
+            if cached is not None:
+                rows = cached["rows"]
+                last_synced_at = cached.get("last_synced_at")
+            else:
+                credentials: Optional[Dict[str, Any]] = None
+                if source_connector_id:
+                    credentials = _resolve_connector_credentials(source_connector_id, requested_workspace_id)
+                if not credentials:
+                    raise ValueError(f"Product catalog connector credentials are not available for {source_connector_id}.")
+                raw_rows = google_drive_api.google_workspace_read_spreadsheet(
+                    credentials,
+                    spreadsheet_id,
+                    range=_normalize_text(source.get("range"), default="Sheet1"),
+                )
+                rows = [normalize_product_catalog_row(_coerce_dict(item)) for item in raw_rows]
+                _set_cached_catalog_rows(cache_key, rows)
+                last_synced_at = time.time()
         else:
-            raise ValueError("Product catalog source must provide rows or csv_text for this proof path.")
+            raise ValueError("Product catalog source must provide rows, csv_text, or spreadsheet_id for this proof path.")
         if not rows:
             raise ValueError("Product catalog source contains no rows.")
+        source_meta: Dict[str, Any] = {
+            "source_id": _normalize_optional_text(source.get("source_id") or source.get("id")),
+            "connector_id": _normalize_optional_text(source.get("connector_id")),
+            "connector_type": _normalize_text(
+                source.get("connector_type") or source.get("type"),
+                default="spreadsheet",
+            ),
+            "workspace_id": requested_workspace_id,
+            "deployed_agent_id": agent_id,
+            "read_only": True,
+        }
+        if last_synced_at is not None:
+            source_meta["last_synced_at"] = last_synced_at
         return {
             "rows": rows,
-            "source": {
-                "source_id": _normalize_optional_text(source.get("source_id") or source.get("id")),
-                "connector_id": _normalize_optional_text(source.get("connector_id")),
-                "connector_type": _normalize_text(
-                    source.get("connector_type") or source.get("type"),
-                    default="spreadsheet",
-                ),
-                "workspace_id": requested_workspace_id,
-                "deployed_agent_id": agent_id,
-                "read_only": True,
-            },
+            "source": source_meta,
         }
     raise ValueError("No product catalog source is configured for this deployed agent.")
 

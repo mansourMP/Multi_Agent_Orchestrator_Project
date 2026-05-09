@@ -74,7 +74,7 @@ MAX_MARKETPLACE_DOMAIN_COUNT = 32
 PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
     {
         "package_id": "preview-restaurant-orders",
-        "kind": "app",
+        "kind": "agent_template",
         "label": "Restaurant Orders",
         "description": "Telegram ordering template with menu lookup, order confirmation, and human escalation.",
         "category": "Specialist template",
@@ -88,18 +88,16 @@ PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
             "monetization_kind": "free",
             "accounting_hook": {"ledger_key": "studio.restaurant_orders", "hook_kind": "template_install"},
         },
-        "app": {
-            "app_id": "studio.restaurant_orders",
-            "hosted_url": "/w/{workspace_id}/studio?template=restaurant_orders",
-            "version": "0.1.0",
-            "release_channel": "preview",
-            "permissions": ["telegram:send", "spreadsheet:read"],
-            "bridge_contracts": {"messages": ["read", "write"], "catalog": ["read"]},
+        "agent_template": {
+            "template_id": "restaurant_orders",
+            "required_connectors": ["telegram"],
+            "suggested_tools": ["menu_lookup"],
+            "launch_checklist": ["Connect Telegram bot", "Upload menu spreadsheet"],
         },
     },
     {
         "package_id": "preview-auto-parts-sales",
-        "kind": "app",
+        "kind": "agent_template",
         "label": "Auto Parts Sales",
         "description": "Qualifies car model, requested part, catalog availability, and next customer action.",
         "category": "Specialist template",
@@ -113,18 +111,16 @@ PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
             "monetization_kind": "free",
             "accounting_hook": {"ledger_key": "studio.auto_parts_sales", "hook_kind": "template_install"},
         },
-        "app": {
-            "app_id": "studio.auto_parts_sales",
-            "hosted_url": "/w/{workspace_id}/studio?template=auto_parts_sales",
-            "version": "0.1.0",
-            "release_channel": "preview",
-            "permissions": ["telegram:send", "spreadsheet:read"],
-            "bridge_contracts": {"messages": ["read", "write"], "catalog": ["read"]},
+        "agent_template": {
+            "template_id": "auto_parts_sales",
+            "required_connectors": ["telegram"],
+            "suggested_tools": ["catalog_lookup"],
+            "launch_checklist": ["Connect Telegram bot", "Upload parts catalog"],
         },
     },
     {
         "package_id": "preview-spreadsheet-catalog",
-        "kind": "app",
+        "kind": "agent_template",
         "label": "Spreadsheet Catalog",
         "description": "Answers product, SKU, menu, or inventory questions from a trusted spreadsheet.",
         "category": "Data",
@@ -138,18 +134,16 @@ PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
             "monetization_kind": "free",
             "accounting_hook": {"ledger_key": "tool.spreadsheet_catalog", "hook_kind": "package_install"},
         },
-        "app": {
-            "app_id": "tool.spreadsheet_catalog",
-            "hosted_url": "/w/{workspace_id}/studio?template=spreadsheet_catalog",
-            "version": "0.1.0",
-            "release_channel": "preview",
-            "permissions": ["spreadsheet:read", "spreadsheet:append"],
-            "bridge_contracts": {"spreadsheet": ["read", "write"]},
+        "agent_template": {
+            "template_id": "spreadsheet_catalog",
+            "required_connectors": ["google_sheets"],
+            "suggested_tools": ["spreadsheet_read"],
+            "launch_checklist": ["Connect Google Sheets", "Map catalog columns"],
         },
     },
     {
         "package_id": "preview-web-search",
-        "kind": "app",
+        "kind": "skill",
         "label": "Web Search",
         "description": "Lets Sage search the web with audit-visible tool calls and governed usage.",
         "category": "Tool",
@@ -163,18 +157,16 @@ PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
             "monetization_kind": "metered",
             "accounting_hook": {"ledger_key": "tool.web_search", "hook_kind": "tool_usage"},
         },
-        "app": {
-            "app_id": "tool.web_search",
-            "hosted_url": "/tools/web-search",
-            "version": "0.1.0",
-            "release_channel": "preview",
+        "skill": {
+            "skill_id": "web_search",
+            "runtime": "hosted",
             "permissions": ["web:search"],
-            "bridge_contracts": {"web": ["search"]},
+            "tool_contracts": {"web": ["search"]},
         },
     },
     {
         "package_id": "preview-image-generation",
-        "kind": "app",
+        "kind": "skill",
         "label": "Image Generation",
         "description": "Image generation package using configured BYOK or hosted media credits.",
         "category": "Media",
@@ -188,13 +180,11 @@ PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
             "monetization_kind": "metered",
             "accounting_hook": {"ledger_key": "tool.generate_image", "hook_kind": "tool_usage"},
         },
-        "app": {
-            "app_id": "tool.generate_image",
-            "hosted_url": "/tools/generate-image",
-            "version": "0.1.0",
-            "release_channel": "preview",
+        "skill": {
+            "skill_id": "generate_image",
+            "runtime": "hosted",
             "permissions": ["media:image_generate"],
-            "bridge_contracts": {"media": ["image_generate"]},
+            "tool_contracts": {"media": ["image_generate"]},
         },
     },
     {
@@ -821,14 +811,23 @@ def _preview_marketplace_packages() -> Dict[str, Dict[str, Any]]:
             continue
         package_id = str(package.get("package_id") or "").strip()
         installable_seed = package_id in INSTALLABLE_SEED_PACKAGE_IDS
-        package["preview_only"] = not installable_seed
-        if installable_seed:
+        existing_review = str(package.get("review_state") or "").strip()
+        existing_verification = str(package.get("verification_status") or "").strip()
+        existing_posture = str(package.get("policy_posture") or "").strip()
+        has_trust_metadata = (
+            existing_review == "approved"
+            and existing_verification in {"verified", "partner"}
+            and existing_posture == "governed"
+        )
+        package["preview_only"] = not (installable_seed or has_trust_metadata)
+        if installable_seed or has_trust_metadata:
             package["install_target"] = INSTALL_TARGETS.get(str(package.get("kind") or "").strip(), "marketplace_contract")
             package["review_state"] = "approved"
             package["verification_status"] = "verified"
             package["policy_posture"] = "governed"
             package["approval_required"] = False
-            package["marketplace_proof"] = _proof_from_seed_contract(package)
+            if installable_seed:
+                package["marketplace_proof"] = _proof_from_seed_contract(package)
         else:
             package["install_target"] = "preview"
         package["analytics"] = {
@@ -1140,11 +1139,20 @@ def install_marketplace_package(
     entry["analytics"] = package_analytics
 
     target_payload: Dict[str, Any] = {}
-    if str(entry.get("kind") or "").strip() == "app":
+    kind = str(entry.get("kind") or "").strip()
+    if kind == "app":
         target_payload["app_registry"] = _upsert_marketplace_app_registry_item(entry, installed=True)
         target_payload["mini_app_contract"] = _sync_marketplace_app_to_mini_apps(normalized_workspace_id, entry)
-    if str(entry.get("kind") or "").strip() == "mini_app":
+    if kind == "mini_app":
         target_payload["mini_app_contract"] = _sync_marketplace_app_to_mini_apps(normalized_workspace_id, entry)
+    if kind == "provider":
+        target_payload["provider_catalog"] = _coerce_dict(entry.get("provider"))
+    if kind == "connector":
+        target_payload["connector_catalog"] = _coerce_dict(entry.get("connector"))
+    if kind == "skill":
+        target_payload["skill_catalog"] = _coerce_dict(entry.get("skill"))
+    if kind == "agent_template":
+        target_payload["template_catalog"] = _coerce_dict(entry.get("agent_template"))
 
     install_record = {
         "package_id": normalized_package_id,

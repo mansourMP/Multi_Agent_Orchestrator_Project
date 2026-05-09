@@ -269,7 +269,9 @@ export async function signup(
   email: string,
   password: string,
   name?: string,
+  pilotInviteCode?: string,
 ): Promise<Record<string, unknown> | null> {
+  const cleanPilotInviteCode = String(pilotInviteCode || '').trim();
   return requestAuth<Record<string, unknown> | null>('/api/auth/signup', {
     method: 'POST',
     body: {
@@ -278,6 +280,7 @@ export async function signup(
       name,
       channel: 'web',
       acquisition_token: channelAttributionToken(),
+      ...(cleanPilotInviteCode ? { pilot_invite_code: cleanPilotInviteCode } : {}),
     },
   });
 }

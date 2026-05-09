@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 
+from server_modules import activity_ledger_service
 from server_modules import channel_execution_service
+from server_modules import control_plane_repository
 from server_modules import deployed_agent_service
+from server_modules import run_state_repository
+from server_modules import studio_proof_agent_seed_service
+from server_modules import usage_accounting_service
 from server_modules.channel_routing_models import ChannelRoutingContext
 from server_modules.channel_turn_request_service import build_routing_context
 
@@ -27,6 +32,7 @@ def _context(
     *,
     deployed_agent: Dict[str, Any] | None = None,
     connector_id: str | None = "gsheet-products-1",
+    message: str = "Do you have Nike Air Max 90?",
 ) -> ChannelRoutingContext:
     return ChannelRoutingContext(
         tenant_id="tenant-1",
@@ -37,7 +43,7 @@ def _context(
         actor_display_name="Customer",
         session_key="session-1",
         thread_id="thread-1",
-        message="Do you have Nike Air Max 90?",
+        message=message,
         owner_type="specialist",
         install={"id": "install-1", "owner_user_id": "owner-1"},
         manifest=None,
@@ -47,7 +53,7 @@ def _context(
         runtime_profile_id=None,
         master_install_id="install-1",
         shared_metadata={"request_id": "req-1"},
-        turn_request={"message": "Do you have Nike Air Max 90?"},
+        turn_request={"message": message},
         execution_owner={"user_id": "owner-1", "role": "owner", "is_admin": True},
         connector_id=connector_id,
         deployed_agent=deployed_agent,
@@ -183,3 +189,217 @@ def test_build_routing_context_extracts_connector_id_from_metadata() -> None:
     )
 
     assert context.connector_id == "gsheet-products-1"
+
+
+@pytest.mark.anyio
+async def test_channel_end_to_end_catalog_answer_persists_activity_and_billing(monkeypatch: pytest.MonkeyPatch):
+    """Full pipeline: Telegram inbound → Shop Assistant → catalog lookup → activity → billing ledger."""
+    monkeypatch.setattr(
+        channel_execution_service.channel_execution_quota_adapter,
+        "channel_execution_slot",
+        lambda **kwargs: _QuotaSlot(),
+    )
+
+    demo_rows = studio_proof_agent_seed_service.get_studio_proof_agent_seed_contract("shop-assistant")["revenue_proof"]["demo_catalog_rows"]
+
+    async def fake_get_workspace(workspace_id):
+        return {"tenant_id": "tenant-1", "workspace_id": "ws-1"}
+
+    async def fake_get_deployed_agent(deployed_agent_id, tenant_id, owner_workspace_id):
+        return {
+            "id": "dagent-shop",
+            "tenant_id": "tenant-1",
+            "owner_workspace_id": "ws-1",
+            "template_slug": "shop-assistant",
+            "metadata": {
+                "public_tier": "pro",
+                "effective_provider": "openai",
+                "effective_model": "gpt-4o",
+                "live_data_connectors": {
+                    "product_catalog": {
+                        "source_id": "demo-catalog",
+                        "connector_id": "gsheet-products-1",
+                        "connector_type": "demo_catalog",
+                        "workspace_id": "ws-1",
+                        "deployed_agent_id": "dagent-shop",
+                        "rows": demo_rows,
+                    }
+                },
+            },
+        }
+
+    captured_activity: List[Dict[str, Any]] = []
+    captured_ledger: List[Dict[str, Any]] = []
+
+    async def fake_append_activity_event(**kwargs):
+        captured_activity.append(dict(kwargs))
+
+    async def fake_record_ledger(**kwargs):
+        captured_ledger.append(dict(kwargs))
+
+    def fake_build_usage_record(*, run_id, tenant_id, workspace_id, deployed_agent_id, source_surface, effective_provider, effective_model, input_tokens, output_tokens, total_tokens, allow_provider_fallback):
+        return {
+            "provider": effective_provider,
+            "model": effective_model,
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": 0.0045,
+            "pricing_known": True,
+            "pricing_source": "pricing_registry",
+        }
+
+    monkeypatch.setattr(control_plane_repository, "get_workspace_by_id", fake_get_workspace)
+    monkeypatch.setattr(control_plane_repository, "get_deployed_agent_by_id", fake_get_deployed_agent)
+    monkeypatch.setattr(activity_ledger_service, "append_activity_event", fake_append_activity_event)
+    monkeypatch.setattr(control_plane_repository, "record_deployed_agent_monthly_cost_ledger_entry", fake_record_ledger)
+    monkeypatch.setattr(usage_accounting_service, "build_usage_accounting_record", fake_build_usage_record)
+
+    result = await channel_execution_service.execute_prepared_channel_turn(
+        context=_context(
+            deployed_agent={
+                "template_slug": "shop-assistant",
+                "metadata": {
+                    "live_data_connectors": {
+                        "product_catalog": {
+                            "source_id": "demo-catalog",
+                            "connector_type": "demo_catalog",
+                            "rows": demo_rows,
+                        }
+                    }
+                },
+            }
+        ),
+        execute_turn=_generic_turn,
+        wait_for=_wait_for,
+    )
+
+    assert result.status == "answered"
+    assert "Nike Air Max 90" in result.reply
+    assert result.metadata["response_class"] == "shop_assistant"
+
+    # Activity events persisted
+    activity_classes = {evt.get("event_class") for evt in captured_activity}
+    assert "studio.proof.shop_assistant.inventory_hit" in activity_classes
+    assert "studio.proof.shop_assistant.credit_consumed" in activity_classes
+
+    # Billing ledger persisted
+    assert len(captured_ledger) >= 1
+    ai_entries = [e for e in captured_ledger if e.get("metadata", {}).get("credit_item_type", "").startswith("ai_")]
+    assert len(ai_entries) >= 1
+    assert ai_entries[0]["estimated_cost_usd"] == 0.0045
+    assert ai_entries[0]["metadata"]["source_surface"] == "shop_assistant"
+
+
+@pytest.mark.anyio
+async def test_channel_end_to_end_discount_approval_creates_durable_approval(monkeypatch: pytest.MonkeyPatch):
+    """Full pipeline: Telegram inbound → Shop Assistant → discount gate → durable approval + activity + billing."""
+    monkeypatch.setattr(
+        channel_execution_service.channel_execution_quota_adapter,
+        "channel_execution_slot",
+        lambda **kwargs: _QuotaSlot(),
+    )
+
+    demo_rows = studio_proof_agent_seed_service.get_studio_proof_agent_seed_contract("shop-assistant")["revenue_proof"]["demo_catalog_rows"]
+
+    async def fake_get_workspace(workspace_id):
+        return {"tenant_id": "tenant-1", "workspace_id": "ws-1"}
+
+    async def fake_get_deployed_agent(deployed_agent_id, tenant_id, owner_workspace_id):
+        return {
+            "id": "dagent-shop",
+            "tenant_id": "tenant-1",
+            "owner_workspace_id": "ws-1",
+            "template_slug": "shop-assistant",
+            "metadata": {
+                "public_tier": "pro",
+                "effective_provider": "openai",
+                "effective_model": "gpt-4o",
+                "live_data_connectors": {
+                    "product_catalog": {
+                        "source_id": "demo-catalog",
+                        "connector_id": "gsheet-products-1",
+                        "connector_type": "demo_catalog",
+                        "workspace_id": "ws-1",
+                        "deployed_agent_id": "dagent-shop",
+                        "rows": demo_rows,
+                    }
+                },
+            },
+        }
+
+    captured_approvals: List[Dict[str, Any]] = []
+    captured_activity: List[Dict[str, Any]] = []
+    captured_ledger: List[Dict[str, Any]] = []
+
+    async def fake_append_activity_event(**kwargs):
+        captured_activity.append(dict(kwargs))
+
+    async def fake_record_ledger(**kwargs):
+        captured_ledger.append(dict(kwargs))
+
+    def fake_create_approval(run_id, approval_id, request_payload, actor, trace_id, *, metadata=None, expires_at=None):
+        captured_approvals.append({
+            "run_id": run_id,
+            "approval_id": approval_id,
+            "request_payload": request_payload,
+            "metadata": metadata,
+        })
+        return {"approval_id": approval_id}
+
+    def fake_build_usage_record(*, run_id, tenant_id, workspace_id, deployed_agent_id, source_surface, effective_provider, effective_model, input_tokens, output_tokens, total_tokens, allow_provider_fallback):
+        return {
+            "provider": effective_provider,
+            "model": effective_model,
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": 0.0045,
+            "pricing_known": True,
+            "pricing_source": "pricing_registry",
+        }
+
+    monkeypatch.setattr(control_plane_repository, "get_workspace_by_id", fake_get_workspace)
+    monkeypatch.setattr(control_plane_repository, "get_deployed_agent_by_id", fake_get_deployed_agent)
+    monkeypatch.setattr(activity_ledger_service, "append_activity_event", fake_append_activity_event)
+    monkeypatch.setattr(control_plane_repository, "record_deployed_agent_monthly_cost_ledger_entry", fake_record_ledger)
+    monkeypatch.setattr(run_state_repository, "sync_create_or_update_approval_request", fake_create_approval)
+    monkeypatch.setattr(usage_accounting_service, "build_usage_accounting_record", fake_build_usage_record)
+
+    result = await channel_execution_service.execute_prepared_channel_turn(
+        context=_context(
+            deployed_agent={
+                "template_slug": "shop-assistant",
+                "metadata": {
+                    "live_data_connectors": {
+                        "product_catalog": {
+                            "source_id": "demo-catalog",
+                            "connector_type": "demo_catalog",
+                            "rows": demo_rows,
+                        }
+                    }
+                },
+            },
+            message="Can I get a discount on Nike Air Max?",
+        ),
+        execute_turn=_generic_turn,
+        wait_for=_wait_for,
+    )
+
+    assert result.status == "completed"
+    assert result.metadata["approval_required"] is True
+    assert result.metadata["approval_gate"] == "discount"
+
+    # Durable approval created
+    assert len(captured_approvals) == 1
+    assert captured_approvals[0]["metadata"]["source_type"] == "deployed_agent"
+    assert captured_approvals[0]["metadata"]["gate"] == "discount"
+
+    # Activity events persisted
+    activity_classes = {evt.get("event_class") for evt in captured_activity}
+    assert "studio.proof.shop_assistant.owner_approval_required" in activity_classes
+    assert "studio.proof.shop_assistant.credit_consumed" in activity_classes
+
+    # Billing ledger persisted
+    ai_entries = [e for e in captured_ledger if e.get("metadata", {}).get("credit_item_type", "").startswith("ai_")]
+    assert len(ai_entries) >= 1

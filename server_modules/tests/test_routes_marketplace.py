@@ -168,9 +168,16 @@ async def test_marketplace_route_lists_backend_seed_agent_templates(monkeypatch:
             list_response = await client.get("/api/workspaces/ws-1/marketplace/packages?kind=agent_template")
             assert list_response.status_code == 200
             payload = list_response.json()
-            assert payload["count"] == 3
+            assert payload["count"] == 6
             items = {item["package"]["template_id"]: item for item in payload["items"]}
-            assert set(items) == {"shop-assistant", "dental-receptionist", "restaurant-order-taker"}
+            assert set(items) == {
+                "shop-assistant",
+                "dental-receptionist",
+                "restaurant-order-taker",
+                "restaurant_orders",
+                "auto_parts_sales",
+                "spreadsheet_catalog",
+            }
             assert items["shop-assistant"]["kind"] == "agent_template"
             assert items["shop-assistant"]["runtime_truth"]["open_href"] == "/w/ws-1/studio?proof_agent=shop-assistant"
 

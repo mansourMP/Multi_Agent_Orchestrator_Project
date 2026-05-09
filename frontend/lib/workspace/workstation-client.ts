@@ -731,6 +731,8 @@ export type WorkstationClientPaths = {
   billingSummary: string;
   billingCheckout: string;
   billingPortal: string;
+  billingCreditPurchase: string;
+  billingCreditBalance: string;
   notificationsStream: (options?: WorkstationClientStreamOptions) => string;
   channelEventsStream: (options?: WorkstationClientStreamOptions) => string;
 };
@@ -1058,6 +1060,12 @@ export type WorkstationClient = {
   createBillingPortalSession: (options?: {
     returnUrl?: string | null;
   }) => Promise<Record<string, unknown> | null>;
+  createCreditPurchaseSession: (options: {
+    amountUsd: number;
+    successUrl?: string | null;
+    cancelUrl?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  getCreditBalance: () => Promise<Record<string, unknown>>;
   createSession: (options: {
     actor: WorkstationSessionActor;
     threadId: string;
@@ -1367,6 +1375,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     billingSummary: `/api/billing/summary${buildQueryString({ workspace_id: workspaceId })}`,
     billingCheckout: '/api/billing/checkout',
     billingPortal: '/api/billing/portal',
+    billingCreditPurchase: '/api/billing/credits/purchase',
+    billingCreditBalance: `/api/billing/credits/balance${buildQueryString({ workspace_id: workspaceId })}`,
     notificationsStream: (options = {}) =>
       `/api/notifications${buildQueryString({
         workspace_id: workspaceId,
@@ -3032,6 +3042,26 @@ export function createWorkstationClient(
         },
         policy: WRITE_REQUEST_POLICY,
       }),
+    createCreditPurchaseSession: ({ amountUsd, successUrl, cancelUrl }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.billingCreditPurchase,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            amount_usd: amountUsd,
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    getCreditBalance: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.billingCreditBalance,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
     createSession,
     persistUserTurn,
     submitTurn,

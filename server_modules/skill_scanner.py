@@ -400,6 +400,24 @@ def _scan_js_ts_conservative(source: _Source) -> List[Dict[str, Any]]:
             "Timer-based code injection",
             "JS/TS skill passes a string to setInterval, which evaluates it as code.",
         ),
+        (
+            r"\bReflect\.construct\s*\(",
+            "reflect_construct",
+            "Reflect.construct evasion",
+            "JS/TS skill uses Reflect.construct to bypass direct Function constructor detection.",
+        ),
+        (
+            r"\bnew\s+Worker\s*\(\s*['\"]data:",
+            "worker_data_url",
+            "Worker data URL",
+            "JS/TS skill creates a Worker from a data URL, which can execute arbitrary code in a separate thread.",
+        ),
+        (
+            r"\bimportScripts\s*\(",
+            "importscripts_url",
+            "importScripts usage",
+            "JS/TS skill uses importScripts to load external scripts dynamically.",
+        ),
     )
     for pattern, code, title, detail in high_risk_patterns:
         _add_regex_findings(

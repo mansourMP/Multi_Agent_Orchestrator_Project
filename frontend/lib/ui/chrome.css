@@ -10520,3 +10520,251 @@ body.theme-light .workstation-shell__topbar {
     position: static;
   }
 }
+
+/* ── Investor Demo Pane ────────────────────────────────────────────── */
+
+.investor-demo-pane {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--app-space-6) var(--app-space-4);
+}
+
+.investor-demo-pane__header {
+  margin-bottom: var(--app-space-6);
+  text-align: center;
+}
+
+.investor-demo-pane__title {
+  font-size: var(--app-font-24);
+  font-weight: 600;
+  margin-bottom: var(--app-space-2);
+  color: var(--app-text-primary);
+}
+
+.investor-demo-pane__subtitle {
+  font-size: var(--app-font-14);
+  color: var(--app-text-secondary);
+  margin-bottom: var(--app-space-4);
+}
+
+.investor-demo-pane__progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--app-surface-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: var(--app-space-2);
+}
+
+.investor-demo-pane__progress-fill {
+  height: 100%;
+  background: var(--app-accent);
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+
+.investor-demo-pane__progress-label {
+  font-size: var(--app-font-12);
+  color: var(--app-text-tertiary);
+  margin-bottom: var(--app-space-4);
+}
+
+.investor-demo-pane__header-actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--app-space-3);
+}
+
+.investor-demo-pane__steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-4);
+}
+
+.investor-demo-pane__step {
+  display: flex;
+  gap: var(--app-space-3);
+  padding: var(--app-space-4);
+  border-radius: 12px;
+  border: 1px solid var(--app-border);
+  background: var(--app-surface-secondary);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.investor-demo-pane__step--current {
+  border-color: var(--app-accent);
+  box-shadow: 0 0 0 1px var(--app-accent);
+}
+
+.investor-demo-pane__step--completed {
+  opacity: 0.85;
+  border-color: var(--app-success);
+}
+
+.investor-demo-pane__step-marker {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--app-text-tertiary);
+}
+
+.investor-demo-pane__step--current .investor-demo-pane__step-marker {
+  color: var(--app-accent);
+}
+
+.investor-demo-pane__step--completed .investor-demo-pane__step-marker {
+  color: var(--app-success);
+}
+
+.investor-demo-pane__step-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.investor-demo-pane__step-header {
+  margin-bottom: var(--app-space-2);
+}
+
+.investor-demo-pane__step-number {
+  font-size: var(--app-font-11);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--app-text-tertiary);
+}
+
+.investor-demo-pane__step-title {
+  font-size: var(--app-font-16);
+  font-weight: 600;
+  margin: 0;
+  color: var(--app-text-primary);
+}
+
+.investor-demo-pane__step-description {
+  font-size: var(--app-font-14);
+  color: var(--app-text-secondary);
+  margin-bottom: var(--app-space-2);
+  line-height: 1.5;
+}
+
+.investor-demo-pane__step-proof {
+  font-size: var(--app-font-12);
+  color: var(--app-text-tertiary);
+  background: var(--app-surface-tertiary);
+  padding: var(--app-space-2) var(--app-space-3);
+  border-radius: 8px;
+  margin-bottom: var(--app-space-3);
+  line-height: 1.4;
+}
+
+.investor-demo-pane__step-proof strong {
+  color: var(--app-text-secondary);
+}
+
+.investor-demo-pane__step-actions {
+  display: flex;
+  gap: var(--app-space-3);
+  flex-wrap: wrap;
+}
+
+.investor-demo-pane__loading {
+  padding: var(--app-space-8);
+  text-align: center;
+  color: var(--app-text-secondary);
+}
+
+/* ── Invite Landing Page ───────────────────────────────────────────── */
+
+.invite-landing {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--app-space-6);
+  background: var(--app-surface-primary);
+}
+
+.invite-landing__card {
+  max-width: 480px;
+  width: 100%;
+  padding: var(--app-space-8);
+  border-radius: 16px;
+  background: var(--app-surface-secondary);
+  border: 1px solid var(--app-border);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--app-space-4);
+}
+
+.invite-landing__card--valid {
+  border-color: var(--app-success);
+}
+
+.invite-landing__card--invalid {
+  border-color: var(--app-danger);
+}
+
+.invite-landing__card h1 {
+  font-size: var(--app-font-20);
+  font-weight: 600;
+  margin: 0;
+  color: var(--app-text-primary);
+}
+
+.invite-landing__subtitle {
+  font-size: var(--app-font-14);
+  color: var(--app-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.invite-landing__spinner {
+  animation: spin 1s linear infinite;
+  color: var(--app-accent);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.invite-landing__details {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-2);
+  background: var(--app-surface-tertiary);
+  padding: var(--app-space-4);
+  border-radius: 12px;
+}
+
+.invite-landing__detail {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--app-font-14);
+}
+
+.invite-landing__detail-label {
+  color: var(--app-text-tertiary);
+}
+
+.invite-landing__detail-value {
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+
+.invite-landing__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-3);
+  width: 100%;
+  margin-top: var(--app-space-2);
+}

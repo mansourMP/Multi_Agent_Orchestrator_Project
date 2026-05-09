@@ -67,14 +67,15 @@ def test_empty_marketplace_returns_preview_packages(monkeypatch, tmp_path):
     assert shop_assistant["marketplace_proof"]["vertical"] == "shop_assistant"
     assert "answers_catalog_question_without_inventory_hallucination" in shop_assistant["marketplace_proof"]["golden_tests"]
     assert shop_assistant["package"]["template_id"] == "shop-assistant"
-    assert all(
-        item["preview_only"] is True
-        for item in payload["items"]
+    preview_packages = [
+        item for item in payload["items"]
         if item["package_id"] not in INSTALLABLE_PROOF_PACKAGES
-    )
+    ]
+    assert all(item["preview_only"] is False for item in preview_packages)
+    assert all(item["install_eligible"] is True for item in preview_packages)
     assert provider_payload["count"] == 1
     assert provider_payload["items"][0]["package_id"] == "preview-deepseek-provider"
-    assert template_payload["count"] == 3
+    assert template_payload["count"] == 6
     assert template_payload["items"][0]["kind"] == "agent_template"
 
 
@@ -400,3 +401,52 @@ def test_restricted_or_unverified_marketplace_packages_are_not_installable(monke
             package_id="unreviewed_plugin",
             actor_user_id="user-1",
         )
+
+
+def test_preview_packages_with_trust_metadata_are_installable(monkeypatch, tmp_path):
+    """Phase 8: Marketplace packages with verified+approved+governed metadata are installable."""
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+    _patch_app_registry(monkeypatch, tmp_path)
+
+    state = marketplace_distribution_service._safe_read_state("ws-phase8")
+    state["packages"] = marketplace_distribution_service._preview_marketplace_packages()
+    marketplace_distribution_service._save_state("ws-phase8", state)
+
+    # Install a preview template (was previously preview_only=True)
+    installed_app = marketplace_distribution_service.install_marketplace_package(
+        "ws-phase8",
+        package_id="preview-restaurant-orders",
+        actor_user_id="user-1",
+    )
+    assert installed_app["installed"] is True
+    assert installed_app["preview_only"] is False
+    assert installed_app["install"]["status"] == "installed"
+    assert installed_app["runtime_truth"]["surface"] == "template_catalog"
+
+    # Install a preview provider (was previously preview_only=True)
+    installed_provider = marketplace_distribution_service.install_marketplace_package(
+        "ws-phase8",
+        package_id="preview-deepseek-provider",
+        actor_user_id="user-1",
+    )
+    assert installed_provider["installed"] is True
+    assert installed_provider["preview_only"] is False
+    assert installed_provider["install"]["status"] == "installed"
+    assert installed_provider["runtime_truth"]["surface"] == "provider_catalog"
+
+    # Verify analytics tracked both installs
+    listed = marketplace_distribution_service.list_marketplace_packages("ws-phase8")
+    restaurant = next(item for item in listed["items"] if item["package_id"] == "preview-restaurant-orders")
+    deepseek = next(item for item in listed["items"] if item["package_id"] == "preview-deepseek-provider")
+    assert restaurant["analytics"]["install_count"] == 1
+    assert deepseek["analytics"]["install_count"] == 1
+
+    # Runtime events should work on installed preview packages
+    runtime_event = marketplace_distribution_service.record_marketplace_runtime_event(
+        "ws-phase8",
+        package_id="preview-restaurant-orders",
+        event_type="runtime_ok",
+        health_state="healthy",
+        metadata={"phase": "8"},
+    )
+    assert runtime_event["analytics"]["runtime_event_count"] == 1

@@ -5,6 +5,11 @@ import pytest
 from fastapi import FastAPI, HTTPException
 
 from server_modules import routes_deployed_agents
+from server_modules import deployed_agent_service
+from server_modules import run_state_repository
+from server_modules import shop_assistant_revenue_agent_service
+from server_modules import activity_ledger_service
+from server_modules import control_plane_repository
 
 
 def _build_app() -> FastAPI:
@@ -1238,3 +1243,266 @@ async def test_shop_evaluate_route_returns_approval_gate_for_discount(monkeypatc
     payload = response.json()
     assert payload["approval"]["required"] is True
     assert payload["approval"]["gate"] == "discount"
+
+
+@pytest.mark.anyio
+async def test_shop_evaluate_service_creates_durable_approval_for_all_gates(monkeypatch: pytest.MonkeyPatch):
+    """Verify that each approval gate creates a durable approval request in run_approvals."""
+    gates = ["discount", "refund", "payment_link", "mass_message"]
+    captured_approvals: list[dict] = []
+
+    async def fake_get_workspace(workspace_id):
+        return {"tenant_id": "tenant-1", "workspace_id": "ws-1"}
+
+    async def fake_get_deployed_agent(deployed_agent_id, tenant_id, owner_workspace_id):
+        return {
+            "id": "dagent_1",
+            "tenant_id": "tenant-1",
+            "owner_workspace_id": "ws-1",
+            "metadata": {"public_tier": "pro", "effective_provider": "openai", "effective_model": "gpt-4o"},
+        }
+
+    async def fake_append_activity_event(**kwargs):
+        return None
+
+    async def fake_upsert_insight(**kwargs):
+        return None
+
+    monkeypatch.setattr(control_plane_repository, "get_workspace_by_id", fake_get_workspace)
+    monkeypatch.setattr(control_plane_repository, "get_deployed_agent_by_id", fake_get_deployed_agent)
+    monkeypatch.setattr(activity_ledger_service, "append_activity_event", fake_append_activity_event)
+    monkeypatch.setattr(control_plane_repository, "upsert_deployed_agent_business_insight_candidate", fake_upsert_insight)
+
+    def fake_create_approval(run_id, approval_id, request_payload, actor, trace_id, *, metadata=None, expires_at=None):
+        captured_approvals.append({
+            "run_id": run_id,
+            "approval_id": approval_id,
+            "request_payload": request_payload,
+            "metadata": metadata,
+        })
+        return {"approval_id": approval_id}
+
+    monkeypatch.setattr(
+        run_state_repository,
+        "sync_create_or_update_approval_request",
+        fake_create_approval,
+    )
+
+    for gate in gates:
+        captured_approvals.clear()
+
+        def fake_revenue_eval(deployed_agent, workspace_id, customer_message, connector_id=None):
+            return {
+                "ok": True,
+                "status": "approval_required",
+                "answer": f"Owner approval required for {gate}.",
+                "approval": {"required": True, "gate": gate, "risk_class": "ORANGE"},
+                "activity_events": [],
+                "roi_metrics": {"questions_handled": 1, "escalations": 1},
+            }
+
+        monkeypatch.setattr(
+            shop_assistant_revenue_agent_service,
+            "evaluate_shop_assistant_customer_question",
+            fake_revenue_eval,
+        )
+
+        result = await deployed_agent_service.evaluate_deployed_shop_assistant_customer_question(
+            deployed_agent_id="dagent_1",
+            current_user={"user_id": "user-owner", "workspace_access": {"ws-1": {"role": "owner"}}},
+            owner_workspace_id="ws-1",
+            customer_message=f"Can I get a {gate}?",
+            connector_id="telegram_1",
+        )
+
+        assert result["approval"]["required"] is True
+        assert result["approval"]["gate"] == gate
+        assert "approval_id" in result
+        assert len(captured_approvals) == 1
+        approval = captured_approvals[0]
+        assert approval["run_id"] == "dagent_1"
+        assert approval["request_payload"]["actions"] == [gate]
+        assert approval["request_payload"]["target"] == "dagent_1"
+        assert approval["metadata"]["source_type"] == "deployed_agent"
+        assert approval["metadata"]["gate"] == gate
+        assert approval["metadata"]["connector_id"] == "telegram_1"
+        assert approval["metadata"]["channel_key"] == "telegram_1"
+
+
+@pytest.mark.anyio
+async def test_shop_evaluate_service_fails_closed_when_approval_persistence_fails(monkeypatch: pytest.MonkeyPatch):
+    async def fake_get_workspace(workspace_id):
+        return {"tenant_id": "tenant-1", "workspace_id": "ws-1"}
+
+    async def fake_get_deployed_agent(deployed_agent_id, tenant_id, owner_workspace_id):
+        return {
+            "id": "dagent_1",
+            "tenant_id": "tenant-1",
+            "owner_workspace_id": "ws-1",
+            "metadata": {"public_tier": "pro", "effective_provider": "openai", "effective_model": "gpt-4o"},
+        }
+
+    async def fake_append_activity_event(**kwargs):
+        return None
+
+    async def fake_upsert_insight(**kwargs):
+        return None
+
+    def fake_create_approval(*args, **kwargs):
+        raise RuntimeError("approval store unavailable")
+
+    def fake_revenue_eval(deployed_agent, workspace_id, customer_message, connector_id=None):
+        return {
+            "ok": True,
+            "status": "approval_required",
+            "answer": "Owner approval required before offering a discount.",
+            "approval": {"required": True, "gate": "discount", "risk_class": "ORANGE"},
+            "activity_events": [],
+            "roi_metrics": {"questions_handled": 1, "escalations": 1},
+        }
+
+    monkeypatch.setattr(control_plane_repository, "get_workspace_by_id", fake_get_workspace)
+    monkeypatch.setattr(control_plane_repository, "get_deployed_agent_by_id", fake_get_deployed_agent)
+    monkeypatch.setattr(activity_ledger_service, "append_activity_event", fake_append_activity_event)
+    monkeypatch.setattr(control_plane_repository, "upsert_deployed_agent_business_insight_candidate", fake_upsert_insight)
+    monkeypatch.setattr(run_state_repository, "sync_create_or_update_approval_request", fake_create_approval)
+    monkeypatch.setattr(
+        shop_assistant_revenue_agent_service,
+        "evaluate_shop_assistant_customer_question",
+        fake_revenue_eval,
+    )
+
+    result = await deployed_agent_service.evaluate_deployed_shop_assistant_customer_question(
+        deployed_agent_id="dagent_1",
+        current_user={"user_id": "user-owner", "workspace_access": {"ws-1": {"role": "owner"}}},
+        owner_workspace_id="ws-1",
+        customer_message="Can I get a discount?",
+        connector_id="telegram_1",
+    )
+
+    assert result["status"] == "approval_unavailable"
+    assert result["approval"]["workflow_error"] == "approval_creation_failed"
+    assert "approval_id" not in result
+    assert "temporarily unavailable" in result["answer"]
+
+
+@pytest.mark.anyio
+async def test_shop_evaluate_service_persists_real_billing_ledger(monkeypatch: pytest.MonkeyPatch):
+    """Verify that shop evaluation writes real usage line items to deployed_agent_monthly_cost_ledger."""
+    from server_modules import usage_accounting_service
+
+    async def fake_get_workspace(workspace_id):
+        return {"tenant_id": "tenant-1", "workspace_id": "ws-1"}
+
+    async def fake_get_deployed_agent(deployed_agent_id, tenant_id, owner_workspace_id):
+        return {
+            "id": "dagent_1",
+            "tenant_id": "tenant-1",
+            "owner_workspace_id": "ws-1",
+            "metadata": {"public_tier": "pro", "effective_provider": "openai", "effective_model": "gpt-4o"},
+        }
+
+    async def fake_append_activity_event(**kwargs):
+        return None
+
+    async def fake_upsert_insight(**kwargs):
+        return None
+
+    monkeypatch.setattr(control_plane_repository, "get_workspace_by_id", fake_get_workspace)
+    monkeypatch.setattr(control_plane_repository, "get_deployed_agent_by_id", fake_get_deployed_agent)
+    monkeypatch.setattr(activity_ledger_service, "append_activity_event", fake_append_activity_event)
+    monkeypatch.setattr(control_plane_repository, "upsert_deployed_agent_business_insight_candidate", fake_upsert_insight)
+
+    captured_ledger_entries: list[dict] = []
+
+    async def fake_record_ledger(**kwargs):
+        captured_ledger_entries.append(dict(kwargs))
+
+    monkeypatch.setattr(control_plane_repository, "record_deployed_agent_monthly_cost_ledger_entry", fake_record_ledger)
+
+    def fake_build_usage_record(*, run_id, tenant_id, workspace_id, deployed_agent_id, source_surface, effective_provider, effective_model, input_tokens, output_tokens, total_tokens, allow_provider_fallback):
+        return {
+            "provider": effective_provider,
+            "model": effective_model,
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": 0.0045,
+            "pricing_known": True,
+            "pricing_source": "pricing_registry",
+        }
+
+    monkeypatch.setattr(usage_accounting_service, "build_usage_accounting_record", fake_build_usage_record)
+
+    def fake_revenue_eval(deployed_agent, workspace_id, customer_message, connector_id=None):
+        return {
+            "ok": True,
+            "status": "answered",
+            "answer": "Blue Widget is $29.99.",
+            "approval": {"required": False},
+            "catalog": {"source": {"connector_type": "google_sheets", "connector_id": "gsheet-1"}},
+            "activity_events": [],
+            "roi_metrics": {"questions_handled": 1, "inventory_hits": 1},
+        }
+
+    monkeypatch.setattr(
+        shop_assistant_revenue_agent_service,
+        "evaluate_shop_assistant_customer_question",
+        fake_revenue_eval,
+    )
+
+    result = await deployed_agent_service.evaluate_deployed_shop_assistant_customer_question(
+        deployed_agent_id="dagent_1",
+        current_user={"user_id": "user-owner", "workspace_access": {"ws-1": {"role": "owner"}}},
+        owner_workspace_id="ws-1",
+        customer_message="Do you have blue widget?",
+        connector_id="telegram_1",
+    )
+
+    assert result["ok"] is True
+    assert len(captured_ledger_entries) == 2
+
+    ai_entry = next(e for e in captured_ledger_entries if e.get("metadata", {}).get("credit_item_type", "").startswith("ai_"))
+    connector_entry = next(e for e in captured_ledger_entries if e.get("metadata", {}).get("credit_item_type") == "connector_read")
+
+    assert ai_entry["tenant_id"] == "tenant-1"
+    assert ai_entry["workspace_id"] == "ws-1"
+    assert ai_entry["deployed_agent_id"] == "dagent_1"
+    assert ai_entry["run_status"] == "completed"
+    assert ai_entry["provider"] == "openai"
+    assert ai_entry["model"] == "gpt-4o"
+    assert ai_entry["total_tokens"] > 0
+    assert ai_entry["estimated_cost_usd"] == 0.0045
+    assert ai_entry["metadata"]["source_surface"] == "shop_assistant"
+    assert ai_entry["metadata"]["credit_item_type"].startswith("ai_")
+
+    assert connector_entry["tenant_id"] == "tenant-1"
+    assert connector_entry["workspace_id"] == "ws-1"
+    assert connector_entry["deployed_agent_id"] == "dagent_1"
+    assert connector_entry["total_tokens"] == 0
+    assert connector_entry["estimated_cost_usd"] == 0.0
+    assert connector_entry["metadata"]["credit_item_type"] == "connector_read"
+    assert connector_entry["metadata"]["connector_kind"] == "google_sheets"
+    assert connector_entry["metadata"]["connector_id"] == "gsheet-1"
+
+
+@pytest.mark.anyio
+async def test_deployed_agent_evaluate_route_rejects_missing_csrf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /evaluate must return 403 when CSRF validation fails."""
+    from fastapi import HTTPException
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = _owner_user
+
+    def _reject_csrf(request):
+        raise HTTPException(status_code=403, detail="CSRF validation failed.")
+
+    monkeypatch.setattr(routes_deployed_agents.auth_module, "validate_csrf", _reject_csrf)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/deployed-agents/dagent_1/shop-evaluate",
+            json={"workspace_id": "ws-1", "customer_message": "hello", "connector_id": "telegram_1"},
+        )
+
+    assert response.status_code == 403
+    assert "csrf" in response.text.lower() or "CSRF" in response.text

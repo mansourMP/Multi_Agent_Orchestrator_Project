@@ -42,7 +42,7 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(summary["subscription"]["plan_id"], "free")
         self.assertEqual(summary["subscription"]["effective_plan_id"], "pro")
         self.assertEqual(summary["subscription"]["status"], "active")
-        self.assertEqual([item["plan_id"] for item in summary["plans"]], ["free", "pro"])
+        self.assertEqual([item["plan_id"] for item in summary["plans"]], ["free", "pilot", "pro"])
         self.assertEqual(summary["limits"]["max_specialists"], 3)
         self.assertTrue(summary["limits"]["hosted_ai_enabled"])
         self.assertEqual(summary["usage"]["specialists_in_use"], 0)
@@ -79,6 +79,11 @@ class BillingServiceTests(unittest.TestCase):
         self.assertTrue(summary["hosted_sage_ai"]["allowed"])
         self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
         self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 500)
+
+    def test_pilot_plan_is_recognized_as_hosted_ai_plan(self):
+        self.assertEqual(billing_service.normalize_billing_plan_id("pilot"), "pilot")
+        self.assertEqual(billing_service.normalize_billing_plan_id("beta"), "pilot")
+        self.assertEqual(billing_service.billing_plan_label("pilot"), "Pilot")
 
     def test_billing_summary_exposes_hosted_ai_credit_state_for_paid_workspace(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -192,6 +197,174 @@ class BillingServiceTests(unittest.TestCase):
         request_args = stripe_request.call_args[0]
         self.assertEqual(request_args[0], "/checkout/sessions")
         self.assertEqual(request_args[1]["line_items[0][price]"], "price_pro_123")
+
+    def test_credit_purchase_checkout_uses_payment_mode_with_inline_price(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            with patch.dict(
+                os.environ,
+                {"EMPYRALIS_STRIPE_SECRET_KEY": "sk_test_123"},
+                clear=False,
+            ), patch.object(
+                control_plane_repository,
+                "LOCAL_IDENTITY_DB_FILE",
+                root / "users.db",
+            ), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ), patch.object(
+                billing_service,
+                "_stripe_api_request",
+                return_value={"id": "cs_credit_123", "url": "https://checkout.stripe.test/session/cs_credit_123"},
+            ) as stripe_request:
+                payload = billing_service.create_credit_purchase_checkout_session(
+                    workspace_id=workspace_id,
+                    amount_usd=10.0,
+                    billing_email="owner@example.com",
+                )
+                request_args = stripe_request.call_args[0]
+
+        self.assertEqual(payload["purchase_kind"], "credits")
+        self.assertEqual(payload["amount_usd"], 10.0)
+        self.assertEqual(payload["credits"], 10000)
+        self.assertEqual(payload["checkout_session_id"], "cs_credit_123")
+        self.assertEqual(request_args[0], "/checkout/sessions")
+        self.assertEqual(request_args[1]["mode"], "payment")
+        self.assertEqual(request_args[1]["line_items[0][price_data][unit_amount]"], 1000)
+        self.assertEqual(request_args[1]["metadata[purchase_kind]"], "credits")
+
+    def test_credit_purchase_rejects_amount_below_minimum(self):
+        with self.assertRaises(Exception) as ctx:
+            billing_service.create_credit_purchase_checkout_session(
+                workspace_id="ws_any",
+                amount_usd=0.5,
+            )
+        self.assertIn("at least", str(ctx.exception).lower())
+
+    def test_credit_balance_is_zero_for_new_workspace(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            with patch.object(control_plane_repository, "LOCAL_IDENTITY_DB_FILE", root / "users.db"), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ):
+                balance = billing_service.credit_balance_for_workspace(workspace_id)
+
+        self.assertEqual(balance["credit_balance_usd"], 0.0)
+        self.assertEqual(balance["credit_balance_credits"], 0)
+        self.assertEqual(balance["transactions"], [])
+
+    def test_credit_balance_includes_purchased_credits_in_credit_state(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            with patch.object(control_plane_repository, "LOCAL_IDENTITY_DB_FILE", root / "users.db"), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ):
+                asyncio.run(
+                    control_plane_repository.update_workspace_admin_defaults_metadata(
+                        workspace_id,
+                        metadata={
+                            "credit_balance_usd": 5.0,
+                            "credit_transactions": [
+                                {"kind": "purchase", "amount_usd": 5.0, "credits": 5000}
+                            ],
+                        },
+                    )
+                )
+                summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
+
+        self.assertEqual(summary["hosted_sage_ai"]["credit_balance_usd"], 5.0)
+        self.assertEqual(summary["hosted_sage_ai"]["credit_balance_credits"], 5000)
+        self.assertEqual(summary["hosted_sage_ai"]["total_available_usd"], 5.5)
+        self.assertEqual(summary["hosted_sage_ai"]["total_available_credits"], 5500)
+
+    def test_credit_balance_allows_usage_when_monthly_cap_reached(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            with patch.object(control_plane_repository, "LOCAL_IDENTITY_DB_FILE", root / "users.db"), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ), patch.object(
+                billing_service,
+                "_workspace_runtime_usage_summary",
+                return_value={"hosted_sage_cost_usd_monthly": 0.5},
+            ):
+                asyncio.run(
+                    control_plane_repository.update_workspace_admin_defaults_metadata(
+                        workspace_id,
+                        metadata={
+                            "credit_balance_usd": 3.0,
+                            "hosted_sage_ai_monthly_cap_usd": 0.5,
+                            "hosted_sage_ai_policy": "enabled_with_cap",
+                        },
+                    )
+                )
+                summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
+
+        self.assertTrue(summary["hosted_sage_ai"]["allowed"])
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_remaining_usd"], 0.0)
+        self.assertEqual(summary["hosted_sage_ai"]["credit_balance_usd"], 3.0)
+        self.assertEqual(summary["hosted_sage_ai"]["total_available_usd"], 3.0)
+
+    def test_credit_balance_debits_only_monthly_overage_once_per_request(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            with patch.object(control_plane_repository, "LOCAL_IDENTITY_DB_FILE", root / "users.db"), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ), patch.object(
+                control_plane_repository,
+                "summarize_workspace_billing_usage",
+                new=AsyncMock(
+                    return_value={
+                        "usage_month": "2026-05-01",
+                        "hosted_sage_cost_usd_monthly": 1.25,
+                    }
+                ),
+            ):
+                asyncio.run(
+                    control_plane_repository.update_workspace_admin_defaults_metadata(
+                        workspace_id,
+                        metadata={
+                            "credit_balance_usd": 3.0,
+                            "hosted_sage_ai_monthly_cap_usd": 0.5,
+                            "hosted_sage_ai_policy": "enabled_with_cap",
+                            "credit_transactions": [
+                                {"kind": "purchase", "amount_usd": 3.0, "credits": 3000}
+                            ],
+                        },
+                    )
+                )
+                first = billing_service.debit_workspace_credit_balance_for_hosted_usage(
+                    workspace_id=workspace_id,
+                    tenant_id="tenant_user-billing-1",
+                    request_id="req-usage-1",
+                )
+                second = billing_service.debit_workspace_credit_balance_for_hosted_usage(
+                    workspace_id=workspace_id,
+                    tenant_id="tenant_user-billing-1",
+                    request_id="req-usage-1",
+                )
+                balance = billing_service.credit_balance_for_workspace(workspace_id)
+
+        self.assertEqual(first["debited_usd"], 0.75)
+        self.assertEqual(second["debited_usd"], 0.0)
+        self.assertEqual(balance["credit_balance_usd"], 2.25)
+        self.assertEqual(
+            len([item for item in balance["transactions"] if item.get("kind") == "usage_debit"]),
+            1,
+        )
 
 
 if __name__ == "__main__":

@@ -163,6 +163,98 @@ class BillingWebhookTests(unittest.TestCase):
         self.assertEqual(summary["subscription"]["status"], "canceled")
         self.assertEqual(summary["subscription"]["effective_plan_id"], "free")
 
+    def test_credit_purchase_webhook_adds_balance_and_records_transaction(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            event = {
+                "type": "checkout.session.completed",
+                "data": {
+                    "object": {
+                        "id": "cs_credit_123",
+                        "customer": "cus_credit_123",
+                        "mode": "payment",
+                        "currency": "usd",
+                        "metadata": {
+                            "workspace_id": workspace_id,
+                            "purchase_kind": "credits",
+                            "amount_usd": "15.00",
+                        },
+                    }
+                },
+            }
+            secret = "whsec_test_123"
+            with patch.dict(
+                os.environ,
+                {"EMPYRALIS_STRIPE_WEBHOOK_SECRET": secret},
+                clear=False,
+            ), patch.object(
+                control_plane_repository,
+                "LOCAL_IDENTITY_DB_FILE",
+                root / "users.db",
+            ), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ):
+                payload = json.dumps(event).encode("utf-8")
+                result = billing_service.handle_stripe_webhook(payload, self._sign(secret, payload))
+                balance = billing_service.credit_balance_for_workspace(workspace_id)
+                summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["purchase_kind"], "credits")
+        self.assertEqual(result["amount_usd"], 15.0)
+        self.assertEqual(balance["credit_balance_usd"], 15.0)
+        self.assertEqual(balance["credit_balance_credits"], 15000)
+        self.assertEqual(len(balance["transactions"]), 1)
+        self.assertEqual(balance["transactions"][0]["kind"], "purchase")
+        self.assertEqual(balance["transactions"][0]["amount_usd"], 15.0)
+        self.assertEqual(summary["hosted_sage_ai"]["credit_balance_usd"], 15.0)
+        self.assertEqual(summary["hosted_sage_ai"]["total_available_usd"], 15.5)
+
+    def test_credit_purchase_webhook_accumulates_multiple_purchases(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            secret = "whsec_test_123"
+            with patch.dict(
+                os.environ,
+                {"EMPYRALIS_STRIPE_WEBHOOK_SECRET": secret},
+                clear=False,
+            ), patch.object(
+                control_plane_repository,
+                "LOCAL_IDENTITY_DB_FILE",
+                root / "users.db",
+            ), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ):
+                for amount in [5.0, 10.0]:
+                    event = {
+                        "type": "checkout.session.completed",
+                        "data": {
+                            "object": {
+                                "id": f"cs_credit_{amount}",
+                                "customer": "cus_credit_123",
+                                "mode": "payment",
+                                "currency": "usd",
+                                "metadata": {
+                                    "workspace_id": workspace_id,
+                                    "purchase_kind": "credits",
+                                    "amount_usd": str(amount),
+                                },
+                            }
+                        },
+                    }
+                    payload = json.dumps(event).encode("utf-8")
+                    billing_service.handle_stripe_webhook(payload, self._sign(secret, payload))
+                balance = billing_service.credit_balance_for_workspace(workspace_id)
+
+        self.assertEqual(balance["credit_balance_usd"], 15.0)
+        self.assertEqual(len(balance["transactions"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

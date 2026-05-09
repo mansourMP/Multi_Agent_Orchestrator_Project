@@ -152,6 +152,7 @@ class AuthLoginRequest(BaseModel):
 
 class AuthRegisterRequest(AuthLoginRequest):
     name: Optional[str] = None
+    pilot_invite_code: Optional[str] = None
 
 
 class WorkspaceFileWriteRequest(BaseModel):

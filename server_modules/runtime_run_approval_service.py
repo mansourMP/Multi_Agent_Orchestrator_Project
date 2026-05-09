@@ -13,6 +13,10 @@ from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules import run_state_repository
 
 
+def _coerce_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 _APPROVAL_RESOLUTION_GUARD_LOCK = threading.Lock()
 _APPROVAL_RESOLUTION_GUARDS: dict[str, threading.Lock] = {}
 LOGGER = logging.getLogger(__name__)
@@ -1170,6 +1174,67 @@ def resolve_standalone_approval(
 
     with _approval_resolution_guard(approval_token):
         approval_record = run_state_repository.sync_get_approval_record(approval_token)
+
+        # Fast path: standalone deployed-agent approvals do not require a live run.
+        if isinstance(approval_record, dict):
+            approval_metadata = _coerce_dict(approval_record.get("metadata"))
+            approval_request_payload = _coerce_dict(approval_record.get("request_payload"))
+            source_type = str(
+                approval_metadata.get("source_type")
+                or approval_request_payload.get("source_type")
+                or ""
+            ).strip()
+            if source_type == "deployed_agent":
+                standalone_run_id = str(approval_record.get("run_id") or "").strip() or approval_token
+                standalone_trace_id = str(
+                    approval_record.get("trace_id")
+                    or approval_request_payload.get("trace_id")
+                    or approval_metadata.get("trace_id")
+                    or approval_token
+                ).strip()
+                resolved = run_state_repository.sync_resolve_approval_if_pending(
+                    standalone_run_id,
+                    approval_token,
+                    resolution,
+                    actor,
+                    standalone_trace_id,
+                    note=reason,
+                    decision_payload={
+                        "decision": decision,
+                        "resolution": resolution,
+                        "source": "deployed_agent_approval_api",
+                    },
+                )
+                if not isinstance(resolved, dict):
+                    raise HTTPException(status_code=409, detail="Approval has already been processed.")
+                record_approval_resolution_fn(
+                    standalone_run_id,
+                    approval_token,
+                    resolution,
+                    actor,
+                    standalone_trace_id,
+                )
+                outbox_event = emit_approval_resolved_event_fn(
+                    tenant_id=str(approval_metadata.get("tenant_id") or approval_request_payload.get("tenant_id") or "default").strip() or "default",
+                    workspace_id=str(approval_metadata.get("workspace_id") or approval_request_payload.get("workspace_id") or "default").strip() or "default",
+                    approval_id=approval_token,
+                    run_id=standalone_run_id,
+                    resolution=resolution,
+                    actor=actor,
+                    trace_id=standalone_trace_id,
+                    reason=reason,
+                    metadata=approval_metadata,
+                )
+                return {
+                    "approval_id": approval_token,
+                    "run_id": standalone_run_id,
+                    "status": resolution,
+                    "resolution": resolution,
+                    "actor": actor,
+                    "trace_id": standalone_trace_id,
+                    "outbox_event": outbox_event,
+                }
+
         run_snapshot_record = run_state_repository.sync_find_run_snapshot_for_approval_id(approval_token)
         matched_run = (
             run_snapshot_record.get("payload")

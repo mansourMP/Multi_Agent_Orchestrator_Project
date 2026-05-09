@@ -67,9 +67,9 @@ async def _try_shop_assistant_evaluation(
     shop_answer = str(result.get("answer") or "I can help with product questions, availability, and orders.")
     approval = result.get("approval") if isinstance(result.get("approval"), dict) else {}
 
-    if shop_status in ("answered", "approval_required", "needs_connector"):
+    if shop_status in ("answered", "approval_required", "approval_unavailable", "needs_connector"):
         return ChannelExecutionResult(
-            status=shop_status if shop_status != "approval_required" else "completed",
+            status=shop_status if shop_status not in {"approval_required", "approval_unavailable"} else "completed",
             reply=shop_answer,
             metadata={
                 "response_class": "shop_assistant",

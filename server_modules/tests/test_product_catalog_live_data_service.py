@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 import unittest
+from unittest.mock import patch
 
 from server_modules import product_catalog_live_data_service
 from server_modules import studio_proof_agent_seed_service
@@ -164,6 +166,191 @@ class ProductCatalogLiveDataServiceTests(unittest.TestCase):
         self.assertEqual(result["matches"][0]["sku"], "SHOE-AIRMAX-42-BLK")
         self.assertIn("8 in stock", result["answer"])
         self.assertNotIn("red hiking backpack", result["answer"].lower())
+
+    def test_spreadsheet_source_fetches_rows_and_caches(self) -> None:
+        agent = _deployed_agent_with_catalog(
+            {
+                "connector_type": "google_sheets",
+                "connector_id": "cred-google-1",
+                "spreadsheet_id": "sheet-123",
+                "range": "Products!A1:G10",
+                "workspace_id": "ws-1",
+                "deployed_agent_id": "dagent_shop",
+            }
+        )
+
+        def fake_read_spreadsheet(credentials, spreadsheet_id, range="Sheet1"):
+            self.assertEqual(spreadsheet_id, "sheet-123")
+            self.assertEqual(range, "Products!A1:G10")
+            return [
+                {"sku": "SKU-1", "product_name": "Widget", "category": "gadgets", "price": "19.99", "currency": "USD", "quantity_available": "10"},
+            ]
+
+        def fake_resolve_credentials(credential_id, workspace_id):
+            self.assertEqual(credential_id, "cred-google-1")
+            self.assertEqual(workspace_id, "ws-1")
+            return {"access_token": "token-1"}
+
+        with patch.object(
+            product_catalog_live_data_service.google_drive_api,
+            "google_workspace_read_spreadsheet",
+            fake_read_spreadsheet,
+        ), patch.object(
+            product_catalog_live_data_service,
+            "_resolve_connector_credentials",
+            fake_resolve_credentials,
+        ):
+            result = product_catalog_live_data_service.resolve_deployed_agent_product_catalog(
+                agent,
+                workspace_id="ws-1",
+            )
+
+        self.assertEqual(len(result["rows"]), 1)
+        self.assertEqual(result["rows"][0]["sku"], "SKU-1")
+        self.assertEqual(result["source"]["connector_type"], "google_sheets")
+        self.assertIn("last_synced_at", result["source"])
+        self.assertTrue(result["source"]["read_only"])
+
+    def test_spreadsheet_credentials_are_resolved_with_workspace_scope(self) -> None:
+        observed: dict[str, object] = {}
+
+        def fake_resolve(load_vault_fn, decrypt_fn, credential_id, workspace_id=None):
+            observed["credential_id"] = credential_id
+            observed["workspace_id"] = workspace_id
+            return {"access_token": "token-scoped"}
+
+        with patch.object(
+            product_catalog_live_data_service.vault_helpers,
+            "resolve_vault_credential",
+            fake_resolve,
+        ):
+            credentials = product_catalog_live_data_service._resolve_connector_credentials(
+                "cred-google-1",
+                "ws-1",
+            )
+
+        self.assertEqual(credentials["access_token"], "token-scoped")
+        self.assertEqual(observed["credential_id"], "cred-google-1")
+        self.assertEqual(observed["workspace_id"], "ws-1")
+
+    def test_spreadsheet_cache_hit_avoids_second_fetch(self) -> None:
+        agent = _deployed_agent_with_catalog(
+            {
+                "connector_type": "google_sheets",
+                "connector_id": "cred-google-1",
+                "spreadsheet_id": "sheet-cache-test",
+                "workspace_id": "ws-1",
+                "deployed_agent_id": "dagent_shop",
+            }
+        )
+
+        call_count = 0
+
+        def fake_read_spreadsheet(credentials, spreadsheet_id, range="Sheet1"):
+            nonlocal call_count
+            call_count += 1
+            return [
+                {"sku": "SKU-CACHE", "product_name": "Cached Item", "category": "test", "price": "5", "currency": "USD", "quantity_available": "1"},
+            ]
+
+        def fake_resolve_credentials(credential_id, workspace_id):
+            self.assertEqual(workspace_id, "ws-1")
+            return {"access_token": "token-1"}
+
+        with patch.object(
+            product_catalog_live_data_service.google_drive_api,
+            "google_workspace_read_spreadsheet",
+            fake_read_spreadsheet,
+        ), patch.object(
+            product_catalog_live_data_service,
+            "_resolve_connector_credentials",
+            fake_resolve_credentials,
+        ):
+            result1 = product_catalog_live_data_service.resolve_deployed_agent_product_catalog(
+                agent,
+                workspace_id="ws-1",
+            )
+            result2 = product_catalog_live_data_service.resolve_deployed_agent_product_catalog(
+                agent,
+                workspace_id="ws-1",
+            )
+
+        self.assertEqual(call_count, 1)
+        self.assertEqual(result1["rows"][0]["sku"], "SKU-CACHE")
+        self.assertEqual(result2["rows"][0]["sku"], "SKU-CACHE")
+        self.assertIn("last_synced_at", result2["source"])
+
+    def test_spreadsheet_cache_expires_and_refetches(self) -> None:
+        agent = _deployed_agent_with_catalog(
+            {
+                "connector_type": "google_sheets",
+                "connector_id": "cred-google-1",
+                "spreadsheet_id": "sheet-expire-test",
+                "workspace_id": "ws-1",
+                "deployed_agent_id": "dagent_shop",
+            }
+        )
+
+        call_count = 0
+
+        def fake_read_spreadsheet(credentials, spreadsheet_id, range="Sheet1"):
+            nonlocal call_count
+            call_count += 1
+            return [
+                {"sku": f"SKU-{call_count}", "product_name": "Item", "category": "test", "price": "5", "currency": "USD", "quantity_available": "1"},
+            ]
+
+        def fake_resolve_credentials(credential_id, workspace_id):
+            self.assertEqual(workspace_id, "ws-1")
+            return {"access_token": "token-1"}
+
+        with patch.object(
+            product_catalog_live_data_service.google_drive_api,
+            "google_workspace_read_spreadsheet",
+            fake_read_spreadsheet,
+        ), patch.object(
+            product_catalog_live_data_service,
+            "_resolve_connector_credentials",
+            fake_resolve_credentials,
+        ):
+            result1 = product_catalog_live_data_service.resolve_deployed_agent_product_catalog(
+                agent,
+                workspace_id="ws-1",
+            )
+            # Force cache expiration
+            cache_key = product_catalog_live_data_service._catalog_cache_key("ws-1", "dagent_shop", "cred-google-1", "sheet-expire-test")
+            product_catalog_live_data_service._CATALOG_CACHE[cache_key]["expires_at"] = time.time() - 1
+            result2 = product_catalog_live_data_service.resolve_deployed_agent_product_catalog(
+                agent,
+                workspace_id="ws-1",
+            )
+
+        self.assertEqual(call_count, 2)
+        self.assertEqual(result1["rows"][0]["sku"], "SKU-1")
+        self.assertEqual(result2["rows"][0]["sku"], "SKU-2")
+
+    def test_spreadsheet_missing_credentials_raises_value_error(self) -> None:
+        agent = _deployed_agent_with_catalog(
+            {
+                "connector_type": "google_sheets",
+                "connector_id": "cred-missing",
+                "spreadsheet_id": "sheet-xyz",
+                "workspace_id": "ws-1",
+                "deployed_agent_id": "dagent_shop",
+            }
+        )
+
+        with patch.object(
+            product_catalog_live_data_service,
+            "_resolve_connector_credentials",
+            return_value=None,
+        ):
+            with self.assertRaises(ValueError) as context:
+                product_catalog_live_data_service.resolve_deployed_agent_product_catalog(
+                    agent,
+                    workspace_id="ws-1",
+                )
+            self.assertIn("credentials are not available", str(context.exception))
 
 
 if __name__ == "__main__":

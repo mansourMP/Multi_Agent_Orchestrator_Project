@@ -638,5 +638,115 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         self.assertTrue(captured["current_user"]["is_admin"])
 
 
+    def test_resolve_standalone_approval_for_deployed_agent_without_live_run(self):
+        recorded = []
+        emitted = []
+        approval_record = {
+            "run_id": "dagent_1",
+            "approval_id": "approval-da-1",
+            "trace_id": "trace-da-1",
+            "metadata": {
+                "source_type": "deployed_agent",
+                "gate": "discount",
+                "risk_class": "ORANGE",
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "deployed_agent_id": "dagent_1",
+            },
+            "request_payload": {
+                "approval_id": "approval-da-1",
+                "prompt": "Shop Assistant approval required: discount",
+                "workspace_id": "ws-1",
+                "tenant_id": "tenant-1",
+            },
+        }
+
+        with patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_get_approval_record",
+            return_value=approval_record,
+        ), patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_find_run_snapshot_for_approval_id",
+            return_value={"source": "missing"},
+        ), patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_find_live_run_by_approval_id",
+            return_value=None,
+        ), patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_resolve_approval_if_pending",
+            return_value={
+                "approval_id": "approval-da-1",
+                "run_id": "dagent_1",
+                "status": "approved",
+                "resolved_at": "2026-01-01T00:00:00Z",
+            },
+        ):
+            payload = runtime_run_approval_service.resolve_standalone_approval(
+                "approval-da-1",
+                payload={"approval_id": "approval-da-1", "resolution": "approved", "actor": "user-1", "reason": "ok"},
+                current_user={"user_id": "user-1"},
+                runs={},
+                resolve_run_approval_fn=lambda *args, **kwargs: {"status": "ok"},
+                resolve_run_approval_callbacks={},
+                record_approval_resolution_fn=lambda *args: recorded.append(args),
+                emit_approval_resolved_event_fn=lambda **kwargs: emitted.append(kwargs)
+                or type(
+                    "Event",
+                    (),
+                    {
+                        "event_id": "evt-da-1",
+                        "event_type": "approval_resolved",
+                        "trace_id": kwargs.get("trace_id", ""),
+                        "payload": kwargs,
+                    },
+                )(),
+            )
+
+        self.assertEqual(payload["run_id"], "dagent_1")
+        self.assertEqual(payload["resolution"], "approved")
+        self.assertEqual(recorded[0][:3], ("dagent_1", "approval-da-1", "approved"))
+        self.assertEqual(emitted[0]["approval_id"], "approval-da-1")
+        self.assertEqual(emitted[0]["tenant_id"], "tenant-1")
+        self.assertEqual(emitted[0]["workspace_id"], "ws-1")
+
+    def test_resolve_standalone_approval_still_404_for_missing_run_without_deployed_agent_source(self):
+        """Legacy approvals without a live run still flow through the normal path and fail with 409
+        because resolve_run_approval requires an active run."""
+        with patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_get_approval_record",
+            return_value={
+                "run_id": "run-1",
+                "approval_id": "approval-legacy-1",
+                "metadata": {"source_type": "workflow"},
+                "request_payload": {"approval_id": "approval-legacy-1"},
+            },
+        ), patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_find_run_snapshot_for_approval_id",
+            return_value={"source": "missing"},
+        ), patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_find_live_run_by_approval_id",
+            return_value=None,
+        ):
+            with self.assertRaises(HTTPException) as context:
+                runtime_run_approval_service.resolve_standalone_approval(
+                    "approval-legacy-1",
+                    payload={"approval_id": "approval-legacy-1", "resolution": "approved", "actor": "user-1"},
+                    current_user={"user_id": "user-1"},
+                    runs={},
+                    resolve_run_approval_fn=lambda *args, **kwargs: (_ for _ in ()).throw(
+                        HTTPException(status_code=409, detail="Run is not active in this process.")
+                    ),
+                    resolve_run_approval_callbacks={},
+                    record_approval_resolution_fn=lambda *args: None,
+                    emit_approval_resolved_event_fn=lambda **kwargs: None,
+                )
+            self.assertEqual(context.exception.status_code, 409)
+
+
 if __name__ == "__main__":
     unittest.main()

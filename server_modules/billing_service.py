@@ -27,6 +27,7 @@ DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 0.5
 
 PLAN_LABELS: Dict[str, str] = {
     "free": "Free",
+    "pilot": "Pilot",
     "pro": "Pro",
 }
 
@@ -40,6 +41,9 @@ PLAN_ALIASES: Dict[str, str] = {
     "team": "pro",
     "enterprise": "pro",
     "enterprise_plus": "pro",
+    "beta": "pilot",
+    "early_access": "pilot",
+    "pilot_program": "pilot",
 }
 
 TERMINAL_SUBSCRIPTION_STATUSES = {
@@ -122,7 +126,7 @@ def _hosted_sage_ai_policy(value: Any) -> str:
 
 def _plan_allows_hosted_ai(effective_plan_id: str) -> bool:
     plan_id = normalize_billing_plan_id(effective_plan_id)
-    return plan_id in {"free", "pro"}
+    return plan_id in {"free", "pilot", "pro"}
 
 
 def _hosted_sage_ai_credit_fields(
@@ -156,6 +160,8 @@ def _hosted_sage_ai_credit_state(
     monthly_cap_usd = max(0.0, round(float(monthly_cap_usd), 6))
     monthly_cost_usd = max(0.0, round(float(usage.get("hosted_sage_cost_usd_monthly") or 0.0), 6))
     monthly_remaining_usd = max(0.0, round(monthly_cap_usd - monthly_cost_usd, 6))
+    credit_balance_usd = _credit_balance_from_metadata(metadata)
+    total_available_usd = round(monthly_remaining_usd + credit_balance_usd, 6)
     credit_fields = _hosted_sage_ai_credit_fields(
         monthly_cap_usd=monthly_cap_usd,
         monthly_cost_usd=monthly_cost_usd,
@@ -177,7 +183,7 @@ def _hosted_sage_ai_credit_state(
         message = "Hosted Sage AI needs owner approval before this workspace can use it."
         allowed = False
         resolved_policy = policy
-    elif monthly_cost_usd >= monthly_cap_usd:
+    elif total_available_usd <= 0:
         reason = "cap_reached"
         message = "Hosted Sage AI monthly cap is reached for this workspace."
         allowed = False
@@ -195,6 +201,10 @@ def _hosted_sage_ai_credit_state(
         "monthly_cap_usd": monthly_cap_usd,
         "monthly_cost_usd": monthly_cost_usd,
         "monthly_remaining_usd": monthly_remaining_usd,
+        "credit_balance_usd": credit_balance_usd,
+        "credit_balance_credits": int(round(credit_balance_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+        "total_available_usd": total_available_usd,
+        "total_available_credits": int(round(total_available_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
         **credit_fields,
         "reason": reason,
         "message": message,
@@ -264,6 +274,20 @@ def _billing_cancel_url(workspace_id: str) -> str:
     return f"{_frontend_origin()}/w/{workspace_id}/admin/billing?checkout=cancelled"
 
 
+def _billing_credit_success_url(workspace_id: str) -> str:
+    configured = str(os.getenv("EMPYRALIS_BILLING_CREDIT_SUCCESS_URL") or "").strip()
+    if configured:
+        return configured
+    return f"{_frontend_origin()}/w/{workspace_id}/admin/billing?credit_purchase=success"
+
+
+def _billing_credit_cancel_url(workspace_id: str) -> str:
+    configured = str(os.getenv("EMPYRALIS_BILLING_CREDIT_CANCEL_URL") or "").strip()
+    if configured:
+        return configured
+    return f"{_frontend_origin()}/w/{workspace_id}/admin/billing?credit_purchase=cancelled"
+
+
 def _billing_portal_return_url(workspace_id: str) -> str:
     configured = str(os.getenv("EMPYRALIS_BILLING_PORTAL_RETURN_URL") or "").strip()
     if configured:
@@ -273,6 +297,119 @@ def _billing_portal_return_url(workspace_id: str) -> str:
 
 def _stripe_configured() -> bool:
     return bool(_stripe_secret_key()) and any(_stripe_price_map().values())
+
+
+_MIN_CREDIT_PURCHASE_USD = 1.0
+_MAX_CREDIT_PURCHASE_USD = 500.0
+
+
+def _credit_balance_from_metadata(metadata: Dict[str, Any]) -> float:
+    raw = _coerce_float(_coerce_dict(metadata).get("credit_balance_usd"))
+    if raw is None:
+        return 0.0
+    return max(0.0, round(float(raw), 6))
+
+
+def _credit_transactions_from_metadata(metadata: Dict[str, Any]) -> list[Dict[str, Any]]:
+    transactions = _coerce_dict(metadata).get("credit_transactions")
+    if isinstance(transactions, list):
+        return [dict(t) for t in transactions if isinstance(t, dict)]
+    return []
+
+
+def _credit_debits_for_month(metadata: Dict[str, Any], usage_month: str) -> float:
+    total = 0.0
+    for transaction in _credit_transactions_from_metadata(metadata):
+        if str(transaction.get("kind") or "").strip().lower() != "usage_debit":
+            continue
+        if str(transaction.get("usage_month") or "").strip() != usage_month:
+            continue
+        amount = _coerce_float(transaction.get("amount_usd"))
+        if amount is None:
+            continue
+        total += abs(float(amount))
+    return round(total, 6)
+
+
+def _normalize_credit_purchase_amount_usd(value: Any) -> float:
+    parsed = _coerce_float(value)
+    if parsed is None:
+        return 0.0
+    return max(0.0, min(_MAX_CREDIT_PURCHASE_USD, round(float(parsed), 2)))
+
+
+def debit_workspace_credit_balance_for_hosted_usage(
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    request_id: str,
+) -> Dict[str, Any]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    clean_tenant_id = str(tenant_id or "").strip()
+    clean_request_id = str(request_id or "").strip()
+    if not clean_workspace_id or not clean_tenant_id or not clean_request_id:
+        return {"ok": False, "debited_usd": 0.0, "reason": "missing_scope"}
+
+    workspace = run_async_tool_call(control_plane_repository.get_workspace_by_id(clean_workspace_id)) or {}
+    metadata = _workspace_billing_metadata(workspace)
+    transactions = _credit_transactions_from_metadata(metadata)
+    if any(str(item.get("request_id") or "").strip() == clean_request_id for item in transactions):
+        return {"ok": True, "debited_usd": 0.0, "reason": "already_recorded"}
+
+    usage = run_async_tool_call(
+        control_plane_repository.summarize_workspace_billing_usage(
+            tenant_id=clean_tenant_id,
+            workspace_id=clean_workspace_id,
+        )
+    ) or {}
+    usage_month = str(usage.get("usage_month") or _utc_month_start().isoformat()).strip()
+    monthly_cost_usd = max(0.0, round(float(usage.get("hosted_sage_cost_usd_monthly") or 0.0), 6))
+    monthly_cap_usd = _coerce_float(metadata.get("hosted_sage_ai_monthly_cap_usd"))
+    if monthly_cap_usd is None:
+        monthly_cap_usd = DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD
+    monthly_cap_usd = max(0.0, round(float(monthly_cap_usd), 6))
+    overage_usd = max(0.0, round(monthly_cost_usd - monthly_cap_usd, 6))
+    already_debited_usd = _credit_debits_for_month(metadata, usage_month)
+    debit_needed_usd = max(0.0, round(overage_usd - already_debited_usd, 6))
+    current_balance_usd = _credit_balance_from_metadata(metadata)
+    debit_usd = min(current_balance_usd, debit_needed_usd)
+    if debit_usd <= 0:
+        return {
+            "ok": True,
+            "debited_usd": 0.0,
+            "reason": "no_debit_needed",
+            "credit_balance_usd": current_balance_usd,
+            "monthly_overage_usd": overage_usd,
+        }
+
+    next_balance_usd = max(0.0, round(current_balance_usd - debit_usd, 6))
+    transactions.append(
+        {
+            "kind": "usage_debit",
+            "amount_usd": -debit_usd,
+            "credits": -int(round(debit_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+            "request_id": clean_request_id,
+            "usage_month": usage_month,
+            "source": "hosted_sage_ai",
+            "created_at": int(time.time()),
+        }
+    )
+    run_async_tool_call(
+        control_plane_repository.update_workspace_admin_defaults_metadata(
+            clean_workspace_id,
+            metadata={
+                **metadata,
+                "credit_balance_usd": next_balance_usd,
+                "credit_transactions": transactions,
+            },
+        )
+    )
+    return {
+        "ok": True,
+        "debited_usd": debit_usd,
+        "credit_balance_usd": next_balance_usd,
+        "monthly_overage_usd": overage_usd,
+    }
 
 
 def _stripe_api_request(path: str, form_fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -668,6 +805,82 @@ def create_workspace_portal_session(
     }
 
 
+def create_credit_purchase_checkout_session(
+    *,
+    workspace_id: str,
+    amount_usd: float,
+    success_url: Optional[str] = None,
+    cancel_url: Optional[str] = None,
+    billing_email: Optional[str] = None,
+) -> Dict[str, Any]:
+    parsed = _coerce_float(amount_usd)
+    if parsed is None or parsed < _MIN_CREDIT_PURCHASE_USD:
+        raise HTTPException(status_code=400, detail="Credit purchase amount must be at least $1.")
+    amount_usd = min(_MAX_CREDIT_PURCHASE_USD, round(float(parsed), 2))
+    unit_amount_cents = int(round(amount_usd * 100))
+    summary = workspace_billing_summary_for_workspace_id(workspace_id)
+    account = _coerce_dict(summary.get("account"))
+    form_fields: Dict[str, Any] = {
+        "mode": "payment",
+        "success_url": str(success_url or _billing_credit_success_url(workspace_id)).strip(),
+        "cancel_url": str(cancel_url or _billing_credit_cancel_url(workspace_id)).strip(),
+        "client_reference_id": workspace_id,
+        "metadata[workspace_id]": workspace_id,
+        "metadata[purchase_kind]": "credits",
+        "metadata[amount_usd]": str(amount_usd),
+        "line_items[0][price_data][currency]": str(account.get("default_currency") or "usd").strip().lower() or "usd",
+        "line_items[0][price_data][product_data][name]": "Hosted Sage AI Credits",
+        "line_items[0][price_data][product_data][description]": f"{int(round(amount_usd * HOSTED_SAGE_AI_CREDITS_PER_USD))} credits for hosted Sage AI usage",
+        "line_items[0][price_data][unit_amount]": unit_amount_cents,
+        "line_items[0][quantity]": 1,
+    }
+    customer_id = str(account.get("provider_customer_id") or "").strip()
+    if customer_id:
+        form_fields["customer"] = customer_id
+    elif billing_email:
+        form_fields["customer_email"] = str(billing_email or "").strip().lower()
+    response = _stripe_api_request("/checkout/sessions", form_fields)
+    checkout_session_id = str(response.get("id") or "").strip()
+    checkout_url = str(response.get("url") or "").strip()
+    if not checkout_session_id or not checkout_url:
+        raise HTTPException(status_code=502, detail="Stripe checkout session did not include a usable URL.")
+    run_async_tool_call(
+        control_plane_repository.upsert_workspace_billing_subscription(
+            workspace_id,
+            plan_id=normalize_billing_plan_id(summary.get("subscription", {}).get("plan_id")),
+            status="checkout_pending",
+            provider_customer_id=str(response.get("customer") or "").strip() or customer_id or None,
+            checkout_session_id=checkout_session_id,
+            checkout_url=checkout_url,
+            currency=str(response.get("currency") or account.get("default_currency") or "usd").strip().lower() or "usd",
+            metadata={"source": "stripe_credit_checkout", "purchase_kind": "credits", "amount_usd": amount_usd},
+        )
+    )
+    return {
+        "ok": True,
+        "provider": STRIPE_PROVIDER,
+        "purchase_kind": "credits",
+        "amount_usd": amount_usd,
+        "credits": int(round(amount_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+        "checkout_session_id": checkout_session_id,
+        "checkout_url": checkout_url,
+    }
+
+
+def credit_balance_for_workspace(workspace_id: str) -> Dict[str, Any]:
+    workspace = run_async_tool_call(control_plane_repository.get_workspace_by_id(workspace_id)) or {}
+    metadata = _workspace_billing_metadata(workspace)
+    balance_usd = _credit_balance_from_metadata(metadata)
+    transactions = _credit_transactions_from_metadata(metadata)
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "credit_balance_usd": balance_usd,
+        "credit_balance_credits": int(round(balance_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+        "transactions": transactions,
+    }
+
+
 def _stripe_signature_payload(timestamp: str, body: bytes) -> bytes:
     return f"{timestamp}.{body.decode('utf-8')}".encode("utf-8")
 
@@ -748,9 +961,66 @@ def apply_stripe_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
                 metadata={"source": "stripe_webhook"},
             )
         )
+        session_mode = str(obj.get("mode") or "").strip().lower()
+        metadata = _coerce_dict(obj.get("metadata"))
+        purchase_kind = str(metadata.get("purchase_kind") or "").strip().lower()
+
+        if session_mode == "payment" and purchase_kind == "credits":
+            amount_usd = _coerce_float(metadata.get("amount_usd"))
+            if amount_usd is not None and amount_usd > 0:
+                workspace = run_async_tool_call(
+                    control_plane_repository.get_workspace_by_id(workspace_id)
+                ) or {}
+                ws_metadata = _workspace_billing_metadata(workspace)
+                current_balance = _credit_balance_from_metadata(ws_metadata)
+                new_balance = round(current_balance + amount_usd, 6)
+                transactions = _credit_transactions_from_metadata(ws_metadata)
+                transactions.append(
+                    {
+                        "kind": "purchase",
+                        "amount_usd": amount_usd,
+                        "credits": int(round(amount_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+                        "checkout_session_id": str(obj.get("id") or "").strip() or None,
+                        "provider": STRIPE_PROVIDER,
+                        "created_at": int(time.time()),
+                    }
+                )
+                run_async_tool_call(
+                    control_plane_repository.update_workspace_admin_defaults_metadata(
+                        workspace_id,
+                        metadata={
+                            **_coerce_dict(ws_metadata),
+                            "credit_balance_usd": new_balance,
+                            "credit_transactions": transactions,
+                        },
+                    )
+                )
+            run_async_tool_call(
+                control_plane_repository.upsert_workspace_billing_subscription(
+                    workspace_id,
+                    plan_id=normalize_billing_plan_id(
+                        _coerce_dict(
+                            run_async_tool_call(
+                                control_plane_repository.get_workspace_billing_summary(workspace_id)
+                            ) or {}
+                        ).get("subscription", {}).get("plan_id")
+                    ),
+                    status="checkout_completed",
+                    provider_customer_id=str(obj.get("customer") or "").strip() or None,
+                    checkout_session_id=str(obj.get("id") or "").strip() or None,
+                    metadata={"source": "stripe_webhook", "purchase_kind": "credits", "amount_usd": amount_usd},
+                )
+            )
+            return {
+                "ok": True,
+                "event_type": event_type,
+                "workspace_id": workspace_id,
+                "purchase_kind": "credits",
+                "amount_usd": amount_usd,
+            }
+
         target_plan = normalize_billing_plan_id(
-            _coerce_dict(obj.get("metadata")).get("plan_id")
-            or _coerce_dict(obj.get("metadata")).get("target_plan")
+            metadata.get("plan_id") or metadata.get("target_plan")
         )
         run_async_tool_call(
             control_plane_repository.upsert_workspace_billing_subscription(
@@ -802,6 +1072,27 @@ def apply_stripe_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
                 metadata={"source": "stripe_webhook"},
             )
         )
+        if status in TERMINAL_SUBSCRIPTION_STATUSES:
+            workspace = run_async_tool_call(
+                control_plane_repository.get_workspace_by_id(workspace_id)
+            ) or {}
+            ws_metadata = _coerce_dict(_coerce_dict(workspace).get("metadata"))
+            billing_metadata = _coerce_dict(ws_metadata.get("billing"))
+            next_billing = {k: v for k, v in billing_metadata.items() if k not in {"billing_plan", "plan", "plan_id", "plan_tier"}}
+            next_metadata = {
+                **ws_metadata,
+                "billing": next_billing,
+            }
+            run_async_tool_call(
+                control_plane_repository.update_workspace_profile(
+                    workspace_id,
+                    updates={
+                        "name": str(workspace.get("name") or "").strip() or workspace_id,
+                        "workspace_type": str(workspace.get("workspace_type") or workspace.get("kind") or "personal"),
+                        "metadata": next_metadata,
+                    },
+                )
+            )
         return {"ok": True, "event_type": event_type, "workspace_id": workspace_id}
 
     return {"ok": True, "ignored": True, "reason": "unsupported_event_type", "event_type": event_type}

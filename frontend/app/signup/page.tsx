@@ -85,12 +85,16 @@ export default function SignupPage() {
   });
   const [channelAttribution, setChannelAttribution] = useState('');
   const [agent, setAgent] = useState('');
+  const [pilotCode, setPilotCode] = useState('');
   const loginSearchParams = new URLSearchParams();
   if (channelAttribution) {
     loginSearchParams.set('channel_attribution', channelAttribution);
   }
   if (agent) {
     loginSearchParams.set('agent', agent);
+  }
+  if (pilotCode) {
+    loginSearchParams.set('pilot_code', pilotCode);
   }
   const loginHref = loginSearchParams.size > 0
     ? `/login?${loginSearchParams.toString()}`
@@ -101,6 +105,7 @@ export default function SignupPage() {
     const params = new URLSearchParams(window.location.search);
     setChannelAttribution(String(params.get('channel_attribution') || '').trim());
     setAgent(String(params.get('agent') || '').trim());
+    setPilotCode(String(params.get('pilot_code') || '').trim());
     const providerError = String(params.get('error') || '').trim();
     if (providerError) {
       clearExternalAuthPending();
@@ -160,7 +165,7 @@ export default function SignupPage() {
     setSubmitting(true);
     setError(null);
     try {
-      await signup(email, password, name || undefined);
+      await signup(email, password, name || undefined, pilotCode || undefined);
       await awaitBrowserAuthReady({ attempts: 12, delayMs: 250 });
       window.location.replace('/');
     } catch (nextError) {

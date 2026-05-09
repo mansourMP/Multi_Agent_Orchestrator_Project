@@ -12,7 +12,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Build',
     iconName: 'boxes',
     defaultRouteId: 'studio',
-    childRouteIds: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
+    childRouteIds: ['studio', 'inbox', 'deploy', 'studioIntegrations', 'demo'],
     direct: false,
   },
   {
@@ -255,6 +255,16 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       groupId: 'settings',
       tabLabel: 'Settings',
       includeInBottomTabs: true,
+    },
+  },
+  {
+    id: 'demo',
+    label: 'Investor Demo',
+    segment: 'demo',
+    destinationId: 'studio',
+    requiredCapabilities: ['workspace_admin_enabled'],
+    web: {
+      hiddenFromNavigation: true,
     },
   },
   {

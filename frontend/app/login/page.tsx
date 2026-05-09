@@ -83,6 +83,7 @@ function LoginPageContent() {
   });
   const agentParam = String(searchParams.get('agent') || '').trim();
   const channelAttribution = String(searchParams.get('channel_attribution') || '').trim();
+  const pilotCode = String(searchParams.get('pilot_code') || '').trim();
   const providerError = String(searchParams.get('error') || '').trim();
   const signupSearchParams = new URLSearchParams();
   if (agentParam) {
@@ -90,6 +91,9 @@ function LoginPageContent() {
   }
   if (channelAttribution) {
     signupSearchParams.set('channel_attribution', channelAttribution);
+  }
+  if (pilotCode) {
+    signupSearchParams.set('pilot_code', pilotCode);
   }
   const signupHref = signupSearchParams.size > 0
     ? `/signup?${signupSearchParams.toString()}`

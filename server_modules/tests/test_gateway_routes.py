@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import tempfile
 import threading
@@ -1690,6 +1691,102 @@ class GatewayRoutesTests(unittest.TestCase):
         ]
         self.assertEqual(len(outbound_request_events), 1)
         self.assertEqual(len(outbound_result_events), 1)
+
+
+    def test_gateway_websocket_rejects_oversized_frame(self) -> None:
+        """Frames larger than MAX_GATEWAY_FRAME_BYTES must be rejected with gateway_frame_too_large."""
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_token = registration_payload["gateway_token"]
+        session_response = self.client.post(
+            "/api/gateway/sessions",
+            json={"gateway_id": gateway_id, "gateway_token": gateway_token},
+        )
+        self.assertEqual(session_response.status_code, 200)
+        session_payload = session_response.json()
+        ws_path = f"/api/gateway/ws?gateway_id={gateway_id}&session_token={session_payload['session_token']}"
+
+        with self.client.websocket_connect(ws_path) as websocket:
+            # First, send a valid connect frame
+            websocket.send_json({
+                "kind": "request",
+                "id": "connect-1",
+                "type": "gateway.connect",
+                "ts": "2026-04-22T12:00:00Z",
+                "scope": session_payload["scope"],
+                "payload": {
+                    "gateway_version": "0.1.0",
+                    "device_metadata": {"hostname": "mansur-mac"},
+                    "requested_capabilities": ["screen.read"],
+                    "journal_cursor": 0,
+                    "checkpoint_cursor": 0,
+                },
+            })
+            connect_ack = websocket.receive_json()
+            self.assertTrue(connect_ack["ok"])
+            # Consume hello + presence
+            websocket.receive_json()
+            websocket.receive_json()
+
+            # Now send an oversized frame
+            oversized_payload = "x" * (300 * 1024)
+            websocket.send_text('{"kind":"request","id":"big-1","type":"gateway.heartbeat","scope":' + json.dumps(session_payload["scope"]) + ',"payload":"' + oversized_payload + '"}')
+
+            error_response = websocket.receive_json()
+            self.assertFalse(error_response["ok"])
+            self.assertEqual(error_response["error"]["code"], "gateway_frame_too_large")
+
+    def test_gateway_websocket_rejects_excessively_deep_json(self) -> None:
+        """Frames with nesting depth > MAX_GATEWAY_JSON_DEPTH must be rejected with gateway_frame_too_deep."""
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_token = registration_payload["gateway_token"]
+        session_response = self.client.post(
+            "/api/gateway/sessions",
+            json={"gateway_id": gateway_id, "gateway_token": gateway_token},
+        )
+        self.assertEqual(session_response.status_code, 200)
+        session_payload = session_response.json()
+        ws_path = f"/api/gateway/ws?gateway_id={gateway_id}&session_token={session_payload['session_token']}"
+
+        with self.client.websocket_connect(ws_path) as websocket:
+            # First, send a valid connect frame
+            websocket.send_json({
+                "kind": "request",
+                "id": "connect-1",
+                "type": "gateway.connect",
+                "ts": "2026-04-22T12:00:00Z",
+                "scope": session_payload["scope"],
+                "payload": {
+                    "gateway_version": "0.1.0",
+                    "device_metadata": {"hostname": "mansur-mac"},
+                    "requested_capabilities": ["screen.read"],
+                    "journal_cursor": 0,
+                    "checkpoint_cursor": 0,
+                },
+            })
+            connect_ack = websocket.receive_json()
+            self.assertTrue(connect_ack["ok"])
+            # Consume hello + presence
+            websocket.receive_json()
+            websocket.receive_json()
+
+            # Build a deeply nested payload (depth > 32)
+            deep_payload = "value"
+            for _ in range(40):
+                deep_payload = {"nested": deep_payload}
+
+            websocket.send_json({
+                "kind": "request",
+                "id": "deep-1",
+                "type": "gateway.heartbeat",
+                "scope": session_payload["scope"],
+                "payload": deep_payload,
+            })
+
+            error_response = websocket.receive_json()
+            self.assertFalse(error_response["ok"])
+            self.assertEqual(error_response["error"]["code"], "gateway_frame_too_deep")
 
 
 if __name__ == "__main__":

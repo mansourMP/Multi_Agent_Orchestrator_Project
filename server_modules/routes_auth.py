@@ -38,6 +38,7 @@ from server_modules.channel_pairing_service import (
 )
 from server_modules.channel_user_acquisition_service import CHANNEL_ATTRIBUTION_QUERY_PARAM
 from server_modules.profile_api import register_profile_routes
+from server_modules import control_plane_repository, pilot_invite_service
 from server_modules.schemas import AuthLoginRequest, AuthRegisterRequest
 
 
@@ -205,8 +206,20 @@ async def provider_login(body: AuthProviderLoginRequest, request: Request, respo
     return payload
 
 
+async def _validate_and_apply_pilot_invite(code: Optional[str]) -> Optional[str]:
+    """Validate pilot invite code when invite-only mode is active. Returns plan_id or None."""
+    if not pilot_invite_service.pilot_signup_requires_invite():
+        return None
+    clean_code = str(code or "").strip()
+    if not clean_code:
+        raise HTTPException(status_code=403, detail="A valid pilot invite code is required to register.")
+    result = await pilot_invite_service.claim_pilot_invite_code(clean_code)
+    return str(result.get("plan_id") or "pilot").strip()
+
+
 @router.post("/auth/register", dependencies=[Depends(limit_public_requests), Depends(ensure_public_registration_enabled)])
 async def register(body: AuthRegisterRequest, request: Request, response: Response):
+    pilot_plan_id = await _validate_and_apply_pilot_invite(body.pilot_invite_code)
     payload = register_user(
         body.email,
         body.password,
@@ -219,6 +232,16 @@ async def register(body: AuthRegisterRequest, request: Request, response: Respon
         workspace_id=body.workspace_id,
         session_ttl_seconds=body.session_ttl_seconds,
     )
+    if pilot_plan_id:
+        workspace_access = payload.get("workspace_access") or {}
+        for ws_id in list(workspace_access.keys()):
+            try:
+                await control_plane_repository.update_workspace_billing_plan(
+                    workspace_id=ws_id,
+                    plan_id=pilot_plan_id,
+                )
+            except Exception:
+                pass
     if browser_auth_session_channel(body.channel):
         set_auth_cookies(response, payload, request=request, channel=body.channel)
         return _sanitize_browser_auth_payload(payload)

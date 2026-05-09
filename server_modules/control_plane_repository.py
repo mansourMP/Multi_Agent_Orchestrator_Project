@@ -164,6 +164,25 @@ CREATE TABLE IF NOT EXISTS workspace_member_invites (
     revoked_at TIMESTAMPTZ NULL
 );
 
+CREATE TABLE IF NOT EXISTS pilot_invites (
+    id TEXT PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    email TEXT,
+    role TEXT NOT NULL DEFAULT 'owner',
+    plan_id TEXT NOT NULL DEFAULT 'pilot',
+    max_uses INTEGER NOT NULL DEFAULT 1,
+    uses_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMPTZ NULL,
+    created_by_user_id TEXT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at TIMESTAMPTZ NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pilot_invites_code_status ON pilot_invites(code, status);
+
 CREATE TABLE IF NOT EXISTS workspace_billing_accounts (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -2210,6 +2229,26 @@ def _connect_local_identity_db() -> sqlite3.Connection:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS pilot_invites (
+            id TEXT PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            email TEXT,
+            role TEXT NOT NULL DEFAULT 'owner',
+            plan_id TEXT NOT NULL DEFAULT 'pilot',
+            max_uses INTEGER NOT NULL DEFAULT 1,
+            uses_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            expires_at INTEGER,
+            created_by_user_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            revoked_at INTEGER
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS workspace_billing_accounts (
             workspace_id TEXT PRIMARY KEY,
             tenant_id TEXT NOT NULL,
@@ -3753,6 +3792,274 @@ async def revoke_workspace_invite(invite_id: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row is not None else None
 
 
+def _pilot_invite_record_from_row(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    raw_metadata = (
+        row["metadata_json"] if "metadata_json" in keys
+        else row["metadata"] if "metadata" in keys
+        else row.get("metadata_json") if isinstance(row, dict)
+        else row.get("metadata") if isinstance(row, dict)
+        else {}
+    )
+    metadata = _decode_json_object(raw_metadata)
+    created_at = row.get("created_at") if isinstance(row, dict) else row["created_at"] if "created_at" in keys else None
+    updated_at = row.get("updated_at") if isinstance(row, dict) else row["updated_at"] if "updated_at" in keys else None
+    expires_at = row.get("expires_at") if isinstance(row, dict) else row["expires_at"] if "expires_at" in keys else None
+    revoked_at = row.get("revoked_at") if isinstance(row, dict) else row["revoked_at"] if "revoked_at" in keys else None
+    return {
+        "id": str(row["id"] or "").strip(),
+        "code": str(row["code"] or "").strip(),
+        "email": str(row["email"] or "").strip().lower() or None,
+        "role": str(row["role"] or "").strip() or "owner",
+        "plan_id": str(row["plan_id"] or "").strip() or "pilot",
+        "max_uses": int(row["max_uses"]) if row["max_uses"] is not None else 1,
+        "uses_count": int(row["uses_count"]) if row["uses_count"] is not None else 0,
+        "status": str(row["status"] or "").strip() or "active",
+        "expires_at": int(expires_at) if expires_at is not None else None,
+        "created_by_user_id": str(row["created_by_user_id"] if "created_by_user_id" in keys else "").strip() or None,
+        "metadata": metadata,
+        "created_at": int(created_at) if created_at is not None else None,
+        "updated_at": int(updated_at) if updated_at is not None else None,
+        "revoked_at": int(revoked_at) if revoked_at is not None else None,
+    }
+
+
+async def create_pilot_invite(
+    *,
+    code: str,
+    email: Optional[str] = None,
+    role: str = "owner",
+    plan_id: str = "pilot",
+    max_uses: int = 1,
+    expires_at: Optional[int] = None,
+    created_by_user_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    clean_code = str(code or "").strip().upper()
+    clean_email = str(email or "").strip().lower() or None
+    clean_role = str(role or "").strip().lower() or "owner"
+    clean_plan = str(plan_id or "").strip().lower() or "pilot"
+    clean_max_uses = max(1, int(max_uses or 1))
+    if not clean_code:
+        return None
+    invite_id = f"pilot_invite_{uuid.uuid4().hex}"
+    metadata_payload = dict(metadata or {})
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            now_ts = int(time.time())
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    fallback.execute(
+                        """
+                        INSERT OR REPLACE INTO pilot_invites (
+                            id, code, email, role, plan_id, max_uses, uses_count, status,
+                            expires_at, created_by_user_id, metadata_json, created_at, updated_at, revoked_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?, ?, NULL)
+                        """,
+                        (
+                            invite_id,
+                            clean_code,
+                            clean_email,
+                            clean_role,
+                            clean_plan,
+                            clean_max_uses,
+                            expires_at,
+                            str(created_by_user_id or "").strip() or None,
+                            _to_json(metadata_payload, default={}),
+                            now_ts,
+                            now_ts,
+                        ),
+                    )
+                    row = fallback.execute(
+                        "SELECT * FROM pilot_invites WHERE id = ? LIMIT 1",
+                        (invite_id,),
+                    ).fetchone()
+                    fallback.commit()
+            return _pilot_invite_record_from_row(row)
+        now = _utc_now_ts()
+        await connection.execute(
+            """
+            INSERT INTO pilot_invites (
+                id, code, email, role, plan_id, max_uses, uses_count, status,
+                expires_at, created_by_user_id, metadata, created_at, updated_at, revoked_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, 0, 'active', $7::timestamptz, $8, $9::jsonb, $10::timestamptz, $11::timestamptz, NULL
+            )
+            ON CONFLICT (code) DO UPDATE SET
+                email = EXCLUDED.email,
+                role = EXCLUDED.role,
+                plan_id = EXCLUDED.plan_id,
+                max_uses = EXCLUDED.max_uses,
+                status = 'active',
+                updated_at = EXCLUDED.updated_at,
+                revoked_at = NULL
+            """,
+            invite_id,
+            clean_code,
+            clean_email,
+            clean_role,
+            clean_plan,
+            clean_max_uses,
+            expires_at,
+            str(created_by_user_id or "").strip() or None,
+            _to_json(metadata_payload, default={}),
+            now,
+            now,
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM pilot_invites WHERE id = $1 LIMIT 1",
+            invite_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def get_pilot_invite_by_code(code: str) -> Optional[Dict[str, Any]]:
+    clean_code = str(code or "").strip().upper()
+    if not clean_code:
+        return None
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    row = fallback.execute(
+                        "SELECT * FROM pilot_invites WHERE code = ? LIMIT 1",
+                        (clean_code,),
+                    ).fetchone()
+            return _pilot_invite_record_from_row(row)
+        row = await connection.fetchrow(
+            "SELECT * FROM pilot_invites WHERE code = $1 LIMIT 1",
+            clean_code,
+        )
+    return dict(row) if row is not None else None
+
+
+async def list_pilot_invites() -> List[Dict[str, Any]]:
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    rows = fallback.execute(
+                        "SELECT * FROM pilot_invites ORDER BY created_at DESC",
+                    ).fetchall()
+            return [_pilot_invite_record_from_row(row) for row in rows]
+        rows = await connection.fetch(
+            "SELECT * FROM pilot_invites ORDER BY created_at DESC",
+        )
+    return [dict(row) for row in rows]
+
+
+async def claim_pilot_invite(code: str) -> Optional[Dict[str, Any]]:
+    clean_code = str(code or "").strip().upper()
+    if not clean_code:
+        return None
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            now_ts = int(time.time())
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    row = fallback.execute(
+                        """
+                        SELECT * FROM pilot_invites
+                        WHERE code = ? AND status = 'active'
+                          AND (expires_at IS NULL OR expires_at > ?)
+                          AND uses_count < max_uses
+                        LIMIT 1
+                        """,
+                        (clean_code, now_ts),
+                    ).fetchone()
+                    if row is None:
+                        return None
+                    fallback.execute(
+                        """
+                        UPDATE pilot_invites
+                        SET uses_count = uses_count + 1,
+                            updated_at = ?
+                        WHERE code = ?
+                        """,
+                        (now_ts, clean_code),
+                    )
+                    fallback.commit()
+                    updated_row = fallback.execute(
+                        "SELECT * FROM pilot_invites WHERE code = ? LIMIT 1",
+                        (clean_code,),
+                    ).fetchone()
+            return _pilot_invite_record_from_row(updated_row)
+        now = _utc_now_ts()
+        row = await connection.fetchrow(
+            """
+            SELECT * FROM pilot_invites
+            WHERE code = $1 AND status = 'active'
+              AND (expires_at IS NULL OR expires_at > $2::timestamptz)
+              AND uses_count < max_uses
+            LIMIT 1
+            """,
+            clean_code,
+            now,
+        )
+        if row is None:
+            return None
+        await connection.execute(
+            """
+            UPDATE pilot_invites
+            SET uses_count = uses_count + 1,
+                updated_at = $2::timestamptz
+            WHERE code = $1
+            """,
+            clean_code,
+            now,
+        )
+        updated_row = await connection.fetchrow(
+            "SELECT * FROM pilot_invites WHERE code = $1 LIMIT 1",
+            clean_code,
+        )
+    return dict(updated_row) if updated_row is not None else None
+
+
+async def revoke_pilot_invite(invite_id: str) -> Optional[Dict[str, Any]]:
+    clean_invite_id = str(invite_id or "").strip()
+    if not clean_invite_id:
+        return None
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            now_ts = int(time.time())
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    fallback.execute(
+                        """
+                        UPDATE pilot_invites
+                        SET status = 'revoked',
+                            revoked_at = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now_ts, now_ts, clean_invite_id),
+                    )
+                    row = fallback.execute(
+                        "SELECT * FROM pilot_invites WHERE id = ? LIMIT 1",
+                        (clean_invite_id,),
+                    ).fetchone()
+                    fallback.commit()
+            return _pilot_invite_record_from_row(row)
+        await connection.execute(
+            """
+            UPDATE pilot_invites
+            SET status = 'revoked',
+                revoked_at = $2::timestamptz,
+                updated_at = $2::timestamptz
+            WHERE id = $1
+            """,
+            clean_invite_id,
+            _utc_now_ts(),
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM pilot_invites WHERE id = $1 LIMIT 1",
+            clean_invite_id,
+        )
+    return dict(row) if row is not None else None
+
+
 async def update_workspace_policy_metadata(
     workspace_id: str,
     metadata: Dict[str, Any],
@@ -3977,6 +4284,84 @@ async def get_workspace_billing_summary(workspace_id: str) -> Optional[Dict[str,
         "account": account,
         "subscription": subscription,
     }
+
+
+async def update_workspace_billing_plan(
+    workspace_id: str,
+    *,
+    plan_id: str,
+    tenant_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    clean_plan_id = str(plan_id or "").strip().lower()
+    if not clean_workspace_id or not clean_plan_id:
+        return None
+    workspace = await get_workspace_by_id(clean_workspace_id)
+    if not isinstance(workspace, dict):
+        return None
+    resolved_tenant_id = str(tenant_id or workspace.get("tenant_id") or "").strip()
+    if not resolved_tenant_id:
+        return None
+    now_ts = int(time.time())
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    existing = fallback.execute(
+                        "SELECT id, created_at FROM workspace_billing_subscriptions WHERE workspace_id = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+                        (clean_workspace_id,),
+                    ).fetchone()
+                    if existing is not None:
+                        fallback.execute(
+                            """
+                            UPDATE workspace_billing_subscriptions
+                            SET plan_id = ?, updated_at = ?, metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.source', ?)
+                            WHERE id = ?
+                            """,
+                            (clean_plan_id, now_ts, "pilot_invite", str(existing["id"])),
+                        )
+                    else:
+                        fallback.execute(
+                            """
+                            INSERT INTO workspace_billing_subscriptions (
+                                id, tenant_id, workspace_id, provider, plan_id, status, metadata_json, created_at, updated_at
+                            ) VALUES (?, ?, ?, 'stripe', ?, 'active', ?, ?, ?)
+                            """,
+                            (str(uuid.uuid4()), resolved_tenant_id, clean_workspace_id, clean_plan_id, _to_json({"source": "pilot_invite"}, default={}), now_ts, now_ts),
+                        )
+                    fallback.commit()
+            return await get_workspace_billing_summary(clean_workspace_id)
+        existing = await connection.fetchrow(
+            "SELECT id, created_at FROM workspace_billing_subscriptions WHERE workspace_id = $1 ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+            clean_workspace_id,
+        )
+        if existing is not None:
+            await connection.execute(
+                """
+                UPDATE workspace_billing_subscriptions
+                SET plan_id = $2, updated_at = $3::timestamptz, metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{source}', to_jsonb($4))
+                WHERE id = $1
+                """,
+                str(existing["id"]),
+                clean_plan_id,
+                _utc_now_ts(),
+                "pilot_invite",
+            )
+        else:
+            await connection.execute(
+                """
+                INSERT INTO workspace_billing_subscriptions (
+                    id, tenant_id, workspace_id, provider, plan_id, status, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, 'stripe', $4, 'active', $5::jsonb, $6::timestamptz, $6::timestamptz)
+                """,
+                str(uuid.uuid4()),
+                resolved_tenant_id,
+                clean_workspace_id,
+                clean_plan_id,
+                _to_json({"source": "pilot_invite"}, default={}),
+                _utc_now_ts(),
+            )
+    return await get_workspace_billing_summary(clean_workspace_id)
 
 
 async def upsert_workspace_billing_account(

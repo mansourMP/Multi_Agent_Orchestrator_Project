@@ -180,6 +180,28 @@ class ToolBrokerGuardServiceTests(unittest.TestCase):
         self.assertEqual(decision.code, "broker_action_class_rate_limited")
         self.assertEqual(decision.snapshot["action_class_count"], 2)
 
+    def test_guard_blocks_tool_call_when_broker_rate_limit_exceeded(self) -> None:
+        """Guard integration: when session limit is exceeded, all subsequent tool calls are blocked."""
+        env = {"EMPYRALIS_TOOL_BROKER_SESSION_LIMIT": "1"}
+        with patch.dict(os.environ, env, clear=False):
+            self.assertTrue(
+                tool_broker_guard_service.evaluate_tool_call(
+                    claims=_claims("grant-guard-integ"),
+                    tool_key="web-search",
+                    action_class="read",
+                    now=100.0,
+                ).allowed
+            )
+            blocked = tool_broker_guard_service.evaluate_tool_call(
+                claims=_claims("grant-guard-integ"),
+                tool_key="browser",
+                action_class="read",
+                now=101.0,
+            )
+
+        self.assertFalse(blocked.allowed)
+        self.assertEqual(blocked.code, "broker_session_rate_limited")
+
 
 if __name__ == "__main__":
     unittest.main()

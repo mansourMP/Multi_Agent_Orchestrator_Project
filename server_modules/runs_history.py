@@ -347,6 +347,50 @@ async def resolve_cognitive_approval(event_id: str, payload: ApprovalResolvePayl
         "outbox_event": result.get("outbox_event"),
     }
 
+async def resolve_approval(approval_id: str, payload: ApprovalResolvePayload):
+    payload.validate_fields()
+    target_approval_id = str(approval_id or "").strip()
+    if not target_approval_id:
+        raise HTTPException(status_code=400, detail="approval_id is required.")
+    decision = str(payload.decision or "").strip().lower()
+    approve_tokens = {"proceed", "approve", "yes", "y", "continue", "ok"}
+    reject_tokens = {"hold", "reject", "no", "n", "abort", "stop", "cancel"}
+    escalate_tokens = {"escalate", "escalated"}
+    approved = decision in approve_tokens
+    escalated = decision in escalate_tokens
+    if decision not in approve_tokens and decision not in reject_tokens and decision not in escalate_tokens:
+        raise HTTPException(status_code=400, detail="Unsupported decision value.")
+    result = runtime_run_approval_service.resolve_standalone_approval_with_runtime_defaults(
+        target_approval_id,
+        payload={
+            "approval_id": target_approval_id,
+            "resolution": "approved" if approved else "rejected",
+            "actor": "user",
+            "reason": str(payload.note or "").strip(),
+        },
+    )
+    correlation_id = str(
+        result.get("correlation_id")
+        or ((result.get("outbox_event") or {}).get("trace_id") if isinstance(result.get("outbox_event"), dict) else "")
+        or _approval_correlation_id(target_approval_id, event_id=target_approval_id)
+    ).strip()
+    resolution = str(result.get("resolution") or ("approved" if approved else "rejected")).strip().lower() or "rejected"
+    return {
+        "ok": True,
+        "source": "runtime",
+        "approval_id": str(result.get("approval_id") or target_approval_id).strip() or target_approval_id,
+        "run_id": str(result.get("run_id") or "").strip() or None,
+        "status": resolution,
+        "resolution": resolution,
+        "decision_kind": "approved" if approved else ("escalated" if escalated else "rejected"),
+        "actor": str(result.get("actor") or "user").strip() or "user",
+        "note": str(payload.note or ""),
+        "reason": str(result.get("reason") or payload.note or ""),
+        "correlation_id": correlation_id,
+        "outbox_event": result.get("outbox_event"),
+    }
+
+
 async def get_approval_audit(
     limit: int = 100,
     workspace_id: Optional[str] = None,

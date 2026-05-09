@@ -237,7 +237,7 @@ class ToolBrokerTests(unittest.TestCase):
                 runtime_mode="hosted_secure",
                 runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
             )
-            with patch("server_modules.skill_registry.BrowserEngine", return_value=_FakeBrowser()):
+            with patch("server_modules.browser_engine.BrowserEngine", return_value=_FakeBrowser()):
                 result = await tool_broker.execute_skill(
                     capability_token=grant.token,
                     manifest_id=SAGE_GLOBAL_MANIFEST.manifest_id,

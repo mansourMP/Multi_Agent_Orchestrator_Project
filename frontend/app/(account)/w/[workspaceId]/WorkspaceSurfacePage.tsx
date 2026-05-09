@@ -16,6 +16,7 @@ import { WorkstationSageConnectorsPane } from '@/lib/workspace/workstation-sage-
 import { WorkstationSageProfilePane } from '@/lib/workspace/workstation-sage-profile-pane';
 import { WorkstationSettingsPane } from '@/lib/workspace/workstation-settings-pane';
 import { WorkstationStudioIntegrationsPane } from '@/lib/workspace/workstation-studio-integrations-pane';
+import { WorkstationInvestorDemoPane } from '@/lib/workspace/workstation-investor-demo-pane';
 import { WorkstationSurfaceViewport } from '@/lib/workspace/workstation-shell-frame';
 import { resolveRouteIdFromHref, type WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
 import {
@@ -114,6 +115,10 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   settings: {
     destinationId: 'settings',
     render: () => <WorkstationSettingsPane />,
+  },
+  demo: {
+    destinationId: 'studio',
+    render: () => <WorkstationInvestorDemoPane />,
   },
 };
 

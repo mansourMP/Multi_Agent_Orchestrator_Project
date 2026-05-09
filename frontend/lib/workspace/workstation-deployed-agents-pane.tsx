@@ -3189,7 +3189,10 @@ export function WorkstationDeployedAgentsPane({
                       subtitle="Run one clean path: ask Sage, create or use Shop Assistant, answer from catalog, request approval for risky work, then show activity and billing proof."
                       actions={(
                         <div className="app-inline-actions app-inline-actions--tight studio-inline-wrap">
-                          <AppButton type="button" tone="primary" onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}`)}>
+                          <AppButton type="button" tone="primary" onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}/demo`)}>
+                            Open Demo
+                          </AppButton>
+                          <AppButton type="button" tone="secondary" onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}`)}>
                             Ask Sage
                           </AppButton>
                           <AppButton type="button" tone="secondary" onClick={() => openCreateWizard('shop_assistant')}>

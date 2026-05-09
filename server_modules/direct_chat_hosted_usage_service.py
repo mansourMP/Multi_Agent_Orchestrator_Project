@@ -208,3 +208,13 @@ def persist_direct_chat_hosted_usage_best_effort(
         )
     except Exception:
         return
+    try:
+        from server_modules import billing_service
+
+        billing_service.debit_workspace_credit_balance_for_hosted_usage(
+            workspace_id=workspace_token,
+            tenant_id=tenant_id,
+            request_id=request_id,
+        )
+    except Exception:
+        return

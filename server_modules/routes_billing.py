@@ -26,6 +26,13 @@ class BillingPortalRequest(BaseModel):
     return_url: Optional[str] = None
 
 
+class CreditPurchaseRequest(BaseModel):
+    workspace_id: str
+    amount_usd: float
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
+
+
 @router.get("/billing/summary")
 async def billing_summary(
     workspace_id: str,
@@ -81,6 +88,45 @@ async def billing_portal(
         billing_service.create_workspace_portal_session,
         workspace_id=resolved_workspace_id,
         return_url=body.return_url,
+    )
+
+
+@router.post("/billing/credits/purchase")
+async def billing_credit_purchase(
+    body: CreditPurchaseRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        body.workspace_id,
+        minimum_role="owner",
+    )
+    user = auth_module.get_authenticated_user_record(current_user)
+    return await run_in_threadpool(
+        billing_service.create_credit_purchase_checkout_session,
+        workspace_id=resolved_workspace_id,
+        amount_usd=body.amount_usd,
+        success_url=body.success_url,
+        cancel_url=body.cancel_url,
+        billing_email=str(user.get("email") or "").strip().lower() or None,
+    )
+
+
+@router.get("/billing/credits/balance")
+async def billing_credit_balance(
+    workspace_id: str,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+    )
+    return await run_in_threadpool(
+        billing_service.credit_balance_for_workspace,
+        resolved_workspace_id,
     )
 
 

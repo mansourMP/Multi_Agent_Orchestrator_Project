@@ -16,7 +16,10 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
         with patch(
             "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry",
             new=AsyncMock(return_value={"id": "shost_1"}),
-        ) as record_ledger:
+        ) as record_ledger, patch(
+            "server_modules.billing_service.debit_workspace_credit_balance_for_hosted_usage",
+            return_value={"ok": True, "debited_usd": 0.0},
+        ) as debit_credits:
             direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
                 workspace_id="ws-1",
                 thread_id="thread-1",
@@ -42,6 +45,11 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
             )
 
         record_ledger.assert_awaited_once()
+        debit_credits.assert_called_once_with(
+            workspace_id="ws-1",
+            tenant_id="tenant-1",
+            request_id="req-1",
+        )
         kwargs = record_ledger.await_args.kwargs
         self.assertEqual(kwargs["tenant_id"], "tenant-1")
         self.assertEqual(kwargs["workspace_id"], "ws-1")

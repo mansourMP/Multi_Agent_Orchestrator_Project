@@ -67,6 +67,8 @@ export function WorkstationBillingPane() {
   const [portalPending, setPortalPending] = useState(false);
   const [creditCapDraft, setCreditCapDraft] = useState('0.50');
   const [creditCapPending, setCreditCapPending] = useState(false);
+  const [creditPurchaseAmount, setCreditPurchaseAmount] = useState('');
+  const [creditPurchasePending, setCreditPurchasePending] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -165,6 +167,30 @@ export function WorkstationBillingPane() {
       });
   };
 
+  const creditBalanceUsd = readNumber(hostedSageAi.credit_balance_usd, 0);
+  const creditBalanceCredits = readNumber(hostedSageAi.credit_balance_credits, 0);
+  const totalAvailableCredits = readNumber(hostedSageAi.total_available_credits, hostedCreditsRemaining);
+
+  const startCreditPurchase = (amountUsd: number) => {
+    setCreditPurchasePending(true);
+    setError(null);
+    void services.client.createCreditPurchaseSession({ amountUsd })
+      .then((payload) => {
+        const url = readText((payload ?? {}).checkout_url, '');
+        if (url) {
+          window.location.href = url;
+          return;
+        }
+        reloadSummary();
+      })
+      .catch((requestError) => {
+        setError(requestError instanceof Error ? requestError.message : 'Credit purchase could not be started.');
+      })
+      .finally(() => {
+        setCreditPurchasePending(false);
+      });
+  };
+
   return (
     <WorkstationSurfaceRoot surface="admin/billing">
       {loading ? (
@@ -230,6 +256,16 @@ export function WorkstationBillingPane() {
             subtitle="Hosted by Empyralis"
             description="Normal users stay on hosted credits first. BYOK providers and local models remain advanced setup paths."
           />
+          <WorkstationSurfaceListItem
+            title="Credit balance"
+            subtitle={`${formatCredits(creditBalanceCredits)} credits`}
+            description="Purchased credits that roll over and are consumed after the monthly cap."
+          />
+          <WorkstationSurfaceListItem
+            title="Total available"
+            subtitle={`${formatCredits(totalAvailableCredits)} credits`}
+            description="Combined monthly remaining + purchased credit balance."
+          />
         </WorkstationSurfaceList>
         <WorkstationSurfaceNotice tone="neutral">
           Hosted credits are the launch default. Premium local power comes from a paired computer or dedicated agent machine, not from asking normal users to manage provider keys.
@@ -251,6 +287,49 @@ export function WorkstationBillingPane() {
               onClick={saveHostedCreditCap}
             >
               {creditCapPending ? 'Saving…' : 'Save cap'}
+            </WorkstationActionButton>
+          </div>
+        </FormGrid>
+        <WorkstationSurfaceNotice tone="neutral">
+          Purchase additional credits that never expire and are consumed after your monthly cap.
+        </WorkstationSurfaceNotice>
+        <FormGrid columns="repeat(4, 1fr)">
+          {[5, 10, 25, 50].map((amount) => (
+            <WorkstationActionButton
+              key={amount}
+              type="button"
+              tone="secondary"
+              disabled={creditPurchasePending}
+              onClick={() => startCreditPurchase(amount)}
+            >
+              ${amount}
+            </WorkstationActionButton>
+          ))}
+        </FormGrid>
+        <FormGrid columns="minmax(0, 1fr) auto">
+          <FormField label="Custom amount" hint="USD. Minimum $1, maximum $500.">
+            <FormInput
+              type="number"
+              min="1"
+              max="500"
+              step="1"
+              placeholder="Enter amount in USD"
+              value={creditPurchaseAmount}
+              onChange={(event) => setCreditPurchaseAmount(event.currentTarget.value)}
+            />
+          </FormField>
+          <div className="settings-action-row">
+            <WorkstationActionButton
+              type="button"
+              disabled={creditPurchasePending || !creditPurchaseAmount}
+              onClick={() => {
+                const parsed = Number.parseFloat(creditPurchaseAmount);
+                if (Number.isFinite(parsed) && parsed >= 1) {
+                  startCreditPurchase(Math.min(500, parsed));
+                }
+              }}
+            >
+              {creditPurchasePending ? 'Purchasing…' : 'Purchase credits'}
             </WorkstationActionButton>
           </div>
         </FormGrid>

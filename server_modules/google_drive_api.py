@@ -175,3 +175,36 @@ def google_workspace_create_spreadsheet(credentials: Dict[str, Any], title: str)
         return body
     raise RuntimeError("Google Sheets create response was invalid.")
 
+
+def google_workspace_read_spreadsheet(credentials: Dict[str, Any], spreadsheet_id: str, range: str = "Sheet1") -> List[Dict[str, Any]]:
+    """Read values from a Google Sheet and return them as a list of row dicts.
+
+    The first row is treated as headers. Subsequent rows are mapped to dicts
+    using those headers. Empty cells become empty strings.
+    """
+    if google_workspace_uses_local_cli(credentials):
+        # Local CLI mode not yet implemented for reads; fall through to API.
+        pass
+
+    encoded_range = range.replace("/", "%2F")
+    response = http_json_request(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}",
+        headers=_google_drive_headers(credentials),
+    )
+    if int(response.get("status") or 0) != 200:
+        raise RuntimeError(f"Google Sheets read request failed for {spreadsheet_id}.")
+    body = response.get("json")
+    if not isinstance(body, dict):
+        raise RuntimeError("Google Sheets read response was invalid.")
+    values = body.get("values", [])
+    if not values:
+        return []
+    headers = [str(h).strip() for h in values[0]]
+    rows: List[Dict[str, Any]] = []
+    for row in values[1:]:
+        row_dict: Dict[str, Any] = {}
+        for i, header in enumerate(headers):
+            row_dict[header] = row[i] if i < len(row) else ""
+        rows.append(row_dict)
+    return rows
+

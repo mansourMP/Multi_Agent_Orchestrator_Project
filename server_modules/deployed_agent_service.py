@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
+import uuid
 
 from fastapi import HTTPException
 
@@ -21,6 +23,7 @@ from server_modules import product_catalog_live_data_service
 from server_modules import run_state_repository
 from server_modules import session_service
 from server_modules import shop_assistant_revenue_agent_service
+from server_modules import usage_accounting_service
 from server_modules import workspace_config_schema
 from server_modules.connectors.autopilot_runtime_exports import _autopilot_connector_shell_service
 from server_modules.connectors.autopilot_status_service import AutopilotStatusService
@@ -36,6 +39,7 @@ from server_modules.agent_manifest import (
 
 DEPLOYED_AGENT_ALLOWED_STATES = frozenset({"draft", "staging", "live", "paused"})
 DEPLOYED_AGENT_LIVE_CHANNELS = config_defaults_service.live_deployment_channels()
+LOGGER = logging.getLogger(__name__)
 DEPLOYED_AGENT_PUBLIC_FIELDS = (
     "id",
     "owner_workspace_id",
@@ -1966,29 +1970,79 @@ async def evaluate_deployed_shop_assistant_customer_question(
         except Exception:
             pass
 
-    # Phase 4: When approval is required, create a durable business insight the owner can act on.
+    # Phase 4: When approval is required, create a durable approval request and a business insight.
     approval = _coerce_dict(result.get("approval"))
     if bool(approval.get("required")):
         customer_summary = _normalize_text(customer_message)[:180]
+        approval_gate = str(approval.get("gate", "unknown"))
+        channel_key = str(connector_id or "web")
+        approval_id = str(uuid.uuid4())
+        approval_created = False
+        try:
+            run_state_repository.sync_create_or_update_approval_request(
+                run_id=deployed_agent_id,
+                approval_id=approval_id,
+                request_payload={
+                    "approval_id": approval_id,
+                    "prompt": f"Shop Assistant approval required: {approval_gate}",
+                    "actions": [approval_gate],
+                    "target": deployed_agent_id,
+                    "workspace_id": resolved_workspace_id,
+                    "tenant_id": tenant_id,
+                    "owner_user_id": str((current_user or {}).get("user_id") or "").strip() or None,
+                    "correlation_id": approval_id,
+                    "scope": "once",
+                },
+                actor="system",
+                trace_id=approval_id,
+                metadata={
+                    "source_type": "deployed_agent",
+                    "gate": approval_gate,
+                    "risk_class": str(approval.get("risk_class", "ORANGE")),
+                    "customer_message_summary": customer_summary,
+                    "connector_id": connector_id,
+                    "channel_key": channel_key,
+                    "deployed_agent_id": deployed_agent_id,
+                    "approval_target": deployed_agent_id,
+                },
+            )
+            result["approval_id"] = approval_id
+            approval_created = True
+        except Exception:
+            LOGGER.exception(
+                "Failed to create durable shop assistant approval",
+                extra={
+                    "workspace_id": resolved_workspace_id,
+                    "deployed_agent_id": deployed_agent_id,
+                    "approval_gate": approval_gate,
+                    "connector_id": connector_id,
+                },
+            )
+        if not approval_created:
+            approval["workflow_error"] = "approval_creation_failed"
+            result["approval"] = approval
+            result["status"] = "approval_unavailable"
+            result["answer"] = "Owner approval is temporarily unavailable. I paused this action so nothing risky happens without review."
         try:
             await control_plane_repository.upsert_deployed_agent_business_insight_candidate(
                 tenant_id=tenant_id,
                 workspace_id=resolved_workspace_id,
                 deployed_agent_id=deployed_agent_id,
-                pattern_key=f"shop_approval_{approval.get('gate', 'unknown')}",
+                pattern_key=f"shop_approval_{approval_gate}",
                 insight_type="approval_required",
-                title=f"Shop Assistant approval required: {approval.get('gate', 'action')}",
-                summary=f"Customer asked for a {approval.get('gate', 'business action')}: {customer_summary}",
+                title=f"Shop Assistant approval required: {approval_gate}",
+                summary=f"Customer asked for a {approval_gate}: {customer_summary}",
                 recommendation=result.get("answer", "Owner review is required before proceeding."),
                 sensitivity="orange",
-                channel_key="web",
+                channel_key=channel_key,
                 confidence=1.0,
                 redacted_examples=[customer_summary],
                 metadata={
-                    "approval_gate": approval.get("gate"),
+                    "approval_gate": approval_gate,
                     "risk_class": approval.get("risk_class"),
                     "deployed_agent_id": deployed_agent_id,
                     "customer_message_summary": customer_summary,
+                    "approval_id": approval_id,
                 },
             )
         except Exception:
@@ -2020,6 +2074,78 @@ async def evaluate_deployed_shop_assistant_customer_question(
                     "used_credits": visible_activity.get("used_credits"),
                 },
             )
+        except Exception:
+            pass
+
+    # Phase 6: Persist real usage line items to the deployed_agent_monthly_cost_ledger.
+    shop_run_id = f"shop-{deployed_agent_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+    for item in credit_line_items:
+        try:
+            credit_item_type = str(item.get("credit_item_type") or "").strip()
+            quantity = max(0, int(item.get("quantity") or 0))
+            if credit_item_type.startswith("ai_") and quantity > 0:
+                # Heuristic 70/30 input/output split for cost estimation.
+                input_tokens = int(quantity * 0.7)
+                output_tokens = quantity - input_tokens
+                usage_record = usage_accounting_service.build_usage_accounting_record(
+                    run_id=shop_run_id,
+                    tenant_id=tenant_id,
+                    workspace_id=resolved_workspace_id,
+                    deployed_agent_id=deployed_agent_id,
+                    source_surface="shop_assistant",
+                    effective_provider=provider_metadata.get("effective_provider"),
+                    effective_model=provider_metadata.get("effective_model"),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=quantity,
+                    allow_provider_fallback=True,
+                )
+                await control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry(
+                    tenant_id=tenant_id,
+                    workspace_id=resolved_workspace_id,
+                    deployed_agent_id=deployed_agent_id,
+                    run_id=shop_run_id,
+                    run_status="completed",
+                    provider=usage_record.get("provider") or provider_metadata.get("effective_provider"),
+                    model=usage_record.get("model") or provider_metadata.get("effective_model"),
+                    prompt_tokens=usage_record.get("prompt_tokens", 0),
+                    completion_tokens=usage_record.get("completion_tokens", 0),
+                    total_tokens=usage_record.get("total_tokens", quantity),
+                    estimated_cost_usd=usage_record.get("estimated_cost_usd", 0.0),
+                    metadata={
+                        "credit_item_type": credit_item_type,
+                        "credit_quantity": quantity,
+                        "credit_quantity_unit": str(item.get("quantity_unit") or "tokens"),
+                        "credit_multiplier": float(item.get("credit_multiplier") or 0.0),
+                        "billing_source": str(item.get("billing_source") or "empyralis_credits"),
+                        "public_tier": str(item.get("public_tier") or "pro"),
+                        "source_surface": "shop_assistant",
+                        "pricing_known": bool(usage_record.get("pricing_known")),
+                        "pricing_source": str(usage_record.get("pricing_source") or ""),
+                    },
+                )
+            elif credit_item_type == "connector_read":
+                await control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry(
+                    tenant_id=tenant_id,
+                    workspace_id=resolved_workspace_id,
+                    deployed_agent_id=deployed_agent_id,
+                    run_id=shop_run_id,
+                    run_status="completed",
+                    provider=provider_metadata.get("effective_provider"),
+                    model=provider_metadata.get("effective_model"),
+                    total_tokens=0,
+                    estimated_cost_usd=0.0,
+                    metadata={
+                        "credit_item_type": credit_item_type,
+                        "credit_quantity": quantity,
+                        "credit_quantity_unit": str(item.get("quantity_unit") or "reads"),
+                        "credit_multiplier": float(item.get("credit_multiplier") or 0.0),
+                        "billing_source": str(item.get("billing_source") or "empyralis_credits"),
+                        "connector_kind": str(item.get("connector_kind") or ""),
+                        "connector_id": str(item.get("connector_id") or ""),
+                        "source_surface": "shop_assistant",
+                    },
+                )
         except Exception:
             pass
 

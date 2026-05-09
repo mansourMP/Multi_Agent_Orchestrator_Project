@@ -1152,8 +1152,14 @@ export function WorkstationChatPane() {
     [effectiveSelectedModel, modelOptions, providerCatalog, selectedModelOption.label, selectedModelOption.providerId],
   );
   const selectedProviderRecord = useMemo(
-    () => providerCatalog.find((provider) => readString(provider.id) === readString(selectedProviderContext.providerId)) ?? null,
-    [providerCatalog, selectedProviderContext.providerId],
+    () => {
+      const routeProviderId = readString(selectedProviderContext.providerId);
+      const catalogProviderId = readString(selectedModelOption.providerId);
+      return providerCatalog.find((provider) => readString(provider.id) === routeProviderId)
+        ?? providerCatalog.find((provider) => readString(provider.id) === catalogProviderId)
+        ?? null;
+    },
+    [providerCatalog, selectedModelOption.providerId, selectedProviderContext.providerId],
   );
   const activeProviderSummary = useMemo(() => {
     const providerLabelById = new Map(
@@ -1217,6 +1223,21 @@ export function WorkstationChatPane() {
       || selectedProviderRecord?.local_only === true
       || credentialPlane === 'local_runtime';
     if (!selectedProviderRecord) {
+      if (selectedModelOption.uiSection === 'empyralis') {
+        return { label: 'Empyralis credits', tone: 'success' as const };
+      }
+      if (selectedModelOption.uiSection === 'local_ai') {
+        return {
+          label: localToolingOnline ? 'This Computer' : 'This Computer offline',
+          tone: localToolingOnline ? 'success' as const : 'warning' as const,
+        };
+      }
+      if (selectedModelOption.uiSection === 'my_api_key') {
+        return { label: 'My API Key', tone: 'neutral' as const };
+      }
+      if (selectedModelOption.uiSection === 'my_ai_account') {
+        return { label: 'My AI Account', tone: 'neutral' as const };
+      }
       return { label: 'No AI model', tone: 'warning' as const };
     }
     if (localProvider && !localToolingOnline) {
@@ -1232,7 +1253,7 @@ export function WorkstationChatPane() {
       return { label: providerPath, tone: 'neutral' as const };
     }
     return { label: 'Cloud AI', tone: 'neutral' as const };
-  }, [localToolingOnline, selectedProviderRecord]);
+  }, [localToolingOnline, selectedModelOption.uiSection, selectedProviderRecord]);
   const runtimeTrustZone = useMemo<ChatRuntimeTrustZone>(
     () => resolveRuntimeTrustZone(localRuntimeTarget, machineTrust),
     [localRuntimeTarget, machineTrust],
@@ -1642,6 +1663,7 @@ export function WorkstationChatPane() {
       setReasoningEffort(nextOption.defaultReasoningEffort);
     }
     setStatusMessage(null);
+    setSendFailureNotice(null);
     setIsPersistingModelSelection(true);
     void persistSelectedModelPreference(nextModelId)
       .then(async (persisted) => {
@@ -1791,6 +1813,8 @@ export function WorkstationChatPane() {
     }
     setDraft('');
     setHasEnteredConversationFlow(true);
+    setSendFailureNotice(null);
+    setStatusMessage(null);
 
     const requestedThreadId = activeThreadId;
     const clientRequestId = createClientTurnRequestId();
@@ -2350,6 +2374,44 @@ export function WorkstationChatPane() {
         data-workstation-chat="pane"
         className={`app-chat-page app-chat-page--surface${showFirstImpression ? ' app-chat-page--first-impression' : ''}`}
       >
+        <div className="app-chat-history-bar" aria-label="Recent chats">
+          <div className="app-chat-history-bar__head">
+            <span className="app-chat-history-bar__title">Recent chats</span>
+            <AppButton
+              type="button"
+              tone="secondary"
+              onClick={() => {
+                void startNewThread();
+              }}
+              disabled={isSending}
+            >
+              New chat
+            </AppButton>
+          </div>
+          <div className="app-chat-history-bar__list" role="list">
+            {recentThreadRows.map((item) => {
+              const isActive = item.threadId === activeThreadId;
+              return (
+                <button
+                  key={item.threadId}
+                  type="button"
+                  role="listitem"
+                  className={`app-chat-history-pill${isActive ? ' app-chat-history-pill--active' : ''}`}
+                  onClick={() => {
+                    void openRecentThread(item.threadId);
+                  }}
+                  disabled={isSending || isActive}
+                  aria-current={isActive ? 'true' : undefined}
+                >
+                  <span className="app-chat-history-pill__label">{item.title}</span>
+                  <span className="app-chat-history-pill__time">
+                    {isActive ? 'Current' : formatRelativeTime(item.updatedAt)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <section className={`app-chat-thread app-chat-thread--surface${showBlankTranscript || showFirstImpression ? ' app-chat-thread--blank' : ''}`}>
           {showContextStrip ? (
             <div className="app-chat-context-strip" aria-label="Sage conversation context">
@@ -2410,44 +2472,6 @@ export function WorkstationChatPane() {
               ))}
             </div>
           ) : null}
-          <div className="app-chat-history-bar" aria-label="Recent chats">
-            <div className="app-chat-history-bar__head">
-              <span className="app-chat-history-bar__title">Recent chats</span>
-              <AppButton
-                type="button"
-                tone="secondary"
-                onClick={() => {
-                  void startNewThread();
-                }}
-                disabled={isSending}
-              >
-                New chat
-              </AppButton>
-            </div>
-            <div className="app-chat-history-bar__list" role="list">
-              {recentThreadRows.map((item) => {
-                const isActive = item.threadId === activeThreadId;
-                return (
-                  <button
-                    key={item.threadId}
-                    type="button"
-                    role="listitem"
-                    className={`app-chat-history-pill${isActive ? ' app-chat-history-pill--active' : ''}`}
-                    onClick={() => {
-                      void openRecentThread(item.threadId);
-                    }}
-                    disabled={isSending || isActive}
-                    aria-current={isActive ? 'true' : undefined}
-                  >
-                    <span className="app-chat-history-pill__label">{item.title}</span>
-                    <span className="app-chat-history-pill__time">
-                      {isActive ? 'Current' : formatRelativeTime(item.updatedAt)}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
           <ScrollRegion className="app-chat-thread__scroll">
             <div className="app-chat-thread__body">
               {showSageSetupLoadingCard ? (

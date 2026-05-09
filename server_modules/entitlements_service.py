@@ -377,6 +377,10 @@ def resolve_workspace_entitlement_state(
     if isinstance(billing_summary, dict):
         subscription = _coerce_dict(billing_summary.get("subscription"))
         billing_usage = _coerce_dict(billing_summary.get("usage"))
+        hosted_billing_state = _coerce_dict(billing_summary.get("hosted_sage_ai"))
+        if hosted_billing_state:
+            billing_usage["hosted_sage_credit_balance_usd"] = hosted_billing_state.get("credit_balance_usd")
+            billing_usage["hosted_sage_total_available_usd"] = hosted_billing_state.get("total_available_usd")
         billing_plan_id = str(
             subscription.get("effective_plan_id")
             or subscription.get("plan_id")
@@ -480,6 +484,8 @@ def hosted_sage_ai_access_state(
     )
     monthly_cost_usd = _coerce_non_negative_float(usage.get("hosted_sage_cost_usd_monthly"), 0.0)
     remaining_usd = max(0.0, round(monthly_cap_usd - monthly_cost_usd, 6))
+    credit_balance_usd = _coerce_non_negative_float(usage.get("hosted_sage_credit_balance_usd"), 0.0)
+    total_available_usd = max(0.0, round(remaining_usd + credit_balance_usd, 6))
     credit_fields = _hosted_sage_ai_credit_fields(
         monthly_cap_usd=monthly_cap_usd,
         monthly_cost_usd=monthly_cost_usd,
@@ -494,6 +500,10 @@ def hosted_sage_ai_access_state(
             "monthly_cap_usd": monthly_cap_usd,
             "monthly_cost_usd": monthly_cost_usd,
             "monthly_remaining_usd": remaining_usd,
+            "credit_balance_usd": credit_balance_usd,
+            "credit_balance_credits": int(round(credit_balance_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+            "total_available_usd": total_available_usd,
+            "total_available_credits": int(round(total_available_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
             **credit_fields,
             "reason": "policy_disabled",
             "message": "Credits are not active yet. Add credits or use your own API key.",
@@ -506,6 +516,10 @@ def hosted_sage_ai_access_state(
             "monthly_cap_usd": monthly_cap_usd,
             "monthly_cost_usd": monthly_cost_usd,
             "monthly_remaining_usd": remaining_usd,
+            "credit_balance_usd": credit_balance_usd,
+            "credit_balance_credits": int(round(credit_balance_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+            "total_available_usd": total_available_usd,
+            "total_available_credits": int(round(total_available_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
             **credit_fields,
             "reason": "policy_disabled",
             "message": "Hosted Sage AI is disabled for this workspace.",
@@ -518,11 +532,15 @@ def hosted_sage_ai_access_state(
             "monthly_cap_usd": monthly_cap_usd,
             "monthly_cost_usd": monthly_cost_usd,
             "monthly_remaining_usd": remaining_usd,
+            "credit_balance_usd": credit_balance_usd,
+            "credit_balance_credits": int(round(credit_balance_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+            "total_available_usd": total_available_usd,
+            "total_available_credits": int(round(total_available_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
             **credit_fields,
             "reason": "owner_approval_required",
             "message": "Hosted Sage AI needs owner approval before this workspace can use it.",
         }
-    if monthly_cost_usd >= monthly_cap_usd:
+    if total_available_usd <= 0:
         return {
             "allowed": False,
             "plan_allows_hosted_ai": True,
@@ -530,6 +548,10 @@ def hosted_sage_ai_access_state(
             "monthly_cap_usd": monthly_cap_usd,
             "monthly_cost_usd": monthly_cost_usd,
             "monthly_remaining_usd": remaining_usd,
+            "credit_balance_usd": credit_balance_usd,
+            "credit_balance_credits": int(round(credit_balance_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+            "total_available_usd": total_available_usd,
+            "total_available_credits": int(round(total_available_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
             **credit_fields,
             "reason": "cap_reached",
             "message": "Hosted Sage AI monthly cap is reached for this workspace.",
@@ -541,6 +563,10 @@ def hosted_sage_ai_access_state(
         "monthly_cap_usd": monthly_cap_usd,
         "monthly_cost_usd": monthly_cost_usd,
         "monthly_remaining_usd": remaining_usd,
+        "credit_balance_usd": credit_balance_usd,
+        "credit_balance_credits": int(round(credit_balance_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+        "total_available_usd": total_available_usd,
+        "total_available_credits": int(round(total_available_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
         **credit_fields,
         "reason": None,
         "message": None,

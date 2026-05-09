@@ -224,6 +224,31 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertEqual(hosted["monthly_credits_used"], 2500)
         self.assertEqual(hosted["monthly_credits_remaining"], 7500)
 
+    def test_hosted_sage_ai_purchased_credits_allow_after_monthly_cap_reached(self) -> None:
+        state = entitlements_service.resolve_workspace_entitlement_state(
+            workspace={
+                "metadata": {
+                    "billing": {
+                        "plan": "pro",
+                        "hosted_sage_ai_policy": "enabled_with_cap",
+                        "hosted_sage_ai_monthly_cap_usd": 0.5,
+                        "usage": {
+                            "hosted_sage_cost_usd_monthly": 0.5,
+                            "hosted_sage_credit_balance_usd": 5.0,
+                        },
+                    }
+                }
+            },
+        )
+        hosted = entitlements_service.hosted_sage_ai_access_state(state=state)
+
+        self.assertTrue(hosted["allowed"])
+        self.assertEqual(hosted["reason"], None)
+        self.assertEqual(hosted["monthly_remaining_usd"], 0.0)
+        self.assertEqual(hosted["credit_balance_usd"], 5.0)
+        self.assertEqual(hosted["total_available_usd"], 5.0)
+        self.assertEqual(hosted["total_available_credits"], 5000)
+
     def test_hosted_sage_ai_respects_admin_defaults_billing_plan(self) -> None:
         state = entitlements_service.resolve_workspace_entitlement_state(
             workspace={

@@ -43,6 +43,20 @@ const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
 
 const BROWSER_AUTH_UPSTREAM_PREFIX = '/api/v1/auth/';
 
+function upstreamUnavailableResponse(error: unknown): NextResponse {
+  const reason = error instanceof Error ? error.message : 'upstream_unavailable';
+  return new NextResponse(
+    JSON.stringify({
+      detail: 'Control plane is unavailable. Restart the local runtime or try again in a moment.',
+      reason,
+    }),
+    {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    },
+  );
+}
+
 function hasBrowserSessionCookie(request: NextRequest): boolean {
   return Boolean(
     request.cookies.get(AUTH_ACCESS_COOKIE_NAME)
@@ -245,7 +259,7 @@ export async function forwardControlPlaneRequest(
         },
       );
     }
-    throw error;
+    return upstreamUnavailableResponse(error);
   } finally {
     if (timeoutHandle !== null) {
       clearTimeout(timeoutHandle);

@@ -2049,6 +2049,7 @@ export function WorkstationDeployedAgentsPane({
   const [overlayPersona, setOverlayPersona] = useState('');
   const [overlayMarketplaceListed, setOverlayMarketplaceListed] = useState(false);
   const [overlayMarketplaceCategory, setOverlayMarketplaceCategory] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [isSavingOverlayOverview, setIsSavingOverlayOverview] = useState(false);
   const [selectedAgentDetail, setSelectedAgentDetail] = useState<DeployedAgentRecord | null>(() => cachedStudioPane?.selectedAgentDetail ?? null);
   const [selectedAgentAnalytics, setSelectedAgentAnalytics] = useState<AgentAnalyticsSnapshot | null>(() => cachedStudioPane?.selectedAgentAnalytics ?? null);
@@ -3596,25 +3597,29 @@ export function WorkstationDeployedAgentsPane({
                                 <option value="enabled">Enabled</option>
                               </FormSelect>
                             </FormField>
-                            <ContextPresetControl
-                              value={detailConfigDraft.contextBudgetPreset}
-                              onSelect={(nextValue) => {
-                                setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current);
-                              }}
-                            />
-                            <FormField label="Retention" hint="Controls how long this assistant can retain reusable memory state.">
-                              <FormSelect
-                                value={detailConfigDraft.retentionPreset}
-                                onChange={(event) => {
-                                  const nextValue = event.currentTarget.value;
-                                  setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
+                            {showAdvanced && (
+                              <ContextPresetControl
+                                value={detailConfigDraft.contextBudgetPreset}
+                                onSelect={(nextValue) => {
+                                  setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current);
                                 }}
-                              >
-                                <option value="short">Short</option>
-                                <option value="standard">Standard</option>
-                                <option value="extended">Extended</option>
-                              </FormSelect>
-                            </FormField>
+                              />
+                            )}
+                            {showAdvanced && (
+                              <FormField label="Retention" hint="Controls how long this assistant can retain reusable memory state.">
+                                <FormSelect
+                                  value={detailConfigDraft.retentionPreset}
+                                  onChange={(event) => {
+                                    const nextValue = event.currentTarget.value;
+                                    setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
+                                  }}
+                                >
+                                  <option value="short">Short</option>
+                                  <option value="standard">Standard</option>
+                                  <option value="extended">Extended</option>
+                                </FormSelect>
+                              </FormField>
+                            )}
                           </FormGrid>
                           <div className="app-inline-actions">
                             <AppButton
@@ -3625,6 +3630,14 @@ export function WorkstationDeployedAgentsPane({
                               disabled={isSavingDetailConfig}
                             >
                               {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                            </AppButton>
+                            <AppButton
+                              type="button"
+                              tone="secondary"
+                              onClick={() => setShowAdvanced(!showAdvanced)}
+                              className="app-button--subtle"
+                            >
+                              {showAdvanced ? 'Hide Advanced' : 'Advanced'}
                             </AppButton>
                             <FormReadout
                               label="Selected actions"
@@ -4130,27 +4143,39 @@ export function WorkstationDeployedAgentsPane({
                             <span className="sage-tool-toggle__thumb" />
                           </button>
                         </div>
-                        <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                          <ContextPresetControl
-                            value={detailConfigDraft.contextBudgetPreset}
-                            onSelect={(nextValue) => {
-                              setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current);
-                            }}
-                          />
-                          <FormField label="Retention window">
-                            <FormSelect
-                              value={detailConfigDraft.retentionPreset}
-                              onChange={(event) => {
-                                const nextValue = event.currentTarget.value;
-                                setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
+                        <div className="app-inline-actions app-inline-actions--end">
+                          <AppButton
+                            type="button"
+                            tone="secondary"
+                            onClick={() => setShowAdvanced(!showAdvanced)}
+                            className="app-button--subtle"
+                          >
+                            {showAdvanced ? 'Hide Advanced' : 'Advanced'}
+                          </AppButton>
+                        </div>
+                        {showAdvanced && (
+                          <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                            <ContextPresetControl
+                              value={detailConfigDraft.contextBudgetPreset}
+                              onSelect={(nextValue) => {
+                                setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current);
                               }}
-                            >
-                              <option value="short">Short</option>
-                              <option value="standard">Standard</option>
-                              <option value="extended">Extended</option>
-                            </FormSelect>
-                          </FormField>
-                        </FormGrid>
+                            />
+                            <FormField label="Retention window">
+                              <FormSelect
+                                value={detailConfigDraft.retentionPreset}
+                                onChange={(event) => {
+                                  const nextValue = event.currentTarget.value;
+                                  setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
+                                }}
+                              >
+                                <option value="short">Short</option>
+                                <option value="standard">Standard</option>
+                                <option value="extended">Extended</option>
+                              </FormSelect>
+                            </FormField>
+                          </FormGrid>
+                        )}
                         <div className="deployed-agents-overlay__memory-list">
                           {isLoadingOverlayMemory && overlayMemoryEntries.length === 0 ? (
                             <>
@@ -4374,10 +4399,22 @@ export function WorkstationDeployedAgentsPane({
                           <span className="sage-tool-toggle__thumb" />
                         </button>
                       </div>
-                      <ContextPresetControl
-                        value={wizardState.contextBudgetPreset}
-                        onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
-                      />
+                      <div className="app-inline-actions app-inline-actions--end">
+                        <AppButton
+                          type="button"
+                          tone="secondary"
+                          onClick={() => setShowAdvanced(!showAdvanced)}
+                          className="app-button--subtle"
+                        >
+                          {showAdvanced ? 'Hide Advanced' : 'Advanced'}
+                        </AppButton>
+                      </div>
+                      {showAdvanced && (
+                        <ContextPresetControl
+                          value={wizardState.contextBudgetPreset}
+                          onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
+                        />
+                      )}
                     </FormField>
                     <FormField label="Purpose and behavior" hint="Core customer instructions this assistant follows.">
                       <FormTextarea
@@ -4599,22 +4636,34 @@ export function WorkstationDeployedAgentsPane({
                       <span className="sage-tool-toggle__thumb" />
                     </button>
                   </div>
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <ContextPresetControl
-                      value={wizardState.contextBudgetPreset}
-                      onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
-                    />
-                    <FormField label="Retention" hint="How long reusable memory should be kept.">
-                      <FormSelect
-                        value={wizardState.retentionPreset}
-                        onChange={(event) => setWizardField('retentionPreset', event.currentTarget.value)}
-                      >
-                        <option value="short">Short</option>
-                        <option value="standard">Standard</option>
-                        <option value="long">Long</option>
+                  <div className="app-inline-actions app-inline-actions--end">
+                    <AppButton
+                      type="button"
+                      tone="secondary"
+                      onClick={() => setShowAdvanced(!showAdvanced)}
+                      className="app-button--subtle"
+                    >
+                      {showAdvanced ? 'Hide Advanced' : 'Advanced'}
+                    </AppButton>
+                  </div>
+                  {showAdvanced && (
+                    <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                      <ContextPresetControl
+                        value={wizardState.contextBudgetPreset}
+                        onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
+                      />
+                      <FormField label="Retention" hint="How long reusable memory should be kept.">
+                        <FormSelect
+                          value={wizardState.retentionPreset}
+                          onChange={(event) => setWizardField('retentionPreset', event.currentTarget.value)}
+                        >
+                          <option value="short">Short</option>
+                          <option value="standard">Standard</option>
+                          <option value="long">Long</option>
                       </FormSelect>
                     </FormField>
                   </FormGrid>
+                  )}
                 </div>
               ) : null}
 

@@ -61,6 +61,45 @@ export function classifyReconnectError(error: unknown): ReconnectDecision {
   return { retryable: true, reason: message };
 }
 
+export interface CloseCodeContext {
+  connectionAgeMs?: number;
+  heartbeatAgeMs?: number;
+}
+
+export interface CloseCodeClassification {
+  reason: string;
+  probableCause: string;
+  retryable: boolean;
+}
+
+const SHORT_CONNECTION_THRESHOLD_MS = 30_000;
+const STALE_HEARTBEAT_THRESHOLD_MS = 30_000;
+
+export function classifyCloseCode(code: number, context?: CloseCodeContext): CloseCodeClassification {
+  const connectionAgeMs = context?.connectionAgeMs;
+  const heartbeatAgeMs = context?.heartbeatAgeMs;
+
+  switch (code) {
+    case 1000:
+      return { reason: "Normal closure", probableCause: "Client or server initiated a clean close.", retryable: true };
+    case 1001:
+      return { reason: "Server going away", probableCause: "Server is shutting down or restarting.", retryable: true };
+    case 1005:
+      return { reason: "No close status received", probableCause: "Connection was terminated without a close frame.", retryable: true };
+    case 1006: {
+      let probableCause = "Abnormal closure — possible proxy idle timeout or network loss.";
+      if (connectionAgeMs !== undefined && connectionAgeMs < SHORT_CONNECTION_THRESHOLD_MS) {
+        probableCause = "Proxy rejected connection or network unreachable (connection lasted under 30s).";
+      } else if (heartbeatAgeMs !== undefined && heartbeatAgeMs > STALE_HEARTBEAT_THRESHOLD_MS) {
+        probableCause = "Proxy idle timeout or keepalive failure (last heartbeat was over 30s ago).";
+      }
+      return { reason: "Abnormal closure (1006)", probableCause, retryable: true };
+    }
+    default:
+      return { reason: `Close code ${code}`, probableCause: "Unknown close reason.", retryable: true };
+  }
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);

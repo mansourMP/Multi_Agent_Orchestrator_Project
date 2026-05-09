@@ -25,7 +25,7 @@ import type {
 } from "../protocol/types";
 import { GatewayRuntimeMetadata } from "../runtime/runtime-metadata";
 import { HeartbeatLoop } from "./heartbeat";
-import { ReconnectBackoff, classifyReconnectError, sleep } from "./reconnect";
+import { ReconnectBackoff, classifyReconnectError, classifyCloseCode, sleep, type CloseCodeContext } from "./reconnect";
 import { GatewayCapabilityRouter } from "../supervisor/capability-router";
 import { PersonalChannelRuntimeRegistry } from "../channels/personal-runtime";
 
@@ -51,6 +51,8 @@ export class GatewayWsClient {
   private readonly pendingResponses = new Map<string, PendingResponse>();
   private activeScope: GatewayScope | null = null;
   private socketFailureReason: string | null = null;
+  private _connectionStartedAt: number | null = null;
+  private _lastHeartbeatResponseAt: number | null = null;
 
   constructor(
     private readonly config: GatewayConfig,
@@ -158,18 +160,34 @@ export class GatewayWsClient {
     const session = await this.createSession(identity.gatewayId);
     try {
       this.socket = await this.openSocket(session.ws_url);
+      this._connectionStartedAt = Date.now();
       this.socket.onmessage = (event) => {
         void this.handleIncomingFrame(typeof event.data === "string" ? event.data : String(event.data));
       };
       this.socket.onclose = async (event) => {
+        const closeCode = Number(event.code || 1000);
+        const closeContext: CloseCodeContext = {
+          connectionAgeMs: this._connectionStartedAt ? Date.now() - this._connectionStartedAt : undefined,
+          heartbeatAgeMs: this._lastHeartbeatResponseAt ? Date.now() - this._lastHeartbeatResponseAt : undefined,
+        };
+        const classification = classifyCloseCode(closeCode, closeContext);
         const reason =
           this.socketFailureReason ||
           String(event.reason || "").trim() ||
-          `socket_closed:${Number(event.code || 1000)}`;
+          classification.reason;
         this.socketFailureReason = null;
         this.heartbeatLoop.stop();
         this.activeScope = null;
         this.socket = null;
+        this._connectionStartedAt = null;
+        this._lastHeartbeatResponseAt = null;
+        await this.journal.append("system", "gateway.socket.closed", {
+          code: closeCode,
+          reason: classification.reason,
+          probableCause: classification.probableCause,
+          connectionAgeMs: closeContext.connectionAgeMs,
+          heartbeatAgeMs: closeContext.heartbeatAgeMs,
+        });
         await this.handleSocketFailure(reason);
         await this.personalChannelRuntimes.handleGatewayDisconnected(reason);
       };
@@ -292,6 +310,7 @@ export class GatewayWsClient {
         timeoutMs: this.requestTimeoutMsFor("gateway.heartbeat", this.config.heartbeatIntervalMs),
       },
     );
+    this._lastHeartbeatResponseAt = Date.now();
     await this.checkpoints.saveHealthState("online", {
       lastOutboxError: undefined,
       pendingOutboxCount: outboxSummary.pending,

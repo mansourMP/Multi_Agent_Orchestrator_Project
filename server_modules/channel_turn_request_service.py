@@ -59,6 +59,32 @@ def channel_turn_owner_user(*, install: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def channel_connector_id(*, install: Dict[str, Any], metadata: Dict[str, Any]) -> Optional[str]:
+    install_metadata = coerce_dict(install.get("metadata"))
+    install_config = coerce_dict(install.get("config"))
+    deployed_agent = coerce_dict(install_metadata.get("deployed_agent"))
+    candidates = (
+        metadata.get("connector_id"),
+        metadata.get("source_connector_id"),
+        metadata.get("telegram_connector_id"),
+        install.get("connector_id"),
+        install.get("source_connector_id"),
+        install.get("telegram_connector_id"),
+        install_metadata.get("connector_id"),
+        install_metadata.get("source_connector_id"),
+        install_metadata.get("telegram_connector_id"),
+        install_config.get("connector_id"),
+        install_config.get("telegram_connector_id"),
+        deployed_agent.get("connector_id"),
+        deployed_agent.get("telegram_connector_id"),
+    )
+    for candidate in candidates:
+        token = str(candidate or "").strip()
+        if token:
+            return token
+    return None
+
+
 def _normalize_tool_ids(value: Any) -> list[str]:
     items = value if isinstance(value, list) else []
     return [
@@ -328,6 +354,7 @@ def build_routing_context(
         shared_metadata=shared_metadata,
         turn_request=turn_request,
         execution_owner=channel_turn_owner_user(install=install_payload),
+        connector_id=channel_connector_id(install=install_payload, metadata=shared_metadata),
         allow_master_fallback=bool(allow_master_fallback),
         privileged_runtime_approved=bool(privileged_runtime_approved),
         seed_demo_if_empty=bool(seed_demo_if_empty),
@@ -474,6 +501,7 @@ def context_to_compat_dict(context: ChannelRoutingContext) -> Dict[str, Any]:
         "shared_metadata": context.shared_metadata,
         "turn_request": context.turn_request,
         "execution_owner": context.execution_owner,
+        "connector_id": context.connector_id,
         "deployed_agent": context.deployed_agent,
         "deployed_agent_id": context.deployed_agent_id,
         "deployed_agent_state": context.deployed_agent_state,

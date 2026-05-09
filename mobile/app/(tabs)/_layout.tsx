@@ -93,9 +93,6 @@ export default function TabsLayout() {
       <Tabs.Screen name="apps/index" options={{ title: "Discover" }} />
       <Tabs.Screen name="inbox/index" options={{ title: "Activity" }} />
       <Tabs.Screen name="profile/index" options={{ title: "Settings" }} />
-      <Tabs.Screen name="home/index" options={{ href: null }} />
-      <Tabs.Screen name="today/index" options={{ href: null }} />
-      <Tabs.Screen name="spaces/index" options={{ href: null }} />
     </Tabs>
   );
 }

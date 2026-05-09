@@ -13,6 +13,85 @@ from server_modules.channel_turn_request_service import normalize_canonical_chan
 logger = logging.getLogger(__name__)
 
 
+def _deployed_agent_is_shop_assistant(deployed_agent: Any) -> bool:
+    if not isinstance(deployed_agent, dict):
+        return False
+    template_slug = str(deployed_agent.get("template_slug") or "").strip().lower()
+    if template_slug == "shop-assistant":
+        return True
+    vertical = str(deployed_agent.get("vertical") or "").strip().lower()
+    if vertical == "shop_assistant":
+        return True
+    config = deployed_agent.get("config") if isinstance(deployed_agent.get("config"), dict) else {}
+    config_template = str(config.get("template_slug") or "").strip().lower()
+    if config_template == "shop-assistant":
+        return True
+    metadata = deployed_agent.get("metadata") if isinstance(deployed_agent.get("metadata"), dict) else {}
+    meta_template = str(metadata.get("template_slug") or "").strip().lower()
+    if meta_template == "shop-assistant":
+        return True
+    return False
+
+
+async def _try_shop_assistant_evaluation(
+    context: ChannelRoutingContext,
+) -> ChannelExecutionResult | None:
+    if not _deployed_agent_is_shop_assistant(context.deployed_agent):
+        return None
+    if not context.message or not context.deployed_agent_id:
+        return None
+    try:
+        from server_modules import deployed_agent_service
+
+        result = await deployed_agent_service.evaluate_deployed_shop_assistant_customer_question(
+            deployed_agent_id=context.deployed_agent_id,
+            current_user=context.execution_owner,
+            owner_workspace_id=context.workspace_id,
+            customer_message=context.message,
+            connector_id=context.connector_id,
+        )
+    except Exception:
+        logger.exception(
+            "Shop assistant channel evaluation failed; falling back to generic turn",
+            extra={
+                "tenant_id": context.tenant_id,
+                "workspace_id": context.workspace_id,
+                "channel_key": context.channel_key,
+                "deployed_agent_id": context.deployed_agent_id,
+                "connector_id": context.connector_id,
+            },
+        )
+        return None
+
+    shop_status = str(result.get("status") or "")
+    shop_answer = str(result.get("answer") or "I can help with product questions, availability, and orders.")
+    approval = result.get("approval") if isinstance(result.get("approval"), dict) else {}
+
+    if shop_status in ("answered", "approval_required", "needs_connector"):
+        return ChannelExecutionResult(
+            status=shop_status if shop_status != "approval_required" else "completed",
+            reply=shop_answer,
+            metadata={
+                "response_class": "shop_assistant",
+                "deployed_agent_id": context.deployed_agent_id,
+                "deployment_state": context.deployed_agent_state,
+                "shop_intent": str(result.get("intent") or ""),
+                "approval_required": bool(approval.get("required")),
+                "approval_gate": approval.get("gate"),
+            },
+            payload={
+                "status": shop_status,
+                "reply": shop_answer,
+                "intent": str(result.get("intent") or ""),
+                "approval": approval,
+                "activity_events": list(result.get("activity_events") or []),
+            },
+        )
+
+    # For "general" intents or anything else, fall through to generic turn.
+    return None
+
+
 async def execute_canonical_channel_turn(
     *,
     turn_request: Any,
@@ -62,6 +141,11 @@ async def execute_prepared_channel_turn(
             metadata=context.shared_metadata,
         ) as execution_slot:
             quota_snapshot = execution_slot.get("quota_snapshot")
+            # Phase 2: Try shop assistant evaluation before generic turn.
+            shop_result = await _try_shop_assistant_evaluation(context)
+            if shop_result is not None:
+                return shop_result
+
             timeout_seconds = max(int(getattr(quota_snapshot, "max_runtime_seconds", 0) or 0), 1)
             try:
                 execution_result = await wait_for(

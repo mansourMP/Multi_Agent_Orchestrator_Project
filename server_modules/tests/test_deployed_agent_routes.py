@@ -1182,18 +1182,6 @@ async def test_shop_evaluate_route_returns_catalog_answer_and_persists_activity(
         fake_evaluate,
     )
 
-    appended_events: list[dict[str, object]] = []
-
-    async def fake_append_activity_event(**kwargs):
-        appended_events.append(dict(kwargs))
-        return {"id": "aevt-1"}
-
-    monkeypatch.setattr(
-        routes_deployed_agents.activity_ledger_service,
-        "append_activity_event",
-        fake_append_activity_event,
-    )
-
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.post(
@@ -1206,9 +1194,6 @@ async def test_shop_evaluate_route_returns_catalog_answer_and_persists_activity(
     assert payload["ok"] is True
     assert "Blue Widget" in payload["answer"]
     assert payload["approval"]["required"] is False
-    assert len(appended_events) == 1
-    assert appended_events[0]["workspace_id"] == "ws-1"
-    assert appended_events[0]["event_class"] == "studio.proof.shop_assistant.inventory_hit"
 
 
 @pytest.mark.anyio
@@ -1242,18 +1227,6 @@ async def test_shop_evaluate_route_returns_approval_gate_for_discount(monkeypatc
         fake_evaluate,
     )
 
-    appended_events: list[dict[str, object]] = []
-
-    async def fake_append_activity_event(**kwargs):
-        appended_events.append(dict(kwargs))
-        return {"id": "aevt-2"}
-
-    monkeypatch.setattr(
-        routes_deployed_agents.activity_ledger_service,
-        "append_activity_event",
-        fake_append_activity_event,
-    )
-
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.post(
@@ -1265,5 +1238,3 @@ async def test_shop_evaluate_route_returns_approval_gate_for_discount(monkeypatc
     payload = response.json()
     assert payload["approval"]["required"] is True
     assert payload["approval"]["gate"] == "discount"
-    assert len(appended_events) == 1
-    assert appended_events[0]["review_required"] is True

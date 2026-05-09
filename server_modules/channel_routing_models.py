@@ -26,6 +26,7 @@ class ChannelRoutingContext:
     shared_metadata: Dict[str, Any]
     turn_request: Any
     execution_owner: Dict[str, Any]
+    connector_id: Optional[str] = None
     deployed_agent: Optional[Dict[str, Any]] = None
     deployed_agent_id: Optional[str] = None
     deployed_agent_state: Optional[str] = None

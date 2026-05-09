@@ -3772,6 +3772,11 @@ textarea {
   font-size: var(--app-font-12);
 }
 
+.app-button--subtle {
+  font-size: var(--app-font-13);
+  opacity: 0.7;
+}
+
 .app-stack-1,
 .app-stack-2,
 .app-stack-3,

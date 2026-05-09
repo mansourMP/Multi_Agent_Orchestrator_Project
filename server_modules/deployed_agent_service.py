@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from fastapi import HTTPException
 
+from server_modules import activity_ledger_service
 from server_modules import agent_specialist_repository
 from server_modules import auth as auth_module
 from server_modules import config_defaults_service
@@ -1920,31 +1921,109 @@ async def evaluate_deployed_shop_assistant_customer_question(
             customer_message=customer_message,
             connector_id=connector_id,
         )
-        metadata = _coerce_dict(deployed_agent.get("metadata"))
-        provider_metadata = {
-            "effective_provider": metadata.get("effective_provider") or metadata.get("provider"),
-            "effective_model": metadata.get("effective_model") or metadata.get("model"),
-            "fallback_provider": metadata.get("fallback_provider"),
-            "fallback_model": metadata.get("fallback_model"),
-        }
-        result["activity_billing_evidence"] = (
-            shop_assistant_revenue_agent_service.build_shop_assistant_activity_billing_evidence(
-                result,
-                public_tier=_normalize_text(metadata.get("public_tier"), default="pro"),
-                total_tokens=int(metadata.get("last_total_tokens") or metadata.get("estimated_total_tokens") or 900),
-                provider_metadata={key: value for key, value in provider_metadata.items() if value},
-                runtime_metadata={
-                    "runtime_target": _normalize_text(deployed_agent.get("runtime_target"), default="cloud"),
-                    "runtime_placement": _normalize_text(metadata.get("runtime_placement"), default="managed_cloud"),
-                    "runtime_supply": _normalize_text(metadata.get("runtime_supply"), default="empyralis"),
-                },
-            )
-        )
-        return result
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except ValueError as error:
         raise _http_bad_request(str(error)) from error
+
+    metadata = _coerce_dict(deployed_agent.get("metadata"))
+    provider_metadata = {
+        "effective_provider": metadata.get("effective_provider") or metadata.get("provider"),
+        "effective_model": metadata.get("effective_model") or metadata.get("model"),
+        "fallback_provider": metadata.get("fallback_provider"),
+        "fallback_model": metadata.get("fallback_model"),
+    }
+    result["activity_billing_evidence"] = (
+        shop_assistant_revenue_agent_service.build_shop_assistant_activity_billing_evidence(
+            result,
+            public_tier=_normalize_text(metadata.get("public_tier"), default="pro"),
+            total_tokens=int(metadata.get("last_total_tokens") or metadata.get("estimated_total_tokens") or 900),
+            provider_metadata={key: value for key, value in provider_metadata.items() if value},
+            runtime_metadata={
+                "runtime_target": _normalize_text(deployed_agent.get("runtime_target"), default="cloud"),
+                "runtime_placement": _normalize_text(metadata.get("runtime_placement"), default="managed_cloud"),
+                "runtime_supply": _normalize_text(metadata.get("runtime_supply"), default="empyralis"),
+            },
+        )
+    )
+
+    # Phase 3: Persist activity events to the ledger from every call path.
+    activity_events = list(result.get("activity_events") or [])
+    for event in activity_events:
+        try:
+            await activity_ledger_service.append_activity_event(
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                actor_type=str(event.get("actor_type") or "deployed_agent"),
+                actor_id=str(event.get("actor_id") or deployed_agent_id),
+                event_class=str(event.get("event") or "studio.proof.shop_assistant.interaction"),
+                title=str(event.get("event") or "Shop Assistant Interaction").replace("studio.proof.shop_assistant.", "").replace("_", " ").title(),
+                summary=str(event.get("customer_message_summary") or customer_message),
+                status=str(event.get("status") or "logged"),
+                review_required=bool(event.get("approval_required")),
+                payload=dict(event.get("metadata") or {}),
+            )
+        except Exception:
+            pass
+
+    # Phase 4: When approval is required, create a durable business insight the owner can act on.
+    approval = _coerce_dict(result.get("approval"))
+    if bool(approval.get("required")):
+        customer_summary = _normalize_text(customer_message)[:180]
+        try:
+            await control_plane_repository.upsert_deployed_agent_business_insight_candidate(
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                deployed_agent_id=deployed_agent_id,
+                pattern_key=f"shop_approval_{approval.get('gate', 'unknown')}",
+                insight_type="approval_required",
+                title=f"Shop Assistant approval required: {approval.get('gate', 'action')}",
+                summary=f"Customer asked for a {approval.get('gate', 'business action')}: {customer_summary}",
+                recommendation=result.get("answer", "Owner review is required before proceeding."),
+                sensitivity="orange",
+                channel_key="web",
+                confidence=1.0,
+                redacted_examples=[customer_summary],
+                metadata={
+                    "approval_gate": approval.get("gate"),
+                    "risk_class": approval.get("risk_class"),
+                    "deployed_agent_id": deployed_agent_id,
+                    "customer_message_summary": customer_summary,
+                },
+            )
+        except Exception:
+            pass
+
+    # Phase 5: Persist billing evidence as activity events for the credit ledger.
+    billing_evidence = _coerce_dict(result.get("activity_billing_evidence"))
+    credit_line_items = list(billing_evidence.get("credit_line_items") or [])
+    visible_activity = _coerce_dict(billing_evidence.get("visible_activity"))
+    for item in credit_line_items:
+        try:
+            await activity_ledger_service.append_activity_event(
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                actor_type="deployed_agent",
+                actor_id=deployed_agent_id,
+                event_class="studio.proof.shop_assistant.credit_consumed",
+                title="Shop Assistant credit usage",
+                summary=f"{visible_activity.get('tier_label', 'Pro')} tier · {item.get('credit_item_type', 'usage')}: {item.get('quantity', 0)} {item.get('quantity_unit', 'tokens')}",
+                status="logged",
+                review_required=False,
+                payload={
+                    "credit_item_type": str(item.get("credit_item_type") or ""),
+                    "quantity": item.get("quantity"),
+                    "quantity_unit": str(item.get("quantity_unit") or ""),
+                    "billing_source": str(item.get("billing_source") or ""),
+                    "public_tier": str(item.get("public_tier") or ""),
+                    "credit_multiplier": item.get("credit_multiplier"),
+                    "used_credits": visible_activity.get("used_credits"),
+                },
+            )
+        except Exception:
+            pass
+
+    return result
 
 
 async def get_deployed_agent_telegram_readiness(

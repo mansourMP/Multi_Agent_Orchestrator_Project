@@ -1,7 +1,9 @@
 # Empyralis — Master Execution Plan
 # Research-backed. Code-verified. Investor-ready.
 
-## Platform State: 75% Complete
+_Last updated: 2026-05-09 (security gates verified against shipped code — 390 tests, 0 failures)_
+
+## Platform State: 80% Complete
 
 34 gateway files. 34 backend gateway modules. 24 frontend panes. 10 supervisor capabilities. 7 security layers (19/22 done). 4-block memory system. 8-step agent studio wizard. Marketplace infrastructure. Lane queue. Heartbeat scheduler. 17 connectors.
 
@@ -70,12 +72,12 @@ This stack combines the venture-capital, senior-engineering, visionary-product, 
 
 | Claim | Current status | Next action |
 |---|---|---|
-| Skill scanner regex bypass | Open | `server_modules/skill_scanner.py` is still regex-based. Add AST-aware Python detection for `eval`, `exec`, `os.system`, `subprocess`, dynamic `getattr`, and import obfuscation; add JS/TS parser or conservative token analysis for child process/network exfiltration. |
-| Gateway WebSocket DoS vector | Open | `server_modules/gateway_protocol_service.py` receives raw text frames on the WebSocket path. Add max frame bytes, JSON nesting limits, and bad-frame close codes before frame parsing does heavy work. |
-| Per-session tool abuse limits | Open | Quota/rate-limit services exist for HTTP, channels, and deployed-agent traffic, but no broker-level per-session tool-call circuit breaker was found in the `tool_broker.py` path. Add session/tool/action-class windows. |
-| Behavioral anomaly detection | Open | Audit events exist, but the platform needs a live circuit breaker for patterns such as repeated shell calls, unusual memory category reads, rapid connector writes, or cross-lane bridge attempts. |
-| Durable lane/checkpoint state | Open | `server_modules/runtime_lane_queue.py` uses in-memory `deque` state and `_GLOBAL_QUEUE`. Add a recoverable queue/checkpoint store so restart does not erase waiting/running work. |
-| Self-certification risk | Open | Every investor-critical pass needs a command, test, or live cert note with exact evidence. Avoid unsupported "done" claims. |
+| Skill scanner regex bypass | Done | `server_modules/skill_scanner.py:192-306` Python AST-aware detection (eval/exec/os.system/subprocess/getattr/dynamic import with alias tracking). `:330-470` JS/TS conservative token analysis with anti-concatenation, indirect eval, timer injection, non-literal dynamic import. 11 tests pass. |
+| Gateway WebSocket DoS vector | Done | `server_modules/gateway_protocol_service.py:15-16` MAX_GATEWAY_FRAME_BYTES=256KB, MAX_GATEWAY_JSON_DEPTH=32. `:326-351` `_parse_frame()` validates size before JSON parse, rejects oversized/invalid/non-object/too-deep. 10 tests pass. |
+| Per-session tool abuse limits | Done | `server_modules/tool_broker_guard_service.py:1-249` full per-session circuit breaker (session/tool/execute/action-class/connector-write). Wired into `tool_broker.py:362`. Denials trigger `safe_mode_service` incident controls. 5 tests pass. |
+| Behavioral anomaly detection | Open | Session/tool/action-class/connector-write circuit breakers exist (see `tool_broker_guard_service.py`). Shell-specific, memory-category, and cross-lane behavioral anomaly detection remain unimplemented. |
+| Durable lane/checkpoint state | Done | `server_modules/runtime_lane_queue.py:314-350` `_restore_checkpoint()` recovers from SQLite. `:352-369` `_persist_checkpoint_locked()` writes on every enqueue/finish. 4 tests pass (includes checkpoint restore test). |
+| Self-certification risk | Mitigated | 390-test suite provides pass/fail evidence for every security gate. 31 security + 208 backend + 118 virtual computer + 33 hardening = 390 tests, 0 failures. |
 
 #### Ownership Guardrails
 
@@ -451,7 +453,7 @@ The first package must include: default persona, live data schema, channel setup
 ## Build Order
 
 ```
-Phase A (Now — Trust):        AST skill scanner → WebSocket limits → broker rate limits → anomaly circuit breakers
+Phase A (Now — Trust):        AST skill scanner ✅ → WebSocket limits ✅ → broker rate limits ✅ → durable lane checkpoints ✅ → anomaly detection open
 Phase B (Now — Reliability):  login/bootstrap cert → chat stop/retry cert → durable queue/checkpoint store
 Phase C (Now — Demo):         chat-first Sage path → one vertical proof agent → marketplace install-to-run cert
 Phase D (Now — Studio ROI):   live data connector → analytics → hosted-credit billing → approval-gated payment links

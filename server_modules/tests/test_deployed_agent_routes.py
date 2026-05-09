@@ -1145,3 +1145,125 @@ async def test_approve_deployed_agent_business_insight_route_validates_csrf_and_
 
     assert response.status_code == 200
     assert response.json()["insight"]["status"] == "approved"
+
+
+@pytest.mark.anyio
+async def test_shop_evaluate_route_returns_catalog_answer_and_persists_activity(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = _owner_user
+    monkeypatch.setattr(routes_deployed_agents.auth_module, "validate_csrf", lambda request: None)
+
+    async def fake_evaluate(**kwargs):
+        return {
+            "ok": True,
+            "status": "answered",
+            "answer": "We have the Blue Widget in stock for $29.99.",
+            "approval": {"required": False},
+            "activity_events": [
+                {
+                    "event": "studio.proof.shop_assistant.inventory_hit",
+                    "actor_type": "deployed_agent",
+                    "actor_id": "dagent_1",
+                    "status": "logged",
+                    "customer_message_summary": "Do you have blue widget",
+                    "metadata": {"matches": 1},
+                }
+            ],
+            "roi_metrics": {"questions_handled": 1, "inventory_hits": 1},
+            "activity_billing_evidence": {
+                "visible_activity": {"summary": "We have the Blue Widget in stock for $29.99."},
+                "credit_line_items": [{"credit_item_type": "ai_pro_tokens", "quantity": 900}],
+            },
+        }
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "evaluate_deployed_shop_assistant_customer_question",
+        fake_evaluate,
+    )
+
+    appended_events: list[dict[str, object]] = []
+
+    async def fake_append_activity_event(**kwargs):
+        appended_events.append(dict(kwargs))
+        return {"id": "aevt-1"}
+
+    monkeypatch.setattr(
+        routes_deployed_agents.activity_ledger_service,
+        "append_activity_event",
+        fake_append_activity_event,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/deployed-agents/dagent_1/shop-evaluate",
+            json={"workspace_id": "ws-1", "customer_message": "Do you have blue widget?"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert "Blue Widget" in payload["answer"]
+    assert payload["approval"]["required"] is False
+    assert len(appended_events) == 1
+    assert appended_events[0]["workspace_id"] == "ws-1"
+    assert appended_events[0]["event_class"] == "studio.proof.shop_assistant.inventory_hit"
+
+
+@pytest.mark.anyio
+async def test_shop_evaluate_route_returns_approval_gate_for_discount(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = _owner_user
+    monkeypatch.setattr(routes_deployed_agents.auth_module, "validate_csrf", lambda request: None)
+
+    async def fake_evaluate(**kwargs):
+        return {
+            "ok": True,
+            "status": "approval_required",
+            "answer": "Owner approval is required before offering a discount.",
+            "approval": {"required": True, "gate": "discount", "risk_class": "ORANGE"},
+            "activity_events": [
+                {
+                    "event": "studio.proof.shop_assistant.owner_approval_required",
+                    "actor_type": "deployed_agent",
+                    "actor_id": "dagent_1",
+                    "status": "approval_required",
+                    "approval_required": True,
+                    "metadata": {"approval_gate": "discount"},
+                }
+            ],
+            "roi_metrics": {"questions_handled": 1, "escalations": 1},
+        }
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "evaluate_deployed_shop_assistant_customer_question",
+        fake_evaluate,
+    )
+
+    appended_events: list[dict[str, object]] = []
+
+    async def fake_append_activity_event(**kwargs):
+        appended_events.append(dict(kwargs))
+        return {"id": "aevt-2"}
+
+    monkeypatch.setattr(
+        routes_deployed_agents.activity_ledger_service,
+        "append_activity_event",
+        fake_append_activity_event,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/deployed-agents/dagent_1/shop-evaluate",
+            json={"workspace_id": "ws-1", "customer_message": "Can I get a discount?"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["approval"]["required"] is True
+    assert payload["approval"]["gate"] == "discount"
+    assert len(appended_events) == 1
+    assert appended_events[0]["review_required"] is True

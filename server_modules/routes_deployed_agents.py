@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from server_modules import activity_ledger_service
 from server_modules import auth as auth_module
 from server_modules import deployed_agent_business_insights_service
 from server_modules import deployed_agent_service
@@ -66,6 +67,12 @@ class DeployedAgentExternalUserDeleteRequest(BaseModel):
 
 class DeployedAgentBusinessInsightReviewRequest(BaseModel):
     note: Optional[str] = None
+
+
+class ShopAssistantEvaluateRequest(BaseModel):
+    workspace_id: str
+    customer_message: str
+    connector_id: Optional[str] = None
 
 
 def _raise_for_value_error(error: ValueError, *, default_status: int = 400) -> None:
@@ -461,3 +468,48 @@ async def delete_deployed_agent_external_user_data(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=404, detail="Customer record not found.")
     return payload
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/shop-evaluate")
+async def evaluate_shop_assistant(
+    deployed_agent_id: str,
+    body: ShopAssistantEvaluateRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    try:
+        result = await deployed_agent_service.evaluate_deployed_shop_assistant_customer_question(
+            deployed_agent_id=deployed_agent_id,
+            current_user=current_user,
+            owner_workspace_id=body.workspace_id,
+            customer_message=body.customer_message,
+            connector_id=body.connector_id,
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        _raise_for_value_error(error)
+
+    # Persist activity events to the ledger so the demo path shows proof.
+    tenant_id = str((current_user or {}).get("tenant_id") or "").strip()
+    activity_events = list(result.get("activity_events") or [])
+    for event in activity_events:
+        try:
+            await activity_ledger_service.append_activity_event(
+                tenant_id=tenant_id,
+                workspace_id=body.workspace_id,
+                actor_type=str(event.get("actor_type") or "deployed_agent"),
+                actor_id=str(event.get("actor_id") or deployed_agent_id),
+                event_class=str(event.get("event") or "studio.proof.shop_assistant.interaction"),
+                title=str(event.get("event") or "Shop Assistant Interaction").replace("studio.proof.shop_assistant.", "").replace("_", " ").title(),
+                summary=str(event.get("customer_message_summary") or body.customer_message),
+                status=str(event.get("status") or "logged"),
+                review_required=bool(event.get("approval_required")),
+                payload=dict(event.get("metadata") or {}),
+            )
+        except Exception:
+            # Activity ledger persistence is best-effort for the demo path.
+            pass
+
+    return result

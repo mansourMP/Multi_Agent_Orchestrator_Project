@@ -10,7 +10,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Literal, Optional
 
-from server_modules import runtime_state_store
+from server_modules import runtime_config, runtime_state_store
+
+_DEFAULT_STATE_DB_PATH = Path(runtime_config.ORION_RUNTIME_STATE_DB).expanduser().resolve() if runtime_config.ORION_RUNTIME_STATE_DB else None
+
+
+def _default_restore_work_factory(item: Dict[str, Any]) -> RuntimeLaneWork:
+    run_id = str(item.get("run_id") or item.get("metadata", {}).get("run_id") or "").strip()
+    label = str(item.get("label") or "").strip()
+
+    def _restored_work() -> Dict[str, Any]:
+        return {
+            "status": "failed",
+            "summary": f"Restored lane work could not be rehydrated: label={label}, run_id={run_id}",
+            "run_id": run_id or None,
+            "restored": True,
+        }
+
+    return _restored_work
 
 RuntimeLane = Literal["main", "cron", "subagent", "system"]
 RuntimeLaneWork = Callable[[], Dict[str, Any]]
@@ -395,7 +412,10 @@ def get_runtime_lane_queue() -> RuntimeLaneQueue:
     global _GLOBAL_QUEUE
     with _GLOBAL_QUEUE_LOCK:
         if _GLOBAL_QUEUE is None:
-            _GLOBAL_QUEUE = RuntimeLaneQueue()
+            _GLOBAL_QUEUE = RuntimeLaneQueue(
+                state_db_path=_DEFAULT_STATE_DB_PATH,
+                restore_work_factory=_default_restore_work_factory,
+            )
             atexit.register(_GLOBAL_QUEUE.shutdown, wait=True, timeout=3.0)
         return _GLOBAL_QUEUE
 

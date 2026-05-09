@@ -81,6 +81,25 @@ class RuntimeLaneQueueTests(unittest.TestCase):
         self.assertFalse(drain_thread.is_alive())
         self.assertEqual(finished, ["slow", "fast"])
 
+    def test_default_global_queue_uses_checkpoint_when_db_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "runtime.db"
+            # Temporarily override the default DB path
+            from server_modules import runtime_lane_queue
+            original_default = runtime_lane_queue._DEFAULT_STATE_DB_PATH
+            runtime_lane_queue._DEFAULT_STATE_DB_PATH = db_path
+            runtime_lane_queue._GLOBAL_QUEUE = None
+            try:
+                queue = runtime_lane_queue.get_runtime_lane_queue()
+                snapshot = queue.snapshot()
+                self.assertTrue(snapshot["checkpoint"]["enabled"])
+                self.assertEqual(snapshot["checkpoint"]["key"], "runtime_lane_queue.v1")
+            finally:
+                if runtime_lane_queue._GLOBAL_QUEUE is not None:
+                    runtime_lane_queue._GLOBAL_QUEUE.shutdown(wait=True, timeout=2.0)
+                runtime_lane_queue._GLOBAL_QUEUE = None
+                runtime_lane_queue._DEFAULT_STATE_DB_PATH = original_default
+
     def test_run_backed_items_restore_from_durable_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "runtime.db"

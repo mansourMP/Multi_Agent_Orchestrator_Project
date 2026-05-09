@@ -114,6 +114,38 @@ class ToolBrokerGuardServiceTests(unittest.TestCase):
         self.assertTrue(incident["active"])
         self.assertEqual(incident["mode"], "pause")
 
+    def test_tool_rate_limit_blocks_repeated_tool_calls(self) -> None:
+        env = {
+            "EMPYRALIS_TOOL_BROKER_SESSION_LIMIT": "20",
+            "EMPYRALIS_TOOL_BROKER_TOOL_LIMIT": "2",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            self.assertTrue(
+                tool_broker_guard_service.evaluate_tool_call(
+                    claims=_claims("grant-tool-limit"),
+                    tool_key="web-search",
+                    action_class="read",
+                    now=100.0,
+                ).allowed
+            )
+            self.assertTrue(
+                tool_broker_guard_service.evaluate_tool_call(
+                    claims=_claims("grant-tool-limit"),
+                    tool_key="web-search",
+                    action_class="read",
+                    now=101.0,
+                ).allowed
+            )
+            decision = tool_broker_guard_service.evaluate_tool_call(
+                claims=_claims("grant-tool-limit"),
+                tool_key="web-search",
+                action_class="read",
+                now=102.0,
+            )
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.code, "broker_tool_rate_limited")
+
     def test_action_class_calls_have_generic_rate_limit(self) -> None:
         env = {
             "EMPYRALIS_TOOL_BROKER_SESSION_LIMIT": "20",

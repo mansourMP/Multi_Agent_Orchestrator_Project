@@ -313,11 +313,17 @@ def _js_token_view(text: str) -> str:
     token_view = str(text or "")
     token_view = re.sub(r"/\*.*?\*/", " ", token_view, flags=re.S)
     token_view = re.sub(r"//[^\n\r]*", " ", token_view)
-    token_view = re.sub(
-        r"(['\"])([A-Za-z0-9_:@./-]{1,80})\1\s*\+\s*(['\"])([A-Za-z0-9_:@./-]{1,80})\3",
-        lambda match: f'"{match.group(2)}{match.group(4)}"',
-        token_view,
+    # Iteratively fold adjacent string literals to defeat multi-part concatenation.
+    _STRING_CONCAT_RE = re.compile(
+        r"(['\"])([A-Za-z0-9_:@./-]{1,80})\1\s*\+\s*(['\"])([A-Za-z0-9_:@./-]{1,80})\3"
     )
+    for _ in range(32):
+        next_view = _STRING_CONCAT_RE.sub(
+            lambda match: f'"{match.group(2)}{match.group(4)}"', token_view
+        )
+        if next_view == token_view:
+            break
+        token_view = next_view
     return token_view
 
 
@@ -376,6 +382,24 @@ def _scan_js_ts_conservative(source: _Source) -> List[Dict[str, Any]]:
             "WebSocket tunnel",
             "JS/TS skill opens a WebSocket connection that can be used as a command or exfiltration channel.",
         ),
+        (
+            r"\(\s*[^)]*,\s*eval\s*\)\s*\(|\beval\s*\(\s*['\"]",
+            "js_indirect_eval",
+            "Indirect eval invocation",
+            "JS/TS skill invokes eval directly or through an indirect reference, which can execute untrusted code.",
+        ),
+        (
+            r"\bsetTimeout\s*\(\s*['\"]",
+            "js_timer_code_injection",
+            "Timer-based code injection",
+            "JS/TS skill passes a string to setTimeout, which evaluates it as code.",
+        ),
+        (
+            r"\bsetInterval\s*\(\s*['\"]",
+            "js_timer_code_injection",
+            "Timer-based code injection",
+            "JS/TS skill passes a string to setInterval, which evaluates it as code.",
+        ),
     )
     for pattern, code, title, detail in high_risk_patterns:
         _add_regex_findings(
@@ -427,6 +451,19 @@ def _scan_js_ts_conservative(source: _Source) -> List[Dict[str, Any]]:
                 source=source,
                 offset=_first_offset(r"\bprocess\.env\b|\bdotenv\b", text),
                 detail="JS/TS skill reads environment variables and sends data over a network path.",
+            )
+        )
+
+    # Detect dynamic import() where the argument is not a string literal (e.g., computed module name)
+    if _has(r"\bimport\s*\(", text) and not _has(r"\bimport\s*\(\s*['\"]", text):
+        findings.append(
+            _finding(
+                severity="critical",
+                code="js_dynamic_import_nonliteral",
+                title="Dynamic import with non-literal specifier",
+                source=source,
+                offset=_first_offset(r"\bimport\s*\(", text),
+                detail="JS/TS skill uses dynamic import with a computed module specifier, which can hide malicious dependency loading.",
             )
         )
 

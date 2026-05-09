@@ -4,13 +4,14 @@ import tempfile
 import threading
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import uuid
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from server_modules import (
     auth,
@@ -116,6 +117,94 @@ class GatewayRoutesTests(unittest.TestCase):
                 }
             },
         }
+
+    def test_pairing_token_replay_is_rejected(self) -> None:
+        pairing_response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={"workspace_id": "default", "display_name": "Test Device", "platform": "macos"},
+        )
+        self.assertEqual(pairing_response.status_code, 200)
+        pairing_payload = pairing_response.json()
+        pairing_token = pairing_payload["pairing_token"]
+
+        # First registration succeeds
+        first_registration = self.client.post(
+            "/api/gateway/registrations",
+            json={
+                "pairing_token": pairing_token,
+                "device_id": "device-replay-1",
+                "display_name": "Test Device",
+                "platform": "macos-arm64",
+            },
+        )
+        self.assertEqual(first_registration.status_code, 200)
+
+        # Second registration with same token fails
+        second_registration = self.client.post(
+            "/api/gateway/registrations",
+            json={
+                "pairing_token": pairing_token,
+                "device_id": "device-replay-2",
+                "display_name": "Test Device 2",
+                "platform": "macos-arm64",
+            },
+        )
+        self.assertEqual(second_registration.status_code, 400)
+        self.assertIn("no longer active", second_registration.json()["detail"].lower())
+
+    def test_expired_session_token_is_rejected(self) -> None:
+        from server_modules import gateway_state_repository
+
+        pairing_response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={"workspace_id": "default", "display_name": "Test Device", "platform": "macos"},
+        )
+        self.assertEqual(pairing_response.status_code, 200)
+        pairing_payload = pairing_response.json()
+
+        registration_response = self.client.post(
+            "/api/gateway/registrations",
+            json={
+                "pairing_token": pairing_payload["pairing_token"],
+                "device_id": "device-expired-1",
+                "display_name": "Test Device",
+                "platform": "macos-arm64",
+            },
+        )
+        self.assertEqual(registration_response.status_code, 200)
+        registration_payload = registration_response.json()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_token = registration_payload["gateway_token"]
+
+        session_response = self.client.post(
+            "/api/gateway/sessions",
+            json={"gateway_id": gateway_id, "gateway_token": gateway_token},
+        )
+        self.assertEqual(session_response.status_code, 200)
+        session_payload = session_response.json()
+        session_token = session_payload["session_token"]
+
+        # Manually expire the session in the DB
+        with gateway_state_repository._connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE gateway_sessions SET expires_at = ? WHERE session_token_hash = ?",
+                (
+                    (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+                    gateway_state_repository._hash_token(session_token),
+                ),
+            )
+            conn.commit()
+
+        # WS connection with expired session should be rejected
+        ws_path = (
+            f"/api/gateway/ws?gateway_id={gateway_id}"
+            f"&session_token={session_token}"
+        )
+        with self.assertRaises(WebSocketDisconnect) as raised:
+            with self.client.websocket_connect(ws_path) as websocket:
+                websocket.receive_text()
+        self.assertEqual(raised.exception.code, 4401)
+        self.assertIn("expired", raised.exception.reason.lower())
 
     def _register_gateway(self) -> dict:
         pairing_response = self.client.post(

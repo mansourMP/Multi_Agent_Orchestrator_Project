@@ -120,6 +120,11 @@ class GatewayProtocolServiceTests(unittest.TestCase):
         self.assertTrue(connection.remember_inbound_frame_id("frame-2"))
         self.assertTrue(connection.remember_inbound_frame_id(""))
 
+    def test_parse_frame_rejects_empty_frame(self) -> None:
+        with self.assertRaises(gateway_protocol_service.GatewayFrameValidationError) as raised:
+            gateway_protocol_service._parse_frame("")
+        self.assertEqual(raised.exception.error_code, "gateway_frame_invalid_json")
+
 
 if __name__ == "__main__":
     unittest.main()

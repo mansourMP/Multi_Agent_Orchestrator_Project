@@ -618,12 +618,13 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
 ];
 
 const DEFAULT_STUDIO_TEMPLATE = STUDIO_TEMPLATES[0]!;
-const PRIMARY_STUDIO_TEMPLATE_IDS = new Set([
+const PRIMARY_STUDIO_TEMPLATE_ORDER = [
   'shop_assistant',
   'restaurant_orders',
   'dental_receptionist',
   'support_faq',
-]);
+] as const;
+const PRIMARY_STUDIO_TEMPLATE_IDS = new Set<string>(PRIMARY_STUDIO_TEMPLATE_ORDER);
 const CUSTOM_STUDIO_TEMPLATE: StudioTemplate = {
   id: 'custom_agent',
   title: 'Custom Agent',
@@ -992,17 +993,32 @@ function normalizeStudioTemplates(payload: unknown): StudioTemplate[] {
     .map(mapStudioSeedToTemplate)
     .filter((item): item is StudioTemplate => Boolean(item));
   if (!seedTemplates.length) {
-    return [...STUDIO_TEMPLATES];
+    return sortStudioTemplatesForBusinessFlow(STUDIO_TEMPLATES);
   }
   const seedIds = new Set(seedTemplates.map((template) => normalizeTemplateToken(template.id)));
-  const staticExtras = STUDIO_TEMPLATES.filter((template) => (
-    !seedIds.has(normalizeTemplateToken(template.id))
-    && !PRIMARY_STUDIO_TEMPLATE_IDS.has(normalizeTemplateToken(template.id))
+  const primaryFallbacks = STUDIO_TEMPLATES.filter((template) => (
+    PRIMARY_STUDIO_TEMPLATE_IDS.has(normalizeTemplateToken(template.id))
+    && !seedIds.has(normalizeTemplateToken(template.id))
   ));
-  return [
+  const staticExtras = STUDIO_TEMPLATES.filter((template) => {
+    const templateId = normalizeTemplateToken(template.id);
+    return !seedIds.has(templateId) && !PRIMARY_STUDIO_TEMPLATE_IDS.has(templateId);
+  });
+  return sortStudioTemplatesForBusinessFlow([
     ...seedTemplates,
+    ...primaryFallbacks,
     ...staticExtras,
-  ];
+  ]);
+}
+
+function sortStudioTemplatesForBusinessFlow(templates: ReadonlyArray<StudioTemplate>): StudioTemplate[] {
+  return [...templates].sort((left, right) => {
+    const leftRank = PRIMARY_STUDIO_TEMPLATE_ORDER.indexOf(normalizeTemplateToken(left.id) as typeof PRIMARY_STUDIO_TEMPLATE_ORDER[number]);
+    const rightRank = PRIMARY_STUDIO_TEMPLATE_ORDER.indexOf(normalizeTemplateToken(right.id) as typeof PRIMARY_STUDIO_TEMPLATE_ORDER[number]);
+    const normalizedLeftRank = leftRank === -1 ? Number.MAX_SAFE_INTEGER : leftRank;
+    const normalizedRightRank = rightRank === -1 ? Number.MAX_SAFE_INTEGER : rightRank;
+    return normalizedLeftRank - normalizedRightRank;
+  });
 }
 
 function applyStudioTemplate(state: WizardState, template: StudioTemplate): WizardState {
@@ -3166,6 +3182,40 @@ export function WorkstationDeployedAgentsPane({
                     </ListDetailPanel>
 
                     <ListDetailPanel
+                      className="studio-panel studio-panel--demo-proof"
+                      eyebrow="Investor demo"
+                      title="Show the whole company story"
+                      subtitle="Run one clean path: ask Sage, create or use Shop Assistant, answer from catalog, request approval for risky work, then show activity and billing proof."
+                      actions={(
+                        <div className="app-inline-actions app-inline-actions--tight studio-inline-wrap">
+                          <AppButton type="button" tone="primary" onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}`)}>
+                            Ask Sage
+                          </AppButton>
+                          <AppButton type="button" tone="secondary" onClick={() => openCreateWizard('shop_assistant')}>
+                            Create Shop Assistant
+                          </AppButton>
+                          <AppButton type="button" tone="secondary" onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}/activity`)}>
+                            Activity proof
+                          </AppButton>
+                          <AppButton type="button" tone="secondary" onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`)}>
+                            Billing proof
+                          </AppButton>
+                        </div>
+                      )}
+                    >
+                      <div className="deployed-agents-card__badges" aria-label="Investor demo certification flow">
+                        <span className="deployed-agents-card__badge">1. Login</span>
+                        <span className="deployed-agents-card__badge">2. Ask Sage</span>
+                        <span className="deployed-agents-card__badge">3. Shop Assistant</span>
+                        <span className="deployed-agents-card__badge">4. Live catalog answer</span>
+                        <span className="deployed-agents-card__badge">5. Approval gate</span>
+                        <span className="deployed-agents-card__badge">6. Activity</span>
+                        <span className="deployed-agents-card__badge">7. Billing</span>
+                        <span className="deployed-agents-card__badge">8. Gateway proof if needed</span>
+                      </div>
+                    </ListDetailPanel>
+
+                    <ListDetailPanel
                       className="studio-panel studio-panel--templates"
                       eyebrow="Templates"
                       title="What do you need?"
@@ -3377,7 +3427,7 @@ export function WorkstationDeployedAgentsPane({
                         <FormReadout label="Context" value={humanizeToken(selectedStudioTemplate.contextBudgetPreset, 'Balanced')} />
                       </FormGrid>
                       <div className="studio-template-detail__group">
-                        <span className="studio-template-detail__label">Required connected apps</span>
+                        <span className="studio-template-detail__label">What you’ll connect</span>
                         <div className="studio-template-card__tags">
                           {selectedStudioTemplate.requiredConnectors.map((connector) => (
                             <span key={connector} className="studio-template-card__tag">{connector}</span>

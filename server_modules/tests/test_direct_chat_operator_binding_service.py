@@ -93,6 +93,11 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
     def test_parse_tool_name_handles_builtin_and_connector_tools(self) -> None:
         self.assertEqual(service.parse_tool_name("memory_search"), ("memory", "search"))
         self.assertEqual(service.parse_tool_name("memory_update"), ("memory", "update"))
+        self.assertEqual(service.parse_tool_name("memory_append_daily_note"), ("memory", "append_daily_note"))
+        self.assertEqual(service.parse_tool_name("memory_stage_consolidation"), ("memory", "stage_consolidation"))
+        self.assertEqual(service.parse_tool_name("memory_consolidate_daily_notes"), ("memory", "consolidate_daily_notes"))
+        self.assertEqual(service.parse_tool_name("memory_list_versions"), ("memory", "list_versions"))
+        self.assertEqual(service.parse_tool_name("memory_rollback_version"), ("memory", "rollback_version"))
         self.assertEqual(service.parse_tool_name("telegram__send"), ("telegram", "send"))
 
     def test_build_direct_tool_execution_callbacks_reads_underscored_namespace(self) -> None:
@@ -1025,6 +1030,11 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(bindings.parse_tool_name("memory_search"), ("memory", "search"))
+        self.assertEqual(bindings.parse_tool_name("memory_append_daily_note"), ("memory", "append_daily_note"))
+        self.assertEqual(bindings.parse_tool_name("memory_stage_consolidation"), ("memory", "stage_consolidation"))
+        self.assertEqual(bindings.parse_tool_name("memory_consolidate_daily_notes"), ("memory", "consolidate_daily_notes"))
+        self.assertEqual(bindings.parse_tool_name("memory_list_versions"), ("memory", "list_versions"))
+        self.assertEqual(bindings.parse_tool_name("memory_rollback_version"), ("memory", "rollback_version"))
         self.assertEqual(bindings.tool_arguments_payload({"x": 1}), {"x": 1})
         self.assertEqual(tool_config["to_email"], "john@example.com")
         self.assertEqual(approved_tool["name"], "http_request")

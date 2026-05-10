@@ -21,6 +21,11 @@ class DirectChatPromptServiceTests(unittest.TestCase):
         self.assertIn("## Memory Recall", section)
         self.assertIn("run memory_search", section)
         self.assertIn("memory_update", section)
+        self.assertIn("memory_append_daily_note", section)
+        self.assertIn("memory_stage_consolidation", section)
+        self.assertIn("memory_consolidate_daily_notes", section)
+        self.assertIn("memory_list_versions", section)
+        self.assertIn("memory_rollback_version", section)
 
         empty = direct_chat_prompt_service.memory_recall_section(
             [{"name": "web__search"}],

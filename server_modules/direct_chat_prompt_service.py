@@ -32,7 +32,11 @@ def memory_recall_section(tools: list[dict[str, Any]], *, memory_tool_names: set
         "run memory_search on MEMORY.md + memory/*.md, then use memory_get to read only the needed lines. "
         "If memory results are weak, say you checked. When the user explicitly asks Sage to remember, correct, "
         "or update durable memory, read the current file first, then use memory_update with the complete revised "
-        "Markdown content."
+        "Markdown content. For short durable memory captures, use memory_append_daily_note to append one note to "
+        "today's daily file only; never append secrets, raw transcripts, or temporary noise. For consolidation "
+        "drafts, use memory_stage_consolidation to stage proposals under memory/.dreams/ only. For safe merge "
+        "planning/execution from daily notes, use memory_consolidate_daily_notes with explicit approval/policy flags. "
+        "Use memory_list_versions for audit/version history and memory_rollback_version only when explicitly requested."
     )
 
 

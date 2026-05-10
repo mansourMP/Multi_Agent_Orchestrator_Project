@@ -39,11 +39,55 @@ def _callbacks() -> service.DirectToolExecutionCallbacks:
             "from_line": from_line,
             "line_count": line_count,
         },
-        update_memory_context_file=lambda workspace_id, filename, content, agent_install_id=None: {
+        update_memory_context_file=lambda workspace_id, filename, content, agent_install_id=None, **kwargs: {
             "workspace_id": workspace_id,
             "filename": filename,
             "content": content,
             "agent_install_id": agent_install_id,
+            "version_id": kwargs.get("version_id") or "version-1",
+        },
+        memory_append_daily_note=lambda workspace_id, note, agent_install_id=None, actor=None, run_id=None: {
+            "workspace_id": workspace_id,
+            "filename": "memory/2026-05-11.md",
+            "appended_entry": f"- [00:00:00 UTC] {note}",
+            "saved": True,
+            "usefulness": "useful",
+            "agent_install_id": agent_install_id,
+        },
+        create_memory_consolidation_staging_file=lambda workspace_id, proposal, source_refs=None, target_files=None, agent_install_id=None, actor=None, run_id=None: {
+            "workspace_id": workspace_id,
+            "filename": "memory/.dreams/20260511T000000Z-abc1234567.md",
+            "source_refs": list(source_refs or []),
+            "target_files": list(target_files or []),
+            "agent_install_id": agent_install_id,
+        },
+        consolidate_daily_memory_notes=lambda workspace_id, **kwargs: {
+            "workspace_id": workspace_id,
+            "proposal_id": "proposal-1",
+            "proposed_updates": {"MEMORY.md": "# Curated Memory\n\n- consolidated\n"},
+            "merged": bool(kwargs.get("apply_merge")),
+            "audit_id": "audit-1" if kwargs.get("apply_merge") else None,
+            "compact_mode": kwargs.get("compact_mode") or "none",
+        },
+        list_memory_file_versions=lambda workspace_id, filename, agent_install_id=None, limit=20: [
+            {
+                "version_id": "ver-1",
+                "workspace_id": workspace_id,
+                "agent_install_id": agent_install_id,
+                "filename": filename,
+                "old_hash": "old",
+                "new_hash": "new",
+                "reason": "memory_update",
+                "actor": "direct_tool",
+                "timestamp": "2026-05-11T00:00:00Z",
+            }
+        ],
+        rollback_memory_file_version=lambda workspace_id, filename, **kwargs: {
+            "workspace_id": workspace_id,
+            "filename": filename,
+            "rolled_back_to_version_id": kwargs.get("version_id"),
+            "new_version_id": "ver-2",
+            "new_hash": "hash-2",
         },
     )
 
@@ -103,6 +147,91 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["filename"], "IDENTITY.md")
         self.assertEqual(payload["workspace_id"], "workspace-1")
+
+    def test_execute_single_direct_tool_call_handles_memory_append_daily_note(self) -> None:
+        raw = service.execute_single_direct_tool_call(
+            tool_call={
+                "name": "memory_append_daily_note",
+                "arguments": {"note": "Preference: keep memory updates concise and structured."},
+            },
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            callbacks=_callbacks(),
+        )
+
+        payload = json.loads(raw)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["filename"], "memory/2026-05-11.md")
+        self.assertEqual(payload["workspace_id"], "workspace-1")
+        self.assertTrue(payload["saved"])
+        self.assertIn("Preference:", payload["appended_entry"])
+
+    def test_execute_single_direct_tool_call_handles_memory_stage_consolidation(self) -> None:
+        raw = service.execute_single_direct_tool_call(
+            tool_call={
+                "name": "memory_stage_consolidation",
+                "arguments": {
+                    "proposal": "Decision: consolidate stable goals into GOALS.md and procedures into PROCEDURES.md.",
+                    "target_files": ["GOALS.md", "PROCEDURES.md"],
+                    "source_refs": ["memory/2026-05-11.md#L4"],
+                },
+            },
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            callbacks=_callbacks(),
+        )
+        payload = json.loads(raw)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["staged_only"])
+        self.assertEqual(payload["workspace_id"], "workspace-1")
+        self.assertEqual(payload["target_files"], ["GOALS.md", "PROCEDURES.md"])
+
+    def test_execute_single_direct_tool_call_handles_memory_consolidate_daily_notes(self) -> None:
+        raw = service.execute_single_direct_tool_call(
+            tool_call={
+                "name": "memory_consolidate_daily_notes",
+                "arguments": {
+                    "target_files": ["MEMORY.md"],
+                    "max_notes": 20,
+                    "apply_merge": True,
+                    "compact_mode": "archive",
+                    "user_approved": True,
+                    "run_id": "run-1",
+                },
+            },
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            callbacks=_callbacks(),
+        )
+        payload = json.loads(raw)
+        self.assertEqual(payload["workspace_id"], "workspace-1")
+        self.assertTrue(payload["merged"])
+        self.assertEqual(payload["audit_id"], "audit-1")
+
+    def test_execute_single_direct_tool_call_handles_memory_list_versions(self) -> None:
+        raw = service.execute_single_direct_tool_call(
+            tool_call={"name": "memory_list_versions", "arguments": {"filename": "MEMORY.md", "limit": 5}},
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            callbacks=_callbacks(),
+        )
+        payload = json.loads(raw)
+        self.assertEqual(payload["filename"], "MEMORY.md")
+        self.assertEqual(payload["versions"][0]["version_id"], "ver-1")
+
+    def test_execute_single_direct_tool_call_handles_memory_rollback_version(self) -> None:
+        raw = service.execute_single_direct_tool_call(
+            tool_call={
+                "name": "memory_rollback_version",
+                "arguments": {"filename": "MEMORY.md", "version_id": "ver-1", "reason": "requested"},
+            },
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            callbacks=_callbacks(),
+        )
+        payload = json.loads(raw)
+        self.assertEqual(payload["filename"], "MEMORY.md")
+        self.assertEqual(payload["rolled_back_to_version_id"], "ver-1")
 
     def test_execute_single_direct_tool_call_emits_audit_events(self) -> None:
         callbacks = _callbacks()

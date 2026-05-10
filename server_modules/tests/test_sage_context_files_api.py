@@ -2,6 +2,7 @@ import asyncio
 import sys
 import types
 import unittest
+from fastapi import HTTPException
 from unittest.mock import patch
 
 from server_modules import sage_context_files_api
@@ -88,6 +89,113 @@ class SageContextFilesApiTests(unittest.TestCase):
             self.assertEqual(payload["content"], content)
             self.assertEqual(write_mock.call_args.args, ("IDENTITY.md", content))
             self.assertEqual(write_mock.call_args.kwargs["workspace_id"], "workspace-1")
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_update_route_rejects_invalid_filename_as_http_400(self) -> None:
+        fake_server = types.ModuleType("server")
+        fake_server.Depends = lambda dependency: dependency
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            sage_context_files_api.register_sage_context_file_routes(app)
+            route = app.routes[("PATCH", "/api/sage-context-files/{filename}")]
+            with (
+                patch("server_modules.sage_context_files_api.enforce_workspace_access", return_value="workspace-1"),
+                patch("server_modules.sage_context_files_api.workspace_tenant_id", return_value="tenant-1"),
+                patch(
+                    "server_modules.sage_context_files_api.write_workspace_context_file",
+                    side_effect=ValueError("Unsupported context filename: ../escape.md"),
+                ),
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    asyncio.run(
+                        route(
+                            "../escape.md",
+                            SageContextFileUpdateRequest(workspace_id="workspace-1", content="# nope\n"),
+                            current_user={"user_id": "user-1"},
+                        )
+                    )
+            self.assertEqual(ctx.exception.status_code, 400)
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_update_route_blocks_cross_workspace_write(self) -> None:
+        fake_server = types.ModuleType("server")
+        fake_server.Depends = lambda dependency: dependency
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            sage_context_files_api.register_sage_context_file_routes(app)
+            route = app.routes[("PATCH", "/api/sage-context-files/{filename}")]
+            with (
+                patch("server_modules.sage_context_files_api.enforce_workspace_access", return_value="workspace-allowed") as access_mock,
+                patch("server_modules.sage_context_files_api.workspace_tenant_id", return_value="tenant-1"),
+                patch(
+                    "server_modules.sage_context_files_api.write_workspace_context_file",
+                    return_value={"filename": "MEMORY.md", "content": "# ok\n"},
+                ) as write_mock,
+            ):
+                payload = asyncio.run(
+                    route(
+                        "MEMORY.md",
+                        SageContextFileUpdateRequest(workspace_id="workspace-denied", content="# should not leak\n"),
+                        current_user={"user_id": "user-1"},
+                    )
+                )
+
+            self.assertEqual(access_mock.call_args.args[1], "workspace-denied")
+            self.assertEqual(write_mock.call_args.kwargs["workspace_id"], "workspace-allowed")
+            self.assertEqual(payload["workspace_id"], "workspace-allowed")
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_list_route_includes_all_context_files(self) -> None:
+        fake_server = types.ModuleType("server")
+        fake_server.Depends = lambda dependency: dependency
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            sage_context_files_api.register_sage_context_file_routes(app)
+            route = app.routes[("GET", "/api/sage-context-files")]
+            with (
+                patch("server_modules.sage_context_files_api.enforce_workspace_access", return_value="workspace-1"),
+                patch("server_modules.sage_context_files_api.workspace_tenant_id", return_value="tenant-1"),
+                patch(
+                    "server_modules.sage_context_files_api.read_workspace_context_files",
+                    return_value={
+                        "SOUL.md": "# Empyralis\n",
+                        "IDENTITY.md": "# Identity\n",
+                        "memory/2026-05-10.md": "# Today",
+                        "memory/.dreams/sample.md": "# Dream",
+                    },
+                ),
+            ):
+                payload = asyncio.run(
+                    route(workspace_id="workspace-1", current_user={"user_id": "user-1"})
+                )
+            self.assertTrue(any(item["filename"] == "memory/2026-05-10.md" for item in payload["files"]))
+            self.assertTrue(any(item["filename"] == "memory/.dreams/sample.md" for item in payload["files"]))
+            self.assertTrue(any(item["filename"] == "IDENTITY.md" for item in payload["files"]))
+            self.assertEqual(payload["workspace_id"], "workspace-1")
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)

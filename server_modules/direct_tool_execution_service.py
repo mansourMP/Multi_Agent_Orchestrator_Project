@@ -24,6 +24,36 @@ def _default_update_memory_context_file(*args: Any, **kwargs: Any) -> Any:
     return update_memory_context_file(*args, **kwargs)
 
 
+def _default_memory_append_daily_note(*args: Any, **kwargs: Any) -> Any:
+    from server_modules.memory_service import memory_append_daily_note
+
+    return memory_append_daily_note(*args, **kwargs)
+
+
+def _default_create_memory_consolidation_staging_file(*args: Any, **kwargs: Any) -> Any:
+    from server_modules.memory_service import create_memory_consolidation_staging_file
+
+    return create_memory_consolidation_staging_file(*args, **kwargs)
+
+
+def _default_consolidate_daily_memory_notes(*args: Any, **kwargs: Any) -> Any:
+    from server_modules.memory_service import consolidate_daily_memory_notes
+
+    return consolidate_daily_memory_notes(*args, **kwargs)
+
+
+def _default_list_memory_file_versions(*args: Any, **kwargs: Any) -> Any:
+    from server_modules.memory_service import list_memory_file_versions
+
+    return list_memory_file_versions(*args, **kwargs)
+
+
+def _default_rollback_memory_file_version(*args: Any, **kwargs: Any) -> Any:
+    from server_modules.memory_service import rollback_memory_file_version
+
+    return rollback_memory_file_version(*args, **kwargs)
+
+
 @dataclass(frozen=True)
 class DirectToolExecutionCallbacks:
     compact_step_detail: Callable[[Any], Optional[str]]
@@ -44,6 +74,11 @@ class DirectToolExecutionCallbacks:
     search_memory_notebook: Callable[..., Any]
     get_memory_notebook_excerpt: Callable[..., Any]
     update_memory_context_file: Callable[..., Any] = _default_update_memory_context_file
+    memory_append_daily_note: Callable[..., Any] = _default_memory_append_daily_note
+    create_memory_consolidation_staging_file: Callable[..., Any] = _default_create_memory_consolidation_staging_file
+    consolidate_daily_memory_notes: Callable[..., Any] = _default_consolidate_daily_memory_notes
+    list_memory_file_versions: Callable[..., Any] = _default_list_memory_file_versions
+    rollback_memory_file_version: Callable[..., Any] = _default_rollback_memory_file_version
 
 
 def direct_tool_step_payload(
@@ -378,9 +413,9 @@ def _direct_tool_governance_metadata(
         governance_boundary = "sage_profile"
         risk_level = "moderate" if action_class.endswith("update") else "low"
     elif normalized_connector == "memory":
-        action_class = "workspace_memory_update" if normalized_action == "update" else "workspace_memory_read"
+        action_class = "workspace_memory_update" if normalized_action in {"update", "append_daily_note", "stage_consolidation", "consolidate_daily_notes", "rollback_version"} else "workspace_memory_read"
         governance_boundary = "workspace_memory"
-        risk_level = "moderate" if normalized_action == "update" else "low"
+        risk_level = "moderate" if normalized_action in {"update", "append_daily_note", "stage_consolidation", "consolidate_daily_notes", "rollback_version"} else "low"
     elif normalized_connector in _CHANNEL_CONNECTORS or normalized_action in {"send", "reply", "post", "dispatch"}:
         action_class = "channel_send"
         governance_boundary = "external_channel"

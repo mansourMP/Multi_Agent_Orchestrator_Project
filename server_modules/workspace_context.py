@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 from typing import Dict
@@ -22,6 +23,17 @@ ALLOWED_CONTEXT_FILENAMES = (
     "PROCEDURES.md",
     "REFLECTION.md",
 )
+
+MAX_CONTEXT_ROOT_FILES = 12
+MAX_CONTEXT_FILE_BYTES = 64_000
+MAX_CONTEXT_SCOPE_BYTES = 512_000
+MAX_CONTEXT_DAILY_NOTES = 365
+MAX_CONTEXT_DREAM_STAGING_NOTES = 10
+DREAM_STAGING_TTL_DAYS = 7
+
+_DATE_SEGMENT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+DAILY_NOTE_RE = re.compile(r"^memory/(\d{4}-\d{2}-\d{2})\.md$")
+DREAMS_NOTE_RE = re.compile(r"^memory/\.dreams/([A-Za-z0-9][A-Za-z0-9._-]*)\.md$")
 
 DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
     "SOUL.md": (
@@ -122,17 +134,191 @@ def workspace_knowledge_dir(*, workspace_id: str | None = None, agent_install_id
     return path
 
 
+def _validate_context_path(filename: str) -> str:
+    normalized = str(filename or "").replace("\\", "/").strip()
+
+    if not normalized:
+        raise ValueError("Unsupported context filename: (empty)")
+
+    if normalized.startswith("/"):
+        raise ValueError(f"Absolute context path is not allowed: {normalized}")
+
+    if normalized.startswith("~"):
+        raise ValueError(f"Unsupported context path: {normalized}")
+
+    segments = [part for part in normalized.split("/") if part]
+    if not segments:
+        raise ValueError(f"Unsupported context filename: {normalized}")
+
+    if ".." in segments or any(part == "." for part in segments):
+        raise ValueError(f"Path traversal is not allowed: {normalized}")
+
+    if normalized not in ALLOWED_CONTEXT_FILENAMES:
+        if not DAILY_NOTE_RE.fullmatch(normalized) and not DREAMS_NOTE_RE.fullmatch(normalized):
+            raise ValueError(f"Unsupported context filename: {normalized}")
+
+    if len(segments) == 1:
+        if normalized in ALLOWED_CONTEXT_FILENAMES:
+            return normalized
+        raise ValueError(f"Unsupported context filename: {normalized}")
+
+    if len(segments) == 2 and segments[0] == "memory":
+        match = DAILY_NOTE_RE.fullmatch(normalized)
+        if not match:
+            raise ValueError(f"Unsupported context filename: {normalized}")
+        date_text = match.group(1)
+        if not _DATE_SEGMENT_RE.fullmatch(date_text):
+            raise ValueError(f"Unsupported context filename: {normalized}")
+        try:
+            datetime.strptime(date_text, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError(f"Unsupported context filename: {normalized}") from exc
+        return normalized
+
+    if len(segments) == 3 and segments[0] == "memory":
+        if not DREAMS_NOTE_RE.fullmatch(normalized):
+            raise ValueError(f"Unsupported context filename: {normalized}")
+        if segments[1] != ".dreams":
+            raise ValueError(f"Unsupported context filename: {normalized}")
+        if not normalized.lower().endswith(".md"):
+            raise ValueError(f"Only markdown files are allowed: {normalized}")
+        return normalized
+
+    raise ValueError(f"Unsupported context filename: {normalized}")
+
+
+def _resolve_context_file_path(root: Path, filename: str) -> Path:
+    normalized = normalize_workspace_context_filename(filename)
+    path = root / normalized
+    if "/" in normalized or normalized.startswith("memory"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _iter_context_file_paths(root: Path):
+    for filename in ALLOWED_CONTEXT_FILENAMES:
+        path = root / filename
+        if path.exists():
+            yield filename, path
+
+    memory_dir = root / "memory"
+    if not memory_dir.exists() or not memory_dir.is_dir():
+        return
+
+    for path in sorted(memory_dir.iterdir(), key=lambda item: item.name):
+        if not path.is_file():
+            continue
+        rel = f"memory/{path.name}"
+        try:
+            normalize_workspace_context_filename(rel)
+        except ValueError:
+            continue
+        if rel.startswith("memory/.dreams/"):
+            continue
+        yield rel, path
+
+    dream_dir = memory_dir / ".dreams"
+    if not dream_dir.exists() or not dream_dir.is_dir():
+        return
+    for path in sorted(dream_dir.iterdir(), key=lambda item: item.name):
+        if not path.is_file():
+            continue
+        rel = f"memory/.dreams/{path.name}"
+        try:
+            normalize_workspace_context_filename(rel)
+        except ValueError:
+            continue
+        yield rel, path
+
+
+def _count_existing_daily_notes(root: Path) -> int:
+    memory_dir = root / "memory"
+    if not memory_dir.exists() or not memory_dir.is_dir():
+        return 0
+    count = 0
+    for path in sorted(memory_dir.iterdir(), key=lambda item: item.name):
+        if not path.is_file():
+            continue
+        rel = f"memory/{path.name}"
+        if DAILY_NOTE_RE.fullmatch(rel):
+            count += 1
+    return count
+
+
+def _dreams_dir(root: Path) -> Path:
+    return root / "memory" / ".dreams"
+
+
+def _prune_expired_dream_notes(root: Path, *, now: datetime | None = None) -> int:
+    dream_dir = _dreams_dir(root)
+    if not dream_dir.exists() or not dream_dir.is_dir():
+        return 0
+    utc_now = now or datetime.now(timezone.utc)
+    cutoff = utc_now - timedelta(days=DREAM_STAGING_TTL_DAYS)
+    removed = 0
+    for path in sorted(dream_dir.iterdir(), key=lambda item: item.name):
+        if not path.is_file():
+            continue
+        rel = f"memory/.dreams/{path.name}"
+        if not DREAMS_NOTE_RE.fullmatch(rel):
+            continue
+        try:
+            modified_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except Exception:
+            continue
+        if modified_at >= cutoff:
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except Exception:
+            continue
+    return removed
+
+
+def _count_existing_dream_notes(root: Path) -> int:
+    dream_dir = _dreams_dir(root)
+    if not dream_dir.exists() or not dream_dir.is_dir():
+        return 0
+    count = 0
+    for path in sorted(dream_dir.iterdir(), key=lambda item: item.name):
+        if not path.is_file():
+            continue
+        rel = f"memory/.dreams/{path.name}"
+        if DREAMS_NOTE_RE.fullmatch(rel):
+            count += 1
+    return count
+
+
+def _current_context_bytes(root: Path) -> int:
+    total = 0
+    for _name, path in _iter_context_file_paths(root):
+        try:
+            total += path.stat().st_size
+        except Exception:
+            pass
+    return total
+
+
+def _ensure_root_contract_validity() -> None:
+    if len(ALLOWED_CONTEXT_FILENAMES) > MAX_CONTEXT_ROOT_FILES:
+        raise ValueError("Context root file quota is smaller than configured defaults.")
+
+
 def ensure_workspace_context_files(
     *,
     workspace_id: str | None = None,
     agent_install_id: str | None = None,
 ) -> Dict[str, str]:
     root = agent_workspace_context_dir(workspace_id=workspace_id, agent_install_id=agent_install_id)
+    _prune_expired_dream_notes(root)
+    _ensure_root_contract_validity()
     out: Dict[str, str] = {}
     for filename in ALLOWED_CONTEXT_FILENAMES:
         path = root / filename
         if not path.exists():
             path.write_text(DEFAULT_CONTEXT_FILE_CONTENTS.get(filename, "").strip() + "\n", encoding="utf-8")
+    for filename, path in _iter_context_file_paths(root):
         try:
             out[filename] = path.read_text(encoding="utf-8")
         except Exception:
@@ -155,7 +341,18 @@ def read_workspace_context_file(
     agent_install_id: str | None = None,
 ) -> str:
     normalized = normalize_workspace_context_filename(filename)
-    return ensure_workspace_context_files(workspace_id=workspace_id, agent_install_id=agent_install_id).get(normalized, "")
+    root = agent_workspace_context_dir(workspace_id=workspace_id, agent_install_id=agent_install_id)
+    if normalized.startswith("memory/.dreams/"):
+        _prune_expired_dream_notes(root)
+    if normalized in ALLOWED_CONTEXT_FILENAMES:
+        return ensure_workspace_context_files(workspace_id=workspace_id, agent_install_id=agent_install_id).get(normalized, "")
+    path = _resolve_context_file_path(root, normalized)
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
 
 
 def write_workspace_context_file(
@@ -167,18 +364,33 @@ def write_workspace_context_file(
 ) -> Dict[str, str]:
     normalized = normalize_workspace_context_filename(filename)
     root = agent_workspace_context_dir(workspace_id=workspace_id, agent_install_id=agent_install_id)
-    path = root / normalized
-    text = str(content or "")
-    path.write_text(text, encoding="utf-8")
+    _prune_expired_dream_notes(root)
+    path = _resolve_context_file_path(root, normalized)
+    if DAILY_NOTE_RE.fullmatch(normalized):
+        if not path.exists() and _count_existing_daily_notes(root) >= MAX_CONTEXT_DAILY_NOTES:
+            raise ValueError("Daily note storage exceeds file quota.")
+    if DREAMS_NOTE_RE.fullmatch(normalized):
+        if not path.exists() and _count_existing_dream_notes(root) >= MAX_CONTEXT_DREAM_STAGING_NOTES:
+            raise ValueError("Dream staging storage exceeds file quota.")
+
+    payload = str(content or "")
+    encoded = payload.encode("utf-8")
+    if len(encoded) > MAX_CONTEXT_FILE_BYTES:
+        raise ValueError("Context file content exceeds per-file quota.")
+
+    current_total = _current_context_bytes(root)
+    current_size = path.stat().st_size if path.exists() else 0
+    projected_total = max(0, current_total - current_size) + len(encoded)
+    if projected_total > MAX_CONTEXT_SCOPE_BYTES:
+        raise ValueError("Context file storage exceeds workspace quota.")
+
+    path.write_text(payload, encoding="utf-8")
     return {
         "filename": normalized,
-        "content": text,
+        "content": payload,
         "path": str(path),
     }
 
 
 def normalize_workspace_context_filename(filename: str) -> str:
-    normalized = str(filename or "").strip()
-    if normalized not in ALLOWED_CONTEXT_FILENAMES:
-        raise ValueError(f"Unsupported context filename: {normalized or '(empty)'}")
-    return normalized
+    return _validate_context_path(filename)

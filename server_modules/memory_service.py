@@ -17,8 +17,206 @@ from server_modules import agent_memory as _workspace_memory_store
 from server_modules import memory_summary_service
 from server_modules import workspace_context_memory_adapter
 from server_modules.telemetry import get_tracer, set_span_attributes
-from server_modules.workspace_context import read_workspace_context_files, write_workspace_context_file
+from server_modules.workspace_context import (
+    ALLOWED_CONTEXT_FILENAMES,
+    read_workspace_context_file,
+    read_workspace_context_files,
+    normalize_workspace_context_filename,
+    write_workspace_context_file,
+)
 
+_DAILY_MEMORY_ENTRY_MAX_CHARS = 4000
+_DAILY_MEMORY_ENTRY_MIN_CHARS = 32
+_DAILY_MEMORY_SECRET_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s&]+"),
+    re.compile(r"(?i)\b(authorization:\s*bearer)\s+[^\s]+"),
+)
+_TRANSCRIPT_MARKERS = (
+    re.compile(r"(?im)^\s*(user|assistant|system)\s*:\s*.{0,}$"),
+)
+_TRANSCRIPT_HISTORY_MARKERS = (
+    re.compile(r"(?im)^\s*(user|assistant|system|human|ai|tool)\s*:\s*.{0,}$"),
+    re.compile(r"(?im)^\s*\[\d{1,2}:\d{2}(?::\d{2})?\]\s*(user|assistant|system|human|ai)\b"),
+)
+_DAILY_NOTE_DURABILITY_HINTS = re.compile(
+    r"(?i)\b("
+    r"preference|prefer|decision|decided|policy|constraint|rule|default|"
+    r"goal|plan|roadmap|project|architecture|context|customer|workflow|"
+    r"always|never|must|should|ownership|priority|blocked|risk|billing|runtime"
+    r")\b"
+)
+_DAILY_NOTE_TEMPORARY_HINTS = re.compile(
+    r"(?i)\b("
+    r"temp|temporary|for now|right now|quick test|scratch|maybe later|"
+    r"ignore this|wip|draft only|just testing|random thought"
+    r")\b"
+)
+_SAFE_CONSOLIDATION_TARGET_FILES = {"MEMORY.md", "GOALS.md", "PROCEDURES.md", "REFLECTION.md"}
+_SAFE_CONSOLIDATION_DEFAULT_TARGET = "MEMORY.md"
+_MEMORY_DEFAULT_ACTOR = "system"
+
+
+def _append_note_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _strip_private_note_noise(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return " ".join(text.split())
+
+
+def _redact_daily_note_payload(value: str) -> str:
+    text = str(value or "")
+    for pattern in _DAILY_MEMORY_SECRET_PATTERNS:
+        text = pattern.sub("[redacted-secret]", text)
+    return text.strip()
+
+
+def _looks_like_chat_transcript(value: str) -> bool:
+    normalized = str(value or "")
+    markers = 0
+    for marker in _TRANSCRIPT_MARKERS:
+        markers += len(marker.findall(normalized))
+    return markers >= 2
+
+
+def _looks_like_raw_chat_history(value: str) -> bool:
+    normalized = str(value or "")
+    markers = 0
+    for marker in _TRANSCRIPT_HISTORY_MARKERS:
+        markers += len(marker.findall(normalized))
+    return markers >= 2
+
+
+def _looks_like_temporary_noise(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return True
+    if len(normalized) < _DAILY_MEMORY_ENTRY_MIN_CHARS:
+        return True
+    if normalized in {"ok", "thanks", "thank you", "got it", "noted", "sure", "done", "yes", "no", "yeah"}:
+        return True
+    if not re.search(r"[.!?;:]|\\b(preference|decide|decision|plan|fact|goal|todo|note|update|constraint|policy|bug|project|customer|context|issue|insight|next|because|when|if|should|must|mustn't|avoid|prefer|priority)\b", normalized):
+        return True
+    return False
+
+
+def _build_daily_note_entry(note: str) -> str:
+    raw_redacted = _redact_daily_note_payload(str(note or ""))
+    if _looks_like_chat_transcript(raw_redacted) or _looks_like_raw_chat_history(raw_redacted):
+        raise ValueError("Daily memory note appears to include raw chat transcript content.")
+    cleaned = _redact_daily_note_payload(_strip_private_note_noise(raw_redacted))
+    if not cleaned:
+        raise ValueError("Daily memory note cannot be empty.")
+    if len(cleaned) > _DAILY_MEMORY_ENTRY_MAX_CHARS:
+        raise ValueError("Daily memory note exceeds maximum length.")
+    if _looks_like_temporary_noise(cleaned):
+        raise ValueError("Daily memory note appears to be temporary noise. Include durable facts, decisions, or preferences.")
+    timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    return f"- [{timestamp}] {cleaned}"
+
+
+def _daily_entry_body(value: str) -> str:
+    line = str(value or "").strip()
+    match = re.match(r"^- \[[^\]]+\]\s*(.+)$", line)
+    if match:
+        return str(match.group(1) or "").strip()
+    return line
+
+
+def _normalize_daily_similarity_text(value: str) -> str:
+    lowered = str(value or "").strip().lower()
+    cleaned = re.sub(r"[^a-z0-9\s]+", " ", lowered)
+    return " ".join(cleaned.split())
+
+
+def _daily_similarity_tokens(value: str) -> Set[str]:
+    normalized = _normalize_daily_similarity_text(value)
+    tokens = {
+        token
+        for token in normalized.split(" ")
+        if len(token) >= 4 and token not in {"that", "this", "with", "from", "have", "will", "then"}
+    }
+    return tokens
+
+
+def _daily_note_similarity(a: str, b: str) -> float:
+    a_tokens = _daily_similarity_tokens(a)
+    b_tokens = _daily_similarity_tokens(b)
+    if not a_tokens or not b_tokens:
+        return 0.0
+    intersection = len(a_tokens & b_tokens)
+    union = len(a_tokens | b_tokens)
+    if union <= 0:
+        return 0.0
+    return float(intersection) / float(union)
+
+
+def _classify_daily_note_usefulness(value: str) -> tuple[bool, str]:
+    text = str(value or "").strip()
+    if not text:
+        return False, "empty"
+    score = 0
+    if _DAILY_NOTE_DURABILITY_HINTS.search(text):
+        score += 2
+    if len(text) >= 96:
+        score += 1
+    if re.search(r"\b\d{2,}\b", text):
+        score += 1
+    if _DAILY_NOTE_TEMPORARY_HINTS.search(text):
+        score -= 2
+    if _looks_like_raw_chat_history(text):
+        score -= 3
+    if score < 2:
+        return False, "not_useful_for_future_behavior"
+    return True, "useful"
+
+
+def _safe_consolidation_target_for_text(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if re.search(r"\b(goal|goals|milestone|roadmap|plan|target|objective|next step)\b", normalized):
+        return "GOALS.md"
+    if re.search(r"\b(procedure|process|workflow|runbook|steps|how to|playbook|operating)\b", normalized):
+        return "PROCEDURES.md"
+    if re.search(r"\b(reflection|lesson|learned|mistake|improve|retrospective|insight)\b", normalized):
+        return "REFLECTION.md"
+    return _SAFE_CONSOLIDATION_DEFAULT_TARGET
+
+
+def _iter_daily_note_bodies(content: str) -> List[str]:
+    out: List[str] = []
+    for raw_line in str(content or "").splitlines():
+        body = _daily_entry_body(raw_line)
+        if not body:
+            continue
+        if body.startswith("#"):
+            continue
+        out.append(body)
+    return out
+
+
+def _normalize_root_file_set(values: Optional[List[str]]) -> Set[str]:
+    if not values:
+        return set(_SAFE_CONSOLIDATION_TARGET_FILES)
+    normalized: Set[str] = set()
+    for item in values:
+        token = normalize_workspace_context_filename(str(item or "").strip())
+        if token not in _SAFE_CONSOLIDATION_TARGET_FILES:
+            raise ValueError(f"Unsupported consolidation target file: {token}")
+        normalized.add(token)
+    return normalized
+
+
+def _normalize_memory_actor(value: Any) -> str:
+    token = " ".join(str(value or "").split()).strip()
+    return token[:128] if token else _MEMORY_DEFAULT_ACTOR
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
 def _normalize_workspace_id(workspace_id: str) -> str:
     return str(workspace_id or "default").strip() or "default"
@@ -344,20 +542,541 @@ def update_memory_context_file(
     content: str,
     *,
     agent_install_id: str | None = None,
+    actor: str = _MEMORY_DEFAULT_ACTOR,
+    reason: str = "memory_update",
+    run_id: str | None = None,
+    audit_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_agent_install_id = str(agent_install_id or "").strip() or None
+    normalized_filename = normalize_workspace_context_filename(filename)
+    old_content = read_workspace_context_file(
+        normalized_filename,
+        workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+    )
     saved = write_workspace_context_file(
-        filename,
+        normalized_filename,
         str(content or ""),
         workspace_id=normalized_workspace_id,
-        agent_install_id=str(agent_install_id or "").strip() or None,
+        agent_install_id=normalized_agent_install_id,
+    )
+    version_record = _append_memory_file_version_record(
+        normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+        actor=actor,
+        filename=normalized_filename,
+        old_content=old_content,
+        new_content=str(saved.get("content") or ""),
+        reason=reason,
+        run_id=run_id,
+        metadata=audit_metadata,
     )
     return {
         "workspace_id": normalized_workspace_id,
-        "agent_install_id": str(agent_install_id or "").strip() or None,
+        "agent_install_id": normalized_agent_install_id,
         "filename": saved.get("filename"),
         "content": saved.get("content", ""),
+        "old_hash": version_record.get("old_hash"),
+        "new_hash": version_record.get("new_hash"),
+        "version_id": version_record.get("version_id"),
     }
+
+
+def memory_append_daily_note(
+    workspace_id: str,
+    note: str,
+    *,
+    agent_install_id: str | None = None,
+    actor: str = _MEMORY_DEFAULT_ACTOR,
+    run_id: str | None = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_agent_install_id = str(agent_install_id or "").strip() or None
+    note_date = str(_append_note_now() or "").strip()
+    expected_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if note_date != expected_today:
+        raise ValueError("Daily memory note writes are restricted to today's UTC note file.")
+    filename = f"memory/{note_date}.md"
+    entry = _build_daily_note_entry(note)
+    existing = read_workspace_context_file(
+        filename,
+        workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+    )
+    entry_body = _daily_entry_body(entry)
+    is_useful, usefulness_reason = _classify_daily_note_usefulness(entry_body)
+    if not is_useful:
+        raise ValueError("Daily memory note rejected by usefulness gate; include durable facts, preferences, decisions, or project context.")
+    existing_bodies: List[str] = []
+    for line in str(existing or "").splitlines():
+        body = _daily_entry_body(line)
+        if not body:
+            continue
+        existing_bodies.append(body)
+    normalized_entry_body = _normalize_daily_similarity_text(entry_body)
+    for body in existing_bodies:
+        candidate = _normalize_daily_similarity_text(body)
+        if not candidate:
+            continue
+        similarity = _daily_note_similarity(normalized_entry_body, candidate)
+        if candidate == normalized_entry_body or similarity >= 0.8:
+            return {
+                "workspace_id": normalized_workspace_id,
+                "agent_install_id": normalized_agent_install_id,
+                "filename": filename,
+                "saved": False,
+                "duplicate_of": body,
+                "duplicate_similarity": round(similarity, 3),
+                "usefulness": usefulness_reason,
+            }
+    payload = f"{entry}\n"
+    if str(existing or "").strip():
+        payload = f"{str(existing).rstrip()}\n{entry}\n"
+    saved = write_workspace_context_file(
+        filename,
+        payload,
+        workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+    )
+    version_record = _append_memory_file_version_record(
+        normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+        actor=actor,
+        filename=filename,
+        old_content=existing,
+        new_content=str(saved.get("content") or ""),
+        reason="memory_append_daily_note",
+        run_id=run_id,
+        metadata={"usefulness": usefulness_reason},
+    )
+    return {
+        "workspace_id": normalized_workspace_id,
+        "agent_install_id": normalized_agent_install_id,
+        "filename": saved.get("filename"),
+        "appended_entry": entry,
+        "saved": True,
+        "usefulness": usefulness_reason,
+        "old_hash": version_record.get("old_hash"),
+        "new_hash": version_record.get("new_hash"),
+        "version_id": version_record.get("version_id"),
+    }
+
+
+def create_memory_consolidation_staging_file(
+    workspace_id: str,
+    proposal: str,
+    *,
+    source_refs: Optional[List[str]] = None,
+    target_files: Optional[List[str]] = None,
+    agent_install_id: str | None = None,
+    actor: str = _MEMORY_DEFAULT_ACTOR,
+    run_id: str | None = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_agent_install_id = str(agent_install_id or "").strip() or None
+    proposal_text = _strip_private_note_noise(_redact_daily_note_payload(str(proposal or "")))
+    if not proposal_text:
+        raise ValueError("Consolidation proposal cannot be empty.")
+    if len(proposal_text) < 32:
+        raise ValueError("Consolidation proposal must include durable context, not a short placeholder.")
+    if len(proposal_text) > 8000:
+        raise ValueError("Consolidation proposal exceeds maximum length.")
+    if _looks_like_chat_transcript(proposal_text) or _looks_like_raw_chat_history(proposal_text):
+        raise ValueError("Consolidation proposal appears to include raw chat transcript content.")
+
+    normalized_targets: List[str] = []
+    for item in list(target_files or []):
+        normalized = normalize_workspace_context_filename(str(item or "").strip())
+        if normalized not in ALLOWED_CONTEXT_FILENAMES:
+            raise ValueError(f"Consolidation targets must be root context files. Unsupported target: {normalized}")
+        if normalized in normalized_targets:
+            continue
+        normalized_targets.append(normalized)
+
+    normalized_refs: List[str] = []
+    for item in list(source_refs or []):
+        token = str(item or "").strip()
+        if not token:
+            continue
+        normalized_refs.append(token[:256])
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    proposal_hash = hashlib.sha1(proposal_text.encode("utf-8")).hexdigest()[:10]
+    filename = f"memory/.dreams/{timestamp}-{proposal_hash}.md"
+    markdown_lines: List[str] = [
+        "# Memory Consolidation Proposal",
+        "",
+        f"- created_at_utc: {timestamp}",
+        f"- workspace_id: {normalized_workspace_id}",
+        "",
+        "## Proposed Consolidation",
+        proposal_text,
+        "",
+    ]
+    if normalized_targets:
+        markdown_lines.extend(["## Proposed Target Files", *[f"- {name}" for name in normalized_targets], ""])
+    if normalized_refs:
+        markdown_lines.extend(["## Source References", *[f"- {ref}" for ref in normalized_refs], ""])
+    markdown_lines.extend(
+        [
+            "## Merge Policy",
+            "- Staging proposal only. No root-file merge without user approval or policy allowance.",
+            "",
+        ]
+    )
+    payload = "\n".join(markdown_lines).rstrip() + "\n"
+    old_content = read_workspace_context_file(
+        filename,
+        workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+    )
+    saved = write_workspace_context_file(
+        filename,
+        payload,
+        workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+    )
+    version_record = _append_memory_file_version_record(
+        normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+        actor=actor,
+        filename=filename,
+        old_content=old_content,
+        new_content=str(saved.get("content") or ""),
+        reason="memory_stage_consolidation",
+        run_id=run_id,
+        metadata={"target_files": normalized_targets, "source_refs_count": len(normalized_refs)},
+    )
+    return {
+        "workspace_id": normalized_workspace_id,
+        "agent_install_id": normalized_agent_install_id,
+        "filename": saved.get("filename"),
+        "target_files": normalized_targets,
+        "source_refs": normalized_refs,
+        "old_hash": version_record.get("old_hash"),
+        "new_hash": version_record.get("new_hash"),
+        "version_id": version_record.get("version_id"),
+    }
+
+
+def apply_memory_consolidation_staging(
+    workspace_id: str,
+    staging_filename: str,
+    merged_files: Dict[str, str],
+    *,
+    user_approved: bool = False,
+    policy_allows: bool = False,
+    agent_install_id: str | None = None,
+    actor: str = _MEMORY_DEFAULT_ACTOR,
+    run_id: str | None = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_agent_install_id = str(agent_install_id or "").strip() or None
+    if not (bool(user_approved) or bool(policy_allows)):
+        raise ValueError("Consolidation merge requires explicit user approval or policy allowance.")
+    normalized_staging_filename = normalize_workspace_context_filename(staging_filename)
+    if not normalized_staging_filename.startswith("memory/.dreams/"):
+        raise ValueError("Consolidation staging filename must be under memory/.dreams/.")
+    staging_content = read_workspace_context_file(
+        normalized_staging_filename,
+        workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+    )
+    if not str(staging_content or "").strip():
+        raise ValueError("Consolidation staging file is missing or empty.")
+    if not isinstance(merged_files, dict) or not merged_files:
+        raise ValueError("Consolidation merge requires at least one root file update.")
+    applied_files: List[str] = []
+    versions: List[Dict[str, Any]] = []
+    for filename, content in merged_files.items():
+        normalized = normalize_workspace_context_filename(str(filename or "").strip())
+        if normalized not in ALLOWED_CONTEXT_FILENAMES:
+            raise ValueError(f"Consolidation merge can only write root context files. Unsupported target: {normalized}")
+        old_content = read_workspace_context_file(
+            normalized,
+            workspace_id=normalized_workspace_id,
+            agent_install_id=normalized_agent_install_id,
+        )
+        write_workspace_context_file(
+            normalized,
+            str(content or ""),
+            workspace_id=normalized_workspace_id,
+            agent_install_id=normalized_agent_install_id,
+        )
+        version_record = _append_memory_file_version_record(
+            normalized_workspace_id,
+            agent_install_id=normalized_agent_install_id,
+            actor=actor,
+            filename=normalized,
+            old_content=old_content,
+            new_content=str(content or ""),
+            reason="memory_apply_consolidation",
+            run_id=run_id,
+            metadata={"staging_filename": normalized_staging_filename},
+        )
+        applied_files.append(normalized)
+        versions.append(
+            {
+                "filename": normalized,
+                "old_hash": version_record.get("old_hash"),
+                "new_hash": version_record.get("new_hash"),
+                "version_id": version_record.get("version_id"),
+            }
+        )
+    return {
+        "workspace_id": normalized_workspace_id,
+        "agent_install_id": normalized_agent_install_id,
+        "staging_filename": normalized_staging_filename,
+        "applied_files": applied_files,
+        "approved": bool(user_approved),
+        "policy_allowed": bool(policy_allows),
+        "versions": versions,
+    }
+
+
+def consolidate_daily_memory_notes(
+    workspace_id: str,
+    *,
+    target_files: Optional[List[str]] = None,
+    max_notes: int = 30,
+    apply_merge: bool = False,
+    compact_mode: str = "none",
+    user_approved: bool = False,
+    policy_allows: bool = False,
+    agent_install_id: str | None = None,
+    run_id: str | None = None,
+    actor: str = _MEMORY_DEFAULT_ACTOR,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_agent_install_id = str(agent_install_id or "").strip() or None
+    allowed_targets = _normalize_root_file_set(target_files)
+    safe_max_notes = max(1, min(int(max_notes or 30), 120))
+    normalized_compact_mode = str(compact_mode or "none").strip().lower() or "none"
+    if normalized_compact_mode not in {"none", "archive", "compact"}:
+        raise ValueError("compact_mode must be one of: none, archive, compact.")
+
+    context_files = read_workspace_context_files(
+        workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+    )
+    daily_filenames = sorted(
+        [
+            str(name)
+            for name in context_files.keys()
+            if str(name).startswith("memory/") and str(name).endswith(".md") and not str(name).startswith("memory/.dreams/")
+        ]
+    )[:safe_max_notes]
+
+    proposals_by_target: Dict[str, List[str]] = {name: [] for name in sorted(allowed_targets)}
+    preserved_by_source: Dict[str, List[str]] = {}
+    for filename in daily_filenames:
+        daily_content = str(context_files.get(filename) or "")
+        captured_for_source: List[str] = []
+        for body in _iter_daily_note_bodies(daily_content):
+            useful, _reason = _classify_daily_note_usefulness(body)
+            if not useful:
+                continue
+            target = _safe_consolidation_target_for_text(body)
+            if target not in allowed_targets:
+                continue
+            existing = proposals_by_target.setdefault(target, [])
+            if any(_daily_note_similarity(body, candidate) >= 0.85 for candidate in existing):
+                continue
+            existing.append(body)
+            captured_for_source.append(body)
+        if captured_for_source:
+            preserved_by_source[filename] = captured_for_source
+
+    proposed_updates: Dict[str, str] = {}
+    merge_targets: List[str] = []
+    for target_file in sorted(allowed_targets):
+        additions = proposals_by_target.get(target_file) or []
+        if not additions:
+            continue
+        existing_content = read_workspace_context_file(
+            target_file,
+            workspace_id=normalized_workspace_id,
+            agent_install_id=normalized_agent_install_id,
+        )
+        existing_lines = str(existing_content or "").splitlines()
+        normalized_existing_lines = {_normalize_daily_similarity_text(line) for line in existing_lines if line.strip()}
+        pending_lines = [line for line in additions if _normalize_daily_similarity_text(line) not in normalized_existing_lines]
+        if not pending_lines:
+            continue
+        section_header = f"## Consolidated Daily Notes ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
+        append_block = "\n".join([section_header, *[f"- {line}" for line in pending_lines]]).rstrip()
+        merged_content = str(existing_content or "").rstrip()
+        if merged_content:
+            merged_content = f"{merged_content}\n\n{append_block}\n"
+        else:
+            merged_content = f"{append_block}\n"
+        proposed_updates[target_file] = merged_content
+        merge_targets.append(target_file)
+
+    proposal_id = hashlib.sha1(
+        json.dumps(
+            {
+                "workspace_id": normalized_workspace_id,
+                "sources": daily_filenames,
+                "targets": sorted(proposed_updates.keys()),
+                "entries": sum(len(values) for values in proposals_by_target.values()),
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+
+    response: Dict[str, Any] = {
+        "workspace_id": normalized_workspace_id,
+        "agent_install_id": normalized_agent_install_id,
+        "proposal_id": proposal_id,
+        "source_daily_notes": daily_filenames,
+        "preserved_by_source": preserved_by_source,
+        "proposed_updates": proposed_updates,
+        "merge_targets": merge_targets,
+        "apply_merge": bool(apply_merge),
+        "compact_mode": normalized_compact_mode,
+        "approved": bool(user_approved),
+        "policy_allowed": bool(policy_allows),
+        "merged": False,
+        "compacted_daily_notes": [],
+        "audit_id": None,
+    }
+
+    if not apply_merge:
+        return response
+    if not (bool(user_approved) or bool(policy_allows)):
+        raise ValueError("Safe consolidation merge requires explicit user approval or policy allowance.")
+    if not proposed_updates:
+        response["merged"] = True
+        response["audit_id"] = _append_consolidation_audit_record(
+            normalized_workspace_id,
+            {
+                "kind": "memory_safe_consolidation_merge",
+                "run_id": str(run_id or "").strip() or None,
+                "proposal_id": proposal_id,
+                "merged_files": [],
+                "source_daily_notes": daily_filenames,
+                "preserved_entry_count": 0,
+                "compacted_daily_notes": [],
+                "compact_mode": normalized_compact_mode,
+                "approved": bool(user_approved),
+                "policy_allowed": bool(policy_allows),
+            },
+        )["audit_id"]
+        return response
+
+    merged_files: List[str] = []
+    merged_versions: List[Dict[str, Any]] = []
+    for target_file, content in proposed_updates.items():
+        old_content = read_workspace_context_file(
+            target_file,
+            workspace_id=normalized_workspace_id,
+            agent_install_id=normalized_agent_install_id,
+        )
+        write_workspace_context_file(
+            target_file,
+            content,
+            workspace_id=normalized_workspace_id,
+            agent_install_id=normalized_agent_install_id,
+        )
+        version_record = _append_memory_file_version_record(
+            normalized_workspace_id,
+            agent_install_id=normalized_agent_install_id,
+            actor=actor,
+            filename=target_file,
+            old_content=old_content,
+            new_content=str(content or ""),
+            reason="memory_safe_consolidation_merge",
+            run_id=run_id,
+            metadata={"proposal_id": proposal_id},
+        )
+        merged_files.append(target_file)
+        merged_versions.append(
+            {
+                "filename": target_file,
+                "old_hash": version_record.get("old_hash"),
+                "new_hash": version_record.get("new_hash"),
+                "version_id": version_record.get("version_id"),
+            }
+        )
+
+    compacted_daily_notes: List[str] = []
+    compacted_versions: List[Dict[str, Any]] = []
+    if normalized_compact_mode in {"archive", "compact"}:
+        for source_filename in daily_filenames:
+            if source_filename not in preserved_by_source:
+                continue
+            if normalized_compact_mode == "archive":
+                archive_payload = (
+                    "# Daily Note Archived\n\n"
+                    f"- consolidated_at_utc: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}\n"
+                    f"- proposal_id: {proposal_id}\n"
+                    f"- preserved_entries: {len(preserved_by_source.get(source_filename) or [])}\n"
+                )
+            else:
+                archive_payload = (
+                    "# Daily Note Compacted\n\n"
+                    f"- consolidated_at_utc: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}\n"
+                    f"- proposal_id: {proposal_id}\n"
+                    "- content_removed_after_preservation: true\n"
+                )
+            old_content = read_workspace_context_file(
+                source_filename,
+                workspace_id=normalized_workspace_id,
+                agent_install_id=normalized_agent_install_id,
+            )
+            write_workspace_context_file(
+                source_filename,
+                archive_payload,
+                workspace_id=normalized_workspace_id,
+                agent_install_id=normalized_agent_install_id,
+            )
+            version_record = _append_memory_file_version_record(
+                normalized_workspace_id,
+                agent_install_id=normalized_agent_install_id,
+                actor=actor,
+                filename=source_filename,
+                old_content=old_content,
+                new_content=archive_payload,
+                reason="memory_daily_note_compaction",
+                run_id=run_id,
+                metadata={"proposal_id": proposal_id, "compact_mode": normalized_compact_mode},
+            )
+            compacted_daily_notes.append(source_filename)
+            compacted_versions.append(
+                {
+                    "filename": source_filename,
+                    "old_hash": version_record.get("old_hash"),
+                    "new_hash": version_record.get("new_hash"),
+                    "version_id": version_record.get("version_id"),
+                }
+            )
+
+    audit_record = _append_consolidation_audit_record(
+        normalized_workspace_id,
+        {
+            "kind": "memory_safe_consolidation_merge",
+            "run_id": str(run_id or "").strip() or None,
+            "proposal_id": proposal_id,
+            "merged_files": merged_files,
+            "source_daily_notes": daily_filenames,
+            "preserved_entry_count": sum(len(values) for values in preserved_by_source.values()),
+            "compacted_daily_notes": compacted_daily_notes,
+            "compact_mode": normalized_compact_mode,
+            "approved": bool(user_approved),
+            "policy_allowed": bool(policy_allows),
+            "actor": _normalize_memory_actor(actor),
+            "merged_versions": merged_versions,
+            "compacted_versions": compacted_versions,
+        },
+    )
+    response["merged"] = True
+    response["compacted_daily_notes"] = compacted_daily_notes
+    response["audit_id"] = audit_record.get("audit_id")
+    response["merged_versions"] = merged_versions
+    response["compacted_versions"] = compacted_versions
+    return response
 
 
 def workspace_memory_snapshot(workspace_id: str, *, agent_install_id: str | None = None) -> WorkspaceMemorySnapshot:
@@ -382,12 +1101,243 @@ def workspace_sidecar_dir(workspace_id: str, sidecar_name: str) -> Path:
     return path
 
 
+def _memory_file_versioning_dir(workspace_id: str) -> Path:
+    return workspace_sidecar_dir(workspace_id, "memory_file_versions")
+
+
+def _memory_file_version_log_path(workspace_id: str) -> Path:
+    return _memory_file_versioning_dir(workspace_id) / "changes.jsonl"
+
+
+def _append_memory_file_version_record(
+    workspace_id: str,
+    *,
+    agent_install_id: str | None,
+    actor: str,
+    filename: str,
+    old_content: str,
+    new_content: str,
+    reason: str,
+    run_id: str | None = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_actor = _normalize_memory_actor(actor)
+    normalized_filename = normalize_workspace_context_filename(filename)
+    normalized_reason = " ".join(str(reason or "").split()).strip() or "memory_write"
+    created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    old_text = str(old_content or "")
+    new_text = str(new_content or "")
+    old_hash = _sha256_text(old_text)
+    new_hash = _sha256_text(new_text)
+    version_id = hashlib.sha1(
+        json.dumps(
+            {
+                "workspace_id": normalized_workspace_id,
+                "agent_install_id": str(agent_install_id or "").strip() or None,
+                "filename": normalized_filename,
+                "old_hash": old_hash,
+                "new_hash": new_hash,
+                "reason": normalized_reason,
+                "actor": normalized_actor,
+                "created_at": created_at,
+                "run_id": str(run_id or "").strip() or None,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()[:20]
+    record = {
+        "version_id": version_id,
+        "workspace_id": normalized_workspace_id,
+        "agent_install_id": str(agent_install_id or "").strip() or None,
+        "actor": normalized_actor,
+        "filename": normalized_filename,
+        "old_hash": old_hash,
+        "new_hash": new_hash,
+        "reason": normalized_reason,
+        "timestamp": created_at,
+        "run_id": str(run_id or "").strip() or None,
+        "metadata": dict(metadata or {}),
+        "snapshot": new_text,
+    }
+    log_path = _memory_file_version_log_path(normalized_workspace_id)
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+    return record
+
+
+def list_memory_file_versions(
+    workspace_id: str,
+    filename: str,
+    *,
+    agent_install_id: str | None = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_agent_install_id = str(agent_install_id or "").strip() or None
+    normalized_filename = normalize_workspace_context_filename(filename)
+    log_path = _memory_file_version_log_path(normalized_workspace_id)
+    if not log_path.exists():
+        return []
+    records: List[Dict[str, Any]] = []
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    for line in reversed(lines):
+        if not str(line or "").strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("filename") or "").strip() != normalized_filename:
+            continue
+        if normalized_agent_install_id is not None and str(payload.get("agent_install_id") or "").strip() != normalized_agent_install_id:
+            continue
+        records.append(
+            {
+                "version_id": payload.get("version_id"),
+                "workspace_id": payload.get("workspace_id"),
+                "agent_install_id": payload.get("agent_install_id"),
+                "actor": payload.get("actor"),
+                "filename": payload.get("filename"),
+                "old_hash": payload.get("old_hash"),
+                "new_hash": payload.get("new_hash"),
+                "reason": payload.get("reason"),
+                "timestamp": payload.get("timestamp"),
+                "run_id": payload.get("run_id"),
+                "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+            }
+        )
+        if len(records) >= max(1, min(int(limit or 20), 200)):
+            break
+    return records
+
+
+def rollback_memory_file_version(
+    workspace_id: str,
+    filename: str,
+    *,
+    version_id: str,
+    actor: str = _MEMORY_DEFAULT_ACTOR,
+    reason: str = "rollback",
+    run_id: str | None = None,
+    agent_install_id: str | None = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_filename = normalize_workspace_context_filename(filename)
+    normalized_agent_install_id = str(agent_install_id or "").strip() or None
+    target_version_id = str(version_id or "").strip()
+    if not target_version_id:
+        raise ValueError("rollback version_id is required.")
+    log_path = _memory_file_version_log_path(normalized_workspace_id)
+    if not log_path.exists():
+        raise ValueError("No memory version history found.")
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:
+        raise ValueError("Unable to read memory version history.") from exc
+
+    target_payload: Optional[Dict[str, Any]] = None
+    for line in reversed(lines):
+        if not str(line or "").strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("version_id") or "").strip() != target_version_id:
+            continue
+        if str(payload.get("filename") or "").strip() != normalized_filename:
+            continue
+        if normalized_agent_install_id is not None and str(payload.get("agent_install_id") or "").strip() != normalized_agent_install_id:
+            continue
+        target_payload = payload
+        break
+    if not target_payload:
+        raise ValueError("Requested memory version was not found.")
+    snapshot = str(target_payload.get("snapshot") or "")
+    old_content = read_workspace_context_file(
+        normalized_filename,
+        workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+    )
+    saved = write_workspace_context_file(
+        normalized_filename,
+        snapshot,
+        workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+    )
+    record = _append_memory_file_version_record(
+        normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
+        actor=actor,
+        filename=normalized_filename,
+        old_content=old_content,
+        new_content=str(saved.get("content") or ""),
+        reason=reason,
+        run_id=run_id,
+        metadata={"rollback_from_version_id": target_version_id},
+    )
+    return {
+        "workspace_id": normalized_workspace_id,
+        "agent_install_id": normalized_agent_install_id,
+        "filename": normalized_filename,
+        "rolled_back_to_version_id": target_version_id,
+        "new_version_id": record.get("version_id"),
+        "new_hash": record.get("new_hash"),
+    }
+
+
 def _summary_bridge_dir(workspace_id: str) -> Path:
     return workspace_sidecar_dir(workspace_id, "hybrid_summary_bridge")
 
 
 def _summary_bridge_log_path(workspace_id: str) -> Path:
     return _summary_bridge_dir(workspace_id) / "payloads.jsonl"
+
+
+def _consolidation_audit_dir(workspace_id: str) -> Path:
+    return workspace_sidecar_dir(workspace_id, "memory_consolidation_audit")
+
+
+def _consolidation_audit_log_path(workspace_id: str) -> Path:
+    return _consolidation_audit_dir(workspace_id) / "merges.jsonl"
+
+
+def _append_consolidation_audit_record(workspace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    record_payload = dict(payload or {})
+    audit_id = str(record_payload.get("audit_id") or "").strip()
+    if not audit_id:
+        audit_id = hashlib.sha1(
+            json.dumps(
+                {
+                    "workspace_id": normalized_workspace_id,
+                    "created_at": created_at,
+                    "payload": record_payload,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+    record = {
+        "audit_id": audit_id,
+        "workspace_id": normalized_workspace_id,
+        "created_at": created_at,
+        **record_payload,
+    }
+    log_path = _consolidation_audit_log_path(normalized_workspace_id)
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+    return record
 
 
 def _read_summary_bridge_records(workspace_id: str) -> List[Dict[str, Any]]:

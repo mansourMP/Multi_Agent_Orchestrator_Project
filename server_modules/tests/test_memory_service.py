@@ -112,6 +112,244 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertTrue(any(block.startswith("Runtime Memory Facts") for block in result.context_blocks))
         self.assertTrue(any(block.startswith("Recent Daily Logs") for block in result.context_blocks))
 
+    def test_memory_append_daily_note_appends_to_today_and_redacts_secrets(self) -> None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with patch.object(memory_service, "_append_note_now", return_value=today):
+            first = memory_service.memory_append_daily_note(
+                "default",
+                "Decision: keep runtime placement separate from computer automation; api_key=sk-secret-value.",
+            )
+            second = memory_service.memory_append_daily_note(
+                "default",
+                "Preference: keep memory notes concise and durable so future sessions have reliable context.",
+            )
+
+        expected_filename = f"memory/{today}.md"
+        self.assertEqual(first["filename"], expected_filename)
+        self.assertEqual(second["filename"], expected_filename)
+        content = workspace_context.read_workspace_context_file(expected_filename, workspace_id="default")
+        self.assertIn("[redacted-secret]", content)
+        self.assertNotIn("sk-secret-value", content)
+        self.assertGreaterEqual(content.count("- ["), 2)
+
+    def test_memory_append_daily_note_rejects_transcript_payload(self) -> None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with patch.object(memory_service, "_append_note_now", return_value=today), self.assertRaises(ValueError):
+            memory_service.memory_append_daily_note(
+                "default",
+                "user: please remember this raw transcript\nassistant: ok I will keep this",
+            )
+
+    def test_memory_append_daily_note_rejects_low_usefulness_payload(self) -> None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with patch.object(memory_service, "_append_note_now", return_value=today), self.assertRaises(ValueError):
+            memory_service.memory_append_daily_note(
+                "default",
+                "This is just a quick test draft for now and maybe later we can ignore this note.",
+            )
+
+    def test_memory_append_daily_note_deduplicates_similar_note(self) -> None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with patch.object(memory_service, "_append_note_now", return_value=today):
+            first = memory_service.memory_append_daily_note(
+                "default",
+                "Decision: route all cloud-costly browser automation through virtual computer with approval and budget caps enabled.",
+            )
+            duplicate = memory_service.memory_append_daily_note(
+                "default",
+                "Decision: route cloud-costly browser automation via virtual computer with approval and budget caps.",
+            )
+
+        self.assertTrue(first["saved"])
+        self.assertFalse(duplicate["saved"])
+        self.assertIn("duplicate_of", duplicate)
+        content = workspace_context.read_workspace_context_file(f"memory/{today}.md", workspace_id="default")
+        self.assertEqual(content.count("- ["), 1)
+
+    def test_memory_append_daily_note_blocks_wrong_date_write(self) -> None:
+        with patch.object(memory_service, "_append_note_now", return_value="2000-01-01"), self.assertRaises(ValueError):
+            memory_service.memory_append_daily_note(
+                "default",
+                "Decision: keep durable preferences and project context in daily memory notes.",
+            )
+
+    def test_create_memory_consolidation_staging_file_writes_under_dreams(self) -> None:
+        saved = memory_service.create_memory_consolidation_staging_file(
+            "default",
+            "Decision: consolidate durable user preferences from daily notes into USER.md and PROCEDURES.md.",
+            target_files=["USER.md", "PROCEDURES.md"],
+            source_refs=["memory/2026-05-10.md#L12", "memory/2026-05-11.md#L3"],
+        )
+
+        self.assertTrue(str(saved["filename"]).startswith("memory/.dreams/"))
+        content = workspace_context.read_workspace_context_file(saved["filename"], workspace_id="default")
+        self.assertIn("## Proposed Consolidation", content)
+        self.assertIn("## Proposed Target Files", content)
+        self.assertIn("USER.md", content)
+
+    def test_apply_memory_consolidation_staging_requires_approval_or_policy(self) -> None:
+        saved = memory_service.create_memory_consolidation_staging_file(
+            "default",
+            "Decision: merge stable project context from daily logs into MEMORY.md.",
+            target_files=["MEMORY.md"],
+        )
+        with self.assertRaises(ValueError):
+            memory_service.apply_memory_consolidation_staging(
+                "default",
+                saved["filename"],
+                {"MEMORY.md": "# Curated Memory\n\n- Stable context.\n"},
+                user_approved=False,
+                policy_allows=False,
+            )
+
+    def test_apply_memory_consolidation_staging_updates_root_when_approved(self) -> None:
+        saved = memory_service.create_memory_consolidation_staging_file(
+            "default",
+            "Decision: keep USER.md concise with stable preferences.",
+            target_files=["USER.md"],
+        )
+        result = memory_service.apply_memory_consolidation_staging(
+            "default",
+            saved["filename"],
+            {"USER.md": "# User Profile\n\n- Prefers async updates.\n"},
+            user_approved=True,
+        )
+        self.assertIn("USER.md", result["applied_files"])
+        updated = workspace_context.read_workspace_context_file("USER.md", workspace_id="default")
+        self.assertIn("Prefers async updates", updated)
+
+    def test_consolidate_daily_memory_notes_returns_proposal_without_merge(self) -> None:
+        workspace_context.write_workspace_context_file(
+            "memory/2026-05-08.md",
+            "- [08:01:00 UTC] Decision: keep vendor-neutral runtime placement policy for cloud tasks.\n",
+            workspace_id="default",
+        )
+        workspace_context.write_workspace_context_file(
+            "memory/2026-05-09.md",
+            "- [10:00:00 UTC] Goal: close investor demo blockers this week and keep a clear rollout sequence.\n",
+            workspace_id="default",
+        )
+
+        result = memory_service.consolidate_daily_memory_notes("default", apply_merge=False)
+        self.assertFalse(result["merged"])
+        self.assertIn("MEMORY.md", result["proposed_updates"])
+        self.assertIn("GOALS.md", result["proposed_updates"])
+        self.assertIsNone(result["audit_id"])
+
+    def test_consolidate_daily_memory_notes_requires_approval_for_merge(self) -> None:
+        workspace_context.write_workspace_context_file(
+            "memory/2026-05-08.md",
+            "- [08:01:00 UTC] Decision: keep vendor-neutral runtime placement policy for cloud tasks.\n",
+            workspace_id="default",
+        )
+        with self.assertRaises(ValueError):
+            memory_service.consolidate_daily_memory_notes(
+                "default",
+                apply_merge=True,
+                user_approved=False,
+                policy_allows=False,
+            )
+
+    def test_consolidate_daily_memory_notes_merges_and_archives_with_audit(self) -> None:
+        workspace_context.write_workspace_context_file(
+            "memory/2026-05-08.md",
+            (
+                "- [08:01:00 UTC] Decision: keep vendor-neutral runtime placement policy for cloud tasks.\n"
+                "- [08:10:00 UTC] Procedure: always require owner approval for payment links and mass messages.\n"
+            ),
+            workspace_id="default",
+        )
+
+        result = memory_service.consolidate_daily_memory_notes(
+            "default",
+            apply_merge=True,
+            compact_mode="archive",
+            user_approved=True,
+            run_id="run-123",
+        )
+
+        self.assertTrue(result["merged"])
+        self.assertTrue(result["audit_id"])
+        self.assertIn("memory/2026-05-08.md", result["compacted_daily_notes"])
+        memory_content = workspace_context.read_workspace_context_file("MEMORY.md", workspace_id="default")
+        procedures_content = workspace_context.read_workspace_context_file("PROCEDURES.md", workspace_id="default")
+        self.assertIn("vendor-neutral runtime placement", memory_content)
+        self.assertIn("owner approval for payment links", procedures_content)
+        compacted_content = workspace_context.read_workspace_context_file("memory/2026-05-08.md", workspace_id="default")
+        self.assertIn("Daily Note Archived", compacted_content)
+        audit_path = self._memory_root / "default" / "memory_consolidation_audit" / "merges.jsonl"
+        self.assertTrue(audit_path.exists())
+        self.assertIn("run-123", audit_path.read_text(encoding="utf-8"))
+
+    def test_consolidate_daily_memory_notes_rejects_delete_compaction_mode(self) -> None:
+        workspace_context.write_workspace_context_file(
+            "memory/2026-05-08.md",
+            "- [08:01:00 UTC] Decision: keep vendor-neutral runtime placement policy for cloud tasks.\n",
+            workspace_id="default",
+        )
+        with self.assertRaises(ValueError):
+            memory_service.consolidate_daily_memory_notes(
+                "default",
+                apply_merge=True,
+                compact_mode="delete",
+                user_approved=True,
+            )
+
+    def test_memory_write_audit_records_required_fields_and_versions(self) -> None:
+        updated = memory_service.update_memory_context_file(
+            "default",
+            "MEMORY.md",
+            "# Curated Memory\n\n- Keep durable platform decisions.\n",
+            actor="sage-agent",
+            reason="manual_curation",
+            run_id="run-abc",
+            audit_metadata={"source": "unit_test"},
+        )
+        self.assertTrue(updated["old_hash"])
+        self.assertTrue(updated["new_hash"])
+        self.assertTrue(updated["version_id"])
+
+        versions = memory_service.list_memory_file_versions("default", "MEMORY.md")
+        self.assertGreaterEqual(len(versions), 1)
+        first = versions[0]
+        self.assertEqual(first["actor"], "sage-agent")
+        self.assertEqual(first["workspace_id"], "default")
+        self.assertEqual(first["filename"], "MEMORY.md")
+        self.assertEqual(first["reason"], "manual_curation")
+        self.assertEqual(first["run_id"], "run-abc")
+        self.assertTrue(first["timestamp"])
+        self.assertTrue(first["old_hash"])
+        self.assertTrue(first["new_hash"])
+
+    def test_memory_file_version_rollback_restores_previous_snapshot(self) -> None:
+        first = memory_service.update_memory_context_file(
+            "default",
+            "REFLECTION.md",
+            "# Reflection\n\n- first\n",
+            actor="sage-agent",
+            reason="seed",
+        )
+        second = memory_service.update_memory_context_file(
+            "default",
+            "REFLECTION.md",
+            "# Reflection\n\n- second\n",
+            actor="sage-agent",
+            reason="rewrite",
+        )
+        self.assertNotEqual(first["new_hash"], second["new_hash"])
+        rollback = memory_service.rollback_memory_file_version(
+            "default",
+            "REFLECTION.md",
+            version_id=first["version_id"],
+            actor="owner-user",
+            reason="rollback_requested",
+            run_id="run-rb",
+        )
+        self.assertEqual(rollback["rolled_back_to_version_id"], first["version_id"])
+        restored = workspace_context.read_workspace_context_file("REFLECTION.md", workspace_id="default")
+        self.assertIn("- first", restored)
+        self.assertNotIn("- second", restored)
+
     def test_runtime_memory_search_wraps_runtime_subsystem_results(self) -> None:
         with patch.object(memory_service, "_memory_manager_or_503", return_value=object()) as manager_mock, patch.object(
             memory_service,
@@ -445,7 +683,7 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertIn("USER.md", text)
         self.assertIn("MEMORY.md", text)
         self.assertIn("Recent Daily Logs", text)
-        self.assertIn("Runtime Memory Facts", text)
+        self.assertIn("Retrieved Relevant Memory", text)
         self.assertIn("timezone", text)
 
     def test_direct_chat_memory_context_message_returns_system_payload(self) -> None:

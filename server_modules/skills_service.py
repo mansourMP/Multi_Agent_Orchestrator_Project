@@ -663,6 +663,115 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
             },
         ),
         ToolDescriptor(
+            tool_name="memory_append_daily_note",
+            label="Memory append daily note",
+            connector_id="memory",
+            action_id="append_daily_note",
+            description=(
+                "Append one durable note to today's daily memory file only. "
+                "Use for stable facts, decisions, preferences, or project context. "
+                "A usefulness gate and dedupe filter are enforced. Do not include secrets, "
+                "full chat transcripts, or temporary noise."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "note": {"type": "string", "description": "Durable note text to append to today's daily memory note file."},
+                },
+                "required": ["note"],
+            },
+        ),
+        ToolDescriptor(
+            tool_name="memory_stage_consolidation",
+            label="Memory stage consolidation",
+            connector_id="memory",
+            action_id="stage_consolidation",
+            description=(
+                "Create a proposed memory consolidation file under memory/.dreams/. "
+                "Staging files are temporary and not merged into root files unless user approval or policy allows."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "proposal": {"type": "string", "description": "Durable consolidation proposal summary."},
+                    "target_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional root context files to update if approved later.",
+                    },
+                    "source_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional references for provenance.",
+                    },
+                },
+                "required": ["proposal"],
+            },
+        ),
+        ToolDescriptor(
+            tool_name="memory_consolidate_daily_notes",
+            label="Memory consolidate daily notes",
+            connector_id="memory",
+            action_id="consolidate_daily_notes",
+            description=(
+                "Read daily memory notes and produce safe consolidation proposals for curated root files "
+                "(MEMORY.md, GOALS.md, PROCEDURES.md, REFLECTION.md). Can apply merge only when explicitly approved "
+                "or policy allows; supports optional post-merge compaction with audit metadata."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional subset of curated root files.",
+                    },
+                    "max_notes": {"type": "integer", "description": "Maximum number of daily notes to scan."},
+                    "apply_merge": {"type": "boolean", "description": "Apply merge now. Defaults to false."},
+                    "compact_mode": {
+                        "type": "string",
+                        "enum": ["none", "archive", "compact"],
+                        "description": "Optional compaction behavior after successful merge.",
+                    },
+                    "user_approved": {"type": "boolean", "description": "Explicit user approval flag."},
+                    "policy_allows": {"type": "boolean", "description": "Policy allowance flag."},
+                    "run_id": {"type": "string", "description": "Optional run id for merge audit metadata."},
+                },
+            },
+        ),
+        ToolDescriptor(
+            tool_name="memory_list_versions",
+            label="Memory list versions",
+            connector_id="memory",
+            action_id="list_versions",
+            description="List recent file version records for a memory/context file.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Context file path such as MEMORY.md or memory/2026-05-11.md."},
+                    "limit": {"type": "integer", "description": "Maximum versions to return."},
+                },
+                "required": ["filename"],
+            },
+        ),
+        ToolDescriptor(
+            tool_name="memory_rollback_version",
+            label="Memory rollback version",
+            connector_id="memory",
+            action_id="rollback_version",
+            description="Rollback a memory/context file to a previous version id.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Context file path to rollback."},
+                    "version_id": {"type": "string", "description": "Version id to restore."},
+                    "reason": {"type": "string", "description": "Optional rollback reason."},
+                    "run_id": {"type": "string", "description": "Optional run id for audit."},
+                },
+                "required": ["filename", "version_id"],
+            },
+        ),
+        ToolDescriptor(
             tool_name="web__search",
             label="Web search",
             connector_id="web",
@@ -2054,20 +2163,160 @@ def execute_single_direct_tool_call(
             raise RuntimeError("Tool 'memory_update' requires a filename.")
         if not content.strip():
             raise RuntimeError("Tool 'memory_update' requires non-empty content.")
+        actor = str(
+            session_metadata.get("user_id")
+            or session_metadata.get("actor")
+            or session_metadata.get("agent_install_id")
+            or session_metadata.get("active_agent_install_id")
+            or "direct_tool"
+        ).strip()
         saved = callbacks.update_memory_context_file(
             workspace_id,
             filename,
             content,
             agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+            actor=actor,
+            reason="memory_update",
+            run_id=str(session_metadata.get("run_id") or session_metadata.get("request_id") or "").strip() or None,
+            audit_metadata={"source": "direct_tool"},
         )
         return json.dumps(
             {
                 "ok": True,
                 "filename": saved.get("filename") if isinstance(saved, dict) else filename,
                 "workspace_id": saved.get("workspace_id") if isinstance(saved, dict) else workspace_id,
+                "old_hash": saved.get("old_hash") if isinstance(saved, dict) else None,
+                "new_hash": saved.get("new_hash") if isinstance(saved, dict) else None,
+                "version_id": saved.get("version_id") if isinstance(saved, dict) else None,
             },
             ensure_ascii=False,
         )
+    if connector_id == "memory" and action_id == "append_daily_note":
+        note = str(argument_payload.get("note") or argument_payload.get("input") or "")
+        if not note.strip():
+            raise RuntimeError("Tool 'memory_append_daily_note' requires non-empty note text.")
+        actor = str(
+            session_metadata.get("user_id")
+            or session_metadata.get("actor")
+            or session_metadata.get("agent_install_id")
+            or session_metadata.get("active_agent_install_id")
+            or "direct_tool"
+        ).strip()
+        saved = callbacks.memory_append_daily_note(
+            workspace_id,
+            note,
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+            actor=actor,
+            run_id=str(session_metadata.get("run_id") or session_metadata.get("request_id") or "").strip() or None,
+        )
+        return json.dumps(
+            {
+                "ok": True,
+                "filename": saved.get("filename") if isinstance(saved, dict) else "",
+                "workspace_id": saved.get("workspace_id") if isinstance(saved, dict) else workspace_id,
+                "appended_entry": saved.get("appended_entry") if isinstance(saved, dict) else "",
+                "saved": bool(saved.get("saved", True)) if isinstance(saved, dict) else True,
+                "usefulness": saved.get("usefulness") if isinstance(saved, dict) else None,
+                "duplicate_of": saved.get("duplicate_of") if isinstance(saved, dict) else None,
+                "old_hash": saved.get("old_hash") if isinstance(saved, dict) else None,
+                "new_hash": saved.get("new_hash") if isinstance(saved, dict) else None,
+                "version_id": saved.get("version_id") if isinstance(saved, dict) else None,
+            },
+            ensure_ascii=False,
+        )
+    if connector_id == "memory" and action_id == "stage_consolidation":
+        proposal = str(argument_payload.get("proposal") or argument_payload.get("input") or "")
+        if not proposal.strip():
+            raise RuntimeError("Tool 'memory_stage_consolidation' requires non-empty proposal text.")
+        source_refs = argument_payload.get("source_refs")
+        target_files = argument_payload.get("target_files")
+        actor = str(
+            session_metadata.get("user_id")
+            or session_metadata.get("actor")
+            or session_metadata.get("agent_install_id")
+            or session_metadata.get("active_agent_install_id")
+            or "direct_tool"
+        ).strip()
+        saved = callbacks.create_memory_consolidation_staging_file(
+            workspace_id,
+            proposal,
+            source_refs=source_refs if isinstance(source_refs, list) else None,
+            target_files=target_files if isinstance(target_files, list) else None,
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+            actor=actor,
+            run_id=str(session_metadata.get("run_id") or session_metadata.get("request_id") or "").strip() or None,
+        )
+        return json.dumps(
+            {
+                "ok": True,
+                "filename": saved.get("filename") if isinstance(saved, dict) else "",
+                "workspace_id": saved.get("workspace_id") if isinstance(saved, dict) else workspace_id,
+                "target_files": saved.get("target_files") if isinstance(saved, dict) else [],
+                "source_refs": saved.get("source_refs") if isinstance(saved, dict) else [],
+                "staged_only": True,
+                "old_hash": saved.get("old_hash") if isinstance(saved, dict) else None,
+                "new_hash": saved.get("new_hash") if isinstance(saved, dict) else None,
+                "version_id": saved.get("version_id") if isinstance(saved, dict) else None,
+            },
+            ensure_ascii=False,
+        )
+    if connector_id == "memory" and action_id == "consolidate_daily_notes":
+        actor = str(
+            session_metadata.get("user_id")
+            or session_metadata.get("actor")
+            or session_metadata.get("agent_install_id")
+            or session_metadata.get("active_agent_install_id")
+            or "direct_tool"
+        ).strip()
+        result = callbacks.consolidate_daily_memory_notes(
+            workspace_id,
+            target_files=argument_payload.get("target_files") if isinstance(argument_payload.get("target_files"), list) else None,
+            max_notes=callbacks.safe_positive_int(argument_payload.get("max_notes"), 30),
+            apply_merge=bool(argument_payload.get("apply_merge")),
+            compact_mode=str(argument_payload.get("compact_mode") or "none"),
+            user_approved=bool(argument_payload.get("user_approved")),
+            policy_allows=bool(argument_payload.get("policy_allows")),
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+            run_id=str(argument_payload.get("run_id") or "").strip() or None,
+            actor=actor,
+        )
+        return json.dumps(result if isinstance(result, dict) else {"ok": True}, ensure_ascii=False)
+    if connector_id == "memory" and action_id == "list_versions":
+        filename = str(argument_payload.get("filename") or argument_payload.get("path") or "").strip()
+        if not filename:
+            raise RuntimeError("Tool 'memory_list_versions' requires filename.")
+        versions = callbacks.list_memory_file_versions(
+            workspace_id,
+            filename,
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+            limit=callbacks.safe_positive_int(argument_payload.get("limit"), 20),
+        )
+        return json.dumps({"filename": filename, "versions": versions}, ensure_ascii=False)
+    if connector_id == "memory" and action_id == "rollback_version":
+        filename = str(argument_payload.get("filename") or argument_payload.get("path") or "").strip()
+        version_id = str(argument_payload.get("version_id") or "").strip()
+        reason = str(argument_payload.get("reason") or "memory_rollback").strip() or "memory_rollback"
+        if not filename:
+            raise RuntimeError("Tool 'memory_rollback_version' requires filename.")
+        if not version_id:
+            raise RuntimeError("Tool 'memory_rollback_version' requires version_id.")
+        actor = str(
+            session_metadata.get("user_id")
+            or session_metadata.get("actor")
+            or session_metadata.get("agent_install_id")
+            or session_metadata.get("active_agent_install_id")
+            or "direct_tool"
+        ).strip()
+        result = callbacks.rollback_memory_file_version(
+            workspace_id,
+            filename,
+            version_id=version_id,
+            reason=reason,
+            actor=actor,
+            run_id=str(argument_payload.get("run_id") or session_metadata.get("run_id") or session_metadata.get("request_id") or "").strip() or None,
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+        )
+        return json.dumps(result if isinstance(result, dict) else {"ok": True}, ensure_ascii=False)
     if connector_id == "sage_service" and action_id == "list_state":
         service_id = str(argument_payload.get("service_id") or "").strip()
         if not service_id:

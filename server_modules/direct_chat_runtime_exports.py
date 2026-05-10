@@ -290,7 +290,16 @@ _DIRECT_CHAT_LOOP_REPLY = "I appear to be stuck in a loop. Please clarify what y
 _DIRECT_TOOL_LOOP_STATE: Dict[str, Dict[str, Any]] = {}
 _DIRECT_CHAT_MODEL_PREFERENCES: Dict[str, Dict[str, Optional[str]]] = {}
 _DIRECT_CHAT_CLEAR_MARKERS: set[str] = set()
-_MEMORY_NOTEBOOK_TOOL_NAMES = {"memory_search", "memory_get", "memory_update"}
+_MEMORY_NOTEBOOK_TOOL_NAMES = {
+    "memory_search",
+    "memory_get",
+    "memory_update",
+    "memory_append_daily_note",
+    "memory_stage_consolidation",
+    "memory_consolidate_daily_notes",
+    "memory_list_versions",
+    "memory_rollback_version",
+}
 
 
 _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (

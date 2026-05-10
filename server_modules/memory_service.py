@@ -17,7 +17,7 @@ from server_modules import agent_memory as _workspace_memory_store
 from server_modules import memory_summary_service
 from server_modules import workspace_context_memory_adapter
 from server_modules.telemetry import get_tracer, set_span_attributes
-from server_modules.workspace_context import read_workspace_context_files
+from server_modules.workspace_context import read_workspace_context_files, write_workspace_context_file
 
 
 def _normalize_workspace_id(workspace_id: str) -> str:
@@ -336,6 +336,28 @@ def get_memory_notebook_excerpt(
         line_count=line_count,
         agent_install_id=str(agent_install_id or "").strip() or None,
     )
+
+
+def update_memory_context_file(
+    workspace_id: str,
+    filename: str,
+    content: str,
+    *,
+    agent_install_id: str | None = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    saved = write_workspace_context_file(
+        filename,
+        str(content or ""),
+        workspace_id=normalized_workspace_id,
+        agent_install_id=str(agent_install_id or "").strip() or None,
+    )
+    return {
+        "workspace_id": normalized_workspace_id,
+        "agent_install_id": str(agent_install_id or "").strip() or None,
+        "filename": saved.get("filename"),
+        "content": saved.get("content", ""),
+    }
 
 
 def workspace_memory_snapshot(workspace_id: str, *, agent_install_id: str | None = None) -> WorkspaceMemorySnapshot:

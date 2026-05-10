@@ -39,6 +39,12 @@ class SkillsServiceTests(unittest.TestCase):
                 "from_line": from_line,
                 "line_count": line_count,
             },
+            update_memory_context_file=lambda workspace_id, filename, content, agent_install_id=None: {
+                "workspace_id": workspace_id,
+                "filename": filename,
+                "content": content,
+                "agent_install_id": agent_install_id,
+            },
         )
 
     def test_capability_descriptor_from_payload_normalizes_fields(self) -> None:
@@ -364,6 +370,18 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(get_raw)["path"], "MEMORY.md")
         self.assertEqual(json.loads(get_raw)["from_line"], 2)
 
+    def test_execute_single_direct_tool_call_dispatches_memory_update(self) -> None:
+        raw = skills_service.execute_single_direct_tool_call(
+            tool_call={"name": "memory_update", "arguments": {"filename": "GOALS.md", "content": "# Goals\n\n- Ship memory editing\n"}},
+            workspace_id="default",
+            thread_id="thread-1",
+            callbacks=self._execution_callbacks(),
+        )
+
+        payload = json.loads(raw)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["filename"], "GOALS.md")
+
     def test_build_builtin_direct_chat_tools_includes_sage_service_tools(self) -> None:
         tool_names = {
             item["name"]
@@ -374,6 +392,7 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertIn("sage_service__list_state", tool_names)
         self.assertIn("sage_service__update_profile", tool_names)
         self.assertIn("sage_service__create_entry", tool_names)
+        self.assertIn("memory_update", tool_names)
 
     def test_execute_single_direct_tool_call_dispatches_sage_service_tools(self) -> None:
         callbacks = self._execution_callbacks()

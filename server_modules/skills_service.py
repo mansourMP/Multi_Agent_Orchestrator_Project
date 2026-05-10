@@ -644,6 +644,25 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
             },
         ),
         ToolDescriptor(
+            tool_name="memory_update",
+            label="Memory update",
+            connector_id="memory",
+            action_id="update",
+            description=(
+                "Update one workspace memory context file. Use only when the user explicitly asks Sage to "
+                "remember, correct, or update durable memory. Read the current file first with memory_get, then "
+                "write the complete revised file content."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Allowed context filename such as MEMORY.md, USER.md, IDENTITY.md, SOUL.md, GOALS.md, PROCEDURES.md, or REFLECTION.md."},
+                    "content": {"type": "string", "description": "Complete revised Markdown content for the file."},
+                },
+                "required": ["filename", "content"],
+            },
+        ),
+        ToolDescriptor(
             tool_name="web__search",
             label="Web search",
             connector_id="web",
@@ -2028,6 +2047,27 @@ def execute_single_direct_tool_call(
             line_count=argument_payload.get("lines"),
         )
         return json.dumps(excerpt, ensure_ascii=False)
+    if connector_id == "memory" and action_id == "update":
+        filename = str(argument_payload.get("filename") or argument_payload.get("path") or "").strip()
+        content = str(argument_payload.get("content") or "")
+        if not filename:
+            raise RuntimeError("Tool 'memory_update' requires a filename.")
+        if not content.strip():
+            raise RuntimeError("Tool 'memory_update' requires non-empty content.")
+        saved = callbacks.update_memory_context_file(
+            workspace_id,
+            filename,
+            content,
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+        )
+        return json.dumps(
+            {
+                "ok": True,
+                "filename": saved.get("filename") if isinstance(saved, dict) else filename,
+                "workspace_id": saved.get("workspace_id") if isinstance(saved, dict) else workspace_id,
+            },
+            ensure_ascii=False,
+        )
     if connector_id == "sage_service" and action_id == "list_state":
         service_id = str(argument_payload.get("service_id") or "").strip()
         if not service_id:

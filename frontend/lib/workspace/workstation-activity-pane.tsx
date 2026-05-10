@@ -1002,9 +1002,11 @@ export function WorkstationActivityPane() {
 
   return (
     <WorkstationSurfaceRoot surface="memory">
-      <main className="app-stack-4">
-        {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
-        {error ? <WorkstationSurfaceNotice tone="warning">{error}</WorkstationSurfaceNotice> : null}
+      <main className="app-memory-document-page">
+        <div className="app-memory-document-notices">
+          {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
+          {error ? <WorkstationSurfaceNotice tone="warning">{error}</WorkstationSurfaceNotice> : null}
+        </div>
 
         {isLoading || isProfileLoading ? (
           <div className="app-stack-3">

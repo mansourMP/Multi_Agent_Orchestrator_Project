@@ -30,7 +30,9 @@ def memory_recall_section(tools: list[dict[str, Any]], *, memory_tool_names: set
         "## Memory Recall\n"
         "Before answering anything about prior work, decisions, dates, people, preferences, or todos: "
         "run memory_search on MEMORY.md + memory/*.md, then use memory_get to read only the needed lines. "
-        "If memory results are weak, say you checked."
+        "If memory results are weak, say you checked. When the user explicitly asks Sage to remember, correct, "
+        "or update durable memory, read the current file first, then use memory_update with the complete revised "
+        "Markdown content."
     )
 
 

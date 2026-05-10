@@ -244,6 +244,8 @@ def parse_tool_name(tool_name: str) -> tuple[str, str]:
         return "memory", "search"
     if token == "memory_get":
         return "memory", "get"
+    if token == "memory_update":
+        return "memory", "update"
     if "__" not in token:
         raise RuntimeError(f"Unsupported direct chat tool '{token}'.")
     connector_id, action_id = token.split("__", 1)

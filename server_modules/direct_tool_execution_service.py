@@ -18,6 +18,12 @@ _CHANNEL_CONNECTORS = {"discord", "email", "gmail", "imsg", "mail", "signal", "s
 _HTTP_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
+def _default_update_memory_context_file(*args: Any, **kwargs: Any) -> Any:
+    from server_modules.memory_service import update_memory_context_file
+
+    return update_memory_context_file(*args, **kwargs)
+
+
 @dataclass(frozen=True)
 class DirectToolExecutionCallbacks:
     compact_step_detail: Callable[[Any], Optional[str]]
@@ -37,6 +43,7 @@ class DirectToolExecutionCallbacks:
     web_fetch: Callable[[str], str]
     search_memory_notebook: Callable[..., Any]
     get_memory_notebook_excerpt: Callable[..., Any]
+    update_memory_context_file: Callable[..., Any] = _default_update_memory_context_file
 
 
 def direct_tool_step_payload(
@@ -370,6 +377,10 @@ def _direct_tool_governance_metadata(
         action_class = "service_state_update" if normalized_action in {"create_entry", "update_profile"} else "service_state_read"
         governance_boundary = "sage_profile"
         risk_level = "moderate" if action_class.endswith("update") else "low"
+    elif normalized_connector == "memory":
+        action_class = "workspace_memory_update" if normalized_action == "update" else "workspace_memory_read"
+        governance_boundary = "workspace_memory"
+        risk_level = "moderate" if normalized_action == "update" else "low"
     elif normalized_connector in _CHANNEL_CONNECTORS or normalized_action in {"send", "reply", "post", "dispatch"}:
         action_class = "channel_send"
         governance_boundary = "external_channel"
@@ -404,7 +415,7 @@ def _broker_action_class_for_direct_tool(governance: Dict[str, Any]) -> str:
         return "execute"
     if risk_level in {"critical", "high"}:
         return "execute"
-    if bool(governance.get("external_side_effect")) or action_class in {"local_write", "browser_mutation", "channel_send"}:
+    if bool(governance.get("external_side_effect")) or action_class in {"local_write", "browser_mutation", "channel_send", "workspace_memory_update"}:
         return "write"
     return "read"
 

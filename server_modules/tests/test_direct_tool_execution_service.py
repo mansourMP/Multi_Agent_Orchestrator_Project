@@ -39,6 +39,12 @@ def _callbacks() -> service.DirectToolExecutionCallbacks:
             "from_line": from_line,
             "line_count": line_count,
         },
+        update_memory_context_file=lambda workspace_id, filename, content, agent_install_id=None: {
+            "workspace_id": workspace_id,
+            "filename": filename,
+            "content": content,
+            "agent_install_id": agent_install_id,
+        },
     )
 
 
@@ -84,6 +90,19 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(search_raw)["results"][0]["max_results"], 3)
         self.assertEqual(json.loads(get_raw)["path"], "MEMORY.md")
         self.assertEqual(json.loads(get_raw)["from_line"], 2)
+
+    def test_execute_single_direct_tool_call_handles_memory_update(self) -> None:
+        raw = service.execute_single_direct_tool_call(
+            tool_call={"name": "memory_update", "arguments": {"filename": "IDENTITY.md", "content": "# Identity\n\n- Role: founder\n"}},
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            callbacks=_callbacks(),
+        )
+
+        payload = json.loads(raw)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["filename"], "IDENTITY.md")
+        self.assertEqual(payload["workspace_id"], "workspace-1")
 
     def test_execute_single_direct_tool_call_emits_audit_events(self) -> None:
         callbacks = _callbacks()

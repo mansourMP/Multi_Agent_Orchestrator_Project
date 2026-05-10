@@ -92,6 +92,7 @@ def _operator_namespace() -> dict:
 class DirectChatOperatorBindingServiceTests(unittest.TestCase):
     def test_parse_tool_name_handles_builtin_and_connector_tools(self) -> None:
         self.assertEqual(service.parse_tool_name("memory_search"), ("memory", "search"))
+        self.assertEqual(service.parse_tool_name("memory_update"), ("memory", "update"))
         self.assertEqual(service.parse_tool_name("telegram__send"), ("telegram", "send"))
 
     def test_build_direct_tool_execution_callbacks_reads_underscored_namespace(self) -> None:

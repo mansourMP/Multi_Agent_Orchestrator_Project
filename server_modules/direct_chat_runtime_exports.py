@@ -57,6 +57,7 @@ from server_modules.memory_service import (
     get_memory,
     list_memory_entries,
     search_memory_notebook,
+    update_memory_context_file,
 )
 from server_modules.agent_turn import resolve_agent_turn_request
 from server_modules.conversation_memory_policy import DIRECT_CHAT_PROFILE, get_memory_policy_profile
@@ -289,7 +290,7 @@ _DIRECT_CHAT_LOOP_REPLY = "I appear to be stuck in a loop. Please clarify what y
 _DIRECT_TOOL_LOOP_STATE: Dict[str, Dict[str, Any]] = {}
 _DIRECT_CHAT_MODEL_PREFERENCES: Dict[str, Dict[str, Optional[str]]] = {}
 _DIRECT_CHAT_CLEAR_MARKERS: set[str] = set()
-_MEMORY_NOTEBOOK_TOOL_NAMES = {"memory_search", "memory_get"}
+_MEMORY_NOTEBOOK_TOOL_NAMES = {"memory_search", "memory_get", "memory_update"}
 
 
 _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (

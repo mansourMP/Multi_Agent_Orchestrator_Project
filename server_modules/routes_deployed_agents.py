@@ -57,6 +57,16 @@ class DeployedAgentWorkspaceRequest(BaseModel):
     workspace_id: str
 
 
+class DeployedAgentControlRequest(BaseModel):
+    workspace_id: str
+    reason: Optional[str] = None
+
+
+class DeployedAgentRecoveryActionRequest(BaseModel):
+    workspace_id: str
+    action: str
+
+
 class DeployedAgentExternalUserDeleteRequest(BaseModel):
     workspace_id: str
     channel: str
@@ -185,6 +195,26 @@ async def list_deployed_agent_memory_entries(
     current_user=Depends(get_current_user),
 ):
     payload = await deployed_agent_service.list_deployed_agent_memory_entries(
+        deployed_agent_id=deployed_agent_id,
+        current_user=current_user,
+        owner_workspace_id=workspace_id,
+        limit=limit,
+        offset=offset,
+    )
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent not found.")
+    return payload
+
+
+@router.get("/deployed-agents/{deployed_agent_id}/activity")
+async def list_deployed_agent_activity(
+    deployed_agent_id: str,
+    workspace_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    current_user=Depends(get_current_user),
+):
+    payload = await deployed_agent_service.list_deployed_agent_activity(
         deployed_agent_id=deployed_agent_id,
         current_user=current_user,
         owner_workspace_id=workspace_id,
@@ -398,6 +428,150 @@ async def pause_deployed_agent(
         raise
     except ValueError as error:
         _raise_for_value_error(error, default_status=409)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent not found.")
+    return payload
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/kill")
+async def kill_deployed_agent(
+    deployed_agent_id: str,
+    body: DeployedAgentControlRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    try:
+        payload = await deployed_agent_service.kill_deployed_agent(
+            deployed_agent_id=deployed_agent_id,
+            current_user=current_user,
+            owner_workspace_id=body.workspace_id,
+            reason=body.reason,
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        _raise_for_value_error(error, default_status=409)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent not found.")
+    return payload
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/recover")
+async def recover_deployed_agent(
+    deployed_agent_id: str,
+    body: DeployedAgentWorkspaceRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    try:
+        payload = await deployed_agent_service.recover_deployed_agent(
+            deployed_agent_id=deployed_agent_id,
+            current_user=current_user,
+            owner_workspace_id=body.workspace_id,
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        _raise_for_value_error(error, default_status=409)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent not found.")
+    return payload
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/archive")
+async def archive_deployed_agent(
+    deployed_agent_id: str,
+    body: DeployedAgentControlRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    try:
+        payload = await deployed_agent_service.archive_deployed_agent(
+            deployed_agent_id=deployed_agent_id,
+            current_user=current_user,
+            owner_workspace_id=body.workspace_id,
+            reason=body.reason,
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        _raise_for_value_error(error, default_status=409)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent not found.")
+    return payload
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/recovery-actions")
+async def apply_deployed_agent_recovery_action(
+    deployed_agent_id: str,
+    body: DeployedAgentRecoveryActionRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    try:
+        payload = await deployed_agent_service.apply_deployed_agent_recovery_action(
+            deployed_agent_id=deployed_agent_id,
+            current_user=current_user,
+            owner_workspace_id=body.workspace_id,
+            action=body.action,
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        _raise_for_value_error(error, default_status=409)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent not found.")
+    return payload
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/runtime-sessions/{session_id}/kill")
+async def kill_deployed_agent_runtime_session(
+    deployed_agent_id: str,
+    session_id: str,
+    body: DeployedAgentWorkspaceRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    return await deployed_agent_service.kill_deployed_agent_runtime_session(
+        deployed_agent_id=deployed_agent_id,
+        session_id=session_id,
+        current_user=current_user,
+        owner_workspace_id=body.workspace_id,
+    )
+
+
+@router.post("/deployed-agents/emergency-stop")
+async def emergency_stop_workspace_deployed_agents(
+    body: DeployedAgentControlRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    return await deployed_agent_service.emergency_stop_workspace_deployed_agents(
+        current_user=current_user,
+        owner_workspace_id=body.workspace_id,
+        reason=body.reason,
+    )
+
+
+@router.get("/deployed-agents/{deployed_agent_id}/audit-export")
+async def export_deployed_agent_audit_logs(
+    deployed_agent_id: str,
+    workspace_id: str,
+    limit: int = 500,
+    current_user=Depends(get_current_user),
+):
+    payload = await deployed_agent_service.export_deployed_agent_audit_logs(
+        deployed_agent_id=deployed_agent_id,
+        current_user=current_user,
+        owner_workspace_id=workspace_id,
+        limit=limit,
+    )
     if not isinstance(payload, dict):
         raise HTTPException(status_code=404, detail="Deployed agent not found.")
     return payload

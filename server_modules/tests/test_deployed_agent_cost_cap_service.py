@@ -303,7 +303,7 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
             ) as update_mock,
             patch(
                 "server_modules.deployed_agent_cost_cap_service.control_plane_repository.set_deployed_agent_state",
-                new=AsyncMock(return_value={**deployed_agent, "deployment_state": "paused"}),
+                new=AsyncMock(return_value={**deployed_agent, "deployment_state": "suspended"}),
             ) as pause_mock,
             patch(
                 "server_modules.deployed_agent_cost_cap_service.outbox_service.emit_notification_event",
@@ -327,6 +327,7 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["applied"])
         self.assertTrue(result["auto_paused"])
+        self.assertTrue(result["auto_suspended"])
         pause_mock.assert_awaited_once()
         actions = [call.kwargs["action"] for call in notification_mock.call_args_list]
         self.assertEqual(actions, ["deployed_agent_budget_100"])
@@ -348,7 +349,7 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
             ) as update_mock,
             patch(
                 "server_modules.deployed_agent_cost_cap_service.control_plane_repository.set_deployed_agent_state",
-                new=AsyncMock(return_value={**deployed_agent, "deployment_state": "paused"}),
+                new=AsyncMock(return_value={**deployed_agent, "deployment_state": "suspended"}),
             ) as pause_mock,
             patch(
                 "server_modules.deployed_agent_cost_cap_service.outbox_service.emit_notification_event",
@@ -370,10 +371,11 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["applied"])
         self.assertTrue(result["fail_closed"])
+        self.assertTrue(result["auto_suspended"])
         pause_mock.assert_awaited_once()
         self.assertEqual(notification_mock.call_args.kwargs["action"], "deployed_agent_budget_tracking_failed")
         budget_cycle = update_mock.await_args.kwargs["updates"]["operational_state"]["current_budget_cycle"]
-        self.assertEqual(budget_cycle["accounting_state"], "paused_accounting_error")
+        self.assertEqual(budget_cycle["accounting_state"], "suspended_accounting_error")
 
     async def test_settle_falls_back_to_workspace_tenant_when_run_context_uses_default(self) -> None:
         deployed_agent = _deployed_agent(metadata={"monthly_cost_cap_usd": 10.0})

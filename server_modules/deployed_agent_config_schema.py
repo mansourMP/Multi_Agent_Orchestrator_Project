@@ -37,6 +37,7 @@ KNOWN_OWNER_METADATA_KEYS = frozenset(
         "runtime_supply",
         "runtime_supplier",
         "computer_automation",
+        "studio_agent_mode",
     }
 )
 
@@ -151,7 +152,7 @@ def _normalize_tool_ids(value: Any) -> List[str]:
 
 def _normalize_deployment_state(value: Any) -> str:
     token = _text(value).lower()
-    if token in {"draft", "staging", "live", "paused"}:
+    if token in {"draft", "private_test", "ready_for_review", "live", "paused", "suspended", "archived"}:
         return token
     return config_defaults_service.default_deployed_agent_deployment_state()
 
@@ -233,6 +234,17 @@ class DeployedAgentComputerAutomationPolicy(BaseModel):
     requires_owner_approval: bool = True
     idle_timeout_seconds: int = 0
     max_session_runtime_seconds: int = 0
+    isolation_boundary: str = "isolated_sandbox"
+    inherit_host_environment: bool = False
+    filesystem_default_access: str = "none"
+    allow_downloads: bool = False
+    allow_software_install: bool = False
+    terminal_command_policy: str = "blocked"
+    sensitive_action_confirmation_required: bool = True
+    screenshot_capture_enabled: bool = False
+    session_recording_policy: str = "metadata_only"
+    emergency_stop_enabled: bool = True
+    required_owner_approval_actions: List[str] = Field(default_factory=list)
 
 
 class DeployedAgentConfig(BaseModel):
@@ -245,6 +257,9 @@ class DeployedAgentConfig(BaseModel):
     system_prompt: str = ""
     runtime_placement: str = Field(
         default_factory=lambda: deployed_agent_runtime_contract_service.RUNTIME_PLACEMENT_MANAGED_CLOUD
+    )
+    studio_agent_mode: str = Field(
+        default_factory=lambda: deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_TEXT
     )
     runtime_supply: Dict[str, Any] = Field(default_factory=dict)
     runtime_target: str = Field(default_factory=config_defaults_service.default_deployed_agent_runtime_target)
@@ -326,16 +341,33 @@ def deployed_agent_config_from_record(
         if "runtime_target" in config_payload
         else payload.get("runtime_target")
     )
-    runtime_placement = _normalize_runtime_placement(
+    runtime_placement_value = (
         config_payload.get("runtime_placement")
         if "runtime_placement" in config_payload
-        else metadata.get("runtime_placement"),
+        else metadata.get("runtime_placement")
+    )
+    runtime_supplier_value = (
+        config_payload.get("runtime_supplier")
+        if "runtime_supplier" in config_payload
+        else metadata.get("runtime_supplier")
+    )
+    explicit_studio_mode = config_payload.get("studio_agent_mode") if "studio_agent_mode" in config_payload else None
+    has_runtime_hints = any(
+        key in config_payload
+        for key in ("runtime_placement", "runtime_target", "runtime_supplier")
+    )
+    studio_mode_hint = explicit_studio_mode
+    if studio_mode_hint is None and not has_runtime_hints:
+        studio_mode_hint = metadata.get("studio_agent_mode")
+    studio_agent_mode = deployed_agent_runtime_contract_service.resolve_studio_agent_mode(
+        studio_mode_hint,
+        runtime_placement=runtime_placement_value,
         runtime_target=runtime_target_value,
+        runtime_supplier=runtime_supplier_value,
     )
-    runtime_target = _normalize_runtime_target(
-        runtime_target_value
-        or deployed_agent_runtime_contract_service.runtime_target_for_placement(runtime_placement)
-    )
+    mode_contract = deployed_agent_runtime_contract_service.studio_agent_mode_contract(studio_agent_mode)
+    runtime_placement = _normalize_runtime_placement(mode_contract["placement"]["kind"])
+    runtime_target = _normalize_runtime_target(mode_contract["placement"]["runtime_target"])
     customer_policy = {
         "paused_message": _optional_text(
             customer_policy_payload.get("paused_message")
@@ -398,9 +430,11 @@ def deployed_agent_config_from_record(
                 config_payload.get("system_prompt") if "system_prompt" in config_payload else payload.get("system_prompt")
             ),
             "runtime_placement": runtime_placement,
+            "studio_agent_mode": studio_agent_mode,
             "runtime_supply": deployed_agent_runtime_contract_service.normalize_runtime_supply_contract(
                 runtime_supply_payload,
-                runtime_supplier=config_payload.get("runtime_supplier") or metadata.get("runtime_supplier"),
+                studio_agent_mode=studio_agent_mode,
+                runtime_supplier=runtime_supplier_value,
                 runtime_placement=runtime_placement,
                 runtime_target=runtime_target,
                 computer_automation=computer_automation_payload,
@@ -541,6 +575,7 @@ def metadata_from_deployed_agent_config(
         **preserved,
         "config_schema_version": config.schema_version,
         "runtime_placement": config.runtime_placement,
+        "studio_agent_mode": config.studio_agent_mode,
         "runtime_supply": config.runtime_supply,
         "computer_automation": config.computer_automation.model_dump(exclude_none=True),
         "memory_enabled": bool(config.memory_policy.memory_enabled),

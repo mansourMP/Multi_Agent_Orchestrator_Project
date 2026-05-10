@@ -6466,6 +6466,12 @@ body.theme-light .workstation-shell__topbar {
   gap: var(--app-space-3);
 }
 
+.deployed-agents-wizard__runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--app-space-3);
+}
+
 .deployed-agents-wizard__tool-card {
   display: grid;
   gap: var(--app-space-2);
@@ -6512,6 +6518,37 @@ body.theme-light .workstation-shell__topbar {
 .deployed-agents-wizard__tool-card--selected {
   border-color: var(--app-border-strong);
   background: var(--app-bg-page);
+}
+
+.deployed-agents-wizard__runtime-card {
+  align-content: start;
+  min-height: 100%;
+}
+
+.deployed-agents-wizard__runtime-metadata {
+  display: grid;
+  gap: var(--app-space-2);
+  margin: var(--app-space-2) 0 0;
+}
+
+.deployed-agents-wizard__runtime-metadata div {
+  display: grid;
+  gap: 2px;
+}
+
+.deployed-agents-wizard__runtime-metadata dt {
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-11);
+  font-weight: var(--app-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.deployed-agents-wizard__runtime-metadata dd {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-12);
+  line-height: 1.45;
 }
 
 .deployed-agents-wizard__memory-toggle--panel {

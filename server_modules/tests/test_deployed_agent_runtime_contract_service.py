@@ -4,6 +4,47 @@ from server_modules import deployed_agent_runtime_contract_service as contract
 
 
 class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
+    def test_studio_agent_mode_contract_maps_to_internal_runtime_contract(self):
+        text_contract = contract.studio_agent_mode_contract("text_agent")
+        self.assertEqual(text_contract["placement"]["kind"], "managed_cloud")
+        self.assertEqual(text_contract["supplier"]["kind"], "empyralis")
+        self.assertFalse(text_contract["computer_allowed"])
+
+        cloud_contract = contract.studio_agent_mode_contract("cloud_computer_agent")
+        self.assertEqual(cloud_contract["placement"]["kind"], "hosted_hardware_pool")
+        self.assertEqual(cloud_contract["placement"]["runtime_target"], "cloud")
+        self.assertTrue(cloud_contract["computer_allowed"])
+
+        local_contract = contract.studio_agent_mode_contract("my_computer_agent")
+        self.assertEqual(local_contract["placement"]["kind"], "customer_local")
+        self.assertEqual(local_contract["supplier"]["kind"], "customer")
+
+        hosted_contract = contract.studio_agent_mode_contract("self_hosted_agent")
+        self.assertEqual(hosted_contract["placement"]["kind"], "customer_hosted")
+        self.assertEqual(hosted_contract["placement"]["runtime_target"], "self_hosted")
+
+    def test_runtime_supply_contract_ignores_arbitrary_runtime_strings_when_mode_is_set(self):
+        payload = contract.normalize_runtime_supply_contract(
+            {
+                "supplier": {"kind": "third_party_certified"},
+                "placement": {"kind": "customer_hosted"},
+                "computer_automation": {
+                    "enabled": True,
+                    "runtime_class": "virtual_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                },
+            },
+            studio_agent_mode="text_agent",
+            runtime_supplier="customer",
+            runtime_placement="customer_hosted",
+            runtime_target="self_hosted",
+        )
+        self.assertEqual(payload["studio_agent_mode"], "text_agent")
+        self.assertEqual(payload["placement"]["kind"], "managed_cloud")
+        self.assertEqual(payload["supplier"]["kind"], "empyralis")
+        self.assertFalse(payload["computer_automation"]["enabled"])
+
     def test_runtime_placement_normalizes_without_computer_automation(self):
         self.assertEqual(contract.normalize_runtime_placement("cloud"), "managed_cloud")
         self.assertEqual(contract.normalize_runtime_placement("empyralis_hosted_device"), "hosted_hardware_pool")
@@ -25,6 +66,9 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
         self.assertIsNone(policy["runtime_class"])
         self.assertEqual(policy["allowed_domains"], [])
         self.assertEqual(policy["max_concurrent_sessions"], 0)
+        self.assertFalse(policy["inherit_host_environment"])
+        self.assertEqual(policy["filesystem_default_access"], "none")
+        self.assertTrue(policy["emergency_stop_enabled"])
 
     def test_computer_automation_requires_explicit_enablement_and_allowed_domain(self):
         blocked = contract.computer_automation_guardrail_state(
@@ -88,6 +132,123 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
         self.assertEqual(payload["placement"]["runtime_target"], "cloud")
         self.assertFalse(payload["computer_automation"]["enabled"])
         self.assertFalse(payload["provider_binding"]["expose_provider_model_to_ordinary_ui"])
+
+    def test_validate_mode_capability_matrix_rejects_text_agent_computer_automation(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_mode_capability_matrix(
+                studio_agent_mode="text_agent",
+                runtime_placement="managed_cloud",
+                runtime_target="cloud",
+                computer_automation={
+                    "enabled": True,
+                    "runtime_class": "virtual_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                },
+                stage="create",
+            )
+
+        self.assertIn("text_agent cannot enable computer automation", str(error.exception))
+
+    def test_validate_mode_capability_matrix_requires_runtime_target_health_on_deploy(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_mode_capability_matrix(
+                studio_agent_mode="cloud_computer_agent",
+                runtime_placement="hosted_hardware_pool",
+                runtime_target="cloud",
+                computer_automation={
+                    "enabled": True,
+                    "runtime_class": "virtual_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 5,
+                    "monthly_budget_usd": 25,
+                    "max_session_runtime_seconds": 900,
+                },
+                stage="deploy",
+                runtime_targets={
+                    "targets": [
+                        {
+                            "target_id": "sage_cloud_computer",
+                            "available": True,
+                            "online": True,
+                            "healthy": False,
+                        }
+                    ]
+                },
+            )
+
+        self.assertIn("sage_cloud_computer", str(error.exception))
+        self.assertIn("healthy", str(error.exception))
+
+    def test_validate_mode_capability_matrix_requires_budget_and_allowlist_when_computer_enabled(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_mode_capability_matrix(
+                studio_agent_mode="cloud_computer_agent",
+                runtime_placement="hosted_hardware_pool",
+                runtime_target="cloud",
+                computer_automation={"enabled": True, "runtime_class": "virtual_browser"},
+                stage="create",
+                runtime_targets={
+                    "targets": [
+                        {"target_id": "sage_cloud_computer", "available": True},
+                    ]
+                },
+            )
+
+        detail = str(error.exception)
+        self.assertIn("domain allowlist", detail.lower())
+        self.assertIn("daily_budget_usd", detail)
+        self.assertIn("monthly_budget_usd", detail)
+
+    def test_validate_mode_capability_matrix_requires_secure_computer_safety_controls(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_mode_capability_matrix(
+                studio_agent_mode="cloud_computer_agent",
+                runtime_placement="hosted_hardware_pool",
+                runtime_target="cloud",
+                computer_automation={
+                    "enabled": True,
+                    "runtime_class": "virtual_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 5,
+                    "monthly_budget_usd": 25,
+                    "idle_timeout_seconds": 300,
+                    "max_session_runtime_seconds": 900,
+                    "inherit_host_environment": True,
+                    "filesystem_default_access": "full_host",
+                    "terminal_command_policy": "unrestricted",
+                    "sensitive_action_confirmation_required": False,
+                    "allow_software_install": True,
+                    "emergency_stop_enabled": False,
+                    "required_owner_approval_actions": [],
+                },
+                stage="create",
+            )
+
+        detail = str(error.exception).lower()
+        self.assertIn("cannot inherit host environment variables", detail)
+        self.assertIn("restricted filesystem access", detail)
+        self.assertIn("safe terminal command policy", detail)
+        self.assertIn("sensitive-action confirmation", detail)
+        self.assertIn("software installs", detail)
+        self.assertIn("emergency stop", detail)
+        self.assertIn("missing required risky actions", detail)
+
+    def test_validate_mode_capability_matrix_requires_runtime_target_availability_on_create(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_mode_capability_matrix(
+                studio_agent_mode="self_hosted_agent",
+                runtime_placement="customer_hosted",
+                runtime_target="self_hosted",
+                computer_automation={"enabled": False},
+                stage="create",
+                runtime_targets={"targets": []},
+            )
+
+        self.assertIn("self_host_runtime", str(error.exception))
+        self.assertIn("not present", str(error.exception))
 
     def test_marketplace_package_cannot_force_customer_runtime_without_installer_opt_in(self):
         payload = contract.normalize_runtime_supply_contract(

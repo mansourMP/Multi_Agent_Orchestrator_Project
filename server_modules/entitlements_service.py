@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional
 
 from server_modules import billing_service
 from server_modules import control_plane_repository
+from server_modules import deployed_agent_runtime_contract_service
 from server_modules import run_state_repository
 from server_modules.direct_tool_config_service import run_async_tool_call
 
@@ -723,6 +724,7 @@ def workspace_capability_flags(
     entitlements = resolved_state.entitlements
     hosted_state = hosted_sage_ai_access_state(state=resolved_state)
     history_window_days = max(1, _coerce_int(entitlements.get("sync_depth_days"), 30))
+    deployed_agent_quotas = deployed_agent_quota_defaults(state=resolved_state)
     return {
         "hosted_ai_enabled": bool(hosted_state.get("allowed")),
         "hosted_sage_ai_policy": str(hosted_state.get("policy") or DEFAULT_HOSTED_SAGE_AI_POLICY),
@@ -742,12 +744,116 @@ def workspace_capability_flags(
         "priority_sync_enabled": bool(entitlements.get("priority_sync_enabled")),
         "mini_apps_unlimited": bool(entitlements.get("mini_apps_unlimited")),
         "max_specialists": _coerce_int(entitlements.get("max_deployed_agents"), 1),
+        "deployed_agent_quotas": deployed_agent_quotas,
         "history_window_days": history_window_days,
         "telegram_channel_enabled": bool(entitlements.get("telegram_channel_enabled")),
         "whatsapp_channel_enabled": bool(entitlements.get("whatsapp_channel_enabled")),
         "channels": {
             "telegram": bool(entitlements.get("telegram_channel_enabled")),
             "whatsapp": bool(entitlements.get("whatsapp_channel_enabled")),
+        },
+    }
+
+
+def _runtime_target_payload_by_id(runtime_targets: Any, target_id: str) -> Dict[str, Any]:
+    payload = runtime_targets if isinstance(runtime_targets, dict) else {}
+    targets = payload.get("targets") if isinstance(payload.get("targets"), list) else []
+    token = str(target_id or "").strip().lower()
+    for item in targets:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("target_id") or "").strip().lower() == token:
+            return dict(item)
+    return {}
+
+
+def deployed_agent_quota_defaults(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+    state: Optional[WorkspaceEntitlementState] = None,
+    runtime_targets: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_state = state or resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    limits = resolved_state.entitlements
+    max_specialists = max(1, _coerce_int(limits.get("max_deployed_agents"), 1))
+    created_agents_max = max(1, _coerce_int(limits.get("max_deployed_agents_created"), max_specialists))
+    live_agents_max = max(1, _coerce_int(limits.get("max_deployed_agents_live"), max_specialists))
+    concurrent_running_agents_max = max(1, _coerce_int(limits.get("max_concurrent_running_agents"), _coerce_int(limits.get("concurrent_hosted_executions"), 1)))
+    computer_sessions_max = max(1, _coerce_int(limits.get("max_computer_sessions"), 1))
+    background_jobs_max = max(1, _coerce_int(limits.get("max_background_jobs"), _coerce_int(limits.get("background_event_triggers_per_hour"), 2)))
+    messages_per_day_max = max(1, _coerce_int(limits.get("max_messages_per_day"), 500))
+    tool_calls_per_day_max = max(1, _coerce_int(limits.get("max_tool_calls_per_day"), 300))
+    runtime_minutes_monthly_max = max(0, _coerce_int(limits.get("max_runtime_minutes_monthly"), _coerce_int(limits.get("hosted_runtime_minutes_monthly"), 0)))
+    monthly_spend_usd_max = _coerce_non_negative_float(
+        limits.get("max_monthly_spend_usd"),
+        0.0,
+    )
+    storage_memory_size_mb_max = max(0, _coerce_int(limits.get("max_storage_memory_mb"), _coerce_int(limits.get("cloud_memory_storage_mb"), 0)))
+
+    local_target = _runtime_target_payload_by_id(runtime_targets, "local_companion")
+    self_hosted_target = _runtime_target_payload_by_id(runtime_targets, "self_host_runtime")
+    local_capacity = max(1, int(local_target.get("attachment_count") or 1)) if local_target else 1
+    self_hosted_capacity = max(1, int(self_hosted_target.get("attachment_count") or 1)) if self_hosted_target else 1
+
+    text_created = max(1, _coerce_int(limits.get("max_text_agent_created"), created_agents_max))
+    text_live = max(1, _coerce_int(limits.get("max_text_agent_live"), min(live_agents_max, text_created)))
+    cloud_created = max(1, _coerce_int(limits.get("max_cloud_computer_agent_created"), min(created_agents_max, 2)))
+    cloud_live = max(1, _coerce_int(limits.get("max_cloud_computer_agent_live"), min(live_agents_max, 1)))
+    cloud_concurrent = max(1, _coerce_int(limits.get("max_cloud_computer_agent_concurrent_running"), min(concurrent_running_agents_max, 1)))
+    cloud_sessions = max(1, _coerce_int(limits.get("max_cloud_computer_sessions"), min(computer_sessions_max, 1)))
+    my_created = max(1, _coerce_int(limits.get("max_my_computer_agent_created"), created_agents_max))
+    my_live_requested = max(1, _coerce_int(limits.get("max_my_computer_agent_live"), live_agents_max))
+    my_live = min(local_capacity, my_live_requested)
+    my_concurrent_requested = max(1, _coerce_int(limits.get("max_my_computer_agent_concurrent_running"), concurrent_running_agents_max))
+    my_concurrent = min(local_capacity, my_concurrent_requested)
+    my_sessions_requested = max(1, _coerce_int(limits.get("max_my_computer_sessions"), computer_sessions_max))
+    my_sessions = min(local_capacity, my_sessions_requested)
+    self_created = max(1, _coerce_int(limits.get("max_self_hosted_agent_created"), created_agents_max))
+    self_live_requested = max(1, _coerce_int(limits.get("max_self_hosted_agent_live"), live_agents_max))
+    self_live = min(self_hosted_capacity, self_live_requested)
+    self_concurrent_requested = max(1, _coerce_int(limits.get("max_self_hosted_agent_concurrent_running"), concurrent_running_agents_max))
+    self_concurrent = min(self_hosted_capacity, self_concurrent_requested)
+    self_sessions_requested = max(1, _coerce_int(limits.get("max_self_hosted_agent_computer_sessions"), computer_sessions_max))
+    self_sessions = min(self_hosted_capacity, self_sessions_requested)
+
+    return {
+        "plan_tier": resolved_state.plan_id,
+        "created_agents_max": created_agents_max,
+        "live_agents_max": live_agents_max,
+        "concurrent_running_agents_max": concurrent_running_agents_max,
+        "computer_sessions_max": computer_sessions_max,
+        "background_jobs_max": background_jobs_max,
+        "messages_per_day_max": messages_per_day_max,
+        "tool_calls_per_day_max": tool_calls_per_day_max,
+        "runtime_minutes_monthly_max": runtime_minutes_monthly_max,
+        "monthly_spend_usd_max": monthly_spend_usd_max,
+        "storage_memory_size_mb_max": storage_memory_size_mb_max,
+        "mode_limits": {
+            deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_TEXT: {
+                "created_agents_max": text_created,
+                "live_agents_max": text_live,
+                "concurrent_running_agents_max": concurrent_running_agents_max,
+                "computer_sessions_max": 0,
+            },
+            deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER: {
+                "created_agents_max": cloud_created,
+                "live_agents_max": cloud_live,
+                "concurrent_running_agents_max": cloud_concurrent,
+                "computer_sessions_max": cloud_sessions,
+            },
+            deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER: {
+                "created_agents_max": my_created,
+                "live_agents_max": my_live,
+                "concurrent_running_agents_max": my_concurrent,
+                "computer_sessions_max": my_sessions,
+            },
+            deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED: {
+                "created_agents_max": self_created,
+                "live_agents_max": self_live,
+                "concurrent_running_agents_max": self_concurrent,
+                "computer_sessions_max": self_sessions,
+            },
         },
     }
 

@@ -20,6 +20,7 @@ from server_modules import entitlements_service
 from server_modules import external_user_privacy_service
 from server_modules import provider_catalog_service
 from server_modules import product_catalog_live_data_service
+from server_modules import runtime_attachment_service
 from server_modules import run_state_repository
 from server_modules import session_service
 from server_modules import shop_assistant_revenue_agent_service
@@ -37,7 +38,26 @@ from server_modules.agent_manifest import (
 )
 
 
-DEPLOYED_AGENT_ALLOWED_STATES = frozenset({"draft", "staging", "live", "paused"})
+DEPLOYED_AGENT_ALLOWED_STATES = frozenset(
+    {
+        "draft",
+        "private_test",
+        "ready_for_review",
+        "live",
+        "paused",
+        "suspended",
+        "archived",
+    }
+)
+DEPLOYED_AGENT_PUBLIC_CHANNEL_ROUTABLE_STATES = frozenset({"live", "paused", "suspended"})
+DEPLOYED_AGENT_NON_PUBLIC_STATES = frozenset(
+    {
+        "draft",
+        "private_test",
+        "ready_for_review",
+        "archived",
+    }
+)
 DEPLOYED_AGENT_LIVE_CHANNELS = config_defaults_service.live_deployment_channels()
 LOGGER = logging.getLogger(__name__)
 DEPLOYED_AGENT_PUBLIC_FIELDS = (
@@ -112,6 +132,54 @@ _STUDIO_TOOL_SCOPE_CATALOG = (
         "label": "Calendar write",
         "description": "Create or update calendar events for customer-facing scheduling flows.",
     },
+)
+_PRIVACY_RETENTION_PRESET_DAYS = {
+    "short": 30,
+    "standard": 365,
+    "extended": 730,
+}
+_PRIVACY_CONTRACT_REQUIRED_KEYS = frozenset(
+    {
+        "where_it_runs",
+        "model_provider_data_access",
+        "screenshots_captured",
+        "files_accessible",
+        "terminal_accessible",
+        "connectors_accessible",
+        "memory_scope",
+        "retention_period",
+        "export_delete_policy",
+        "audit_log",
+    }
+)
+_COMPUTER_SAFETY_REQUIRED_KEYS = frozenset(
+    {
+        "enabled",
+        "studio_agent_mode",
+        "isolation_boundary",
+        "inherit_host_environment",
+        "filesystem_default_access",
+        "domain_allowlist",
+        "download_install_policy",
+        "terminal_command_policy",
+        "sensitive_action_confirmation_required",
+        "session_timeout_seconds",
+        "max_runtime_seconds",
+        "screenshot_session_recording",
+        "emergency_stop_enabled",
+        "required_owner_approval_actions",
+    }
+)
+_COMPUTER_SAFETY_REQUIRED_OWNER_APPROVAL_ACTIONS = frozenset(
+    {
+        "send_external_messages",
+        "make_purchases",
+        "delete_data",
+        "change_permissions",
+        "enter_secrets",
+        "install_software",
+        "run_unknown_scripts",
+    }
 )
 
 
@@ -205,6 +273,14 @@ def _normalize_deployment_state(value: Any, *, default: str = "draft") -> str:
     return token if token in DEPLOYED_AGENT_ALLOWED_STATES else default
 
 
+def deployment_state_is_publicly_routable(value: Any) -> bool:
+    return _normalize_deployment_state(value, default="") in DEPLOYED_AGENT_PUBLIC_CHANNEL_ROUTABLE_STATES
+
+
+def deployment_state_blocks_public_routing(value: Any) -> bool:
+    return _normalize_deployment_state(value, default="") in DEPLOYED_AGENT_NON_PUBLIC_STATES
+
+
 def _normalize_channels(value: Any) -> Dict[str, Dict[str, Any]]:
     return deployed_agent_config_schema.normalize_deployed_agent_channels(value)
 
@@ -276,6 +352,920 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
 
 def _coerce_list(value: Any) -> List[Any]:
     return list(value) if isinstance(value, list) else []
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        return round(float(value), 6)
+    except (TypeError, ValueError):
+        return None
+
+
+def _deployed_agent_activity_kind(row: Dict[str, Any]) -> str:
+    event_class = _normalize_text(row.get("event_class")).lower()
+    action = _normalize_text(row.get("action")).lower()
+    payload = _coerce_dict(row.get("payload"))
+    metadata = _coerce_dict(row.get("metadata"))
+    if action.startswith("deployed_agent_") or event_class == "system_activity":
+        if any(token in action for token in {"paused", "resumed", "suspended", "killed", "archived"}):
+            return "lifecycle_control"
+        return "lifecycle"
+    if event_class == "approval" or "approval" in action:
+        return "approval"
+    if event_class == "memory_update" or "memory" in action:
+        return "memory_write"
+    if "connector" in action or _normalize_text(payload.get("connector")).lower() or _normalize_text(payload.get("connector_id")).lower():
+        return "connector_call"
+    if "tool" in action or _normalize_text(payload.get("tool_name")).lower():
+        return "tool_call"
+    if "browser" in action or "computer" in action:
+        return "computer_session"
+    if event_class in {"specialist_activity", "sage_activity"} and _normalize_text(row.get("direction")).lower() == "outbound":
+        return "external_message"
+    if any(token in action for token in {"budget", "cost", "credit", "spend"}):
+        return "cost_spend"
+    if _safe_float(payload.get("estimated_cost_usd")) is not None or _safe_float(metadata.get("estimated_cost_usd")) is not None:
+        return "cost_spend"
+    return "activity"
+
+
+def _activity_row_matches_deployed_agent(
+    *,
+    row: Dict[str, Any],
+    deployed_agent_id: str,
+    backing_install_id: Optional[str],
+) -> bool:
+    payload = _coerce_dict(row.get("payload"))
+    metadata = _coerce_dict(row.get("metadata"))
+    actor_type = _normalize_text(row.get("actor_type")).lower()
+    actor_id = _normalize_text(row.get("actor_id"))
+    install_id = _normalize_optional_text(row.get("install_id"))
+    resolved_deployed_agent_id = _normalize_text(deployed_agent_id)
+    resolved_backing_install_id = _normalize_optional_text(backing_install_id)
+    if actor_type == "deployed_agent" and actor_id == resolved_deployed_agent_id:
+        return True
+    if resolved_backing_install_id and install_id == resolved_backing_install_id:
+        return True
+    payload_deployed_agent_id = _normalize_optional_text(
+        payload.get("deployed_agent_id")
+        or _coerce_dict(payload.get("runtime")).get("deployed_agent_id")
+    )
+    metadata_deployed_agent_id = _normalize_optional_text(
+        metadata.get("deployed_agent_id")
+        or _coerce_dict(metadata.get("deployed_agent")).get("id")
+    )
+    if payload_deployed_agent_id == resolved_deployed_agent_id:
+        return True
+    if metadata_deployed_agent_id == resolved_deployed_agent_id:
+        return True
+    return False
+
+
+def _deployed_agent_activity_item(row: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _coerce_dict(row.get("payload"))
+    metadata = _coerce_dict(row.get("metadata"))
+    return {
+        "id": _normalize_optional_text(row.get("id")),
+        "ts": _timestamp_token(row.get("created_at")),
+        "event_class": _normalize_optional_text(row.get("event_class")),
+        "action": _normalize_optional_text(row.get("action")),
+        "title": _compact_text(row.get("title"), limit=160),
+        "summary": _compact_text(row.get("summary"), limit=320),
+        "status": _normalize_optional_text(row.get("status")),
+        "review_required": bool(row.get("review_required")),
+        "kind": _deployed_agent_activity_kind(row),
+        "actor_type": _normalize_optional_text(row.get("actor_type")) or "system",
+        "actor_id": _normalize_optional_text(row.get("actor_id")),
+        "install_id": _normalize_optional_text(row.get("install_id")),
+        "app_id": _normalize_optional_text(row.get("app_id")),
+        "run_id": _normalize_optional_text(row.get("run_id")),
+        "thread_id": _normalize_optional_text(row.get("thread_id")),
+        "session_key": _normalize_optional_text(row.get("session_key")),
+        "channel": _normalize_optional_text(row.get("channel")),
+        "direction": _normalize_optional_text(row.get("direction")),
+        "connector": _normalize_optional_text(
+            payload.get("connector")
+            or payload.get("connector_id")
+            or metadata.get("connector")
+            or metadata.get("connector_id")
+        ),
+        "tool_name": _normalize_optional_text(payload.get("tool_name") or metadata.get("tool_name")),
+        "estimated_cost_usd": _safe_float(payload.get("estimated_cost_usd") or metadata.get("estimated_cost_usd")),
+    }
+
+
+async def _append_deployed_agent_audit_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent: Dict[str, Any],
+    action: str,
+    title: str,
+    summary: str,
+    status: str = "logged",
+    event_class: str = "system_activity",
+    review_required: bool = False,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    actor_user_id: Optional[str] = None,
+) -> None:
+    if not isinstance(deployed_agent, dict):
+        return
+    deployed_agent_id = _normalize_text(deployed_agent.get("id"))
+    if not deployed_agent_id:
+        return
+    config = _config_from_record(deployed_agent)
+    snapshot_metadata = _coerce_dict(deployed_agent.get("metadata"))
+    privacy_snapshot = _coerce_dict(snapshot_metadata.get("privacy_contract_snapshot"))
+    computer_snapshot = _coerce_dict(snapshot_metadata.get("computer_safety_contract_snapshot"))
+    event_metadata = {
+        "deployed_agent_id": deployed_agent_id,
+        "deployment_state": _normalize_text(deployed_agent.get("deployment_state"), default="draft"),
+        "runtime_selected": {
+            "studio_agent_mode": config.studio_agent_mode,
+            "runtime_target": config.runtime_target,
+            "runtime_placement": config.runtime_placement,
+            "runtime_supplier": _normalize_optional_text(
+                _coerce_dict(_coerce_dict(config.runtime_supply).get("supplier")).get("kind")
+            ),
+        },
+        "privacy_contract_version": int(privacy_snapshot.get("schema_version") or 0) or None,
+        "computer_safety_contract_version": int(computer_snapshot.get("schema_version") or 0) or None,
+        "tool_policy": {"enabled_tools": list(config.tool_policy.enabled_tools or [])},
+        "connectors": sorted(
+            key
+            for key, value in dict(config.channels or {}).items()
+            if bool(getattr(value, "enabled", False))
+        ),
+        "memory_policy": {
+            "enabled": bool(config.memory_policy.memory_enabled),
+            "context_budget_preset": config.memory_policy.context_budget_preset,
+            "retention_preset": config.memory_policy.retention_preset,
+        },
+        "actor_user_id": _normalize_optional_text(actor_user_id),
+        "audit_version": 1,
+    }
+    event_metadata.update(_coerce_dict(metadata))
+    try:
+        await activity_ledger_service.append_activity_event(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_type="deployed_agent",
+            actor_id=deployed_agent_id,
+            install_id=_normalize_optional_text(deployed_agent.get("backing_install_id")),
+            event_class=event_class,
+            detail_level="audit_reference",
+            action=action,
+            title=title,
+            summary=summary,
+            status=status,
+            review_required=bool(review_required),
+            payload=_coerce_dict(payload),
+            metadata=event_metadata,
+        )
+    except Exception:
+        LOGGER.exception(
+            "Failed to append deployed-agent audit event",
+            extra={
+                "workspace_id": workspace_id,
+                "deployed_agent_id": deployed_agent_id,
+                "action": action,
+            },
+        )
+
+
+def _privacy_contract_snapshot(
+    *,
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    existing_metadata: Optional[Dict[str, Any]] = None,
+    captured_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    metadata = _coerce_dict(existing_metadata)
+    runtime_supply = _coerce_dict(config.runtime_supply)
+    placement = _coerce_dict(runtime_supply.get("placement"))
+    supplier = _coerce_dict(runtime_supply.get("supplier"))
+    provider_binding = _coerce_dict(runtime_supply.get("provider_binding"))
+    automation = config.computer_automation
+    runtime_class = _normalize_optional_text(automation.runtime_class)
+    screenshots_captured = bool(
+        automation.enabled
+        and runtime_class in {"virtual_browser", "virtual_desktop", "local_browser", "local_desktop"}
+    )
+    retention_preset = _normalize_text(config.memory_policy.retention_preset).lower()
+    retention_days = _PRIVACY_RETENTION_PRESET_DAYS.get(retention_preset)
+    enabled_channels = sorted(
+        key
+        for key, value in dict(config.channels or {}).items()
+        if bool(getattr(value, "enabled", False))
+    )
+    connector_surfaces = sorted(
+        {
+            key.replace("_read", "").replace("_append", "").replace("_send", "").replace("_write", "")
+            for key in list(config.tool_policy.enabled_tools or [])
+            if "_" in key
+        }
+    )
+    connector_scope = sorted(set(enabled_channels + connector_surfaces))
+    memory_scope = {
+        "read": "scoped_workspace_safe_memory" if config.memory_policy.memory_enabled else "none",
+        "write": "scoped_workspace_safe_memory" if config.memory_policy.memory_enabled else "none",
+        "context_budget_preset": config.memory_policy.context_budget_preset,
+        "retention_preset": config.memory_policy.retention_preset,
+    }
+    accepted_at = _normalize_optional_text(metadata.get("privacy_contract_accepted_at"))
+    accepted_by_user_id = _normalize_optional_text(metadata.get("privacy_contract_accepted_by_user_id"))
+    existing_snapshot = _coerce_dict(metadata.get("privacy_contract_snapshot"))
+    accepted_at = accepted_at or _normalize_optional_text(existing_snapshot.get("accepted_at"))
+    accepted_by_user_id = accepted_by_user_id or _normalize_optional_text(existing_snapshot.get("accepted_by_user_id"))
+    snapshot = {
+        "schema_version": 1,
+        "captured_at": captured_at or _utc_now_iso(),
+        "where_it_runs": {
+            "studio_agent_mode": config.studio_agent_mode,
+            "runtime_placement": config.runtime_placement,
+            "runtime_target": config.runtime_target,
+            "trust_zone": _normalize_optional_text(placement.get("trust_zone")),
+            "supplier_kind": _normalize_optional_text(supplier.get("kind")),
+        },
+        "model_provider_data_access": {
+            "provider": _normalize_optional_text(config.provider)
+            or _normalize_optional_text(provider_binding.get("internal_provider")),
+            "model": _normalize_optional_text(config.model)
+            or _normalize_optional_text(provider_binding.get("internal_model")),
+            "supplier_kind": _normalize_optional_text(supplier.get("kind")),
+            "processor_visibility": "workspace_scoped",
+        },
+        "screenshots_captured": screenshots_captured,
+        "files_accessible": bool(
+            config.studio_agent_mode
+            in {
+                deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+                deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER,
+                deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED,
+            }
+        ),
+        "terminal_accessible": bool(
+            config.studio_agent_mode
+            in {
+                deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+                deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER,
+                deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED,
+            }
+        ),
+        "connectors_accessible": {
+            "channels": enabled_channels,
+            "tool_connector_surfaces": connector_surfaces,
+            "effective_scope": connector_scope,
+        },
+        "memory_scope": memory_scope,
+        "retention_period": {
+            "preset": retention_preset,
+            "days": retention_days,
+        },
+        "export_delete_policy": {
+            "owner_export_supported": True,
+            "external_user_delete_supported": True,
+            "external_user_delete_endpoint": "delete_deployed_agent_external_user_data",
+            "policy_scope": "workspace_scoped_external_user_data",
+        },
+        "audit_log": {
+            "available": True,
+            "surface": "activity_ledger",
+            "scope": "workspace_specialist_events",
+            "privacy_audit_events_available": bool(_coerce_dict(metadata.get("audit") or {}).get("id") or True),
+        },
+    }
+    if accepted_at and accepted_by_user_id:
+        snapshot["accepted_at"] = accepted_at
+        snapshot["accepted_by_user_id"] = accepted_by_user_id
+    return snapshot
+
+
+def _computer_safety_contract_snapshot(
+    *,
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    captured_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    automation = config.computer_automation
+    mode = _normalize_text(config.studio_agent_mode).lower()
+    requires_computer_safety = mode in {
+        deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+        deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER,
+    }
+    approval_actions = sorted(
+        {
+            _normalize_text(item).lower()
+            for item in list(automation.required_owner_approval_actions or [])
+            if _normalize_text(item)
+        }
+    )
+    return {
+        "schema_version": 1,
+        "captured_at": captured_at or _utc_now_iso(),
+        "enabled": bool(automation.enabled),
+        "required_for_mode": requires_computer_safety,
+        "studio_agent_mode": config.studio_agent_mode,
+        "isolation_boundary": _normalize_text(automation.isolation_boundary).lower(),
+        "inherit_host_environment": bool(automation.inherit_host_environment),
+        "filesystem_default_access": _normalize_text(automation.filesystem_default_access).lower(),
+        "domain_allowlist": list(automation.allowed_domains or []),
+        "download_install_policy": {
+            "downloads_allowed": bool(automation.allow_downloads),
+            "software_install_allowed": bool(automation.allow_software_install),
+        },
+        "terminal_command_policy": _normalize_text(automation.terminal_command_policy).lower(),
+        "sensitive_action_confirmation_required": bool(automation.sensitive_action_confirmation_required),
+        "session_timeout_seconds": int(automation.idle_timeout_seconds or 0),
+        "max_runtime_seconds": int(automation.max_session_runtime_seconds or 0),
+        "screenshot_session_recording": {
+            "screenshots_enabled": bool(automation.screenshot_capture_enabled),
+            "recording_policy": _normalize_text(automation.session_recording_policy).lower(),
+        },
+        "emergency_stop_enabled": bool(automation.emergency_stop_enabled),
+        "required_owner_approval_actions": approval_actions,
+    }
+
+
+def _validate_privacy_contract_snapshot(snapshot: Any) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    keys = set(snapshot.keys())
+    return _PRIVACY_CONTRACT_REQUIRED_KEYS.issubset(keys)
+
+
+def _validate_privacy_contract_acceptance(snapshot: Any) -> bool:
+    if not _validate_privacy_contract_snapshot(snapshot):
+        return False
+    return bool(_normalize_optional_text(snapshot.get("accepted_at"))) and bool(
+        _normalize_optional_text(snapshot.get("accepted_by_user_id"))
+    )
+
+
+def _validate_computer_safety_contract_snapshot(
+    snapshot: Any,
+    *,
+    require_for_mode: bool = False,
+) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    keys = set(snapshot.keys())
+    if not _COMPUTER_SAFETY_REQUIRED_KEYS.issubset(keys):
+        return False
+    if bool(snapshot.get("inherit_host_environment")):
+        return False
+    if _normalize_text(snapshot.get("filesystem_default_access")).lower() not in {"none", "session_scoped", "workspace_scoped"}:
+        return False
+    terminal_policy = _normalize_text(snapshot.get("terminal_command_policy")).lower()
+    if terminal_policy not in {"blocked", "allowlist", "review_required"}:
+        return False
+    if not bool(snapshot.get("sensitive_action_confirmation_required")):
+        return False
+    if int(snapshot.get("session_timeout_seconds") or 0) <= 0:
+        return False
+    if int(snapshot.get("max_runtime_seconds") or 0) <= 0:
+        return False
+    if not bool(snapshot.get("emergency_stop_enabled")):
+        return False
+    approval_actions = {
+        _normalize_text(item).lower()
+        for item in list(snapshot.get("required_owner_approval_actions") or [])
+        if _normalize_text(item)
+    }
+    if not _COMPUTER_SAFETY_REQUIRED_OWNER_APPROVAL_ACTIONS.issubset(approval_actions):
+        return False
+    if require_for_mode and not bool(snapshot.get("required_for_mode")):
+        return False
+    return True
+
+
+def _deploy_readiness_blockers(
+    *,
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    privacy_snapshot: Dict[str, Any],
+    computer_safety_snapshot: Dict[str, Any],
+) -> List[str]:
+    blockers: List[str] = []
+    if not _normalize_text(config.name):
+        blockers.append("Agent name is required before deployment.")
+    if not _normalize_text(config.persona):
+        blockers.append("Agent persona is required before deployment.")
+    if not _normalize_text(config.system_prompt):
+        blockers.append("Agent system prompt is required before deployment.")
+    if config.commerce_policy.monthly_cost_cap_usd is None:
+        blockers.append("Monthly budget cap is required before deployment.")
+    if not _normalize_text(config.escalation_policy.preset):
+        blockers.append("Safety escalation preset is required before deployment.")
+    if not _normalize_text(config.escalation_policy.handoff_mode):
+        blockers.append("Safety handoff mode is required before deployment.")
+    if not _validate_privacy_contract_snapshot(privacy_snapshot):
+        blockers.append("Complete privacy contract snapshot is required before deployment.")
+    elif not _validate_privacy_contract_acceptance(privacy_snapshot):
+        blockers.append("Privacy contract must be accepted before deployment.")
+    requires_computer_safety = config.studio_agent_mode in {
+        deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+        deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER,
+    }
+    if requires_computer_safety and not _validate_computer_safety_contract_snapshot(
+        computer_safety_snapshot,
+        require_for_mode=True,
+    ):
+        blockers.append("Complete computer safety contract snapshot is required before deployment.")
+    return blockers
+
+
+def _terminal_run_state(value: Any) -> bool:
+    return _normalize_text(value).lower() in {
+        "completed",
+        "failed",
+        "timeout",
+        "cancelled",
+        "canceled",
+        "stopped",
+        "aborted",
+    }
+
+
+def _run_belongs_to_deployed_agent(run: Dict[str, Any], deployed_agent: Dict[str, Any]) -> bool:
+    if not isinstance(run, dict) or not isinstance(deployed_agent, dict):
+        return False
+    context = _coerce_dict(run.get("context"))
+    metadata = _coerce_dict(context.get("metadata") or run.get("metadata"))
+    deployed_agent_id = _normalize_optional_text(deployed_agent.get("id"))
+    backing_install_id = _normalize_optional_text(deployed_agent.get("backing_install_id"))
+    return bool(
+        deployed_agent_id
+        and _normalize_optional_text(metadata.get("deployed_agent_id")) == deployed_agent_id
+    ) or bool(
+        backing_install_id
+        and _normalize_optional_text(metadata.get("install_id") or run.get("install_id")) == backing_install_id
+    )
+
+
+def _stop_deployed_agent_live_runs(
+    *,
+    deployed_agent: Dict[str, Any],
+    reason: str,
+    stopped_by_user_id: Optional[str],
+) -> List[str]:
+    stopped_run_ids: List[str] = []
+    try:
+        live_runs = list(run_state_repository.sync_list_live_runs() or [])
+    except Exception:
+        LOGGER.exception("Failed to list live runs for deployed-agent kill switch")
+        return stopped_run_ids
+    for run in live_runs:
+        if not isinstance(run, dict) or not _run_belongs_to_deployed_agent(run, deployed_agent):
+            continue
+        run_id = _normalize_optional_text(run.get("run_id") or run.get("id"))
+        if not run_id or _terminal_run_state(run.get("status") or run.get("state")):
+            continue
+        payload = dict(run)
+        context = _coerce_dict(payload.get("context"))
+        metadata = _coerce_dict(context.get("metadata"))
+        metadata.update(
+            {
+                "deployed_agent_stop_reason": reason,
+                "deployed_agent_stopped_at": _utc_now_iso(),
+                "deployed_agent_stopped_by_user_id": _normalize_optional_text(stopped_by_user_id),
+            }
+        )
+        context["metadata"] = metadata
+        payload["context"] = context
+        payload["status"] = "stopped"
+        payload["state"] = "stopped"
+        try:
+            run_state_repository.sync_update_live_run_if_version_matches(
+                run_id,
+                _normalize_text(run.get("workspace_id"), default=_normalize_text(deployed_agent.get("owner_workspace_id"))),
+                _normalize_text(run.get("tenant_id"), default=_normalize_text(deployed_agent.get("tenant_id"))),
+                "stopped",
+                payload,
+                _normalize_text(run.get("trace_id"), default=f"deployed_agent_stop_{uuid.uuid4().hex}"),
+                expected_version=int(run.get("version") or 0),
+            )
+            stopped_run_ids.append(run_id)
+        except Exception:
+            LOGGER.exception("Failed to stop deployed-agent live run", extra={"run_id": run_id})
+    return stopped_run_ids
+
+
+def _disabled_channels(channels: Any) -> Dict[str, Dict[str, Any]]:
+    disabled: Dict[str, Dict[str, Any]] = {}
+    for key, value in _normalize_channels(channels).items():
+        payload = dict(value or {})
+        payload["enabled"] = False
+        disabled[key] = payload
+    return disabled
+
+
+def _raise_http_from_entitlement_error(error: Exception) -> None:
+    status_code = 403
+    if isinstance(error, entitlements_service.EntitlementQuotaExceededError):
+        status_code = 409
+    detail = _normalize_text(getattr(error, "message", ""), default=str(error))
+    raise HTTPException(status_code=status_code, detail=detail) from error
+
+
+def _runtime_target_by_id(payload: Any, target_id: str) -> Dict[str, Any]:
+    targets = payload.get("targets") if isinstance(payload, dict) and isinstance(payload.get("targets"), list) else []
+    for item in targets:
+        if not isinstance(item, dict):
+            continue
+        if _normalize_text(item.get("target_id")).lower() == _normalize_text(target_id).lower():
+            return dict(item)
+    return {}
+
+
+def _mode_for_deployed_agent_record(record: Dict[str, Any]) -> str:
+    if not isinstance(record, dict):
+        return deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_TEXT
+    try:
+        return _config_from_record(record).studio_agent_mode
+    except Exception:
+        return deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_TEXT
+
+
+def _is_live_state(value: Any) -> bool:
+    return deployment_state_is_publicly_routable(value)
+
+
+def _mode_counts_for_deployed_agents(
+    rows: List[Dict[str, Any]],
+    *,
+    live_only: bool = False,
+    exclude_deployed_agent_id: Optional[str] = None,
+) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    excluded = _normalize_optional_text(exclude_deployed_agent_id)
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        if excluded and _normalize_optional_text(row.get("id")) == excluded:
+            continue
+        if live_only and not _is_live_state(row.get("deployment_state")):
+            continue
+        mode = _mode_for_deployed_agent_record(row)
+        counts[mode] = int(counts.get(mode) or 0) + 1
+    return counts
+
+
+def _live_running_mode_counts(
+    rows: List[Dict[str, Any]],
+    *,
+    exclude_deployed_agent_id: Optional[str] = None,
+) -> Dict[str, int]:
+    deployed_agent_mode: Dict[str, str] = {}
+    excluded = _normalize_optional_text(exclude_deployed_agent_id)
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        deployed_agent_id = _normalize_optional_text(row.get("id"))
+        if not deployed_agent_id:
+            continue
+        if excluded and deployed_agent_id == excluded:
+            continue
+        deployed_agent_mode[deployed_agent_id] = _mode_for_deployed_agent_record(row)
+    terminal_states = {"completed", "failed", "cancelled", "canceled", "timeout", "aborted"}
+    counts: Dict[str, int] = {}
+    try:
+        live_runs = list(run_state_repository.sync_list_live_runs() or [])
+    except Exception:
+        live_runs = []
+    for run in live_runs:
+        if not isinstance(run, dict):
+            continue
+        status = _normalize_text(run.get("status")).lower()
+        if status in terminal_states:
+            continue
+        context = _coerce_dict(run.get("context"))
+        metadata = _coerce_dict(context.get("metadata"))
+        deployed_agent_id = _normalize_optional_text(metadata.get("deployed_agent_id"))
+        if not deployed_agent_id:
+            continue
+        mode = deployed_agent_mode.get(deployed_agent_id)
+        if not mode:
+            continue
+        counts[mode] = int(counts.get(mode) or 0) + 1
+    return counts
+
+
+def _quota_for_mode(
+    *,
+    quota_policy: Dict[str, Any],
+    studio_agent_mode: str,
+    key: str,
+    default_value: int = 0,
+) -> int:
+    global_value = int(quota_policy.get(key) or default_value)
+    mode_limits = _coerce_dict(quota_policy.get("mode_limits")).get(studio_agent_mode)
+    mode_value = int(_coerce_dict(mode_limits).get(key) or 0) if isinstance(mode_limits, dict) else 0
+    if mode_value > 0:
+        return mode_value
+    return global_value
+
+
+def _enforce_phase8_quota_controls(
+    *,
+    workspace: Dict[str, Any],
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    stage: str,
+    runtime_targets: Any = None,
+    existing_deployed_agents: Optional[List[Dict[str, Any]]] = None,
+    subject_deployed_agent_id: Optional[str] = None,
+) -> None:
+    quota_policy = entitlements_service.deployed_agent_quota_defaults(
+        workspace=workspace,
+        runtime_targets=runtime_targets if isinstance(runtime_targets, dict) else None,
+    )
+    stage_token = _normalize_text(stage).lower()
+    mode = config.studio_agent_mode
+    rows = [dict(item) for item in list(existing_deployed_agents or []) if isinstance(item, dict)]
+    created_counts = _mode_counts_for_deployed_agents(
+        rows,
+        live_only=False,
+        exclude_deployed_agent_id=subject_deployed_agent_id if stage_token == "update" else None,
+    )
+    live_counts = _mode_counts_for_deployed_agents(
+        rows,
+        live_only=True,
+        exclude_deployed_agent_id=subject_deployed_agent_id if stage_token in {"update", "deploy"} else None,
+    )
+
+    created_limit_global = int(quota_policy.get("created_agents_max") or 0)
+    created_limit_mode = _quota_for_mode(
+        quota_policy=quota_policy,
+        studio_agent_mode=mode,
+        key="created_agents_max",
+        default_value=created_limit_global,
+    )
+    if stage_token == "create":
+        if created_limit_global > 0 and len(rows) >= created_limit_global:
+            raise _http_conflict("Created-agent quota reached for this workspace.")
+        if created_limit_mode > 0 and int(created_counts.get(mode) or 0) >= created_limit_mode:
+            raise _http_conflict(f"Created-agent quota reached for {mode}.")
+
+    if stage_token == "deploy":
+        live_limit_global = int(quota_policy.get("live_agents_max") or 0)
+        live_limit_mode = _quota_for_mode(
+            quota_policy=quota_policy,
+            studio_agent_mode=mode,
+            key="live_agents_max",
+            default_value=live_limit_global,
+        )
+        total_live = sum(int(value or 0) for value in live_counts.values())
+        mode_live = int(live_counts.get(mode) or 0)
+        if live_limit_global > 0 and total_live >= live_limit_global:
+            raise _http_conflict("Live-agent quota reached for this workspace.")
+        if live_limit_mode > 0 and mode_live >= live_limit_mode:
+            raise _http_conflict(f"Live-agent quota reached for {mode}.")
+
+        running_counts = _live_running_mode_counts(
+            rows,
+            exclude_deployed_agent_id=subject_deployed_agent_id,
+        )
+        running_limit_global = int(quota_policy.get("concurrent_running_agents_max") or 0)
+        running_limit_mode = _quota_for_mode(
+            quota_policy=quota_policy,
+            studio_agent_mode=mode,
+            key="concurrent_running_agents_max",
+            default_value=running_limit_global,
+        )
+        total_running = sum(int(value or 0) for value in running_counts.values())
+        mode_running = int(running_counts.get(mode) or 0)
+        if running_limit_global > 0 and total_running >= running_limit_global:
+            raise _http_conflict("Concurrent-running-agent quota reached for this workspace.")
+        if running_limit_mode > 0 and mode_running >= running_limit_mode:
+            raise _http_conflict(f"Concurrent-running-agent quota reached for {mode}.")
+
+    messages_per_day_max = int(quota_policy.get("messages_per_day_max") or 0)
+    daily_message_limit = config.customer_policy.daily_message_limit
+    if daily_message_limit is not None and messages_per_day_max > 0 and int(daily_message_limit) > messages_per_day_max:
+        raise _http_bad_request(
+            f"daily_message_limit exceeds workspace quota ({messages_per_day_max} messages/day)."
+        )
+
+    tool_calls_per_day_max = int(quota_policy.get("tool_calls_per_day_max") or 0)
+    if len(list(config.tool_policy.enabled_tools or [])) > 0 and tool_calls_per_day_max <= 0:
+        raise HTTPException(
+            status_code=403,
+            detail="Tool calls are not available for this workspace quota policy.",
+        )
+
+    monthly_spend_usd_max = float(quota_policy.get("monthly_spend_usd_max") or 0.0)
+    monthly_cost_cap = config.commerce_policy.monthly_cost_cap_usd
+    if monthly_cost_cap is not None and monthly_spend_usd_max > 0 and float(monthly_cost_cap) > monthly_spend_usd_max:
+        raise _http_bad_request(
+            f"monthly_cost_cap_usd exceeds workspace spend quota (${monthly_spend_usd_max:.2f}/month)."
+        )
+
+    runtime_minutes_monthly_max = int(quota_policy.get("runtime_minutes_monthly_max") or 0)
+    if (
+        config.studio_agent_mode
+        == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER
+        and runtime_minutes_monthly_max <= 0
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Runtime minutes are not available for this workspace quota policy.",
+        )
+
+    if bool(config.computer_automation.enabled):
+        sessions_limit = _quota_for_mode(
+            quota_policy=quota_policy,
+            studio_agent_mode=mode,
+            key="computer_sessions_max",
+            default_value=int(quota_policy.get("computer_sessions_max") or 0),
+        )
+        if sessions_limit <= 0:
+            raise HTTPException(
+                status_code=403,
+                detail="Computer sessions are not available for this workspace quota policy.",
+            )
+        if int(config.computer_automation.max_concurrent_sessions or 0) > sessions_limit:
+            raise _http_bad_request(
+                f"computer_automation.max_concurrent_sessions exceeds workspace quota ({sessions_limit})."
+            )
+
+    if bool(config.memory_policy.memory_enabled):
+        storage_limit_mb = int(quota_policy.get("storage_memory_size_mb_max") or 0)
+        if storage_limit_mb <= 0:
+            raise HTTPException(
+                status_code=403,
+                detail="Cloud memory storage is not available for this workspace quota policy.",
+            )
+
+
+def _enforce_mode_capability_matrix(
+    *,
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    stage: str,
+    runtime_targets: Any = None,
+    explicit_mode: bool = False,
+) -> None:
+    runtime_supply = config.runtime_supply if isinstance(config.runtime_supply, dict) else {}
+    runtime_supply_supplier = (
+        runtime_supply.get("supplier")
+        if isinstance(runtime_supply.get("supplier"), dict)
+        else {}
+    )
+    runtime_placement_for_validation = config.runtime_placement
+    runtime_supply_for_validation: Dict[str, Any] = runtime_supply
+    mode_for_validation = config.studio_agent_mode
+    if not explicit_mode:
+        normalized_placement = deployed_agent_runtime_contract_service.normalize_runtime_placement(
+            config.runtime_placement,
+            runtime_target=config.runtime_target,
+        )
+        normalized_target = _normalize_text(config.runtime_target).lower() or deployed_agent_runtime_contract_service.runtime_target_for_placement(
+            normalized_placement
+        )
+        expected_target = deployed_agent_runtime_contract_service.runtime_target_for_placement(normalized_placement)
+        if normalized_target != expected_target:
+            runtime_placement_for_validation = deployed_agent_runtime_contract_service.normalize_runtime_placement(
+                config.runtime_target
+            )
+            runtime_supply_for_validation = {}
+        mode_for_validation = deployed_agent_runtime_contract_service.infer_studio_agent_mode(
+            runtime_placement=runtime_placement_for_validation,
+            runtime_target=config.runtime_target,
+            runtime_supplier=runtime_supply_supplier.get("kind") if runtime_supply_for_validation else None,
+        )
+    try:
+        deployed_agent_runtime_contract_service.validate_mode_capability_matrix(
+            studio_agent_mode=mode_for_validation,
+            runtime_placement=runtime_placement_for_validation,
+            runtime_target=config.runtime_target,
+            runtime_supply=runtime_supply_for_validation,
+            computer_automation=config.computer_automation.model_dump(exclude_none=True),
+            stage=stage,
+            runtime_targets=runtime_targets,
+        )
+    except ValueError as error:
+        if _normalize_text(stage).lower() == "deploy":
+            raise _http_conflict(str(error)) from error
+        raise _http_bad_request(str(error)) from error
+
+
+def _enforce_runtime_eligibility(
+    *,
+    workspace: Dict[str, Any],
+    workspace_id: str,
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    stage: str,
+    runtime_targets: Any = None,
+    explicit_mode: bool = False,
+    existing_deployed_agents: Optional[List[Dict[str, Any]]] = None,
+    subject_deployed_agent_id: Optional[str] = None,
+) -> None:
+    stage_token = _normalize_text(stage).lower()
+    entitlement_state = entitlements_service.resolve_workspace_entitlement_state(workspace=workspace)
+    entitlements = dict(entitlement_state.entitlements or {})
+    runtime_supply = config.runtime_supply if isinstance(config.runtime_supply, dict) else {}
+    runtime_supply_supplier = (
+        runtime_supply.get("supplier")
+        if isinstance(runtime_supply.get("supplier"), dict)
+        else {}
+    )
+    effective_mode = config.studio_agent_mode
+    if not explicit_mode:
+        normalized_placement = deployed_agent_runtime_contract_service.normalize_runtime_placement(
+            config.runtime_placement,
+            runtime_target=config.runtime_target,
+        )
+        normalized_target = _normalize_text(config.runtime_target).lower() or deployed_agent_runtime_contract_service.runtime_target_for_placement(
+            normalized_placement
+        )
+        expected_target = deployed_agent_runtime_contract_service.runtime_target_for_placement(normalized_placement)
+        effective_placement = (
+            deployed_agent_runtime_contract_service.normalize_runtime_placement(config.runtime_target)
+            if normalized_target != expected_target
+            else normalized_placement
+        )
+        effective_mode = deployed_agent_runtime_contract_service.infer_studio_agent_mode(
+            runtime_placement=effective_placement,
+            runtime_target=config.runtime_target,
+            runtime_supplier=runtime_supply_supplier.get("kind"),
+        )
+
+    if effective_mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER:
+        if not bool(entitlements.get("virtual_computer_runtime_enabled")):
+            raise HTTPException(
+                status_code=403,
+                detail="Cloud Computer mode is not available for this workspace plan.",
+            )
+
+    for channel_key, channel_config in dict(config.channels or {}).items():
+        if not bool(getattr(channel_config, "enabled", False)):
+            continue
+        try:
+            entitlements_service.enforce_channel_surface_access_for_workspace_id(
+                channel_key,
+                workspace_id=workspace_id,
+                workspace=workspace,
+            )
+        except entitlements_service.EntitlementError as error:
+            _raise_http_from_entitlement_error(error)
+
+    if len(list(config.tool_policy.enabled_tools or [])) > 0 and not bool(entitlements.get("premium_tools_enabled")):
+        raise HTTPException(
+            status_code=403,
+            detail="Selected tools are not available for this workspace plan.",
+        )
+
+    if config.memory_policy.memory_enabled:
+        memory_limits = entitlements_service.memory_policy_defaults(workspace=workspace)
+        storage_limit_mb = int(memory_limits.get("cloud_memory_storage_mb") or 0)
+        retention_limit_days = int(memory_limits.get("cloud_memory_retention_days") or 0)
+        if storage_limit_mb <= 0 or retention_limit_days <= 0:
+            raise HTTPException(
+                status_code=403,
+                detail="Memory is not available for this workspace plan.",
+            )
+
+    automation = config.computer_automation
+    if bool(automation.enabled):
+        if len(list(automation.allowed_domains or [])) == 0:
+            raise _http_bad_request("Computer automation requires a non-empty domain allowlist.")
+        if int(automation.max_concurrent_sessions or 0) <= 0:
+            raise _http_bad_request("Computer automation requires max_concurrent_sessions > 0.")
+        if int(automation.max_session_runtime_seconds or 0) <= 0:
+            raise _http_bad_request("Computer automation requires max_session_runtime_seconds > 0.")
+        daily_budget = automation.daily_budget_usd
+        monthly_budget = automation.monthly_budget_usd
+        if daily_budget is None:
+            raise _http_bad_request("Computer automation requires daily_budget_usd.")
+        if monthly_budget is None:
+            raise _http_bad_request("Computer automation requires monthly_budget_usd.")
+        if float(monthly_budget) < float(daily_budget):
+            raise _http_bad_request("Computer automation requires monthly_budget_usd >= daily_budget_usd.")
+        if config.commerce_policy.monthly_cost_cap_usd is not None:
+            if float(config.commerce_policy.monthly_cost_cap_usd) < float(monthly_budget):
+                raise _http_bad_request(
+                    "monthly_cost_cap_usd must be greater than or equal to computer_automation.monthly_budget_usd."
+                )
+
+    expected_target_id = deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_DEPLOY_TARGETS.get(effective_mode)
+    should_check_targets = stage_token == "deploy" or (
+        stage_token == "create" and isinstance(runtime_targets, dict)
+    )
+    if should_check_targets and expected_target_id:
+        target_record = _runtime_target_by_id(runtime_targets, expected_target_id)
+        if not target_record:
+            raise _http_conflict(
+                f"{effective_mode} requires runtime target {expected_target_id}, but it is not present for this workspace."
+            )
+        if not bool(target_record.get("available")):
+            raise _http_conflict(
+                f"{effective_mode} requires runtime target {expected_target_id}, but it is unavailable."
+            )
+    _enforce_phase8_quota_controls(
+        workspace=workspace,
+        config=config,
+        stage=stage,
+        runtime_targets=runtime_targets,
+        existing_deployed_agents=existing_deployed_agents,
+        subject_deployed_agent_id=subject_deployed_agent_id,
+    )
 
 
 def _tool_toggles_from_config(
@@ -640,10 +1630,18 @@ def _metadata_from_config(
     *,
     existing_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return deployed_agent_config_schema.metadata_from_deployed_agent_config(
+    payload = deployed_agent_config_schema.metadata_from_deployed_agent_config(
         config,
         existing_metadata=existing_metadata,
     )
+    payload["privacy_contract_snapshot"] = _privacy_contract_snapshot(
+        config=config,
+        existing_metadata={**_coerce_dict(existing_metadata), **payload},
+    )
+    payload["computer_safety_contract_snapshot"] = _computer_safety_contract_snapshot(
+        config=config,
+    )
+    return payload
 
 
 def _serialized_operational_state(
@@ -1383,6 +2381,17 @@ def paused_channel_reply(
     return f"{name} is temporarily paused. Please try again shortly."
 
 
+def suspended_channel_reply(
+    *,
+    deployed_agent: Optional[Dict[str, Any]],
+) -> str:
+    name = _normalize_optional_text((deployed_agent or {}).get("name")) or "This assistant"
+    return (
+        f"{name} is temporarily suspended due to a policy, quota, or security control. "
+        "Please contact the owner."
+    )
+
+
 def daily_limit_channel_reply(
     *,
     deployed_agent: Optional[Dict[str, Any]],
@@ -1532,15 +2541,20 @@ def project_deployed_agent(
         config=config,
     )
     config_payload["agent_workspace"] = _deployed_agent_workspace_contract(deployed_agent)
+    metadata_payload = _metadata_from_config(
+        config,
+        existing_metadata=_coerce_dict(deployed_agent.get("metadata")),
+    )
+    privacy_snapshot = _coerce_dict(metadata_payload.get("privacy_contract_snapshot"))
+    computer_safety_snapshot = _coerce_dict(metadata_payload.get("computer_safety_contract_snapshot"))
+    config_payload["privacy_contract"] = privacy_snapshot
+    config_payload["computer_safety_contract"] = computer_safety_snapshot
     projected["config"] = config_payload
     projected["operational_state"] = _operational_state_payload(operational_state)
     if include_internal:
         for field in DEPLOYED_AGENT_INTERNAL_FIELDS:
             if field == "metadata":
-                projected[field] = _metadata_from_config(
-                    config,
-                    existing_metadata=_coerce_dict(deployed_agent.get("metadata")),
-                )
+                projected[field] = metadata_payload
             else:
                 projected[field] = deployed_agent.get(field)
     return projected
@@ -1550,10 +2564,13 @@ def validate_state_transition(current_state: Any, next_state: Any) -> str:
     resolved_current = _normalize_deployment_state(current_state)
     resolved_next = _normalize_deployment_state(next_state)
     allowed_transitions = {
-        "draft": {"draft", "staging", "live", "paused"},
-        "staging": {"staging", "live", "paused"},
-        "live": {"live", "paused"},
-        "paused": {"paused", "staging", "live"},
+        "draft": {"draft", "private_test", "ready_for_review", "archived"},
+        "private_test": {"private_test", "ready_for_review", "paused", "archived"},
+        "ready_for_review": {"ready_for_review", "private_test", "live", "paused", "archived"},
+        "live": {"live", "paused", "suspended", "archived"},
+        "paused": {"paused", "private_test", "ready_for_review", "live", "suspended", "archived"},
+        "suspended": {"suspended", "private_test", "ready_for_review", "archived"},
+        "archived": {"archived"},
     }
     if resolved_next not in allowed_transitions.get(resolved_current, set()):
         raise ValueError(f"Unsupported deployed-agent state transition: {resolved_current} -> {resolved_next}.")
@@ -1602,6 +2619,31 @@ def validate_can_deploy(
         raise ValueError("Backing specialist must be in owner_test or customer_live mode before deployment can go live.")
     if requires_customer_live_mode and specialist_mode != "customer_live":
         raise ValueError("Backing specialist must be in customer_live mode before deployment can go live.")
+    metadata = _coerce_dict(deployed_agent.get("metadata"))
+    privacy_snapshot = _coerce_dict(metadata.get("privacy_contract_snapshot"))
+    if not _validate_privacy_contract_snapshot(privacy_snapshot):
+        raise ValueError("Live deployment requires a complete privacy contract snapshot.")
+    if not _validate_privacy_contract_acceptance(privacy_snapshot):
+        raise ValueError("Live deployment requires privacy contract acceptance.")
+    config = _config_from_record(deployed_agent)
+    readiness_blockers = _deploy_readiness_blockers(
+        config=config,
+        privacy_snapshot=privacy_snapshot,
+        computer_safety_snapshot=_coerce_dict(metadata.get("computer_safety_contract_snapshot")),
+    )
+    if readiness_blockers:
+        raise ValueError("Deployment readiness failed: " + "; ".join(readiness_blockers))
+    requires_computer_safety = config.studio_agent_mode in {
+        deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+        deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER,
+    }
+    if requires_computer_safety:
+        safety_snapshot = _coerce_dict(metadata.get("computer_safety_contract_snapshot"))
+        if not _validate_computer_safety_contract_snapshot(
+            safety_snapshot,
+            require_for_mode=True,
+        ):
+            raise ValueError("Live deployment requires a complete computer safety contract snapshot.")
     return True
 
 
@@ -1765,6 +2807,8 @@ async def create_draft_deployed_agent(
     if not normalized_name:
         raise ValueError("name is required.")
     workspace_defaults = _workspace_admin_defaults(workspace)
+    config_payload = _coerce_dict(config)
+    metadata_payload = _coerce_dict(metadata)
     normalized_channels = await _enrich_deployed_agent_channels(
         owner_workspace_id=resolved_workspace_id,
         channels=channels,
@@ -1782,19 +2826,52 @@ async def create_draft_deployed_agent(
                     "runtime_target": runtime_target,
                     "billing_plan": billing_plan,
                     "metadata": _normalize_deployed_agent_metadata(metadata),
-                    "config": _coerce_dict(config),
+                    "config": config_payload,
                 },
                 runtime_profile_id=runtime_profile_id,
             ),
             workspace_defaults=workspace_defaults,
             runtime_target_supplied=runtime_target is not None,
             billing_plan_supplied=billing_plan is not None,
-            config_payload=_coerce_dict(config),
-            legacy_metadata=_coerce_dict(metadata),
+            config_payload=config_payload,
+            legacy_metadata=metadata_payload,
         ),
         provider=provider,
         model=model,
         owner_workspace_id=resolved_workspace_id,
+    )
+    explicit_mode = "studio_agent_mode" in config_payload
+    effective_mode = (
+        draft_config.studio_agent_mode
+        if explicit_mode
+        else deployed_agent_runtime_contract_service.infer_studio_agent_mode(
+            runtime_placement=draft_config.runtime_placement,
+            runtime_target=draft_config.runtime_target,
+            runtime_supplier=(
+                _coerce_dict(_coerce_dict(draft_config.runtime_supply).get("supplier")).get("kind")
+            ),
+        )
+    )
+    runtime_targets = None
+    if effective_mode != deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_TEXT:
+        runtime_targets = await runtime_attachment_service.list_workspace_runtime_targets(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+    _enforce_mode_capability_matrix(
+        config=draft_config,
+        stage="create",
+        runtime_targets=runtime_targets,
+        explicit_mode=explicit_mode,
+    )
+    _enforce_runtime_eligibility(
+        workspace=workspace,
+        workspace_id=resolved_workspace_id,
+        config=draft_config,
+        stage="create",
+        runtime_targets=runtime_targets,
+        explicit_mode=explicit_mode,
+        existing_deployed_agents=[dict(item) for item in list(existing_deployed_agents or []) if isinstance(item, dict)],
     )
     operational_state = _operational_state_from_record({"deployment_state": "draft"})
     manifest = _base_manifest(
@@ -1857,6 +2934,21 @@ async def create_draft_deployed_agent(
         deployed_agent=deployed_agent,
         backing_install=backing_install,
         updated_by_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
+    await _append_deployed_agent_audit_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent=deployed_agent,
+        action="deployed_agent_created",
+        title="Deployed agent created",
+        summary=f"{draft_config.name} was created in draft state.",
+        status="created",
+        payload={
+            "lifecycle_state": "draft",
+            "runtime_target": draft_config.runtime_target,
+            "studio_agent_mode": draft_config.studio_agent_mode,
+        },
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
     )
     return project_deployed_agent(deployed_agent, include_internal=True)
 
@@ -2591,8 +3683,10 @@ async def update_deployed_agent(
             validated_state = validate_state_transition(existing.get("deployment_state"), next_state)
         except ValueError as error:
             raise _http_conflict(str(error)) from error
-        if validated_state in {"live", "paused"}:
-            raise _http_conflict("Use the dedicated deploy or pause endpoint for live and paused transitions.")
+        if validated_state in {"live", "paused", "suspended"}:
+            raise _http_conflict(
+                "Use dedicated lifecycle controls for live, paused, and suspended transitions."
+            )
         candidate_record["deployment_state"] = validated_state
     if candidate_record == existing and "provider" not in updates and "model" not in updates:
         raise _http_bad_request("At least one deployed-agent field must be supplied.")
@@ -2605,6 +3699,30 @@ async def update_deployed_agent(
         )
     except ValueError as error:
         raise _http_bad_request(str(error)) from error
+    _enforce_mode_capability_matrix(
+        config=next_config,
+        stage="update",
+        explicit_mode="config" in updates
+        and isinstance(updates.get("config"), dict)
+        and "studio_agent_mode" in dict(updates.get("config") or {}),
+    )
+    update_explicit_mode = (
+        "config" in updates
+        and isinstance(updates.get("config"), dict)
+        and "studio_agent_mode" in dict(updates.get("config") or {})
+    )
+    _enforce_runtime_eligibility(
+        workspace=workspace,
+        workspace_id=resolved_workspace_id,
+        config=next_config,
+        stage="update",
+        explicit_mode=update_explicit_mode,
+        existing_deployed_agents=await control_plane_repository.list_deployed_agents_for_workspace(
+            resolved_workspace_id,
+            tenant_id=tenant_id,
+        ),
+        subject_deployed_agent_id=deployed_agent_id,
+    )
     next_state = _operational_state_from_record(
         {
             **existing,
@@ -2648,6 +3766,38 @@ async def update_deployed_agent(
     )
     if not isinstance(persisted, dict):
         return None
+    previous_state = _normalize_deployment_state(existing.get("deployment_state"))
+    current_state = _normalize_deployment_state(persisted.get("deployment_state"))
+    state_changed = previous_state != current_state
+    updated_fields = sorted(str(key) for key in normalized_updates.keys())
+    await _append_deployed_agent_audit_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent=persisted,
+        action="deployed_agent_updated",
+        title="Deployed agent updated",
+        summary=f"{_normalize_text(persisted.get('name'), default='Deployed agent')} configuration was updated.",
+        status="updated",
+        payload={
+            "updated_fields": updated_fields,
+            "state_changed": state_changed,
+            "previous_state": previous_state,
+            "current_state": current_state,
+        },
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
+    if state_changed and previous_state in {"paused", "suspended"} and current_state in {"private_test", "ready_for_review"}:
+        await _append_deployed_agent_audit_event(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            deployed_agent=persisted,
+            action="deployed_agent_resumed",
+            title="Deployed agent resumed",
+            summary=f"Lifecycle moved from {previous_state} to {current_state}.",
+            status="resumed",
+            payload={"previous_state": previous_state, "current_state": current_state},
+            actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+        )
     return {
         **dict(project_deployed_agent(persisted, include_internal=True) or {}),
         "backing_install": updated_install,
@@ -2710,6 +3860,64 @@ async def deploy_deployed_agent(
         **existing,
         "deployment_state": "live",
     }
+    try:
+        deploy_config = _config_from_record(next_record)
+    except ValueError as error:
+        raise _http_conflict(str(error)) from error
+    runtime_targets = await runtime_attachment_service.list_workspace_runtime_targets(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+    )
+    existing_deployed_agents = await control_plane_repository.list_deployed_agents_for_workspace(
+        resolved_workspace_id,
+        tenant_id=tenant_id,
+    )
+    _enforce_mode_capability_matrix(
+        config=deploy_config,
+        stage="deploy",
+        runtime_targets=runtime_targets,
+    )
+    _enforce_runtime_eligibility(
+        workspace=workspace,
+        workspace_id=resolved_workspace_id,
+        config=deploy_config,
+        stage="deploy",
+        runtime_targets=runtime_targets,
+        explicit_mode=True,
+        existing_deployed_agents=existing_deployed_agents,
+        subject_deployed_agent_id=deployed_agent_id,
+    )
+    privacy_metadata = _metadata_from_config(
+        deploy_config,
+        existing_metadata=_coerce_dict(existing.get("metadata")),
+    )
+    privacy_snapshot = _coerce_dict(privacy_metadata.get("privacy_contract_snapshot"))
+    if _validate_privacy_contract_snapshot(privacy_snapshot):
+        privacy_snapshot = {
+            **privacy_snapshot,
+            "accepted_at": _utc_now_iso(),
+            "accepted_by_user_id": _normalize_optional_text((current_user or {}).get("user_id")) or "system",
+        }
+        privacy_metadata["privacy_contract_snapshot"] = privacy_snapshot
+        privacy_metadata["privacy_contract_accepted_at"] = privacy_snapshot["accepted_at"]
+        privacy_metadata["privacy_contract_accepted_by_user_id"] = privacy_snapshot["accepted_by_user_id"]
+    computer_safety_snapshot = _coerce_dict(privacy_metadata.get("computer_safety_contract_snapshot"))
+    readiness_blockers = _deploy_readiness_blockers(
+        config=deploy_config,
+        privacy_snapshot=privacy_snapshot,
+        computer_safety_snapshot=computer_safety_snapshot,
+    )
+    if readiness_blockers:
+        raise _http_conflict("Deployment readiness failed: " + "; ".join(readiness_blockers))
+    next_record["metadata"] = privacy_metadata
+    metadata_persisted = await control_plane_repository.update_deployed_agent(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+        updates={"metadata": privacy_metadata},
+    )
+    if not isinstance(metadata_persisted, dict):
+        raise _http_conflict("Failed to persist privacy contract snapshot before live deployment.")
     updated_install = await mirror_deployed_agent_to_backing_specialist(
         deployed_agent=next_record,
         updated_by_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
@@ -2741,6 +3949,44 @@ async def deploy_deployed_agent(
     )
     if not isinstance(persisted, dict):
         return None
+    await _append_deployed_agent_audit_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent=persisted,
+        action="deployed_agent_deployed_live",
+        title="Deployed agent is live",
+        summary=f"{_normalize_text(persisted.get('name'), default='Deployed agent')} is now live.",
+        status="live",
+        payload={
+            "previous_state": _normalize_deployment_state(existing.get("deployment_state")),
+            "current_state": "live",
+            "readiness_gate": "passed",
+            "privacy_contract_valid": True,
+            "computer_safety_contract_valid": bool(
+                deploy_config.studio_agent_mode
+                in {
+                    deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+                    deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER,
+                }
+            ),
+        },
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
+    if _normalize_deployment_state(existing.get("deployment_state")) in {"paused", "suspended"}:
+        await _append_deployed_agent_audit_event(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            deployed_agent=persisted,
+            action="deployed_agent_resumed",
+            title="Deployed agent resumed",
+            summary="Deployment resumed to live state.",
+            status="resumed",
+            payload={
+                "previous_state": _normalize_deployment_state(existing.get("deployment_state")),
+                "current_state": "live",
+            },
+            actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+        )
     return {
         **dict(project_deployed_agent(persisted, include_internal=True) or {}),
         "backing_install": updated_install,
@@ -2792,9 +4038,436 @@ async def pause_deployed_agent(
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,
     )
+    if isinstance(paused, dict):
+        await _append_deployed_agent_audit_event(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            deployed_agent=paused,
+            action="deployed_agent_paused",
+            title="Deployed agent paused",
+            summary=f"{_normalize_text(paused.get('name'), default='Deployed agent')} was paused.",
+            status="paused",
+            payload={
+                "previous_state": _normalize_deployment_state(deployed_agent.get("deployment_state")),
+                "current_state": "paused",
+            },
+            actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+        )
     return {
         **dict(project_deployed_agent(paused, include_internal=True) or {}),
         "backing_install": backing_install,
+    }
+
+
+async def kill_deployed_agent(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    reason: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    try:
+        validate_state_transition(deployed_agent.get("deployment_state"), "suspended")
+    except ValueError as error:
+        raise _http_conflict(str(error)) from error
+    actor_user_id = _normalize_optional_text((current_user or {}).get("user_id"))
+    stopped_run_ids = _stop_deployed_agent_live_runs(
+        deployed_agent=deployed_agent,
+        reason="agent_kill_switch",
+        stopped_by_user_id=actor_user_id,
+    )
+    metadata = _coerce_dict(deployed_agent.get("metadata"))
+    now_iso = _utc_now_iso()
+    metadata["kill_switch"] = {
+        "active": True,
+        "scope": "agent",
+        "reason": _normalize_optional_text(reason) or "Owner kill switch activated.",
+        "activated_at": now_iso,
+        "activated_by_user_id": actor_user_id,
+        "stopped_run_ids": stopped_run_ids,
+    }
+    next_state = _operational_state_from_record(
+        {
+            **deployed_agent,
+            "deployment_state": "suspended",
+            "last_paused_at": now_iso,
+        }
+    )
+    killed = await control_plane_repository.update_deployed_agent(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+        updates={
+            "deployment_state": "suspended",
+            "last_paused_at": now_iso,
+            "metadata": metadata,
+            "operational_state": _serialized_operational_state(next_state),
+        },
+    )
+    if isinstance(killed, dict):
+        await _append_deployed_agent_audit_event(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            deployed_agent=killed,
+            action="deployed_agent_killed",
+            title="Deployed agent kill switch activated",
+            summary=f"{_normalize_text(killed.get('name'), default='Deployed agent')} was suspended by kill switch.",
+            status="suspended",
+            payload={
+                "previous_state": _normalize_deployment_state(deployed_agent.get("deployment_state")),
+                "current_state": "suspended",
+                "reason": metadata["kill_switch"]["reason"],
+                "stopped_run_ids": stopped_run_ids,
+            },
+            actor_user_id=actor_user_id,
+        )
+    return dict(project_deployed_agent(killed, include_internal=True) or {})
+
+
+async def recover_deployed_agent(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    try:
+        next_state = validate_state_transition(deployed_agent.get("deployment_state"), "ready_for_review")
+    except ValueError as error:
+        raise _http_conflict(str(error)) from error
+    metadata = _coerce_dict(deployed_agent.get("metadata"))
+    kill_switch = _coerce_dict(metadata.get("kill_switch"))
+    if kill_switch:
+        kill_switch["active"] = False
+        kill_switch["cleared_at"] = _utc_now_iso()
+        kill_switch["cleared_by_user_id"] = _normalize_optional_text((current_user or {}).get("user_id"))
+        metadata["kill_switch"] = kill_switch
+    recovered_state = _operational_state_from_record({**deployed_agent, "deployment_state": next_state})
+    recovered = await control_plane_repository.update_deployed_agent(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+        updates={
+            "deployment_state": next_state,
+            "metadata": metadata,
+            "operational_state": _serialized_operational_state(recovered_state),
+        },
+    )
+    if isinstance(recovered, dict):
+        await _append_deployed_agent_audit_event(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            deployed_agent=recovered,
+            action="deployed_agent_recovered",
+            title="Deployed agent recovered",
+            summary="Kill switch was cleared and deployment returned to review.",
+            status="ready_for_review",
+            payload={
+                "previous_state": _normalize_deployment_state(deployed_agent.get("deployment_state")),
+                "current_state": next_state,
+            },
+            actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+        )
+    return dict(project_deployed_agent(recovered, include_internal=True) or {})
+
+
+async def archive_deployed_agent(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    reason: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    try:
+        validate_state_transition(deployed_agent.get("deployment_state"), "archived")
+    except ValueError as error:
+        raise _http_conflict(str(error)) from error
+    actor_user_id = _normalize_optional_text((current_user or {}).get("user_id"))
+    stopped_run_ids = _stop_deployed_agent_live_runs(
+        deployed_agent=deployed_agent,
+        reason="agent_archived",
+        stopped_by_user_id=actor_user_id,
+    )
+    metadata = _coerce_dict(deployed_agent.get("metadata"))
+    metadata["archived_at"] = _utc_now_iso()
+    metadata["archived_by_user_id"] = actor_user_id
+    metadata["archive_reason"] = _normalize_optional_text(reason)
+    next_state = _operational_state_from_record({**deployed_agent, "deployment_state": "archived"})
+    archived = await control_plane_repository.update_deployed_agent(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+        updates={
+            "deployment_state": "archived",
+            "channels": _disabled_channels(deployed_agent.get("channels")),
+            "metadata": metadata,
+            "operational_state": _serialized_operational_state(next_state),
+        },
+    )
+    if isinstance(archived, dict):
+        await _append_deployed_agent_audit_event(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            deployed_agent=archived,
+            action="deployed_agent_archived",
+            title="Deployed agent archived",
+            summary=f"{_normalize_text(archived.get('name'), default='Deployed agent')} was archived.",
+            status="archived",
+            payload={"stopped_run_ids": stopped_run_ids, "reason": _normalize_optional_text(reason)},
+            actor_user_id=actor_user_id,
+        )
+    return dict(project_deployed_agent(archived, include_internal=True) or {})
+
+
+async def apply_deployed_agent_recovery_action(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    action: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    token = _normalize_text(action).lower().replace("-", "_")
+    allowed_actions = {
+        "revoke_connector_access",
+        "revoke_local_computer_access",
+        "delete_browser_session_cookies",
+        "stop_background_schedules",
+    }
+    if token not in allowed_actions:
+        raise _http_bad_request("Unsupported deployed-agent recovery action.")
+    metadata = _coerce_dict(deployed_agent.get("metadata"))
+    recovery = _coerce_dict(metadata.get("recovery_controls"))
+    now_iso = _utc_now_iso()
+    actor_user_id = _normalize_optional_text((current_user or {}).get("user_id"))
+    recovery[token] = {"applied_at": now_iso, "applied_by_user_id": actor_user_id}
+    metadata["recovery_controls"] = recovery
+    updates: Dict[str, Any] = {"metadata": metadata}
+    if token == "revoke_connector_access":
+        updates["channels"] = _disabled_channels(deployed_agent.get("channels"))
+    updated = await control_plane_repository.update_deployed_agent(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+        updates=updates,
+    )
+    if isinstance(updated, dict):
+        await _append_deployed_agent_audit_event(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            deployed_agent=updated,
+            action=f"deployed_agent_{token}",
+            title="Deployed agent recovery control applied",
+            summary=f"Recovery control applied: {token}.",
+            status="applied",
+            payload={"recovery_action": token},
+            actor_user_id=actor_user_id,
+        )
+    return dict(project_deployed_agent(updated, include_internal=True) or {})
+
+
+async def kill_deployed_agent_runtime_session(
+    *,
+    deployed_agent_id: str,
+    session_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent not found.")
+    token = _normalize_text(session_id)
+    if not token:
+        raise _http_bad_request("Runtime session id is required.")
+    await session_service.terminate_session(token)
+    await _append_deployed_agent_audit_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent=deployed_agent,
+        action="deployed_agent_runtime_session_killed",
+        title="Runtime session killed",
+        summary="Runtime session was terminated by owner control.",
+        status="killed",
+        payload={"session_id": token},
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
+    return {"ok": True, "deployed_agent_id": deployed_agent_id, "session_id": token, "status": "killed"}
+
+
+async def emergency_stop_workspace_deployed_agents(
+    *,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    rows = await control_plane_repository.list_deployed_agents_for_workspace(
+        resolved_workspace_id,
+        tenant_id=tenant_id,
+    )
+    actor_user_id = _normalize_optional_text((current_user or {}).get("user_id"))
+    stopped_agents: List[str] = []
+    stopped_run_ids: List[str] = []
+    now_iso = _utc_now_iso()
+    for deployed_agent in list(rows or []):
+        if not isinstance(deployed_agent, dict):
+            continue
+        state = _normalize_deployment_state(deployed_agent.get("deployment_state"))
+        if state == "archived":
+            continue
+        agent_run_ids = _stop_deployed_agent_live_runs(
+            deployed_agent=deployed_agent,
+            reason="workspace_emergency_stop",
+            stopped_by_user_id=actor_user_id,
+        )
+        metadata = _coerce_dict(deployed_agent.get("metadata"))
+        metadata["workspace_emergency_stop"] = {
+            "active": True,
+            "reason": _normalize_optional_text(reason) or "Workspace emergency stop activated.",
+            "activated_at": now_iso,
+            "activated_by_user_id": actor_user_id,
+        }
+        next_state = _operational_state_from_record(
+            {
+                **deployed_agent,
+                "deployment_state": "suspended",
+                "last_paused_at": now_iso,
+            }
+        )
+        updated = await control_plane_repository.update_deployed_agent(
+            _normalize_text(deployed_agent.get("id")),
+            tenant_id=tenant_id,
+            owner_workspace_id=resolved_workspace_id,
+            updates={
+                "deployment_state": "suspended",
+                "last_paused_at": now_iso,
+                "metadata": metadata,
+                "operational_state": _serialized_operational_state(next_state),
+            },
+        )
+        if isinstance(updated, dict):
+            stopped_agents.append(_normalize_text(updated.get("id")))
+            stopped_run_ids.extend(agent_run_ids)
+            await _append_deployed_agent_audit_event(
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                deployed_agent=updated,
+                action="workspace_deployed_agents_emergency_stopped",
+                title="Workspace emergency stop applied",
+                summary="Workspace emergency stop suspended this deployed agent.",
+                status="suspended",
+                payload={"reason": _normalize_optional_text(reason), "stopped_run_ids": agent_run_ids},
+                actor_user_id=actor_user_id,
+            )
+    return {
+        "ok": True,
+        "workspace_id": resolved_workspace_id,
+        "status": "emergency_stopped",
+        "stopped_agent_ids": stopped_agents,
+        "stopped_run_ids": stopped_run_ids,
+        "count": len(stopped_agents),
+    }
+
+
+async def export_deployed_agent_audit_logs(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    limit: int = 500,
+) -> Optional[Dict[str, Any]]:
+    activity = await list_deployed_agent_activity(
+        deployed_agent_id=deployed_agent_id,
+        current_user=current_user,
+        owner_workspace_id=owner_workspace_id,
+        limit=limit,
+        offset=0,
+    )
+    if not isinstance(activity, dict):
+        return None
+    return {
+        "schema_version": 1,
+        "exported_at": _utc_now_iso(),
+        "deployed_agent_id": _normalize_text(deployed_agent_id),
+        "workspace_id": _normalize_text(owner_workspace_id),
+        "audit_log": activity,
     }
 
 
@@ -2921,6 +4594,72 @@ async def list_deployed_agent_memory_entries(
         "offset": safe_offset,
         "limit": safe_limit,
         "has_more": has_more,
+    }
+
+
+async def list_deployed_agent_activity(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    safe_limit, safe_offset = _normalize_pagination(limit, offset)
+    fetch_limit = min(500, max((safe_limit + safe_offset + 40), (safe_limit * 4)))
+    rows = await control_plane_repository.list_activity_ledger_events(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        detail_levels=["feed_summary", "timeline_detail", "audit_reference"],
+        limit=fetch_limit,
+    )
+    filtered_rows = [
+        dict(row)
+        for row in rows
+        if isinstance(row, dict)
+        and _activity_row_matches_deployed_agent(
+            row=row,
+            deployed_agent_id=_normalize_text(deployed_agent.get("id")),
+            backing_install_id=_normalize_optional_text(deployed_agent.get("backing_install_id")),
+        )
+    ]
+    total = len(filtered_rows)
+    has_more = total > (safe_offset + safe_limit)
+    paged_rows = filtered_rows[safe_offset : safe_offset + safe_limit]
+    items = [_deployed_agent_activity_item(row) for row in paged_rows]
+    by_kind: Dict[str, int] = {}
+    for item in items:
+        token = _normalize_text(item.get("kind"))
+        if not token:
+            continue
+        by_kind[token] = int(by_kind.get(token) or 0) + 1
+    return {
+        "deployed_agent_id": _normalize_text(deployed_agent.get("id")),
+        "items": items,
+        "offset": safe_offset,
+        "limit": safe_limit,
+        "count": len(items),
+        "total": total,
+        "has_more": has_more,
+        "summary": {
+            "review_required_count": sum(1 for item in items if bool(item.get("review_required"))),
+            "by_kind": by_kind,
+        },
     }
 
 

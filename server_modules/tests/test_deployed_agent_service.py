@@ -157,6 +157,25 @@ def _telegram_readiness_payload(**overrides) -> dict[str, object]:
     return payload
 
 
+def _privacy_contract_snapshot(**overrides) -> dict[str, object]:
+    snapshot: dict[str, object] = {
+        "where_it_runs": {},
+        "model_provider_data_access": {},
+        "screenshots_captured": False,
+        "files_accessible": False,
+        "terminal_accessible": False,
+        "connectors_accessible": {},
+        "memory_scope": {},
+        "retention_period": {},
+        "export_delete_policy": {},
+        "audit_log": {},
+        "accepted_at": "2026-04-13T10:00:00Z",
+        "accepted_by_user_id": "user-owner",
+    }
+    snapshot.update(overrides)
+    return snapshot
+
+
 def _conversation_summary_row(
     *,
     session_id: str = "sess-1",
@@ -327,7 +346,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_repository_update_deployed_agent_returns_normalized_row(self) -> None:
         connection = AsyncMock()
-        updated_row = _deployed_agent_row(deployment_state="staging")
+        updated_row = _deployed_agent_row(deployment_state="private_test")
         connection.fetchrow = AsyncMock(return_value=updated_row)
 
         with patch(
@@ -339,12 +358,12 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 tenant_id="tenant-1",
                 owner_workspace_id="ws-1",
                 updates={
-                    "deployment_state": "staging",
+                    "deployment_state": "private_test",
                     "channels": {"telegram": {"enabled": True}},
                 },
             )
 
-        self.assertEqual(updated["deployment_state"], "staging")
+        self.assertEqual(updated["deployment_state"], "private_test")
         update_query = connection.fetchrow.await_args.args[0]
         self.assertIn("UPDATE deployed_agents", update_query)
         self.assertIn("deployment_state = $4", update_query)
@@ -444,6 +463,16 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
                 new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(
+                    return_value={
+                        "targets": [
+                            {"target_id": "local_companion", "available": True, "online": True, "healthy": True},
+                        ]
+                    }
+                ),
             ),
             patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
@@ -695,6 +724,16 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=[]),
             ),
             patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(
+                    return_value={
+                        "targets": [
+                            {"target_id": "self_host_runtime", "available": True, "online": True, "healthy": True},
+                        ]
+                    }
+                ),
+            ),
+            patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
                 new=AsyncMock(return_value=backing_install),
             ) as create_specialist_mock,
@@ -757,6 +796,16 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
                 new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(
+                    return_value={
+                        "targets": [
+                            {"target_id": "local_companion", "available": True, "online": True, "healthy": True},
+                        ]
+                    }
+                ),
             ),
             patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
@@ -863,6 +912,16 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=[]),
             ),
             patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(
+                    return_value={
+                        "targets": [
+                            {"target_id": "self_host_runtime", "available": True, "online": True, "healthy": True},
+                        ]
+                    }
+                ),
+            ),
+            patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
                 new=AsyncMock(return_value=backing_install),
             ) as create_specialist_mock,
@@ -885,6 +944,116 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(create_deployed_agent_mock.await_args.kwargs["runtime_target"], "self_hosted")
         self.assertEqual(create_specialist_mock.await_args.kwargs["runtime_mode"], "hosted_secure")
 
+    async def test_create_draft_deployed_agent_rejects_text_mode_with_computer_automation(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.create_draft_deployed_agent(
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    name="Store Assistant",
+                    config={
+                        "studio_agent_mode": "text_agent",
+                        "computer_automation": {
+                            "enabled": True,
+                            "runtime_class": "virtual_browser",
+                            "allowed_domains": ["example.com"],
+                            "max_concurrent_sessions": 1,
+                        },
+                    },
+                )
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertIn("text_agent cannot enable computer automation", str(error.exception.detail))
+
+    async def test_create_draft_deployed_agent_rejects_tools_when_plan_lacks_tool_permissions(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.create_draft_deployed_agent(
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    name="Store Assistant",
+                    config={"tool_policy": {"enabled_tools": ["web_search"]}},
+                )
+
+        self.assertEqual(error.exception.status_code, 403)
+        self.assertIn("Selected tools are not available", str(error.exception.detail))
+
+    async def test_create_draft_deployed_agent_rejects_cloud_computer_without_plan_entitlement(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(
+                    return_value={
+                        "targets": [
+                            {"target_id": "sage_cloud_computer", "available": True, "online": True, "healthy": True},
+                        ]
+                    }
+                ),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.create_draft_deployed_agent(
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    name="Store Assistant",
+                    config={"studio_agent_mode": "cloud_computer_agent"},
+                )
+
+        self.assertEqual(error.exception.status_code, 403)
+        self.assertIn("Cloud Computer mode is not available", str(error.exception.detail))
+
+    async def test_create_draft_deployed_agent_rejects_mode_without_runtime_enrollment(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(return_value={"targets": []}),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.create_draft_deployed_agent(
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    name="Store Assistant",
+                    config={"studio_agent_mode": "my_computer_agent"},
+                )
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertIn("local_companion", str(error.exception.detail))
+
     async def test_create_draft_deployed_agent_enforces_free_specialist_limit(self) -> None:
         with (
             patch(
@@ -904,6 +1073,97 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(ctx.exception.reason, "specialist_limit_exceeded")
+
+    async def test_create_draft_deployed_agent_enforces_mode_created_quota(self) -> None:
+        workspace = _workspace_record()
+        workspace["metadata"] = {
+            "billing": {
+                "plan": "pro",
+                "overrides": {
+                    "max_deployed_agents": 10,
+                    "max_deployed_agents_created": 10,
+                    "max_text_agent_created": 1,
+                },
+            }
+        }
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=workspace),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[_deployed_agent_row()]),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.create_draft_deployed_agent(
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    name="Second Text Agent",
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("Created-agent quota reached", str(error.exception.detail))
+
+    async def test_deploy_deployed_agent_enforces_live_quota(self) -> None:
+        workspace = _workspace_record()
+        workspace["metadata"] = {
+            "billing": {
+                "plan": "pro",
+                "overrides": {
+                    "max_deployed_agents": 10,
+                    "max_deployed_agents_live": 1,
+                    "max_text_agent_live": 1,
+                },
+            }
+        }
+        draft_row = _deployed_agent_row(
+            deployment_state="ready_for_review",
+            metadata={"source": "test", "monthly_cost_cap_usd": 25.0},
+        )
+        draft_row["channels"] = {
+            "telegram": {
+                "enabled": True,
+                "is_inbound_owner": True,
+                "endpoint_key": "store-bot",
+            }
+        }
+        live_existing = _deployed_agent_row(deployment_state="live", backing_install_id="ainstall_2")
+        live_existing["id"] = "dagent_live"
+        live_existing["name"] = "Already Live"
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=workspace),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[live_existing, draft_row]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(return_value=_telegram_readiness_payload()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(return_value={"targets": [{"target_id": "cloud_default", "available": True}]}),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.deploy_deployed_agent(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("Live-agent quota reached", str(error.exception.detail))
 
     async def test_list_deployed_agent_analytics_uses_workspace_roster_and_service_summary(self) -> None:
         analytics_payload = {
@@ -1191,6 +1451,12 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("live -> draft", str(error.exception))
 
+    def test_validate_state_transition_allows_ready_for_review_to_live(self) -> None:
+        self.assertEqual(
+            deployed_agent_service.validate_state_transition("ready_for_review", "live"),
+            "live",
+        )
+
     def test_validate_can_deploy_requires_customer_live_backing_install(self) -> None:
         with self.assertRaises(ValueError) as error:
             deployed_agent_service.validate_can_deploy(
@@ -1221,12 +1487,50 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             "telegram": {"enabled": True},
             "whatsapp": {"enabled": True},
         }
+        deployed_agent["metadata"] = {
+            "monthly_cost_cap_usd": 25.0,
+            "privacy_contract_snapshot": _privacy_contract_snapshot(),
+        }
 
         deployed_agent_service.validate_can_deploy(
             deployed_agent=deployed_agent,
             backing_install=_backing_install(specialist_mode="customer_live"),
             allowed_live_channels={"telegram", "whatsapp"},
         )
+
+    def test_validate_can_deploy_requires_monthly_budget_cap(self) -> None:
+        deployed_agent = _deployed_agent_row(
+            deployment_state="live",
+            metadata={"privacy_contract_snapshot": _privacy_contract_snapshot()},
+        )
+
+        with self.assertRaises(ValueError) as error:
+            deployed_agent_service.validate_can_deploy(
+                deployed_agent=deployed_agent,
+                backing_install=_backing_install(specialist_mode="customer_live"),
+            )
+
+        self.assertIn("Monthly budget cap", str(error.exception))
+
+    def test_validate_can_deploy_requires_privacy_contract_acceptance(self) -> None:
+        deployed_agent = _deployed_agent_row(
+            deployment_state="live",
+            metadata={
+                "monthly_cost_cap_usd": 25.0,
+                "privacy_contract_snapshot": _privacy_contract_snapshot(
+                    accepted_at=None,
+                    accepted_by_user_id=None,
+                ),
+            },
+        )
+
+        with self.assertRaises(ValueError) as error:
+            deployed_agent_service.validate_can_deploy(
+                deployed_agent=deployed_agent,
+                backing_install=_backing_install(specialist_mode="customer_live"),
+            )
+
+        self.assertIn("privacy contract acceptance", str(error.exception).lower())
 
     def test_paused_channel_reply_uses_safe_default_when_not_configured(self) -> None:
         reply = deployed_agent_service.paused_channel_reply(
@@ -1247,6 +1551,14 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(reply, "The store team is offline right now. Please check back after 9 AM.")
+
+    def test_suspended_channel_reply_uses_safe_default(self) -> None:
+        reply = deployed_agent_service.suspended_channel_reply(
+            deployed_agent=_deployed_agent_row(deployment_state="suspended"),
+        )
+
+        self.assertIn("temporarily suspended", reply)
+        self.assertIn("policy, quota, or security control", reply)
 
     def test_daily_limit_channel_reply_uses_configured_cta(self) -> None:
         reply = deployed_agent_service.daily_limit_channel_reply(
@@ -1283,6 +1595,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 "server_modules.deployed_agent_service.control_plane_repository.set_deployed_agent_state",
                 new=AsyncMock(return_value=paused_row),
             ) as set_state_mock,
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(),
+            ) as audit_mock,
         ):
             paused = await deployed_agent_service.pause_deployed_agent(
                 deployed_agent_id="dagent_1",
@@ -1293,6 +1609,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(paused["deployment_state"], "paused")
         self.assertEqual(paused["last_paused_at"], "2026-04-13T11:00:00Z")
         self.assertTrue(set_state_mock.await_args.kwargs["last_paused_at"])
+        self.assertEqual(audit_mock.await_args.kwargs["action"], "deployed_agent_paused")
 
     async def test_update_deployed_agent_mirrors_to_backing_specialist(self) -> None:
         updated_row = _deployed_agent_row()
@@ -1342,6 +1659,71 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update_manifest_mock.await_args.kwargs["manifest"].identity.name, "Store Concierge")
         self.assertEqual(update_manifest_mock.await_args.kwargs["metadata"]["specialist_mode"], "owner_edit")
         self.assertTrue(update_manifest_mock.await_args.kwargs["channel_bindings"]["telegram"]["is_inbound_owner"])
+
+    async def test_update_deployed_agent_rejects_text_mode_with_computer_automation(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=_deployed_agent_row()),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.update_deployed_agent(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    updates={
+                        "config": {
+                            "studio_agent_mode": "text_agent",
+                            "computer_automation": {
+                                "enabled": True,
+                                "runtime_class": "virtual_browser",
+                                "allowed_domains": ["example.com"],
+                                "max_concurrent_sessions": 1,
+                            },
+                        }
+                    },
+                )
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertIn("text_agent cannot enable computer automation", str(error.exception.detail))
+
+    async def test_update_deployed_agent_rejects_computer_automation_without_spend_caps(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=_deployed_agent_row()),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.update_deployed_agent(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    updates={
+                        "config": {
+                            "studio_agent_mode": "my_computer_agent",
+                            "computer_automation": {
+                                "enabled": True,
+                                "runtime_class": "local_desktop",
+                                "allowed_domains": ["example.com"],
+                                "max_concurrent_sessions": 1,
+                                "max_session_runtime_seconds": 900,
+                            },
+                        }
+                    },
+                )
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertIn("daily_budget_usd", str(error.exception.detail))
 
     async def test_update_deployed_agent_enriches_telegram_binding_from_connector_selection(self) -> None:
         updated_row = _deployed_agent_row()
@@ -1655,6 +2037,90 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(specialist_metadata["provider"], "anthropic")
         self.assertEqual(specialist_metadata["model"], "claude-3-5-sonnet-20241022")
 
+    async def test_list_deployed_agent_activity_filters_and_classifies_rows(self) -> None:
+        rows = [
+            _activity_row(
+                event_id="aevt-1",
+                created_at="2026-04-13T12:06:01Z",
+                event_class="system_activity",
+                action="deployed_agent_updated",
+                summary="Updated settings",
+            ),
+            _activity_row(
+                event_id="aevt-2",
+                created_at="2026-04-13T12:06:02Z",
+                event_class="memory_update",
+                action="deployed_agent_memory_snapshot_written",
+                summary="Memory snapshot updated",
+            ),
+            _activity_row(
+                event_id="aevt-3",
+                created_at="2026-04-13T12:06:03Z",
+                event_class="system_activity",
+                action="deployed_agent_cost_spend_recorded",
+                summary="Spend updated",
+                payload={"estimated_cost_usd": 0.12},
+            ),
+            {
+                **_activity_row(
+                    event_id="aevt-ignore",
+                    created_at="2026-04-13T12:06:04Z",
+                    event_class="system_activity",
+                    action="other_agent_event",
+                    summary="Ignore me",
+                ),
+                "install_id": "ainstall_other",
+                "metadata": {"deployed_agent_id": "dagent_other"},
+            },
+        ]
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=_deployed_agent_row()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_activity_ledger_events",
+                new=AsyncMock(return_value=rows),
+            ),
+        ):
+            payload = await deployed_agent_service.list_deployed_agent_activity(
+                deployed_agent_id="dagent_1",
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                limit=2,
+                offset=0,
+            )
+
+        self.assertEqual(payload["deployed_agent_id"], "dagent_1")
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["total"], 3)
+        self.assertTrue(payload["has_more"])
+        self.assertIn(payload["items"][0]["kind"], {"lifecycle", "memory_write", "cost_spend"})
+        self.assertGreaterEqual(payload["summary"]["by_kind"].get("lifecycle", 0), 1)
+
+    async def test_list_deployed_agent_activity_returns_none_when_missing(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            payload = await deployed_agent_service.list_deployed_agent_activity(
+                deployed_agent_id="missing",
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+            )
+
+        self.assertIsNone(payload)
+
     async def test_list_deployed_agent_conversations_paginates_deterministically(self) -> None:
         session_rows = [
             _conversation_summary_row(session_id="sess-2", latest_run_id="run-2", last_message_at="2026-04-13T12:06:00Z"),
@@ -1898,7 +2364,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         live_row = _deployed_agent_row(deployment_state="live")
         live_row["last_deployed_at"] = "2026-04-13T11:30:00Z"
         live_install = _backing_install(specialist_mode="customer_live")
-        draft_row = _deployed_agent_row(deployment_state="draft")
+        draft_row = _deployed_agent_row(
+            deployment_state="ready_for_review",
+            metadata={"source": "test", "monthly_cost_cap_usd": 25.0},
+        )
         draft_row["channels"] = {
             "telegram": {
                 "enabled": True,
@@ -1921,6 +2390,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=_telegram_readiness_payload()),
             ),
             patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(return_value={"targets": [{"target_id": "cloud_default", "available": True}]}),
+            ),
+            patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.get_workspace_specialist",
                 new=AsyncMock(return_value=_backing_install(specialist_mode='owner_edit')),
             ),
@@ -1929,9 +2402,17 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=live_install),
             ) as update_manifest_mock,
             patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(return_value=draft_row),
+            ) as update_deployed_agent_mock,
+            patch(
                 "server_modules.deployed_agent_service.control_plane_repository.set_deployed_agent_state",
                 new=AsyncMock(return_value=live_row),
             ) as set_state_mock,
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(),
+            ) as audit_mock,
         ):
             deployed = await deployed_agent_service.deploy_deployed_agent(
                 deployed_agent_id="dagent_1",
@@ -1942,7 +2423,429 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deployed["deployment_state"], "live")
         self.assertEqual(deployed["backing_install"]["specialist_mode"], "customer_live")
         self.assertEqual(update_manifest_mock.await_args.kwargs["metadata"]["specialist_mode"], "customer_live")
+        privacy_snapshot = update_deployed_agent_mock.await_args.kwargs["updates"]["metadata"]["privacy_contract_snapshot"]
+        computer_safety_snapshot = update_deployed_agent_mock.await_args.kwargs["updates"]["metadata"]["computer_safety_contract_snapshot"]
+        self.assertIn("where_it_runs", privacy_snapshot)
+        self.assertIn("memory_scope", privacy_snapshot)
+        self.assertEqual(privacy_snapshot["accepted_by_user_id"], "user-owner")
+        self.assertTrue(privacy_snapshot["accepted_at"])
+        self.assertIn("terminal_command_policy", computer_safety_snapshot)
+        self.assertIn("required_owner_approval_actions", computer_safety_snapshot)
         self.assertTrue(set_state_mock.await_args.kwargs["last_deployed_at"])
+        self.assertEqual(audit_mock.await_args.kwargs["action"], "deployed_agent_deployed_live")
+
+    async def test_deploy_deployed_agent_blocks_live_when_privacy_snapshot_cannot_persist(self) -> None:
+        draft_row = _deployed_agent_row(
+            deployment_state="ready_for_review",
+            metadata={"source": "test", "monthly_cost_cap_usd": 25.0},
+        )
+        draft_row["channels"] = {
+            "telegram": {
+                "enabled": True,
+                "is_inbound_owner": True,
+                "endpoint_key": "store-bot",
+            }
+        }
+        live_install = _backing_install(specialist_mode="customer_live")
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(return_value=_telegram_readiness_payload()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(return_value={"targets": [{"target_id": "cloud_default", "available": True}]}),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(return_value=live_install),
+            ) as update_manifest_mock,
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.set_deployed_agent_state",
+                new=AsyncMock(),
+            ) as set_state_mock,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.deploy_deployed_agent(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("privacy contract snapshot", str(error.exception.detail).lower())
+        update_manifest_mock.assert_not_awaited()
+        set_state_mock.assert_not_awaited()
+
+    async def test_deploy_deployed_agent_rejects_unavailable_cloud_computer_runtime_target(self) -> None:
+        workspace = _workspace_record()
+        workspace["metadata"] = {"billing": {"plan": "pro"}}
+        draft_row = _deployed_agent_row(
+            deployment_state="ready_for_review",
+            metadata={
+                "source": "test",
+                "runtime_placement": "hosted_hardware_pool",
+                "studio_agent_mode": "cloud_computer_agent",
+            },
+        )
+        draft_row["channels"] = {
+            "telegram": {
+                "enabled": True,
+                "is_inbound_owner": True,
+                "endpoint_key": "store-bot",
+            }
+        }
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=workspace),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(return_value=_telegram_readiness_payload()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(
+                    return_value={
+                        "targets": [
+                            {
+                                "target_id": "sage_cloud_computer",
+                                "available": False,
+                                "online": False,
+                                "healthy": False,
+                            }
+                        ]
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(),
+            ) as update_manifest_mock,
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.set_deployed_agent_state",
+                new=AsyncMock(),
+            ) as set_state_mock,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.deploy_deployed_agent(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("sage_cloud_computer", str(error.exception.detail))
+        update_manifest_mock.assert_not_awaited()
+        set_state_mock.assert_not_awaited()
+
+    async def test_deploy_deployed_agent_blocks_cloud_mode_without_computer_safety_snapshot_readiness(self) -> None:
+        workspace = _workspace_record()
+        workspace["metadata"] = {"billing": {"plan": "pilot"}}
+        draft_row = _deployed_agent_row(
+            deployment_state="ready_for_review",
+            metadata={
+                "source": "test",
+                "runtime_placement": "hosted_hardware_pool",
+                "studio_agent_mode": "cloud_computer_agent",
+                "monthly_cost_cap_usd": 25.0,
+                "computer_automation": {
+                    "enabled": False,
+                    "runtime_class": "virtual_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 5,
+                    "monthly_budget_usd": 25,
+                },
+            },
+        )
+        draft_row["channels"] = {
+            "telegram": {
+                "enabled": True,
+                "is_inbound_owner": True,
+                "endpoint_key": "store-bot",
+            }
+        }
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=workspace),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(return_value=_telegram_readiness_payload()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(
+                    return_value={
+                        "targets": [
+                            {
+                                "target_id": "sage_cloud_computer",
+                                "available": True,
+                                "online": True,
+                                "healthy": True,
+                            }
+                        ]
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(),
+            ) as update_deployed_agent_mock,
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(),
+            ) as update_manifest_mock,
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.set_deployed_agent_state",
+                new=AsyncMock(),
+            ) as set_state_mock,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.deploy_deployed_agent(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("computer safety contract snapshot", str(error.exception.detail).lower())
+        update_deployed_agent_mock.assert_not_awaited()
+        update_manifest_mock.assert_not_awaited()
+        set_state_mock.assert_not_awaited()
+
+    async def test_kill_deployed_agent_suspends_and_records_kill_switch(self) -> None:
+        live_row = _deployed_agent_row(deployment_state="live")
+        killed_row = _deployed_agent_row(deployment_state="suspended")
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=live_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.run_state_repository.sync_list_live_runs",
+                return_value=[
+                    {
+                        "run_id": "run-1",
+                        "workspace_id": "ws-1",
+                        "tenant_id": "tenant-1",
+                        "status": "running",
+                        "state": "running",
+                        "version": 1,
+                        "trace_id": "trace-1",
+                        "context": {"metadata": {"deployed_agent_id": "dagent_1"}},
+                    }
+                ],
+            ),
+            patch(
+                "server_modules.deployed_agent_service.run_state_repository.sync_update_live_run_if_version_matches",
+                return_value=2,
+            ) as stop_run_mock,
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(return_value=killed_row),
+            ) as update_mock,
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(),
+            ) as audit_mock,
+        ):
+            payload = await deployed_agent_service.kill_deployed_agent(
+                deployed_agent_id="dagent_1",
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                reason="incident",
+            )
+
+        self.assertEqual(payload["deployment_state"], "suspended")
+        updates = update_mock.await_args.kwargs["updates"]
+        self.assertEqual(updates["deployment_state"], "suspended")
+        self.assertTrue(updates["metadata"]["kill_switch"]["active"])
+        self.assertEqual(updates["metadata"]["kill_switch"]["stopped_run_ids"], ["run-1"])
+        stop_run_mock.assert_called_once()
+        audit_mock.assert_awaited()
+
+    async def test_archive_deployed_agent_disables_channels(self) -> None:
+        live_row = _deployed_agent_row(deployment_state="paused")
+        archived_row = _deployed_agent_row(deployment_state="archived")
+        archived_row["channels"] = {"telegram": {"enabled": False, "endpoint_key": "store-bot"}}
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=live_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.run_state_repository.sync_list_live_runs",
+                return_value=[],
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(return_value=archived_row),
+            ) as update_mock,
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(),
+            ),
+        ):
+            payload = await deployed_agent_service.archive_deployed_agent(
+                deployed_agent_id="dagent_1",
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                reason="retired",
+            )
+
+        self.assertEqual(payload["deployment_state"], "archived")
+        updates = update_mock.await_args.kwargs["updates"]
+        self.assertEqual(updates["deployment_state"], "archived")
+        self.assertFalse(updates["channels"]["telegram"]["enabled"])
+        self.assertEqual(updates["metadata"]["archive_reason"], "retired")
+
+    async def test_recovery_action_revokes_connector_access(self) -> None:
+        live_row = _deployed_agent_row(deployment_state="suspended")
+        updated_row = _deployed_agent_row(deployment_state="suspended")
+        updated_row["channels"] = {"telegram": {"enabled": False}}
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=live_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(return_value=updated_row),
+            ) as update_mock,
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(),
+            ),
+        ):
+            payload = await deployed_agent_service.apply_deployed_agent_recovery_action(
+                deployed_agent_id="dagent_1",
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                action="revoke_connector_access",
+            )
+
+        self.assertEqual(payload["deployment_state"], "suspended")
+        updates = update_mock.await_args.kwargs["updates"]
+        self.assertFalse(updates["channels"]["telegram"]["enabled"])
+        self.assertIn("revoke_connector_access", updates["metadata"]["recovery_controls"])
+
+    async def test_kill_deployed_agent_runtime_session_terminates_session(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=_deployed_agent_row()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.session_service.terminate_session",
+                new=AsyncMock(),
+            ) as terminate_mock,
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(),
+            ),
+        ):
+            payload = await deployed_agent_service.kill_deployed_agent_runtime_session(
+                deployed_agent_id="dagent_1",
+                session_id="sess-1",
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "killed")
+        terminate_mock.assert_awaited_once_with("sess-1")
+
+    async def test_emergency_stop_workspace_suspends_agents(self) -> None:
+        live_row = _deployed_agent_row(deployment_state="live")
+        second_row = _deployed_agent_row(deployment_state="paused", backing_install_id="ainstall_2")
+        second_row["id"] = "dagent_2"
+
+        async def _update_agent(agent_id: str, **kwargs):
+            row = _deployed_agent_row(deployment_state=kwargs["updates"]["deployment_state"])
+            row["id"] = agent_id
+            row["metadata"] = kwargs["updates"]["metadata"]
+            return row
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[live_row, second_row]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.run_state_repository.sync_list_live_runs",
+                return_value=[],
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(side_effect=_update_agent),
+            ) as update_mock,
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(),
+            ),
+        ):
+            payload = await deployed_agent_service.emergency_stop_workspace_deployed_agents(
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                reason="security incident",
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(update_mock.await_count, 2)
+        first_updates = update_mock.await_args_list[0].kwargs["updates"]
+        self.assertEqual(first_updates["deployment_state"], "suspended")
+        self.assertTrue(first_updates["metadata"]["workspace_emergency_stop"]["active"])
 
     async def test_get_deployed_agent_telegram_readiness_reports_missing_connector(self) -> None:
         draft_row = _deployed_agent_row(deployment_state="draft")
@@ -1984,7 +2887,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_deployed_agent_telegram_readiness_returns_selected_tool_scope(self) -> None:
         draft_row = _deployed_agent_row(
-            deployment_state="draft",
+            deployment_state="ready_for_review",
             metadata={
                 "source": "test",
                 "selected_tool_ids": ["web_search", "gmail_send"],
@@ -2042,7 +2945,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(readiness["tool_scope"]["selected_tool_ids"], ["web_search", "gmail_send"])
 
     async def test_deploy_deployed_agent_rejects_unready_telegram_binding(self) -> None:
-        draft_row = _deployed_agent_row(deployment_state="draft")
+        draft_row = _deployed_agent_row(deployment_state="ready_for_review")
         draft_row["channels"] = {"telegram": {"enabled": True}}
 
         with (
@@ -2083,6 +2986,15 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
                 new=AsyncMock(return_value=_deployed_agent_row(deployment_state="live")),
             ),
+            patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(
+                    return_value=_telegram_readiness_payload(
+                        ready_for_live=False,
+                        blockers=[{"code": "already_live", "message": "Agent is already live."}],
+                    )
+                ),
+            ),
         ):
             with self.assertRaises(HTTPException) as error:
                 await deployed_agent_service.deploy_deployed_agent(
@@ -2094,7 +3006,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.exception.status_code, 409)
 
     async def test_deploy_deployed_agent_rejects_non_telegram_live_channels(self) -> None:
-        draft_row = _deployed_agent_row(deployment_state="draft")
+        draft_row = _deployed_agent_row(deployment_state="ready_for_review")
         draft_row["channels"] = {
             "telegram": {
                 "enabled": True,

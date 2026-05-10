@@ -765,6 +765,66 @@ class AgentChannelRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outbound_kwargs["deployed_agent_id"], "dagent_1")
         self.assertEqual(outbound_kwargs["status"], "paused")
 
+    async def test_route_inbound_channel_message_returns_suspended_reply_for_suspended_deployed_agent(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(return_value=_deployed_agent_row(deployment_state="suspended")),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ) as append_event_mock,
+            patch("server_modules.agent_channel_router.execute_canonical_channel_turn", new=AsyncMock()) as execute_mock,
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="Hello",
+                actor_id="telegram-user-1",
+                message_id="msg-suspended",
+            )
+
+        self.assertEqual(result["status"], "suspended")
+        self.assertEqual(result["limit_reason"], "deployment_suspended")
+        self.assertIn("temporarily suspended", result["reply"])
+        self.assertEqual(append_event_mock.await_count, 2)
+        execute_mock.assert_not_awaited()
+        outbound_kwargs = append_event_mock.await_args_list[1].kwargs
+        self.assertEqual(outbound_kwargs["deployed_agent_id"], "dagent_1")
+        self.assertEqual(outbound_kwargs["status"], "suspended")
+
     async def test_route_inbound_channel_message_returns_branded_quota_reply_for_rate_limited_deployed_agent(self):
         manifest = AgentManifest(
             manifest_id="manifest-parts-pro",

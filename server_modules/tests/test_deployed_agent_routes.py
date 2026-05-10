@@ -955,6 +955,164 @@ async def test_pause_deployed_agent_route_returns_paused_payload(monkeypatch: py
 
 
 @pytest.mark.anyio
+async def test_kill_deployed_agent_route_returns_suspended_payload(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {"user_id": "user-1"}
+
+    async def fake_kill_deployed_agent(**kwargs):
+        assert kwargs["deployed_agent_id"] == "dagent_1"
+        assert kwargs["owner_workspace_id"] == "ws-1"
+        assert kwargs["reason"] == "incident"
+        payload = _created_payload()
+        payload["deployment_state"] = "suspended"
+        payload["metadata"] = {"kill_switch": {"active": True}}
+        return payload
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "kill_deployed_agent",
+        fake_kill_deployed_agent,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/deployed-agents/dagent_1/kill",
+            json={"workspace_id": "ws-1", "reason": "incident"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["deployment_state"] == "suspended"
+    assert response.json()["metadata"]["kill_switch"]["active"] is True
+
+
+@pytest.mark.anyio
+async def test_recovery_action_route_revokes_connector_access(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {"user_id": "user-1"}
+
+    async def fake_recovery_action(**kwargs):
+        assert kwargs["deployed_agent_id"] == "dagent_1"
+        assert kwargs["owner_workspace_id"] == "ws-1"
+        assert kwargs["action"] == "revoke_connector_access"
+        payload = _created_payload()
+        payload["channels"] = {"telegram": {"enabled": False}}
+        return payload
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "apply_deployed_agent_recovery_action",
+        fake_recovery_action,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/deployed-agents/dagent_1/recovery-actions",
+            json={"workspace_id": "ws-1", "action": "revoke_connector_access"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["channels"]["telegram"]["enabled"] is False
+
+
+@pytest.mark.anyio
+async def test_runtime_session_kill_route_terminates_session(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {"user_id": "user-1"}
+
+    async def fake_kill_runtime_session(**kwargs):
+        assert kwargs["deployed_agent_id"] == "dagent_1"
+        assert kwargs["session_id"] == "sess-1"
+        assert kwargs["owner_workspace_id"] == "ws-1"
+        return {"ok": True, "deployed_agent_id": "dagent_1", "session_id": "sess-1", "status": "killed"}
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "kill_deployed_agent_runtime_session",
+        fake_kill_runtime_session,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/deployed-agents/dagent_1/runtime-sessions/sess-1/kill",
+            json={"workspace_id": "ws-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "killed"
+
+
+@pytest.mark.anyio
+async def test_workspace_emergency_stop_route_returns_stopped_agents(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {"user_id": "user-1"}
+
+    async def fake_emergency_stop(**kwargs):
+        assert kwargs["owner_workspace_id"] == "ws-1"
+        assert kwargs["reason"] == "incident"
+        return {
+            "ok": True,
+            "workspace_id": "ws-1",
+            "status": "emergency_stopped",
+            "stopped_agent_ids": ["dagent_1"],
+            "stopped_run_ids": ["run-1"],
+            "count": 1,
+        }
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "emergency_stop_workspace_deployed_agents",
+        fake_emergency_stop,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/deployed-agents/emergency-stop",
+            json={"workspace_id": "ws-1", "reason": "incident"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "emergency_stopped"
+    assert response.json()["stopped_run_ids"] == ["run-1"]
+
+
+@pytest.mark.anyio
+async def test_audit_export_route_returns_activity_log(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {"user_id": "user-1"}
+
+    async def fake_audit_export(**kwargs):
+        assert kwargs["deployed_agent_id"] == "dagent_1"
+        assert kwargs["owner_workspace_id"] == "ws-1"
+        assert kwargs["limit"] == 25
+        return {
+            "schema_version": 1,
+            "deployed_agent_id": "dagent_1",
+            "workspace_id": "ws-1",
+            "audit_log": {"items": [{"action": "deployed_agent_deployed_live"}]},
+        }
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "export_deployed_agent_audit_logs",
+        fake_audit_export,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/deployed-agents/dagent_1/audit-export",
+            params={"workspace_id": "ws-1", "limit": 25},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["audit_log"]["items"][0]["action"] == "deployed_agent_deployed_live"
+
+
+@pytest.mark.anyio
 async def test_list_deployed_agents_route_forbids_member_access(monkeypatch: pytest.MonkeyPatch):
     app = _build_app()
     app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {
@@ -1027,6 +1185,75 @@ async def test_list_deployed_agent_conversations_route_returns_paginated_items(m
 
     assert response.status_code == 200
     assert response.json()["items"][0]["session_id"] == "sess-1"
+
+
+@pytest.mark.anyio
+async def test_list_deployed_agent_activity_route_returns_paginated_items(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {"user_id": "user-1"}
+
+    async def fake_list_deployed_agent_activity(**kwargs):
+        assert kwargs["deployed_agent_id"] == "dagent_1"
+        assert kwargs["owner_workspace_id"] == "ws-1"
+        assert kwargs["limit"] == 20
+        assert kwargs["offset"] == 5
+        return {
+            "deployed_agent_id": "dagent_1",
+            "items": [
+                {
+                    "id": "aevt-1",
+                    "kind": "lifecycle",
+                    "action": "deployed_agent_updated",
+                    "summary": "Updated settings",
+                }
+            ],
+            "offset": 5,
+            "limit": 20,
+            "count": 1,
+            "total": 1,
+            "has_more": False,
+            "summary": {"review_required_count": 0, "by_kind": {"lifecycle": 1}},
+        }
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "list_deployed_agent_activity",
+        fake_list_deployed_agent_activity,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/deployed-agents/dagent_1/activity",
+            params={"workspace_id": "ws-1", "limit": 20, "offset": 5},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["kind"] == "lifecycle"
+
+
+@pytest.mark.anyio
+async def test_list_deployed_agent_activity_route_returns_404_when_missing(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {"user_id": "user-1"}
+
+    async def fake_list_deployed_agent_activity(**kwargs):
+        return None
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "list_deployed_agent_activity",
+        fake_list_deployed_agent_activity,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/deployed-agents/dagent_1/activity",
+            params={"workspace_id": "ws-1"},
+        )
+
+    assert response.status_code == 404
 
 
 @pytest.mark.anyio

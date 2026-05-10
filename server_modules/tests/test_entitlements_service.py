@@ -146,6 +146,36 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertTrue(paid_flags["hosted_ai_enabled"])
         self.assertEqual(paid_flags["hosted_sage_ai_policy"], "enabled_with_cap")
         self.assertEqual(paid_flags["hosted_sage_ai_reason"], None)
+        self.assertIn("deployed_agent_quotas", paid_flags)
+        self.assertIn("mode_limits", paid_flags["deployed_agent_quotas"])
+
+    def test_deployed_agent_quota_defaults_respect_runtime_target_capacity(self) -> None:
+        state = entitlements_service.resolve_workspace_entitlement_state(
+            workspace={
+                "metadata": {
+                    "billing": {
+                        "plan": "pro",
+                        "overrides": {
+                            "max_deployed_agents_live": 5,
+                            "max_my_computer_agent_live": 4,
+                            "max_self_hosted_agent_live": 4,
+                        },
+                    }
+                }
+            },
+        )
+        quotas = entitlements_service.deployed_agent_quota_defaults(
+            state=state,
+            runtime_targets={
+                "targets": [
+                    {"target_id": "local_companion", "attachment_count": 2},
+                    {"target_id": "self_host_runtime", "attachment_count": 1},
+                ]
+            },
+        )
+
+        self.assertEqual(quotas["mode_limits"]["my_computer_agent"]["live_agents_max"], 2)
+        self.assertEqual(quotas["mode_limits"]["self_hosted_agent"]["live_agents_max"], 1)
 
     def test_enforce_specialist_slot_access_rejects_free_workspace_after_one_specialist(self) -> None:
         with self.assertRaises(entitlements_service.EntitlementQuotaExceededError) as ctx:

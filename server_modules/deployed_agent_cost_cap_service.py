@@ -5,6 +5,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from server_modules import (
+    activity_ledger_service,
     control_plane_repository,
     credit_ledger_contract,
     deployed_agent_config_schema,
@@ -213,6 +214,48 @@ def _emit_budget_notification(
     )
 
 
+async def _append_budget_activity_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent: Dict[str, Any],
+    action: str,
+    title: str,
+    summary: str,
+    payload: Optional[Dict[str, Any]] = None,
+    status: str = "logged",
+    review_required: bool = False,
+) -> None:
+    deployed_agent_id = _normalize_optional_text(deployed_agent.get("id"))
+    if not deployed_agent_id:
+        return
+    try:
+        await activity_ledger_service.append_activity_event(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_type="deployed_agent",
+            actor_id=deployed_agent_id,
+            install_id=_normalize_optional_text(deployed_agent.get("backing_install_id")),
+            event_class="system_activity",
+            detail_level="audit_reference",
+            action=action,
+            title=title,
+            summary=summary,
+            status=status,
+            review_required=bool(review_required),
+            payload=dict(payload or {}),
+            metadata={
+                "deployed_agent_id": deployed_agent_id,
+                "workspace_id": _normalize_optional_text(workspace_id),
+            },
+        )
+    except Exception:
+        LOGGER.exception(
+            "Failed to append deployed-agent budget activity event",
+            extra={"workspace_id": workspace_id, "deployed_agent_id": deployed_agent_id, "action": action},
+        )
+
+
 async def _persist_budget_cycle(
     *,
     deployed_agent: Dict[str, Any],
@@ -256,7 +299,7 @@ async def _pause_deployment_fail_closed(
         last_run_completed_at=None,
         last_threshold_reached="fail_closed",
         auto_paused_at=now_iso,
-        accounting_state="paused_accounting_error",
+        accounting_state="suspended_accounting_error",
         last_error=error_text,
     )
     updated = await _persist_budget_cycle(
@@ -265,12 +308,12 @@ async def _pause_deployment_fail_closed(
         workspace_id=workspace_id,
         budget_cycle=budget_cycle,
     )
-    if str((deployed_agent or {}).get("deployment_state") or "").strip().lower() != "paused":
+    if str((deployed_agent or {}).get("deployment_state") or "").strip().lower() != "suspended":
         await control_plane_repository.set_deployed_agent_state(
             _normalize_text(deployed_agent.get("id")),
             tenant_id=tenant_id,
             owner_workspace_id=workspace_id,
-            deployment_state="paused",
+            deployment_state="suspended",
             last_paused_at=now_iso,
         )
     _emit_budget_notification(
@@ -278,18 +321,35 @@ async def _pause_deployment_fail_closed(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         action="deployed_agent_budget_tracking_failed",
-        text=f"{_normalize_text(deployed_agent.get('name')) or 'This deployment'} was auto-paused because monthly budget tracking could not be computed safely.",
-        title="Deployment auto-paused",
+        text=f"{_normalize_text(deployed_agent.get('name')) or 'This deployment'} was auto-suspended because monthly budget tracking could not be computed safely.",
+        title="Deployment auto-suspended",
         priority="high",
         threshold=None,
         cap_usd=cap_usd,
         burn_usd=burn_usd,
         usage_month=usage_month,
     )
+    await _append_budget_activity_event(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        deployed_agent=updated or deployed_agent,
+        action="deployed_agent_budget_fail_closed_suspended",
+        title="Deployment auto-suspended",
+        summary="Monthly budget tracking failed closed and suspended deployment.",
+        status="suspended",
+        payload={
+            "reason": "budget_tracking_failed",
+            "usage_month": usage_month,
+            "monthly_cost_cap_usd": _round_usd(cap_usd) if cap_usd is not None else None,
+            "current_burn_usd": _round_usd(burn_usd) if burn_usd is not None else None,
+        },
+        review_required=True,
+    )
     return {
         "applied": True,
         "fail_closed": True,
         "auto_paused": True,
+        "auto_suspended": True,
         "usage_month": usage_month,
         "reason": "budget_tracking_failed",
         "budget_cycle": budget_cycle,
@@ -492,7 +552,7 @@ async def settle_deployed_agent_monthly_cost_cap(
         cap_usd=cap_usd,
         usage_month=usage_month,
     ):
-        will_auto_pause = str(deployed_agent.get("deployment_state") or "").strip().lower() != "paused"
+        will_auto_suspend = str(deployed_agent.get("deployment_state") or "").strip().lower() != "suspended"
         next_budget_cycle["threshold_100_notified_at"] = now_iso
         next_budget_cycle["threshold_100_cap_usd"] = cap_usd
         _emit_budget_notification(
@@ -502,8 +562,8 @@ async def settle_deployed_agent_monthly_cost_cap(
             action="deployed_agent_budget_100",
             text=(
                 f"{_normalize_text(deployed_agent.get('name')) or 'This deployment'} reached 100% of its monthly cost cap "
-                f"(${total_cost_usd:.2f} of ${cap_usd:.2f}) and was auto-paused."
-                if will_auto_pause
+                f"(${total_cost_usd:.2f} of ${cap_usd:.2f}) and was auto-suspended."
+                if will_auto_suspend
                 else f"{_normalize_text(deployed_agent.get('name')) or 'This deployment'} reached 100% of its monthly cost cap "
                 f"(${total_cost_usd:.2f} of ${cap_usd:.2f})."
             ),
@@ -516,7 +576,7 @@ async def settle_deployed_agent_monthly_cost_cap(
         )
 
     if cap_usd is not None and total_cost_usd >= cap_usd:
-        auto_paused = str(deployed_agent.get("deployment_state") or "").strip().lower() != "paused"
+        auto_paused = str(deployed_agent.get("deployment_state") or "").strip().lower() != "suspended"
         next_budget_cycle["auto_paused_at"] = now_iso
 
     updated = await _persist_budget_cycle(
@@ -525,14 +585,51 @@ async def settle_deployed_agent_monthly_cost_cap(
         workspace_id=workspace_id,
         budget_cycle=next_budget_cycle,
     )
+    await _append_budget_activity_event(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        deployed_agent=updated or deployed_agent,
+        action="deployed_agent_cost_spend_recorded",
+        title="Deployment spend recorded",
+        summary=(
+            f"Monthly spend is now ${total_cost_usd:.2f}"
+            + (f" of ${cap_usd:.2f} cap." if cap_usd is not None else ".")
+        ),
+        payload={
+            "usage_month": usage_month,
+            "total_cost_usd": total_cost_usd,
+            "runs_count": runs_count,
+            "monthly_cost_cap_usd": _round_usd(cap_usd) if cap_usd is not None else None,
+            "percent_used": next_budget_cycle.get("percent_used"),
+            "last_threshold_reached": last_threshold_reached,
+            "run_id": run_id,
+        },
+    )
 
     if auto_paused:
         await control_plane_repository.set_deployed_agent_state(
             deployed_agent_id,
             tenant_id=tenant_id,
             owner_workspace_id=workspace_id,
-            deployment_state="paused",
+            deployment_state="suspended",
             last_paused_at=now_iso,
+        )
+        await _append_budget_activity_event(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            deployed_agent=updated or deployed_agent,
+            action="deployed_agent_budget_cap_suspended",
+            title="Deployment auto-suspended",
+            summary="Monthly spend cap reached and deployment was auto-suspended.",
+            status="suspended",
+            payload={
+                "usage_month": usage_month,
+                "total_cost_usd": total_cost_usd,
+                "monthly_cost_cap_usd": _round_usd(cap_usd) if cap_usd is not None else None,
+                "threshold": "100",
+                "run_id": run_id,
+            },
+            review_required=True,
         )
 
     return {
@@ -545,6 +642,7 @@ async def settle_deployed_agent_monthly_cost_cap(
         "percent_used": next_budget_cycle.get("percent_used"),
         "last_threshold_reached": last_threshold_reached,
         "auto_paused": auto_paused,
+        "auto_suspended": auto_paused,
         "budget_cycle": next_budget_cycle,
-        "deployment_state": "paused" if auto_paused else _normalize_optional_text((updated or deployed_agent).get("deployment_state")),
+        "deployment_state": "suspended" if auto_paused else _normalize_optional_text((updated or deployed_agent).get("deployment_state")),
     }

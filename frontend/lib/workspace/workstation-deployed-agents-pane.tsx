@@ -329,11 +329,61 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   label: string;
   hint: string;
   supplier: WizardState['runtimeSupplierKind'];
+  capabilities: string;
+  runsWhere: string;
+  privacy: string;
+  costRisk: string;
+  setup: string;
+  bestFor: string;
 }> = [
-  { value: 'managed_cloud', label: 'Managed Cloud', supplier: 'empyralis', hint: 'Empyralis hosts this assistant as a governed business worker.' },
-  { value: 'hosted_hardware_pool', label: 'Empyralis Hosted Hardware', supplier: 'empyralis', hint: 'Runs on Empyralis-owned hardware capacity with checkpoint and queue controls.' },
-  { value: 'customer_local', label: 'Customer Local Runtime', supplier: 'customer', hint: 'Runs through the customer paired machine, with scoped workspace policy.' },
-  { value: 'customer_hosted', label: 'Customer-Hosted Runtime', supplier: 'customer', hint: 'Runs on a customer-controlled worker while Empyralis remains the control plane.' },
+  {
+    value: 'managed_cloud',
+    label: 'Text only',
+    supplier: 'empyralis',
+    hint: 'Cloud chat with approved tools. No browser or computer control.',
+    capabilities: 'Chat, memory, knowledge lookup, and approved API-style tools.',
+    runsWhere: 'Managed cloud runtime in the Empyralis control plane.',
+    privacy: 'High. No direct computer access surface.',
+    costRisk: 'Low to medium.',
+    setup: 'No extra setup.',
+    bestFor: 'Support, FAQs, triage, and policy-safe assistants.',
+  },
+  {
+    value: 'hosted_hardware_pool',
+    label: 'Cloud Computer',
+    supplier: 'empyralis',
+    hint: 'Cloud agent with isolated computer/browser automation under policy controls.',
+    capabilities: 'Browser, files, and task automation inside an isolated cloud session.',
+    runsWhere: 'Isolated cloud computer managed by Empyralis.',
+    privacy: 'Medium. Session activity can be logged for safety and audit.',
+    costRisk: 'High.',
+    setup: 'Enable computer automation policy and runtime limits.',
+    bestFor: 'Web workflows, operations playbooks, and guided back-office tasks.',
+  },
+  {
+    value: 'customer_local',
+    label: 'My Computer',
+    supplier: 'customer',
+    hint: 'Agent uses your machine through the local companion with explicit permissions.',
+    capabilities: 'Local browser/files/terminal actions after explicit grants.',
+    runsWhere: 'Your computer through the enrolled local companion.',
+    privacy: 'Very high data locality, with host-device trust responsibility.',
+    costRisk: 'Medium.',
+    setup: 'Install and enroll the local companion, then grant scoped permissions.',
+    bestFor: 'Personal workflows and device-local automation.',
+  },
+  {
+    value: 'customer_hosted',
+    label: 'Self-hosted',
+    supplier: 'customer',
+    hint: 'Agent runs on a customer-owned server or runtime node.',
+    capabilities: 'Customer-managed execution with workspace-scoped controls.',
+    runsWhere: 'Customer-owned infrastructure registered to this workspace.',
+    privacy: 'Highest control in your own environment.',
+    costRisk: 'Variable, depends on your infrastructure.',
+    setup: 'Register and maintain a healthy self-hosted runtime node.',
+    bestFor: 'Regulated environments and enterprise-owned runtime operations.',
+  },
 ];
 
 const STUDIO_APPROVAL_MODE_OPTIONS: ReadonlyArray<{
@@ -1288,7 +1338,7 @@ function runtimeSupplierForPlacement(value: WizardState['runtimePlacement']): Wi
 
 function runtimePlacementLabel(value: unknown): string {
   const placement = normalizeRuntimePlacement(value);
-  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Managed Cloud';
+  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Text only';
 }
 
 function normalizeApprovalModeFromPolicies(escalationPreset: unknown, handoffMode: unknown): WizardState['approvalMode'] {
@@ -3367,7 +3417,7 @@ export function WorkstationDeployedAgentsPane({
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />
                       <FormReadout label="Channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
-                      <FormReadout label="Runtime placement" value={runtimePlacementLabel(readRecord(selectedAgent?.config).runtime_placement ?? readRecord(selectedAgent?.metadata).runtime_placement ?? selectedAgent?.runtime_target)} />
+                      <FormReadout label="Runtime mode" value={runtimePlacementLabel(readRecord(selectedAgent?.config).runtime_placement ?? readRecord(selectedAgent?.metadata).runtime_placement ?? selectedAgent?.runtime_target)} />
                     </FormGrid>
                   </ListDetailPanel>
                 ) : null}
@@ -3483,7 +3533,7 @@ export function WorkstationDeployedAgentsPane({
                       ) : null}
                       <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
                         <FormReadout label="State" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
-                        <FormReadout label="Runtime placement" value={runtimePlacementLabel(readRecord(selectedAgent.config).runtime_placement ?? readRecord(selectedAgent.metadata).runtime_placement ?? selectedAgent.runtime_target)} />
+                        <FormReadout label="Runtime mode" value={runtimePlacementLabel(readRecord(selectedAgent.config).runtime_placement ?? readRecord(selectedAgent.metadata).runtime_placement ?? selectedAgent.runtime_target)} />
                         <FormReadout label="AI model" value={humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
                         <FormReadout label="Model" value={selectedModelId(selectedAgent) || 'Not pinned'} />
                         <FormReadout label="Billing plan" value={humanizeToken(selectedAgent.billing_plan, 'Free')} />
@@ -4781,26 +4831,60 @@ export function WorkstationDeployedAgentsPane({
                         {STUDIO_AI_TIER_OPTIONS.find((item) => item.value === wizardState.aiTier)?.hint}
                       </div>
                     </FormField>
-                    <FormField label="Runtime placement" hint="Where this assistant worker runs. Computer/browser automation is a separate add-on.">
-                      <FormSelect
-                        value={wizardState.runtimePlacement}
-                        onChange={(event) => {
-                          const nextRuntime = normalizeRuntimePlacement(event.currentTarget.value);
-                          setWizardState((current) => ({
-                            ...current,
-                            runtimePlacement: nextRuntime,
-                            runtimeTarget: runtimeTargetForPlacement(nextRuntime),
-                          }));
-                        }}
-                      >
-                        {STUDIO_RUNTIME_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </FormSelect>
-                      <div className="app-surface-field-help">
-                        {STUDIO_RUNTIME_OPTIONS.find((item) => item.value === wizardState.runtimePlacement)?.hint}
+                    <FormField label="Runtime mode" hint="Choose how this assistant runs. Internal runtime identifiers are hidden in this view.">
+                      <div className="deployed-agents-wizard__runtime-grid">
+                        {STUDIO_RUNTIME_OPTIONS.map((option) => {
+                          const selected = wizardState.runtimePlacement === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              aria-pressed={selected}
+                              className={joinClassNames(
+                                'deployed-agents-wizard__tool-card',
+                                'deployed-agents-wizard__runtime-card',
+                                selected && 'deployed-agents-wizard__tool-card--selected',
+                              )}
+                              onClick={() => {
+                                const nextRuntime = normalizeRuntimePlacement(option.value);
+                                setWizardState((current) => ({
+                                  ...current,
+                                  runtimePlacement: nextRuntime,
+                                  runtimeTarget: runtimeTargetForPlacement(nextRuntime),
+                                }));
+                              }}
+                            >
+                              <strong>{option.label}</strong>
+                              <small>{option.hint}</small>
+                              <dl className="deployed-agents-wizard__runtime-metadata">
+                                <div>
+                                  <dt>What it can do</dt>
+                                  <dd>{option.capabilities}</dd>
+                                </div>
+                                <div>
+                                  <dt>Where it runs</dt>
+                                  <dd>{option.runsWhere}</dd>
+                                </div>
+                                <div>
+                                  <dt>Privacy level</dt>
+                                  <dd>{option.privacy}</dd>
+                                </div>
+                                <div>
+                                  <dt>Cost risk</dt>
+                                  <dd>{option.costRisk}</dd>
+                                </div>
+                                <div>
+                                  <dt>Required setup</dt>
+                                  <dd>{option.setup}</dd>
+                                </div>
+                                <div>
+                                  <dt>Best use cases</dt>
+                                  <dd>{option.bestFor}</dd>
+                                </div>
+                              </dl>
+                            </button>
+                          );
+                        })}
                       </div>
                     </FormField>
                     <FormField label="Approval mode" hint="How much autonomy this assistant gets before human handoff.">

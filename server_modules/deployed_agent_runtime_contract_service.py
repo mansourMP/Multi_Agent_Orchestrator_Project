@@ -35,11 +35,124 @@ COMPUTER_AUTOMATION_CLASSES = {
     "local_desktop",
 }
 
+COMPUTER_SAFETY_REQUIRED_OWNER_APPROVAL_ACTIONS = {
+    "send_external_messages",
+    "make_purchases",
+    "delete_data",
+    "change_permissions",
+    "enter_secrets",
+    "install_software",
+    "run_unknown_scripts",
+}
+COMPUTER_SAFETY_SAFE_FILESYSTEM_DEFAULTS = {
+    "none",
+    "session_scoped",
+    "workspace_scoped",
+}
+COMPUTER_SAFETY_ALLOWED_TERMINAL_POLICIES = {
+    "blocked",
+    "allowlist",
+    "review_required",
+}
+
 RUNTIME_PLACEMENT_TARGETS = {
     RUNTIME_PLACEMENT_MANAGED_CLOUD: "cloud",
     RUNTIME_PLACEMENT_HOSTED_HARDWARE_POOL: "cloud",
     RUNTIME_PLACEMENT_CUSTOMER_LOCAL: "local",
     RUNTIME_PLACEMENT_CUSTOMER_HOSTED: "self_hosted",
+}
+
+STUDIO_AGENT_MODE_TEXT = "text_agent"
+STUDIO_AGENT_MODE_CLOUD_COMPUTER = "cloud_computer_agent"
+STUDIO_AGENT_MODE_MY_COMPUTER = "my_computer_agent"
+STUDIO_AGENT_MODE_SELF_HOSTED = "self_hosted_agent"
+STUDIO_AGENT_MODES = {
+    STUDIO_AGENT_MODE_TEXT,
+    STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+    STUDIO_AGENT_MODE_MY_COMPUTER,
+    STUDIO_AGENT_MODE_SELF_HOSTED,
+}
+STUDIO_AGENT_MODE_ALIASES = {
+    "text": STUDIO_AGENT_MODE_TEXT,
+    "text_agent": STUDIO_AGENT_MODE_TEXT,
+    "chat": STUDIO_AGENT_MODE_TEXT,
+    "chat_agent": STUDIO_AGENT_MODE_TEXT,
+    "cloud_computer": STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+    "cloud_computer_agent": STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+    "cloud_agent": STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+    "my_computer": STUDIO_AGENT_MODE_MY_COMPUTER,
+    "my_computer_agent": STUDIO_AGENT_MODE_MY_COMPUTER,
+    "local_agent": STUDIO_AGENT_MODE_MY_COMPUTER,
+    "self_hosted": STUDIO_AGENT_MODE_SELF_HOSTED,
+    "self_hosted_agent": STUDIO_AGENT_MODE_SELF_HOSTED,
+    "customer_hosted_agent": STUDIO_AGENT_MODE_SELF_HOSTED,
+}
+STUDIO_AGENT_MODE_PROFILES = {
+    STUDIO_AGENT_MODE_TEXT: {
+        "placement": RUNTIME_PLACEMENT_MANAGED_CLOUD,
+        "supplier_kind": RUNTIME_SUPPLIER_EMPYRALIS,
+        "allowed_capabilities": [
+            "chat",
+            "approved_tools",
+            "knowledge_sources",
+            "memory",
+            "channels",
+        ],
+        "computer_allowed": False,
+    },
+    STUDIO_AGENT_MODE_CLOUD_COMPUTER: {
+        "placement": RUNTIME_PLACEMENT_HOSTED_HARDWARE_POOL,
+        "supplier_kind": RUNTIME_SUPPLIER_EMPYRALIS,
+        "allowed_capabilities": [
+            "chat",
+            "approved_tools",
+            "knowledge_sources",
+            "memory",
+            "channels",
+            "isolated_computer",
+            "browser_automation",
+            "code_execution",
+            "file_artifacts",
+        ],
+        "computer_allowed": True,
+    },
+    STUDIO_AGENT_MODE_MY_COMPUTER: {
+        "placement": RUNTIME_PLACEMENT_CUSTOMER_LOCAL,
+        "supplier_kind": RUNTIME_SUPPLIER_CUSTOMER,
+        "allowed_capabilities": [
+            "chat",
+            "approved_tools",
+            "knowledge_sources",
+            "memory",
+            "channels",
+            "local_companion",
+            "local_files",
+            "local_browser",
+        ],
+        "computer_allowed": True,
+    },
+    STUDIO_AGENT_MODE_SELF_HOSTED: {
+        "placement": RUNTIME_PLACEMENT_CUSTOMER_HOSTED,
+        "supplier_kind": RUNTIME_SUPPLIER_CUSTOMER,
+        "allowed_capabilities": [
+            "chat",
+            "approved_tools",
+            "knowledge_sources",
+            "memory",
+            "channels",
+            "self_hosted_runtime",
+            "remote_files",
+            "remote_jobs",
+        ],
+        "computer_allowed": True,
+    },
+}
+
+STUDIO_AGENT_MODE_DEPLOY_TARGETS = {
+    STUDIO_AGENT_MODE_TEXT: "cloud_default",
+    STUDIO_AGENT_MODE_CLOUD_COMPUTER: "sage_cloud_computer",
+    STUDIO_AGENT_MODE_MY_COMPUTER: "local_companion",
+    STUDIO_AGENT_MODE_SELF_HOSTED: "self_host_runtime",
 }
 
 DEFAULT_AGENT_WORKSPACE_BASE = "~/.empyralis/agents"
@@ -166,6 +279,238 @@ def runtime_target_for_placement(value: Any) -> str:
     return RUNTIME_PLACEMENT_TARGETS.get(placement, "cloud")
 
 
+def normalize_studio_agent_mode(
+    value: Any,
+    *,
+    default: str = STUDIO_AGENT_MODE_TEXT,
+    strict: bool = False,
+) -> str:
+    token = _text(value).lower().replace("-", "_").replace(" ", "_")
+    resolved = STUDIO_AGENT_MODE_ALIASES.get(token)
+    if resolved:
+        return resolved
+    if strict and token:
+        raise ValueError(f"Unsupported Studio agent mode: {token}.")
+    return default
+
+
+def infer_studio_agent_mode(
+    *,
+    runtime_placement: Any = None,
+    runtime_target: Any = None,
+    runtime_supplier: Any = None,
+) -> str:
+    placement = normalize_runtime_placement(runtime_placement, runtime_target=runtime_target)
+    supplier = normalize_runtime_supplier(runtime_supplier, runtime_placement=placement)
+    if placement == RUNTIME_PLACEMENT_CUSTOMER_HOSTED:
+        return STUDIO_AGENT_MODE_SELF_HOSTED
+    if placement == RUNTIME_PLACEMENT_CUSTOMER_LOCAL:
+        return STUDIO_AGENT_MODE_MY_COMPUTER
+    if placement == RUNTIME_PLACEMENT_HOSTED_HARDWARE_POOL:
+        return STUDIO_AGENT_MODE_CLOUD_COMPUTER
+    if supplier == RUNTIME_SUPPLIER_CUSTOMER and placement == RUNTIME_PLACEMENT_MANAGED_CLOUD:
+        return STUDIO_AGENT_MODE_MY_COMPUTER
+    return STUDIO_AGENT_MODE_TEXT
+
+
+def resolve_studio_agent_mode(
+    value: Any,
+    *,
+    runtime_placement: Any = None,
+    runtime_target: Any = None,
+    runtime_supplier: Any = None,
+) -> str:
+    token = _text(value)
+    if token:
+        return normalize_studio_agent_mode(token, strict=True)
+    return infer_studio_agent_mode(
+        runtime_placement=runtime_placement,
+        runtime_target=runtime_target,
+        runtime_supplier=runtime_supplier,
+    )
+
+
+def studio_agent_mode_contract(mode: Any) -> Dict[str, Any]:
+    resolved_mode = normalize_studio_agent_mode(mode, strict=True)
+    profile = STUDIO_AGENT_MODE_PROFILES[resolved_mode]
+    placement = str(profile["placement"])
+    supplier = str(profile["supplier_kind"])
+    return {
+        "studio_agent_mode": resolved_mode,
+        "placement": {
+            "kind": placement,
+            "runtime_target": runtime_target_for_placement(placement),
+            "trust_zone": _runtime_trust_zone(supplier, placement),
+        },
+        "supplier": {
+            "kind": supplier,
+        },
+        "allowed_capabilities": list(profile["allowed_capabilities"]),
+        "computer_allowed": bool(profile["computer_allowed"]),
+    }
+
+
+def _target_record(runtime_targets: Any, target_id: str) -> Dict[str, Any]:
+    payload = runtime_targets if isinstance(runtime_targets, dict) else {}
+    targets = payload.get("targets") if isinstance(payload.get("targets"), list) else []
+    for item in targets:
+        if not isinstance(item, dict):
+            continue
+        token = _text(item.get("target_id")).lower()
+        if token == target_id:
+            return dict(item)
+    return {}
+
+
+def validate_mode_capability_matrix(
+    *,
+    studio_agent_mode: Any,
+    runtime_placement: Any,
+    runtime_target: Any,
+    runtime_supply: Any = None,
+    computer_automation: Any = None,
+    stage: str = "create",
+    runtime_targets: Any = None,
+) -> None:
+    mode_contract = studio_agent_mode_contract(studio_agent_mode)
+    mode = mode_contract["studio_agent_mode"]
+    expected_placement = mode_contract["placement"]["kind"]
+    expected_target = mode_contract["placement"]["runtime_target"]
+    expected_supplier = mode_contract["supplier"]["kind"]
+
+    placement = normalize_runtime_placement(runtime_placement, runtime_target=runtime_target)
+    target = _text(runtime_target).lower() or runtime_target_for_placement(placement)
+    supply = runtime_supply if isinstance(runtime_supply, dict) else {}
+    supply_supplier = _text(
+        (supply.get("supplier") if isinstance(supply.get("supplier"), dict) else {}).get("kind")
+    ).lower()
+    supply_mode = _text(supply.get("studio_agent_mode")).lower()
+    automation = normalize_computer_automation_config(computer_automation)
+    errors: List[str] = []
+
+    if placement != expected_placement:
+        errors.append(
+            f"{mode} requires runtime_placement={expected_placement}, received {placement or 'unknown'}."
+        )
+    if target != expected_target:
+        errors.append(f"{mode} requires runtime_target={expected_target}, received {target or 'unknown'}.")
+    if supply_supplier and supply_supplier != expected_supplier:
+        errors.append(
+            f"{mode} requires runtime supplier {expected_supplier}, received {supply_supplier}."
+        )
+    if supply_mode and supply_mode != mode:
+        errors.append(f"runtime_supply.studio_agent_mode must be {mode}, received {supply_mode}.")
+
+    if mode == STUDIO_AGENT_MODE_TEXT:
+        if automation.get("enabled"):
+            errors.append("text_agent cannot enable computer automation.")
+    elif mode == STUDIO_AGENT_MODE_CLOUD_COMPUTER:
+        if automation.get("enabled"):
+            runtime_class = _text(automation.get("runtime_class")).lower()
+            if runtime_class and runtime_class not in {
+                "virtual_browser",
+                "virtual_desktop",
+                "virtual_code_sandbox",
+            }:
+                errors.append(
+                    "cloud_computer_agent computer automation must use virtual_browser, virtual_desktop, or virtual_code_sandbox."
+                )
+        if not bool(automation.get("requires_owner_approval")):
+            errors.append("cloud_computer_agent requires explicit owner approval for computer automation.")
+    elif mode == STUDIO_AGENT_MODE_MY_COMPUTER:
+        if automation.get("enabled"):
+            runtime_class = _text(automation.get("runtime_class")).lower()
+            if runtime_class and runtime_class not in {"local_browser", "local_desktop"}:
+                errors.append(
+                    "my_computer_agent computer automation must use local_browser or local_desktop."
+                )
+        if not bool(automation.get("requires_owner_approval")):
+            errors.append("my_computer_agent requires explicit owner approval for computer automation.")
+    elif mode == STUDIO_AGENT_MODE_SELF_HOSTED:
+        if not bool(automation.get("requires_owner_approval")):
+            errors.append("self_hosted_agent requires explicit owner approval for computer automation.")
+
+    if automation.get("enabled"):
+        if len(list(automation.get("allowed_domains") or [])) == 0:
+            errors.append("Computer automation requires a non-empty domain allowlist.")
+        if int(automation.get("max_concurrent_sessions") or 0) <= 0:
+            errors.append("Computer automation requires max_concurrent_sessions > 0.")
+        if int(automation.get("max_session_runtime_seconds") or 0) <= 0:
+            errors.append("Computer automation requires max_session_runtime_seconds > 0.")
+        daily_budget = automation.get("daily_budget_usd")
+        monthly_budget = automation.get("monthly_budget_usd")
+        if daily_budget is None:
+            errors.append("Computer automation requires daily_budget_usd.")
+        if monthly_budget is None:
+            errors.append("Computer automation requires monthly_budget_usd.")
+        if daily_budget is not None and monthly_budget is not None and float(monthly_budget) < float(daily_budget):
+            errors.append("Computer automation requires monthly_budget_usd >= daily_budget_usd.")
+        if bool(automation.get("inherit_host_environment")):
+            errors.append("Computer automation cannot inherit host environment variables.")
+        filesystem_default = _text(automation.get("filesystem_default_access")).lower()
+        if filesystem_default not in COMPUTER_SAFETY_SAFE_FILESYSTEM_DEFAULTS:
+            errors.append(
+                "Computer automation must default to restricted filesystem access (none, session_scoped, or workspace_scoped)."
+            )
+        if bool(automation.get("allow_software_install")):
+            errors.append("Computer automation cannot allow software installs by default.")
+        terminal_policy = _text(automation.get("terminal_command_policy")).lower()
+        if terminal_policy not in COMPUTER_SAFETY_ALLOWED_TERMINAL_POLICIES:
+            errors.append("Computer automation must define a safe terminal command policy.")
+        if not bool(automation.get("sensitive_action_confirmation_required")):
+            errors.append("Computer automation requires explicit sensitive-action confirmation.")
+        if int(automation.get("idle_timeout_seconds") or 0) <= 0:
+            errors.append("Computer automation requires idle_timeout_seconds > 0.")
+        if not bool(automation.get("emergency_stop_enabled")):
+            errors.append("Computer automation requires emergency stop support.")
+        approval_actions = {
+            _text(item).lower()
+            for item in list(automation.get("required_owner_approval_actions") or [])
+            if _text(item)
+        }
+        missing_approvals = sorted(COMPUTER_SAFETY_REQUIRED_OWNER_APPROVAL_ACTIONS - approval_actions)
+        if missing_approvals:
+            errors.append(
+                "Computer automation approval policy is missing required risky actions: "
+                + ", ".join(missing_approvals)
+                + "."
+            )
+
+    stage_token = _text(stage).lower()
+    should_check_targets = stage_token == "deploy" or (
+        stage_token == "create" and isinstance(runtime_targets, dict)
+    )
+    if should_check_targets:
+        expected_target_id = STUDIO_AGENT_MODE_DEPLOY_TARGETS.get(mode)
+        if expected_target_id:
+            record = _target_record(runtime_targets, expected_target_id)
+            if not record:
+                errors.append(
+                    f"{mode} requires runtime target {expected_target_id}, but it is not present for this workspace."
+                )
+            else:
+                if not bool(record.get("available")):
+                    errors.append(
+                        f"{mode} requires runtime target {expected_target_id}, but it is unavailable."
+                    )
+                if stage_token == "deploy" and mode in {
+                    STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+                    STUDIO_AGENT_MODE_MY_COMPUTER,
+                    STUDIO_AGENT_MODE_SELF_HOSTED,
+                }:
+                    if not bool(record.get("online")):
+                        errors.append(
+                            f"{mode} requires runtime target {expected_target_id} to be online."
+                        )
+                    if not bool(record.get("healthy")):
+                        errors.append(
+                            f"{mode} requires runtime target {expected_target_id} to be healthy."
+                        )
+
+    if errors:
+        raise ValueError(" ".join(errors))
+
+
 def _runtime_trust_zone(supplier: str, placement: str) -> str:
     if supplier == RUNTIME_SUPPLIER_CUSTOMER:
         return "customer_owned"
@@ -188,6 +533,28 @@ def normalize_computer_automation_config(value: Any) -> Dict[str, Any]:
         max_concurrent_sessions = 0
     daily_budget_usd = _positive_float(payload.get("daily_budget_usd"))
     monthly_budget_usd = _positive_float(payload.get("monthly_budget_usd"))
+    if runtime_class in {"local_browser", "local_desktop"}:
+        default_isolation_boundary = "local_companion"
+    else:
+        default_isolation_boundary = "isolated_sandbox"
+    isolation_boundary = _text(
+        payload.get("isolation_boundary"),
+        default=default_isolation_boundary,
+    ).lower()
+    if isolation_boundary not in {"isolated_sandbox", "local_companion"}:
+        isolation_boundary = default_isolation_boundary
+    filesystem_default_access = _text(
+        payload.get("filesystem_default_access"),
+        default="none",
+    ).lower()
+    terminal_command_policy = _text(
+        payload.get("terminal_command_policy"),
+        default="allowlist" if enabled else "blocked",
+    ).lower()
+    if "required_owner_approval_actions" in payload:
+        required_owner_approval_actions = _list_text(payload.get("required_owner_approval_actions"))
+    else:
+        required_owner_approval_actions = sorted(COMPUTER_SAFETY_REQUIRED_OWNER_APPROVAL_ACTIONS)
     return {
         "enabled": enabled,
         "runtime_class": runtime_class if enabled else None,
@@ -201,12 +568,37 @@ def normalize_computer_automation_config(value: Any) -> Dict[str, Any]:
             payload.get("max_session_runtime_seconds"),
             default=1800 if enabled else 0,
         ),
+        "isolation_boundary": isolation_boundary if enabled else default_isolation_boundary,
+        "inherit_host_environment": _bool(payload.get("inherit_host_environment"), default=False),
+        "filesystem_default_access": filesystem_default_access if enabled else "none",
+        "allow_downloads": _bool(payload.get("allow_downloads"), default=False),
+        "allow_software_install": _bool(payload.get("allow_software_install"), default=False),
+        "terminal_command_policy": terminal_command_policy if enabled else "blocked",
+        "sensitive_action_confirmation_required": _bool(
+            payload.get("sensitive_action_confirmation_required"),
+            default=True,
+        ),
+        "screenshot_capture_enabled": _bool(
+            payload.get("screenshot_capture_enabled"),
+            default=runtime_class in {"virtual_browser", "virtual_desktop", "local_browser", "local_desktop"},
+        ),
+        "session_recording_policy": _text(
+            payload.get("session_recording_policy"),
+            default="metadata_only",
+        ).lower() or "metadata_only",
+        "emergency_stop_enabled": _bool(payload.get("emergency_stop_enabled"), default=True),
+        "required_owner_approval_actions": (
+            required_owner_approval_actions
+            if enabled
+            else sorted(COMPUTER_SAFETY_REQUIRED_OWNER_APPROVAL_ACTIONS)
+        ),
     }
 
 
 def normalize_runtime_supply_contract(
     value: Any = None,
     *,
+    studio_agent_mode: Any = None,
     runtime_supplier: Any = None,
     runtime_placement: Any = None,
     runtime_target: Any = None,
@@ -223,19 +615,22 @@ def normalize_runtime_supply_contract(
     model_tier_payload = payload.get("model_tier") if isinstance(payload.get("model_tier"), dict) else {}
     provider_binding_payload = payload.get("provider_binding") if isinstance(payload.get("provider_binding"), dict) else {}
 
-    placement = normalize_runtime_placement(
-        runtime_placement if runtime_placement is not None else placement_payload.get("kind"),
+    resolved_mode = resolve_studio_agent_mode(
+        studio_agent_mode,
+        runtime_placement=runtime_placement if runtime_placement is not None else placement_payload.get("kind"),
         runtime_target=runtime_target or placement_payload.get("runtime_target"),
+        runtime_supplier=runtime_supplier if runtime_supplier is not None else supplier_payload.get("kind"),
     )
-    supplier_kind = normalize_runtime_supplier(
-        runtime_supplier if runtime_supplier is not None else supplier_payload.get("kind"),
-        runtime_placement=placement,
-    )
+    mode_contract = studio_agent_mode_contract(resolved_mode)
+    placement = mode_contract["placement"]["kind"]
+    supplier_kind = mode_contract["supplier"]["kind"]
     automation = normalize_computer_automation_config(
         computer_automation if computer_automation is not None else payload.get("computer_automation")
         if "computer_automation" in payload
         else payload.get("automation")
     )
+    if not mode_contract["computer_allowed"]:
+        automation = normalize_computer_automation_config({"enabled": False})
     tier = _text(public_tier or model_tier_payload.get("public_tier") or payload.get("public_tier") or "pro").lower()
     if tier not in {"light", "pro", "max", "local_ai", "my_api_key", "my_ai_account"}:
         tier = "pro"
@@ -254,6 +649,8 @@ def normalize_runtime_supply_contract(
 
     return {
         "schema_version": 1,
+        "studio_agent_mode": resolved_mode,
+        "allowed_capabilities": list(mode_contract["allowed_capabilities"]),
         "supplier": {
             "kind": supplier_kind,
             "id": _text(supplier_payload.get("id"), default=supplier_kind),
@@ -262,8 +659,8 @@ def normalize_runtime_supply_contract(
         },
         "placement": {
             "kind": placement,
-            "runtime_target": runtime_target_for_placement(placement),
-            "trust_zone": _runtime_trust_zone(supplier_kind, placement),
+            "runtime_target": mode_contract["placement"]["runtime_target"],
+            "trust_zone": mode_contract["placement"]["trust_zone"],
         },
         "computer_automation": automation,
         "marketplace_policy": {

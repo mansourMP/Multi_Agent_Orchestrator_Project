@@ -67,6 +67,38 @@ def test_deployed_agent_schema_accepts_runtime_supply_contract_without_enabling_
     assert metadata["runtime_supply"]["supplier"]["id"] == "home-linux-pool"
 
 
+def test_deployed_agent_schema_uses_studio_agent_mode_as_runtime_source_of_truth() -> None:
+    config = deployed_agent_config_schema.deployed_agent_config_from_record(
+        {
+            "name": "Store Assistant",
+            "runtime_target": "self_hosted",
+            "config": {
+                "studio_agent_mode": "text_agent",
+                "runtime_placement": "customer_hosted",
+                "runtime_supply": {
+                    "supplier": {"kind": "customer"},
+                    "placement": {"kind": "customer_hosted"},
+                },
+                "computer_automation": {
+                    "enabled": True,
+                    "runtime_class": "virtual_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                },
+            },
+        }
+    )
+    metadata = deployed_agent_config_schema.metadata_from_deployed_agent_config(config)
+
+    assert config.studio_agent_mode == "text_agent"
+    assert config.runtime_placement == "managed_cloud"
+    assert config.runtime_target == "cloud"
+    assert config.runtime_supply["supplier"]["kind"] == "empyralis"
+    assert config.runtime_supply["placement"]["kind"] == "managed_cloud"
+    assert config.runtime_supply["computer_automation"]["enabled"] is False
+    assert metadata["studio_agent_mode"] == "text_agent"
+
+
 def test_workspace_policy_schema_normalizes_legacy_payload() -> None:
     config = workspace_config_schema.workspace_policy_config_from_legacy(
         {

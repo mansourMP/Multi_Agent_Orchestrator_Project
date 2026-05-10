@@ -139,31 +139,41 @@ def incident_result_payload(incident: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def check_deployment_pause(*, context: ChannelRoutingContext) -> Optional[ChannelExecutionResult]:
-    if context.deployed_agent_state != "paused":
+    state = str(context.deployed_agent_state or "").strip().lower()
+    if state not in {"paused", "suspended"}:
         return None
-    reply = deployed_agent_service.paused_channel_reply(deployed_agent=context.deployed_agent)
+    if state == "suspended":
+        reply = deployed_agent_service.suspended_channel_reply(deployed_agent=context.deployed_agent)
+        code = "deployment_suspended"
+        status = "suspended"
+        limit_reason = "deployment_suspended"
+    else:
+        reply = deployed_agent_service.paused_channel_reply(deployed_agent=context.deployed_agent)
+        code = "deployment_paused"
+        status = "paused"
+        limit_reason = "deployment_paused"
     error = error_response_service.platform_error(
-        code="deployment_paused",
+        code=code,
         message=reply,
         error_class=POLICY_BLOCK,
         retryable=True,
         status_code=409,
         details={
             "deployed_agent_id": context.deployed_agent_id,
-            "deployment_state": context.deployed_agent_state,
+            "deployment_state": state,
         },
     )
     return ChannelExecutionResult(
-        status="paused",
+        status=status,
         reply=reply,
-        limit_reason="deployment_paused",
+        limit_reason=limit_reason,
         metadata={
             "deployed_agent_id": context.deployed_agent_id,
-            "deployment_state": context.deployed_agent_state,
+            "deployment_state": state,
         },
         payload={
-            "status": "paused",
-            "deployment_state": context.deployed_agent_state,
+            "status": status,
+            "deployment_state": state,
             "error": error_response_service.channel_error_payload(error),
         },
         error=error_response_service.channel_error_payload(error),

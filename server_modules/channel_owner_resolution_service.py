@@ -68,7 +68,7 @@ async def resolve_public_channel_owner(
             raise ChannelOwnerNotFoundError("No active channel owner is configured for this endpoint.")
         deployed_agent_id = str(deployed_agent.get("id") or "").strip() or None
         deployed_agent_state = str(deployed_agent.get("deployment_state") or "").strip().lower() or None
-        if deployed_agent_state in {"draft", "staging"}:
+        if deployed_agent_service.deployment_state_blocks_public_routing(deployed_agent_state):
             raise ChannelOwnerNotFoundError("No active channel owner is configured for this endpoint.")
 
     master_install = (

@@ -236,6 +236,10 @@ class DeployedAgentMemoryServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_memory_service.session_transcript_store.save_session_transcript",
             ),
+            patch(
+                "server_modules.deployed_agent_memory_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(),
+            ) as append_activity_event_mock,
         ):
             persisted = await deployed_agent_memory_service.persist_deployed_agent_memory_snapshot(
                 tenant_id="tenant-1",
@@ -270,6 +274,10 @@ class DeployedAgentMemoryServiceTests(unittest.IsolatedAsyncioTestCase):
             estimate_conversation_tokens(reloaded["prior_messages"]),
             deployed_agent_memory_service.DEFAULT_MEMORY_TOKEN_LIMIT,
         )
+        append_activity_event_mock.assert_awaited_once()
+        event_kwargs = append_activity_event_mock.await_args.kwargs
+        self.assertEqual(event_kwargs["event_class"], "memory_update")
+        self.assertEqual(event_kwargs["action"], "deployed_agent_memory_snapshot_written")
 
 
 if __name__ == "__main__":

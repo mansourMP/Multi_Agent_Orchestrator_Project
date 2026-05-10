@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from server_modules import activity_ledger_service
 from server_modules import control_plane_repository, session_transcript_store
 from server_modules import deployed_agent_business_insights_service
 from server_modules import deployed_agent_config_schema
@@ -42,6 +43,65 @@ def _compact_text(value: Any, *, limit: int = 320) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 1].rstrip() + "…"
+
+
+async def _append_memory_audit_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent: Dict[str, Any],
+    channel_key: str,
+    external_user_id: str,
+    session_key: str,
+    thread_id: str,
+    summary_present: bool,
+    summary_length: int,
+    source_message_count: int,
+    recent_message_count: int,
+) -> None:
+    deployed_agent_id = str((deployed_agent or {}).get("id") or "").strip()
+    if not deployed_agent_id:
+        return
+    try:
+        await activity_ledger_service.append_activity_event(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_type="deployed_agent",
+            actor_id=deployed_agent_id,
+            install_id=str((deployed_agent or {}).get("backing_install_id") or "").strip() or None,
+            event_class="memory_update",
+            detail_level="audit_reference",
+            action="deployed_agent_memory_snapshot_written",
+            title="Deployed-agent memory updated",
+            summary=f"Memory snapshot updated for {channel_key} channel.",
+            payload={
+                "deployed_agent_id": deployed_agent_id,
+                "channel_key": str(channel_key or "").strip().lower() or None,
+                "external_user_id": str(external_user_id or "").strip() or None,
+                "session_key": str(session_key or "").strip() or None,
+                "thread_id": str(thread_id or "").strip() or None,
+                "summary_present": bool(summary_present),
+                "summary_length": int(summary_length or 0),
+                "source_message_count": int(source_message_count or 0),
+                "recent_message_count": int(recent_message_count or 0),
+            },
+            metadata={
+                "deployed_agent_id": deployed_agent_id,
+                "workspace_id": str(workspace_id or "").strip() or None,
+                "memory_policy": {
+                    "enabled": True,
+                },
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to append deployed-agent memory activity event",
+            extra={
+                "workspace_id": workspace_id,
+                "deployed_agent_id": deployed_agent_id,
+                "channel_key": channel_key,
+            },
+        )
 
 
 def deployed_agent_memory_enabled(deployed_agent: Optional[Dict[str, Any]]) -> bool:
@@ -428,6 +488,19 @@ async def persist_deployed_agent_memory_snapshot(
             "retention_preset": config.memory_policy.retention_preset,
             "retention_days": policy.retention.event_memory_days,
         },
+    )
+    await _append_memory_audit_event(
+        tenant_id=key["tenant_id"],
+        workspace_id=key["workspace_id"],
+        deployed_agent=dict(deployed_agent or {}),
+        channel_key=key["channel_key"],
+        external_user_id=key["external_user_id"],
+        session_key=str(session_key or "").strip(),
+        thread_id=str(thread_id or "").strip(),
+        summary_present=bool(summary_text),
+        summary_length=len(str(summary_text or "").strip()),
+        source_message_count=len(source_messages),
+        recent_message_count=recent_message_count,
     )
     try:
         await deployed_agent_business_insights_service.record_deployed_agent_turn_insights(

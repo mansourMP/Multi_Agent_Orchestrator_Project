@@ -286,6 +286,137 @@ class VirtualComputerEnterpriseControlsTests(unittest.TestCase):
                 )
             )
 
+    def test_local_sandbox_blocks_workspace_scoped_filesystem_by_default(self):
+        runtime = InMemoryVirtualComputerRuntime()
+        with self.assertRaisesRegex(RuntimeError, "broad filesystem scope"):
+            asyncio.run(
+                runtime.create_session(
+                    {
+                        "runtime_choice": "virtual_code_sandbox",
+                        "local_sandbox_policy": {
+                            "enabled": True,
+                            "filesystem_scope": "workspace_scoped",
+                            "approved_working_directories": ["/workspace/app"],
+                            "terminal_command_policy": "allowlist",
+                            "terminal_command_allowlist": ["python"],
+                            "recording_required": True,
+                            "emergency_stop_enabled": True,
+                        },
+                    }
+                )
+            )
+
+    def test_local_sandbox_enforces_approved_working_directory(self):
+        runtime = InMemoryVirtualComputerRuntime()
+        created = asyncio.run(
+            runtime.create_session(
+                {
+                    "runtime_choice": "virtual_code_sandbox",
+                    "local_sandbox_policy": {
+                        "enabled": True,
+                        "filesystem_scope": "session_scoped",
+                        "approved_working_directories": ["/workspace/app"],
+                        "terminal_command_policy": "allowlist",
+                        "terminal_command_allowlist": ["python"],
+                        "allow_downloads": False,
+                        "allow_software_install": False,
+                        "recording_required": True,
+                        "emergency_stop_enabled": True,
+                    },
+                }
+            )
+        )
+        session_id = created.get("session_id")
+        ok = asyncio.run(
+            runtime.execute_action(
+                {
+                    "session_id": session_id,
+                    "approval_id": "appr_1",
+                    "policy_metadata": {
+                        "workspace_role": "owner",
+                        "virtual_computer_risk_policy": {"red_policy": "owner_approval"},
+                    },
+                    "action": "run_command",
+                    "action_args": {
+                        "command": "python worker.py",
+                        "working_directory": "/workspace/app/jobs",
+                    },
+                }
+            )
+        )
+        self.assertEqual((ok.get("action_result") or {}).get("action"), "run_command")
+
+        with self.assertRaisesRegex(RuntimeError, "approved sandbox scope"):
+            asyncio.run(
+                runtime.execute_action(
+                    {
+                        "session_id": session_id,
+                        "approval_id": "appr_2",
+                        "policy_metadata": {
+                            "workspace_role": "owner",
+                            "virtual_computer_risk_policy": {"red_policy": "owner_approval"},
+                        },
+                        "action": "run_command",
+                        "action_args": {
+                            "command": "python worker.py",
+                            "working_directory": "/Users/mansur",
+                        },
+                    }
+                )
+            )
+
+    def test_local_sandbox_blocks_install_and_download_by_default(self):
+        runtime = InMemoryVirtualComputerRuntime()
+        created = asyncio.run(
+            runtime.create_session(
+                {
+                    "runtime_choice": "virtual_code_sandbox",
+                    "local_sandbox_policy": {
+                        "enabled": True,
+                        "filesystem_scope": "session_scoped",
+                        "approved_working_directories": ["/workspace/app"],
+                        "terminal_command_policy": "review_required",
+                        "allow_downloads": False,
+                        "allow_software_install": False,
+                        "recording_required": True,
+                        "emergency_stop_enabled": True,
+                    },
+                }
+            )
+        )
+        session_id = created.get("session_id")
+
+        with self.assertRaisesRegex(RuntimeError, "software install command is blocked"):
+            asyncio.run(
+                runtime.execute_action(
+                    {
+                        "session_id": session_id,
+                        "approval_id": "appr_3",
+                        "policy_metadata": {
+                            "workspace_role": "owner",
+                            "virtual_computer_risk_policy": {"red_policy": "owner_approval"},
+                        },
+                        "action": "run_command",
+                        "action_args": {
+                            "command": "brew install jq",
+                            "working_directory": "/workspace/app",
+                        },
+                    }
+                )
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "downloads are restricted|File upload/download is disabled"):
+            asyncio.run(
+                runtime.execute_action(
+                    {
+                        "session_id": session_id,
+                        "approval_id": "appr_4",
+                        "action": "download_artifact",
+                        "action_args": {"url": "https://example.com/file.zip"},
+                    }
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

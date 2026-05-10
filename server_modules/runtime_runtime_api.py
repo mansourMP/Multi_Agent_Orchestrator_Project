@@ -24,7 +24,7 @@ from server_modules.auth import (
     workspace_tenant_id,
 )
 from server_modules.runtime_common import require_api_key
-from server_modules import demo_workflows, local_queue, machine_capability_check
+from server_modules import agent_registry_repository, demo_workflows, local_queue, machine_capability_check
 from server_modules import outbox_service
 from server_modules import run_state_repository, runs_output, shared, telemetry
 from server_modules import billing_service, entitlements_service
@@ -68,6 +68,48 @@ class RuntimeRegisterPayload(BaseModel):
 class RuntimeCompanionBootstrapPayload(RuntimeRegisterPayload):
     runtime_type: str = "local_companion"
     enrollment_token: str = Field(min_length=1)
+
+
+class SelfHostedNodeEnrollPayload(BaseModel):
+    enrollment_token: str = Field(min_length=1)
+    public_key: str = Field(min_length=8)
+    node_kind: Optional[Literal["mac_mini", "mac", "linux_server", "docker_host"]] = None
+    capabilities: List[str] = Field(default_factory=list)
+    max_concurrent_sessions: Optional[int] = Field(default=None, ge=1, le=64)
+    root_policy: Dict[str, Any] = Field(default_factory=dict)
+    display_name: Optional[str] = None
+
+
+class SelfHostedNodeHeartbeatPayload(BaseModel):
+    node_session_token: str = Field(min_length=1)
+    status: Optional[str] = None
+    note: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    health_state: Optional[str] = None
+
+
+class SelfHostedNodeCommandEnqueuePayload(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    runtime_node_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1)
+    command_type: str = Field(default="runtime_action", min_length=1)
+    command_payload: Dict[str, Any] = Field(default_factory=dict)
+    ttl_seconds: Optional[int] = Field(default=None, ge=30, le=3600)
+
+
+class SelfHostedNodeCommandClaimPayload(BaseModel):
+    node_session_token: str = Field(min_length=1)
+    max_commands: int = Field(default=1, ge=1, le=50)
+    lease_seconds: int = Field(default=120, ge=15, le=600)
+
+
+class SelfHostedNodeCommandResultPayload(BaseModel):
+    node_session_token: str = Field(min_length=1)
+    status: Literal["completed", "failed"]
+    result_payload: Dict[str, Any] = Field(default_factory=dict)
+    artifacts: List[Dict[str, Any]] = Field(default_factory=list)
+    audit_references: List[Dict[str, Any]] = Field(default_factory=list)
+    error: Optional[str] = None
 
 
 class RuntimeHeartbeatPayload(BaseModel):
@@ -1151,6 +1193,106 @@ def register_runtime_routes(app) -> None:
             "enrollment_bootstrap": True,
             "connection_mode": result.get("connection_mode") or "platform_relay",
         }
+
+    @app.post("/runtime/self-hosted-nodes/{runtime_profile_id}/enroll")
+    async def enroll_self_hosted_node(runtime_profile_id: str, payload: SelfHostedNodeEnrollPayload):
+        try:
+            result = await agent_registry_repository.enroll_self_hosted_runtime_profile(
+                runtime_profile_id=runtime_profile_id,
+                enrollment_token=payload.enrollment_token,
+                public_key=payload.public_key,
+                node_kind=payload.node_kind,
+                capabilities=payload.capabilities,
+                max_concurrent_sessions=payload.max_concurrent_sessions,
+                root_policy=payload.root_policy,
+                label=payload.display_name,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {
+            "ok": True,
+            "runtime_profile_id": result.get("runtime_profile_id"),
+            "runtime_node_id": result.get("runtime_node_id"),
+            "workspace_id": result.get("workspace_id"),
+            "node_session_token": result.get("node_session_token"),
+            "owner_approval_required": True,
+            "runtime_profile": result.get("runtime_profile"),
+        }
+
+    @app.post("/runtime/self-hosted-nodes/{runtime_profile_id}/heartbeat")
+    async def heartbeat_self_hosted_node(runtime_profile_id: str, payload: SelfHostedNodeHeartbeatPayload):
+        try:
+            result = await agent_registry_repository.resolve_self_hosted_runtime_heartbeat(
+                runtime_profile_id=runtime_profile_id,
+                node_session_token=payload.node_session_token,
+                status=payload.status or "idle",
+                note=payload.note,
+                capabilities=payload.capabilities,
+                health_state=payload.health_state or "healthy",
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return result
+
+    @app.post("/runtime/self-hosted-nodes/{runtime_profile_id}/commands", dependencies=[Depends(require_api_key)])
+    async def enqueue_self_hosted_node_command(
+        runtime_profile_id: str,
+        payload: SelfHostedNodeCommandEnqueuePayload,
+        current_user: Dict[str, Any] = Depends(require_api_key),
+    ):
+        workspace_id = enforce_workspace_access(current_user, payload.workspace_id)
+        role = workspace_role(current_user, workspace_id)
+        if role not in {"owner", "admin"} and not bool((current_user or {}).get("is_admin")):
+            raise HTTPException(status_code=403, detail="Workspace owner or admin role is required.")
+        _ensure_advanced_features_access(workspace_id)
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        try:
+            result = await agent_registry_repository.enqueue_self_hosted_runtime_command(
+                runtime_profile_id=runtime_profile_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                runtime_node_id=payload.runtime_node_id,
+                agent_id=payload.agent_id,
+                command_type=payload.command_type,
+                command_payload=payload.command_payload,
+                requested_by_user_id=str((current_user or {}).get("user_id") or "").strip() or None,
+                ttl_seconds=payload.ttl_seconds or agent_registry_repository.SELF_HOSTED_NODE_COMMAND_DEFAULT_TTL_SECONDS,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return result
+
+    @app.post("/runtime/self-hosted-nodes/{runtime_profile_id}/commands/claim")
+    async def claim_self_hosted_node_commands(runtime_profile_id: str, payload: SelfHostedNodeCommandClaimPayload):
+        try:
+            return await agent_registry_repository.claim_self_hosted_runtime_commands(
+                runtime_profile_id=runtime_profile_id,
+                node_session_token=payload.node_session_token,
+                max_commands=payload.max_commands,
+                lease_seconds=payload.lease_seconds,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/runtime/self-hosted-nodes/{runtime_profile_id}/commands/{command_id}/result")
+    async def complete_self_hosted_node_command(
+        runtime_profile_id: str,
+        command_id: str,
+        payload: SelfHostedNodeCommandResultPayload,
+    ):
+        try:
+            return await agent_registry_repository.complete_self_hosted_runtime_command(
+                runtime_profile_id=runtime_profile_id,
+                node_session_token=payload.node_session_token,
+                command_id=command_id,
+                status=payload.status,
+                result_payload=payload.result_payload,
+                artifacts=payload.artifacts,
+                audit_references=payload.audit_references,
+                error=payload.error,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.post("/runtime/runtimes/{runtime_id}/heartbeat")
     async def heartbeat_runtime(runtime_id: str, payload: Optional[RuntimeHeartbeatPayload] = None):

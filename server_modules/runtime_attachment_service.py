@@ -25,6 +25,8 @@ SUPPORTED_ATTACHMENT_KINDS = ("managed_cloud", "cloud_computer", "local_companio
 SUPPORTED_RUNTIME_MODES = {"hosted_secure", "local_secure", "privileged_device"}
 SUPPORTED_RUNTIME_TARGET_IDS = ("cloud_default", "sage_cloud_computer", "local_companion", "self_host_runtime")
 CLOUD_COMPUTER_RUNTIME_CLASSES = {"cloud_computer", "cloud_desktop", "cloud_sandbox", "hosted_cloud_computer"}
+SELF_HOSTED_NODE_KINDS = {"mac_mini", "mac", "linux_server", "docker_host"}
+SELF_HOSTED_NODE_STATUSES = {"pending", "online", "offline", "unhealthy", "revoked"}
 _RUNTIME_ATTACHMENTS_CACHE: Dict[str, Dict[str, Any]] = {}
 _RUNTIME_TARGETS_CACHE: Dict[str, Dict[str, Any]] = {}
 _RUNTIME_CACHE_LIMIT = 128
@@ -128,6 +130,20 @@ def _list_strings(value: Any) -> List[str]:
         if token:
             out.append(token)
     return out
+
+
+def _normalize_node_kind(value: Any, *, runtime_class: str, runtime_type: str, label: str) -> str:
+    token = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if token in SELF_HOSTED_NODE_KINDS:
+        return token
+    class_token = str(runtime_class or "").strip().lower()
+    type_token = str(runtime_type or "").strip().lower()
+    label_token = str(label or "").strip().lower()
+    if "docker" in class_token or "docker" in type_token or "kubernetes" in class_token or "kubernetes" in type_token:
+        return "docker_host"
+    if "mac" in class_token or "mac" in type_token or "mac mini" in label_token:
+        return "mac_mini" if "mini" in label_token else "mac"
+    return "linux_server"
 
 
 def _stable_json(value: Any) -> str:
@@ -420,6 +436,20 @@ def _attachment_lifecycle(runtime_kind: str, worker: Optional[Dict[str, Any]]) -
         "detachable": True,
         "migratable": True,
     }
+
+
+def _self_hosted_node_status(payload: Dict[str, Any], health: Dict[str, Any]) -> str:
+    status_token = str(payload.get("status") or "").strip().lower()
+    control_token = str(payload.get("control_state") or "").strip().lower()
+    if control_token in {"revoked", "blocked"} or status_token == "revoked":
+        return "revoked"
+    if status_token in {"pending", "registering", "enrolling", "pairing"}:
+        return "pending"
+    if bool(health.get("online")) and bool(health.get("healthy")):
+        return "online"
+    if bool(health.get("online")) and not bool(health.get("healthy")):
+        return "unhealthy"
+    return "offline"
 
 
 def _gateway_registration_online(registration: Dict[str, Any]) -> bool:
@@ -774,6 +804,41 @@ def _attachment_from_profile(
         or runtime_id
         or runtime_kind
     )
+    profile_metadata = _coerce_dict(profile.get("metadata"))
+    worker_metadata = _coerce_dict(payload.get("metadata"))
+    merged_metadata = {**profile_metadata, **worker_metadata}
+    self_hosted_status = _self_hosted_node_status(payload, health)
+    node_kind = _normalize_node_kind(
+        merged_metadata.get("node_kind"),
+        runtime_class=runtime_class,
+        runtime_type=str(payload.get("runtime_type") or runtime_kind).strip(),
+        label=label,
+    )
+    supported_caps = _list_strings(payload.get("capabilities") or profile.get("supported_capabilities"))
+    allowed_agent_ids = _list_strings(merged_metadata.get("allowed_agent_ids"))
+    public_key = str(merged_metadata.get("public_key") or "").strip() or None
+    heartbeat_at = payload.get("last_seen_at") or payload.get("last_heartbeat_at") or profile.get("last_seen_at")
+    root_policy = _coerce_dict(merged_metadata.get("root_policy"))
+    owner_user_id = str(merged_metadata.get("owner_user_id") or payload.get("owner_user_id") or "").strip() or None
+    max_concurrent_sessions = int(
+        merged_metadata.get("max_concurrent_sessions")
+        or payload.get("max_concurrent_sessions")
+        or 1
+    )
+    owner_approved_at = (
+        merged_metadata.get("owner_approved_at")
+        or merged_metadata.get("approved_at")
+        or merged_metadata.get("ownerApprovalAt")
+    )
+    owner_approved_by_user_id = str(
+        merged_metadata.get("owner_approved_by_user_id")
+        or merged_metadata.get("approved_by_user_id")
+        or ""
+    ).strip() or None
+    owner_approved = bool(
+        merged_metadata.get("owner_approved") is True
+        or owner_approved_at
+    )
     return {
         "attachment_id": f"{runtime_kind}:{str(profile.get('id') or runtime_id or machine_id or label).strip()}",
         "attachment_kind": runtime_kind,
@@ -791,7 +856,7 @@ def _attachment_from_profile(
         "healthy": health["healthy"],
         "control_state": health["control_state"],
         "status": health["status"],
-        "capabilities": _list_strings(payload.get("capabilities") or profile.get("supported_capabilities")),
+        "capabilities": supported_caps,
         "connectors": _list_strings(payload.get("connectors") or payload.get("available_connectors") or profile.get("supported_connectors")),
         "execution_targets": _list_strings(payload.get("execution_targets")),
         "supports_runtime_modes": _attachment_support(runtime_kind),
@@ -808,7 +873,96 @@ def _attachment_from_profile(
         "last_seen_at": payload.get("last_seen_at") or payload.get("last_heartbeat_at"),
         "instance_id": str(payload.get("instance_id") or "").strip() or None,
         "note": str(payload.get("note") or "").strip() or None,
+        "runtime_node_id": runtime_id if runtime_kind == "self_hosted_business_node" else None,
+        "owner_user_id": owner_user_id,
+        "node_kind": node_kind if runtime_kind == "self_hosted_business_node" else None,
+        "heartbeat_at": heartbeat_at if runtime_kind == "self_hosted_business_node" else None,
+        "public_key": public_key if runtime_kind == "self_hosted_business_node" else None,
+        "allowed_agent_ids": allowed_agent_ids if runtime_kind == "self_hosted_business_node" else [],
+        "max_concurrent_sessions": max_concurrent_sessions if runtime_kind == "self_hosted_business_node" else None,
+        "root_policy": root_policy if runtime_kind == "self_hosted_business_node" else {},
+        "self_hosted_node_status": self_hosted_status if runtime_kind == "self_hosted_business_node" else None,
+        "owner_approved": owner_approved if runtime_kind == "self_hosted_business_node" else None,
+        "owner_approved_at": owner_approved_at if runtime_kind == "self_hosted_business_node" else None,
+        "owner_approved_by_user_id": owner_approved_by_user_id if runtime_kind == "self_hosted_business_node" else None,
     }
+
+
+def ensure_self_hosted_node_gate(
+    *,
+    attachment: Dict[str, Any],
+    workspace_id: str,
+    required_capabilities: Optional[List[str]] = None,
+) -> None:
+    if str(attachment.get("attachment_kind") or "").strip() != "self_hosted_business_node":
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted runtime gate requires a self-hosted node attachment.",
+            reason="invalid_self_hosted_attachment_kind",
+        )
+    if str(attachment.get("workspace_id") or "").strip() != str(workspace_id or "").strip():
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted node is outside the requested workspace scope.",
+            reason="self_hosted_workspace_scope_mismatch",
+        )
+    node_status = str(attachment.get("self_hosted_node_status") or "").strip().lower()
+    if node_status == "revoked":
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted node is revoked.",
+            reason="self_hosted_node_revoked",
+        )
+    if node_status and node_status not in SELF_HOSTED_NODE_STATUSES:
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted node has unsupported status.",
+            reason="self_hosted_node_status_invalid",
+        )
+    if not bool(attachment.get("online")):
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted node is offline.",
+            reason="self_hosted_node_offline",
+        )
+    if not bool(attachment.get("healthy")):
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted node is unhealthy.",
+            reason="self_hosted_node_unhealthy",
+        )
+    if not bool(attachment.get("owner_approved")):
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted node is not owner-approved.",
+            reason="self_hosted_node_not_owner_approved",
+        )
+    runtime_node_id = str(attachment.get("runtime_node_id") or "").strip()
+    if not runtime_node_id:
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted node is missing runtime_node_id.",
+            reason="self_hosted_node_id_missing",
+        )
+    node_kind = str(attachment.get("node_kind") or "").strip().lower()
+    if node_kind not in SELF_HOSTED_NODE_KINDS:
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted node has unsupported node_kind.",
+            reason="self_hosted_node_kind_invalid",
+        )
+    required = {
+        str(item or "").strip().lower()
+        for item in list(required_capabilities or [])
+        if str(item or "").strip()
+    }
+    available = {
+        str(item or "").strip().lower()
+        for item in list(attachment.get("capabilities") or [])
+        if str(item or "").strip()
+    }
+    if required and not required.issubset(available):
+        missing = sorted(required - available)
+        raise RuntimeAttachmentSelectionError(
+            f"Self-hosted node is missing required capabilities: {', '.join(missing)}.",
+            reason="self_hosted_node_capability_mismatch",
+        )
+    if int(attachment.get("max_concurrent_sessions") or 0) <= 0:
+        raise RuntimeAttachmentSelectionError(
+            "Self-hosted node has invalid max_concurrent_sessions.",
+            reason="self_hosted_node_concurrency_invalid",
+        )
 
 
 def _managed_cloud_attachment(*, tenant_id: str, workspace_id: str, runtime_profiles: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -1201,6 +1355,12 @@ async def resolve_install_runtime_plan(
             selected_attachment=selected,
         )
         selected_attachment_kind = str(selected.get("attachment_kind") or "").strip()
+        if selected_attachment_kind == "self_hosted_business_node":
+            ensure_self_hosted_node_gate(
+                attachment=selected,
+                workspace_id=workspace_id,
+                required_capabilities=required_capabilities,
+            )
         execution_target_selected = "cloud_computer" if selected_attachment_kind == "cloud_computer" else "cloud"
         return {
             "runtime_mode": runtime_mode,

@@ -567,6 +567,21 @@ def execute_single_direct_tool_call(
     callbacks: DirectToolExecutionCallbacks,
 ) -> str:
     session_metadata = session_ctx if isinstance(session_ctx, dict) else {}
+    turn_request_payload = (
+        session_metadata.get("agent_turn_request")
+        if isinstance(session_metadata.get("agent_turn_request"), dict)
+        else {}
+    )
+    context_hints_payload = (
+        turn_request_payload.get("context_hints")
+        if isinstance(turn_request_payload.get("context_hints"), dict)
+        else {}
+    )
+    context_metadata_payload = (
+        context_hints_payload.get("metadata")
+        if isinstance(context_hints_payload.get("metadata"), dict)
+        else {}
+    )
     tool_name = str(tool_call.get("name") or "").strip()
     try:
         connector_id, action_id = callbacks.parse_tool_name(tool_name)
@@ -648,36 +663,50 @@ def execute_single_direct_tool_call(
         idempotency_key=f"direct_tool.started:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}",
     )
     try:
-        if (
-            connector_id in _CLOUD_COMPUTER_RUNTIME_CONNECTORS
-            and deployed_agent_virtual_runtime_service.has_cloud_runtime_session_binding(session_ctx)
-        ):
-            runtime_bound_result = callbacks.run_async_tool_call(
-                deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call(
-                    connector_id=connector_id,
-                    action_id=action_id,
-                    argument_payload=argument_payload,
-                    workspace_id=workspace_id,
-                    thread_id=thread_id,
-                    session_ctx=session_ctx,
+        result: Optional[str] = None
+        if connector_id in _CLOUD_COMPUTER_RUNTIME_CONNECTORS:
+            has_cloud_binding = deployed_agent_virtual_runtime_service.has_cloud_runtime_session_binding(session_ctx)
+            has_self_hosted_binding = deployed_agent_virtual_runtime_service.has_self_hosted_runtime_session_binding(session_ctx)
+            has_deployed_agent_context = bool(
+                str(
+                    context_metadata_payload.get("deployed_agent_id")
+                    or session_metadata.get("deployed_agent_id")
+                    or ""
                 )
             )
-            if runtime_bound_result is not None:
-                result = runtime_bound_result
-            else:
-                result = skills_service.execute_single_direct_tool_call(
-                    tool_call=tool_call,
-                    workspace_id=workspace_id,
-                    thread_id=thread_id,
-                    index=index,
-                    provider=provider,
-                    model=model,
-                    credentials=credentials,
-                    reasoning_effort=reasoning_effort,
-                    session_ctx=session_ctx,
-                    callbacks=callbacks,
+            should_check_self_hosted = has_self_hosted_binding or (has_deployed_agent_context and not has_cloud_binding)
+            if should_check_self_hosted:
+                self_hosted_result = callbacks.run_async_tool_call(
+                    deployed_agent_virtual_runtime_service.execute_bound_self_hosted_runtime_tool_call(
+                        connector_id=connector_id,
+                        action_id=action_id,
+                        argument_payload=argument_payload,
+                        workspace_id=workspace_id,
+                        thread_id=thread_id,
+                        session_ctx=session_ctx,
+                    )
                 )
-        else:
+                if self_hosted_result is not None:
+                    result = self_hosted_result
+                elif has_self_hosted_binding:
+                    raise RuntimeError(
+                        f"self_hosted_agent runtime action '{connector_id}__{action_id}' must execute through bound node runtime."
+                    )
+        if result is None and connector_id in _CLOUD_COMPUTER_RUNTIME_CONNECTORS:
+            if deployed_agent_virtual_runtime_service.has_cloud_runtime_session_binding(session_ctx):
+                cloud_result = callbacks.run_async_tool_call(
+                    deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call(
+                        connector_id=connector_id,
+                        action_id=action_id,
+                        argument_payload=argument_payload,
+                        workspace_id=workspace_id,
+                        thread_id=thread_id,
+                        session_ctx=session_ctx,
+                    )
+                )
+                if cloud_result is not None:
+                    result = cloud_result
+        if result is None:
             result = skills_service.execute_single_direct_tool_call(
                 tool_call=tool_call,
                 workspace_id=workspace_id,

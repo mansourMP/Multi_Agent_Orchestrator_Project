@@ -877,6 +877,129 @@ def _runtime_target_by_id(payload: Any, target_id: str) -> Dict[str, Any]:
     return {}
 
 
+def _self_hosted_required_capabilities(config: deployed_agent_config_schema.DeployedAgentConfig) -> List[str]:
+    automation = config.computer_automation
+    if not bool(automation.enabled):
+        return []
+    runtime_class = _normalize_text(automation.runtime_class).lower()
+    if runtime_class == "virtual_code_sandbox":
+        return ["shell.execute"]
+    if runtime_class in {"virtual_browser", "virtual_desktop", "local_browser", "local_desktop"}:
+        return ["computer_control"]
+    return []
+
+
+def _self_hosted_attachment_by_runtime_profile_id(runtime_inventory: Any, runtime_profile_id: str) -> Dict[str, Any]:
+    inventory = runtime_inventory if isinstance(runtime_inventory, dict) else {}
+    for item in list(inventory.get("attachments") or []):
+        if not isinstance(item, dict):
+            continue
+        if _normalize_text(item.get("attachment_kind")).lower() != "self_hosted_business_node":
+            continue
+        if _normalize_text(item.get("runtime_profile_id")) == runtime_profile_id:
+            return dict(item)
+    return {}
+
+
+def _self_hosted_runtime_binding_payload(
+    *,
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    runtime_attachment: Dict[str, Any],
+    workspace_id: str,
+) -> Dict[str, Any]:
+    required_capabilities = _self_hosted_required_capabilities(config)
+    attachment_capabilities = [
+        _normalize_text(item).lower()
+        for item in list(runtime_attachment.get("capabilities") or [])
+        if _normalize_text(item)
+    ]
+    allowed_capabilities = (
+        [cap for cap in required_capabilities if cap in attachment_capabilities]
+        if required_capabilities
+        else list(attachment_capabilities)
+    )
+    automation = config.computer_automation
+    quota_max_concurrent = int(automation.max_concurrent_sessions or 0)
+    attachment_max_concurrent = int(runtime_attachment.get("max_concurrent_sessions") or 0)
+    if quota_max_concurrent > 0 and attachment_max_concurrent > 0:
+        quota_max_concurrent = min(quota_max_concurrent, attachment_max_concurrent)
+    elif quota_max_concurrent <= 0:
+        quota_max_concurrent = max(attachment_max_concurrent, 1)
+    return {
+        "binding_version": 1,
+        "runtime_target": "self_host_runtime",
+        "workspace_id": workspace_id,
+        "runtime_node_id": _normalize_optional_text(runtime_attachment.get("runtime_node_id")),
+        "runtime_attachment_id": _normalize_optional_text(runtime_attachment.get("attachment_id")),
+        "runtime_profile_id": _normalize_optional_text(runtime_attachment.get("runtime_profile_id"))
+        or _normalize_optional_text(config.runtime_profile_id),
+        "allowed_capabilities": allowed_capabilities,
+        "filesystem_scope": _normalize_text(automation.filesystem_default_access, default="none"),
+        "domain_allowlist": list(automation.allowed_domains or []),
+        "approval_policy": {
+            "requires_owner_approval": bool(automation.requires_owner_approval),
+            "required_owner_approval_actions": list(automation.required_owner_approval_actions or []),
+            "sensitive_action_confirmation_required": bool(automation.sensitive_action_confirmation_required),
+            "terminal_command_policy": _normalize_text(automation.terminal_command_policy, default="blocked"),
+        },
+        "quota_policy": {
+            "max_concurrent_sessions": int(quota_max_concurrent),
+            "max_session_runtime_seconds": int(automation.max_session_runtime_seconds or 0),
+            "idle_timeout_seconds": int(automation.idle_timeout_seconds or 0),
+            "daily_budget_usd": float(automation.daily_budget_usd or 0.0),
+            "monthly_budget_usd": float(automation.monthly_budget_usd or 0.0),
+            "monthly_cost_cap_usd": float(config.commerce_policy.monthly_cost_cap_usd or 0.0),
+        },
+    }
+
+
+def _metadata_with_self_hosted_runtime_binding(
+    *,
+    metadata: Dict[str, Any],
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    runtime_inventory: Any,
+    workspace_id: str,
+    require_binding: bool,
+) -> Dict[str, Any]:
+    payload = dict(metadata or {})
+    if (
+        _normalize_text(config.studio_agent_mode).lower()
+        != deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED
+    ):
+        payload.pop("self_hosted_runtime_binding", None)
+        return payload
+
+    runtime_profile_id = _normalize_optional_text(config.runtime_profile_id)
+    if not runtime_profile_id:
+        if require_binding:
+            raise ValueError(
+                "self_hosted_agent requires explicit runtime_profile_id agent-to-node binding."
+            )
+        payload.pop("self_hosted_runtime_binding", None)
+        return payload
+
+    attachment = _self_hosted_attachment_by_runtime_profile_id(runtime_inventory, runtime_profile_id)
+    if not attachment:
+        if require_binding:
+            raise ValueError(
+                "self_hosted_agent requires a registered self-hosted node matching runtime_profile_id."
+            )
+        payload.pop("self_hosted_runtime_binding", None)
+        return payload
+
+    runtime_attachment_service.ensure_self_hosted_node_gate(
+        attachment=attachment,
+        workspace_id=workspace_id,
+        required_capabilities=_self_hosted_required_capabilities(config),
+    )
+    payload["self_hosted_runtime_binding"] = _self_hosted_runtime_binding_payload(
+        config=config,
+        runtime_attachment=attachment,
+        workspace_id=workspace_id,
+    )
+    return payload
+
+
 def _mode_for_deployed_agent_record(record: Dict[str, Any]) -> str:
     if not isinstance(record, dict):
         return deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_TEXT
@@ -1154,6 +1277,7 @@ def _enforce_runtime_eligibility(
     config: deployed_agent_config_schema.DeployedAgentConfig,
     stage: str,
     runtime_targets: Any = None,
+    runtime_inventory: Any = None,
     explicit_mode: bool = False,
     existing_deployed_agents: Optional[List[Dict[str, Any]]] = None,
     subject_deployed_agent_id: Optional[str] = None,
@@ -1259,6 +1383,42 @@ def _enforce_runtime_eligibility(
             raise _http_conflict(
                 f"{effective_mode} requires runtime target {expected_target_id}, but it is unavailable."
             )
+        if (
+            stage_token == "deploy"
+            and effective_mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED
+        ):
+            if not bool(target_record.get("online")):
+                raise _http_conflict(
+                    "self_hosted_agent requires runtime target self_host_runtime to be online before deployment."
+                )
+            if not bool(target_record.get("healthy")):
+                raise _http_conflict(
+                    "self_hosted_agent requires runtime target self_host_runtime to be healthy before deployment."
+                )
+            if int(target_record.get("attachment_count") or 0) <= 0:
+                raise _http_conflict(
+                    "self_hosted_agent requires at least one registered self-hosted node before deployment."
+                )
+            if not _normalize_optional_text(config.runtime_profile_id):
+                raise _http_conflict(
+                    "self_hosted_agent requires explicit runtime_profile_id agent-to-node binding before deployment."
+                )
+            node_attachment = _self_hosted_attachment_by_runtime_profile_id(
+                runtime_inventory,
+                _normalize_optional_text(config.runtime_profile_id) or "",
+            )
+            if not node_attachment:
+                raise _http_conflict(
+                    "self_hosted_agent requires a registered self-hosted node matching runtime_profile_id before deployment."
+                )
+            try:
+                runtime_attachment_service.ensure_self_hosted_node_gate(
+                    attachment=node_attachment,
+                    workspace_id=workspace_id,
+                    required_capabilities=_self_hosted_required_capabilities(config),
+                )
+            except runtime_attachment_service.RuntimeAttachmentSelectionError as error:
+                raise _http_conflict(str(error)) from error
     _enforce_phase8_quota_controls(
         workspace=workspace,
         config=config,
@@ -2854,10 +3014,17 @@ async def create_draft_deployed_agent(
         )
     )
     runtime_targets = None
+    runtime_inventory = None
     if effective_mode != deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_TEXT:
+        if effective_mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED:
+            runtime_inventory = await runtime_attachment_service.list_workspace_runtime_attachments(
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+            )
         runtime_targets = await runtime_attachment_service.list_workspace_runtime_targets(
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
+            inventory=runtime_inventory,
         )
     _enforce_mode_capability_matrix(
         config=draft_config,
@@ -2871,9 +3038,23 @@ async def create_draft_deployed_agent(
         config=draft_config,
         stage="create",
         runtime_targets=runtime_targets,
+        runtime_inventory=runtime_inventory,
         explicit_mode=explicit_mode,
         existing_deployed_agents=[dict(item) for item in list(existing_deployed_agents or []) if isinstance(item, dict)],
     )
+    draft_metadata = _metadata_from_config(draft_config)
+    try:
+        draft_metadata = _metadata_with_self_hosted_runtime_binding(
+            metadata=draft_metadata,
+            config=draft_config,
+            runtime_inventory=runtime_inventory,
+            workspace_id=resolved_workspace_id,
+            require_binding=(
+                effective_mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED
+            ),
+        )
+    except (ValueError, runtime_attachment_service.RuntimeAttachmentSelectionError) as error:
+        raise _http_conflict(str(error)) from error
     operational_state = _operational_state_from_record({"deployment_state": "draft"})
     manifest = _base_manifest(
         name=draft_config.name,
@@ -2894,7 +3075,7 @@ async def create_draft_deployed_agent(
         tool_toggles=_tool_toggles_from_config(draft_config),
         channel_bindings=_channels_payload_from_config(draft_config),
         metadata={
-            **_metadata_from_config(draft_config),
+            **draft_metadata,
             "source": "deployed_agent",
             "visibility": "private",
             "specialist_mode": "owner_edit",
@@ -2926,7 +3107,7 @@ async def create_draft_deployed_agent(
         knowledge_sources=draft_config.knowledge_sources,
         runtime_target=draft_config.runtime_target,
         billing_plan=draft_config.billing_plan,
-        metadata=_metadata_from_config(draft_config),
+        metadata=draft_metadata,
         operational_state=_serialized_operational_state(operational_state),
     )
     if not isinstance(deployed_agent, dict):
@@ -3724,6 +3905,15 @@ async def update_deployed_agent(
         ),
         subject_deployed_agent_id=deployed_agent_id,
     )
+    runtime_inventory: Dict[str, Any] = {}
+    if (
+        _normalize_text(next_config.studio_agent_mode).lower()
+        == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED
+    ):
+        runtime_inventory = await runtime_attachment_service.list_workspace_runtime_attachments(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
     next_state = _operational_state_from_record(
         {
             **existing,
@@ -3733,6 +3923,23 @@ async def update_deployed_agent(
             ),
         }
     )
+    next_metadata = _metadata_from_config(
+        next_config,
+        existing_metadata=_coerce_dict(existing.get("metadata")),
+    )
+    try:
+        next_metadata = _metadata_with_self_hosted_runtime_binding(
+            metadata=next_metadata,
+            config=next_config,
+            runtime_inventory=runtime_inventory,
+            workspace_id=resolved_workspace_id,
+            require_binding=(
+                _normalize_text(next_config.studio_agent_mode).lower()
+                == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED
+            ),
+        )
+    except (ValueError, runtime_attachment_service.RuntimeAttachmentSelectionError) as error:
+        raise _http_conflict(str(error)) from error
     normalized_updates = {
         "name": next_config.name,
         "avatar": next_config.avatar,
@@ -3746,10 +3953,7 @@ async def update_deployed_agent(
         "quality_stars": candidate_record.get("quality_stars"),
         "cost_tier": candidate_record.get("cost_tier"),
         "category": _normalize_optional_text(candidate_record.get("category")),
-        "metadata": _metadata_from_config(
-            next_config,
-            existing_metadata=_coerce_dict(existing.get("metadata")),
-        ),
+        "metadata": next_metadata,
         "operational_state": _serialized_operational_state(next_state),
     }
     if "deployment_state" in candidate_record:
@@ -3865,9 +4069,14 @@ async def deploy_deployed_agent(
         deploy_config = _config_from_record(next_record)
     except ValueError as error:
         raise _http_conflict(str(error)) from error
+    runtime_inventory = await runtime_attachment_service.list_workspace_runtime_attachments(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+    )
     runtime_targets = await runtime_attachment_service.list_workspace_runtime_targets(
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,
+        inventory=runtime_inventory,
     )
     existing_deployed_agents = await control_plane_repository.list_deployed_agents_for_workspace(
         resolved_workspace_id,
@@ -3884,6 +4093,7 @@ async def deploy_deployed_agent(
         config=deploy_config,
         stage="deploy",
         runtime_targets=runtime_targets,
+        runtime_inventory=runtime_inventory,
         explicit_mode=True,
         existing_deployed_agents=existing_deployed_agents,
         subject_deployed_agent_id=deployed_agent_id,
@@ -3892,6 +4102,19 @@ async def deploy_deployed_agent(
         deploy_config,
         existing_metadata=_coerce_dict(existing.get("metadata")),
     )
+    try:
+        privacy_metadata = _metadata_with_self_hosted_runtime_binding(
+            metadata=privacy_metadata,
+            config=deploy_config,
+            runtime_inventory=runtime_inventory,
+            workspace_id=resolved_workspace_id,
+            require_binding=(
+                _normalize_text(deploy_config.studio_agent_mode).lower()
+                == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED
+            ),
+        )
+    except (ValueError, runtime_attachment_service.RuntimeAttachmentSelectionError) as error:
+        raise _http_conflict(str(error)) from error
     privacy_snapshot = _coerce_dict(privacy_metadata.get("privacy_contract_snapshot"))
     if _validate_privacy_contract_snapshot(privacy_snapshot):
         privacy_snapshot = {
@@ -4351,6 +4574,11 @@ async def kill_deployed_agent_runtime_session(
     if not token:
         raise _http_bad_request("Runtime session id is required.")
     await deployed_agent_virtual_runtime_service.terminate_bound_cloud_runtime_session(
+        session_id=token,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+    )
+    await deployed_agent_virtual_runtime_service.terminate_bound_self_hosted_runtime_session(
         session_id=token,
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,

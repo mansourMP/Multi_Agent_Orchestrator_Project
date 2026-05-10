@@ -3,9 +3,11 @@ from __future__ import annotations
 import ipaddress
 import hashlib
 import json
+import shlex
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any, Callable, Dict, List, Optional, Protocol
 from urllib.parse import urlparse
 
@@ -197,6 +199,8 @@ PHISHING_PATH_MARKERS = {
     "/wallet/recover",
 }
 DEFAULT_ENTERPRISE_APPROVAL_ROLES = ["owner", "admin", "security_reviewer"]
+TERMINAL_POLICY_VALUES = {"blocked", "allowlist", "review_required"}
+FILESYSTEM_SCOPE_VALUES = {"none", "session_scoped", "workspace_scoped"}
 
 
 def _token(value: Any) -> str:
@@ -1638,6 +1642,205 @@ def _assert_runtime_concurrency_quota(
         raise RuntimeError("Runtime admission gate rejected session/action: agent concurrency quota exceeded.")
 
 
+def _normalized_local_sandbox_policy(
+    payload: Dict[str, Any],
+    *,
+    session_state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    sources: List[Dict[str, Any]] = []
+    for source in (session_state, payload):
+        if isinstance(source, dict):
+            if isinstance(source.get("local_sandbox_policy"), dict):
+                sources.append(dict(source.get("local_sandbox_policy") or {}))
+            metadata = source.get("policy_metadata")
+            if isinstance(metadata, dict):
+                if isinstance(metadata.get("local_sandbox_policy"), dict):
+                    sources.append(dict(metadata.get("local_sandbox_policy") or {}))
+                binding = metadata.get("self_hosted_runtime_binding")
+                if isinstance(binding, dict):
+                    sources.append(
+                        {
+                            "enabled": True,
+                            "filesystem_scope": _token(binding.get("filesystem_scope")).lower() or "none",
+                            "domain_allowlist": list(binding.get("domain_allowlist") or []),
+                        }
+                    )
+    merged: Dict[str, Any] = {}
+    for source in sources:
+        merged.update(source)
+
+    enabled = bool(merged.get("enabled"))
+    policy = {
+        "enabled": enabled,
+        "allow_host_env_inheritance": bool(merged.get("allow_host_env_inheritance")),
+        "filesystem_scope": _token(merged.get("filesystem_scope")).lower() or "none",
+        "allow_workspace_scoped_filesystem": bool(merged.get("allow_workspace_scoped_filesystem")),
+        "terminal_command_policy": _token(merged.get("terminal_command_policy")).lower() or "blocked",
+        "terminal_command_allowlist": [str(item).strip() for item in list(merged.get("terminal_command_allowlist") or []) if str(item).strip()],
+        "approved_working_directories": [str(item).strip() for item in list(merged.get("approved_working_directories") or []) if str(item).strip()],
+        "allow_software_install": bool(merged.get("allow_software_install")),
+        "allow_downloads": bool(merged.get("allow_downloads")),
+        "session_timeout_seconds": int(merged.get("session_timeout_seconds") or 0),
+        "max_runtime_seconds": int(merged.get("max_runtime_seconds") or 0),
+        "emergency_stop_enabled": bool(merged.get("emergency_stop_enabled", True)),
+        "recording_required": bool(merged.get("recording_required", True)),
+    }
+    if policy["terminal_command_policy"] not in TERMINAL_POLICY_VALUES:
+        policy["terminal_command_policy"] = "blocked"
+    return policy
+
+
+def _path_under_allowed_directories(path: str, allowed_directories: List[str]) -> bool:
+    token = str(path or "").strip()
+    if not token:
+        return False
+    try:
+        candidate = PurePosixPath(token)
+    except Exception:
+        return False
+    if not candidate.is_absolute():
+        return False
+    for allowed in allowed_directories:
+        try:
+            parent = PurePosixPath(str(allowed or "").strip())
+        except Exception:
+            continue
+        if not parent.is_absolute():
+            continue
+        if candidate == parent or parent in candidate.parents:
+            return True
+    return False
+
+
+def _looks_like_install_command(command: str) -> bool:
+    token = str(command or "").strip().lower()
+    if not token:
+        return False
+    markers = [
+        " apt install",
+        " apt-get install",
+        " yum install",
+        " dnf install",
+        " apk add",
+        " pacman -s",
+        " brew install",
+        " npm install",
+        " pnpm add",
+        " yarn add",
+        " pip install",
+        " pip3 install",
+        " gem install",
+        " cargo install",
+        " go install",
+        " install.sh",
+    ]
+    padded = f" {token} "
+    if any(marker in padded for marker in markers):
+        return True
+    if ("curl " in token or "wget " in token) and ("| sh" in token or "| bash" in token):
+        return True
+    return False
+
+
+def _looks_like_download_command(command: str) -> bool:
+    token = str(command or "").strip().lower()
+    if not token:
+        return False
+    return ("curl " in token) or ("wget " in token) or (" aria2c " in f" {token} ")
+
+
+def _assert_local_sandbox_policy(
+    *,
+    phase: str,
+    payload: Dict[str, Any],
+    action: str,
+    action_args: Dict[str, Any],
+    policy: Dict[str, Any],
+    approval_granted: bool,
+    agent_runtime_seconds: float,
+    session_state: Optional[Dict[str, Any]],
+) -> None:
+    if not bool(policy.get("enabled")):
+        return
+    if bool(policy.get("allow_host_env_inheritance")):
+        raise RuntimeError("Runtime admission gate rejected session/action: host environment inheritance is forbidden.")
+    filesystem_scope = _token(policy.get("filesystem_scope")).lower() or "none"
+    if filesystem_scope not in FILESYSTEM_SCOPE_VALUES:
+        raise RuntimeError("Runtime admission gate rejected session/action: invalid filesystem scope.")
+    if (
+        phase == "session_init"
+        and filesystem_scope == "workspace_scoped"
+        and not bool(policy.get("allow_workspace_scoped_filesystem"))
+    ):
+        raise RuntimeError("Runtime admission gate rejected session/action: broad filesystem scope is blocked by default.")
+    if action != ACTION_RUN_COMMAND and action != ACTION_DOWNLOAD_ARTIFACT:
+        # still enforce max runtime and idle timeout for all actions below
+        pass
+    if action == ACTION_DOWNLOAD_ARTIFACT and not bool(policy.get("allow_downloads")):
+        raise RuntimeError("Runtime admission gate rejected session/action: downloads are restricted by local sandbox policy.")
+
+    if action == ACTION_RUN_COMMAND:
+        command = str(action_args.get("command") or "").strip()
+        if not command:
+            raise RuntimeError("Runtime admission gate rejected session/action: run_command payload is missing command.")
+        terminal_policy = _token(policy.get("terminal_command_policy")).lower() or "blocked"
+        if terminal_policy == "blocked":
+            raise RuntimeError("Runtime admission gate rejected session/action: terminal command policy blocks run_command.")
+        if terminal_policy == "allowlist":
+            try:
+                parts = shlex.split(command)
+            except Exception:
+                parts = []
+            first = str(parts[0] or "").strip().lower() if parts else ""
+            allowlist = {str(item).strip().lower() for item in list(policy.get("terminal_command_allowlist") or []) if str(item).strip()}
+            if not allowlist:
+                raise RuntimeError("Runtime admission gate rejected session/action: terminal allowlist is required.")
+            if first not in allowlist:
+                raise RuntimeError("Runtime admission gate rejected session/action: command is outside terminal allowlist.")
+        if terminal_policy == "review_required" and not approval_granted:
+            raise RuntimeError("Runtime admission gate rejected session/action: terminal command requires explicit approval.")
+        if _looks_like_install_command(command) and not bool(policy.get("allow_software_install")):
+            raise RuntimeError("Runtime admission gate rejected session/action: software install command is blocked.")
+        if _looks_like_download_command(command) and not bool(policy.get("allow_downloads")):
+            raise RuntimeError("Runtime admission gate rejected session/action: command download is blocked.")
+        if not bool(policy.get("allow_host_env_inheritance")) and (
+            isinstance(action_args.get("env"), dict)
+            or isinstance(payload.get("env"), dict)
+            or isinstance(payload.get("environment"), dict)
+        ):
+            raise RuntimeError("Runtime admission gate rejected session/action: host environment inheritance is forbidden.")
+        working_directory = (
+            _token(action_args.get("working_directory"))
+            or _token(action_args.get("cwd"))
+            or _token(payload.get("working_directory"))
+            or _token(payload.get("cwd"))
+        )
+        approved_dirs = [str(item).strip() for item in list(policy.get("approved_working_directories") or []) if str(item).strip()]
+        if not approved_dirs:
+            raise RuntimeError("Runtime admission gate rejected session/action: approved working directory list is required.")
+        if not _path_under_allowed_directories(working_directory, approved_dirs):
+            raise RuntimeError("Runtime admission gate rejected session/action: command working directory is outside approved sandbox scope.")
+
+    if bool(policy.get("recording_required")) and payload.get("session_recording_enabled") is False:
+        raise RuntimeError("Runtime admission gate rejected session/action: session recording is required by local sandbox policy.")
+    if bool(policy.get("emergency_stop_enabled")) and bool(payload.get("emergency_stop_active")):
+        raise RuntimeError("Runtime admission gate rejected session/action: workspace_emergency_stop.")
+
+    max_runtime_seconds = int(policy.get("max_runtime_seconds") or 0)
+    if max_runtime_seconds > 0 and float(agent_runtime_seconds or 0.0) >= float(max_runtime_seconds):
+        raise RuntimeError("Runtime admission gate rejected session/action: max runtime exceeded.")
+    timeout_seconds = int(policy.get("session_timeout_seconds") or 0)
+    if timeout_seconds > 0 and isinstance(session_state, dict):
+        last_activity = session_state.get("last_activity_epoch")
+        if last_activity is not None:
+            try:
+                idle_seconds = float(time.time()) - float(last_activity)
+            except Exception:
+                idle_seconds = 0.0
+            if idle_seconds >= float(timeout_seconds):
+                raise RuntimeError("Runtime admission gate rejected session/action: session timeout exceeded.")
+
+
 def _assert_session_recording_started(
     *,
     payload: Dict[str, Any],
@@ -1700,6 +1903,7 @@ def runtime_admission_gate(
     estimated_increment = float(cost_profile.estimated_create_cost if creating_session else 0.0)
     if not creating_session and action_token:
         estimated_increment = _estimate_action_cost(action_token, safe_action_args, cost_profile)
+    approval_granted = bool(payload.get("approved") or payload.get("approval_granted") or _token(payload.get("approval_id")))
 
     _assert_runtime_budget_cap(
         cost_state=cost_state,
@@ -1715,7 +1919,7 @@ def runtime_admission_gate(
             action=action_token,
             action_args=safe_action_args,
             policy=network_policy,
-            approval_granted=bool(payload.get("approved") or payload.get("approval_granted") or _token(payload.get("approval_id"))),
+            approval_granted=approval_granted,
             current_url=current_url,
         )
         _assert_enterprise_network_controls(
@@ -1735,6 +1939,17 @@ def runtime_admission_gate(
         active_agent_sessions=active_agent_sessions,
         cost_profile=cost_profile,
         creating_session=creating_session,
+    )
+    local_sandbox_policy = _normalized_local_sandbox_policy(payload, session_state=session_state)
+    _assert_local_sandbox_policy(
+        phase=phase_token,
+        payload=payload,
+        action=action_token,
+        action_args=safe_action_args,
+        policy=local_sandbox_policy,
+        approval_granted=approval_granted,
+        agent_runtime_seconds=agent_runtime_seconds,
+        session_state=session_state,
     )
 
     recording_state = _assert_session_recording_started(
@@ -2122,6 +2337,7 @@ class LocalGatewayVirtualComputerRuntime:
         workspace_id = _token(body.get("workspace_id")) or "default"
         agent_id = _token(body.get("agent_id") or body.get("run_id") or body.get("agent_runtime_id")) or "default_agent"
         cost_profile = build_cost_quota_profile(body, provider_id=provider_id)
+        local_sandbox_policy = _normalized_local_sandbox_policy(body)
         admission = runtime_admission_gate(
             phase="session_init",
             payload=body,
@@ -2168,6 +2384,8 @@ class LocalGatewayVirtualComputerRuntime:
                 enterprise_controls.get("session_recording_retention_seconds") or 0
             ),
             "session_recording": dict(admission.get("recording_state") or {}),
+            "local_sandbox_policy": dict(local_sandbox_policy),
+            "last_activity_epoch": now_epoch,
         }
         self._risk_prompt_by_session.pop(session_id, None)
         self._bridge_policy_by_session[session_id] = dict(bridge_policy)
@@ -2194,6 +2412,7 @@ class LocalGatewayVirtualComputerRuntime:
                 "network_browser_policy": dict(network_policy),
                 "enterprise_controls": dict(enterprise_controls),
                 "local_gateway_bridge": dict(bridge_policy),
+                "local_sandbox_policy": dict(local_sandbox_policy),
                 "runtime_admission_gate": {"phase": admission.get("phase"), "allowed": True},
             },
         )
@@ -2451,6 +2670,7 @@ class LocalGatewayVirtualComputerRuntime:
                 cost_state.termination_reason = "agent_runtime_budget_limit"
                 raise RuntimeError("Session terminated by per-agent runtime budget.")
         response = self._response(await self._runtime.perform_action(body))
+        context["last_activity_epoch"] = time.time()
         _append_timeline_event(
             timeline,
             event_type="action",
@@ -2920,6 +3140,7 @@ class InMemoryVirtualComputerRuntime:
         workspace_id = _token(body.get("workspace_id")) or "default"
         tenant_id = _token(body.get("tenant_id")) or workspace_id
         agent_id = _token(body.get("agent_id") or body.get("run_id") or body.get("agent_runtime_id")) or "default_agent"
+        local_sandbox_policy = _normalized_local_sandbox_policy(body)
         now_epoch = time.time()
         token_ttl_seconds = _coerce_positive_int(body.get("session_token_ttl_seconds"), 15 * 60, 1)
         token_expires_at = body.get("session_token_expires_at_epoch")
@@ -2983,6 +3204,8 @@ class InMemoryVirtualComputerRuntime:
                 enterprise_controls.get("session_recording_retention_seconds") or 0
             ),
             "session_recording": dict(admission.get("recording_state") or {}),
+            "local_sandbox_policy": dict(local_sandbox_policy),
+            "last_activity_epoch": now_epoch,
         }
         self._sessions[session_id] = session
         self._isolation_by_session[session_id] = VirtualComputerIsolationState(
@@ -3028,6 +3251,7 @@ class InMemoryVirtualComputerRuntime:
                 "network_browser_policy": dict(network_policy),
                 "local_gateway_bridge": dict(bridge_policy),
                 "enterprise_controls": dict(enterprise_controls),
+                "local_sandbox_policy": dict(local_sandbox_policy),
                 "runtime_admission_gate": {"phase": admission.get("phase"), "allowed": True},
             },
         )
@@ -3321,6 +3545,7 @@ class InMemoryVirtualComputerRuntime:
             session["ui_current_url"] = _token(action_args.get("url"))
             session["ui_app_title"] = _token(action_args.get("app_title") or action_args.get("title"))
         session["state"] = RUNTIME_STATE_RUNNING
+        session["last_activity_epoch"] = time.time()
         response = self._base_response(session)
         response["status"] = "completed"
         response["action_result"] = {
@@ -3643,6 +3868,256 @@ class InMemoryVirtualComputerRuntime:
         }
 
 
+class SelfHostedNodeVirtualComputerRuntime:
+    def __init__(
+        self,
+        runtime: Optional[VirtualComputerRuntime] = None,
+    ) -> None:
+        self._runtime = runtime or LocalGatewayVirtualComputerRuntime(
+            runtime=GatewayBrowserRuntime(target="self_host_runtime")
+        )
+        self._session_binding_by_id: Dict[str, Dict[str, Any]] = {}
+
+    def _session_id_from_payload(self, payload: Dict[str, Any]) -> str:
+        return _token(
+            payload.get("browser_session_id")
+            or payload.get("session_id")
+            or payload.get("runtime_session_id")
+        )
+
+    def _binding_contract_from_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        policy_metadata = payload.get("policy_metadata") if isinstance(payload.get("policy_metadata"), dict) else {}
+        contract = (
+            policy_metadata.get("self_hosted_runtime_binding")
+            if isinstance(policy_metadata.get("self_hosted_runtime_binding"), dict)
+            else payload.get("self_hosted_runtime_binding")
+            if isinstance(payload.get("self_hosted_runtime_binding"), dict)
+            else {}
+        )
+        return dict(contract)
+
+    def _node_binding_from_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = payload.get("policy_metadata") if isinstance(payload.get("policy_metadata"), dict) else {}
+        contract = self._binding_contract_from_payload(payload)
+        node_id = _token(
+            contract.get("runtime_node_id")
+            or payload.get("runtime_node_id")
+            or metadata.get("runtime_node_id")
+            or metadata.get("self_hosted_runtime_node_id")
+        )
+        profile_id = _token(
+            contract.get("runtime_profile_id")
+            or payload.get("runtime_profile_id")
+            or metadata.get("runtime_profile_id")
+        )
+        attachment_id = _token(
+            contract.get("runtime_attachment_id")
+            or payload.get("runtime_attachment_id")
+            or metadata.get("runtime_attachment_id")
+        )
+        workspace_id = _token(
+            contract.get("workspace_id")
+            or payload.get("workspace_id")
+            or metadata.get("workspace_id")
+        )
+        node_kind = _token(
+            contract.get("node_kind")
+            or payload.get("node_kind")
+            or metadata.get("node_kind")
+        ).lower() or None
+        return {
+            "runtime_node_id": node_id,
+            "runtime_profile_id": profile_id or None,
+            "runtime_attachment_id": attachment_id or None,
+            "workspace_id": workspace_id or None,
+            "node_kind": node_kind,
+        }
+
+    def _enforce_and_bind_payload(self, payload: Dict[str, Any], *, creating_session: bool) -> Dict[str, Any]:
+        body = dict(payload or {})
+        session_id = self._session_id_from_payload(body)
+        stored_binding = self._session_binding_by_id.get(session_id) or {}
+        contract = self._binding_contract_from_payload(body)
+        binding = self._node_binding_from_payload(body)
+        if creating_session and not contract:
+            raise RuntimeError(
+                "self_hosted runtime requires server-side self_hosted_runtime_binding contract before session creation."
+            )
+        if contract and stored_binding and _token(stored_binding.get("runtime_node_id")):
+            if _token(contract.get("runtime_node_id")) and _token(contract.get("runtime_node_id")) != _token(stored_binding.get("runtime_node_id")):
+                raise RuntimeError("self_hosted runtime rejected runtime_node_id override against existing session binding.")
+        if contract:
+            requested_node = _token(body.get("runtime_node_id"))
+            if requested_node and _token(contract.get("runtime_node_id")) and requested_node != _token(contract.get("runtime_node_id")):
+                raise RuntimeError("self_hosted runtime rejected raw runtime_node_id override payload.")
+            requested_profile = _token(body.get("runtime_profile_id"))
+            if requested_profile and _token(contract.get("runtime_profile_id")) and requested_profile != _token(contract.get("runtime_profile_id")):
+                raise RuntimeError("self_hosted runtime rejected raw runtime_profile_id override payload.")
+            requested_attachment = _token(body.get("runtime_attachment_id"))
+            if requested_attachment and _token(contract.get("runtime_attachment_id")) and requested_attachment != _token(contract.get("runtime_attachment_id")):
+                raise RuntimeError("self_hosted runtime rejected raw runtime_attachment_id override payload.")
+            requested_workspace = _token(body.get("workspace_id"))
+            if requested_workspace and _token(contract.get("workspace_id")) and requested_workspace != _token(contract.get("workspace_id")):
+                raise RuntimeError("self_hosted runtime rejected workspace scope override payload.")
+
+        if not binding["runtime_node_id"] and session_id:
+            binding.update(stored_binding)
+
+        if creating_session and not binding["runtime_node_id"]:
+            raise RuntimeError("self_hosted runtime requires runtime_node_id before session creation.")
+        if not creating_session and session_id and not binding["runtime_node_id"]:
+            raise RuntimeError("self_hosted runtime action requires runtime_node_id session binding.")
+        if not creating_session and session_id and stored_binding:
+            if _token(stored_binding.get("runtime_node_id")) and _token(stored_binding.get("runtime_node_id")) != _token(binding.get("runtime_node_id")):
+                raise RuntimeError("self_hosted runtime rejected runtime_node_id override for bound session.")
+            if _token(stored_binding.get("workspace_id")) and _token(body.get("workspace_id")) and _token(stored_binding.get("workspace_id")) != _token(body.get("workspace_id")):
+                raise RuntimeError("self_hosted runtime rejected cross-workspace execution.")
+
+        if binding.get("workspace_id") and _token(body.get("workspace_id")) and _token(body.get("workspace_id")) != _token(binding.get("workspace_id")):
+            raise RuntimeError("self_hosted runtime rejected cross-workspace execution.")
+
+        if binding["runtime_node_id"]:
+            body["runtime_node_id"] = binding["runtime_node_id"]
+        if binding.get("runtime_profile_id"):
+            body["runtime_profile_id"] = binding["runtime_profile_id"]
+        if binding.get("runtime_attachment_id"):
+            body["runtime_attachment_id"] = binding["runtime_attachment_id"]
+        if binding.get("workspace_id"):
+            body["workspace_id"] = binding["workspace_id"]
+        if binding.get("node_kind"):
+            body["node_kind"] = binding["node_kind"]
+        body["machine_target"] = _token(body.get("machine_target")) or "self_host_runtime"
+        policy_metadata = body.get("policy_metadata") if isinstance(body.get("policy_metadata"), dict) else {}
+        policy_metadata["runtime_placement"] = "self_hosted_node"
+        if binding.get("runtime_node_id"):
+            policy_metadata["runtime_node_id"] = binding["runtime_node_id"]
+        if binding.get("runtime_profile_id"):
+            policy_metadata["runtime_profile_id"] = binding["runtime_profile_id"]
+        if binding.get("runtime_attachment_id"):
+            policy_metadata["runtime_attachment_id"] = binding["runtime_attachment_id"]
+        if binding.get("workspace_id"):
+            policy_metadata["workspace_id"] = binding["workspace_id"]
+        if binding.get("node_kind"):
+            policy_metadata["node_kind"] = binding["node_kind"]
+        policy_metadata["self_hosted_runtime_binding"] = {
+            "runtime_target": "self_host_runtime",
+            "runtime_node_id": binding.get("runtime_node_id"),
+            "runtime_profile_id": binding.get("runtime_profile_id"),
+            "runtime_attachment_id": binding.get("runtime_attachment_id"),
+            "workspace_id": binding.get("workspace_id"),
+            "node_kind": binding.get("node_kind"),
+        }
+        body["policy_metadata"] = policy_metadata
+        return body
+
+    def _bind_session_from_response(self, payload: Dict[str, Any], response: Dict[str, Any]) -> None:
+        session_id = _token(
+            response.get("session_id")
+            or (
+                response.get("browser_session").get("browser_session_id")
+                if isinstance(response.get("browser_session"), dict)
+                else ""
+            )
+            or self._session_id_from_payload(payload)
+        )
+        if not session_id:
+            return
+        binding = self._node_binding_from_payload(payload)
+        if not binding["runtime_node_id"]:
+            return
+        self._session_binding_by_id[session_id] = dict(binding)
+
+    def _tag(self, response: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+        tagged = dict(response or {})
+        tagged["runtime_kind"] = "self_hosted_node_runtime"
+        tagged["self_hosted"] = True
+        binding = self._node_binding_from_payload(payload)
+        session_id = _token(
+            tagged.get("session_id")
+            or (
+                tagged.get("browser_session").get("browser_session_id")
+                if isinstance(tagged.get("browser_session"), dict)
+                else ""
+            )
+            or self._session_id_from_payload(payload)
+        )
+        if session_id:
+            tagged["session_id"] = session_id
+            stored = self._session_binding_by_id.get(session_id) or {}
+            binding.update(stored)
+        if binding.get("runtime_node_id"):
+            tagged["runtime_node_id"] = binding["runtime_node_id"]
+        if binding.get("runtime_profile_id"):
+            tagged["runtime_profile_id"] = binding["runtime_profile_id"]
+        if binding.get("runtime_attachment_id"):
+            tagged["runtime_attachment_id"] = binding["runtime_attachment_id"]
+        if binding.get("workspace_id"):
+            tagged["workspace_id"] = binding["workspace_id"]
+        if binding.get("node_kind"):
+            tagged["node_kind"] = binding["node_kind"]
+        return tagged
+
+    async def create_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._enforce_and_bind_payload(payload, creating_session=True)
+        response = await self._runtime.create_session(body)
+        self._bind_session_from_response(body, response)
+        return self._tag(response, body)
+
+    async def resume_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._enforce_and_bind_payload(payload, creating_session=False)
+        response = await self._runtime.resume_session(body)
+        return self._tag(response, body)
+
+    async def pause_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._enforce_and_bind_payload(payload, creating_session=False)
+        response = await self._runtime.pause_session(body)
+        return self._tag(response, body)
+
+    async def terminate_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._enforce_and_bind_payload(payload, creating_session=False)
+        response = await self._runtime.terminate_session(body)
+        session_id = _token(
+            response.get("session_id")
+            or (
+                response.get("browser_session").get("browser_session_id")
+                if isinstance(response.get("browser_session"), dict)
+                else ""
+            )
+            or self._session_id_from_payload(body)
+        )
+        if session_id:
+            self._session_binding_by_id.pop(session_id, None)
+        return self._tag(response, body)
+
+    async def execute_action(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._enforce_and_bind_payload(payload, creating_session=False)
+        response = await self._runtime.execute_action(body)
+        return self._tag(response, body)
+
+    async def stream_screenshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._enforce_and_bind_payload(payload, creating_session=False)
+        response = await self._runtime.stream_screenshot(body)
+        return self._tag(response, body)
+
+    async def collect_artifact(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._enforce_and_bind_payload(payload, creating_session=False)
+        response = await self._runtime.collect_artifact(body)
+        return self._tag(response, body)
+
+    async def snapshot_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._enforce_and_bind_payload(payload, creating_session=False)
+        response = await self._runtime.snapshot_session(body)
+        return self._tag(response, body)
+
+    async def export_audit_report(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._enforce_and_bind_payload(payload, creating_session=False)
+        runtime_method = getattr(self._runtime, "export_audit_report", None)
+        if not callable(runtime_method):
+            raise RuntimeError("Self-hosted runtime provider does not support audit export.")
+        response = await runtime_method(body)
+        return self._tag(response, body)
+
+
 class ProviderTaggedVirtualComputerRuntime:
     def __init__(self, runtime: VirtualComputerRuntime, provider_spec: VirtualComputerProviderSpec) -> None:
         self._runtime = runtime
@@ -3722,6 +4197,30 @@ class StaticVirtualComputerProviderAdapter:
         if fallback_runtime is not None:
             return fallback_runtime
         return InMemoryVirtualComputerRuntime()
+
+
+class SelfHostedRuntimeProviderAdapter:
+    def __init__(
+        self,
+        provider_spec: VirtualComputerProviderSpec,
+        *,
+        runtime_factory: Optional[Callable[[], VirtualComputerRuntime]] = None,
+    ) -> None:
+        self._provider_spec = provider_spec
+        self._runtime_factory = runtime_factory
+
+    def spec(self) -> VirtualComputerProviderSpec:
+        return self._provider_spec
+
+    def build_runtime(
+        self,
+        *,
+        fallback_runtime: Optional[VirtualComputerRuntime] = None,
+    ) -> VirtualComputerRuntime:
+        runtime = self._runtime_factory() if self._runtime_factory is not None else SelfHostedNodeVirtualComputerRuntime()
+        if isinstance(runtime, InMemoryVirtualComputerRuntime):
+            raise RuntimeError("Self-hosted runtime provider cannot fallback to InMemoryVirtualComputerRuntime.")
+        return runtime
 
 
 class VirtualComputerProviderRegistry:
@@ -3905,10 +4404,10 @@ def default_virtual_computer_provider_registry() -> VirtualComputerProviderRegis
                     notes="Enterprise desktop provider target for later phases.",
                 )
             ),
-            StaticVirtualComputerProviderAdapter(
+            SelfHostedRuntimeProviderAdapter(
                 VirtualComputerProviderSpec(
                     provider_id=PROVIDER_ID_DOCKER_KUBERNETES,
-                    label="Self-hosted Docker/Kubernetes (future)",
+                    label="Self-hosted Docker/Kubernetes Node",
                     provider_kind="self_hosted_sandbox_provider",
                     runtime_choices=[RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX],
                     capabilities={
@@ -3923,8 +4422,9 @@ def default_virtual_computer_provider_registry() -> VirtualComputerProviderRegis
                         "max_runtime": "720m",
                         "cost_unit": "cluster_minute",
                     },
-                    notes="Self-hosted runtime profile for later phases.",
-                )
+                    notes="Self-hosted runtime profile with dedicated node-bound provider path.",
+                ),
+                runtime_factory=lambda: SelfHostedNodeVirtualComputerRuntime(),
             ),
         ]
     )

@@ -90,8 +90,9 @@ def _checkpoint(
 
 
 class GatewayBrowserRuntime:
-    def __init__(self) -> None:
-        self._adapter = get_browser_adapter({"trust_mode": "reviewed"}, target="local_companion")
+    def __init__(self, *, target: str = "local_companion") -> None:
+        resolved_target = _token(target) or "local_companion"
+        self._adapter = get_browser_adapter({"trust_mode": "reviewed"}, target=resolved_target)
         self._sessions: Dict[str, Dict[str, Any]] = {}
 
     async def _page_snapshot(self) -> Dict[str, Any]:

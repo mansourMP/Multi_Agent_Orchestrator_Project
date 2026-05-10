@@ -452,6 +452,13 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                 {
                     "attachment_id": "self_hosted_business_node:profile-self-host",
                     "attachment_kind": "self_hosted_business_node",
+                    "workspace_id": "workspace-1",
+                    "runtime_node_id": "runtime-self-host",
+                    "node_kind": "mac_mini",
+                    "self_hosted_node_status": "online",
+                    "owner_approved": True,
+                    "max_concurrent_sessions": 2,
+                    "capabilities": ["shell.execute", "file_access"],
                     "online": True,
                     "healthy": True,
                     "supports_runtime_modes": ["hosted_secure"],
@@ -522,6 +529,13 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                 {
                     "attachment_id": "self_hosted_business_node:profile-enterprise",
                     "attachment_kind": "self_hosted_business_node",
+                    "workspace_id": "workspace-1",
+                    "runtime_node_id": "runtime-enterprise",
+                    "node_kind": "linux_server",
+                    "self_hosted_node_status": "online",
+                    "owner_approved": True,
+                    "max_concurrent_sessions": 2,
+                    "capabilities": ["shell.execute", "file_access"],
                     "online": True,
                     "healthy": True,
                     "supports_runtime_modes": ["hosted_secure"],
@@ -721,6 +735,13 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                     "runtime_profile_id": "profile-enterprise",
                     "runtime_profile_slug": "workspace-secure-node",
                     "runtime_id": "runtime-enterprise",
+                    "workspace_id": "workspace-1",
+                    "runtime_node_id": "runtime-enterprise",
+                    "node_kind": "linux_server",
+                    "self_hosted_node_status": "online",
+                    "owner_approved": True,
+                    "max_concurrent_sessions": 2,
+                    "capabilities": ["shell.execute", "file_access"],
                     "online": True,
                     "healthy": True,
                     "control_state": "active",
@@ -741,6 +762,126 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(plan["selected_attachment"]["attachment_kind"], "self_hosted_business_node")
         self.assertEqual(plan["execution_target_selected"], "cloud")
         self.assertEqual(plan["entitlements"]["enforcement_target"], "self_hosted")
+
+    def test_list_workspace_runtime_attachments_projects_self_hosted_node_registry_fields(self) -> None:
+        runtime_profiles = [
+            {
+                "id": "profile-enterprise",
+                "slug": "workspace-secure-node",
+                "label": "Workspace Secure Node",
+                "runtime_class": "self_hosted_business_node",
+                "status": "active",
+                "runtime_id": "runtime-enterprise",
+                "metadata": {
+                    "owner_user_id": "user-owner",
+                    "public_key": "pk-node-123",
+                    "allowed_agent_ids": ["agent-1", "agent-2"],
+                    "max_concurrent_sessions": 3,
+                    "root_policy": {"filesystem": "workspace_scoped"},
+                    "owner_approved": True,
+                },
+            }
+        ]
+        fleet_workers = [
+            {
+                "worker_id": "runtime-enterprise",
+                "runtime_id": "runtime-enterprise",
+                "runtime_type": "self_hosted_business_node",
+                "display_name": "Mansur Mac mini",
+                "online": True,
+                "status": "idle",
+                "control_state": "active",
+                "execution_targets": ["cloud"],
+                "capabilities": ["shell.execute", "computer_control"],
+                "last_heartbeat_at": "2026-05-11T01:02:03Z",
+                "metadata": {
+                    "node_kind": "mac_mini",
+                },
+            }
+        ]
+
+        inventory = asyncio.run(
+            runtime_attachment_service.list_workspace_runtime_attachments(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_profiles=runtime_profiles,
+                fleet_workers=fleet_workers,
+            )
+        )
+        self_hosted = next(
+            item for item in inventory["attachments"] if item.get("attachment_kind") == "self_hosted_business_node"
+        )
+        self.assertEqual(self_hosted["runtime_node_id"], "runtime-enterprise")
+        self.assertEqual(self_hosted["workspace_id"], "workspace-1")
+        self.assertEqual(self_hosted["owner_user_id"], "user-owner")
+        self.assertEqual(self_hosted["node_kind"], "mac_mini")
+        self.assertEqual(self_hosted["self_hosted_node_status"], "online")
+        self.assertEqual(self_hosted["heartbeat_at"], "2026-05-11T01:02:03Z")
+        self.assertEqual(self_hosted["public_key"], "pk-node-123")
+        self.assertEqual(self_hosted["allowed_agent_ids"], ["agent-1", "agent-2"])
+        self.assertEqual(self_hosted["max_concurrent_sessions"], 3)
+        self.assertEqual(self_hosted["root_policy"], {"filesystem": "workspace_scoped"})
+        self.assertTrue(self_hosted["owner_approved"])
+
+    def test_ensure_self_hosted_node_gate_rejects_revoked_node(self) -> None:
+        with self.assertRaises(runtime_attachment_service.RuntimeAttachmentSelectionError) as ctx:
+            runtime_attachment_service.ensure_self_hosted_node_gate(
+                attachment={
+                    "attachment_kind": "self_hosted_business_node",
+                    "workspace_id": "workspace-1",
+                    "runtime_node_id": "node-1",
+                    "node_kind": "mac_mini",
+                    "self_hosted_node_status": "revoked",
+                    "online": True,
+                    "healthy": True,
+                    "owner_approved": True,
+                    "capabilities": ["shell.execute"],
+                    "max_concurrent_sessions": 1,
+                },
+                workspace_id="workspace-1",
+                required_capabilities=["shell.execute"],
+            )
+        self.assertEqual(ctx.exception.reason, "self_hosted_node_revoked")
+
+    def test_ensure_self_hosted_node_gate_rejects_missing_required_capability(self) -> None:
+        with self.assertRaises(runtime_attachment_service.RuntimeAttachmentSelectionError) as ctx:
+            runtime_attachment_service.ensure_self_hosted_node_gate(
+                attachment={
+                    "attachment_kind": "self_hosted_business_node",
+                    "workspace_id": "workspace-1",
+                    "runtime_node_id": "node-1",
+                    "node_kind": "linux_server",
+                    "self_hosted_node_status": "online",
+                    "online": True,
+                    "healthy": True,
+                    "owner_approved": True,
+                    "capabilities": ["shell.execute"],
+                    "max_concurrent_sessions": 1,
+                },
+                workspace_id="workspace-1",
+                required_capabilities=["computer_control"],
+            )
+        self.assertEqual(ctx.exception.reason, "self_hosted_node_capability_mismatch")
+
+    def test_ensure_self_hosted_node_gate_rejects_not_owner_approved(self) -> None:
+        with self.assertRaises(runtime_attachment_service.RuntimeAttachmentSelectionError) as ctx:
+            runtime_attachment_service.ensure_self_hosted_node_gate(
+                attachment={
+                    "attachment_kind": "self_hosted_business_node",
+                    "workspace_id": "workspace-1",
+                    "runtime_node_id": "node-1",
+                    "node_kind": "linux_server",
+                    "self_hosted_node_status": "online",
+                    "online": True,
+                    "healthy": True,
+                    "owner_approved": False,
+                    "capabilities": ["shell.execute"],
+                    "max_concurrent_sessions": 1,
+                },
+                workspace_id="workspace-1",
+                required_capabilities=["shell.execute"],
+            )
+        self.assertEqual(ctx.exception.reason, "self_hosted_node_not_owner_approved")
 
     def test_resolve_install_runtime_plan_supports_cloud_computer_profile(self) -> None:
         install = {
@@ -877,6 +1018,13 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                     "runtime_profile_id": "profile-enterprise",
                     "runtime_profile_slug": "workspace-secure-node",
                     "runtime_id": "runtime-enterprise",
+                    "workspace_id": "workspace-1",
+                    "runtime_node_id": "runtime-enterprise",
+                    "node_kind": "linux_server",
+                    "self_hosted_node_status": "online",
+                    "owner_approved": True,
+                    "max_concurrent_sessions": 2,
+                    "capabilities": ["shell.execute", "file_access"],
                     "online": True,
                     "healthy": True,
                     "control_state": "active",
@@ -1301,6 +1449,13 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                     "runtime_class": "self_hosted_business_node",
                     "runtime_profile_id": "profile-enterprise",
                     "runtime_profile_slug": "workspace-secure-node",
+                    "workspace_id": "workspace-1",
+                    "runtime_node_id": "runtime-enterprise",
+                    "node_kind": "linux_server",
+                    "self_hosted_node_status": "online",
+                    "owner_approved": True,
+                    "max_concurrent_sessions": 2,
+                    "capabilities": ["shell.execute", "file_access"],
                     "online": True,
                     "healthy": True,
                     "control_state": "active",

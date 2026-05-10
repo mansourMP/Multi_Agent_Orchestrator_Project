@@ -687,6 +687,7 @@ export type WorkstationClientPaths = {
   appsUpdate: string;
   agentDefinitions: string;
   agentInstalls: string;
+  runtimeAttachments: string;
   runtimeTargets: string;
   providers: string;
   providersCatalog: string;
@@ -898,6 +899,7 @@ export type WorkstationClient = {
   }) => Promise<Record<string, unknown> | null>;
   listAgentDefinitions: () => Promise<Record<string, unknown>>;
   listAgentInstalls: () => Promise<Record<string, unknown>>;
+  listRuntimeAttachments: () => Promise<Record<string, unknown>>;
   listRuntimeTargets: () => Promise<Record<string, unknown>>;
   listProviders: () => Promise<Record<string, unknown>>;
   listProviderCatalog: () => Promise<Record<string, unknown>>;
@@ -1279,6 +1281,7 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     appsUpdate: '/apps/update',
     agentDefinitions: `/agent-registry/definitions${buildQueryString({ workspace_id: workspaceId })}`,
     agentInstalls: `/agent-registry/installs${buildQueryString({ workspace_id: workspaceId })}`,
+    runtimeAttachments: `/agent-registry/runtime-attachments${buildQueryString({ workspace_id: workspaceId })}`,
     runtimeTargets: `/agent-registry/runtime-targets${buildQueryString({ workspace_id: workspaceId })}`,
     providers: `/api/providers${buildQueryString({ workspace_id: workspaceId })}`,
     providersCatalog: `/api/providers/catalog${buildQueryString({ workspace_id: workspaceId })}`,
@@ -2563,6 +2566,11 @@ export function createWorkstationClient(
     listAgentInstalls: () =>
       requestJson<Record<string, unknown>>({
         path: paths.agentInstalls,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listRuntimeAttachments: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.runtimeAttachments,
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     listRuntimeTargets: () =>

@@ -95,6 +95,9 @@ type WizardState = {
   providerId: string;
   modelId: string;
   runtimeTarget: string;
+  selfHostedRuntimeProfileId: string;
+  selfHostedPrivacyAccepted: boolean;
+  selfHostedSafetyAccepted: boolean;
   billingPlan: string;
   selectedToolIds: string[];
   memoryEnabled: boolean;
@@ -243,6 +246,22 @@ type TelegramReadinessSnapshot = {
   configuredBinding: Record<string, unknown>;
   webhook: Record<string, unknown>;
   autopilot: Record<string, unknown>;
+};
+
+type RuntimeAttachmentSnapshot = {
+  attachmentId: string;
+  attachmentKind: string;
+  runtimeProfileId: string;
+  runtimeNodeId: string;
+  label: string;
+  online: boolean;
+  healthy: boolean;
+  ownerApproved: boolean;
+  status: string;
+  selfHostedNodeStatus: string;
+  nodeKind: string;
+  heartbeatAt: string | null;
+  capabilities: string[];
 };
 
 type ConversationFilters = {
@@ -760,6 +779,73 @@ function readItems<T extends Record<string, unknown>>(payload: unknown): T[] {
   return Array.isArray(items)
     ? items.filter((item): item is T => Boolean(item) && typeof item === 'object')
     : [];
+}
+
+function normalizeRuntimeAttachments(payload: unknown): RuntimeAttachmentSnapshot[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  const attachments = (payload as Record<string, unknown>).attachments;
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+  return attachments
+    .map((item) => readRecord(item))
+    .map((item) => ({
+      attachmentId: readString(item.attachment_id),
+      attachmentKind: readString(item.attachment_kind),
+      runtimeProfileId: readString(item.runtime_profile_id),
+      runtimeNodeId: readString(item.runtime_node_id),
+      label: readString(item.label, 'Runtime node'),
+      online: readBoolean(item.online),
+      healthy: readBoolean(item.healthy),
+      ownerApproved: readBoolean(item.owner_approved),
+      status: readString(item.status),
+      selfHostedNodeStatus: readString(item.self_hosted_node_status),
+      nodeKind: readString(item.node_kind),
+      heartbeatAt: readOptionalString(item.heartbeat_at ?? item.last_seen_at),
+      capabilities: normalizeLabelList(item.capabilities),
+    }))
+    .filter((item) => item.attachmentKind === 'self_hosted_business_node');
+}
+
+function selfHostedNodeGateReason(node: RuntimeAttachmentSnapshot | null): string | null {
+  if (!node) {
+    return 'Select a self-hosted runtime node.';
+  }
+  if (!node.runtimeProfileId) {
+    return 'Selected node is missing runtime profile id.';
+  }
+  if (!node.ownerApproved) {
+    return 'Selected node is not owner-approved.';
+  }
+  if (!node.online) {
+    return 'Selected node is offline.';
+  }
+  if (!node.healthy) {
+    return 'Selected node is unhealthy.';
+  }
+  const status = node.selfHostedNodeStatus.toLowerCase();
+  if (status === 'revoked') {
+    return 'Selected node is revoked.';
+  }
+  return null;
+}
+
+function selfHostedNodeHealthLabel(node: RuntimeAttachmentSnapshot | null): string {
+  if (!node) {
+    return 'Not selected';
+  }
+  if (!node.ownerApproved) {
+    return 'Pending owner approval';
+  }
+  if (!node.online) {
+    return 'Offline';
+  }
+  if (!node.healthy) {
+    return 'Unhealthy';
+  }
+  return 'Online and healthy';
 }
 
 function formatTimestamp(value: unknown): string {
@@ -1487,6 +1573,9 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   const escalationPolicy = readRecord(config.escalation_policy);
   const computerAutomation = readRecord(config.computer_automation ?? readRecord(agent?.metadata).computer_automation);
   const metadata = readRecord(agent?.metadata);
+  const selfHostedBinding = readRecord(metadata.self_hosted_runtime_binding);
+  const privacyContractSnapshot = readRecord(metadata.privacy_contract_snapshot);
+  const computerSafetyContractSnapshot = readRecord(metadata.computer_safety_contract_snapshot);
   const runtimeSupply = readRecord(config.runtime_supply ?? metadata.runtime_supply);
   const runtimeSupplySupplier = readRecord(runtimeSupply.supplier);
   const runtimeSupplyMarketplace = readRecord(runtimeSupply.marketplace_policy);
@@ -1551,6 +1640,19 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     providerId,
     modelId,
     runtimeTarget: readString(agent?.runtime_target, runtimeTargetForPlacement(runtimePlacement)),
+    selfHostedRuntimeProfileId: readString(
+      config.runtime_profile_id
+      ?? selfHostedBinding.runtime_profile_id
+      ?? metadata.runtime_profile_id,
+    ),
+    selfHostedPrivacyAccepted: Boolean(
+      readOptionalString(privacyContractSnapshot.accepted_at)
+      || readOptionalString(metadata.privacy_contract_accepted_at),
+    ),
+    selfHostedSafetyAccepted: Boolean(
+      readOptionalString(computerSafetyContractSnapshot.accepted_at)
+      || readOptionalString(metadata.computer_safety_contract_accepted_at),
+    ),
     billingPlan: readString(agent?.billing_plan, 'free'),
     selectedToolIds: selectedToolIds.length > 0 ? selectedToolIds : ['spreadsheet_read', 'spreadsheet_append'],
     memoryEnabled: agent
@@ -1635,6 +1737,9 @@ function buildDeploymentConfig(state: WizardState): Record<string, unknown> {
   };
   return {
     runtime_placement: state.runtimePlacement,
+    runtime_profile_id: state.runtimePlacement === 'customer_hosted'
+      ? state.selfHostedRuntimeProfileId.trim() || null
+      : null,
     runtime_supplier: runtimeSupplier,
     runtime_supply: {
       schema_version: 1,
@@ -2106,6 +2211,7 @@ export function WorkstationDeployedAgentsPane({
   const [selectedTelegramReadiness, setSelectedTelegramReadiness] = useState<TelegramReadinessSnapshot | null>(() => cachedStudioPane?.selectedTelegramReadiness ?? null);
   const [conversations, setConversations] = useState<DeployedAgentConversationRecord[]>(() => cachedStudioPane?.conversations ?? []);
   const [agentMemoryById, setAgentMemoryById] = useState<Record<string, DeployedAgentMemoryRecord[]>>({});
+  const [runtimeAttachments, setRuntimeAttachments] = useState<RuntimeAttachmentSnapshot[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => cachedStudioPane?.selectedSessionId ?? null);
   const [selectedTranscript, setSelectedTranscript] = useState<DeployedAgentConversationDetail | null>(() => cachedStudioPane?.selectedTranscript ?? null);
   const [isLoadingAgents, setIsLoadingAgents] = useState(() => (cachedStudioPane?.agents?.length ?? 0) === 0);
@@ -2116,6 +2222,7 @@ export function WorkstationDeployedAgentsPane({
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const [isLoadingOverlayMemory, setIsLoadingOverlayMemory] = useState(false);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
+  const [isLoadingRuntimeAttachments, setIsLoadingRuntimeAttachments] = useState(false);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [isTelegramSetupOpen, setIsTelegramSetupOpen] = useState(false);
   const [wizardMode, setWizardMode] = useState<WizardMode>('create');
@@ -2171,6 +2278,53 @@ export function WorkstationDeployedAgentsPane({
     () => selectedProviderCatalog?.models.find((item) => item.id === wizardState.modelId) ?? null,
     [selectedProviderCatalog, wizardState.modelId],
   );
+  const selfHostedNodeOptions = useMemo(
+    () => runtimeAttachments
+      .filter((item) => item.runtimeProfileId)
+      .sort((left, right) => left.label.localeCompare(right.label)),
+    [runtimeAttachments],
+  );
+  const selectedSelfHostedNode = useMemo(
+    () => selfHostedNodeOptions.find((item) => item.runtimeProfileId === wizardState.selfHostedRuntimeProfileId) ?? null,
+    [selfHostedNodeOptions, wizardState.selfHostedRuntimeProfileId],
+  );
+  const selfHostedWizardNodeBlocker = useMemo(() => {
+    if (wizardState.runtimePlacement !== 'customer_hosted') {
+      return null;
+    }
+    return selfHostedNodeGateReason(selectedSelfHostedNode);
+  }, [selectedSelfHostedNode, wizardState.runtimePlacement]);
+  const selectedAgentRuntimePlacement = useMemo(() => {
+    const config = readRecord(selectedAgent?.config);
+    const metadata = readRecord(selectedAgent?.metadata);
+    const runtimeSupply = readRecord(config.runtime_supply ?? metadata.runtime_supply);
+    const placement = readRecord(runtimeSupply.placement);
+    return normalizeRuntimePlacement(
+      placement.kind
+      ?? config.runtime_placement
+      ?? metadata.runtime_placement
+      ?? selectedAgent?.runtime_target,
+    );
+  }, [selectedAgent]);
+  const selectedAgentSelfHostedProfileId = useMemo(() => {
+    const config = readRecord(selectedAgent?.config);
+    const metadata = readRecord(selectedAgent?.metadata);
+    const binding = readRecord(metadata.self_hosted_runtime_binding);
+    return readString(config.runtime_profile_id ?? binding.runtime_profile_id ?? metadata.runtime_profile_id);
+  }, [selectedAgent]);
+  const selectedAgentSelfHostedNode = useMemo(
+    () => selfHostedNodeOptions.find((item) => item.runtimeProfileId === selectedAgentSelfHostedProfileId) ?? null,
+    [selectedAgentSelfHostedProfileId, selfHostedNodeOptions],
+  );
+  const selectedAgentSelfHostedDeployBlocker = useMemo(() => {
+    if (selectedAgentRuntimePlacement !== 'customer_hosted') {
+      return null;
+    }
+    if (!selectedAgentSelfHostedProfileId) {
+      return 'Self-hosted deployment requires an explicit runtime node binding.';
+    }
+    return selfHostedNodeGateReason(selectedAgentSelfHostedNode);
+  }, [selectedAgentRuntimePlacement, selectedAgentSelfHostedNode, selectedAgentSelfHostedProfileId]);
   const selectedWizardConnector = useMemo(
     () => selectedTelegramReadiness?.connectors.find((item) => item.id === wizardState.telegramConnectorId) ?? null,
     [selectedTelegramReadiness, wizardState.telegramConnectorId],
@@ -2260,6 +2414,19 @@ export function WorkstationDeployedAgentsPane({
       setErrorMessage(error instanceof Error ? error.message : 'AI model catalog is unavailable.');
     } finally {
       setIsLoadingProviderCatalog(false);
+    }
+  }
+
+  async function loadRuntimeAttachments() {
+    setIsLoadingRuntimeAttachments(true);
+    try {
+      const payload = await services.client.listRuntimeAttachments();
+      setRuntimeAttachments(normalizeRuntimeAttachments(payload));
+    } catch (error) {
+      setRuntimeAttachments([]);
+      setErrorMessage(error instanceof Error ? error.message : 'Runtime node inventory is unavailable.');
+    } finally {
+      setIsLoadingRuntimeAttachments(false);
     }
   }
 
@@ -2464,6 +2631,7 @@ export function WorkstationDeployedAgentsPane({
   useEffect(() => {
     void refreshAgents();
     void refreshStudioTemplates();
+    void loadRuntimeAttachments();
     const handle = window.setTimeout(() => {
       void refreshProviderCatalog();
     }, hadInitialCache ? 120 : 260);
@@ -2518,6 +2686,14 @@ export function WorkstationDeployedAgentsPane({
     }
     setWizardState((current) => applyProviderCatalogDefaults(current, providerCatalog));
   }, [isWizardOpen, providerCatalog]);
+
+  useEffect(() => {
+    if (!isWizardOpen || wizardState.runtimePlacement !== 'customer_hosted') {
+      return;
+    }
+    void loadRuntimeAttachments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isWizardOpen, wizardState.runtimePlacement]);
 
   useEffect(() => {
     const agentId = readString(selectedAgentId);
@@ -2809,6 +2985,24 @@ export function WorkstationDeployedAgentsPane({
         return;
       }
     }
+    if (wizardState.runtimePlacement === 'customer_hosted') {
+      if (!wizardState.selfHostedRuntimeProfileId.trim()) {
+        setErrorMessage('Self-hosted mode requires selecting a runtime node.');
+        return;
+      }
+      if (selfHostedWizardNodeBlocker) {
+        setErrorMessage(selfHostedWizardNodeBlocker);
+        return;
+      }
+      if (!wizardState.selfHostedPrivacyAccepted) {
+        setErrorMessage('Accept the privacy contract before saving a self-hosted assistant.');
+        return;
+      }
+      if (!wizardState.selfHostedSafetyAccepted) {
+        setErrorMessage('Accept the safety contract before saving a self-hosted assistant.');
+        return;
+      }
+    }
     if (wizardState.customerChannel === 'telegram' && wizardState.telegramEnabled && !wizardState.telegramConnectorId.trim()) {
       setErrorMessage('Choose a Telegram connected app before saving a live-ready assistant.');
       return;
@@ -2826,6 +3020,9 @@ export function WorkstationDeployedAgentsPane({
       channels: buildChannelPayload(wizardState),
       knowledgeSources: parseKnowledgeSources(wizardState.knowledgeSourceText),
       runtimeTarget: resolvedRuntimeTarget,
+      runtimeProfileId: wizardState.runtimePlacement === 'customer_hosted'
+        ? wizardState.selfHostedRuntimeProfileId.trim() || null
+        : null,
       billingPlan: wizardState.billingPlan,
       provider: route.providerId,
       model: route.modelId,
@@ -2844,6 +3041,15 @@ export function WorkstationDeployedAgentsPane({
         computer_automation_enabled: wizardState.computerAutomationEnabled,
         approval_mode: wizardState.approvalMode,
         customer_channel: wizardState.customerChannel,
+        self_hosted_runtime_profile_id: wizardState.runtimePlacement === 'customer_hosted'
+          ? wizardState.selfHostedRuntimeProfileId.trim() || null
+          : null,
+        self_hosted_privacy_contract_accepted: wizardState.runtimePlacement === 'customer_hosted'
+          ? wizardState.selfHostedPrivacyAccepted
+          : null,
+        self_hosted_safety_contract_accepted: wizardState.runtimePlacement === 'customer_hosted'
+          ? wizardState.selfHostedSafetyAccepted
+          : null,
       },
     };
 
@@ -2903,6 +3109,10 @@ export function WorkstationDeployedAgentsPane({
   async function handleDeploymentAction(action: 'deploy' | 'pause') {
     const agentId = readString(selectedAgent?.id);
     if (!agentId) {
+      return;
+    }
+    if (action === 'deploy' && selectedAgentSelfHostedDeployBlocker) {
+      setErrorMessage(selectedAgentSelfHostedDeployBlocker);
       return;
     }
     if (
@@ -3419,6 +3629,28 @@ export function WorkstationDeployedAgentsPane({
                       <FormReadout label="Channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
                       <FormReadout label="Runtime mode" value={runtimePlacementLabel(readRecord(selectedAgent?.config).runtime_placement ?? readRecord(selectedAgent?.metadata).runtime_placement ?? selectedAgent?.runtime_target)} />
                     </FormGrid>
+                    {selectedAgentRuntimePlacement === 'customer_hosted' ? (
+                      <div className="app-stack-2">
+                        <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
+                          <FormReadout label="Node health" value={selfHostedNodeHealthLabel(selectedAgentSelfHostedNode)} />
+                          <FormReadout label="Node" value={selectedAgentSelfHostedNode?.label || 'Not bound'} />
+                          <FormReadout label="Node kind" value={humanizeToken(selectedAgentSelfHostedNode?.nodeKind, 'n/a')} />
+                        </FormGrid>
+                        {selectedAgentSelfHostedDeployBlocker ? (
+                          <StateBanner
+                            tone="warning"
+                            title="Self-hosted readiness blocked"
+                            detail={selectedAgentSelfHostedDeployBlocker}
+                          />
+                        ) : (
+                          <StateBanner
+                            tone="success"
+                            title="Self-hosted readiness passed"
+                            detail="This assistant runs on customer-hosted compute only. No silent fallback to platform-hosted runtime."
+                          />
+                        )}
+                      </div>
+                    ) : null}
                   </ListDetailPanel>
                 ) : null}
               </div>
@@ -3445,8 +3677,10 @@ export function WorkstationDeployedAgentsPane({
                           busyAgentId === readString(selectedAgent.id)
                           || readString(selectedAgent.deployment_state).toLowerCase() === 'live'
                           || isLoadingTelegramReadiness
+                          || isLoadingRuntimeAttachments
                           || !selectedTelegramReadiness
                           || (selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
+                          || Boolean(selectedAgentSelfHostedDeployBlocker)
                         }
                       >
                         Deploy
@@ -4104,8 +4338,10 @@ export function WorkstationDeployedAgentsPane({
                               busyAgentId === readString(overlayAgent.id)
                               || readString(overlayAgent.deployment_state).toLowerCase() === 'live'
                               || isLoadingTelegramReadiness
+                              || isLoadingRuntimeAttachments
                               || !selectedTelegramReadiness
                               || (selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
+                              || Boolean(selectedAgentSelfHostedDeployBlocker)
                             }
                           >
                             Deploy
@@ -4934,6 +5170,61 @@ export function WorkstationDeployedAgentsPane({
                       </FormSelect>
                     </FormField>
                   </FormGrid>
+                  {wizardState.runtimePlacement === 'customer_hosted' ? (
+                    <div className="app-stack-3">
+                      <StateBanner
+                        tone="neutral"
+                        title="Self-hosted execution boundary"
+                        detail="This mode runs only on your selected customer-owned node. Platform-hosted compute is not used as fallback."
+                      />
+                      <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                        <FormField label="Self-hosted node" hint="Choose an enrolled runtime node in this workspace.">
+                          <FormSelect
+                            value={wizardState.selfHostedRuntimeProfileId}
+                            onChange={(event) => setWizardField('selfHostedRuntimeProfileId', event.currentTarget.value)}
+                            disabled={isLoadingRuntimeAttachments}
+                          >
+                            <option value="">
+                              {isLoadingRuntimeAttachments ? 'Loading nodes…' : selfHostedNodeOptions.length > 0 ? 'Select a node' : 'No enrolled nodes found'}
+                            </option>
+                            {selfHostedNodeOptions.map((node) => (
+                              <option key={node.runtimeProfileId} value={node.runtimeProfileId}>
+                                {node.label} ({humanizeToken(node.nodeKind, 'node')})
+                              </option>
+                            ))}
+                          </FormSelect>
+                        </FormField>
+                        <FormReadout label="Node health" value={selfHostedNodeHealthLabel(selectedSelfHostedNode)} />
+                        <FormReadout label="Heartbeat" value={selectedSelfHostedNode?.heartbeatAt ? formatRelativeTime(selectedSelfHostedNode.heartbeatAt) : 'n/a'} />
+                        <FormReadout label="Capabilities" value={selectedSelfHostedNode?.capabilities.length ? selectedSelfHostedNode.capabilities.join(', ') : 'n/a'} />
+                      </FormGrid>
+                      <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                        <FormField label="Privacy contract" hint="Required before a self-hosted assistant can be saved.">
+                          <FormSelect
+                            value={wizardState.selfHostedPrivacyAccepted ? 'accepted' : 'pending'}
+                            onChange={(event) => setWizardField('selfHostedPrivacyAccepted', event.currentTarget.value === 'accepted')}
+                          >
+                            <option value="pending">Not accepted</option>
+                            <option value="accepted">Accepted</option>
+                          </FormSelect>
+                        </FormField>
+                        <FormField label="Safety contract" hint="Required before a self-hosted assistant can be saved.">
+                          <FormSelect
+                            value={wizardState.selfHostedSafetyAccepted ? 'accepted' : 'pending'}
+                            onChange={(event) => setWizardField('selfHostedSafetyAccepted', event.currentTarget.value === 'accepted')}
+                          >
+                            <option value="pending">Not accepted</option>
+                            <option value="accepted">Accepted</option>
+                          </FormSelect>
+                        </FormField>
+                      </FormGrid>
+                      {selfHostedWizardNodeBlocker ? (
+                        <StateBanner tone="warning" title="Self-hosted setup required" detail={selfHostedWizardNodeBlocker} />
+                      ) : (
+                        <StateBanner tone="success" title="Self-hosted node ready" detail="Node selection and health checks passed for this draft." />
+                      )}
+                    </div>
+                  ) : null}
                   <details className="app-stack-3">
                     <summary>Computer Automation Add-on</summary>
                     <p className="app-surface-field-help">
@@ -5143,7 +5434,7 @@ export function WorkstationDeployedAgentsPane({
                         onClick={() => {
                           void handleDeploymentAction('deploy');
                         }}
-                        disabled={busyAgentId === readString(selectedAgent.id)}
+                        disabled={busyAgentId === readString(selectedAgent.id) || Boolean(selectedAgentSelfHostedDeployBlocker)}
                       >
                         Deploy
                       </AppButton>

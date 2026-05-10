@@ -46,6 +46,15 @@ class _FakePool:
         return _FakeAcquire(self._connection)
 
 
+class _FakeExecutePool:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def execute(self, query, *args):
+        self.calls.append((query, args))
+        return "UPDATE 1"
+
+
 class AgentRegistryRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
         global agent_registry_repository
@@ -86,6 +95,204 @@ class AgentRegistryRepositoryTests(unittest.TestCase):
         self.assertEqual(result["workflow_id"], "wf-test")
         self.assertEqual(result["workflow_version_id"], "wfver-test")
         fetch_snapshot.assert_awaited_once()
+
+    def test_enqueue_self_hosted_runtime_command_rejects_runtime_node_scope_mismatch(self) -> None:
+        profile = {
+            "id": "rprof-1",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "runtime_id": "node-expected",
+            "runtime_class": "self_hosted_business_node",
+            "metadata": {"owner_approved": True, "runtime_node_id": "node-expected"},
+        }
+        with patch(
+            "server_modules.agent_registry_repository.get_runtime_profile",
+            new=AsyncMock(return_value=profile),
+        ):
+            with self.assertRaises(ValueError) as exc:
+                asyncio.run(
+                    agent_registry_repository.enqueue_self_hosted_runtime_command(
+                        runtime_profile_id="rprof-1",
+                        tenant_id="tenant-1",
+                        workspace_id="workspace-1",
+                        runtime_node_id="node-other",
+                        agent_id="agent-1",
+                        command_type="runtime_action",
+                        command_payload={"action": "open_url"},
+                    )
+                )
+        self.assertIn("runtime_node_id does not match runtime profile binding", str(exc.exception))
+
+    def test_claim_self_hosted_runtime_commands_requires_valid_node_session_token(self) -> None:
+        profile = {
+            "id": "rprof-1",
+            "workspace_id": "workspace-1",
+            "runtime_id": "node-1",
+            "runtime_class": "self_hosted_business_node",
+            "metadata": {"node_session_token_hash": agent_registry_repository._token_hash("good-token")},
+        }
+        with patch(
+            "server_modules.agent_registry_repository.get_runtime_profile",
+            new=AsyncMock(return_value=profile),
+        ):
+            with self.assertRaises(ValueError) as exc:
+                asyncio.run(
+                    agent_registry_repository.claim_self_hosted_runtime_commands(
+                        runtime_profile_id="rprof-1",
+                        node_session_token="bad-token",
+                    )
+                )
+        self.assertIn("Node session token is invalid", str(exc.exception))
+
+    def test_claim_self_hosted_runtime_commands_returns_signed_scoped_commands(self) -> None:
+        profile = {
+            "id": "rprof-1",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "runtime_id": "node-1",
+            "runtime_class": "self_hosted_business_node",
+            "metadata": {
+                "node_session_token_hash": agent_registry_repository._token_hash("sess-node-1"),
+                "node_command_queue": [
+                    {
+                        "id": "shcmd_1",
+                        "workspace_id": "workspace-1",
+                        "runtime_node_id": "node-1",
+                        "agent_id": "agent-1",
+                        "command_type": "runtime_action",
+                        "command_payload": {"action": "open_url", "url": "https://example.com"},
+                        "state": "queued",
+                        "created_at": "2026-05-11T00:00:00Z",
+                        "expires_at": "2099-01-01T00:00:00Z",
+                    }
+                ],
+            },
+        }
+        fake_pool = _FakeExecutePool()
+        with (
+            patch(
+                "server_modules.agent_registry_repository.get_runtime_profile",
+                new=AsyncMock(return_value=profile),
+            ),
+            patch(
+                "server_modules.agent_registry_repository.control_plane_repository.ensure_control_plane_schema",
+                new=AsyncMock(return_value=fake_pool),
+            ),
+        ):
+            result = asyncio.run(
+                agent_registry_repository.claim_self_hosted_runtime_commands(
+                    runtime_profile_id="rprof-1",
+                    node_session_token="sess-node-1",
+                    max_commands=1,
+                    lease_seconds=60,
+                )
+            )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["claimed_count"], 1)
+        claimed = result["commands"][0]
+        self.assertEqual(claimed["workspace_id"], "workspace-1")
+        self.assertEqual(claimed["runtime_node_id"], "node-1")
+        self.assertEqual(claimed["agent_id"], "agent-1")
+        self.assertTrue(str(claimed["command_signature"]).strip())
+        self.assertEqual(len(fake_pool.calls), 1)
+
+    def test_complete_self_hosted_runtime_command_rejects_cross_node_scope(self) -> None:
+        profile = {
+            "id": "rprof-1",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "runtime_id": "node-1",
+            "runtime_class": "self_hosted_business_node",
+            "metadata": {
+                "node_session_token_hash": agent_registry_repository._token_hash("sess-node-1"),
+                "node_command_queue": [
+                    {
+                        "id": "shcmd_1",
+                        "workspace_id": "workspace-1",
+                        "runtime_node_id": "node-2",
+                        "agent_id": "agent-1",
+                        "command_type": "runtime_action",
+                        "command_payload": {"action": "open_url"},
+                        "state": "claimed",
+                        "created_at": "2026-05-11T00:00:00Z",
+                        "expires_at": "2099-01-01T00:00:00Z",
+                    }
+                ],
+            },
+        }
+        with patch(
+            "server_modules.agent_registry_repository.get_runtime_profile",
+            new=AsyncMock(return_value=profile),
+        ):
+            with self.assertRaises(ValueError) as exc:
+                asyncio.run(
+                    agent_registry_repository.complete_self_hosted_runtime_command(
+                        runtime_profile_id="rprof-1",
+                        node_session_token="sess-node-1",
+                        command_id="shcmd_1",
+                        status="completed",
+                        result_payload={"ok": True},
+                    )
+                )
+        self.assertIn("runtime_node_id scope mismatch", str(exc.exception))
+
+    def test_enroll_self_hosted_runtime_profile_rejects_expired_token(self) -> None:
+        profile = {
+            "id": "rprof-1",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "runtime_id": "node-1",
+            "runtime_class": "self_hosted_business_node",
+            "metadata": {
+                "enrollment": {
+                    "token_hash": agent_registry_repository._token_hash("tok-expired"),
+                    "expires_at": "2000-01-01T00:00:00Z",
+                    "issued_for_workspace_id": "workspace-1",
+                }
+            },
+        }
+        with patch(
+            "server_modules.agent_registry_repository.get_runtime_profile",
+            new=AsyncMock(return_value=profile),
+        ):
+            with self.assertRaises(ValueError) as exc:
+                asyncio.run(
+                    agent_registry_repository.enroll_self_hosted_runtime_profile(
+                        runtime_profile_id="rprof-1",
+                        enrollment_token="tok-expired",
+                        public_key="pk-node-1",
+                    )
+                )
+        self.assertIn("expired", str(exc.exception).lower())
+
+    def test_enroll_self_hosted_runtime_profile_rejects_workspace_scope_mismatch(self) -> None:
+        profile = {
+            "id": "rprof-1",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-2",
+            "runtime_id": "node-1",
+            "runtime_class": "self_hosted_business_node",
+            "metadata": {
+                "enrollment": {
+                    "token_hash": agent_registry_repository._token_hash("tok-1"),
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "issued_for_workspace_id": "workspace-1",
+                }
+            },
+        }
+        with patch(
+            "server_modules.agent_registry_repository.get_runtime_profile",
+            new=AsyncMock(return_value=profile),
+        ):
+            with self.assertRaises(ValueError) as exc:
+                asyncio.run(
+                    agent_registry_repository.enroll_self_hosted_runtime_profile(
+                        runtime_profile_id="rprof-1",
+                        enrollment_token="tok-1",
+                        public_key="pk-node-1",
+                    )
+                )
+        self.assertIn("workspace scope mismatch", str(exc.exception).lower())
 
 
 if __name__ == "__main__":

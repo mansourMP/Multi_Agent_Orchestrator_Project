@@ -187,7 +187,7 @@ async def _bind_cloud_runtime_session_if_needed(
     context_hints = dict(turn_request.context_hints or {})
     turn_metadata = _metadata_dict(context_hints.get("metadata"))
     session_metadata = _metadata_dict(session_record.get("metadata"))
-    binding = await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
+    binding = await deployed_agent_virtual_runtime_service.ensure_runtime_session_binding(
         deployed_agent_id=turn_metadata.get("deployed_agent_id") or session_metadata.get("deployed_agent_id"),
         tenant_id=turn_request.tenant_id,
         workspace_id=turn_request.workspace_id,

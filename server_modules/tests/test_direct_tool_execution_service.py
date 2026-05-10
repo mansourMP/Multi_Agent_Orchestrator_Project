@@ -466,6 +466,87 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
 
         browser_adapter.assert_not_called()
 
+    def test_execute_single_direct_tool_call_routes_self_hosted_actions_through_runtime(self) -> None:
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(_callbacks()),
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ), patch(
+            "server_modules.direct_tool_execution_service.deployed_agent_virtual_runtime_service.execute_bound_self_hosted_runtime_tool_call",
+            new=AsyncMock(return_value='{"status":"ok","runtime":"self_hosted"}'),
+        ) as self_hosted_exec, patch(
+            "server_modules.direct_tool_execution_service.deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call",
+            new=AsyncMock(return_value=None),
+        ) as cloud_exec, patch(
+            "server_modules.skills_service._resolve_direct_tool_browser_adapter",
+        ) as browser_adapter:
+            result = service.execute_single_direct_tool_call(
+                tool_call={"name": "browser__navigate", "arguments": {"url": "https://intranet.example"}},
+                workspace_id="workspace-1",
+                thread_id="thread-1",
+                callbacks=callbacks,
+                session_ctx={
+                    "tenant_id": "tenant-1",
+                    "agent_turn_request": {
+                        "context_hints": {
+                            "metadata": {
+                                "deployed_agent_id": "dagent_1",
+                                "runtime_session_id": "shsess_1",
+                                "runtime_session_binding": "self_hosted_agent",
+                            }
+                        }
+                    },
+                },
+            )
+
+        self.assertIn('"runtime":"self_hosted"', result)
+        self_hosted_exec.assert_awaited_once()
+        cloud_exec.assert_not_awaited()
+        browser_adapter.assert_not_called()
+
+    def test_execute_single_direct_tool_call_self_hosted_binding_never_falls_back_to_generic(self) -> None:
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(_callbacks()),
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ), patch(
+            "server_modules.direct_tool_execution_service.deployed_agent_virtual_runtime_service.execute_bound_self_hosted_runtime_tool_call",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "server_modules.skills_service._resolve_direct_tool_browser_adapter",
+        ) as browser_adapter:
+            with self.assertRaisesRegex(RuntimeError, "must execute through bound node runtime"):
+                service.execute_single_direct_tool_call(
+                    tool_call={"name": "browser__navigate", "arguments": {"url": "https://intranet.example"}},
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={
+                        "tenant_id": "tenant-1",
+                        "agent_turn_request": {
+                            "context_hints": {
+                                "metadata": {
+                                    "deployed_agent_id": "dagent_1",
+                                    "runtime_session_id": "shsess_1",
+                                    "runtime_session_binding": "self_hosted_agent",
+                                }
+                            }
+                        },
+                    },
+                )
+
+        browser_adapter.assert_not_called()
+
     def test_execute_single_direct_tool_call_uses_broker_guard_for_execute_actions(self) -> None:
         callbacks = _callbacks()
         callbacks = service.DirectToolExecutionCallbacks(

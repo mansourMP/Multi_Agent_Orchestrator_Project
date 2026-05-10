@@ -63,6 +63,8 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertIn(("GET", "/agent-registry/definitions"), app.routes)
             self.assertIn(("GET", "/agent-registry/definitions/{definition_id}"), app.routes)
             self.assertIn(("GET", "/agent-registry/runtime-profiles"), app.routes)
+            self.assertIn(("POST", "/agent-registry/self-hosted-nodes"), app.routes)
+            self.assertIn(("POST", "/agent-registry/self-hosted-nodes/{runtime_profile_id}/approve"), app.routes)
             self.assertIn(("GET", "/agent-registry/mcp/servers"), app.routes)
             self.assertIn(("GET", "/agent-registry/mcp/servers/{server_id}"), app.routes)
             self.assertIn(("PUT", "/agent-registry/mcp/servers/{server_id}"), app.routes)
@@ -214,6 +216,58 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertEqual(result["skill_ids"], ["mcp:inventory-feed:lookup_stock"])
             self.assertEqual(upsert_mock.call_args.kwargs["workspace_id"], "workspace-1")
             self.assertTrue(upsert_mock.call_args.kwargs["discover_tools"])
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_create_self_hosted_node_requires_owner_and_returns_enrollment_token(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("POST", "/agent-registry/self-hosted-nodes")]
+
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.agent_registry_repository.create_self_hosted_runtime_profile_enrollment_intent",
+                    new=AsyncMock(
+                        return_value={
+                            "runtime_profile_id": "rprof_1",
+                            "runtime_node_id": "node_1",
+                            "enrollment_token": "tok-1",
+                            "enrollment_expires_at": "2026-05-11T00:10:00Z",
+                            "token_ttl_seconds": 600,
+                            "runtime_profile": {"id": "rprof_1"},
+                        }
+                    ),
+                ) as create_mock,
+            ):
+                result = asyncio.run(
+                    route(
+                        agent_registry_api.SelfHostedNodeCreateRequest(
+                            workspace_id="workspace-1",
+                            label="Mansur Mac mini",
+                            node_kind="mac_mini",
+                            capabilities=["shell.execute"],
+                            max_concurrent_sessions=2,
+                            root_policy={"filesystem": "workspace_scoped"},
+                            token_ttl_seconds=600,
+                        ),
+                        current_user={"user_id": "owner-1", "role": "owner", "is_admin": True},
+                    )
+                )
+
+            self.assertEqual(result["runtime_profile_id"], "rprof_1")
+            self.assertEqual(result["enrollment_token"], "tok-1")
+            self.assertEqual(create_mock.await_args.kwargs["workspace_id"], "workspace-1")
+            self.assertEqual(create_mock.await_args.kwargs["owner_user_id"], "owner-1")
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)

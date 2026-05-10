@@ -295,6 +295,67 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("backing_install_id TEXT NOT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE", schema)
         self.assertIn("UNIQUE(backing_install_id)", schema)
 
+    def test_self_hosted_runtime_binding_metadata_persists_contract_fields(self) -> None:
+        config = deployed_agent_service._config_from_record(
+            {
+                "name": "Self-hosted Agent",
+                "runtime_target": "self_host_runtime",
+                "config": {
+                    "studio_agent_mode": "self_hosted_agent",
+                    "runtime_placement": "customer_hosted",
+                    "runtime_target": "self_host_runtime",
+                    "runtime_profile_id": "rprof-1",
+                    "commerce_policy": {"monthly_cost_cap_usd": 300},
+                    "computer_automation": {
+                        "enabled": True,
+                        "runtime_class": "virtual_code_sandbox",
+                        "allowed_domains": ["intranet.example"],
+                        "max_concurrent_sessions": 2,
+                        "daily_budget_usd": 10,
+                        "monthly_budget_usd": 100,
+                        "idle_timeout_seconds": 300,
+                        "max_session_runtime_seconds": 3600,
+                    },
+                },
+            }
+        )
+        inventory = {
+            "attachments": [
+                {
+                    "attachment_kind": "self_hosted_business_node",
+                    "attachment_id": "attach-1",
+                    "runtime_profile_id": "rprof-1",
+                    "runtime_node_id": "node-1",
+                    "workspace_id": "ws-1",
+                    "node_kind": "mac_mini",
+                    "online": True,
+                    "healthy": True,
+                    "owner_approved": True,
+                    "self_hosted_node_status": "online",
+                    "max_concurrent_sessions": 5,
+                    "capabilities": ["shell.execute", "computer_control"],
+                }
+            ]
+        }
+
+        metadata = deployed_agent_service._metadata_with_self_hosted_runtime_binding(
+            metadata={},
+            config=config,
+            runtime_inventory=inventory,
+            workspace_id="ws-1",
+            require_binding=True,
+        )
+        binding = dict(metadata.get("self_hosted_runtime_binding") or {})
+
+        self.assertEqual(binding.get("runtime_target"), "self_host_runtime")
+        self.assertEqual(binding.get("runtime_node_id"), "node-1")
+        self.assertEqual(binding.get("runtime_attachment_id"), "attach-1")
+        self.assertEqual(binding.get("runtime_profile_id"), "rprof-1")
+        self.assertEqual(binding.get("filesystem_scope"), "none")
+        self.assertEqual(binding.get("domain_allowlist"), ["intranet.example"])
+        self.assertEqual(binding.get("allowed_capabilities"), ["shell.execute"])
+        self.assertEqual(binding.get("quota_policy", {}).get("max_concurrent_sessions"), 2)
+
     async def test_repository_create_and_resolve_deployed_agent_rows(self) -> None:
         row = _deployed_agent_row()
         connection = AsyncMock()
@@ -900,7 +961,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         persisted_row = _deployed_agent_row(
             metadata={"runtime_placement": "customer_hosted"},
         )
-        persisted_row["runtime_target"] = "self_hosted"
+        persisted_row["runtime_target"] = "self_host_runtime"
 
         with (
             patch(
@@ -910,6 +971,29 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
                 new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_attachments",
+                new=AsyncMock(
+                    return_value={
+                        "attachments": [
+                            {
+                                "attachment_kind": "self_hosted_business_node",
+                                "attachment_id": "attach-1",
+                                "runtime_profile_id": "rprof-1",
+                                "runtime_node_id": "node-1",
+                                "workspace_id": "ws-1",
+                                "node_kind": "mac_mini",
+                                "online": True,
+                                "healthy": True,
+                                "owner_approved": True,
+                                "self_hosted_node_status": "online",
+                                "max_concurrent_sessions": 2,
+                                "capabilities": ["shell.execute"],
+                            }
+                        ]
+                    }
+                ),
             ),
             patch(
                 "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
@@ -938,10 +1022,30 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 current_user=_owner_user(),
                 owner_workspace_id="ws-1",
                 name="Store Assistant",
-                config={"runtime_placement": "customer_hosted"},
+                config={
+                    "runtime_placement": "customer_hosted",
+                    "runtime_profile_id": "rprof-1",
+                    "computer_automation": {
+                        "enabled": True,
+                        "runtime_class": "virtual_code_sandbox",
+                        "allowed_domains": ["intranet.example"],
+                        "max_concurrent_sessions": 1,
+                        "daily_budget_usd": 5,
+                        "monthly_budget_usd": 25,
+                    },
+                },
             )
 
+        metadata_payload = create_deployed_agent_mock.await_args.kwargs["metadata"]
         self.assertEqual(create_deployed_agent_mock.await_args.kwargs["runtime_target"], "self_hosted")
+        self.assertEqual(
+            metadata_payload["self_hosted_runtime_binding"]["runtime_node_id"],
+            "node-1",
+        )
+        self.assertEqual(
+            metadata_payload["self_hosted_runtime_binding"]["runtime_target"],
+            "self_host_runtime",
+        )
         self.assertEqual(create_specialist_mock.await_args.kwargs["runtime_mode"], "hosted_secure")
 
     async def test_create_draft_deployed_agent_rejects_text_mode_with_computer_automation(self) -> None:
@@ -2640,6 +2744,237 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         update_manifest_mock.assert_not_awaited()
         set_state_mock.assert_not_awaited()
 
+    async def test_deploy_deployed_agent_requires_self_hosted_runtime_profile_binding(self) -> None:
+        workspace = _workspace_record()
+        workspace["metadata"] = {"billing": {"plan": "pro"}}
+        draft_row = _deployed_agent_row(
+            deployment_state="ready_for_review",
+            metadata={
+                "source": "test",
+                "runtime_placement": "customer_hosted",
+                "studio_agent_mode": "self_hosted_agent",
+                "privacy_contract_snapshot": _privacy_contract_snapshot(),
+                "computer_safety_contract_snapshot": {
+                    "schema_version": 1,
+                    "enabled": False,
+                    "required_for_mode": False,
+                    "studio_agent_mode": "self_hosted_agent",
+                    "isolation_boundary": "isolated_sandbox",
+                    "inherit_host_environment": False,
+                    "filesystem_default_access": "none",
+                    "domain_allowlist": [],
+                    "download_install_policy": {"downloads_allowed": False, "software_install_allowed": False},
+                    "terminal_command_policy": "blocked",
+                    "sensitive_action_confirmation_required": True,
+                    "session_timeout_seconds": 300,
+                    "max_runtime_seconds": 1800,
+                    "screenshot_session_recording": {"screenshots_enabled": False, "recording_policy": "metadata_only"},
+                    "emergency_stop_enabled": True,
+                    "required_owner_approval_actions": [],
+                },
+                "computer_automation": {
+                    "enabled": False,
+                },
+            },
+        )
+        draft_row["runtime_target"] = "self_hosted"
+        draft_row["channels"] = {
+            "telegram": {
+                "enabled": True,
+                "is_inbound_owner": True,
+                "endpoint_key": "store-bot",
+            }
+        }
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=workspace),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(return_value=_telegram_readiness_payload()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(
+                    return_value={
+                        "targets": [
+                            {
+                                "target_id": "self_host_runtime",
+                                "available": True,
+                                "online": True,
+                                "healthy": True,
+                                "attachment_count": 1,
+                            }
+                        ]
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(),
+            ) as update_deployed_agent_mock,
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(),
+            ) as update_manifest_mock,
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.set_deployed_agent_state",
+                new=AsyncMock(),
+            ) as set_state_mock,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.deploy_deployed_agent(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("runtime_profile_id", str(error.exception.detail))
+        update_deployed_agent_mock.assert_not_awaited()
+        update_manifest_mock.assert_not_awaited()
+        set_state_mock.assert_not_awaited()
+
+    async def test_deploy_deployed_agent_blocks_self_hosted_without_registered_node(self) -> None:
+        workspace = _workspace_record()
+        workspace["metadata"] = {"billing": {"plan": "pro"}}
+        draft_row = _deployed_agent_row(
+            deployment_state="ready_for_review",
+            metadata={
+                "source": "test",
+                "runtime_placement": "customer_hosted",
+                "studio_agent_mode": "self_hosted_agent",
+                "runtime_profile_id": "rprof-404",
+                "self_hosted_runtime_binding": {
+                    "runtime_target": "self_host_runtime",
+                    "runtime_profile_id": "rprof-404",
+                    "runtime_attachment_id": "attach-missing",
+                    "runtime_node_id": "node-missing",
+                    "workspace_id": "ws-1",
+                    "allowed_capabilities": ["shell.execute"],
+                    "filesystem_scope": "none",
+                    "domain_allowlist": ["intranet.example"],
+                },
+                "privacy_contract_snapshot": _privacy_contract_snapshot(),
+                "computer_safety_contract_snapshot": {
+                    "schema_version": 1,
+                    "enabled": False,
+                    "required_for_mode": False,
+                    "studio_agent_mode": "self_hosted_agent",
+                    "isolation_boundary": "isolated_sandbox",
+                    "inherit_host_environment": False,
+                    "filesystem_default_access": "none",
+                    "domain_allowlist": [],
+                    "download_install_policy": {"downloads_allowed": False, "software_install_allowed": False},
+                    "terminal_command_policy": "blocked",
+                    "sensitive_action_confirmation_required": True,
+                    "session_timeout_seconds": 300,
+                    "max_runtime_seconds": 1800,
+                    "screenshot_session_recording": {"screenshots_enabled": False, "recording_policy": "metadata_only"},
+                    "emergency_stop_enabled": True,
+                    "required_owner_approval_actions": [],
+                },
+                "computer_automation": {
+                    "enabled": False,
+                },
+            },
+        )
+        draft_row["runtime_target"] = "self_hosted"
+        draft_row["config"] = {
+            "studio_agent_mode": "self_hosted_agent",
+            "runtime_placement": "customer_hosted",
+            "runtime_profile_id": "rprof-404",
+        }
+        draft_row["channels"] = {
+            "telegram": {
+                "enabled": True,
+                "is_inbound_owner": True,
+                "endpoint_key": "store-bot",
+            }
+        }
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=workspace),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(return_value=_telegram_readiness_payload()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_targets",
+                new=AsyncMock(
+                    return_value={
+                        "targets": [
+                            {
+                                "target_id": "self_host_runtime",
+                                "available": True,
+                                "online": True,
+                                "healthy": True,
+                                "attachment_count": 1,
+                            }
+                        ]
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.runtime_attachment_service.list_workspace_runtime_attachments",
+                new=AsyncMock(
+                    return_value={
+                        "attachments": [
+                            {
+                                "attachment_kind": "self_hosted_business_node",
+                                "runtime_profile_id": "rprof-1",
+                                "runtime_node_id": "node-1",
+                                "workspace_id": "ws-1",
+                                "online": True,
+                                "healthy": True,
+                                "owner_approved": True,
+                                "self_hosted_node_status": "online",
+                                "max_concurrent_sessions": 1,
+                                "capabilities": ["shell.execute"],
+                            }
+                        ]
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(),
+            ) as update_deployed_agent_mock,
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(),
+            ) as update_manifest_mock,
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.set_deployed_agent_state",
+                new=AsyncMock(),
+            ) as set_state_mock,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.deploy_deployed_agent(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("matching runtime_profile_id", str(error.exception.detail))
+        update_deployed_agent_mock.assert_not_awaited()
+        update_manifest_mock.assert_not_awaited()
+        set_state_mock.assert_not_awaited()
+
     async def test_kill_deployed_agent_suspends_and_records_kill_switch(self) -> None:
         live_row = _deployed_agent_row(deployment_state="live")
         killed_row = _deployed_agent_row(deployment_state="suspended")
@@ -2786,6 +3121,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value={"status": "terminated"}),
             ) as terminate_runtime_mock,
             patch(
+                "server_modules.deployed_agent_service.deployed_agent_virtual_runtime_service.terminate_bound_self_hosted_runtime_session",
+                new=AsyncMock(return_value=None),
+            ) as terminate_self_hosted_runtime_mock,
+            patch(
                 "server_modules.deployed_agent_service.session_service.terminate_session",
                 new=AsyncMock(),
             ) as terminate_mock,
@@ -2804,6 +3143,11 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["status"], "killed")
         terminate_runtime_mock.assert_awaited_once_with(
+            session_id="sess-1",
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+        )
+        terminate_self_hosted_runtime_mock.assert_awaited_once_with(
             session_id="sess-1",
             tenant_id="tenant-1",
             workspace_id="ws-1",

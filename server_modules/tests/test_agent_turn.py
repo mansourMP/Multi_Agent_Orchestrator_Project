@@ -886,7 +886,7 @@ class AgentTurnTests(unittest.TestCase):
                 patch("server_modules.agent_turn.session_service.create_session", new=AsyncMock(return_value="generated-session")),
                 patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock()) as extend_session,
                 patch(
-                    "server_modules.agent_turn.deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding",
+                    "server_modules.agent_turn.deployed_agent_virtual_runtime_service.ensure_runtime_session_binding",
                     new=AsyncMock(
                         return_value={
                             "metadata_updates": {

@@ -6,11 +6,42 @@ from server_modules.virtual_computer_runtime import (
     PROVIDER_CAPABILITY_KEYS,
     PROVIDER_ID_BROWSERBASE,
     PROVIDER_ID_DAYTONA,
+    PROVIDER_ID_DOCKER_KUBERNETES,
     RUNTIME_CHOICE_VIRTUAL_BROWSER,
     RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+    SelfHostedNodeVirtualComputerRuntime,
     VirtualComputerRuntimeRegistry,
     default_virtual_computer_provider_registry,
 )
+
+
+class _FakeSelfHostedDelegateRuntime:
+    async def create_session(self, payload):
+        return {"session_id": "sess_self_hosted", "payload": dict(payload)}
+
+    async def resume_session(self, payload):
+        return {"session_id": str(payload.get("session_id") or ""), "status": "resumed"}
+
+    async def pause_session(self, payload):
+        return {"session_id": str(payload.get("session_id") or ""), "status": "paused"}
+
+    async def terminate_session(self, payload):
+        return {"session_id": str(payload.get("session_id") or ""), "status": "terminated"}
+
+    async def execute_action(self, payload):
+        return {"session_id": str(payload.get("session_id") or ""), "status": "completed"}
+
+    async def stream_screenshot(self, payload):
+        return {"session_id": str(payload.get("session_id") or ""), "status": "streaming"}
+
+    async def collect_artifact(self, payload):
+        return {"session_id": str(payload.get("session_id") or ""), "status": "collected"}
+
+    async def snapshot_session(self, payload):
+        return {"session_id": str(payload.get("session_id") or ""), "status": "snapshotted"}
+
+    async def export_audit_report(self, payload):
+        return {"session_id": str(payload.get("session_id") or ""), "audit_report": {"event_count": 0}}
 
 
 class VirtualComputerProviderAbstractionTests(unittest.TestCase):
@@ -66,6 +97,87 @@ class VirtualComputerProviderAbstractionTests(unittest.TestCase):
         self.assertEqual(created.get("provider_id"), PROVIDER_ID_DAYTONA)
         self.assertEqual(action.get("provider_id"), PROVIDER_ID_DAYTONA)
         self.assertEqual(action.get("runtime_contract_interface"), "virtual_computer_runtime.v1")
+
+    def test_self_hosted_provider_cannot_fallback_to_in_memory_runtime(self):
+        provider_registry = default_virtual_computer_provider_registry()
+        adapter = provider_registry.select_provider(
+            runtime_choice=RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+            preferred_provider_id=PROVIDER_ID_DOCKER_KUBERNETES,
+        )
+
+        runtime = adapter.build_runtime(fallback_runtime=InMemoryVirtualComputerRuntime())
+        self.assertNotIsInstance(runtime, InMemoryVirtualComputerRuntime)
+
+    def test_self_hosted_runtime_requires_runtime_node_binding(self):
+        runtime = SelfHostedNodeVirtualComputerRuntime(runtime=_FakeSelfHostedDelegateRuntime())
+        with self.assertRaisesRegex(RuntimeError, "self_hosted_runtime_binding"):
+            asyncio.run(runtime.create_session({"runtime_choice": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX}))
+
+        created = asyncio.run(
+            runtime.create_session(
+                {
+                    "runtime_choice": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+                    "workspace_id": "ws-1",
+                    "policy_metadata": {
+                        "self_hosted_runtime_binding": {
+                            "runtime_target": "self_host_runtime",
+                            "workspace_id": "ws-1",
+                            "runtime_node_id": "node-123",
+                            "runtime_profile_id": "rprof-123",
+                            "runtime_attachment_id": "attach-123",
+                        }
+                    },
+                }
+            )
+        )
+        self.assertTrue(created.get("self_hosted"))
+        self.assertEqual(created.get("runtime_kind"), "self_hosted_node_runtime")
+        self.assertEqual(created.get("runtime_node_id"), "node-123")
+        self.assertEqual(created.get("workspace_id"), "ws-1")
+
+        action = asyncio.run(
+            runtime.execute_action(
+                {
+                    "session_id": created.get("session_id"),
+                    "action": "wait",
+                    "action_args": {"duration_ms": 100},
+                }
+            )
+        )
+        self.assertEqual(action.get("runtime_kind"), "self_hosted_node_runtime")
+        self.assertEqual(action.get("runtime_node_id"), "node-123")
+
+    def test_self_hosted_runtime_rejects_raw_runtime_node_override(self):
+        runtime = SelfHostedNodeVirtualComputerRuntime(runtime=_FakeSelfHostedDelegateRuntime())
+        created = asyncio.run(
+            runtime.create_session(
+                {
+                    "runtime_choice": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+                    "workspace_id": "ws-1",
+                    "policy_metadata": {
+                        "self_hosted_runtime_binding": {
+                            "runtime_target": "self_host_runtime",
+                            "workspace_id": "ws-1",
+                            "runtime_node_id": "node-123",
+                            "runtime_profile_id": "rprof-123",
+                            "runtime_attachment_id": "attach-123",
+                        }
+                    },
+                }
+            )
+        )
+        with self.assertRaisesRegex(RuntimeError, "runtime_node_id override"):
+            asyncio.run(
+                runtime.execute_action(
+                    {
+                        "session_id": created.get("session_id"),
+                        "workspace_id": "ws-1",
+                        "runtime_node_id": "node-attacker",
+                        "action": "wait",
+                        "action_args": {"duration_ms": 100},
+                    }
+                )
+            )
 
 
 if __name__ == "__main__":

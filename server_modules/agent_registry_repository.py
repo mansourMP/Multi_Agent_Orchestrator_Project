@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
+import hmac
+import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from server_modules import control_plane_repository
+from server_modules import control_plane_repository, run_state_repository
 
 
 CAPTAIN_AGENT_KIND = "master"
@@ -41,6 +44,17 @@ _SPECIALIST_MODE_CONTRACTS: Dict[str, Dict[str, Any]] = {
         "approval_behavior": "workspace_policy_enforced",
     },
 }
+SELF_HOSTED_NODE_KINDS = {"mac_mini", "mac", "linux_server", "docker_host"}
+SELF_HOSTED_ENROLLMENT_MIN_TTL_SECONDS = 60
+SELF_HOSTED_ENROLLMENT_MAX_TTL_SECONDS = 900
+SELF_HOSTED_ENROLLMENT_DEFAULT_TTL_SECONDS = 600
+SELF_HOSTED_NODE_COMMAND_QUEUE_LIMIT = 500
+SELF_HOSTED_NODE_COMMAND_DEFAULT_TTL_SECONDS = 300
+SELF_HOSTED_NODE_COMMAND_MIN_TTL_SECONDS = 30
+SELF_HOSTED_NODE_COMMAND_MAX_TTL_SECONDS = 3600
+SELF_HOSTED_NODE_COMMAND_DEFAULT_LEASE_SECONDS = 120
+SELF_HOSTED_NODE_COMMAND_MIN_LEASE_SECONDS = 15
+SELF_HOSTED_NODE_COMMAND_MAX_LEASE_SECONDS = 600
 
 
 def _utc_now_iso() -> str:
@@ -95,6 +109,75 @@ def _iso(value: Any) -> Optional[str]:
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     return str(value).strip() or None
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _token_hash(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _hmac_sha256(secret: str, message: str) -> str:
+    return hmac.new(
+        str(secret or "").encode("utf-8"),
+        str(message or "").encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _iso_to_datetime(value: Any) -> Optional[datetime]:
+    token = _iso(value)
+    if not token:
+        return None
+    try:
+        parsed = token[:-1] + "+00:00" if str(token).endswith("Z") else str(token)
+        dt = datetime.fromisoformat(parsed)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _utc_iso_after_seconds(seconds: int) -> str:
+    return (_utc_now() + timedelta(seconds=int(seconds))).isoformat().replace("+00:00", "Z")
+
+
+def _self_hosted_command_hash(command: Dict[str, Any]) -> str:
+    canonical = {
+        "id": _normalize_token(command.get("id")),
+        "workspace_id": _normalize_token(command.get("workspace_id")),
+        "runtime_node_id": _normalize_token(command.get("runtime_node_id")),
+        "agent_id": _normalize_token(command.get("agent_id")),
+        "command_type": _normalize_token(command.get("command_type")),
+        "command_payload": _dict_json(command.get("command_payload")),
+        "created_at": _iso(command.get("created_at")),
+        "expires_at": _iso(command.get("expires_at")),
+    }
+    return _token_hash(_to_json(canonical, default={}))
+
+
+def _normalize_self_hosted_node_kind(value: Any) -> str:
+    token = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if token not in SELF_HOSTED_NODE_KINDS:
+        raise ValueError("Unsupported node_kind. Allowed values: mac_mini, mac, linux_server, docker_host.")
+    return token
+
+
+def _normalize_self_hosted_capabilities(value: Any) -> List[str]:
+    normalized: List[str] = []
+    seen = set()
+    for item in list(value or []):
+        token = str(item or "").strip()
+        if not token:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        normalized.append(token)
+    return normalized
 
 
 def _slugify(value: Any, *, fallback: str) -> str:
@@ -887,6 +970,648 @@ async def list_runtime_profiles(
         str(workspace_id or "").strip(),
     )
     return [item for item in (_row_to_runtime_profile(row) for row in rows) if item]
+
+
+async def create_self_hosted_runtime_profile_enrollment_intent(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    owner_user_id: Optional[str],
+    label: Optional[str],
+    node_kind: str,
+    capabilities: Optional[List[str]] = None,
+    max_concurrent_sessions: int = 1,
+    root_policy: Optional[Dict[str, Any]] = None,
+    token_ttl_seconds: int = SELF_HOSTED_ENROLLMENT_DEFAULT_TTL_SECONDS,
+) -> Dict[str, Any]:
+    pool = await control_plane_repository.ensure_control_plane_schema()
+    if pool is None:
+        raise RuntimeError("Control-plane storage is unavailable.")
+    tenant_token = str(tenant_id or "").strip() or "default"
+    workspace_token = str(workspace_id or "").strip() or "default"
+    owner_token = _normalize_token(owner_user_id)
+    if owner_token is None:
+        raise ValueError("owner_user_id is required for self-hosted enrollment.")
+    normalized_node_kind = _normalize_self_hosted_node_kind(node_kind)
+    normalized_caps = _normalize_self_hosted_capabilities(capabilities or [])
+    max_sessions = max(1, int(max_concurrent_sessions or 1))
+    ttl = int(token_ttl_seconds or SELF_HOSTED_ENROLLMENT_DEFAULT_TTL_SECONDS)
+    ttl = max(SELF_HOSTED_ENROLLMENT_MIN_TTL_SECONDS, min(ttl, SELF_HOSTED_ENROLLMENT_MAX_TTL_SECONDS))
+    now = _utc_now()
+    expires_at = now + timedelta(seconds=ttl)
+    suffix = uuid.uuid4().hex[:10]
+    workspace_slug = _slugify(workspace_token, fallback="workspace")
+    runtime_profile_id = f"rprof_{workspace_slug}_selfhost_{suffix}"
+    runtime_node_id = f"node_{suffix}"
+    profile_slug = f"self-hosted-{_slugify(label or normalized_node_kind, fallback='node')}-{suffix[:6]}"
+    enrollment_token = secrets.token_urlsafe(32)
+    enrollment_metadata = {
+        "state": "pending",
+        "token_hash": _token_hash(enrollment_token),
+        "issued_at": now.isoformat().replace("+00:00", "Z"),
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+        "consumed_at": None,
+        "issued_for_workspace_id": workspace_token,
+        "issued_by_user_id": owner_token,
+    }
+    metadata = {
+        "runtime_node_id": runtime_node_id,
+        "owner_user_id": owner_token,
+        "node_kind": normalized_node_kind,
+        "allowed_agent_ids": [],
+        "max_concurrent_sessions": max_sessions,
+        "root_policy": _dict_json(root_policy),
+        "public_key": None,
+        "owner_approved": False,
+        "owner_approved_at": None,
+        "owner_approved_by_user_id": None,
+        "enrollment": enrollment_metadata,
+        "node_session_token_hash": None,
+        "node_session_issued_at": None,
+    }
+    await pool.execute(
+        """
+        INSERT INTO runtime_profiles (
+            id, tenant_id, workspace_id, slug, label, runtime_class, placement_mode, runtime_id, machine_id,
+            default_execution_target, supported_capabilities, root_folder_uri, allowed_connector_scopes, status,
+            last_seen_at, metadata, created_at, updated_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, 'self_hosted_business_node', 'preferred', $6, $6,
+            'cloud', $7::jsonb, NULL, '[]'::jsonb, 'pending',
+            NULL, $8::jsonb, NOW(), NOW()
+        )
+        """,
+        runtime_profile_id,
+        tenant_token,
+        workspace_token,
+        profile_slug,
+        str(label or "Self-hosted Node").strip() or "Self-hosted Node",
+        runtime_node_id,
+        _to_json(normalized_caps, default=[]),
+        _to_json(metadata, default={}),
+    )
+    profile = await get_runtime_profile(
+        runtime_profile_id,
+        tenant_id=tenant_token,
+        workspace_id=workspace_token,
+    )
+    if not isinstance(profile, dict):
+        raise RuntimeError("Self-hosted runtime profile creation failed.")
+    return {
+        "runtime_profile": profile,
+        "runtime_profile_id": runtime_profile_id,
+        "runtime_node_id": runtime_node_id,
+        "enrollment_token": enrollment_token,
+        "enrollment_expires_at": enrollment_metadata["expires_at"],
+        "token_ttl_seconds": ttl,
+    }
+
+
+async def enroll_self_hosted_runtime_profile(
+    *,
+    runtime_profile_id: str,
+    enrollment_token: str,
+    public_key: str,
+    node_kind: Optional[str] = None,
+    capabilities: Optional[List[str]] = None,
+    max_concurrent_sessions: Optional[int] = None,
+    root_policy: Optional[Dict[str, Any]] = None,
+    label: Optional[str] = None,
+) -> Dict[str, Any]:
+    profile = await get_runtime_profile(runtime_profile_id)
+    if not isinstance(profile, dict):
+        raise ValueError("Self-hosted runtime profile not found.")
+    if str(profile.get("runtime_class") or "").strip() != "self_hosted_business_node":
+        raise ValueError("Runtime profile is not a self-hosted node.")
+    enrollment = _dict_json(_dict_json(profile.get("metadata")).get("enrollment"))
+    expected_hash = str(enrollment.get("token_hash") or "").strip()
+    if not expected_hash:
+        raise ValueError("Enrollment token is not pending.")
+    provided = str(enrollment_token or "").strip()
+    if not provided:
+        raise ValueError("Enrollment token is required.")
+    if _token_hash(provided) != expected_hash:
+        raise ValueError("Enrollment token is invalid.")
+    expires_at = _iso(enrollment.get("expires_at"))
+    if expires_at:
+        parsed = _iso(expires_at)
+        expiry = None
+        if parsed:
+            try:
+                token = parsed[:-1] + "+00:00" if str(parsed).endswith("Z") else str(parsed)
+                expiry = datetime.fromisoformat(token)
+            except Exception:
+                expiry = None
+        if expiry is not None and expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if expiry is not None and _utc_now() > expiry:
+            raise ValueError("Enrollment token expired.")
+    workspace_id = str(profile.get("workspace_id") or "").strip() or "default"
+    issued_workspace = str(enrollment.get("issued_for_workspace_id") or "").strip()
+    if issued_workspace and issued_workspace != workspace_id:
+        raise ValueError("Enrollment token workspace scope mismatch.")
+    now_iso = _utc_now_iso()
+    metadata = _dict_json(profile.get("metadata"))
+    normalized_kind = _normalize_self_hosted_node_kind(node_kind or metadata.get("node_kind") or "linux_server")
+    normalized_caps = _normalize_self_hosted_capabilities(capabilities or profile.get("supported_capabilities") or [])
+    max_sessions = max(1, int(max_concurrent_sessions or metadata.get("max_concurrent_sessions") or 1))
+    next_root_policy = _dict_json(root_policy) if root_policy is not None else _dict_json(metadata.get("root_policy"))
+    session_token = secrets.token_urlsafe(32)
+    next_enrollment = {
+        **enrollment,
+        "state": "enrolled_pending_owner_approval",
+        "token_hash": None,
+        "consumed_at": now_iso,
+    }
+    metadata.update(
+        {
+            "node_kind": normalized_kind,
+            "public_key": str(public_key or "").strip(),
+            "max_concurrent_sessions": max_sessions,
+            "root_policy": next_root_policy,
+            "enrollment": next_enrollment,
+            "node_session_token_hash": _token_hash(session_token),
+            "node_session_issued_at": now_iso,
+            "heartbeat_at": now_iso,
+            "runtime_node_id": str(profile.get("runtime_id") or metadata.get("runtime_node_id") or "").strip() or None,
+        }
+    )
+    pool = await control_plane_repository.ensure_control_plane_schema()
+    if pool is None:
+        raise RuntimeError("Control-plane storage is unavailable.")
+    await pool.execute(
+        """
+        UPDATE runtime_profiles
+        SET
+            label = $4,
+            supported_capabilities = $5::jsonb,
+            metadata = $6::jsonb,
+            status = 'pending',
+            last_seen_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
+        """,
+        str(profile.get("id") or runtime_profile_id).strip(),
+        str(profile.get("tenant_id") or "default").strip() or "default",
+        workspace_id,
+        str(label or profile.get("label") or "Self-hosted Node").strip() or "Self-hosted Node",
+        _to_json(normalized_caps, default=[]),
+        _to_json(metadata, default={}),
+    )
+    enrolled_profile = await get_runtime_profile(
+        str(profile.get("id") or runtime_profile_id).strip(),
+        tenant_id=str(profile.get("tenant_id") or "default").strip() or "default",
+        workspace_id=workspace_id,
+    )
+    return {
+        "runtime_profile": enrolled_profile,
+        "runtime_profile_id": str(profile.get("id") or runtime_profile_id).strip(),
+        "workspace_id": workspace_id,
+        "runtime_node_id": str(profile.get("runtime_id") or metadata.get("runtime_node_id") or "").strip() or None,
+        "node_session_token": session_token,
+        "owner_approval_required": True,
+    }
+
+
+async def approve_self_hosted_runtime_profile(
+    *,
+    runtime_profile_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    approved_by_user_id: str,
+) -> Optional[Dict[str, Any]]:
+    profile = await get_runtime_profile(
+        runtime_profile_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+    )
+    if not isinstance(profile, dict):
+        return None
+    if str(profile.get("runtime_class") or "").strip() != "self_hosted_business_node":
+        raise ValueError("Runtime profile is not a self-hosted node.")
+    metadata = _dict_json(profile.get("metadata"))
+    now_iso = _utc_now_iso()
+    metadata["owner_approved"] = True
+    metadata["owner_approved_at"] = now_iso
+    metadata["owner_approved_by_user_id"] = str(approved_by_user_id or "").strip() or None
+    enrollment = _dict_json(metadata.get("enrollment"))
+    if enrollment:
+        enrollment["state"] = "approved"
+        metadata["enrollment"] = enrollment
+    pool = await control_plane_repository.ensure_control_plane_schema()
+    if pool is None:
+        raise RuntimeError("Control-plane storage is unavailable.")
+    await pool.execute(
+        """
+        UPDATE runtime_profiles
+        SET
+            metadata = $4::jsonb,
+            status = 'active',
+            updated_at = NOW()
+        WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
+        """,
+        str(runtime_profile_id or "").strip(),
+        str(tenant_id or "").strip() or "default",
+        str(workspace_id or "").strip() or "default",
+        _to_json(metadata, default={}),
+    )
+    return await get_runtime_profile(
+        runtime_profile_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+    )
+
+
+async def resolve_self_hosted_runtime_heartbeat(
+    *,
+    runtime_profile_id: str,
+    node_session_token: str,
+    status: str = "idle",
+    note: Optional[str] = None,
+    capabilities: Optional[List[str]] = None,
+    health_state: Optional[str] = None,
+) -> Dict[str, Any]:
+    profile = await get_runtime_profile(runtime_profile_id)
+    if not isinstance(profile, dict):
+        raise ValueError("Self-hosted runtime profile not found.")
+    if str(profile.get("runtime_class") or "").strip() != "self_hosted_business_node":
+        raise ValueError("Runtime profile is not a self-hosted node.")
+    metadata = _dict_json(profile.get("metadata"))
+    expected = str(metadata.get("node_session_token_hash") or "").strip()
+    provided = str(node_session_token or "").strip()
+    if not provided or not expected or _token_hash(provided) != expected:
+        raise ValueError("Node session token is invalid.")
+    runtime_id = str(profile.get("runtime_id") or "").strip()
+    if not runtime_id:
+        raise ValueError("Self-hosted runtime profile is missing runtime_id.")
+    now_iso = _utc_now_iso()
+    metadata["heartbeat_at"] = now_iso
+    pool = await control_plane_repository.ensure_control_plane_schema()
+    if pool is None:
+        raise RuntimeError("Control-plane storage is unavailable.")
+    await pool.execute(
+        """
+        UPDATE runtime_profiles
+        SET
+            metadata = $4::jsonb,
+            last_seen_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
+        """,
+        str(profile.get("id") or runtime_profile_id).strip(),
+        str(profile.get("tenant_id") or "default").strip() or "default",
+        str(profile.get("workspace_id") or "default").strip() or "default",
+        _to_json(metadata, default={}),
+    )
+    worker_caps = _normalize_self_hosted_capabilities(capabilities or profile.get("supported_capabilities") or [])
+    await run_state_repository.upsert_fleet_worker(
+        {
+            "worker_id": runtime_id,
+            "runtime_id": runtime_id,
+            "machine_id": runtime_id,
+            "tenant_id": str(profile.get("tenant_id") or "default").strip() or "default",
+            "workspace_id": str(profile.get("workspace_id") or "default").strip() or "default",
+            "runtime_type": "self_hosted_business_node",
+            "display_name": str(profile.get("label") or runtime_id).strip() or runtime_id,
+            "online": True,
+            "status": str(status or "idle").strip().lower() or "idle",
+            "control_state": "active",
+            "execution_targets": ["cloud"],
+            "capabilities": worker_caps,
+            "last_heartbeat_at": now_iso,
+            "last_seen_at": now_iso,
+            "lease_seconds": 30,
+            "note": str(note or "self_hosted_node_heartbeat").strip() or "self_hosted_node_heartbeat",
+            "health_state": str(health_state or "healthy").strip() or "healthy",
+            "metadata": {
+                "node_kind": str(metadata.get("node_kind") or "").strip() or None,
+                "public_key": str(metadata.get("public_key") or "").strip() or None,
+                "max_concurrent_sessions": int(metadata.get("max_concurrent_sessions") or 1),
+                "root_policy": _dict_json(metadata.get("root_policy")),
+                "allowed_agent_ids": _list_json(metadata.get("allowed_agent_ids")),
+                "owner_approved": bool(metadata.get("owner_approved")),
+                "owner_approved_at": _iso(metadata.get("owner_approved_at")),
+                "owner_approved_by_user_id": _normalize_token(metadata.get("owner_approved_by_user_id")),
+            },
+        },
+        heartbeat_seen=True,
+    )
+    return {
+        "ok": True,
+        "runtime_profile_id": str(profile.get("id") or runtime_profile_id).strip(),
+        "runtime_node_id": runtime_id,
+        "workspace_id": str(profile.get("workspace_id") or "default").strip() or "default",
+        "heartbeat_at": now_iso,
+    }
+
+
+def _self_hosted_runtime_node_id(profile: Dict[str, Any], metadata: Dict[str, Any]) -> str:
+    return str(profile.get("runtime_id") or metadata.get("runtime_node_id") or "").strip()
+
+
+def _is_terminal_self_hosted_command_state(state: Any) -> bool:
+    return str(state or "").strip().lower() in {"completed", "failed", "canceled", "expired"}
+
+
+def _normalized_self_hosted_command_queue(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    queue: List[Dict[str, Any]] = []
+    for item in _list_json(metadata.get("node_command_queue")):
+        if isinstance(item, dict):
+            queue.append(dict(item))
+    return queue
+
+
+async def _load_self_hosted_runtime_profile_for_node_session(
+    *,
+    runtime_profile_id: str,
+    node_session_token: str,
+) -> tuple[Dict[str, Any], Dict[str, Any], str]:
+    profile = await get_runtime_profile(runtime_profile_id)
+    if not isinstance(profile, dict):
+        raise ValueError("Self-hosted runtime profile not found.")
+    if str(profile.get("runtime_class") or "").strip() != "self_hosted_business_node":
+        raise ValueError("Runtime profile is not a self-hosted node.")
+    metadata = _dict_json(profile.get("metadata"))
+    expected = str(metadata.get("node_session_token_hash") or "").strip()
+    provided = str(node_session_token or "").strip()
+    if not provided or not expected or _token_hash(provided) != expected:
+        raise ValueError("Node session token is invalid.")
+    runtime_id = _self_hosted_runtime_node_id(profile, metadata)
+    if not runtime_id:
+        raise ValueError("Self-hosted runtime profile is missing runtime_id.")
+    return profile, metadata, runtime_id
+
+
+async def enqueue_self_hosted_runtime_command(
+    *,
+    runtime_profile_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    runtime_node_id: str,
+    agent_id: str,
+    command_type: str,
+    command_payload: Dict[str, Any],
+    requested_by_user_id: Optional[str] = None,
+    ttl_seconds: int = SELF_HOSTED_NODE_COMMAND_DEFAULT_TTL_SECONDS,
+) -> Dict[str, Any]:
+    profile = await get_runtime_profile(
+        runtime_profile_id,
+        tenant_id=str(tenant_id or "").strip() or "default",
+        workspace_id=str(workspace_id or "").strip() or "default",
+    )
+    if not isinstance(profile, dict):
+        raise ValueError("Self-hosted runtime profile not found in workspace scope.")
+    if str(profile.get("runtime_class") or "").strip() != "self_hosted_business_node":
+        raise ValueError("Runtime profile is not a self-hosted node.")
+    metadata = _dict_json(profile.get("metadata"))
+    if not bool(metadata.get("owner_approved")):
+        raise ValueError("Self-hosted runtime node is not owner approved.")
+    profile_runtime_node_id = _self_hosted_runtime_node_id(profile, metadata)
+    if not profile_runtime_node_id:
+        raise ValueError("Self-hosted runtime profile is missing runtime_node_id.")
+    if str(runtime_node_id or "").strip() != profile_runtime_node_id:
+        raise ValueError("runtime_node_id does not match runtime profile binding.")
+    scoped_workspace_id = str(profile.get("workspace_id") or "").strip() or "default"
+    if scoped_workspace_id != str(workspace_id or "").strip():
+        raise ValueError("workspace_id scope mismatch for self-hosted command enqueue.")
+
+    pool = await control_plane_repository.ensure_control_plane_schema()
+    if pool is None:
+        raise RuntimeError("Control-plane storage is unavailable.")
+
+    normalized_payload = _dict_json(command_payload)
+    normalized_agent_id = str(agent_id or "").strip()
+    normalized_type = str(command_type or "").strip().lower() or "runtime_action"
+    if not normalized_agent_id:
+        raise ValueError("agent_id is required for self-hosted command enqueue.")
+    ttl = int(ttl_seconds or SELF_HOSTED_NODE_COMMAND_DEFAULT_TTL_SECONDS)
+    ttl = max(SELF_HOSTED_NODE_COMMAND_MIN_TTL_SECONDS, min(ttl, SELF_HOSTED_NODE_COMMAND_MAX_TTL_SECONDS))
+    now_iso = _utc_now_iso()
+    expires_at = _utc_iso_after_seconds(ttl)
+
+    command_id = f"shcmd_{uuid.uuid4().hex[:16]}"
+    command_record: Dict[str, Any] = {
+        "id": command_id,
+        "workspace_id": scoped_workspace_id,
+        "runtime_node_id": profile_runtime_node_id,
+        "agent_id": normalized_agent_id,
+        "command_type": normalized_type,
+        "command_payload": normalized_payload,
+        "state": "queued",
+        "created_at": now_iso,
+        "expires_at": expires_at,
+        "issued_by_user_id": _normalize_token(requested_by_user_id),
+    }
+    command_record["command_hash"] = _self_hosted_command_hash(command_record)
+
+    queue = _normalized_self_hosted_command_queue(metadata)
+    queue.append(command_record)
+    terminal_items: List[Dict[str, Any]] = [item for item in queue if _is_terminal_self_hosted_command_state(item.get("state"))]
+    active_items: List[Dict[str, Any]] = [item for item in queue if not _is_terminal_self_hosted_command_state(item.get("state"))]
+    if len(active_items) > SELF_HOSTED_NODE_COMMAND_QUEUE_LIMIT:
+        raise ValueError("Self-hosted command queue limit reached for runtime node.")
+    while len(active_items) + len(terminal_items) > SELF_HOSTED_NODE_COMMAND_QUEUE_LIMIT:
+        terminal_items.pop(0)
+    metadata["node_command_queue"] = active_items + terminal_items
+
+    await pool.execute(
+        """
+        UPDATE runtime_profiles
+        SET
+            metadata = $4::jsonb,
+            updated_at = NOW()
+        WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
+        """,
+        str(profile.get("id") or runtime_profile_id).strip(),
+        str(profile.get("tenant_id") or "default").strip() or "default",
+        scoped_workspace_id,
+        _to_json(metadata, default={}),
+    )
+    return {
+        "ok": True,
+        "runtime_profile_id": str(profile.get("id") or runtime_profile_id).strip(),
+        "runtime_node_id": profile_runtime_node_id,
+        "workspace_id": scoped_workspace_id,
+        "command": dict(command_record),
+    }
+
+
+async def claim_self_hosted_runtime_commands(
+    *,
+    runtime_profile_id: str,
+    node_session_token: str,
+    max_commands: int = 1,
+    lease_seconds: int = SELF_HOSTED_NODE_COMMAND_DEFAULT_LEASE_SECONDS,
+) -> Dict[str, Any]:
+    profile, metadata, runtime_id = await _load_self_hosted_runtime_profile_for_node_session(
+        runtime_profile_id=runtime_profile_id,
+        node_session_token=node_session_token,
+    )
+    workspace_id = str(profile.get("workspace_id") or "").strip() or "default"
+    now = _utc_now()
+    now_iso = now.isoformat().replace("+00:00", "Z")
+    lease = int(lease_seconds or SELF_HOSTED_NODE_COMMAND_DEFAULT_LEASE_SECONDS)
+    lease = max(SELF_HOSTED_NODE_COMMAND_MIN_LEASE_SECONDS, min(lease, SELF_HOSTED_NODE_COMMAND_MAX_LEASE_SECONDS))
+    max_take = max(1, min(int(max_commands or 1), 50))
+
+    queue = _normalized_self_hosted_command_queue(metadata)
+    claimed_commands: List[Dict[str, Any]] = []
+    mutated = False
+
+    for item in queue:
+        if len(claimed_commands) >= max_take:
+            break
+        state = str(item.get("state") or "").strip().lower() or "queued"
+        expires_at_dt = _iso_to_datetime(item.get("expires_at"))
+        if expires_at_dt is not None and expires_at_dt <= now:
+            if state not in {"completed", "failed", "expired", "canceled"}:
+                item["state"] = "expired"
+                item["expired_at"] = now_iso
+                mutated = True
+            continue
+        if state == "claimed":
+            claim_expires_at = _iso_to_datetime(item.get("claim_expires_at"))
+            if claim_expires_at is None or claim_expires_at > now:
+                continue
+        elif state != "queued":
+            continue
+
+        lease_expires_at = (now + timedelta(seconds=lease)).isoformat().replace("+00:00", "Z")
+        claim_nonce = f"nonce_{uuid.uuid4().hex[:12]}"
+        item["state"] = "claimed"
+        item["claimed_at"] = now_iso
+        item["claim_expires_at"] = lease_expires_at
+        item["claimed_by_runtime_node_id"] = runtime_id
+        item["claim_nonce"] = claim_nonce
+        item["last_claimed_at"] = now_iso
+        command_hash = str(item.get("command_hash") or "").strip() or _self_hosted_command_hash(item)
+        item["command_hash"] = command_hash
+        signature_payload = f"{runtime_profile_id}:{str(item.get('id') or '').strip()}:{command_hash}:{claim_nonce}"
+        item["delivery_signature"] = _hmac_sha256(node_session_token, signature_payload)
+        claimed_commands.append(
+            {
+                "id": str(item.get("id") or "").strip(),
+                "workspace_id": str(item.get("workspace_id") or "").strip(),
+                "runtime_node_id": str(item.get("runtime_node_id") or "").strip(),
+                "agent_id": str(item.get("agent_id") or "").strip(),
+                "command_type": str(item.get("command_type") or "").strip() or "runtime_action",
+                "command_payload": _dict_json(item.get("command_payload")),
+                "created_at": _iso(item.get("created_at")),
+                "expires_at": _iso(item.get("expires_at")),
+                "claimed_at": now_iso,
+                "claim_expires_at": lease_expires_at,
+                "claim_nonce": claim_nonce,
+                "command_hash": command_hash,
+                "command_signature": str(item.get("delivery_signature") or "").strip(),
+            }
+        )
+        mutated = True
+
+    if mutated:
+        metadata["node_command_queue"] = queue
+        metadata["heartbeat_at"] = now_iso
+        pool = await control_plane_repository.ensure_control_plane_schema()
+        if pool is None:
+            raise RuntimeError("Control-plane storage is unavailable.")
+        await pool.execute(
+            """
+            UPDATE runtime_profiles
+            SET
+                metadata = $4::jsonb,
+                updated_at = NOW()
+            WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
+            """,
+            str(profile.get("id") or runtime_profile_id).strip(),
+            str(profile.get("tenant_id") or "default").strip() or "default",
+            workspace_id,
+            _to_json(metadata, default={}),
+        )
+
+    return {
+        "ok": True,
+        "runtime_profile_id": str(profile.get("id") or runtime_profile_id).strip(),
+        "runtime_node_id": runtime_id,
+        "workspace_id": workspace_id,
+        "commands": claimed_commands,
+        "claimed_count": len(claimed_commands),
+        "claimed_at": now_iso,
+    }
+
+
+async def complete_self_hosted_runtime_command(
+    *,
+    runtime_profile_id: str,
+    node_session_token: str,
+    command_id: str,
+    status: str,
+    result_payload: Optional[Dict[str, Any]] = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
+    audit_references: Optional[List[Dict[str, Any]]] = None,
+    error: Optional[str] = None,
+) -> Dict[str, Any]:
+    profile, metadata, runtime_id = await _load_self_hosted_runtime_profile_for_node_session(
+        runtime_profile_id=runtime_profile_id,
+        node_session_token=node_session_token,
+    )
+    workspace_id = str(profile.get("workspace_id") or "").strip() or "default"
+    queue = _normalized_self_hosted_command_queue(metadata)
+    now_iso = _utc_now_iso()
+    target_id = str(command_id or "").strip()
+    if not target_id:
+        raise ValueError("command_id is required.")
+
+    resolved: Optional[Dict[str, Any]] = None
+    for item in queue:
+        if str(item.get("id") or "").strip() != target_id:
+            continue
+        resolved = item
+        break
+    if resolved is None:
+        raise ValueError("Self-hosted runtime command was not found.")
+    if str(resolved.get("runtime_node_id") or "").strip() != runtime_id:
+        raise ValueError("Self-hosted runtime command runtime_node_id scope mismatch.")
+    if str(resolved.get("workspace_id") or "").strip() != workspace_id:
+        raise ValueError("Self-hosted runtime command workspace scope mismatch.")
+
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status not in {"completed", "failed"}:
+        raise ValueError("status must be completed or failed.")
+
+    resolved["state"] = normalized_status
+    resolved["completed_at"] = now_iso
+    resolved["result_payload"] = _dict_json(result_payload)
+    resolved["artifacts"] = [dict(item) for item in list(artifacts or []) if isinstance(item, dict)]
+    resolved["audit_references"] = [dict(item) for item in list(audit_references or []) if isinstance(item, dict)]
+    resolved["error"] = str(error or "").strip() or None
+    resolved["claim_expires_at"] = None
+
+    metadata["node_command_queue"] = queue
+    metadata["heartbeat_at"] = now_iso
+    pool = await control_plane_repository.ensure_control_plane_schema()
+    if pool is None:
+        raise RuntimeError("Control-plane storage is unavailable.")
+    await pool.execute(
+        """
+        UPDATE runtime_profiles
+        SET
+            metadata = $4::jsonb,
+            updated_at = NOW()
+        WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
+        """,
+        str(profile.get("id") or runtime_profile_id).strip(),
+        str(profile.get("tenant_id") or "default").strip() or "default",
+        workspace_id,
+        _to_json(metadata, default={}),
+    )
+    return {
+        "ok": True,
+        "runtime_profile_id": str(profile.get("id") or runtime_profile_id).strip(),
+        "runtime_node_id": runtime_id,
+        "workspace_id": workspace_id,
+        "command_id": target_id,
+        "status": normalized_status,
+        "completed_at": now_iso,
+    }
 
 
 async def list_agent_definitions(

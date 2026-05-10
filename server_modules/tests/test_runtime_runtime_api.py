@@ -220,6 +220,186 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(result["machine_id"], "machine-1")
         mock_complete.assert_called_once_with("machine-1", enrollment_token="tok")
 
+    @patch("server_modules.runtime_runtime_api.agent_registry_repository.enroll_self_hosted_runtime_profile")
+    def test_self_hosted_node_enroll_route_accepts_one_time_token(self, mock_enroll):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/self-hosted-nodes/{runtime_profile_id}/enroll")]
+        mock_enroll.return_value = {
+            "runtime_profile_id": "rprof-1",
+            "runtime_node_id": "node-1",
+            "workspace_id": "ws-1",
+            "node_session_token": "sess-node-1",
+            "runtime_profile": {"id": "rprof-1"},
+        }
+
+        result = self._run_async(
+            handler(
+                "rprof-1",
+                runtime_runtime_api.SelfHostedNodeEnrollPayload(
+                    enrollment_token="tok-1",
+                    public_key="pubkey-xyz",
+                    node_kind="mac_mini",
+                    capabilities=["shell.execute"],
+                ),
+            )
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["node_session_token"], "sess-node-1")
+        self.assertEqual(mock_enroll.await_args.kwargs["runtime_profile_id"], "rprof-1")
+        self.assertEqual(mock_enroll.await_args.kwargs["enrollment_token"], "tok-1")
+
+    @patch("server_modules.runtime_runtime_api.agent_registry_repository.resolve_self_hosted_runtime_heartbeat")
+    def test_self_hosted_node_heartbeat_route_requires_node_session_token(self, mock_heartbeat):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/self-hosted-nodes/{runtime_profile_id}/heartbeat")]
+        mock_heartbeat.return_value = {
+            "ok": True,
+            "runtime_profile_id": "rprof-1",
+            "runtime_node_id": "node-1",
+            "workspace_id": "ws-1",
+            "heartbeat_at": "2026-05-11T00:12:00Z",
+        }
+
+        result = self._run_async(
+            handler(
+                "rprof-1",
+                runtime_runtime_api.SelfHostedNodeHeartbeatPayload(
+                    node_session_token="sess-node-1",
+                    status="idle",
+                    note="alive",
+                    capabilities=["shell.execute"],
+                    health_state="healthy",
+                ),
+            )
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["runtime_node_id"], "node-1")
+        self.assertEqual(mock_heartbeat.await_args.kwargs["runtime_profile_id"], "rprof-1")
+        self.assertEqual(mock_heartbeat.await_args.kwargs["node_session_token"], "sess-node-1")
+
+    @patch("server_modules.runtime_runtime_api._ensure_advanced_features_access")
+    @patch("server_modules.runtime_runtime_api.agent_registry_repository.enqueue_self_hosted_runtime_command")
+    def test_self_hosted_node_command_enqueue_route_enforces_workspace_scope(self, mock_enqueue, mock_features_gate):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/self-hosted-nodes/{runtime_profile_id}/commands")]
+        mock_enqueue.return_value = {"ok": True, "command": {"id": "shcmd_1"}}
+
+        result = self._run_async(
+            handler(
+                "rprof-1",
+                runtime_runtime_api.SelfHostedNodeCommandEnqueuePayload(
+                    workspace_id="default",
+                    runtime_node_id="node-1",
+                    agent_id="agent-1",
+                    command_type="runtime_action",
+                    command_payload={"action": "open_url"},
+                ),
+                current_user=self._current_user(),
+            )
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(mock_enqueue.await_args.kwargs["runtime_profile_id"], "rprof-1")
+        self.assertEqual(mock_enqueue.await_args.kwargs["workspace_id"], "default")
+        self.assertEqual(mock_enqueue.await_args.kwargs["runtime_node_id"], "node-1")
+        self.assertEqual(mock_enqueue.await_args.kwargs["agent_id"], "agent-1")
+        self.assertEqual(mock_enqueue.await_args.kwargs["command_payload"]["action"], "open_url")
+        mock_features_gate.assert_called_once_with("default")
+
+    @patch("server_modules.runtime_runtime_api._ensure_advanced_features_access")
+    @patch("server_modules.runtime_runtime_api.agent_registry_repository.enqueue_self_hosted_runtime_command")
+    def test_self_hosted_node_command_enqueue_route_blocks_non_admin_role(self, mock_enqueue, mock_features_gate):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/self-hosted-nodes/{runtime_profile_id}/commands")]
+
+        with self.assertRaises(HTTPException) as exc:
+            self._run_async(
+                handler(
+                    "rprof-1",
+                    runtime_runtime_api.SelfHostedNodeCommandEnqueuePayload(
+                        workspace_id="default",
+                        runtime_node_id="node-1",
+                        agent_id="agent-1",
+                        command_type="runtime_action",
+                        command_payload={"action": "open_url"},
+                    ),
+                    current_user=self._current_user(
+                        auth_type="bearer",
+                        is_admin=False,
+                        role="member",
+                        workspace_access={
+                            "default": {
+                                "workspace_id": "default",
+                                "tenant_id": "default",
+                                "role": "member",
+                                "tenant_role": "member",
+                            }
+                        },
+                    ),
+                )
+            )
+        self.assertEqual(exc.exception.status_code, 403)
+        mock_enqueue.assert_not_called()
+        mock_features_gate.assert_not_called()
+
+    @patch("server_modules.runtime_runtime_api.agent_registry_repository.claim_self_hosted_runtime_commands")
+    def test_self_hosted_node_command_claim_route_uses_node_session_token(self, mock_claim):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/self-hosted-nodes/{runtime_profile_id}/commands/claim")]
+        mock_claim.return_value = {"ok": True, "claimed_count": 1, "commands": [{"id": "shcmd_1"}]}
+
+        result = self._run_async(
+            handler(
+                "rprof-1",
+                runtime_runtime_api.SelfHostedNodeCommandClaimPayload(
+                    node_session_token="sess-node-1",
+                    max_commands=2,
+                    lease_seconds=90,
+                ),
+            )
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["claimed_count"], 1)
+        self.assertEqual(mock_claim.await_args.kwargs["runtime_profile_id"], "rprof-1")
+        self.assertEqual(mock_claim.await_args.kwargs["node_session_token"], "sess-node-1")
+        self.assertEqual(mock_claim.await_args.kwargs["max_commands"], 2)
+        self.assertEqual(mock_claim.await_args.kwargs["lease_seconds"], 90)
+
+    @patch("server_modules.runtime_runtime_api.agent_registry_repository.complete_self_hosted_runtime_command")
+    def test_self_hosted_node_command_result_route_reports_completion(self, mock_complete):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/self-hosted-nodes/{runtime_profile_id}/commands/{command_id}/result")]
+        mock_complete.return_value = {"ok": True, "command_id": "shcmd_1", "status": "completed"}
+
+        result = self._run_async(
+            handler(
+                "rprof-1",
+                "shcmd_1",
+                runtime_runtime_api.SelfHostedNodeCommandResultPayload(
+                    node_session_token="sess-node-1",
+                    status="completed",
+                    result_payload={"ok": True},
+                    artifacts=[{"artifact_id": "a1"}],
+                    audit_references=[{"event_id": "ev1"}],
+                ),
+            )
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(mock_complete.await_args.kwargs["runtime_profile_id"], "rprof-1")
+        self.assertEqual(mock_complete.await_args.kwargs["command_id"], "shcmd_1")
+        self.assertEqual(mock_complete.await_args.kwargs["node_session_token"], "sess-node-1")
+        self.assertEqual(mock_complete.await_args.kwargs["status"], "completed")
+
     @patch("server_modules.runtime_runtime_api.run_in_threadpool", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
     @patch("server_modules.local_queue.handle_bootstrap_enrolled_local_companion_runtime")
     def test_companion_bootstrap_route_accepts_enrollment_token_without_api_key(self, mock_bootstrap, mock_run_in_threadpool):

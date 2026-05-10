@@ -201,6 +201,20 @@ class McpServerRefreshRequest(BaseModel):
     workspace_id: str
 
 
+class SelfHostedNodeCreateRequest(BaseModel):
+    workspace_id: str
+    label: str = Field(min_length=1)
+    node_kind: Literal["mac_mini", "mac", "linux_server", "docker_host"] = "mac_mini"
+    capabilities: list[str] = Field(default_factory=list)
+    max_concurrent_sessions: int = Field(default=1, ge=1, le=64)
+    root_policy: Dict[str, Any] = Field(default_factory=dict)
+    token_ttl_seconds: int = Field(default=600, ge=60, le=900)
+
+
+class SelfHostedNodeApproveRequest(BaseModel):
+    workspace_id: str
+
+
 class SharedOperationalBoardWriteRequest(BaseModel):
     workspace_id: str
     action: Literal["propose_update", "publish_update"] = "propose_update"
@@ -799,6 +813,59 @@ def register_agent_registry_routes(app) -> None:
             workspace_id=resolved_workspace_id,
         )
         return {"items": items}
+
+    @app.post("/agent-registry/self-hosted-nodes", dependencies=[Depends(member_dependency)])
+    async def create_self_hosted_node(
+        body: SelfHostedNodeCreateRequest,
+        current_user=Depends(member_dependency),
+    ):
+        _refresh_server_exports()
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
+            minimum_role="owner",
+        )
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        owner_user_id = str((current_user or {}).get("user_id") or (current_user or {}).get("id") or "").strip() or None
+        result = await agent_registry_repository.create_self_hosted_runtime_profile_enrollment_intent(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            owner_user_id=owner_user_id,
+            label=body.label,
+            node_kind=body.node_kind,
+            capabilities=body.capabilities,
+            max_concurrent_sessions=body.max_concurrent_sessions,
+            root_policy=body.root_policy,
+            token_ttl_seconds=body.token_ttl_seconds,
+        )
+        return result
+
+    @app.post("/agent-registry/self-hosted-nodes/{runtime_profile_id}/approve", dependencies=[Depends(member_dependency)])
+    async def approve_self_hosted_node(
+        runtime_profile_id: str,
+        body: SelfHostedNodeApproveRequest,
+        current_user=Depends(member_dependency),
+    ):
+        _refresh_server_exports()
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
+            minimum_role="owner",
+        )
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        owner_user_id = str((current_user or {}).get("user_id") or (current_user or {}).get("id") or "").strip() or "owner"
+        try:
+            record = await agent_registry_repository.approve_self_hosted_runtime_profile(
+                runtime_profile_id=runtime_profile_id,
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                approved_by_user_id=owner_user_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Self-hosted node not found.")
+        return {"runtime_profile": record}
 
     @app.get("/agent-registry/mcp/servers", dependencies=[Depends(member_dependency)])
     async def list_mcp_servers(

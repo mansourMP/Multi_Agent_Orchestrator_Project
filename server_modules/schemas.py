@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -128,7 +128,7 @@ class SageChatRequest(BaseModel):
     workspace_id: str
     message: str
     surface: str = "chat"
-    mode: str = "owner_sage"
+    mode: Literal["owner_sage"] = "owner_sage"
 
 
 class AgentCreate(BaseModel):

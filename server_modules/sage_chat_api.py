@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException
 
 from server_modules.auth import enforce_workspace_access, workspace_tenant_id
-from server_modules.sage_agent_runtime_service import run_sage_chat_turn
+from server_modules.sage_agent_runtime_service import handle_sage_chat
 from server_modules.schemas import SageChatRequest
 
 
@@ -37,11 +37,13 @@ def register_sage_chat_routes(app) -> None:
         tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
 
         try:
-            result = run_sage_chat_turn(
+            result = await handle_sage_chat(
                 workspace_id=resolved_workspace_id,
+                tenant_id=tenant_id,
                 message=str(body.message).strip(),
                 surface=str(body.surface or "chat").strip() or "chat",
                 mode="owner_sage",
+                current_user=current_user,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

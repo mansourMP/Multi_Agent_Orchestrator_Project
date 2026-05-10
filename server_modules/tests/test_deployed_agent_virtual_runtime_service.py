@@ -1,0 +1,660 @@
+import unittest
+from unittest.mock import AsyncMock, Mock, patch
+
+from server_modules import deployed_agent_virtual_runtime_service
+
+
+def _privacy_contract_snapshot(**overrides):
+    snapshot = {
+        "schema_version": 1,
+        "where_it_runs": {"trust_zone": "cloud_managed"},
+        "model_provider_data_access": {},
+        "screenshots_captured": True,
+        "files_accessible": True,
+        "terminal_accessible": True,
+        "connectors_accessible": {},
+        "memory_scope": {},
+        "retention_period": {},
+        "export_delete_policy": {},
+        "audit_log": {"available": True},
+        "accepted_at": "2026-05-11T10:00:00Z",
+        "accepted_by_user_id": "user-owner",
+    }
+    snapshot.update(overrides)
+    return snapshot
+
+
+def _computer_safety_contract_snapshot(**overrides):
+    snapshot = {
+        "schema_version": 1,
+        "enabled": True,
+        "required_for_mode": True,
+        "studio_agent_mode": "cloud_computer_agent",
+        "isolation_boundary": "sandbox",
+        "inherit_host_environment": False,
+        "filesystem_default_access": "session_scoped",
+        "domain_allowlist": ["supplier.example", "*.orders.example"],
+        "download_install_policy": {
+            "downloads_allowed": False,
+            "software_install_allowed": False,
+        },
+        "terminal_command_policy": "review_required",
+        "sensitive_action_confirmation_required": True,
+        "session_timeout_seconds": 900,
+        "max_runtime_seconds": 7200,
+        "screenshot_session_recording": {
+            "screenshots_enabled": True,
+            "recording_policy": "metadata_only",
+        },
+        "emergency_stop_enabled": True,
+        "required_owner_approval_actions": [
+            "send_external_messages",
+            "make_purchases",
+            "delete_data",
+            "change_permissions",
+            "enter_secrets",
+            "install_software",
+            "run_unknown_scripts",
+        ],
+    }
+    snapshot.update(overrides)
+    return snapshot
+
+
+def _deployed_agent(**overrides):
+    base = {
+        "id": "dagent_1",
+        "backing_install_id": "ainstall_1",
+        "deployment_state": "live",
+        "config": {
+            "name": "Store Assistant",
+            "persona": "Helpful ops assistant",
+            "system_prompt": "Help safely.",
+            "studio_agent_mode": "cloud_computer_agent",
+            "runtime_target": "cloud",
+            "computer_automation": {
+                "enabled": True,
+                "runtime_class": "virtual_browser",
+                "allowed_domains": ["supplier.example", "*.orders.example"],
+                "max_concurrent_sessions": 2,
+                "daily_budget_usd": 25,
+                "monthly_budget_usd": 200,
+                "requires_owner_approval": True,
+                "idle_timeout_seconds": 900,
+                "max_session_runtime_seconds": 7200,
+                "screenshot_capture_enabled": True,
+                "session_recording_policy": "metadata_only",
+                "required_owner_approval_actions": [
+                    "send_external_messages",
+                    "make_purchases",
+                    "delete_data",
+                    "change_permissions",
+                    "enter_secrets",
+                    "install_software",
+                    "run_unknown_scripts",
+                ],
+            },
+            "commerce_policy": {
+                "monthly_cost_cap_usd": 300,
+            },
+            "tool_policy": {
+                "enabled_tools": ["web_search", "http_request"],
+            },
+            "memory_policy": {
+                "memory_enabled": True,
+            },
+        },
+        "metadata": {
+            "privacy_contract_snapshot": _privacy_contract_snapshot(),
+            "computer_safety_contract_snapshot": _computer_safety_contract_snapshot(),
+        },
+    }
+    override_config = overrides.pop("config", None)
+    override_metadata = overrides.pop("metadata", None)
+    base.update(overrides)
+    if override_config is not None:
+        config = dict(base["config"])
+        config.update(override_config)
+        base["config"] = config
+    if override_metadata is not None:
+        metadata = dict(base["metadata"])
+        metadata.update(override_metadata)
+        base["metadata"] = metadata
+    return base
+
+
+class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
+    def test_builds_cloud_computer_runtime_payload(self):
+        payload = deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(
+            _deployed_agent()
+        )
+
+        self.assertEqual(payload["runtime_choice"], "virtual_browser")
+        self.assertEqual(payload["computer_automation"]["runtime_class"], "virtual_browser")
+        self.assertEqual(payload["network_policy"]["allowed_domains"], ["supplier.example", "*.orders.example"])
+        self.assertTrue(payload["enterprise_controls"]["disable_public_internet_mode"])
+        self.assertTrue(payload["session_recording"]["enabled"])
+        self.assertEqual(payload["runtime_kill_state"]["deployment_state"], "live")
+        self.assertEqual(payload["policy_metadata"]["studio_agent_mode"], "cloud_computer_agent")
+        self.assertEqual(payload["policy_metadata"]["privacy_contract_snapshot_version"], 1)
+        self.assertEqual(payload["policy_metadata"]["computer_safety_contract_snapshot_version"], 1)
+
+    def test_uses_server_side_policy_not_untrusted_raw_policy_fields(self):
+        record = _deployed_agent(
+            config={
+                "computer_automation": {
+                    "enabled": True,
+                    "runtime_class": "virtual_browser",
+                    "allowed_domains": ["safe.example"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 10,
+                    "monthly_budget_usd": 50,
+                },
+                "network_policy": {"allowed_domains": ["evil.example"]},
+                "session_recording": {"enabled": False},
+                "policy_metadata": {"policy_mode": "allow_all"},
+            },
+            metadata={
+                "privacy_contract_snapshot": _privacy_contract_snapshot(),
+                "computer_safety_contract_snapshot": _computer_safety_contract_snapshot(
+                    domain_allowlist=["safe.example"],
+                ),
+                "network_policy": {"allowed_domains": ["evil.example"]},
+                "runtime_kill_state": {"deployment_state": "live"},
+            },
+        )
+
+        payload = deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(record)
+
+        self.assertEqual(payload["network_policy"]["allowed_domains"], ["safe.example"])
+        self.assertTrue(payload["session_recording_enabled"])
+        self.assertEqual(payload["policy_metadata"]["policy_mode"], "strict")
+
+    def test_maps_kill_switch_and_workspace_emergency_stop(self):
+        record = _deployed_agent(
+            deployment_state="suspended",
+            metadata={
+                "kill_switch": {"active": True, "reason": "owner_stop"},
+                "workspace_emergency_stop": {"active": True, "reason": "workspace_stop"},
+            },
+        )
+
+        payload = deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(record)
+
+        self.assertEqual(payload["runtime_kill_state"]["deployment_state"], "suspended")
+        self.assertTrue(payload["runtime_kill_state"]["kill_switch_active"])
+        self.assertTrue(payload["runtime_kill_state"]["workspace_emergency_stop_active"])
+        self.assertEqual(payload["runtime_kill_state"]["kill_switch_reason"], "owner_stop")
+
+    def test_maps_local_runtime_classes_to_local_runtime_choice(self):
+        record = _deployed_agent(
+            config={
+                "studio_agent_mode": "my_computer_agent",
+                "commerce_policy": {"monthly_cost_cap_usd": 25},
+                "computer_automation": {
+                    "enabled": True,
+                    "runtime_class": "local_desktop",
+                    "allowed_domains": ["intranet.example"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 5,
+                    "monthly_budget_usd": 25,
+                },
+            },
+            metadata={
+                "computer_safety_contract_snapshot": _computer_safety_contract_snapshot(
+                    studio_agent_mode="my_computer_agent",
+                    domain_allowlist=["intranet.example"],
+                )
+            },
+        )
+
+        payload = deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(record)
+
+        self.assertEqual(payload["runtime_choice"], "local")
+
+    def test_derives_runtime_and_cost_quota_from_backend_config(self):
+        payload = deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(
+            _deployed_agent()
+        )
+
+        self.assertEqual(payload["runtime_quota"]["max_concurrent_sessions"], 2)
+        self.assertEqual(payload["cost_quota"]["workspace_monthly_budget_limit"], 300.0)
+        self.assertEqual(payload["cost_quota"]["agent_monthly_budget_limit"], 200.0)
+        self.assertEqual(payload["cost_quota"]["per_session_runtime_seconds"], 7200)
+        self.assertEqual(payload["cost_quota"]["agent_runtime_budget_seconds"], 14400)
+
+    def test_requires_privacy_snapshot_for_computer_runtime(self):
+        with self.assertRaisesRegex(ValueError, "privacy_contract_snapshot"):
+            deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(
+                _deployed_agent(metadata={"privacy_contract_snapshot": None})
+            )
+
+    def test_requires_computer_safety_snapshot_for_computer_runtime(self):
+        with self.assertRaisesRegex(ValueError, "computer_safety_contract_snapshot"):
+            deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(
+                _deployed_agent(metadata={"computer_safety_contract_snapshot": None})
+            )
+
+    def test_requires_budget_allowlist_and_recording_for_computer_runtime(self):
+        with self.assertRaisesRegex(ValueError, "allowed_domains"):
+            deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(
+                _deployed_agent(
+                    config={
+                        "computer_automation": {
+                            "enabled": True,
+                            "runtime_class": "virtual_browser",
+                            "allowed_domains": [],
+                            "daily_budget_usd": 25,
+                            "monthly_budget_usd": 200,
+                            "session_recording_policy": "metadata_only",
+                        }
+                    },
+                    metadata={
+                        "computer_safety_contract_snapshot": _computer_safety_contract_snapshot(
+                            domain_allowlist=[],
+                        )
+                    },
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "daily_budget_usd"):
+            deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(
+                _deployed_agent(
+                    config={
+                        "computer_automation": {
+                            "enabled": True,
+                            "runtime_class": "virtual_browser",
+                            "allowed_domains": ["supplier.example"],
+                            "daily_budget_usd": None,
+                            "monthly_budget_usd": 200,
+                            "session_recording_policy": "metadata_only",
+                        }
+                    }
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "session recording"):
+            deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(
+                _deployed_agent(
+                    config={
+                        "computer_automation": {
+                            "enabled": True,
+                            "runtime_class": "virtual_browser",
+                            "allowed_domains": ["supplier.example"],
+                            "daily_budget_usd": 25,
+                            "monthly_budget_usd": 200,
+                            "session_recording_policy": "disabled",
+                        }
+                    },
+                    metadata={
+                        "computer_safety_contract_snapshot": _computer_safety_contract_snapshot(
+                            screenshot_session_recording={
+                                "screenshots_enabled": False,
+                                "recording_policy": "disabled",
+                            }
+                        )
+                    },
+                )
+            )
+
+    def test_ensure_cloud_runtime_session_binding_uses_virtual_runtime_registry(self):
+        async def _run():
+            runtime = Mock()
+            runtime.create_session = AsyncMock(
+                return_value={
+                    "browser_session": {"browser_session_id": "vcsess_1"},
+                    "provider_id": "provider_demo",
+                    "provider_kind": "managed_cloud",
+                }
+            )
+            registry = Mock()
+            registry.resolve.return_value = runtime
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.control_plane_repository,
+                    "get_deployed_agent_by_id",
+                    new=AsyncMock(return_value=_deployed_agent()),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service,
+                    "get_runtime_registry",
+                    return_value=registry,
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service.activity_ledger_service,
+                    "append_activity_event",
+                    new=AsyncMock(),
+                ) as append_activity_event,
+            ):
+                return await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
+                    deployed_agent_id="dagent_1",
+                    tenant_id="tenant-1",
+                    workspace_id="ws-1",
+                    session_id="sess-1",
+                    thread_id="thread-1",
+                    channel="telegram",
+                    actor={"type": "user", "id": "user-1"},
+                    session_metadata={},
+                    turn_metadata={"deployed_agent_id": "dagent_1"},
+                    machine_target=None,
+                ), registry, runtime, append_activity_event
+
+        import asyncio
+
+        binding, registry, runtime, append_activity_event = asyncio.run(_run())
+        self.assertEqual(binding["metadata_updates"]["runtime_session_id"], "vcsess_1")
+        self.assertEqual(binding["metadata_updates"]["runtime_session_binding"], "cloud_computer_agent")
+        registry.resolve.assert_called_once()
+        runtime.create_session.assert_awaited_once()
+        payload = runtime.create_session.await_args.args[0]
+        self.assertEqual(payload["session_id"], "sess-1")
+        self.assertEqual(payload["agent_id"], "dagent_1")
+        self.assertEqual(payload["metadata"]["runtime_session_binding"], "cloud_computer_agent")
+        self.assertEqual(
+            append_activity_event.await_args.kwargs["action"],
+            "deployed_agent_cloud_runtime_session_created",
+        )
+
+    def test_ensure_cloud_runtime_session_binding_skips_non_cloud_agents(self):
+        async def _run():
+            with patch.object(
+                deployed_agent_virtual_runtime_service.control_plane_repository,
+                "get_deployed_agent_by_id",
+                new=AsyncMock(
+                    return_value=_deployed_agent(
+                        config={"studio_agent_mode": "text_agent"},
+                    )
+                ),
+            ):
+                return await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
+                    deployed_agent_id="dagent_1",
+                    tenant_id="tenant-1",
+                    workspace_id="ws-1",
+                    session_id="sess-1",
+                    thread_id="thread-1",
+                    channel="web",
+                    actor={"type": "user", "id": "user-1"},
+                    turn_metadata={"deployed_agent_id": "dagent_1"},
+                )
+
+        import asyncio
+
+        self.assertIsNone(asyncio.run(_run()))
+
+    def test_execute_bound_cloud_runtime_tool_call_uses_execute_action(self):
+        async def _run():
+            runtime = Mock()
+            runtime.execute_action = AsyncMock(
+                return_value={
+                    "status": "ok",
+                    "browser_session": {"browser_session_id": "vcsess_1"},
+                    "action_result": {"ok": True, "action": "open_url"},
+                }
+            )
+            registry = Mock()
+            registry.resolve.return_value = runtime
+            session_ctx = {
+                "tenant_id": "tenant-1",
+                "agent_turn_request": {
+                    "context_hints": {
+                        "metadata": {
+                            "deployed_agent_id": "dagent_1",
+                            "runtime_session_id": "vcsess_1",
+                            "runtime_session_binding": "cloud_computer_agent",
+                        }
+                    }
+                },
+            }
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.control_plane_repository,
+                    "get_deployed_agent_by_id",
+                    new=AsyncMock(return_value=_deployed_agent()),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service,
+                    "get_runtime_registry",
+                    return_value=registry,
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service.activity_ledger_service,
+                    "append_activity_event",
+                    new=AsyncMock(),
+                ) as append_activity_event,
+            ):
+                return await deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call(
+                    connector_id="browser",
+                    action_id="navigate",
+                    argument_payload={"url": "https://supplier.example"},
+                    workspace_id="ws-1",
+                    thread_id="thread-1",
+                    session_ctx=session_ctx,
+                ), runtime, append_activity_event
+
+        import asyncio
+
+        result, runtime, append_activity_event = asyncio.run(_run())
+        payload = runtime.execute_action.await_args.args[0]
+        self.assertEqual(payload["browser_session_id"], "vcsess_1")
+        self.assertEqual(payload["action"], "open_url")
+        self.assertEqual(payload["action_args"]["url"], "https://supplier.example")
+        self.assertEqual(payload["metadata"]["runtime_session_binding"], "cloud_computer_agent")
+        self.assertIn("\"open_url\"", result)
+        self.assertEqual(
+            append_activity_event.await_args.kwargs["action"],
+            "deployed_agent_cloud_runtime_action_admitted",
+        )
+
+    def test_execute_bound_cloud_runtime_tool_call_rejects_missing_runtime_session(self):
+        async def _run():
+            with patch.object(
+                deployed_agent_virtual_runtime_service.control_plane_repository,
+                "get_deployed_agent_by_id",
+                new=AsyncMock(return_value=_deployed_agent()),
+            ):
+                return await deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call(
+                    connector_id="browser",
+                    action_id="navigate",
+                    argument_payload={"url": "https://supplier.example"},
+                    workspace_id="ws-1",
+                    thread_id="thread-1",
+                    session_ctx={
+                        "tenant_id": "tenant-1",
+                        "agent_turn_request": {
+                            "context_hints": {
+                                "metadata": {
+                                    "deployed_agent_id": "dagent_1",
+                                    "runtime_session_binding": "cloud_computer_agent",
+                                }
+                            }
+                        },
+                    },
+                )
+
+        import asyncio
+
+        with self.assertRaisesRegex(RuntimeError, "runtime_session_id"):
+            asyncio.run(_run())
+
+    def test_execute_bound_cloud_runtime_tool_call_rejects_selector_browser_mutations(self):
+        async def _run():
+            with patch.object(
+                deployed_agent_virtual_runtime_service.control_plane_repository,
+                "get_deployed_agent_by_id",
+                new=AsyncMock(return_value=_deployed_agent()),
+            ):
+                return await deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call(
+                    connector_id="browser",
+                    action_id="fill",
+                    argument_payload={"selector": "#email", "value": "x"},
+                    workspace_id="ws-1",
+                    thread_id="thread-1",
+                    session_ctx={
+                        "tenant_id": "tenant-1",
+                        "agent_turn_request": {
+                            "context_hints": {
+                                "metadata": {
+                                    "deployed_agent_id": "dagent_1",
+                                    "runtime_session_id": "vcsess_1",
+                                    "runtime_session_binding": "cloud_computer_agent",
+                                }
+                            }
+                        },
+                    },
+                )
+
+        import asyncio
+
+        with self.assertRaisesRegex(RuntimeError, "does not support browser__fill"):
+            asyncio.run(_run())
+
+    def test_execute_bound_cloud_runtime_tool_call_emits_policy_override_rejection(self):
+        async def _run():
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.control_plane_repository,
+                    "get_deployed_agent_by_id",
+                    new=AsyncMock(return_value=_deployed_agent()),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service.activity_ledger_service,
+                    "append_activity_event",
+                    new=AsyncMock(),
+                ) as append_activity_event,
+            ):
+                try:
+                    await deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call(
+                        connector_id="browser",
+                        action_id="navigate",
+                        argument_payload={
+                            "url": "https://supplier.example",
+                            "network_policy": {"allowed_domains": ["evil.example"]},
+                        },
+                        workspace_id="ws-1",
+                        thread_id="thread-1",
+                        session_ctx={
+                            "tenant_id": "tenant-1",
+                            "agent_turn_request": {
+                                "context_hints": {
+                                    "metadata": {
+                                        "deployed_agent_id": "dagent_1",
+                                        "runtime_session_id": "vcsess_1",
+                                        "runtime_session_binding": "cloud_computer_agent",
+                                    }
+                                }
+                            },
+                        },
+                    )
+                except RuntimeError as exc:
+                    return str(exc), append_activity_event
+            return "", None
+
+        import asyncio
+
+        error, append_activity_event = asyncio.run(_run())
+        self.assertIn("raw policy override", error)
+        self.assertEqual(
+            append_activity_event.await_args.kwargs["action"],
+            "deployed_agent_cloud_runtime_policy_override_rejected",
+        )
+
+    def test_execute_bound_cloud_runtime_tool_call_emits_kill_state_rejection(self):
+        async def _run():
+            runtime = Mock()
+            runtime.execute_action = AsyncMock(side_effect=RuntimeError("Runtime admission gate rejected session/action: agent_suspended."))
+            registry = Mock()
+            registry.resolve.return_value = runtime
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.control_plane_repository,
+                    "get_deployed_agent_by_id",
+                    new=AsyncMock(return_value=_deployed_agent(deployment_state="suspended")),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service,
+                    "get_runtime_registry",
+                    return_value=registry,
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service.activity_ledger_service,
+                    "append_activity_event",
+                    new=AsyncMock(),
+                ) as append_activity_event,
+            ):
+                try:
+                    await deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call(
+                        connector_id="browser",
+                        action_id="navigate",
+                        argument_payload={"url": "https://supplier.example"},
+                        workspace_id="ws-1",
+                        thread_id="thread-1",
+                        session_ctx={
+                            "tenant_id": "tenant-1",
+                            "agent_turn_request": {
+                                "context_hints": {
+                                    "metadata": {
+                                        "deployed_agent_id": "dagent_1",
+                                        "runtime_session_id": "vcsess_1",
+                                        "runtime_session_binding": "cloud_computer_agent",
+                                    }
+                                }
+                            },
+                        },
+                    )
+                except RuntimeError:
+                    return append_activity_event.await_args_list
+            return []
+
+        import asyncio
+
+        calls = asyncio.run(_run())
+        actions = [call.kwargs["action"] for call in calls]
+        self.assertIn("deployed_agent_cloud_runtime_action_denied", actions)
+        self.assertIn("deployed_agent_cloud_runtime_kill_state_rejected", actions)
+
+    def test_terminate_bound_cloud_runtime_session_calls_runtime_terminate(self):
+        async def _run():
+            runtime = Mock()
+            runtime.terminate_session = AsyncMock(return_value={"status": "terminated"})
+            registry = Mock()
+            registry.resolve.return_value = runtime
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.session_service,
+                    "get_session",
+                    new=AsyncMock(
+                        return_value={
+                            "session_id": "sess-1",
+                            "tenant_id": "tenant-1",
+                            "workspace_id": "ws-1",
+                            "metadata": {
+                                "deployed_agent_id": "dagent_1",
+                                "runtime_session_binding": "cloud_computer_agent",
+                                "runtime_session_id": "vcsess_1",
+                                "runtime_choice": "virtual_browser",
+                                "runtime_provider_id": "provider_demo",
+                            },
+                        }
+                    ),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service,
+                    "get_runtime_registry",
+                    return_value=registry,
+                ),
+            ):
+                return await deployed_agent_virtual_runtime_service.terminate_bound_cloud_runtime_session(
+                    session_id="sess-1",
+                    tenant_id="tenant-1",
+                    workspace_id="ws-1",
+                ), runtime
+
+        import asyncio
+
+        result, runtime = asyncio.run(_run())
+        payload = runtime.terminate_session.await_args.args[0]
+        self.assertEqual(payload["browser_session_id"], "vcsess_1")
+        self.assertTrue(payload["manual_terminate"])
+        self.assertEqual(result["status"], "terminated")
+
+
+if __name__ == "__main__":
+    unittest.main()

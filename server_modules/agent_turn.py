@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Literal, Optional, Protocol
 
 from server_modules import agent_trace_service
 from server_modules import agent_registry_repository
+from server_modules import deployed_agent_virtual_runtime_service
 from server_modules import healthguide_safety_service
 from server_modules import session_service
 from server_modules import thread_service
@@ -174,6 +175,51 @@ def normalize_session_mode(value: Any) -> SessionMode:
 
 def _metadata_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+async def _bind_cloud_runtime_session_if_needed(
+    *,
+    turn_request: AgentTurnRequest,
+    session_record: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(session_record, dict):
+        return session_record
+    context_hints = dict(turn_request.context_hints or {})
+    turn_metadata = _metadata_dict(context_hints.get("metadata"))
+    session_metadata = _metadata_dict(session_record.get("metadata"))
+    binding = await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
+        deployed_agent_id=turn_metadata.get("deployed_agent_id") or session_metadata.get("deployed_agent_id"),
+        tenant_id=turn_request.tenant_id,
+        workspace_id=turn_request.workspace_id,
+        session_id=session_record.get("session_id") or turn_request.session_id,
+        thread_id=turn_request.thread_id,
+        channel=turn_request.channel,
+        actor=serialize_turn_actor(turn_request.actor),
+        session_metadata=session_metadata,
+        turn_metadata=turn_metadata,
+        machine_target=turn_request.machine_target,
+    )
+    if not isinstance(binding, dict):
+        return session_record
+    metadata_updates = _metadata_dict(binding.get("metadata_updates"))
+    if not metadata_updates:
+        return session_record
+    merged_session_metadata = dict(session_metadata)
+    merged_session_metadata.update(metadata_updates)
+    merged_turn_metadata = dict(turn_metadata)
+    merged_turn_metadata.update(metadata_updates)
+    session_record["metadata"] = merged_session_metadata
+    context_hints["metadata"] = merged_turn_metadata
+    context_hints["session"] = dict(session_record)
+    turn_request.context_hints = context_hints
+    runtime_session_id = str(metadata_updates.get("runtime_session_id") or "").strip()
+    if runtime_session_id and str(turn_request.machine_target or "").strip().lower() not in {"cloud", "virtual"}:
+        turn_request.machine_target = "virtual"
+    await session_service.extend_session(
+        str(session_record.get("session_id") or turn_request.session_id).strip(),
+        metadata_updates=metadata_updates,
+    )
+    return session_record
 
 
 def _trace_root_agent_id(binding_metadata: Dict[str, Any]) -> str:
@@ -1377,6 +1423,10 @@ async def agent_turn(
             },
         )
         session_record = await session_service.get_session(resolved_turn_request.session_id)
+    session_record = await _bind_cloud_runtime_session_if_needed(
+        turn_request=resolved_turn_request,
+        session_record=session_record,
+    )
     if isinstance(session_record, dict):
         context_hints = dict(resolved_turn_request.context_hints or {})
         if not isinstance(context_hints.get("session"), dict):

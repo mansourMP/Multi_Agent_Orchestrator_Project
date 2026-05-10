@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from server_modules import security_audit_service
+from server_modules import deployed_agent_virtual_runtime_service
 from server_modules import skills_service
 from server_modules import tool_broker_guard_service
 
@@ -16,6 +17,7 @@ _FILE_DELETE_ACTIONS = {"delete", "remove", "unlink", "trash"}
 _FILE_WRITE_ACTIONS = {"write", "append", "rename", "move", "copy", "mkdir", "touch"}
 _CHANNEL_CONNECTORS = {"discord", "email", "gmail", "imsg", "mail", "signal", "slack", "telegram", "whatsapp"}
 _HTTP_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+_CLOUD_COMPUTER_RUNTIME_CONNECTORS = {"browser", "computer", "shell"}
 
 
 def _default_update_memory_context_file(*args: Any, **kwargs: Any) -> Any:
@@ -646,18 +648,48 @@ def execute_single_direct_tool_call(
         idempotency_key=f"direct_tool.started:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}",
     )
     try:
-        result = skills_service.execute_single_direct_tool_call(
-            tool_call=tool_call,
-            workspace_id=workspace_id,
-            thread_id=thread_id,
-            index=index,
-            provider=provider,
-            model=model,
-            credentials=credentials,
-            reasoning_effort=reasoning_effort,
-            session_ctx=session_ctx,
-            callbacks=callbacks,
-        )
+        if (
+            connector_id in _CLOUD_COMPUTER_RUNTIME_CONNECTORS
+            and deployed_agent_virtual_runtime_service.has_cloud_runtime_session_binding(session_ctx)
+        ):
+            runtime_bound_result = callbacks.run_async_tool_call(
+                deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call(
+                    connector_id=connector_id,
+                    action_id=action_id,
+                    argument_payload=argument_payload,
+                    workspace_id=workspace_id,
+                    thread_id=thread_id,
+                    session_ctx=session_ctx,
+                )
+            )
+            if runtime_bound_result is not None:
+                result = runtime_bound_result
+            else:
+                result = skills_service.execute_single_direct_tool_call(
+                    tool_call=tool_call,
+                    workspace_id=workspace_id,
+                    thread_id=thread_id,
+                    index=index,
+                    provider=provider,
+                    model=model,
+                    credentials=credentials,
+                    reasoning_effort=reasoning_effort,
+                    session_ctx=session_ctx,
+                    callbacks=callbacks,
+                )
+        else:
+            result = skills_service.execute_single_direct_tool_call(
+                tool_call=tool_call,
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                index=index,
+                provider=provider,
+                model=model,
+                credentials=credentials,
+                reasoning_effort=reasoning_effort,
+                session_ctx=session_ctx,
+                callbacks=callbacks,
+            )
     except Exception as exc:
         security_audit_service.emit_security_audit_event(
             action="direct_tool.failed",

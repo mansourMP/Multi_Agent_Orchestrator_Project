@@ -1582,7 +1582,7 @@ def _runtime_kill_state(payload: Dict[str, Any], session_state: Optional[Dict[st
         deployment_state = _token(
             source.get("deployment_state") or source.get("agent_state") or source.get("runtime_state")
         ).lower()
-        if deployment_state in {"suspended", "archived", "killed"}:
+        if deployment_state in {"paused", "suspended", "archived", "killed"}:
             return {"blocked": True, "reason": f"agent_{deployment_state}"}
     return {"blocked": False, "reason": ""}
 

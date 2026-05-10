@@ -389,6 +389,83 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertEqual(metadata["approval_reason"], "Browser mutation")
         self.assertEqual(metadata["argument_target"], "#email")
 
+    def test_execute_single_direct_tool_call_routes_cloud_computer_actions_through_runtime(self) -> None:
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(_callbacks()),
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ), patch(
+            "server_modules.direct_tool_execution_service.deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call",
+            new=AsyncMock(return_value='{"status":"ok","action_result":{"ok":true}}'),
+        ) as runtime_exec, patch(
+            "server_modules.skills_service._resolve_direct_tool_browser_adapter",
+        ) as browser_adapter:
+            result = service.execute_single_direct_tool_call(
+                tool_call={"name": "browser__navigate", "arguments": {"url": "https://supplier.example"}},
+                workspace_id="workspace-1",
+                thread_id="thread-1",
+                callbacks=callbacks,
+                session_ctx={
+                    "tenant_id": "tenant-1",
+                    "agent_turn_request": {
+                        "context_hints": {
+                            "metadata": {
+                                "deployed_agent_id": "dagent_1",
+                                "runtime_session_id": "vcsess_1",
+                                "runtime_session_binding": "cloud_computer_agent",
+                            }
+                        }
+                    },
+                },
+            )
+
+        self.assertIn('"status":"ok"', result)
+        runtime_exec.assert_awaited_once()
+        browser_adapter.assert_not_called()
+
+    def test_execute_single_direct_tool_call_cloud_computer_unsupported_action_fails_closed(self) -> None:
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(_callbacks()),
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ), patch(
+            "server_modules.direct_tool_execution_service.deployed_agent_virtual_runtime_service.execute_bound_cloud_runtime_tool_call",
+            new=AsyncMock(side_effect=RuntimeError("Cloud Computer runtime does not support browser__fill.")),
+        ), patch(
+            "server_modules.skills_service._resolve_direct_tool_browser_adapter",
+        ) as browser_adapter:
+            with self.assertRaisesRegex(RuntimeError, "browser__fill"):
+                service.execute_single_direct_tool_call(
+                    tool_call={"name": "browser__fill", "arguments": {"selector": "#email", "value": "x"}},
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={
+                        "tenant_id": "tenant-1",
+                        "agent_turn_request": {
+                            "context_hints": {
+                                "metadata": {
+                                    "deployed_agent_id": "dagent_1",
+                                    "runtime_session_id": "vcsess_1",
+                                    "runtime_session_binding": "cloud_computer_agent",
+                                }
+                            }
+                        },
+                    },
+                )
+
+        browser_adapter.assert_not_called()
+
     def test_execute_single_direct_tool_call_uses_broker_guard_for_execute_actions(self) -> None:
         callbacks = _callbacks()
         callbacks = service.DirectToolExecutionCallbacks(

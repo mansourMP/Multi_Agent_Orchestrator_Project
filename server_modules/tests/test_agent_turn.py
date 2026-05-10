@@ -853,6 +853,82 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(request.session_id, "generated-session")
         create_session.assert_awaited_once()
 
+    def test_agent_turn_binds_cloud_runtime_session_metadata_for_deployed_agent(self):
+        request = AgentTurnRequest(
+            tenant_id="default",
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            session_id="",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="user-1"),
+            message="hello",
+            context_hints={"metadata": {"deployed_agent_id": "dagent_1"}},
+        )
+
+        async def _run():
+            with (
+                patch(
+                    "server_modules.agent_turn.session_service.get_session",
+                    new=AsyncMock(
+                        return_value={
+                            "session_id": "generated-session",
+                            "workspace_id": "workspace-1",
+                            "tenant_id": "default",
+                            "channel": "web",
+                            "actor": {"type": "user", "id": "user-1"},
+                            "created_at": "2026-04-06T00:00:00Z",
+                            "expires_at": "2026-04-07T00:00:00Z",
+                            "metadata": {"source": "agent_turn", "deployed_agent_id": "dagent_1"},
+                            "status": "active",
+                        }
+                    ),
+                ),
+                patch("server_modules.agent_turn.session_service.create_session", new=AsyncMock(return_value="generated-session")),
+                patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock()) as extend_session,
+                patch(
+                    "server_modules.agent_turn.deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding",
+                    new=AsyncMock(
+                        return_value={
+                            "metadata_updates": {
+                                "runtime_session_id": "vcsess_1",
+                                "runtime_session_binding": "cloud_computer_agent",
+                                "runtime_choice": "virtual_browser",
+                                "virtual_runtime_bound": True,
+                            }
+                        }
+                    ),
+                ) as bind_runtime,
+                patch("server_modules.turn_runtime.build_turn_execution_services", return_value="services"),
+                patch(
+                    "server_modules.turn_runtime.execute_agent_turn_request",
+                    new=AsyncMock(return_value={"status": "ok", "session_id": "generated-session"}),
+                ),
+            ):
+                result = await agent_turn(
+                    turn_request=request,
+                    current_user={"user_id": "user-1"},
+                    run_execution_services="run-services",
+                )
+                return result, extend_session, bind_runtime
+
+        import asyncio
+
+        result, extend_session, bind_runtime = asyncio.run(_run())
+        self.assertEqual(result["session_id"], "generated-session")
+        self.assertEqual(request.context_hints["metadata"]["runtime_session_id"], "vcsess_1")
+        self.assertEqual(request.context_hints["metadata"]["runtime_session_binding"], "cloud_computer_agent")
+        self.assertEqual(request.context_hints["session"]["metadata"]["runtime_session_id"], "vcsess_1")
+        bind_runtime.assert_awaited_once()
+        extend_session.assert_awaited_once_with(
+            "generated-session",
+            metadata_updates={
+                "runtime_session_id": "vcsess_1",
+                "runtime_session_binding": "cloud_computer_agent",
+                "runtime_choice": "virtual_browser",
+                "virtual_runtime_bound": True,
+            },
+        )
+
     def test_bind_agent_turn_request_meta_binds_serialized_turn_request(self):
         request = build_direct_chat_turn_request(
             current_user={"user_id": "user-1"},

@@ -16,6 +16,7 @@ from server_modules import control_plane_repository
 from server_modules import deployed_agent_config_schema
 from server_modules import deployed_agent_runtime_contract_service
 from server_modules import deployed_agent_analytics_service
+from server_modules import deployed_agent_virtual_runtime_service
 from server_modules import entitlements_service
 from server_modules import external_user_privacy_service
 from server_modules import provider_catalog_service
@@ -4349,6 +4350,11 @@ async def kill_deployed_agent_runtime_session(
     token = _normalize_text(session_id)
     if not token:
         raise _http_bad_request("Runtime session id is required.")
+    await deployed_agent_virtual_runtime_service.terminate_bound_cloud_runtime_session(
+        session_id=token,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+    )
     await session_service.terminate_session(token)
     await _append_deployed_agent_audit_event(
         tenant_id=tenant_id,

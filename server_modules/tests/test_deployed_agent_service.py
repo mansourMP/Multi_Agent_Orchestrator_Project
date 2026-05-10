@@ -2782,6 +2782,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=_deployed_agent_row()),
             ),
             patch(
+                "server_modules.deployed_agent_service.deployed_agent_virtual_runtime_service.terminate_bound_cloud_runtime_session",
+                new=AsyncMock(return_value={"status": "terminated"}),
+            ) as terminate_runtime_mock,
+            patch(
                 "server_modules.deployed_agent_service.session_service.terminate_session",
                 new=AsyncMock(),
             ) as terminate_mock,
@@ -2799,6 +2803,11 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["status"], "killed")
+        terminate_runtime_mock.assert_awaited_once_with(
+            session_id="sess-1",
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+        )
         terminate_mock.assert_awaited_once_with("sess-1")
 
     async def test_emergency_stop_workspace_suspends_agents(self) -> None:

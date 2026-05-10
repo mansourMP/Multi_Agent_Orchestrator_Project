@@ -214,6 +214,33 @@ class VirtualComputerEnterpriseControlsTests(unittest.TestCase):
                 )
             )
 
+    def test_runtime_admission_gate_rejects_paused_agent_on_init_and_action(self):
+        runtime = InMemoryVirtualComputerRuntime()
+        with self.assertRaisesRegex(RuntimeError, "agent_paused"):
+            asyncio.run(
+                runtime.create_session(
+                    {
+                        "runtime_choice": "virtual_browser",
+                        "runtime_kill_state": {"deployment_state": "paused"},
+                    }
+                )
+            )
+
+        created = asyncio.run(runtime.create_session({"runtime_choice": "virtual_browser"}))
+        session_id = created.get("session_id")
+        runtime._sessions[session_id]["runtime_kill_state"] = {"deployment_state": "paused"}
+        with self.assertRaisesRegex(RuntimeError, "agent_paused"):
+            asyncio.run(
+                runtime.execute_action(
+                    {
+                        "session_id": session_id,
+                        "deployment_state": "live",
+                        "action": "open_url",
+                        "action_args": {"url": "https://example.com"},
+                    }
+                )
+            )
+
     def test_runtime_admission_gate_hard_rejects_budget_cap(self):
         runtime = InMemoryVirtualComputerRuntime()
         with self.assertRaisesRegex(RuntimeError, "budget cap"):

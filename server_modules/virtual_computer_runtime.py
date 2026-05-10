@@ -1015,6 +1015,8 @@ def _assert_domain_bound_credential_injection(
 
 def build_cost_quota_profile(payload: Dict[str, Any], *, provider_id: Any = None) -> VirtualComputerCostQuotaProfile:
     source = payload.get("cost_quota") if isinstance(payload.get("cost_quota"), dict) else {}
+    runtime_quota = payload.get("runtime_quota") if isinstance(payload.get("runtime_quota"), dict) else {}
+    computer_automation = payload.get("computer_automation") if isinstance(payload.get("computer_automation"), dict) else {}
     provider_token = _token(provider_id or payload.get("runtime_provider_id") or payload.get("virtual_provider_id"))
     default_cost_unit = "session_minute" if provider_token == PROVIDER_ID_BROWSERBASE else "runtime_unit"
     workspace_limit = float(source.get("workspace_monthly_budget_limit") or source.get("workspace_budget_limit") or 1000.0)
@@ -1023,6 +1025,26 @@ def build_cost_quota_profile(payload: Dict[str, Any], *, provider_id: Any = None
     threshold_action = _token(source.get("budget_threshold_action")).lower() or "pause"
     if threshold_action not in {"pause", "kill"}:
         threshold_action = "pause"
+    provider_concurrency_limit = _coerce_positive_int(
+        source.get("provider_concurrency_limit") or runtime_quota.get("provider_concurrency_limit"),
+        4,
+        1,
+    )
+    workspace_concurrency_limit = _coerce_positive_int(
+        source.get("workspace_concurrency_limit")
+        or runtime_quota.get("workspace_concurrency_limit")
+        or runtime_quota.get("max_concurrent_sessions"),
+        provider_concurrency_limit,
+        1,
+    )
+    agent_concurrency_limit = _coerce_positive_int(
+        source.get("agent_concurrency_limit")
+        or runtime_quota.get("agent_concurrency_limit")
+        or computer_automation.get("max_concurrent_sessions")
+        or payload.get("max_concurrent_sessions"),
+        provider_concurrency_limit,
+        1,
+    )
     return VirtualComputerCostQuotaProfile(
         cost_unit=_token(source.get("cost_unit")) or default_cost_unit,
         per_session_cost_limit=float(source.get("per_session_cost_limit") or 120.0),
@@ -1031,7 +1053,9 @@ def build_cost_quota_profile(payload: Dict[str, Any], *, provider_id: Any = None
         agent_monthly_budget_limit=float(source.get("agent_monthly_budget_limit") or 300.0),
         per_session_runtime_seconds=_coerce_positive_int(source.get("per_session_runtime_seconds"), 60 * 60, 60),
         agent_runtime_budget_seconds=_coerce_positive_int(source.get("agent_runtime_budget_seconds"), 8 * 60 * 60, 1),
-        provider_concurrency_limit=_coerce_positive_int(source.get("provider_concurrency_limit"), 4, 1),
+        provider_concurrency_limit=provider_concurrency_limit,
+        workspace_concurrency_limit=workspace_concurrency_limit,
+        agent_concurrency_limit=agent_concurrency_limit,
         idle_timeout_seconds=_coerce_positive_int(source.get("idle_timeout_seconds"), 10 * 60, 1),
         estimated_create_cost=float(source.get("estimated_create_cost") or 1.0),
         estimated_action_cost=float(source.get("estimated_action_cost") or 1.0),
@@ -1051,6 +1075,8 @@ def _cost_quota_payload(profile: VirtualComputerCostQuotaProfile) -> Dict[str, A
         "per_session_runtime_seconds": int(profile.per_session_runtime_seconds),
         "agent_runtime_budget_seconds": int(profile.agent_runtime_budget_seconds),
         "provider_concurrency_limit": int(profile.provider_concurrency_limit),
+        "workspace_concurrency_limit": int(profile.workspace_concurrency_limit),
+        "agent_concurrency_limit": int(profile.agent_concurrency_limit),
         "idle_timeout_seconds": int(profile.idle_timeout_seconds),
         "estimated_create_cost": float(profile.estimated_create_cost),
         "estimated_action_cost": float(profile.estimated_action_cost),
@@ -1534,6 +1560,208 @@ def _estimate_action_cost(action: str, action_args: Dict[str, Any], profile: Vir
     return max(estimate, base)
 
 
+def _runtime_kill_state(payload: Dict[str, Any], session_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    state_sources = []
+    for source in (session_state, payload):
+        if isinstance(source, dict):
+            state_sources.append(source)
+            metadata = source.get("metadata")
+            if isinstance(metadata, dict):
+                state_sources.append(metadata)
+            kill_state = source.get("runtime_kill_state")
+            if isinstance(kill_state, dict):
+                state_sources.append(kill_state)
+            kill_switch = source.get("kill_switch")
+            if isinstance(kill_switch, dict):
+                state_sources.append(kill_switch)
+    for source in state_sources:
+        if bool(source.get("workspace_emergency_stop_active") or source.get("emergency_stop_active")):
+            return {"blocked": True, "reason": "workspace_emergency_stop"}
+        if bool(source.get("kill_switch_active") or source.get("active")):
+            return {"blocked": True, "reason": "kill_switch_active"}
+        deployment_state = _token(
+            source.get("deployment_state") or source.get("agent_state") or source.get("runtime_state")
+        ).lower()
+        if deployment_state in {"suspended", "archived", "killed"}:
+            return {"blocked": True, "reason": f"agent_{deployment_state}"}
+    return {"blocked": False, "reason": ""}
+
+
+def _assert_runtime_budget_cap(
+    *,
+    cost_state: Optional[VirtualComputerCostQuotaState],
+    cost_profile: VirtualComputerCostQuotaProfile,
+    workspace_estimated_cost: float,
+    agent_estimated_cost: float,
+    agent_runtime_seconds: float,
+    estimated_increment: float,
+) -> None:
+    if cost_state is not None:
+        _assert_cost_quota_active(cost_state)
+        if float(cost_state.estimated_cost) + float(estimated_increment or 0.0) > float(cost_profile.per_session_cost_limit):
+            cost_state.quota_terminated = True
+            cost_state.termination_reason = "per_session_cost_limit"
+            raise RuntimeError("Runtime admission gate rejected session/action: per-session budget cap exceeded.")
+    if float(workspace_estimated_cost) + float(estimated_increment or 0.0) > float(cost_profile.workspace_monthly_budget_limit):
+        if cost_state is not None:
+            cost_state.quota_terminated = True
+            cost_state.termination_reason = "workspace_monthly_budget_limit"
+        raise RuntimeError("Runtime admission gate rejected session/action: workspace budget cap exceeded.")
+    if float(agent_estimated_cost) + float(estimated_increment or 0.0) > float(cost_profile.agent_monthly_budget_limit):
+        if cost_state is not None:
+            cost_state.quota_terminated = True
+            cost_state.termination_reason = "agent_monthly_budget_limit"
+        raise RuntimeError("Runtime admission gate rejected session/action: agent budget cap exceeded.")
+    if float(agent_runtime_seconds) >= float(cost_profile.agent_runtime_budget_seconds):
+        if cost_state is not None:
+            cost_state.quota_terminated = True
+            cost_state.termination_reason = "agent_runtime_budget_limit"
+        raise RuntimeError("Runtime admission gate rejected session/action: agent runtime budget cap exceeded.")
+
+
+def _assert_runtime_concurrency_quota(
+    *,
+    active_provider_sessions: int,
+    active_workspace_sessions: int,
+    active_agent_sessions: int,
+    cost_profile: VirtualComputerCostQuotaProfile,
+    creating_session: bool,
+) -> None:
+    def exceeded(active: int, limit: int) -> bool:
+        return int(active) >= int(limit) if creating_session else int(active) > int(limit)
+
+    if exceeded(active_provider_sessions, cost_profile.provider_concurrency_limit):
+        raise RuntimeError("Runtime admission gate rejected session/action: provider concurrency quota exceeded.")
+    if exceeded(active_workspace_sessions, cost_profile.workspace_concurrency_limit):
+        raise RuntimeError("Runtime admission gate rejected session/action: workspace concurrency quota exceeded.")
+    if exceeded(active_agent_sessions, cost_profile.agent_concurrency_limit):
+        raise RuntimeError("Runtime admission gate rejected session/action: agent concurrency quota exceeded.")
+
+
+def _assert_session_recording_started(
+    *,
+    payload: Dict[str, Any],
+    enterprise_controls: Dict[str, Any],
+    session_state: Optional[Dict[str, Any]],
+    creating_session: bool,
+) -> Dict[str, Any]:
+    recording_config = payload.get("session_recording") if isinstance(payload.get("session_recording"), dict) else {}
+    if bool(
+        payload.get("session_recording_start_failed")
+        or recording_config.get("start_failed")
+        or enterprise_controls.get("session_recording_start_failed")
+    ):
+        raise RuntimeError("Runtime admission gate rejected session/action: session recording could not start.")
+    if (
+        payload.get("session_recording_enabled") is False
+        or recording_config.get("enabled") is False
+        or enterprise_controls.get("session_recording_enabled") is False
+    ):
+        raise RuntimeError("Runtime admission gate rejected session/action: session recording is required.")
+    retention_seconds = int(enterprise_controls.get("session_recording_retention_seconds") or 0)
+    if retention_seconds <= 0:
+        raise RuntimeError("Runtime admission gate rejected session/action: session recording retention is required.")
+    if not creating_session:
+        recording_state = session_state.get("session_recording") if isinstance(session_state, dict) else {}
+        if not isinstance(recording_state, dict) or not bool(recording_state.get("started")):
+            raise RuntimeError("Runtime admission gate rejected session/action: session recording is not active.")
+    return {
+        "started": True,
+        "started_at_epoch": time.time(),
+        "retention_seconds": retention_seconds,
+        "provider": _token(recording_config.get("provider") or enterprise_controls.get("session_recording_provider")) or "runtime_audit_chain",
+    }
+
+
+def runtime_admission_gate(
+    *,
+    phase: str,
+    payload: Dict[str, Any],
+    action: Optional[str],
+    action_args: Optional[Dict[str, Any]],
+    runtime_kind: str,
+    cost_profile: VirtualComputerCostQuotaProfile,
+    cost_state: Optional[VirtualComputerCostQuotaState],
+    workspace_estimated_cost: float,
+    agent_estimated_cost: float,
+    agent_runtime_seconds: float,
+    active_provider_sessions: int,
+    active_workspace_sessions: int,
+    active_agent_sessions: int,
+    network_policy: Dict[str, Any],
+    enterprise_controls: Dict[str, Any],
+    current_url: Any = None,
+    session_state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    phase_token = _token(phase).lower()
+    action_token = _token(action).lower()
+    safe_action_args = dict(action_args or {})
+    creating_session = phase_token == "session_init"
+    estimated_increment = float(cost_profile.estimated_create_cost if creating_session else 0.0)
+    if not creating_session and action_token:
+        estimated_increment = _estimate_action_cost(action_token, safe_action_args, cost_profile)
+
+    _assert_runtime_budget_cap(
+        cost_state=cost_state,
+        cost_profile=cost_profile,
+        workspace_estimated_cost=workspace_estimated_cost,
+        agent_estimated_cost=agent_estimated_cost,
+        agent_runtime_seconds=agent_runtime_seconds,
+        estimated_increment=estimated_increment,
+    )
+
+    if action_token:
+        _assert_network_browser_security(
+            action=action_token,
+            action_args=safe_action_args,
+            policy=network_policy,
+            approval_granted=bool(payload.get("approved") or payload.get("approval_granted") or _token(payload.get("approval_id"))),
+            current_url=current_url,
+        )
+        _assert_enterprise_network_controls(
+            action=action_token,
+            action_args=safe_action_args,
+            controls=enterprise_controls,
+            current_url=current_url,
+        )
+
+    kill_state = _runtime_kill_state(payload, session_state=session_state)
+    if bool(kill_state.get("blocked")):
+        raise RuntimeError(f"Runtime admission gate rejected session/action: {kill_state.get('reason')}.")
+
+    _assert_runtime_concurrency_quota(
+        active_provider_sessions=active_provider_sessions,
+        active_workspace_sessions=active_workspace_sessions,
+        active_agent_sessions=active_agent_sessions,
+        cost_profile=cost_profile,
+        creating_session=creating_session,
+    )
+
+    recording_state = _assert_session_recording_started(
+        payload=payload,
+        enterprise_controls=enterprise_controls,
+        session_state=session_state,
+        creating_session=creating_session,
+    )
+
+    action_policy: Optional[Dict[str, Any]] = None
+    if action_token:
+        action_policy = _evaluate_action_policy_and_approval(
+            action=action_token,
+            action_args=safe_action_args,
+            runtime_kind=runtime_kind,
+            payload=payload,
+        )
+
+    return {
+        "allowed": True,
+        "phase": phase_token,
+        "estimated_increment": estimated_increment,
+        "recording_state": recording_state,
+        "action_policy": action_policy,
+    }
+
+
 def contract_descriptor(runtime_choice: Any) -> Dict[str, Any]:
     choice = _token(runtime_choice).lower() or RUNTIME_CHOICE_LOCAL
     runtime_kind = "local_gateway_runtime" if choice == RUNTIME_CHOICE_LOCAL else "virtual_computer_runtime"
@@ -1599,6 +1827,8 @@ class VirtualComputerCostQuotaProfile:
     per_session_runtime_seconds: int
     agent_runtime_budget_seconds: int
     provider_concurrency_limit: int
+    workspace_concurrency_limit: int
+    agent_concurrency_limit: int
     idle_timeout_seconds: int
     estimated_create_cost: float
     estimated_action_cost: float
@@ -1797,6 +2027,7 @@ class LocalGatewayVirtualComputerRuntime:
             "session_recording_retention_seconds": int(
                 (enterprise_controls or {}).get("session_recording_retention_seconds") or 0
             ),
+            "session_recording": dict(context.get("session_recording") or {}),
             "session_recording_expires_at_epoch": (
                 float(context.get("session_recording_expires_at_epoch"))
                 if context.get("session_recording_expires_at_epoch") is not None
@@ -1821,26 +2052,25 @@ class LocalGatewayVirtualComputerRuntime:
             if state.provider_id == provider_id and not state.quota_terminated
         )
 
+    def _active_workspace_count(self, workspace_id: str) -> int:
+        return sum(
+            1
+            for state in self._cost_by_session.values()
+            if state.workspace_id == workspace_id and not state.quota_terminated
+        )
+
+    def _active_agent_count(self, agent_id: str) -> int:
+        return sum(
+            1
+            for state in self._cost_by_session.values()
+            if state.agent_id == agent_id and not state.quota_terminated
+        )
+
     def _workspace_estimated_cost(self, workspace_id: str) -> float:
         return sum(
             float(state.estimated_cost)
             for state in self._cost_by_session.values()
             if state.workspace_id == workspace_id and not state.quota_terminated
-        )
-
-    def _agent_estimated_cost(self, agent_id: str) -> float:
-        return sum(
-            float(state.estimated_cost)
-            for state in self._cost_by_session.values()
-            if state.agent_id == agent_id and not state.quota_terminated
-        )
-
-    def _agent_runtime_seconds(self, agent_id: str) -> float:
-        now_epoch = time.time()
-        return sum(
-            max(now_epoch - float(state.started_at_epoch), 0.0)
-            for state in self._cost_by_session.values()
-            if state.agent_id == agent_id and not state.quota_terminated
         )
 
     def _agent_estimated_cost(self, agent_id: str) -> float:
@@ -1892,14 +2122,23 @@ class LocalGatewayVirtualComputerRuntime:
         workspace_id = _token(body.get("workspace_id")) or "default"
         agent_id = _token(body.get("agent_id") or body.get("run_id") or body.get("agent_runtime_id")) or "default_agent"
         cost_profile = build_cost_quota_profile(body, provider_id=provider_id)
-        if self._active_provider_count(provider_id) >= int(cost_profile.provider_concurrency_limit):
-            raise RuntimeError("Provider concurrency quota exceeded for virtual computer runtime.")
-        if self._workspace_estimated_cost(workspace_id) + float(cost_profile.estimated_create_cost) > float(cost_profile.workspace_monthly_budget_limit):
-            raise RuntimeError("Workspace virtual computer budget quota exceeded.")
-        if self._agent_estimated_cost(agent_id) + float(cost_profile.estimated_create_cost) > float(cost_profile.agent_monthly_budget_limit):
-            raise RuntimeError("Agent monthly virtual computer budget quota exceeded.")
-        if self._agent_runtime_seconds(agent_id) >= float(cost_profile.agent_runtime_budget_seconds):
-            raise RuntimeError("Agent runtime budget quota exceeded.")
+        admission = runtime_admission_gate(
+            phase="session_init",
+            payload=body,
+            action=None,
+            action_args=None,
+            runtime_kind="local_gateway_runtime",
+            cost_profile=cost_profile,
+            cost_state=None,
+            workspace_estimated_cost=self._workspace_estimated_cost(workspace_id),
+            agent_estimated_cost=self._agent_estimated_cost(agent_id),
+            agent_runtime_seconds=self._agent_runtime_seconds(agent_id),
+            active_provider_sessions=self._active_provider_count(provider_id),
+            active_workspace_sessions=self._active_workspace_count(workspace_id),
+            active_agent_sessions=self._active_agent_count(agent_id),
+            network_policy=network_policy,
+            enterprise_controls=enterprise_controls,
+        )
         result = await self._runtime.start_session(body)
         session = result.get("browser_session") if isinstance(result.get("browser_session"), dict) else {}
         session_id = _token(session.get("browser_session_id"))
@@ -1928,6 +2167,7 @@ class LocalGatewayVirtualComputerRuntime:
             "session_recording_expires_at_epoch": now_epoch + float(
                 enterprise_controls.get("session_recording_retention_seconds") or 0
             ),
+            "session_recording": dict(admission.get("recording_state") or {}),
         }
         self._risk_prompt_by_session.pop(session_id, None)
         self._bridge_policy_by_session[session_id] = dict(bridge_policy)
@@ -1954,6 +2194,7 @@ class LocalGatewayVirtualComputerRuntime:
                 "network_browser_policy": dict(network_policy),
                 "enterprise_controls": dict(enterprise_controls),
                 "local_gateway_bridge": dict(bridge_policy),
+                "runtime_admission_gate": {"phase": admission.get("phase"), "allowed": True},
             },
         )
         self._audit_by_session[session_id] = audit_events
@@ -2080,14 +2321,59 @@ class LocalGatewayVirtualComputerRuntime:
             action=action,
             metadata={"action_args": dict(action_args or {})},
         )
+        context = self._context_by_session.setdefault(session_id, {})
+        context_network_policy = (
+            context.get("network_browser_policy") if isinstance(context.get("network_browser_policy"), dict) else {}
+        )
+        enterprise_controls = (
+            context.get("enterprise_controls") if isinstance(context.get("enterprise_controls"), dict) else {}
+        )
+        body_network_policy = _build_network_browser_security_policy(body)
+        network_policy = dict(context_network_policy)
+        payload_denied_domains = body_network_policy.get("denied_domains")
+        if payload_denied_domains:
+            network_policy["denied_domains"] = list(
+                dict.fromkeys(list(network_policy.get("denied_domains") or []) + list(payload_denied_domains))
+            )
+        for key in (
+            "detect_phishing_pages",
+            "block_auto_download_without_approval",
+            "enforce_domain_bound_credential_injection",
+        ):
+            if key in body_network_policy:
+                network_policy.setdefault(key, body_network_policy.get(key))
+        cost_state = self._cost_by_session.get(session_id)
+        if cost_state is None:
+            raise RuntimeError("Runtime admission gate rejected session/action: missing cost quota state.")
         try:
-            action_policy = _evaluate_action_policy_and_approval(
+            admission = runtime_admission_gate(
+                phase="action",
+                payload=body,
                 action=action,
                 action_args=action_args,
                 runtime_kind="local_gateway_runtime",
-                payload=body,
+                cost_profile=cost_state.profile,
+                cost_state=cost_state,
+                workspace_estimated_cost=self._workspace_estimated_cost(cost_state.workspace_id),
+                agent_estimated_cost=self._agent_estimated_cost(cost_state.agent_id),
+                agent_runtime_seconds=self._agent_runtime_seconds(cost_state.agent_id),
+                active_provider_sessions=self._active_provider_count(cost_state.provider_id),
+                active_workspace_sessions=self._active_workspace_count(cost_state.workspace_id),
+                active_agent_sessions=self._active_agent_count(cost_state.agent_id),
+                network_policy=network_policy,
+                enterprise_controls=enterprise_controls,
+                current_url=context.get("url"),
+                session_state=context,
             )
+            action_policy = dict(admission.get("action_policy") or {})
         except Exception as exc:
+            _append_audit_event(
+                audit_events,
+                event_type="admission_gate_denied",
+                action=action,
+                decision="denied",
+                metadata={"reason": str(exc)},
+            )
             _append_audit_event(
                 audit_events,
                 event_type="approval_decision",
@@ -2103,29 +2389,7 @@ class LocalGatewayVirtualComputerRuntime:
             decision="approved" if bool(action_policy.get("approval_granted")) else "allowed",
             metadata={"policy": dict(action_policy or {})},
         )
-        context = self._context_by_session.setdefault(session_id, {})
-        context_network_policy = (
-            context.get("network_browser_policy") if isinstance(context.get("network_browser_policy"), dict) else {}
-        )
-        enterprise_controls = (
-            context.get("enterprise_controls") if isinstance(context.get("enterprise_controls"), dict) else {}
-        )
-        body_network_policy = _build_network_browser_security_policy(body)
-        network_policy = {**context_network_policy, **body_network_policy}
         try:
-            _assert_network_browser_security(
-                action=action,
-                action_args=action_args,
-                policy=network_policy,
-                approval_granted=bool(action_policy.get("approval_granted")),
-                current_url=context.get("url"),
-            )
-            _assert_enterprise_network_controls(
-                action=action,
-                action_args=action_args,
-                controls=enterprise_controls,
-                current_url=context.get("url"),
-            )
             identity = self._identity_by_session.get(session_id)
             _assert_domain_bound_credential_injection(
                 identity=identity,
@@ -2160,11 +2424,9 @@ class LocalGatewayVirtualComputerRuntime:
             risk_class=str(action_policy.get("risk_class") or ""),
             details={"requires_approval": bool(action_policy.get("requires_approval"))},
         )
-        cost_state = self._cost_by_session.get(session_id)
         action_cost_estimate = None
         if cost_state is not None:
-            _assert_cost_quota_active(cost_state)
-            action_cost_estimate = _estimate_action_cost(action, action_args, cost_state.profile)
+            action_cost_estimate = float(admission.get("estimated_increment") or 0.0)
             if action_cost_estimate >= float(cost_state.profile.long_task_cost_estimate_threshold):
                 estimate_approved = bool(
                     payload.get("cost_estimate_approved")
@@ -2570,6 +2832,7 @@ class InMemoryVirtualComputerRuntime:
             "network_browser_policy": dict(network_policy),
             "enterprise_controls": dict(enterprise_controls),
             "session_recording_retention_seconds": int(enterprise_controls.get("session_recording_retention_seconds") or 0),
+            "session_recording": dict(session.get("session_recording") or {}),
             "session_recording_expires_at_epoch": (
                 float(session.get("session_recording_expires_at_epoch"))
                 if session.get("session_recording_expires_at_epoch") is not None
@@ -2592,6 +2855,20 @@ class InMemoryVirtualComputerRuntime:
             1
             for state in self._cost_by_session.values()
             if state.provider_id == provider_id and not state.quota_terminated
+        )
+
+    def _active_workspace_count(self, workspace_id: str) -> int:
+        return sum(
+            1
+            for state in self._cost_by_session.values()
+            if state.workspace_id == workspace_id and not state.quota_terminated
+        )
+
+    def _active_agent_count(self, agent_id: str) -> int:
+        return sum(
+            1
+            for state in self._cost_by_session.values()
+            if state.agent_id == agent_id and not state.quota_terminated
         )
 
     def _workspace_estimated_cost(self, workspace_id: str) -> float:
@@ -2655,14 +2932,23 @@ class InMemoryVirtualComputerRuntime:
         elif bool(body.get("require_session_token")):
             session_token_expires_at_epoch = now_epoch + float(token_ttl_seconds)
         cost_profile = build_cost_quota_profile(body, provider_id=provider_id)
-        if self._active_provider_count(provider_id) >= int(cost_profile.provider_concurrency_limit):
-            raise RuntimeError("Provider concurrency quota exceeded for virtual computer runtime.")
-        if self._workspace_estimated_cost(workspace_id) + float(cost_profile.estimated_create_cost) > float(cost_profile.workspace_monthly_budget_limit):
-            raise RuntimeError("Workspace virtual computer budget quota exceeded.")
-        if self._agent_estimated_cost(agent_id) + float(cost_profile.estimated_create_cost) > float(cost_profile.agent_monthly_budget_limit):
-            raise RuntimeError("Agent monthly virtual computer budget quota exceeded.")
-        if self._agent_runtime_seconds(agent_id) >= float(cost_profile.agent_runtime_budget_seconds):
-            raise RuntimeError("Agent runtime budget quota exceeded.")
+        admission = runtime_admission_gate(
+            phase="session_init",
+            payload=body,
+            action=None,
+            action_args=None,
+            runtime_kind="virtual_computer_runtime",
+            cost_profile=cost_profile,
+            cost_state=None,
+            workspace_estimated_cost=self._workspace_estimated_cost(workspace_id),
+            agent_estimated_cost=self._agent_estimated_cost(agent_id),
+            agent_runtime_seconds=self._agent_runtime_seconds(agent_id),
+            active_provider_sessions=self._active_provider_count(provider_id),
+            active_workspace_sessions=self._active_workspace_count(workspace_id),
+            active_agent_sessions=self._active_agent_count(agent_id),
+            network_policy=network_policy,
+            enterprise_controls=enterprise_controls,
+        )
         session_id = _token(body.get("session_id")) or f"vcsess_{uuid.uuid4().hex}"
         session = {
             "session_id": session_id,
@@ -2696,6 +2982,7 @@ class InMemoryVirtualComputerRuntime:
             "session_recording_expires_at_epoch": now_epoch + float(
                 enterprise_controls.get("session_recording_retention_seconds") or 0
             ),
+            "session_recording": dict(admission.get("recording_state") or {}),
         }
         self._sessions[session_id] = session
         self._isolation_by_session[session_id] = VirtualComputerIsolationState(
@@ -2741,6 +3028,7 @@ class InMemoryVirtualComputerRuntime:
                 "network_browser_policy": dict(network_policy),
                 "local_gateway_bridge": dict(bridge_policy),
                 "enterprise_controls": dict(enterprise_controls),
+                "runtime_admission_gate": {"phase": admission.get("phase"), "allowed": True},
             },
         )
         session["audit_events"] = audit_events
@@ -2865,14 +3153,58 @@ class InMemoryVirtualComputerRuntime:
             action=action,
             metadata={"action_args": dict(action_args or {})},
         )
+        session_network_policy = (
+            session.get("network_browser_policy") if isinstance(session.get("network_browser_policy"), dict) else {}
+        )
+        enterprise_controls = (
+            session.get("enterprise_controls") if isinstance(session.get("enterprise_controls"), dict) else {}
+        )
+        payload_network_policy = _build_network_browser_security_policy(dict(payload or {}))
+        network_policy = dict(session_network_policy)
+        payload_denied_domains = payload_network_policy.get("denied_domains")
+        if payload_denied_domains:
+            network_policy["denied_domains"] = list(
+                dict.fromkeys(list(network_policy.get("denied_domains") or []) + list(payload_denied_domains))
+            )
+        for key in (
+            "detect_phishing_pages",
+            "block_auto_download_without_approval",
+            "enforce_domain_bound_credential_injection",
+        ):
+            if key in payload_network_policy:
+                network_policy.setdefault(key, payload_network_policy.get(key))
+        cost_state = self._cost_by_session.get(session_id)
+        if cost_state is None:
+            raise RuntimeError("Runtime admission gate rejected session/action: missing cost quota state.")
         try:
-            action_policy = _evaluate_action_policy_and_approval(
+            admission = runtime_admission_gate(
+                phase="action",
+                payload=dict(payload or {}),
                 action=action,
                 action_args=action_args,
                 runtime_kind="virtual_computer_runtime",
-                payload=dict(payload or {}),
+                cost_profile=cost_state.profile,
+                cost_state=cost_state,
+                workspace_estimated_cost=self._workspace_estimated_cost(cost_state.workspace_id),
+                agent_estimated_cost=self._agent_estimated_cost(cost_state.agent_id),
+                agent_runtime_seconds=self._agent_runtime_seconds(cost_state.agent_id),
+                active_provider_sessions=self._active_provider_count(cost_state.provider_id),
+                active_workspace_sessions=self._active_workspace_count(cost_state.workspace_id),
+                active_agent_sessions=self._active_agent_count(cost_state.agent_id),
+                network_policy=network_policy,
+                enterprise_controls=enterprise_controls,
+                current_url=session.get("ui_current_url"),
+                session_state=session,
             )
+            action_policy = dict(admission.get("action_policy") or {})
         except Exception as exc:
+            _append_audit_event(
+                audit_events,
+                event_type="admission_gate_denied",
+                action=action,
+                decision="denied",
+                metadata={"reason": str(exc)},
+            )
             _append_audit_event(
                 audit_events,
                 event_type="approval_decision",
@@ -2889,39 +3221,7 @@ class InMemoryVirtualComputerRuntime:
             decision="approved" if bool(action_policy.get("approval_granted")) else "allowed",
             metadata={"policy": dict(action_policy or {})},
         )
-        session_network_policy = (
-            session.get("network_browser_policy") if isinstance(session.get("network_browser_policy"), dict) else {}
-        )
-        enterprise_controls = (
-            session.get("enterprise_controls") if isinstance(session.get("enterprise_controls"), dict) else {}
-        )
-        payload_network_policy = _build_network_browser_security_policy(dict(payload or {}))
-        network_policy = dict(session_network_policy)
-        for key in ("allowed_domains", "denied_domains"):
-            payload_values = payload_network_policy.get(key)
-            if payload_values:
-                network_policy[key] = list(payload_values)
-        for key in (
-            "detect_phishing_pages",
-            "block_auto_download_without_approval",
-            "enforce_domain_bound_credential_injection",
-        ):
-            if key in payload_network_policy:
-                network_policy.setdefault(key, payload_network_policy.get(key))
         try:
-            _assert_network_browser_security(
-                action=action,
-                action_args=action_args,
-                policy=network_policy,
-                approval_granted=bool(action_policy.get("approval_granted")),
-                current_url=session.get("ui_current_url"),
-            )
-            _assert_enterprise_network_controls(
-                action=action,
-                action_args=action_args,
-                controls=enterprise_controls,
-                current_url=session.get("ui_current_url"),
-            )
             identity = self._identity_by_session.get(session_id)
             _assert_domain_bound_credential_injection(
                 identity=identity,
@@ -2958,11 +3258,9 @@ class InMemoryVirtualComputerRuntime:
             details={"requires_approval": bool(action_policy.get("requires_approval"))},
         )
         session["ui_action_timeline"] = timeline
-        cost_state = self._cost_by_session.get(session_id)
         action_cost_estimate = None
         if cost_state is not None:
-            _assert_cost_quota_active(cost_state)
-            action_cost_estimate = _estimate_action_cost(action, action_args, cost_state.profile)
+            action_cost_estimate = float(admission.get("estimated_increment") or 0.0)
             if action_cost_estimate >= float(cost_state.profile.long_task_cost_estimate_threshold):
                 estimate_approved = bool(
                     payload.get("cost_estimate_approved")

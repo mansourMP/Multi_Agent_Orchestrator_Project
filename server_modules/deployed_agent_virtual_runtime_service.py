@@ -557,6 +557,23 @@ async def ensure_cloud_runtime_session_binding(
     if not resolved_deployed_agent_id or not resolved_session_id or not resolved_workspace_id or not resolved_tenant_id:
         return None
 
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        resolved_deployed_agent_id,
+        tenant_id=resolved_tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        raise ValueError("Deployed agent not found for runtime session binding.")
+    config = deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent)
+    mode = _text(config.studio_agent_mode).lower()
+    if mode not in {
+        deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+        deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER,
+    }:
+        raise ValueError(
+            f"Deployed agent studio_agent_mode '{mode or 'unknown'}' is not allowed to create runtime session binding."
+        )
+
     current_session_metadata = _coerce_dict(session_metadata)
     current_turn_metadata = _coerce_dict(turn_metadata)
     existing_runtime_session_id = _text(
@@ -575,18 +592,6 @@ async def ensure_cloud_runtime_session_binding(
                 "runtime_session_binding": "cloud_computer_agent",
             },
         }
-
-    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
-        resolved_deployed_agent_id,
-        tenant_id=resolved_tenant_id,
-        owner_workspace_id=resolved_workspace_id,
-    )
-    if not isinstance(deployed_agent, dict):
-        raise ValueError("Deployed agent not found for runtime session binding.")
-
-    config = deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent)
-    if _text(config.studio_agent_mode).lower() != deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER:
-        return None
 
     payload = build_deployed_agent_virtual_runtime_payload(deployed_agent)
     payload.update(

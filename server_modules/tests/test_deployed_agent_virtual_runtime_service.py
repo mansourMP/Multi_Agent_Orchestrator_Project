@@ -353,7 +353,7 @@ class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
             "deployed_agent_cloud_runtime_session_created",
         )
 
-    def test_ensure_cloud_runtime_session_binding_skips_non_cloud_agents(self):
+    def test_ensure_cloud_runtime_session_binding_rejects_text_agent(self):
         async def _run():
             with patch.object(
                 deployed_agent_virtual_runtime_service.control_plane_repository,
@@ -364,20 +364,75 @@ class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
                     )
                 ),
             ):
-                return await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
-                    deployed_agent_id="dagent_1",
-                    tenant_id="tenant-1",
-                    workspace_id="ws-1",
-                    session_id="sess-1",
-                    thread_id="thread-1",
-                    channel="web",
-                    actor={"type": "user", "id": "user-1"},
-                    turn_metadata={"deployed_agent_id": "dagent_1"},
-                )
+                with self.assertRaisesRegex(ValueError, "studio_agent_mode"):
+                    await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
+                        deployed_agent_id="dagent_1",
+                        tenant_id="tenant-1",
+                        workspace_id="ws-1",
+                        session_id="sess-1",
+                        thread_id="thread-1",
+                        channel="web",
+                        actor={"type": "user", "id": "user-1"},
+                        turn_metadata={"deployed_agent_id": "dagent_1"},
+                    )
 
         import asyncio
 
-        self.assertIsNone(asyncio.run(_run()))
+        asyncio.run(_run())
+
+    def test_text_agent_cannot_create_runtime_session_from_crafted_payload(self):
+        async def _run():
+            runtime = Mock()
+            runtime.create_session = AsyncMock(
+                return_value={
+                    "browser_session": {"browser_session_id": "vcsess_1"},
+                    "provider_id": "provider_demo",
+                    "provider_kind": "managed_cloud",
+                }
+            )
+            registry = Mock()
+            registry.resolve.return_value = runtime
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.control_plane_repository,
+                    "get_deployed_agent_by_id",
+                    new=AsyncMock(
+                        return_value=_deployed_agent(
+                            config={"studio_agent_mode": "text_agent"},
+                        )
+                    ),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service,
+                    "get_runtime_registry",
+                    return_value=registry,
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "studio_agent_mode"):
+                    await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
+                        deployed_agent_id="dagent_1",
+                        tenant_id="tenant-1",
+                        workspace_id="ws-1",
+                        session_id="sess-1",
+                        thread_id="thread-1",
+                        channel="web",
+                        actor={"type": "user", "id": "user-1"},
+                        session_metadata={
+                            "runtime_session_binding": "cloud_computer_agent",
+                            "runtime_session_id": "vcsess_attacker",
+                        },
+                        turn_metadata={
+                            "deployed_agent_id": "dagent_1",
+                            "runtime_choice": "virtual_browser",
+                            "runtime_provider_id": "provider_attacker",
+                        },
+                    )
+            runtime.create_session.assert_not_called()
+            registry.resolve.assert_not_called()
+
+        import asyncio
+
+        asyncio.run(_run())
 
     def test_execute_bound_cloud_runtime_tool_call_uses_execute_action(self):
         async def _run():

@@ -1,5 +1,10 @@
-import { WorkstationInvestorDemoPane } from '@/lib/workspace/workstation-investor-demo-pane';
+import { WorkspaceSurfacePage } from '@/app/(account)/w/[workspaceId]/WorkspaceSurfacePage';
 
-export default function InvestorDemoPage() {
-  return <WorkstationInvestorDemoPane />;
+export default async function InvestorDemoPage({
+  params,
+}: {
+  params: Promise<{ workspaceId: string }>;
+}) {
+  const { workspaceId } = await params;
+  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="demo" />;
 }

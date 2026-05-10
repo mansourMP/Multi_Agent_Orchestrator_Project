@@ -1,4 +1,4 @@
-import { HostedMiniAppsPane } from '@/lib/workspace/hosted-mini-apps-pane';
+import { redirect } from 'next/navigation';
 
 export default async function WorkspaceApplicationsPage({
   params,
@@ -6,5 +6,5 @@ export default async function WorkspaceApplicationsPage({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  return <HostedMiniAppsPane workspaceId={workspaceId} />;
+  redirect(`/w/${encodeURIComponent(workspaceId)}/deploy`);
 }

@@ -7,6 +7,7 @@ from server_modules.sage_context_files_api import register_sage_context_file_rou
 from server_modules.sage_profile_api import register_sage_profile_routes
 from server_modules.sage_skills_api import register_sage_skills_routes
 from server_modules.sage_services_api import register_sage_services_routes
+from server_modules.sage_chat_api import register_sage_chat_routes
 from server_modules.workflow_api import register_workflow_routes
 
 
@@ -19,4 +20,5 @@ register_sage_memory_routes(router)
 register_sage_profile_routes(router)
 register_sage_skills_routes(router)
 register_sage_services_routes(router)
+register_sage_chat_routes(router)
 register_workflow_routes(router)

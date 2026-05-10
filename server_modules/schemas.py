@@ -124,6 +124,13 @@ class SageProfileBootstrapAnswerRequest(BaseModel):
     answer: str
 
 
+class SageChatRequest(BaseModel):
+    workspace_id: str
+    message: str
+    surface: str = "chat"
+    mode: str = "owner_sage"
+
+
 class AgentCreate(BaseModel):
     path: Optional[str] = None
     workspace_id: Optional[str] = None

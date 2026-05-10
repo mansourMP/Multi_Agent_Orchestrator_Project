@@ -204,6 +204,21 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
         mocks["persist"] = patch("server_modules.sage_agent_runtime_service.persist_interaction")
         mocks["activity"] = patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock())
         mocks["audit"] = patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event")
+        mocks["approval"] = patch(
+            "server_modules.sage_agent_runtime_service._create_approval_for_blocked_action",
+            return_value={
+                "type": "tool_action",
+                "skill_id": "email-access",
+                "label": "Email Access",
+                "action_class": "write",
+                "reason": "Requires explicit owner approval before write/execute action.",
+                "approval_token": "sap_test_token_1234",
+                "status": "pending",
+                "action": "channel_send_draft",
+                "description": "Approve a write action",
+                "expires_at": "2026-05-11T12:00:00Z",
+            },
+        )
         return mocks
 
     def test_excludes_critical_restricted_memory(self):
@@ -252,7 +267,7 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
             mocks["skills"], mocks["provider"],
             mocks["generate"], mocks["persist"], mocks["activity"],
-            mocks["audit"] as mock_audit,
+            mocks["audit"] as mock_audit, mocks["approval"],
         ):
             result = _run(sage_agent_runtime_service.handle_sage_chat(
                 workspace_id="ws-1", message="send email to boss",
@@ -262,7 +277,7 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             self.assertEqual(len(result["available_tools"]), 0)
             self.assertTrue(any(a["skill_id"] == "email-access" for a in result["approvals_required"]))
             self.assertTrue(
-                any(str(a.get("approval_token") or "").startswith("apr_") for a in result["approvals_required"])
+                any(str(a.get("approval_token") or "").startswith("sap_") for a in result["approvals_required"])
             )
 
     def test_blocks_execute_skill_triggers(self):
@@ -278,7 +293,7 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
         with (
             mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
             mocks["skills"], mocks["provider"],
-            mocks["generate"], mocks["persist"], mocks["activity"], mocks["audit"],
+            mocks["generate"], mocks["persist"], mocks["activity"], mocks["audit"], mocks["approval"],
         ):
             result = _run(sage_agent_runtime_service.handle_sage_chat(
                 workspace_id="ws-1", message="run the deployment script",
@@ -299,7 +314,7 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
         with (
             mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
             mocks["skills"], mocks["provider"], mocks["generate"], mocks["persist"],
-            mocks["activity"], mocks["audit"],
+            mocks["activity"], mocks["audit"], mocks["approval"],
         ):
             chat_result = _run(
                 sage_agent_runtime_service.handle_sage_chat(

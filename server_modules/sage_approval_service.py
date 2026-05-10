@@ -1,0 +1,325 @@
+from __future__ import annotations
+
+import json
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from server_modules import workspace_context
+
+APPROVAL_TOKEN_PREFIX = "sap_"
+APPROVAL_TTL_MINUTES = 15
+APPROVAL_STATUSES = ("pending", "approved", "rejected", "expired", "consumed")
+
+SUPPORTED_ACTIONS = {
+    "channel_send_draft": {
+        "label": "Send channel message draft",
+        "description": "Sends a draft message through the connected channel",
+        "required_fields": ("channel", "recipient", "message_text"),
+    },
+}
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_now_iso() -> str:
+    return _utc_now().isoformat().replace("+00:00", "Z")
+
+
+def _coerce_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+@dataclass(frozen=False, slots=True)
+class SageApprovalRecord:
+    approval_token: str
+    workspace_id: str
+    tenant_id: str
+    trace_id: str
+    action: str
+    description: str
+    action_payload_snapshot: str
+    action_payload: dict = field(default_factory=dict)
+    requester_actor: str = ""
+    status: str = "pending"
+    created_at: str = ""
+    expires_at: str = ""
+    resolved_at: Optional[str] = None
+    resolution_reason: Optional[str] = None
+    resolution_actor: Optional[str] = None
+
+    def is_pending(self) -> bool:
+        return self.status == "pending"
+
+    def is_terminal(self) -> bool:
+        return self.status in ("approved", "rejected", "expired")
+
+    def is_expired(self) -> bool:
+        if self.expires_at:
+            try:
+                expiry = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+                return _utc_now() >= expiry
+            except (ValueError, TypeError):
+                pass
+        return False
+
+    def as_dict(self) -> dict:
+        return {
+            "approval_token": self.approval_token,
+            "workspace_id": self.workspace_id,
+            "tenant_id": self.tenant_id,
+            "trace_id": self.trace_id,
+            "action": self.action,
+            "description": self.description,
+            "action_payload_snapshot": self.action_payload_snapshot,
+            "requester_actor": self.requester_actor,
+            "status": self.status,
+            "created_at": self.created_at,
+            "expires_at": self.expires_at,
+            "resolved_at": self.resolved_at,
+            "resolution_reason": self.resolution_reason,
+            "resolution_actor": self.resolution_actor,
+        }
+
+
+def _state_file(workspace_id: str) -> Path:
+    return workspace_context.workspace_scope_dir(workspace_id) / "sage_approvals.json"
+
+
+def _default_state() -> dict:
+    return {"version": 1, "updated_at": _utc_now_iso(), "records": {}}
+
+
+def _read_state(workspace_id: str) -> dict:
+    path = _state_file(workspace_id)
+    if not path.exists():
+        payload = _default_state()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return payload
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    if not isinstance(raw.get("records"), dict):
+        raw["records"] = {}
+    return raw
+
+
+def _write_state(workspace_id: str, payload: dict) -> dict:
+    path = _state_file(workspace_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload["updated_at"] = _utc_now_iso()
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
+def _generate_token() -> str:
+    return APPROVAL_TOKEN_PREFIX + uuid.uuid4().hex
+
+
+def _hash_payload(payload: dict) -> str:
+    import hashlib
+
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
+def create_approval(
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    trace_id: str,
+    action: str,
+    description: str,
+    action_payload: dict,
+    requester_actor: str = "",
+) -> SageApprovalRecord:
+    if action not in SUPPORTED_ACTIONS:
+        raise ValueError(f"Unsupported approval action: {action}")
+    if not isinstance(action_payload, dict):
+        raise ValueError("action_payload must be an object")
+    required_fields = SUPPORTED_ACTIONS[action]["required_fields"]
+    missing = [field for field in required_fields if not _coerce_text(action_payload.get(field))]
+    if missing:
+        raise ValueError(f"Missing required action_payload fields: {', '.join(missing)}")
+
+    normalized_workspace_id = _coerce_text(workspace_id)
+    if not normalized_workspace_id:
+        raise ValueError("workspace_id is required")
+
+    now = _utc_now()
+    token = _generate_token()
+    record = SageApprovalRecord(
+        approval_token=token,
+        workspace_id=normalized_workspace_id,
+        tenant_id=_coerce_text(tenant_id),
+        trace_id=_coerce_text(trace_id),
+        action=action,
+        description=_coerce_text(description) or SUPPORTED_ACTIONS[action]["description"],
+        action_payload_snapshot=_hash_payload(action_payload),
+        action_payload=dict(action_payload),
+        requester_actor=_coerce_text(requester_actor),
+        status="pending",
+        created_at=now.isoformat().replace("+00:00", "Z"),
+        expires_at=(now + timedelta(minutes=APPROVAL_TTL_MINUTES)).isoformat().replace("+00:00", "Z"),
+    )
+
+    try:
+        state = _read_state(normalized_workspace_id)
+        state["records"][token] = record.as_dict()
+        _write_state(normalized_workspace_id, state)
+    except Exception:
+        raise RuntimeError("Failed to persist approval record.")
+
+    return record
+
+
+def get_approval(*, approval_token: str, workspace_id: str) -> SageApprovalRecord | None:
+    normalized_token = _coerce_text(approval_token)
+    if not normalized_token or not normalized_token.startswith(APPROVAL_TOKEN_PREFIX):
+        return None
+
+    state = _read_state(_coerce_text(workspace_id))
+    raw = state.get("records", {}).get(normalized_token)
+    if not isinstance(raw, dict):
+        return None
+
+    record = SageApprovalRecord(
+        approval_token=_coerce_text(raw.get("approval_token")),
+        workspace_id=_coerce_text(raw.get("workspace_id")),
+        tenant_id=_coerce_text(raw.get("tenant_id")),
+        trace_id=_coerce_text(raw.get("trace_id")),
+        action=_coerce_text(raw.get("action")),
+        description=_coerce_text(raw.get("description")),
+        action_payload_snapshot=_coerce_text(raw.get("action_payload_snapshot")),
+        action_payload=raw.get("action_payload") if isinstance(raw.get("action_payload"), dict) else {},
+        requester_actor=_coerce_text(raw.get("requester_actor")),
+        status=_coerce_text(raw.get("status")) or "pending",
+        created_at=_coerce_text(raw.get("created_at")),
+        expires_at=_coerce_text(raw.get("expires_at")),
+        resolved_at=_coerce_text(raw.get("resolved_at")) or None,
+        resolution_reason=_coerce_text(raw.get("resolution_reason")) or None,
+        resolution_actor=_coerce_text(raw.get("resolution_actor")) or None,
+    )
+    return record
+
+
+def _update_record(workspace_id: str, record: SageApprovalRecord) -> SageApprovalRecord:
+    try:
+        state = _read_state(workspace_id)
+        state["records"][record.approval_token] = record.as_dict()
+        _write_state(workspace_id, state)
+    except Exception:
+        raise RuntimeError("Failed to update approval record.")
+    return record
+
+
+def resolve_approval(
+    *,
+    approval_token: str,
+    workspace_id: str,
+    status: str,
+    resolution_actor: str = "",
+    resolution_reason: str = "",
+) -> SageApprovalRecord:
+    if status not in ("approved", "rejected"):
+        raise ValueError(f"Invalid resolution status: {status}")
+
+    record = get_approval(approval_token=approval_token, workspace_id=workspace_id)
+    if record is None:
+        raise ValueError("Approval token not found.")
+
+    if record.is_terminal():
+        raise ValueError(f"Approval is already {record.status}.")
+
+    if record.is_expired():
+        record.status = "expired"
+        record.resolved_at = _utc_now_iso()
+        _update_record(workspace_id, record)
+        raise ValueError("Approval token has expired.")
+
+    if _coerce_text(record.workspace_id) != _coerce_text(workspace_id):
+        raise ValueError("Approval token does not belong to this workspace.")
+    if _coerce_text(record.requester_actor) and _coerce_text(resolution_actor):
+        if _coerce_text(record.requester_actor) != _coerce_text(resolution_actor):
+            raise ValueError("Approval token requester does not match resolution actor.")
+
+    record.status = status
+    record.resolved_at = _utc_now_iso()
+    record.resolution_actor = _coerce_text(resolution_actor)
+    record.resolution_reason = _coerce_text(resolution_reason)
+    return _update_record(workspace_id, record)
+
+
+def consume_approval(
+    *,
+    approval_token: str,
+    workspace_id: str,
+) -> SageApprovalRecord:
+    """Mark an approved token as consumed after successful execution."""
+    record = get_approval(approval_token=approval_token, workspace_id=workspace_id)
+    if record is None:
+        raise ValueError("Approval token not found.")
+    if record.status != "approved":
+        raise ValueError(f"Cannot consume approval in status: {record.status}")
+    if record.is_expired():
+        record.status = "expired"
+        record.resolved_at = _utc_now_iso()
+        _update_record(workspace_id, record)
+        raise ValueError("Approval token has expired.")
+    if record.resolution_actor and record.requester_actor and record.resolution_actor != record.requester_actor:
+        raise ValueError("Approval token actor binding is invalid.")
+    record.status = "consumed"
+    record.resolved_at = _utc_now_iso()
+    return _update_record(workspace_id, record)
+
+
+def expire_stale_approvals(*, workspace_id: str) -> int:
+    state = _read_state(_coerce_text(workspace_id))
+    expired_count = 0
+    for token, raw in list(state.get("records", {}).items()):
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("status") != "pending":
+            continue
+        expires_at = _coerce_text(raw.get("expires_at"))
+        if not expires_at:
+            continue
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if _utc_now() >= expiry:
+                raw["status"] = "expired"
+                raw["resolved_at"] = _utc_now_iso()
+                expired_count += 1
+        except (ValueError, TypeError):
+            pass
+    if expired_count:
+        _write_state(_coerce_text(workspace_id), state)
+    return expired_count
+
+
+def list_pending_approvals(*, workspace_id: str) -> list[dict]:
+    expire_stale_approvals(workspace_id=workspace_id)
+    state = _read_state(_coerce_text(workspace_id))
+    pending: list[dict] = []
+    for token, raw in state.get("records", {}).items():
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("status") == "pending":
+            pending.append({
+                "approval_token": _coerce_text(raw.get("approval_token")),
+                "action": _coerce_text(raw.get("action")),
+                "description": _coerce_text(raw.get("description")),
+                "status": _coerce_text(raw.get("status")),
+                "created_at": _coerce_text(raw.get("created_at")),
+                "expires_at": _coerce_text(raw.get("expires_at")),
+                "trace_id": _coerce_text(raw.get("trace_id")),
+            })
+    return pending

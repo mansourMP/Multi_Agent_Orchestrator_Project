@@ -131,6 +131,11 @@ class SageChatRequest(BaseModel):
     mode: Literal["owner_sage"] = "owner_sage"
 
 
+class SageApprovalResolveRequest(BaseModel):
+    workspace_id: str
+    approval_token: str
+
+
 class AgentCreate(BaseModel):
     path: Optional[str] = None
     workspace_id: Optional[str] = None

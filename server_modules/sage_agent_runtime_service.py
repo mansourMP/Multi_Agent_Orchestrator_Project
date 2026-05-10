@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-import hashlib
 from typing import Any, Dict, List, Optional
 
 from server_modules import (
@@ -34,6 +33,11 @@ from server_modules.sage_agent_runtime_contract import (
     normalize_sage_mode,
     normalize_sage_surface,
     SageTurnResult,
+)
+from server_modules.sage_approval_service import (
+    create_approval,
+    APPROVAL_TOKEN_PREFIX,
+    APPROVAL_TTL_MINUTES,
 )
 from server_modules.skill_registry import list_skill_definitions
 
@@ -228,17 +232,52 @@ def _build_prompt_envelope(
     }
 
 
-def _build_approval_token(
+def _create_approval_for_blocked_action(
     *,
     workspace_id: str,
+    tenant_id: str,
     trace_id: str,
     skill_id: str,
+    label: str,
     action_class: str,
-) -> str:
-    digest = hashlib.sha256(
-        f"{workspace_id}:{trace_id}:{skill_id}:{action_class}".encode("utf-8")
-    ).hexdigest()[:24]
-    return f"apr_{digest}"
+    requester_actor: str = "",
+) -> dict | None:
+    """Create a pending approval record for a blocked tool action.
+
+    Returns the approval metadata dict for the response, or None if persistence fails.
+    Fail-closed: if the write fails, the action stays blocked.
+    """
+    try:
+        record = create_approval(
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            trace_id=trace_id,
+            action="channel_send_draft",
+            description=f"Approve {label} ({action_class}) action",
+            action_payload={
+                "channel": "sage_chat",
+                "recipient": requester_actor or "owner",
+                "message_text": f"Approved action for {label}",
+                "skill_id": skill_id,
+                "label": label,
+                "action_class": action_class,
+            },
+            requester_actor=requester_actor,
+        )
+        return {
+            "type": "tool_action",
+            "skill_id": skill_id,
+            "label": label,
+            "action_class": action_class,
+            "reason": "Requires explicit owner approval before write/execute action.",
+            "approval_token": record.approval_token,
+            "status": record.status,
+            "action": record.action,
+            "description": record.description,
+            "expires_at": record.expires_at,
+        }
+    except RuntimeError:
+        return None
 
 
 def _emit_failed_audit_event(
@@ -342,21 +381,30 @@ async def handle_sage_chat(
                         "triggered_by": term,
                     }
                     blocked_actions.append(blocked)
-                    approvals_required.append({
+
+                    approval_entry = {
                         "type": "tool_action",
                         "skill_id": skill.id,
                         "label": skill.label,
                         "action_class": skill.action_class,
                         "reason": "Requires explicit owner approval before write/execute action.",
-                    })
-                    # approval_token is Sage-chat-surface only.
+                    }
                     if normalized_surface == "chat":
-                        approvals_required[-1]["approval_token"] = _build_approval_token(
+                        created = _create_approval_for_blocked_action(
                             workspace_id=normalized_workspace_id,
+                            tenant_id=normalized_tenant_id,
                             trace_id=trace_id,
                             skill_id=skill.id,
+                            label=skill.label,
                             action_class=skill.action_class,
+                            requester_actor=actor_user_id,
                         )
+                        if created is not None:
+                            approval_entry.update(created)
+                        else:
+                            approval_entry["approval_token"] = None
+                            approval_entry["status"] = "failed"
+                    approvals_required.append(approval_entry)
                     break
 
     # --- Build prompt ---
@@ -510,6 +558,30 @@ async def handle_sage_chat(
                 trace_id=trace_id,
                 detail=f"Blocked {blocked['action_class']} skill: {blocked['label']}",
                 metadata=blocked,
+            )
+        except Exception:
+            pass
+
+    # --- Emit audit for approval requests ---
+    for approval in approvals_required:
+        token = _coerce_text(approval.get("approval_token"))
+        if not token or token == "None":
+            continue
+        try:
+            security_audit_service.emit_security_audit_event(
+                action="approval.requested",
+                status="pending",
+                tenant_id=normalized_tenant_id,
+                workspace_id=normalized_workspace_id,
+                actor_user_id=actor_user_id or None,
+                trace_id=trace_id,
+                detail=f"Approval requested for {approval.get('label', 'unknown')}",
+                metadata={
+                    "approval_token": token,
+                    "skill_id": approval.get("skill_id"),
+                    "action_class": approval.get("action_class"),
+                },
+                idempotency_key=f"approval:requested:{token}",
             )
         except Exception:
             pass

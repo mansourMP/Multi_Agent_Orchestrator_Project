@@ -39,6 +39,7 @@ import type {
   StudioProofAgentSeedRecord,
 } from '@/lib/workspace/workstation-client';
 import { WorkstationDeployedAgentAnalyticsPane } from '@/lib/workspace/workstation-deployed-agent-analytics-pane';
+import { DeployedAgentTestTurnPane } from '@/lib/workspace/workstation-deployed-agent-test-turn-pane';
 import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
@@ -4161,6 +4162,14 @@ export function WorkstationDeployedAgentsPane({
                     </div>
                   )}
                 </ListDetailPanel>
+                ) : null}
+
+                {overlayAgent && overlayAgent.id && workspaceId ? (
+                  <DeployedAgentTestTurnPane
+                    deployedAgentId={readString(overlayAgent.id)}
+                    workspaceId={workspaceId}
+                    client={client as unknown as { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown>> }}
+                  />
                 ) : null}
               </div>
             )}

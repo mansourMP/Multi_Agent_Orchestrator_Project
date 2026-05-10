@@ -709,6 +709,7 @@ export type WorkstationClientPaths = {
   deployedAgentDetail: (deployedAgentId: string) => string;
   deployedAgentDeploy: (deployedAgentId: string) => string;
   deployedAgentPause: (deployedAgentId: string) => string;
+  deployedAgentTestTurn: (deployedAgentId: string) => string;
   deployedAgentAnalyticsRoster: string;
   deployedAgentAnalyticsDetail: (deployedAgentId: string) => string;
   deployedAgentAdminDashboard: (deployedAgentId: string, limit?: number, offset?: number) => string;
@@ -992,6 +993,7 @@ export type WorkstationClient = {
   }) => Promise<Record<string, unknown> | null>;
   deployDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
   pauseDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
+  testTurnDeployedAgent: (options: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown>>;
   listDeployedAgentAnalytics: () => Promise<Record<string, unknown>>;
   getDeployedAgentAnalytics: (options: {
     deployedAgentId: string;
@@ -1326,6 +1328,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/deploy`,
     deployedAgentPause: (deployedAgentId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/pause`,
+    deployedAgentTestTurn: (deployedAgentId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/test-turn`,
     deployedAgentAnalyticsRoster:
       `/api/deployed-agents/analytics${buildQueryString({ workspace_id: workspaceId })}`,
     deployedAgentAnalyticsDetail: (deployedAgentId) =>
@@ -2848,6 +2852,22 @@ export function createWorkstationClient(
           headers: mergeJsonHeaders(),
           body: JSON.stringify({
             workspace_id: scope.workspaceId,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    testTurnDeployedAgent: ({ deployedAgentId, body }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentTestTurn(deployedAgentId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            message: body.message,
+            channel: body.channel ?? 'test',
+            runtime_mode: body.runtime_mode ?? 'text_agent',
+            customer_profile: body.customer_profile ?? null,
           }),
         },
         policy: WRITE_REQUEST_POLICY,

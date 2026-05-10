@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 from server_modules import auth as auth_module
 from server_modules import deployed_agent_business_insights_service
 from server_modules import deployed_agent_service
+from server_modules import deployed_agent_test_turn_service
 from server_modules.deployed_agent_admin_dashboard_service import get_deployed_agent_admin_dashboard_service
+from server_modules.schemas import DeployedAgentTestTurnRequest
 
 
 router = APIRouter()
@@ -665,3 +667,37 @@ async def evaluate_shop_assistant(
         _raise_for_value_error(error)
 
     return result
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/test-turn")
+async def test_turn_deployed_agent(
+    deployed_agent_id: str,
+    body: DeployedAgentTestTurnRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        body.workspace_id,
+        minimum_role="viewer",
+    )
+    tenant_id = auth_module.workspace_tenant_id(current_user, resolved_workspace_id)
+
+    try:
+        result = await deployed_agent_test_turn_service.execute_test_turn(
+            deployed_agent_id=deployed_agent_id,
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+            request=body,
+            current_user=current_user,
+        )
+    except ValueError as error:
+        _raise_for_value_error(error)
+
+    return {
+        "workspace_id": resolved_workspace_id,
+        "tenant_id": tenant_id,
+        "deployed_agent_id": deployed_agent_id,
+        **result.model_dump(),
+    }

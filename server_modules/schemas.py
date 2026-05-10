@@ -285,3 +285,22 @@ class MarketplaceUpgradeClickResponse(BaseModel):
     duplicate: bool = False
     deployed_agent_id: Optional[str] = None
     clicked_at: Optional[str] = None
+
+
+class DeployedAgentTestTurnRequest(BaseModel):
+    workspace_id: str
+    message: str
+    channel: str = "test"
+    runtime_mode: str = "text_agent"
+    customer_profile: Optional[Dict[str, Any]] = None
+
+
+class DeployedAgentTestTurnResponse(BaseModel):
+    reply: str = ""
+    policy_decisions: list[dict] = Field(default_factory=list)
+    tools_considered: list[dict] = Field(default_factory=list)
+    tools_used: list[str] = Field(default_factory=list)
+    memory_context: Dict[str, Any] = Field(default_factory=dict)
+    approval_required: bool = False
+    audit_events: list[dict] = Field(default_factory=list)
+    trace_id: str = ""

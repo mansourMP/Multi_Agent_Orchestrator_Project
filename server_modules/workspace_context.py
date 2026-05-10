@@ -16,6 +16,11 @@ ALLOWED_CONTEXT_FILENAMES = (
     "AGENTS.md",
     "TOOLS.md",
     "MEMORY.md",
+    "SELF_MODEL.md",
+    "LIFE_STORY.md",
+    "GOALS.md",
+    "PROCEDURES.md",
+    "REFLECTION.md",
 )
 
 DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
@@ -53,6 +58,26 @@ DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
     "MEMORY.md": (
         "# Curated Memory\n\n"
         "Store stable long-term facts that should remain visible across future sessions.\n"
+    ),
+    "SELF_MODEL.md": (
+        "# Self Model\n\n"
+        "- Capture how the user prefers to think, decide, and collaborate.\n"
+    ),
+    "LIFE_STORY.md": (
+        "# Life Story\n\n"
+        "- Capture durable background only when the user explicitly wants it saved.\n"
+    ),
+    "GOALS.md": (
+        "# Goals\n\n"
+        "- Capture active projects, intentions, and future direction.\n"
+    ),
+    "PROCEDURES.md": (
+        "# Procedures\n\n"
+        "- Capture how the user likes work done.\n"
+    ),
+    "REFLECTION.md": (
+        "# Reflection\n\n"
+        "- Capture lessons and behavior improvements for future sessions.\n"
     ),
 }
 

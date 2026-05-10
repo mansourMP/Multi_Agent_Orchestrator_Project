@@ -1,14 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Pin, PinOff, Plus, Trash2 } from 'lucide-react';
+import { Code2, Download, Eye, Pencil } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
-import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
-import { AppButton } from '@/lib/ui/primitives';
+import { AppButton, AppTextarea } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type {
+  WorkstationSageContextFileRecord,
   WorkstationSageMemoryRecord,
   WorkstationSageProfileQuestionRecord,
   WorkstationSageProfileRecord,
@@ -16,11 +16,8 @@ import type {
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import {
-  WorkstationSurfaceCard,
   WorkstationSurfaceNotice,
   WorkstationSurfaceRoot,
-  WorkstationSurfaceStat,
-  WorkstationSurfaceStatGrid,
 } from '@/lib/workspace/workstation-surface-primitives';
 
 type SageMemoryCategoryRecord = {
@@ -65,6 +62,8 @@ type SageProfileDraft = {
   standing_rules_text: string;
 };
 
+type MemoryContextDocuments = Record<string, string>;
+
 type SageMemoryStoragePolicy = Record<string, unknown> & {
   authority?: string | null;
   max_entries?: number | null;
@@ -81,6 +80,7 @@ type SageMemoryDraft = {
 };
 
 type MemorySensitivityClass = 'green' | 'yellow' | 'orange' | 'red';
+type MemoryDocumentViewMode = 'preview' | 'source';
 
 const memoryPaneCache = new Map<string, SageMemorySnapshot>();
 
@@ -113,7 +113,6 @@ const MEMORY_SENSITIVITY_META: Record<MemorySensitivityClass, { label: string; d
 };
 
 const MEMORY_ITEM_LIMIT = 50;
-const SAGE_MEMORY_WIPE_CONFIRMATION = 'WIPE SAGE MEMORY';
 
 function readString(value: unknown): string {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -230,6 +229,23 @@ function normalizeProfileSnapshot(payload: unknown): SageProfileSnapshot {
       email: readString(accountSeedRecord.email),
     },
   };
+}
+
+function normalizeContextDocuments(payload: unknown): MemoryContextDocuments {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const files = Array.isArray(record.files) ? record.files : [];
+  return files.reduce<MemoryContextDocuments>((accumulator, item) => {
+    if (!item || typeof item !== 'object') {
+      return accumulator;
+    }
+    const file = item as Partial<WorkstationSageContextFileRecord>;
+    const filename = typeof file.filename === 'string' ? file.filename.trim() : '';
+    if (!filename.endsWith('.md')) {
+      return accumulator;
+    }
+    accumulator[filename] = typeof file.content === 'string' ? file.content : '';
+    return accumulator;
+  }, {});
 }
 
 function draftFromProfileSnapshot(snapshot: SageProfileSnapshot): SageProfileDraft {
@@ -357,6 +373,89 @@ function memoryPaneErrorMessage(error: unknown): string {
   return message;
 }
 
+function buildFallbackMemoryDocuments(
+  profileSnapshot: SageProfileSnapshot,
+  displayNameHint: string,
+  memoryUsed: number,
+  memoryLimit: number,
+): Array<{ filename: string; content: string }> {
+  const profile = profileSnapshot.profile;
+  const standingRules = profile.standing_rules.length > 0
+    ? profile.standing_rules.map((rule) => `- ${rule}`).join('\n')
+    : '- No standing rules saved yet.';
+  return [
+    {
+      filename: 'SOUL.md',
+      content: `# SOUL\n\nRole and personality boundaries for the main agent.\n\nRecurring responsibility: ${profile.recurring_responsibility || 'Not set yet.'}\n\nCommunication style: ${profile.communication_style || 'Not learned yet.'}`,
+    },
+    {
+      filename: 'IDENTITY.md',
+      content: `# IDENTITY\n\n${profile.identity_summary || 'No durable identity summary saved yet.'}`,
+    },
+    {
+      filename: 'USER.md',
+      content: `# USER\n\nName: ${profile.user_name || displayNameHint}\n\nStable profile: ${profile.identity_summary || 'Not learned yet.'}`,
+    },
+    {
+      filename: 'AGENTS.md',
+      content: `# AGENTS\n\nOperating rules Sage should follow across sessions.\n\n${standingRules}`,
+    },
+    {
+      filename: 'MEMORY.md',
+      content: `# MEMORY\n\nCurated long-term memory.\n\nSaved memory entries: ${memoryUsed}/${memoryLimit}`,
+    },
+    {
+      filename: 'SELF_MODEL.md',
+      content: `# SELF_MODEL\n\nWorking model of how the user prefers to think, decide, and collaborate.\n\n${profile.communication_style || 'Not learned yet.'}`,
+    },
+    {
+      filename: 'LIFE_STORY.md',
+      content: '# LIFE_STORY\n\nNarrative identity and important background will appear here when explicitly saved.',
+    },
+    {
+      filename: 'GOALS.md',
+      content: `# GOALS\n\nFuture direction, projects, and intentions.\n\n${profile.recurring_responsibility || 'No durable goals saved yet.'}`,
+    },
+    {
+      filename: 'PROCEDURES.md',
+      content: `# PROCEDURES\n\nHow the user likes work done.\n\n${profile.communication_style || 'No procedures saved yet.'}`,
+    },
+    {
+      filename: 'REFLECTION.md',
+      content: '# REFLECTION\n\nLessons, mistakes, and behavior improvements will appear here when explicitly saved.',
+    },
+    {
+      filename: 'HEARTBEAT.md',
+      content: `# HEARTBEAT\n\nIdentity setup: ${profileSnapshot.bootstrap.complete ? 'Complete' : `In progress (${profileSnapshot.bootstrap.progress_label})`}\nMemory entries: ${memoryUsed}/${memoryLimit}`,
+    },
+  ];
+}
+
+function stripMarkdownTitle(markdown: string): string {
+  return markdown
+    .split('\n')
+    .filter((line, index) => !(index === 0 && line.trim().startsWith('# ')))
+    .join('\n')
+    .trim();
+}
+
+function markdownSection(markdown: string, heading: string): string {
+  const lines = markdown.split('\n');
+  const headingLine = `## ${heading}`;
+  const startIndex = lines.findIndex((line) => line.trim().toLowerCase() === headingLine.toLowerCase());
+  if (startIndex < 0) {
+    return stripMarkdownTitle(markdown);
+  }
+  const sectionLines: string[] = [];
+  for (const line of lines.slice(startIndex + 1)) {
+    if (line.trim().startsWith('## ')) {
+      break;
+    }
+    sectionLines.push(line);
+  }
+  return sectionLines.join('\n').trim();
+}
+
 export function WorkstationActivityPane() {
   const { workspaceId } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
@@ -370,6 +469,7 @@ export function WorkstationActivityPane() {
   const cachedProfilePayload = services.queryClient.peek<unknown>('chat:canonical:sage-profile');
   const cachedProfile = cachedProfilePayload ? normalizeProfileSnapshot(cachedProfilePayload) : null;
   const [profileSnapshot, setProfileSnapshot] = useState<SageProfileSnapshot>(() => cachedProfile ?? defaultProfileSnapshot());
+  const [contextDocuments, setContextDocuments] = useState<MemoryContextDocuments>({});
   const [profileDraft, setProfileDraft] = useState<SageProfileDraft>(() => draftFromProfileSnapshot(cachedProfile ?? defaultProfileSnapshot()));
   const [isProfileLoading, setIsProfileLoading] = useState(() => cachedProfile === null);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
@@ -377,8 +477,10 @@ export function WorkstationActivityPane() {
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultMemoryDraft());
   const [mutatingMemory, setMutatingMemory] = useState<string | null>(null);
-  const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<string | null>(null);
-  const [pendingWipeMemory, setPendingWipeMemory] = useState(false);
+  const [selectedMemoryDocumentId, setSelectedMemoryDocumentId] = useState('overview');
+  const [memoryDocumentViewMode, setMemoryDocumentViewMode] = useState<MemoryDocumentViewMode>('preview');
+  const [editingDocumentId, setEditingDocumentId] = useState<string | null>(null);
+  const [editingDocumentText, setEditingDocumentText] = useState('');
 
   const refresh = async (showLoading = false) => {
     if (showLoading) {
@@ -407,11 +509,17 @@ export function WorkstationActivityPane() {
       setIsProfileLoading(true);
     }
     setError(null);
-    const payload = await services.client.getSageProfile();
+    const [payload, contextPayload] = await Promise.all([
+      services.client.getSageProfile(),
+      services.client.listSageContextFiles().catch(() => null),
+    ]);
     const nextSnapshot = normalizeProfileSnapshot(payload);
     services.queryClient.set('chat:canonical:sage-profile', nextSnapshot);
     setProfileSnapshot(nextSnapshot);
     setProfileDraft(draftFromProfileSnapshot(nextSnapshot));
+    if (contextPayload) {
+      setContextDocuments(normalizeContextDocuments(contextPayload));
+    }
     setIsProfileLoading(false);
   };
 
@@ -441,10 +549,6 @@ export function WorkstationActivityPane() {
     };
   }, [services.client]);
 
-  const pendingDeleteMemory = useMemo(
-    () => snapshot.items.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null,
-    [pendingDeleteMemoryId, snapshot.items],
-  );
   const categoryLabels = useMemo(
     () => new Map(snapshot.categories.map((category) => [readString(category.id), readString(category.label)])),
     [snapshot.categories],
@@ -460,10 +564,6 @@ export function WorkstationActivityPane() {
   }, [snapshot.items]);
   const memoryLimit = readNumber(storagePolicy?.max_entries, MEMORY_ITEM_LIMIT) || MEMORY_ITEM_LIMIT;
   const memoryUsed = readNumber(storagePolicy?.used_entries, snapshot.items.length);
-  const memoryRemaining = readNumber(storagePolicy?.remaining_entries, Math.max(0, memoryLimit - memoryUsed));
-  const memoryAuthorityLabel = readString(storagePolicy?.authority).replace(/_/g, ' ') || 'cloud canonical';
-  const runtimeFormatLabel = readString(storagePolicy?.runtime_format).replace(/_/g, ' ') || 'structured classes';
-  const pinnedCount = snapshot.items.filter((entry) => Boolean(entry.pinned)).length;
   const pinnedMemoryItems = useMemo(
     () => snapshot.items.filter((entry) => Boolean(entry.pinned)),
     [snapshot.items],
@@ -479,22 +579,65 @@ export function WorkstationActivityPane() {
     }),
     [snapshot.items],
   );
-  const projectionItems = useMemo(
-    () => Object.entries(profileSnapshot.projections).map(([filename, content]) => ({
-      filename,
-      preview: content.split('\n').find((line) => readString(line)) || 'Generated projection',
-    })),
-    [profileSnapshot.projections],
-  );
-  const profileAuthority = readString(profileSnapshot.storagePolicy.authority).replace(/_/g, ' ') || 'structured profile cloud canonical';
-  const projectedFiles = Array.isArray(profileSnapshot.storagePolicy.projected_files)
-    ? profileSnapshot.storagePolicy.projected_files.flatMap((value) => {
-      const token = readString(value);
-      return token ? [token] : [];
-    })
-    : [];
   const bootstrapQuestion = profileSnapshot.bootstrap.current_question;
   const displayNameHint = profileSnapshot.accountSeed.display_name || profileSnapshot.accountSeed.email || 'Set a preferred name';
+  const projectionDocuments = useMemo(() => {
+    const sourceDocuments = Object.keys(contextDocuments).length > 0
+      ? contextDocuments
+      : profileSnapshot.projections;
+    const entries = Object.entries(sourceDocuments).flatMap(([filename, content]) => {
+      const normalizedFilename = typeof filename === 'string' ? filename.trim() : '';
+      if (!normalizedFilename || !normalizedFilename.endsWith('.md')) {
+        return [];
+      }
+      return [{ filename: normalizedFilename, content: typeof content === 'string' ? content : '' }];
+    });
+    if (entries.length > 0) {
+      const defaultFilenames = new Set(entries.map((entry) => entry.filename));
+      const fallbackDocuments = buildFallbackMemoryDocuments(profileSnapshot, displayNameHint, memoryUsed, memoryLimit)
+        .filter((document) => !defaultFilenames.has(document.filename));
+      return [...entries, ...fallbackDocuments];
+    }
+    return buildFallbackMemoryDocuments(profileSnapshot, displayNameHint, memoryUsed, memoryLimit);
+  }, [contextDocuments, displayNameHint, memoryLimit, memoryUsed, profileSnapshot]);
+  const memoryDocumentNavItems = useMemo(() => [
+    {
+      id: 'overview',
+      label: 'Overview',
+      description: 'Profile, rules, and carry-forward context',
+    },
+    ...projectionDocuments.map((document) => ({
+      id: `projection:${document.filename}`,
+      label: document.filename,
+      description: 'Markdown projection',
+    })),
+    {
+      id: 'pinned',
+      label: 'Pinned',
+      description: `${pinnedMemoryItems.length} high-signal facts`,
+    },
+    {
+      id: 'recent',
+      label: 'Recent',
+      description: `${recentMemoryItems.length} recent facts`,
+    },
+    {
+      id: 'sensitive',
+      label: 'Sensitive',
+      description: `${sensitiveMemoryItems.length} private facts`,
+    },
+  ], [pinnedMemoryItems.length, projectionDocuments, recentMemoryItems.length, sensitiveMemoryItems.length]);
+
+  useEffect(() => {
+    if (!memoryDocumentNavItems.some((item) => item.id === selectedMemoryDocumentId)) {
+      setSelectedMemoryDocumentId('overview');
+    }
+  }, [memoryDocumentNavItems, selectedMemoryDocumentId]);
+
+  useEffect(() => {
+    setEditingDocumentId(null);
+    setEditingDocumentText('');
+  }, [selectedMemoryDocumentId]);
 
   const saveProfileDraft = async () => {
     if (isProfileSaving) {
@@ -584,57 +727,6 @@ export function WorkstationActivityPane() {
     }
   };
 
-  const togglePinned = async (entry: WorkstationSageMemoryRecord) => {
-    const entryId = readString(entry.id);
-    if (!entryId || mutatingMemory) {
-      return;
-    }
-    setMutatingMemory(entryId);
-    setStatusMessage(null);
-    try {
-      const payload = await services.client.setSageMemoryEntryPinned({
-        entryId,
-        pinned: !Boolean(entry.pinned),
-      });
-      const nextSnapshot = normalizeMemorySnapshot(payload);
-      const normalizedSnapshot = {
-        ...nextSnapshot,
-        items: sortMemoryEntries(nextSnapshot.items),
-      };
-      memoryPaneCache.set(workspaceId, normalizedSnapshot);
-      setSnapshot(normalizedSnapshot);
-    } catch (pinError) {
-      setError(pinError instanceof Error ? pinError.message : 'Could not update memory pin state.');
-    } finally {
-      setMutatingMemory(null);
-    }
-  };
-
-  const confirmDeleteMemory = async () => {
-    if (!pendingDeleteMemoryId || mutatingMemory) {
-      return;
-    }
-    setMutatingMemory(pendingDeleteMemoryId);
-    setStatusMessage(null);
-    try {
-      const payload = await services.client.deleteSageMemoryEntry({
-        entryId: pendingDeleteMemoryId,
-      });
-      const nextSnapshot = normalizeMemorySnapshot(payload);
-      const normalizedSnapshot = {
-        ...nextSnapshot,
-        items: sortMemoryEntries(nextSnapshot.items),
-      };
-      memoryPaneCache.set(workspaceId, normalizedSnapshot);
-      setSnapshot(normalizedSnapshot);
-      setPendingDeleteMemoryId(null);
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : 'Could not forget memory.');
-    } finally {
-      setMutatingMemory(null);
-    }
-  };
-
   const exportMemory = async () => {
     if (mutatingMemory || snapshot.items.length === 0) {
       return;
@@ -663,94 +755,250 @@ export function WorkstationActivityPane() {
     }
   };
 
-  const confirmWipeMemory = async () => {
-    if (mutatingMemory || snapshot.items.length === 0) {
+  const saveDocumentEdit = async (filename: string, content: string) => {
+    if (mutatingMemory) {
       return;
     }
-    setMutatingMemory('wipe');
+    const normalizedContent = content.trim();
+    if (!normalizedContent) {
+      setError('Memory document cannot be empty.');
+      return;
+    }
+    setMutatingMemory(`document:${filename}`);
     setStatusMessage(null);
+    setError(null);
     try {
-      const payload = await services.client.wipeSageMemory({
-        confirm: SAGE_MEMORY_WIPE_CONFIRMATION,
+      const payload = await services.client.updateSageContextFile({
+        filename,
+        content: normalizedContent,
       });
-      const nextSnapshot = normalizeMemorySnapshot(payload);
-      const normalizedSnapshot = {
-        ...nextSnapshot,
-        items: sortMemoryEntries(nextSnapshot.items),
-      };
-      memoryPaneCache.set(workspaceId, normalizedSnapshot);
-      setSnapshot(normalizedSnapshot);
-      setPendingWipeMemory(false);
-      if (payload.storage_policy && typeof payload.storage_policy === 'object') {
-        setStoragePolicy(payload.storage_policy as SageMemoryStoragePolicy);
-      }
-      setStatusMessage('Workspace memory wiped.');
-    } catch (wipeError) {
-      setError(wipeError instanceof Error ? wipeError.message : 'Could not wipe memory.');
+      const savedFilename = readString((payload as Record<string, unknown>).filename) || filename;
+      const savedContent = typeof (payload as Record<string, unknown>).content === 'string'
+        ? (payload as Record<string, unknown>).content as string
+        : normalizedContent;
+      setContextDocuments((current) => ({
+        ...current,
+        [savedFilename]: savedContent,
+      }));
+      setEditingDocumentId(null);
+      setEditingDocumentText('');
+      setStatusMessage(`${filename} updated.`);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not update memory document.');
     } finally {
       setMutatingMemory(null);
     }
   };
 
-  const renderMemoryRows = (items: WorkstationSageMemoryRecord[], emptyLabel: string) => (
-    <div className="app-memory-minimal-group__list">
+  const renderMemoryDocumentRows = (items: WorkstationSageMemoryRecord[], emptyLabel: string) => (
+    <div className="app-memory-document-rows">
       {items.length === 0 ? (
-        <div className="app-memory-minimal-empty-row">{emptyLabel}</div>
+        <div className="app-memory-document-empty">{emptyLabel}</div>
       ) : items.map((entry) => {
         const entryId = readString(entry.id);
-        const busy = mutatingMemory === entryId;
         const categoryLabel = categoryLabels.get(readString(entry.category)) || 'Saved memory';
         const updatedLabel = formatMemoryTimestamp(readString(entry.updated_at) || readString(entry.created_at) || null);
         const contentLabel = [readString(entry.title), readString(entry.content)]
           .filter(Boolean)
           .join(' — ');
         return (
-          <div key={entryId || `memory-${readString(entry.title)}`} className="app-memory-minimal-row">
+          <div key={entryId || `memory-${readString(entry.title)}`} className="app-memory-document-row">
             <button
               type="button"
-              className="app-memory-minimal-row__copy"
+              className="app-memory-document-row__copy"
               onClick={() => {
                 openEditMemory(entry);
               }}
             >
-              <span className="app-memory-minimal-row__content" title={contentLabel || 'Saved memory'}>
+              <span className="app-memory-document-row__content" title={contentLabel || 'Saved memory'}>
                 {contentLabel || 'Saved memory'}
               </span>
-              <span className="app-memory-minimal-row__meta">
+              <span className="app-memory-document-row__meta">
                 {[categoryLabel, updatedLabel, entry.pinned ? 'Pinned' : null].filter(Boolean).join(' · ')}
               </span>
             </button>
-            <div className="app-inline-actions">
-              <button
-                type="button"
-                className="app-memory-minimal-row__delete"
-                disabled={busy}
-                onClick={() => {
-                  void togglePinned(entry);
-                }}
-                aria-label={entry.pinned ? 'Unpin memory' : 'Pin memory'}
-                title={entry.pinned ? 'Unpin memory' : 'Pin memory'}
-              >
-                {entry.pinned ? <PinOff size={16} strokeWidth={1.9} aria-hidden="true" /> : <Pin size={16} strokeWidth={1.9} aria-hidden="true" />}
-              </button>
-              <button
-                type="button"
-                className="app-memory-minimal-row__delete"
-                disabled={busy}
-                onClick={() => {
-                  setPendingDeleteMemoryId(entryId);
-                }}
-                aria-label="Delete memory"
-                title="Delete memory"
-              >
-                <Trash2 size={16} strokeWidth={1.9} aria-hidden="true" />
-              </button>
-            </div>
           </div>
         );
       })}
     </div>
   );
+  const renderDocumentModeSwitch = () => (
+    <div className="app-inline-actions app-inline-actions--tight" aria-label="Memory document view mode">
+      <AppButton
+        type="button"
+        tone={memoryDocumentViewMode === 'preview' ? 'primary' : 'ghost'}
+        onClick={() => {
+          setMemoryDocumentViewMode('preview');
+        }}
+      >
+        <Eye size={16} strokeWidth={2} aria-hidden="true" />
+        <span>Preview</span>
+      </AppButton>
+      <AppButton
+        type="button"
+        tone={memoryDocumentViewMode === 'source' ? 'primary' : 'ghost'}
+        onClick={() => {
+          setMemoryDocumentViewMode('source');
+        }}
+      >
+        <Code2 size={16} strokeWidth={2} aria-hidden="true" />
+        <span>Source</span>
+      </AppButton>
+    </div>
+  );
+  const renderMarkdownPreview = (markdown: string) => (
+    <div className="app-memory-document-prose">
+      {markdown.split('\n').map((line, index) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return null;
+        }
+        if (trimmed.startsWith('# ')) {
+          return <h3 key={`${index}:${trimmed}`}>{trimmed.slice(2)}</h3>;
+        }
+        if (trimmed.startsWith('## ')) {
+          return <h4 key={`${index}:${trimmed}`}>{trimmed.slice(3)}</h4>;
+        }
+        if (trimmed.startsWith('### ')) {
+          return <h5 key={`${index}:${trimmed}`}>{trimmed.slice(4)}</h5>;
+        }
+        if (trimmed.startsWith('- ')) {
+          return <p key={`${index}:${trimmed}`}>• {trimmed.slice(2)}</p>;
+        }
+        return <p key={`${index}:${trimmed}`}>{trimmed}</p>;
+      })}
+    </div>
+  );
+  const renderEditableDocumentBody = (documentId: string, filename: string, content: string) => {
+    const isEditing = editingDocumentId === documentId;
+    if (isEditing) {
+      return (
+        <div className="app-memory-document-editor">
+          <AppTextarea
+            className="app-memory-document-textarea"
+            value={editingDocumentText}
+            onChange={(event) => {
+              setEditingDocumentText(event.currentTarget.value);
+            }}
+            rows={Math.max(18, editingDocumentText.split('\n').length + 2)}
+            spellCheck
+          />
+        </div>
+      );
+    }
+    return memoryDocumentViewMode === 'source'
+      ? <pre className="app-memory-document-markdown">{content}</pre>
+      : renderMarkdownPreview(content);
+  };
+  const renderDocumentToolbar = (documentId: string, filename: string, content: string) => {
+    const isEditing = editingDocumentId === documentId;
+    return (
+    <div className="app-inline-actions app-inline-actions--between app-memory-document-toolbar">
+      {renderDocumentModeSwitch()}
+      <div className="app-memory-document-toolbar__actions">
+        {isEditing ? (
+          <>
+            <AppButton
+              type="button"
+              tone="secondary"
+              onClick={() => {
+                setEditingDocumentId(null);
+                setEditingDocumentText('');
+              }}
+              disabled={Boolean(mutatingMemory)}
+            >
+              Cancel
+            </AppButton>
+            <AppButton
+              type="button"
+              tone="primary"
+              onClick={() => {
+                void saveDocumentEdit(filename, editingDocumentText);
+              }}
+              disabled={Boolean(mutatingMemory)}
+            >
+              {mutatingMemory === `document:${filename}` ? 'Saving…' : 'Save'}
+            </AppButton>
+          </>
+        ) : (
+          <AppButton
+            type="button"
+            tone="primary"
+            onClick={() => {
+              setEditingDocumentId(documentId);
+              setEditingDocumentText(content);
+            }}
+          >
+            <Pencil size={15} strokeWidth={2} aria-hidden="true" />
+            Edit
+          </AppButton>
+        )}
+      </div>
+    </div>
+    );
+  };
+  const renderSelectedMemoryDocument = () => {
+    const selectedProjection = selectedMemoryDocumentId.startsWith('projection:')
+      ? projectionDocuments.find((document) => `projection:${document.filename}` === selectedMemoryDocumentId) ?? null
+      : null;
+    if (selectedProjection) {
+      const documentId = `projection:${selectedProjection.filename}`;
+      return (
+        <div className="app-memory-document-shell">
+          {renderDocumentToolbar(documentId, selectedProjection.filename, selectedProjection.content)}
+          <article className="settings-detail-card app-memory-document-panel">
+            {renderEditableDocumentBody(documentId, selectedProjection.filename, selectedProjection.content)}
+          </article>
+        </div>
+      );
+    }
+    if (selectedMemoryDocumentId === 'pinned') {
+      return (
+        <article className="settings-detail-card app-memory-document-panel">
+          <div className="app-memory-document-panel__header">
+            <span className="app-memory-document-panel__eyebrow">Carry-forward memory</span>
+            <h2>Pinned facts</h2>
+            <p>High-signal facts Sage should keep prominent across future conversations.</p>
+          </div>
+          {renderMemoryDocumentRows(pinnedMemoryItems, 'No pinned facts yet.')}
+        </article>
+      );
+    }
+    if (selectedMemoryDocumentId === 'recent') {
+      return (
+        <article className="settings-detail-card app-memory-document-panel">
+          <div className="app-memory-document-panel__header">
+            <span className="app-memory-document-panel__eyebrow">Carry-forward memory</span>
+            <h2>Recent memory</h2>
+            <p>Facts Sage recently saved or updated.</p>
+          </div>
+          {renderMemoryDocumentRows(recentMemoryItems, 'No recent memory yet.')}
+        </article>
+      );
+    }
+    if (selectedMemoryDocumentId === 'sensitive') {
+      return (
+        <article className="settings-detail-card app-memory-document-panel">
+          <div className="app-memory-document-panel__header">
+            <span className="app-memory-document-panel__eyebrow">Protected memory</span>
+            <h2>Sensitive memory</h2>
+            <p>Private and restricted facts that require tighter handling.</p>
+          </div>
+          {renderMemoryDocumentRows(sensitiveMemoryItems, 'No sensitive memory saved.')}
+        </article>
+      );
+    }
+    const cleanIdentitySummary = markdownSection(profileSnapshot.profile.identity_summary, 'Identity') || profileSnapshot.profile.identity_summary;
+    const overviewContent = `# What Sage carries forward\n\n## Identity\n${cleanIdentitySummary || 'No durable identity summary saved yet.'}\n\n## Communication style\n${profileSnapshot.profile.communication_style || 'No communication preference saved yet.'}\n\n## Recurring responsibility\n${profileSnapshot.profile.recurring_responsibility || 'No recurring responsibility saved yet.'}\n\n## Standing rules\n${profileSnapshot.profile.standing_rules.length === 0 ? 'No standing rules saved yet.' : profileSnapshot.profile.standing_rules.map((rule) => `- ${rule}`).join('\n')}`;
+    return (
+      <div className="app-memory-document-shell">
+        {renderDocumentToolbar('overview', 'IDENTITY.md', overviewContent)}
+        <article className="settings-detail-card app-memory-document-panel">
+          {renderEditableDocumentBody('overview', 'IDENTITY.md', overviewContent)}
+        </article>
+      </div>
+    );
+  };
 
   return (
     <WorkstationSurfaceRoot surface="memory">
@@ -766,191 +1014,61 @@ export function WorkstationActivityPane() {
           </div>
         ) : (
           <>
-            <WorkstationSurfaceStatGrid>
-              <WorkstationSurfaceStat
-                label="Memory entries"
-                value={`${Math.min(memoryUsed, memoryLimit)}/${memoryLimit}`}
-                hint={`${memoryRemaining} slots open`}
-              />
-              <WorkstationSurfaceStat
-                label="Identity"
-                value={profileSnapshot.bootstrap.complete ? 'Complete' : 'In progress'}
-                hint={profileSnapshot.bootstrap.progress_label}
-              />
-              <WorkstationSurfaceStat
-                label="Storage policy"
-                value={runtimeFormatLabel}
-                hint={memoryAuthorityLabel}
-              />
-            </WorkstationSurfaceStatGrid>
-
-            <WorkstationSurfaceCard
-              title="About me"
-              description="What Sage currently knows about you. It should learn this through conversation; this page is for review and correction."
-              actions={(
-                <AppButton
-                  type="button"
-                  tone="primary"
-                  disabled={isProfileSaving}
-                  onClick={() => {
-                    setIsIdentitySheetOpen(true);
-                  }}
-                >
-                  Correct memory
-                </AppButton>
-              )}
-            >
-              <div className="app-stack-3">
-                <WorkstationSurfaceNotice tone="neutral">
-                  {profileSnapshot.bootstrap.complete
-                    ? `Sage has enough identity context to work normally. ${profileAuthority}.`
-                    : 'Sage is still learning. Keep chatting naturally; use Correct memory only when something is wrong.'}
-                </WorkstationSurfaceNotice>
-                <div className="app-memory-minimal-list">
-                  <section className="app-memory-minimal-group">
-                    <div className="app-memory-minimal-group__list">
-                      <div className="app-memory-minimal-row">
-                        <span className="app-memory-minimal-row__copy">
-                          <span className="app-memory-minimal-row__content">Name</span>
-                          <span className="app-memory-minimal-row__meta">{profileSnapshot.profile.user_name || displayNameHint}</span>
-                        </span>
-                      </div>
-                      <div className="app-memory-minimal-row">
-                        <span className="app-memory-minimal-row__copy">
-                          <span className="app-memory-minimal-row__content">Identity</span>
-                          <span className="app-memory-minimal-row__meta">{profileSnapshot.profile.identity_summary || 'Not learned yet'}</span>
-                        </span>
-                      </div>
-                      <div className="app-memory-minimal-row">
-                        <span className="app-memory-minimal-row__copy">
-                          <span className="app-memory-minimal-row__content">Recurring responsibility</span>
-                          <span className="app-memory-minimal-row__meta">{profileSnapshot.profile.recurring_responsibility || 'Not set yet'}</span>
-                        </span>
-                      </div>
-                    </div>
-                  </section>
+            <section className="settings-workbench app-memory-settings-workbench" aria-label="Sage memory documents">
+              <aside className="settings-nav" aria-label="Memory documents">
+                <div className="app-settings-sidebar__header">
+                  <h2 className="app-settings-sidebar__title">Memory</h2>
+                  <p className="app-settings-sidebar__subtitle">{Math.min(memoryUsed, memoryLimit)}/{memoryLimit} saved memory slots</p>
                 </div>
-              </div>
-            </WorkstationSurfaceCard>
-
-            <WorkstationSurfaceCard
-              title="Preferences"
-              description="Tone and working style Sage should carry into normal sessions."
-            >
-              <WorkstationSurfaceNotice tone="neutral">
-                {profileSnapshot.profile.communication_style || 'No communication preference saved yet. Sage can infer this from chat, or you can correct it manually.'}
-              </WorkstationSurfaceNotice>
-            </WorkstationSurfaceCard>
-
-            <WorkstationSurfaceCard
-              title="Rules"
-              description="Standing rules are durable instructions Sage should obey across sessions."
-            >
-              <div className="app-memory-minimal-list">
-                <section className="app-memory-minimal-group">
-                  <div className="app-memory-minimal-group__list">
-                    {profileSnapshot.profile.standing_rules.length === 0 ? (
-                      <div className="app-memory-minimal-empty-row">No standing rules saved yet.</div>
-                    ) : profileSnapshot.profile.standing_rules.map((rule) => (
-                      <div key={rule} className="app-memory-minimal-row">
-                        <span className="app-memory-minimal-row__copy">
-                          <span className="app-memory-minimal-row__content">{rule}</span>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              </div>
-            </WorkstationSurfaceCard>
-
-            <WorkstationSurfaceCard
-              title="Pinned"
-              description="High-signal facts Sage should keep at the top of carry-forward memory."
-              actions={(
-                <AppButton type="button" tone="primary" onClick={openCreateMemory} disabled={Boolean(mutatingMemory)}>
-                  <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
-                  <span>Add memory</span>
-                </AppButton>
-              )}
-            >
-              {renderMemoryRows(pinnedMemoryItems, `No pinned facts yet. ${pinnedCount > 0 ? '' : 'Pin important memory when it should stay prominent.'}`)}
-            </WorkstationSurfaceCard>
-
-            <WorkstationSurfaceCard
-              title="Recent"
-              description="Short-term and long-term memory Sage recently saved or updated."
-            >
-              {renderMemoryRows(recentMemoryItems, 'No recent memory yet.')}
-            </WorkstationSurfaceCard>
-
-            <WorkstationSurfaceCard
-              title="Sensitive"
-              description="Private and restricted memory that needs tighter handling."
-            >
-              {renderMemoryRows(sensitiveMemoryItems, 'No sensitive memory saved.')}
-            </WorkstationSurfaceCard>
-
-            <WorkstationSurfaceCard
-              title="Controls"
-              description="Export, inspect projections, or wipe explicit Sage memory for this workspace."
-              actions={(
-                <div className="app-inline-actions">
-                  <AppButton
+                <div className="app-memory-document-nav">
+                  {memoryDocumentNavItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      aria-selected={item.id === selectedMemoryDocumentId}
+                      className={`settings-nav__item${item.id === selectedMemoryDocumentId ? ' settings-nav__item--active' : ''}`}
+                      onClick={() => {
+                        setSelectedMemoryDocumentId(item.id);
+                      }}
+                    >
+                      <span className="settings-nav__eyebrow">{item.description}</span>
+                      <span className="settings-nav__label">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="app-memory-document-sidebar__footer">
+                  <button
                     type="button"
-                    tone="secondary"
+                    onClick={() => {
+                      setIsIdentitySheetOpen(true);
+                    }}
+                    disabled={isProfileSaving}
+                  >
+                    Edit memory
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openCreateMemory}
+                    disabled={Boolean(mutatingMemory)}
+                  >
+                    New memory
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       void exportMemory();
                     }}
                     disabled={Boolean(mutatingMemory) || snapshot.items.length === 0}
                   >
-                    <Download size={16} strokeWidth={1.9} aria-hidden="true" />
-                    <span>Export</span>
-                  </AppButton>
-                  <AppButton
-                    type="button"
-                    tone="danger"
-                    onClick={() => {
-                      setPendingWipeMemory(true);
-                    }}
-                    disabled={Boolean(mutatingMemory) || snapshot.items.length === 0}
-                  >
-                    <Trash2 size={16} strokeWidth={1.9} aria-hidden="true" />
-                    <span>Wipe</span>
-                  </AppButton>
+                    <Download size={14} strokeWidth={1.9} aria-hidden="true" />
+                    Export
+                  </button>
                 </div>
-              )}
-            >
-              <div className="app-stack-3">
-                <WorkstationSurfaceNotice tone="neutral">
-                  Structured backend memory is authoritative. Markdown files are projections for inspection, export, or advanced editing.
-                </WorkstationSurfaceNotice>
-                <div className="app-memory-minimal-list">
-                  <section className="app-memory-minimal-group">
-                    <div className="app-memory-minimal-group__label">
-                      <span className="app-memory-minimal-group__copy">
-                        <span className="app-memory-minimal-group__name">USER / IDENTITY / SOUL projections</span>
-                        <span className="app-memory-minimal-group__description">
-                          {projectedFiles.join(' · ') || 'USER.md · IDENTITY.md · SOUL.md · HEARTBEAT.md'}
-                        </span>
-                      </span>
-                      <span className="app-memory-minimal-group__count">{projectionItems.length || projectedFiles.length || 4}</span>
-                    </div>
-                    <div className="app-memory-minimal-group__list">
-                      {projectionItems.length === 0 ? (
-                        <div className="app-memory-minimal-empty-row">Projection previews will appear after identity setup.</div>
-                      ) : projectionItems.map((item) => (
-                        <div key={item.filename} className="app-memory-minimal-row">
-                          <span className="app-memory-minimal-row__copy">
-                            <span className="app-memory-minimal-row__content">{item.filename}</span>
-                            <span className="app-memory-minimal-row__meta">{item.preview}</span>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                </div>
+              </aside>
+              <div className="settings-content">
+                {renderSelectedMemoryDocument()}
               </div>
-            </WorkstationSurfaceCard>
+            </section>
           </>
         )}
       </main>
@@ -1140,34 +1258,6 @@ export function WorkstationActivityPane() {
         </FormSection>
       </CommandSheet>
 
-      <ConfirmDialog
-        open={Boolean(pendingDeleteMemory)}
-        title="Delete memory?"
-        body={pendingDeleteMemory
-          ? `Sage will remove "${readString(pendingDeleteMemory.title) || 'this memory'}" from carry-forward memory.`
-          : 'Sage will remove this memory.'}
-        confirmLabel="Delete"
-        busy={Boolean(mutatingMemory)}
-        onConfirm={() => {
-          void confirmDeleteMemory();
-        }}
-        onCancel={() => {
-          setPendingDeleteMemoryId(null);
-        }}
-      />
-      <ConfirmDialog
-        open={pendingWipeMemory}
-        title="Wipe all memory?"
-        body="This removes all explicit Sage carry-forward memory in this workspace. Chat history and audit events are not deleted by this action."
-        confirmLabel="Wipe memory"
-        busy={mutatingMemory === 'wipe'}
-        onConfirm={() => {
-          void confirmWipeMemory();
-        }}
-        onCancel={() => {
-          setPendingWipeMemory(false);
-        }}
-      />
     </WorkstationSurfaceRoot>
   );
 }

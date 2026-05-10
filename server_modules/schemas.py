@@ -104,6 +104,11 @@ class SageMemoryWipeRequest(BaseModel):
     confirm: str
 
 
+class SageContextFileUpdateRequest(BaseModel):
+    workspace_id: str
+    content: str
+
+
 class SageProfileUpdateRequest(BaseModel):
     workspace_id: str
     user_name: Optional[str] = None

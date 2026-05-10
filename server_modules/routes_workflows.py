@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from server_modules.sage_heartbeat_api import register_sage_heartbeat_routes
 from server_modules.app_registry_api import register_app_registry_routes
 from server_modules.sage_memory_api import register_sage_memory_routes
+from server_modules.sage_context_files_api import register_sage_context_file_routes
 from server_modules.sage_profile_api import register_sage_profile_routes
 from server_modules.sage_skills_api import register_sage_skills_routes
 from server_modules.sage_services_api import register_sage_services_routes
@@ -13,6 +14,7 @@ router = APIRouter()
 
 register_app_registry_routes(router)
 register_sage_heartbeat_routes(router)
+register_sage_context_file_routes(router)
 register_sage_memory_routes(router)
 register_sage_profile_routes(router)
 register_sage_skills_routes(router)

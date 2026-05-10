@@ -72,6 +72,18 @@ class RuntimeWorkspaceServiceTests(unittest.TestCase):
             {"ok": True, "filename": "SOUL.md", "content": "Stay concise.\n"},
         )
 
+    def test_update_workspace_context_file_payload_supports_file_like_memory_documents(self):
+        payload = runtime_workspace_service.update_workspace_context_file_payload(
+            "REFLECTION.md",
+            {"content": "# Reflection\n\nSaved exactly.\n"},
+            write_workspace_context_file=lambda filename, content: {"filename": filename, "content": content},
+        )
+
+        self.assertEqual(
+            payload,
+            {"ok": True, "filename": "REFLECTION.md", "content": "# Reflection\n\nSaved exactly.\n"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

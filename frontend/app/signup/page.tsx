@@ -298,7 +298,7 @@ export default function SignupPage() {
             </span>
           </label>
           {error ? <AuthErrorNotice title="Couldn’t create the account" message={error} /> : null}
-          <AppButton type="submit" disabled={submitting || !isHydrated} className="app-auth-submit">
+          <AppButton type="submit" disabled={submitting} className="app-auth-submit">
             <span>{submitting ? 'Creating account…' : 'Create account'}</span>
             <ArrowRight size={16} aria-hidden="true" />
           </AppButton>

@@ -989,7 +989,8 @@ export function WorkstationActivityPane() {
       );
     }
     const cleanIdentitySummary = markdownSection(profileSnapshot.profile.identity_summary, 'Identity') || profileSnapshot.profile.identity_summary;
-    const overviewContent = `# What Sage carries forward\n\n## Identity\n${cleanIdentitySummary || 'No durable identity summary saved yet.'}\n\n## Communication style\n${profileSnapshot.profile.communication_style || 'No communication preference saved yet.'}\n\n## Recurring responsibility\n${profileSnapshot.profile.recurring_responsibility || 'No recurring responsibility saved yet.'}\n\n## Standing rules\n${profileSnapshot.profile.standing_rules.length === 0 ? 'No standing rules saved yet.' : profileSnapshot.profile.standing_rules.map((rule) => `- ${rule}`).join('\n')}`;
+    const generatedOverviewContent = `# What Sage carries forward\n\n## Identity\n${cleanIdentitySummary || 'No durable identity summary saved yet.'}\n\n## Communication style\n${profileSnapshot.profile.communication_style || 'No communication preference saved yet.'}\n\n## Recurring responsibility\n${profileSnapshot.profile.recurring_responsibility || 'No recurring responsibility saved yet.'}\n\n## Standing rules\n${profileSnapshot.profile.standing_rules.length === 0 ? 'No standing rules saved yet.' : profileSnapshot.profile.standing_rules.map((rule) => `- ${rule}`).join('\n')}`;
+    const overviewContent = contextDocuments['IDENTITY.md'] || generatedOverviewContent;
     return (
       <div className="app-memory-document-shell">
         {renderDocumentToolbar('overview', 'IDENTITY.md', overviewContent)}

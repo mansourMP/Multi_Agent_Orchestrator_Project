@@ -291,9 +291,7 @@ textarea {
 }
 
 .app-surface-root[data-workstation-surface='memory'] {
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .app-surface-card {
@@ -7656,10 +7654,7 @@ body.theme-light .workstation-shell__topbar {
 }
 
 .app-memory-document-page {
-  min-height: 0;
-  height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
   gap: var(--app-space-4);
 }
 
@@ -7800,7 +7795,7 @@ body.theme-light .workstation-shell__topbar {
 
 @media (min-width: 961px) {
   .app-memory-settings-workbench {
-    height: 100%;
+    height: calc(100dvh - 180px);
     min-height: 0;
     width: min(100%, 1320px);
     margin: 0 auto;

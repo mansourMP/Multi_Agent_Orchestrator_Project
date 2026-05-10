@@ -407,15 +407,18 @@ def _derive_studio_specialist_profile(
             else "Can place and confirm orders in chat; enable spreadsheet append to log confirmed orders automatically."
         ),
     }
+    telegram_enabled = bool(channel_payload.get("enabled"))
     channel_defaults = {
         "title": "Channel",
-        "primary": "telegram_bot",
-        "secondary": "whatsapp_business",
-        "telegram_enabled": bool(channel_payload.get("enabled")),
+        "primary": "telegram_bot" if telegram_enabled else "owner_test",
+        "secondary": "whatsapp_business" if telegram_enabled else None,
+        "telegram_enabled": telegram_enabled,
         "endpoint_key": _normalize_optional_text(channel_payload.get("endpoint_key")),
         "bot_username": _normalize_optional_text(channel_payload.get("bot_username")),
         "summary": (
             "Primary customer traffic enters through Telegram bot; WhatsApp Business stays optional and out of scope by default."
+            if telegram_enabled
+            else "No live customer channel is configured yet. This specialist can still be deployed for owner testing before public launch."
         ),
     }
 
@@ -546,7 +549,7 @@ def _workspace_telegram_status_payload(owner_workspace_id: str) -> Dict[str, Any
     status_service = AutopilotStatusService(
         normalize_workspace_id=lambda value: str(value or "").strip(),
         telegram_snapshot=lambda: state_service.snapshot(include_connectors=True),
-        telegram_list_entries=lambda: state_service.list_connector_entries(owner_workspace_id),
+        telegram_list_entries=lambda: _workspace_telegram_connector_entries(owner_workspace_id),
         resolve_telegram_profile=lambda entry: shell.profile_service().resolve_telegram_profile(entry),
         telegram_webhook_path="/channels/telegram/webhook/{connector_id}",
         telegram_public_base_url=shell.bridge_facade_service().telegram_public_base_url_getter(),
@@ -562,11 +565,28 @@ def _workspace_telegram_status_payload(owner_workspace_id: str) -> Dict[str, Any
     return status_service.telegram_status_payload()
 
 
-def _workspace_telegram_connector_options(owner_workspace_id: str) -> List[Dict[str, Any]]:
+def _workspace_telegram_connector_entries(owner_workspace_id: str) -> List[Dict[str, Any]]:
     shell = _autopilot_connector_shell_service()
     shell.runtime_facade_service().init_runtime()
     state_service = shell.telegram_service_registry().telegram_autopilot_state_service()
     raw_entries = state_service.list_connector_entries(owner_workspace_id)
+    if raw_entries:
+        return raw_entries
+
+    from server_modules import connectors_actions
+
+    requested_workspace_id = _normalize_text(owner_workspace_id)
+    return [
+        item
+        for item in _coerce_list(connectors_actions.load_vault().get("credentials"))
+        if _normalize_text(_coerce_dict(item).get("provider")).lower() == "telegram_bot"
+        and _normalize_text(_coerce_dict(item).get("workspace_id")) == requested_workspace_id
+        and not bool(_coerce_dict(_coerce_dict(item).get("metadata")).get("paused"))
+    ]
+
+
+def _workspace_telegram_connector_options(owner_workspace_id: str) -> List[Dict[str, Any]]:
+    raw_entries = _workspace_telegram_connector_entries(owner_workspace_id)
     raw_by_id = {
         _normalize_text(item.get("id")): item
         for item in raw_entries
@@ -580,6 +600,21 @@ def _workspace_telegram_connector_options(owner_workspace_id: str) -> List[Dict[
         if not connector_id:
             continue
         options.append(_telegram_connector_projection(raw_by_id.get(connector_id, {}), status_item))
+    seen_ids = {_normalize_text(item.get("id")) for item in options if _normalize_text(item.get("id"))}
+    for connector_id, raw_entry in raw_by_id.items():
+        if connector_id in seen_ids:
+            continue
+        options.append(
+            _telegram_connector_projection(
+                raw_entry,
+                {
+                    "id": connector_id,
+                    "label": raw_entry.get("label"),
+                    "workspace_id": raw_entry.get("workspace_id"),
+                    "profile_status": "live",
+                },
+            )
+        )
     return options
 
 
@@ -1401,6 +1436,19 @@ def _require_live_channel_configuration(
         raise ValueError("Telegram live deployments require an endpoint_key.")
 
 
+def _has_customer_live_channel_configuration(
+    channels: Dict[str, Any],
+    *,
+    allowed_live_channels: Optional[set[str] | frozenset[str]] = None,
+) -> bool:
+    resolved_allowed = frozenset(
+        str(channel or "").strip().lower()
+        for channel in (allowed_live_channels or DEPLOYED_AGENT_LIVE_CHANNELS)
+        if str(channel or "").strip()
+    ) or DEPLOYED_AGENT_LIVE_CHANNELS
+    return bool(_live_channel_keys(channels) & resolved_allowed)
+
+
 def _base_manifest(
     *,
     name: str,
@@ -1543,7 +1591,16 @@ def validate_can_deploy(
         or (backing_install.get("metadata") or {}).get("specialist_mode")
         or ""
     ).strip().lower()
-    if specialist_mode != "customer_live":
+    requires_customer_live_mode = _has_customer_live_channel_configuration(
+        deployed_agent.get("channels") or {},
+        allowed_live_channels=resolved_allowed,
+    )
+    allowed_modes = {"customer_live"} if requires_customer_live_mode else {"owner_test", "customer_live"}
+    if specialist_mode not in allowed_modes:
+        if requires_customer_live_mode:
+            raise ValueError("Backing specialist must be in customer_live mode before deployment can go live.")
+        raise ValueError("Backing specialist must be in owner_test or customer_live mode before deployment can go live.")
+    if requires_customer_live_mode and specialist_mode != "customer_live":
         raise ValueError("Backing specialist must be in customer_live mode before deployment can go live.")
     return True
 
@@ -1608,10 +1665,15 @@ async def mirror_deployed_agent_to_backing_specialist(
         }
     )
     specialist_mode = str(specialist_mode_override or install.get("specialist_mode") or "owner_edit").strip().lower() or "owner_edit"
-    if _normalize_deployment_state(
+    target_deployment_state = _normalize_deployment_state(
         deployment_state_override if deployment_state_override is not None else deployed_agent.get("deployment_state")
-    ) == "live":
-        specialist_mode = "customer_live"
+    )
+    if target_deployment_state == "live":
+        specialist_mode = (
+            "customer_live"
+            if _has_customer_live_channel_configuration(channels)
+            else "owner_test"
+        )
     install_status = "active" if specialist_mode == "customer_live" else (
         str(install.get("status") or "").strip().lower() or "draft"
     )
@@ -2619,26 +2681,31 @@ async def deploy_deployed_agent(
         raise _http_conflict(str(error)) from error
     channels = _normalize_channels(existing.get("channels") or {})
     allowed_live_channels = _allowed_live_channels_for_workspace(workspace)
-    readiness = await get_deployed_agent_telegram_readiness(
-        current_user=current_user,
-        owner_workspace_id=resolved_workspace_id,
-        deployed_agent_id=deployed_agent_id,
+    requires_customer_live_channel = _has_customer_live_channel_configuration(
+        channels,
+        allowed_live_channels=allowed_live_channels,
     )
-    if readiness.get("ready_for_live") is not True:
-        blockers = _coerce_list(readiness.get("blockers"))
-        next_action = _normalize_optional_text(readiness.get("next_action"))
-        first = _coerce_dict(blockers[0]) if blockers else {}
-        detail = _normalize_optional_text(first.get("message")) or "Telegram launch readiness is incomplete."
-        if next_action:
-            detail = f"{detail} {next_action}"
-        raise _http_conflict(detail)
-    try:
-        _require_live_channel_configuration(
-            channels,
-            allowed_live_channels=allowed_live_channels,
+    if requires_customer_live_channel:
+        readiness = await get_deployed_agent_telegram_readiness(
+            current_user=current_user,
+            owner_workspace_id=resolved_workspace_id,
+            deployed_agent_id=deployed_agent_id,
         )
-    except ValueError as error:
-        raise _http_conflict(str(error)) from error
+        if readiness.get("ready_for_live") is not True:
+            blockers = _coerce_list(readiness.get("blockers"))
+            next_action = _normalize_optional_text(readiness.get("next_action"))
+            first = _coerce_dict(blockers[0]) if blockers else {}
+            detail = _normalize_optional_text(first.get("message")) or "Telegram launch readiness is incomplete."
+            if next_action:
+                detail = f"{detail} {next_action}"
+            raise _http_conflict(detail)
+        try:
+            _require_live_channel_configuration(
+                channels,
+                allowed_live_channels=allowed_live_channels,
+            )
+        except ValueError as error:
+            raise _http_conflict(str(error)) from error
     next_record = {
         **existing,
         "deployment_state": "live",
@@ -2646,7 +2713,7 @@ async def deploy_deployed_agent(
     updated_install = await mirror_deployed_agent_to_backing_specialist(
         deployed_agent=next_record,
         updated_by_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
-        specialist_mode_override="customer_live",
+        specialist_mode_override="customer_live" if requires_customer_live_channel else "owner_test",
         deployment_state_override="live",
     )
     try:

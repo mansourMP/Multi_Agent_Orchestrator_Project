@@ -94,6 +94,21 @@ def _require_specialist_config_editable(install: Dict[str, Any]) -> None:
     )
 
 
+def _assert_specialist_gateway_isolation(
+    *,
+    policy_context: Optional[Dict[str, Any]] = None,
+    metadata_overrides: Optional[Dict[str, Any]] = None,
+) -> None:
+    policy = _coerce_dict(policy_context)
+    metadata = _coerce_dict(metadata_overrides)
+    explicit_gateway_id = str(metadata.get("gateway_id") or policy.get("gateway_id") or "").strip()
+    if explicit_gateway_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Specialist runs cannot bind a gateway_id directly. Use runtime attachment selection instead.",
+        )
+
+
 class AgentInstallRunRequest(BaseModel):
     message: Optional[str] = None
     thread_id: Optional[str] = None
@@ -552,6 +567,10 @@ async def execute_install_agent_turn(
     force_recompile: bool = False,
 ) -> ApiAgentTurnResponse:
     _refresh_server_exports()
+    _assert_specialist_gateway_isolation(
+        policy_context=policy_context,
+        metadata_overrides=metadata_overrides,
+    )
     compiled = await template_compiler_service.ensure_install_compiled_artifact(
         install_id,
         compiled_by_user_id=str((current_user or {}).get("user_id") or "").strip() or None,

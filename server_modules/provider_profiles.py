@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import quote_plus
 
-from server_modules import platform_config_schema, pricing_registry_service, usage_accounting_service
+from server_modules import platform_config_schema, pricing_registry_service, secrets_broker, usage_accounting_service
 
 # ---------------------------------------------------------------------------
 # Imports from server.py globals – these must be supplied by the caller or
@@ -324,6 +324,51 @@ def _openai_env_credentials(token: str, source: Any) -> Dict[str, Any]:
     return credentials
 
 
+def _resolve_hosted_provider_api_key(
+    *,
+    provider_id: str,
+    tenant_id: Optional[str],
+    workspace_id: Optional[str],
+    run_id: Optional[str],
+    purpose: str,
+) -> tuple[str, str]:
+    resolution = secrets_broker.resolve_hosted_provider_secret(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        provider_id=provider_id,
+        field="api_key",
+        tool_name="provider_profiles",
+        run_id=run_id,
+        actor_type="provider_profile",
+        purpose=purpose,
+    )
+    source = f"env-{provider_id}"
+    if provider_id in {"qwen", "deepseek", "mistral", "ollama_cloud"} and str(resolution.source or "").startswith("bundle-"):
+        source = f"env-{provider_id}"
+    return str(resolution.value or "").strip(), source
+
+
+def _resolve_hosted_openai_bearer(
+    *,
+    tenant_id: Optional[str],
+    workspace_id: Optional[str],
+    run_id: Optional[str],
+    purpose: str,
+) -> tuple[str, str]:
+    fallback_token, fallback_source = _openai_env_bearer_with_source()
+    resolution = secrets_broker.resolve_hosted_openai_bearer(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        fallback_token=fallback_token,
+        fallback_source=fallback_source,
+        tool_name="provider_profiles",
+        run_id=run_id,
+        actor_type="provider_profile",
+        purpose=purpose,
+    )
+    return str(resolution.value or "").strip(), str(resolution.source or "").strip().lower() or "none"
+
+
 # ---------------------------------------------------------------------------
 # Provider catalog (moved from server.py)
 # ---------------------------------------------------------------------------
@@ -486,7 +531,7 @@ PROVIDER_CATALOG = {
         "default_model": "llama3.2",
         "base_url": "http://localhost:11434/v1",
         "models": ["llama3.2", "llama3", "mistral", "gemma", "phi3"],
-        "provider_scopes": ["sage_personal", "local_only"],
+        "provider_scopes": ["sage_personal", "studio_safe", "local_only"],
         "note": "Local Ollama endpoint on this machine. No credential is required.",
     },
     "ollama_cloud": {
@@ -2243,7 +2288,12 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
         except Exception:
             pass
         if not workspace_only:
-            env_key, env_source = _openai_env_bearer_with_source()
+            env_key, env_source = _resolve_hosted_openai_bearer(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                purpose="provider_candidate_resolution",
+            )
             if env_key and "env-openai" not in seen_labels:
                 candidates.append(
                     {
@@ -2280,7 +2330,13 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
             pass
 
     if canonical_provider == "anthropic" and not workspace_only:
-        env_key = str(os.getenv("ANTHROPIC_API_KEY") or "").strip()
+        env_key, _ = _resolve_hosted_provider_api_key(
+            provider_id="anthropic",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            purpose="provider_candidate_resolution",
+        )
         if env_key and "env-anthropic" not in seen_labels:
             candidates.append(
                 {
@@ -2306,7 +2362,13 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
         seen_labels.add("local-claude-cli")
 
     if canonical_provider == "gemini" and not workspace_only:
-        env_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+        env_key, _ = _resolve_hosted_provider_api_key(
+            provider_id="gemini",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            purpose="provider_candidate_resolution",
+        )
         if env_key and "env-gemini" not in seen_labels:
             candidates.append(
                 {
@@ -2321,12 +2383,13 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
             seen_labels.add("env-gemini")
 
     if canonical_provider == "qwen":
-        env_key = str(
-            os.getenv("ORION_LOCAL_WORKER_QWEN_API_KEY")
-            or os.getenv("QWEN_API_KEY")
-            or os.getenv("DASHSCOPE_API_KEY")
-            or ""
-        ).strip()
+        env_key, _ = _resolve_hosted_provider_api_key(
+            provider_id="qwen",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            purpose="provider_candidate_resolution",
+        )
         if env_key and "env-qwen" not in seen_labels:
             candidates.append(
                 {
@@ -2339,11 +2402,13 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
             seen_labels.add("env-qwen")
 
     if canonical_provider == "deepseek":
-        env_key = str(
-            os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_API_KEY")
-            or os.getenv("DEEPSEEK_API_KEY")
-            or ""
-        ).strip()
+        env_key, _ = _resolve_hosted_provider_api_key(
+            provider_id="deepseek",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            purpose="provider_candidate_resolution",
+        )
         if env_key and "env-deepseek" not in seen_labels:
             candidates.append(
                 {
@@ -2356,11 +2421,13 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
             seen_labels.add("env-deepseek")
 
     if canonical_provider == "mistral":
-        env_key = str(
-            os.getenv("ORION_LOCAL_WORKER_MISTRAL_API_KEY")
-            or os.getenv("MISTRAL_API_KEY")
-            or ""
-        ).strip()
+        env_key, _ = _resolve_hosted_provider_api_key(
+            provider_id="mistral",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            purpose="provider_candidate_resolution",
+        )
         if env_key and "env-mistral" not in seen_labels:
             candidates.append(
                 {
@@ -2776,7 +2843,12 @@ def build_provider_runtime_truth(
             detail="An enabled provider profile is ready for this workspace.",
         )
 
-    openai_env_token, openai_env_source = _openai_env_bearer_with_source()
+    openai_env_token, openai_env_source = _resolve_hosted_openai_bearer(
+        tenant_id=tenant_id,
+        workspace_id=requested_workspace_id,
+        run_id=None,
+        purpose="provider_catalog_truth",
+    )
     openai_env_source = str(openai_env_source or "").strip().lower()
     openai_env_present = bool(str(openai_env_token or "").strip())
 
@@ -2859,7 +2931,13 @@ def build_provider_runtime_truth(
         )
 
     anthropic_entry = _entry("anthropic")
-    anthropic_env_key = str(os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    anthropic_env_key, _ = _resolve_hosted_provider_api_key(
+        provider_id="anthropic",
+        tenant_id=tenant_id,
+        workspace_id=requested_workspace_id,
+        run_id=None,
+        purpose="provider_catalog_truth",
+    )
     if anthropic_env_key:
         _register_provider_path(
             anthropic_entry,
@@ -2892,7 +2970,13 @@ def build_provider_runtime_truth(
         )
 
     gemini_entry = _entry("gemini")
-    gemini_env_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+    gemini_env_key, _ = _resolve_hosted_provider_api_key(
+        provider_id="gemini",
+        tenant_id=tenant_id,
+        workspace_id=requested_workspace_id,
+        run_id=None,
+        purpose="provider_catalog_truth",
+    )
     if gemini_env_key:
         _register_provider_path(
             gemini_entry,
@@ -2918,13 +3002,16 @@ def build_provider_runtime_truth(
 
     for provider_id in ("vertex", "qwen", "deepseek", "mistral", "ollama_cloud"):
         entry = _entry(provider_id)
-        env_var = {
-            "vertex": "",
-            "qwen": str(os.getenv("ORION_LOCAL_WORKER_QWEN_API_KEY") or os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or "").strip(),
-            "deepseek": str(os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or "").strip(),
-            "mistral": str(os.getenv("ORION_LOCAL_WORKER_MISTRAL_API_KEY") or os.getenv("MISTRAL_API_KEY") or "").strip(),
-            "ollama_cloud": str(os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_API_KEY") or os.getenv("OLLAMA_API_KEY") or "").strip(),
-        }.get(provider_id, "")
+        if provider_id == "vertex":
+            env_var = ""
+        else:
+            env_var, _ = _resolve_hosted_provider_api_key(
+                provider_id=provider_id,
+                tenant_id=tenant_id,
+                workspace_id=requested_workspace_id,
+                run_id=None,
+                purpose="provider_catalog_truth",
+            )
         if env_var:
             _register_provider_path(
                 entry,

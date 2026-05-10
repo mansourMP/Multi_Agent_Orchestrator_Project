@@ -589,12 +589,16 @@ def _provider_unavailable_payload(
     proactive_suggestions: List[str],
     base_context_used: Dict[str, Any],
     services: DirectChatRuntimeServices,
+    availability_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    availability = dict(availability_payload or {})
     return services.with_context_used(
         {
             **direct_chat_provider_service.provider_unavailable_response(
                 provider,
                 connect_action=lambda label, href: {"label": label, "href": href},
+                issue_code=str(availability.get("issue_code") or "").strip() or None,
+                issue_detail=str(availability.get("issue") or availability.get("runtime_state_detail") or "").strip() or None,
             ),
             "suggestions": proactive_suggestions,
         },
@@ -974,6 +978,7 @@ def build_direct_operator_reply(
                 proactive_suggestions=proactive_suggestions,
                 base_context_used=base_context_used,
                 services=services,
+                availability_payload=availability_payload,
             ),
         }
         return
@@ -982,7 +987,8 @@ def build_direct_operator_reply(
         provider,
         direct_chat_credentials,
     )
-    selected_model = normalized_requested_model if provider == normalized_requested_provider else ""
+    lock_selected_provider = bool(normalized_requested_provider or normalized_requested_model)
+    selected_model = normalized_requested_model if lock_selected_provider else ""
     explicit_provider_tool_calls = _explicit_provider_parity_tool_calls(
         normalized_message,
         tools,
@@ -1185,7 +1191,7 @@ def build_direct_operator_reply(
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
         "tools": generation_tools,
-        "disable_provider_fallback": True,
+        "disable_provider_fallback": lock_selected_provider,
     }
     metadata = {
         "provider": provider,
@@ -1194,7 +1200,7 @@ def build_direct_operator_reply(
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
         "tools": generation_tools,
-        "disable_provider_fallback": True,
+        "disable_provider_fallback": lock_selected_provider,
     }
     if direct_chat_credentials:
         metadata["credentials"] = direct_chat_credentials

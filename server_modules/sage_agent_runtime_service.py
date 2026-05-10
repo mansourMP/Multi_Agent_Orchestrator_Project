@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
 from typing import Any, Dict, List, Optional
 
 from server_modules import (
@@ -28,9 +29,15 @@ from server_modules.direct_chat_provider_service import (
     supports_direct_message_native_chat,
     credential_auth_mode,
 )
+from server_modules.sage_agent_runtime_contract import (
+    SAGE_MODE,
+    normalize_sage_mode,
+    normalize_sage_surface,
+    SageTurnResult,
+)
 from server_modules.skill_registry import list_skill_definitions
 
-ALLOWED_MODES = {"owner_sage"}
+ALLOWED_MODES = {SAGE_MODE}
 CLOUD_PROVIDER_IDS = ("anthropic", "deepseek", "openai", "gemini")
 
 SAFE_ACTION_CLASSES = {"read"}
@@ -221,6 +228,48 @@ def _build_prompt_envelope(
     }
 
 
+def _build_approval_token(
+    *,
+    workspace_id: str,
+    trace_id: str,
+    skill_id: str,
+    action_class: str,
+) -> str:
+    digest = hashlib.sha256(
+        f"{workspace_id}:{trace_id}:{skill_id}:{action_class}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"apr_{digest}"
+
+
+def _emit_failed_audit_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    actor_user_id: str,
+    actor_email: str,
+    actor_auth_type: str,
+    trace_id: str,
+    surface: str,
+    error: str,
+) -> None:
+    try:
+        security_audit_service.emit_security_audit_event(
+            action="sage_chat.failed",
+            status="failed",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id or None,
+            actor_email=actor_email or None,
+            actor_auth_type=actor_auth_type or None,
+            trace_id=trace_id,
+            detail=error,
+            metadata={"surface": surface, "error": error},
+            idempotency_key=f"sage_chat:failed:{trace_id}",
+        )
+    except Exception:
+        pass
+
+
 async def handle_sage_chat(
     *,
     workspace_id: str,
@@ -232,15 +281,14 @@ async def handle_sage_chat(
 ) -> dict:
     normalized_workspace_id = _coerce_text(workspace_id)
     normalized_message = _coerce_text(message)
-    normalized_mode = _coerce_text(mode)
+    normalized_mode = normalize_sage_mode(mode)
+    normalized_surface = normalize_sage_surface(surface)
     normalized_tenant_id = _coerce_text(tenant_id)
 
     if not normalized_workspace_id:
         raise ValueError("workspace_id is required")
     if not normalized_message:
         raise ValueError("message must not be empty")
-    if normalized_mode not in ALLOWED_MODES:
-        raise ValueError(f"Unsupported mode: {normalized_mode}")
 
     trace_id = str(uuid.uuid4())
     actor_user_id = _coerce_text((current_user or {}).get("user_id"))
@@ -301,6 +349,14 @@ async def handle_sage_chat(
                         "action_class": skill.action_class,
                         "reason": "Requires explicit owner approval before write/execute action.",
                     })
+                    # approval_token is Sage-chat-surface only.
+                    if normalized_surface == "chat":
+                        approvals_required[-1]["approval_token"] = _build_approval_token(
+                            workspace_id=normalized_workspace_id,
+                            trace_id=trace_id,
+                            skill_id=skill.id,
+                            action_class=skill.action_class,
+                        )
                     break
 
     # --- Build prompt ---
@@ -326,27 +382,50 @@ async def handle_sage_chat(
         "workspace_id": normalized_workspace_id,
         "provider": provider,
         "source": "sage_chat",
-        "surface": _coerce_text(surface),
+        "surface": normalized_surface,
         "disable_provider_fallback": False,
     }
     metadata: dict = {
         "workspace_id": normalized_workspace_id,
         "provider": provider,
         "source": "sage_chat",
-        "surface": _coerce_text(surface),
+        "surface": normalized_surface,
         "credentials": credentials,
         "trace_id": trace_id,
     }
 
-    reply, usage, attempted_providers, last_error = generate_chat_reply_with_provider_fallback(
-        context,
-        metadata,
-        envelope["user_message"],
-        envelope["system_prompt"],
-        prior_messages=None,
-    )
+    try:
+        reply, usage, attempted_providers, last_error = generate_chat_reply_with_provider_fallback(
+            context,
+            metadata,
+            envelope["user_message"],
+            envelope["system_prompt"],
+            prior_messages=None,
+        )
+    except Exception as exc:
+        _emit_failed_audit_event(
+            tenant_id=normalized_tenant_id,
+            workspace_id=normalized_workspace_id,
+            actor_user_id=actor_user_id,
+            actor_email=actor_email,
+            actor_auth_type=actor_auth_type,
+            trace_id=trace_id,
+            surface=normalized_surface,
+            error=str(exc),
+        )
+        raise
 
     if not reply and last_error:
+        _emit_failed_audit_event(
+            tenant_id=normalized_tenant_id,
+            workspace_id=normalized_workspace_id,
+            actor_user_id=actor_user_id,
+            actor_email=actor_email,
+            actor_auth_type=actor_auth_type,
+            trace_id=trace_id,
+            surface=normalized_surface,
+            error=last_error,
+        )
         raise RuntimeError(last_error)
 
     attempted = [p.strip() for p in _coerce_text(attempted_providers).split(",") if p.strip()]
@@ -388,7 +467,7 @@ async def handle_sage_chat(
                 "used_context": used_context,
                 "provider": effective_provider,
                 "model": effective_model or None,
-                "surface": _coerce_text(surface),
+                "surface": normalized_surface,
                 "blocked_action_count": len(blocked_actions),
             },
         )
@@ -411,7 +490,7 @@ async def handle_sage_chat(
                 "used_context": used_context,
                 "provider": effective_provider,
                 "model": effective_model or None,
-                "surface": _coerce_text(surface),
+                "surface": normalized_surface,
                 "blocked_action_count": len(blocked_actions),
             },
             idempotency_key=f"sage_chat:{trace_id}",
@@ -437,6 +516,7 @@ async def handle_sage_chat(
 
     return {
         "message": reply or "",
+        "error": None,
         "used_context": used_context,
         "tool_calls": [],
         "available_tools": safe_skills,

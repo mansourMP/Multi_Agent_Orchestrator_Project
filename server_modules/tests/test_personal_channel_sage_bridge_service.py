@@ -1,16 +1,23 @@
 import unittest
 import uuid
-from unittest.mock import patch
+import asyncio
+from unittest.mock import patch, AsyncMock
 
 from server_modules import personal_channel_sage_bridge_service
 
 
 class PersonalChannelSageBridgeServiceTests(unittest.TestCase):
     def test_whatsapp_personal_reply_uses_direct_chat_runtime_lane_without_studio_install_context(self) -> None:
-        with patch(
-            "server_modules.direct_chat_runtime_exports.collect_direct_operator_reply",
-            return_value={"reply": "hello from Sage"},
-        ) as reply_mock:
+        with (
+            patch(
+                "server_modules.sage_turn_adapter.execute_sage_turn_for_channel",
+                new=AsyncMock(side_effect=RuntimeError("force-fallback")),
+            ),
+            patch(
+                "server_modules.direct_chat_runtime_exports.collect_direct_operator_reply",
+                return_value={"reply": "hello from Sage"},
+            ) as reply_mock,
+        ):
             result = personal_channel_sage_bridge_service.build_whatsapp_personal_reply(
                 workspace_id="workspace-1",
                 gateway_id="gateway-1",
@@ -49,10 +56,16 @@ class PersonalChannelSageBridgeServiceTests(unittest.TestCase):
         uuid.UUID(kwargs["session_ctx"]["external_content_guard"]["wrapper_id"])
 
     def test_telegram_personal_reply_wraps_prompt_injection_before_runtime(self) -> None:
-        with patch(
-            "server_modules.direct_chat_runtime_exports.collect_direct_operator_reply",
-            return_value={"reply": "safe reply"},
-        ) as reply_mock:
+        with (
+            patch(
+                "server_modules.sage_turn_adapter.execute_sage_turn_for_channel",
+                new=AsyncMock(side_effect=RuntimeError("force-fallback")),
+            ),
+            patch(
+                "server_modules.direct_chat_runtime_exports.collect_direct_operator_reply",
+                return_value={"reply": "safe reply"},
+            ) as reply_mock,
+        ):
             result = personal_channel_sage_bridge_service.build_telegram_personal_reply(
                 workspace_id="workspace-1",
                 gateway_id="gateway-1",
@@ -82,6 +95,10 @@ class PersonalChannelSageBridgeServiceTests(unittest.TestCase):
             return {"reply": "no tools used"}
 
         with (
+            patch(
+                "server_modules.sage_turn_adapter.execute_sage_turn_for_channel",
+                new=AsyncMock(side_effect=RuntimeError("force-fallback")),
+            ),
             patch.object(
                 direct_chat_runtime_exports,
                 "build_direct_chat_tools",
@@ -115,6 +132,37 @@ class PersonalChannelSageBridgeServiceTests(unittest.TestCase):
 
             self.assertEqual(result["text"], "no tools used")
             self.assertIs(direct_chat_runtime_exports.build_builtin_direct_chat_tools, original_builtin_builder)
+
+    def test_async_telegram_reply_routes_unified_sage_with_trace(self) -> None:
+        async def run_case():
+            with patch(
+                "server_modules.sage_turn_adapter.execute_sage_turn_for_channel",
+                new=AsyncMock(
+                    return_value={
+                        "message": "unified sage reply",
+                        "error": None,
+                        "used_context": [],
+                        "tool_calls": [],
+                        "available_tools": [],
+                        "blocked_tools": [],
+                        "approvals_required": [],
+                        "memory_updates": [],
+                        "trace_id": "trace-smoke-1",
+                    }
+                ),
+            ):
+                return await personal_channel_sage_bridge_service.build_telegram_personal_reply_async(
+                    workspace_id="workspace-1",
+                    gateway_id="gateway-1",
+                    remote_jid="tg-user-1",
+                    text="hello",
+                    push_name="User",
+                )
+
+        result = asyncio.run(run_case())
+        self.assertEqual(result["source"], "sage_turn_adapter")
+        self.assertEqual(result["trace_id"], "trace-smoke-1")
+        self.assertEqual(result["text"], "unified sage reply")
 
 
 if __name__ == "__main__":

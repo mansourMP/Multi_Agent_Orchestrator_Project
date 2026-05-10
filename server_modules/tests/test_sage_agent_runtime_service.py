@@ -261,6 +261,9 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             self.assertTrue(any(b["skill_id"] == "email-access" for b in result["blocked_tools"]))
             self.assertEqual(len(result["available_tools"]), 0)
             self.assertTrue(any(a["skill_id"] == "email-access" for a in result["approvals_required"]))
+            self.assertTrue(
+                any(str(a.get("approval_token") or "").startswith("apr_") for a in result["approvals_required"])
+            )
 
     def test_blocks_execute_skill_triggers(self):
         from server_modules.skill_registry import SkillDefinition
@@ -282,6 +285,39 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             ))
 
             self.assertTrue(any(b["skill_id"] == "task-runner" for b in result["blocked_tools"]))
+
+    def test_approval_token_is_chat_surface_only(self):
+        from server_modules.skill_registry import SkillDefinition
+
+        dangerous = SkillDefinition(
+            id="email-access", label="Email Access", description="Send email",
+            permission_label="email", execution_mode="manual", action_class="write",
+            connector_scopes=("email",), trigger_terms=("send email",),
+            requires_approval=True,
+        )
+        mocks = self._setup_mocks(skills=[dangerous])
+        with (
+            mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
+            mocks["skills"], mocks["provider"], mocks["generate"], mocks["persist"],
+            mocks["activity"], mocks["audit"],
+        ):
+            chat_result = _run(
+                sage_agent_runtime_service.handle_sage_chat(
+                    workspace_id="ws-1",
+                    message="send email now",
+                    surface="chat",
+                )
+            )
+            mobile_result = _run(
+                sage_agent_runtime_service.handle_sage_chat(
+                    workspace_id="ws-1",
+                    message="send email now",
+                    surface="mobile",
+                )
+            )
+
+            self.assertTrue(any(a.get("approval_token") for a in chat_result["approvals_required"]))
+            self.assertTrue(all("approval_token" not in a for a in mobile_result["approvals_required"]))
 
 
 class SageAgentRuntimePersistenceTests(unittest.TestCase):
@@ -440,10 +476,12 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             ))
 
             self.assertEqual(result["message"], "Hello there")
+            self.assertIsNone(result["error"])
             self.assertIsInstance(result["used_context"], list)
             self.assertIsInstance(result["tool_calls"], list)
             self.assertIsInstance(result["available_tools"], list)
             self.assertIsInstance(result["blocked_tools"], list)
+            self.assertIsInstance(result["approvals_required"], list)
             self.assertIsInstance(result["memory_updates"], list)
             self.assertIsNotNone(result["trace_id"])
             self.assertEqual(result["provider"], "openai")
@@ -472,6 +510,39 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
                 _run(sage_agent_runtime_service.handle_sage_chat(
                     workspace_id="ws-1", message="hi",
                 ))
+
+    def test_failed_turn_emits_failed_audit_with_trace_id(self):
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile") as mock_profile,
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files") as mock_files,
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block") as mock_mem,
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider") as mock_provider,
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback", side_effect=RuntimeError("provider crashed")),
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event") as mock_audit,
+        ):
+            mock_profile.return_value = {"profile": {"user_name": "", "identity_summary": "", "communication_style": "", "recurring_responsibility": "", "standing_rules": []}}
+            mock_files.return_value = {}
+            mock_mem.return_value = ""
+            mock_provider.return_value = ("openai", {"api_key": "test-key"})
+
+            with self.assertRaises(RuntimeError):
+                _run(
+                    sage_agent_runtime_service.handle_sage_chat(
+                        workspace_id="ws-1",
+                        tenant_id="t-1",
+                        message="hi",
+                        current_user={"user_id": "u-1"},
+                    )
+                )
+
+            failed_calls = [c for c in mock_audit.call_args_list if c.kwargs.get("action") == "sage_chat.failed"]
+            self.assertEqual(len(failed_calls), 1)
+            self.assertEqual(failed_calls[0].kwargs.get("status"), "failed")
+            self.assertTrue(str(failed_calls[0].kwargs.get("trace_id") or "").strip())
 
 
 if __name__ == "__main__":

@@ -3,6 +3,11 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException
 
 from server_modules.auth import enforce_workspace_access, workspace_tenant_id
+from server_modules.sage_agent_runtime_contract import (
+    SAGE_MODE,
+    normalize_sage_mode,
+    normalize_sage_surface,
+)
 from server_modules.sage_agent_runtime_service import handle_sage_chat
 from server_modules.schemas import SageChatRequest
 
@@ -26,8 +31,12 @@ def register_sage_chat_routes(app) -> None:
             raise HTTPException(status_code=400, detail="workspace_id is required.")
         if not body.message or not str(body.message).strip():
             raise HTTPException(status_code=400, detail="message must not be empty.")
-        if str(body.mode or "").strip().lower() != "owner_sage":
-            raise HTTPException(status_code=400, detail="Unsupported mode. Only owner_sage is allowed.")
+
+        try:
+            normalized_mode = normalize_sage_mode(body.mode)
+            normalized_surface = normalize_sage_surface(body.surface)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
         resolved_workspace_id = enforce_workspace_access(
             current_user,
@@ -41,8 +50,8 @@ def register_sage_chat_routes(app) -> None:
                 workspace_id=resolved_workspace_id,
                 tenant_id=tenant_id,
                 message=str(body.message).strip(),
-                surface=str(body.surface or "chat").strip() or "chat",
-                mode="owner_sage",
+                surface=normalized_surface,
+                mode=normalized_mode,
                 current_user=current_user,
             )
         except ValueError as exc:

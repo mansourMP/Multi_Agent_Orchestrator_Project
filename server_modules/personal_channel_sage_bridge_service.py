@@ -150,6 +150,172 @@ def _build_personal_reply(
     }
 
 
+async def _build_unified_sage_personal_reply_async(
+    *,
+    surface_channel: str,
+    workspace_id: str,
+    gateway_id: str,
+    remote_jid: str,
+    text: str,
+    push_name: Optional[str] = None,
+    fallback_label: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Route personal channel messages through the unified Sage turn adapter.
+
+    This ensures channel-originated Sage turns use the same execution path,
+    safety rules, context loading, persistence, and audit as /api/sage/chat.
+    Falls back to the legacy path on any error.
+    """
+    from server_modules.sage_turn_adapter import execute_sage_turn_for_channel
+
+    guarded = channel_lane_contract_service.guard_personal_gateway_inbound_message(
+        surface_channel=surface_channel,
+        text=str(text or "").strip(),
+        sender=push_name or remote_jid,
+        source_event_id=None,
+        metadata={"remote_jid": str(remote_jid or "").strip()},
+    )
+    if not str(guarded.text or "").strip():
+        return None
+
+    try:
+        result = await execute_sage_turn_for_channel(
+            workspace_id=str(workspace_id or "default").strip() or "default",
+            surface_channel=surface_channel,
+            gateway_id=str(gateway_id or "").strip(),
+            remote_jid=str(remote_jid or "").strip(),
+            message=guarded.text,
+            push_name=push_name,
+        )
+        reply = str((result or {}).get("message") or "").strip()
+        if reply:
+            return {
+                "text": reply,
+                "source": "sage_turn_adapter",
+                "trace_id": (result or {}).get("trace_id", ""),
+                "raw": dict(result or {}),
+            }
+    except Exception:
+        pass
+
+    return None
+
+
+def _build_unified_sage_personal_reply(
+    *,
+    surface_channel: str,
+    workspace_id: str,
+    gateway_id: str,
+    remote_jid: str,
+    text: str,
+    push_name: Optional[str] = None,
+    fallback_label: str,
+) -> Optional[Dict[str, Any]]:
+    import asyncio
+    import threading
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(
+            _build_unified_sage_personal_reply_async(
+                surface_channel=surface_channel,
+                workspace_id=workspace_id,
+                gateway_id=gateway_id,
+                remote_jid=remote_jid,
+                text=text,
+                push_name=push_name,
+                fallback_label=fallback_label,
+            )
+        )
+
+    holder: dict[str, Any] = {"result": None, "error": None}
+
+    def _runner() -> None:
+        try:
+            holder["result"] = asyncio.run(
+                _build_unified_sage_personal_reply_async(
+                    surface_channel=surface_channel,
+                    workspace_id=workspace_id,
+                    gateway_id=gateway_id,
+                    remote_jid=remote_jid,
+                    text=text,
+                    push_name=push_name,
+                    fallback_label=fallback_label,
+                )
+            )
+        except Exception as exc:
+            holder["error"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if holder["error"] is not None:
+        raise holder["error"]
+    return holder["result"]
+
+
+async def build_whatsapp_personal_reply_async(
+    *,
+    workspace_id: str,
+    gateway_id: str,
+    remote_jid: str,
+    text: str,
+    push_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    unified = await _build_unified_sage_personal_reply_async(
+        surface_channel="whatsapp_personal",
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        fallback_label="WhatsApp",
+    )
+    if unified is not None:
+        return unified
+    return _build_personal_reply(
+        surface_channel="whatsapp_personal",
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        fallback_label="WhatsApp",
+    )
+
+
+async def build_telegram_personal_reply_async(
+    *,
+    workspace_id: str,
+    gateway_id: str,
+    remote_jid: str,
+    text: str,
+    push_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    unified = await _build_unified_sage_personal_reply_async(
+        surface_channel="telegram_personal",
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        fallback_label="Telegram",
+    )
+    if unified is not None:
+        return unified
+    return _build_personal_reply(
+        surface_channel="telegram_personal",
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        fallback_label="Telegram",
+    )
+
+
 def build_whatsapp_personal_reply(
     *,
     workspace_id: str,
@@ -158,6 +324,17 @@ def build_whatsapp_personal_reply(
     text: str,
     push_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    unified = _build_unified_sage_personal_reply(
+        surface_channel="whatsapp_personal",
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        fallback_label="WhatsApp",
+    )
+    if unified is not None:
+        return unified
     return _build_personal_reply(
         surface_channel="whatsapp_personal",
         workspace_id=workspace_id,
@@ -177,6 +354,17 @@ def build_telegram_personal_reply(
     text: str,
     push_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    unified = _build_unified_sage_personal_reply(
+        surface_channel="telegram_personal",
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        fallback_label="Telegram",
+    )
+    if unified is not None:
+        return unified
     return _build_personal_reply(
         surface_channel="telegram_personal",
         workspace_id=workspace_id,

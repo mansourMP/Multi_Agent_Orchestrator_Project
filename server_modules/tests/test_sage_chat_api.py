@@ -72,6 +72,7 @@ class SageChatApiContractTests(unittest.TestCase):
 
         required_keys = {
             "message",
+            "error",
             "used_context",
             "tool_calls",
             "available_tools",

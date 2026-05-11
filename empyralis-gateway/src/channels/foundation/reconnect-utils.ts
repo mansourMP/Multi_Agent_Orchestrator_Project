@@ -33,5 +33,6 @@ export function computeReconnectDelay(
   const rawDelay = policy.initialDelayMs * Math.pow(policy.factor, attempt);
   const capped = Math.min(rawDelay, policy.maxDelayMs);
   const jitter = capped * policy.jitterRatio * (Math.random() * 2 - 1);
-  return Math.round(Math.max(capped + jitter, policy.initialDelayMs));
+  const withJitter = Math.round(Math.max(capped + jitter, policy.initialDelayMs));
+  return Math.min(withJitter, policy.maxDelayMs);
 }

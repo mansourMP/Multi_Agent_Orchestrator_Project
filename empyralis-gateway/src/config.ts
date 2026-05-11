@@ -25,6 +25,34 @@ function normalizeBaseUrl(value: string | undefined, fallback: string): string {
   return (token || fallback).replace(/\/+$/, "");
 }
 
+function isCloudEnvironment(env: NodeJS.ProcessEnv): boolean {
+  const value = String(
+    env.EMPYRALIS_DEPLOY_ENV || env.EXPO_PUBLIC_EMPYRALIS_DEPLOY_ENV || env.NODE_ENV || "",
+  )
+    .trim()
+    .toLowerCase();
+  return value === "production" || value === "prod" || value === "staging";
+}
+
+function assertCloudApiBaseUrl(value: string, env: NodeJS.ProcessEnv): string {
+  if (!isCloudEnvironment(env)) {
+    return value;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("EMPYRALIS_GATEWAY_API_URL must be an absolute HTTPS URL in staging/production.");
+  }
+  if (["127.0.0.1", "localhost", "0.0.0.0", "::1"].includes(parsed.hostname)) {
+    throw new Error("EMPYRALIS_GATEWAY_API_URL cannot point at localhost in staging/production.");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("EMPYRALIS_GATEWAY_API_URL must use HTTPS in staging/production.");
+  }
+  return value;
+}
+
 function normalizePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -52,8 +80,12 @@ function resolveBrowserPythonExecutable(projectRoot: string, explicitValue: stri
 export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const homeDir = env.HOME || os.homedir();
   const browserProjectRoot = path.resolve(env.EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT || process.cwd());
+  const apiBaseUrl = assertCloudApiBaseUrl(
+    normalizeBaseUrl(env.EMPYRALIS_GATEWAY_API_URL, "http://127.0.0.1:8001/api"),
+    env,
+  );
   return {
-    apiBaseUrl: normalizeBaseUrl(env.EMPYRALIS_GATEWAY_API_URL, "http://127.0.0.1:8001/api"),
+    apiBaseUrl,
     stateDir: path.resolve(
       env.EMPYRALIS_GATEWAY_STATE_DIR || path.join(homeDir, ".empyralis", "gateway"),
     ),

@@ -34,7 +34,7 @@ export function DeployedAgentTestTurnPane({
 }: {
   deployedAgentId: string;
   workspaceId: string;
-  client: { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown>> };
+  client: { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null> };
 }) {
   const [message, setMessage] = useState("");
   const [channel, setChannel] = useState<string>("test");
@@ -58,6 +58,9 @@ export function DeployedAgentTestTurnPane({
           runtime_mode: runtimeMode,
         },
       });
+      if (!res) {
+        throw new Error("Test turn returned an empty response");
+      }
       setResult(res as unknown as TestTurnResult);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Test turn failed");

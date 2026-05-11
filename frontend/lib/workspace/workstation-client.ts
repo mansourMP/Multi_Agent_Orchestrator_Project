@@ -993,7 +993,7 @@ export type WorkstationClient = {
   }) => Promise<Record<string, unknown> | null>;
   deployDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
   pauseDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
-  testTurnDeployedAgent: (options: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown>>;
+  testTurnDeployedAgent: (options: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
   listDeployedAgentAnalytics: () => Promise<Record<string, unknown>>;
   getDeployedAgentAnalytics: (options: {
     deployedAgentId: string;

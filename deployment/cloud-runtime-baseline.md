@@ -43,7 +43,9 @@ Persistent disk is still required because the runtime keeps explicit non-Postgre
 Manual values after blueprint creation:
 
 - runtime:
+  - `EMPYRALIS_DEPLOY_ENV=production`
   - `CONTROL_PLANE_ORIGINS=https://<your-web-service>.onrender.com`
+  - `EMPYRALIS_PUBLIC_API_URL=https://<your-runtime-service>.onrender.com`
   - `OPENAI_API_KEY`
   - `ANTHROPIC_API_KEY` if used
   - `GEMINI_API_KEY` if used
@@ -54,7 +56,15 @@ Manual values after blueprint creation:
   - `NEXT_PUBLIC_API_URL=https://<your-runtime-service>.onrender.com`
   - `NEXT_PUBLIC_ORION_API_URL=https://<your-runtime-service>.onrender.com`
   - `NEXT_PUBLIC_WS_URL=wss://<your-runtime-service>.onrender.com`
+  - `NEXT_PUBLIC_EMPYRALIS_DEPLOY_ENV=production`
   - `NEXT_PUBLIC_SENTRY_DSN` if used
+- mobile:
+  - `EXPO_PUBLIC_EMPYRALIS_DEPLOY_ENV=production`
+  - `EXPO_PUBLIC_RUNTIME_URL=https://<your-runtime-service>.onrender.com`
+  - `EXPO_PUBLIC_EMPYRALIST_API_URL=https://<your-runtime-service>.onrender.com`
+- gateway companion:
+  - `EMPYRALIS_DEPLOY_ENV=production`
+  - `EMPYRALIS_GATEWAY_API_URL=https://<your-runtime-service>.onrender.com/api`
 
 Verification:
 
@@ -118,20 +128,58 @@ bash scripts/phase70_cloud_smoke.sh
 
 ## Remaining blockers outside phase 1
 
-These are not cloud-runtime blueprint problems anymore, but they still block a
-true cloud-only mobile product and must be handled in phase 2:
+Phase 5 closes the localhost cutover class by adding production validation for
+server, web, mobile, and gateway companion URLs. Development can still use
+loopback URLs; staging and production cannot.
 
-- [mobile/app.json](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/app.json)
-  still encodes `runtimeUrl=http://127.0.0.1:8001`
-- [mobile/app.json](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/app.json)
-  still requests local-network access to a Mac-hosted runtime
-- [mobile/src/lib/api.ts](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/src/lib/api.ts)
-  still remaps loopback URLs for Expo/local device testing
-- [mobile/src/lib/session-context.tsx](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/src/lib/session-context.tsx)
-  still uses hidden beta bootstrap behavior
+Production/staging fail-closed rules:
 
-Those belong to the mobile cloud-only cutover, not the Render runtime
-blueprint.
+- server startup rejects `FRONTEND_ORIGINS` if it is empty, non-HTTPS, or points
+  at localhost
+- server startup rejects the public API URL unless it is HTTPS
+- mobile Expo config rejects production/staging builds with missing, non-HTTPS,
+  or localhost runtime URLs
+- frontend server routing rejects localhost control-plane URLs in
+  staging/production
+- gateway companion rejects localhost or non-HTTPS `EMPYRALIS_GATEWAY_API_URL`
+  in staging/production
+- gateway websocket URLs, when configured, must use `wss://` in
+  staging/production
+
+Development exceptions:
+
+- local web can continue using `http://127.0.0.1:8001`
+- local frontend can continue using `http://127.0.0.1:3000`
+- local gateway supervisor can continue using `http://127.0.0.1:7788` because it
+  is the local companion control socket, not the cloud API
+
+Mobile staging setup:
+
+```bash
+EXPO_PUBLIC_EMPYRALIS_DEPLOY_ENV=staging \
+EXPO_PUBLIC_RUNTIME_URL="https://<runtime-staging-host>" \
+EXPO_PUBLIC_EMPYRALIST_API_URL="https://<runtime-staging-host>" \
+npm --prefix mobile start
+```
+
+Gateway production pairing:
+
+```bash
+EMPYRALIS_DEPLOY_ENV=production \
+EMPYRALIS_GATEWAY_API_URL="https://<runtime-service>/api" \
+EMPYRALIS_GATEWAY_PAIRING_TOKEN="<one-time-token>" \
+npm --prefix empyralis-gateway start
+```
+
+Troubleshooting:
+
+- If mobile build fails with `Production mobile runtime URL cannot point at
+  localhost`, replace the Expo public runtime URL with the HTTPS runtime host.
+- If the server fails during startup, inspect `FRONTEND_ORIGINS` and
+  `EMPYRALIS_PUBLIC_API_URL` first.
+- If gateway pairing command says the API URL is unavailable, set
+  `NEXT_PUBLIC_ORION_API_URL` or `NEXT_PUBLIC_API_URL` on the web service before
+  generating the pairing command.
 
 ## Repo-local Tauri desktop shell
 

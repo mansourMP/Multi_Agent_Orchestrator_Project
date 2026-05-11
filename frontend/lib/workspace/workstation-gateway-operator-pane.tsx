@@ -330,6 +330,9 @@ function gatewayPairingCommand(token: unknown): string {
     }
     return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
   };
+  const isProductionLike = ['production', 'prod', 'staging'].includes(
+    readString(process.env.NEXT_PUBLIC_EMPYRALIS_DEPLOY_ENV, '').toLowerCase(),
+  ) || process.env.NODE_ENV === 'production';
   const apiUrl = (() => {
     const explicitRuntimeBase =
       process.env.NEXT_PUBLIC_ORION_API_URL
@@ -339,7 +342,7 @@ function gatewayPairingCommand(token: unknown): string {
       return normalizeGatewayApiBase(explicitRuntimeBase);
     }
     if (typeof window === 'undefined') {
-      return 'http://127.0.0.1:8001/api';
+      return isProductionLike ? '' : 'http://127.0.0.1:8001/api';
     }
     const hostname = String(window.location.hostname || '').trim().toLowerCase();
     if (hostname === '127.0.0.1' || hostname === 'localhost') {
@@ -347,6 +350,9 @@ function gatewayPairingCommand(token: unknown): string {
     }
     return normalizeGatewayApiBase(window.location.origin);
   })();
+  if (!apiUrl) {
+    return 'Gateway API URL unavailable. Set NEXT_PUBLIC_ORION_API_URL or NEXT_PUBLIC_API_URL before pairing.';
+  }
   return [
     'cd "$(git rev-parse --show-toplevel)/empyralis-gateway"',
     'npm run build',

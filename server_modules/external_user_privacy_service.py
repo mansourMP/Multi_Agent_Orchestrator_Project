@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Optional
 
 from server_modules import control_plane_repository
 from server_modules import workspace_config_schema
+from server_modules.cloud_cutover_config import CloudCutoverConfigError, resolve_privacy_policy_url
 from server_modules.direct_tool_config_service import run_async_tool_call
 
 
@@ -25,6 +26,15 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
 
 
 def _default_privacy_policy_url() -> str:
+    try:
+        return resolve_privacy_policy_url(os.environ)
+    except CloudCutoverConfigError:
+        if (os.getenv("EMPYRALIS_DEPLOY_ENV") or os.getenv("ORION_ENV") or "").strip().lower() in {
+            "prod",
+            "production",
+            "staging",
+        }:
+            raise
     candidates = (
         os.getenv("EMPYRALIS_PUBLIC_FRONTEND_ORIGIN"),
         os.getenv("BACKEND_PUBLIC_ORIGIN"),

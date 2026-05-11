@@ -53,6 +53,7 @@ from server_modules import health_diagnostics as health_diagnostics
 from server_modules import connectors_core as connectors_core
 from server_modules import connectors_actions as connectors_actions
 from server_modules import error_response_service as error_response_service
+from server_modules.cloud_cutover_config import assert_cloud_cutover_config
 from server_modules.direct_chat_tool_catalog_service import registered_direct_chat_tool_names_for_logging
 
 
@@ -74,6 +75,9 @@ for module in (
     connectors_actions,
 ):
     globals().update({key: value for key, value in vars(module).items() if not key.startswith("__")})
+
+
+assert_cloud_cutover_config(os.environ)
 
 
 def _log_machine_mode_startup() -> None:

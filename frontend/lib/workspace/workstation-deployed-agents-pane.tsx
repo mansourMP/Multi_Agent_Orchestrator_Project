@@ -4168,7 +4168,7 @@ export function WorkstationDeployedAgentsPane({
                   <DeployedAgentTestTurnPane
                     deployedAgentId={readString(overlayAgent.id)}
                     workspaceId={workspaceId}
-                    client={client as unknown as { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown>> }}
+                    client={services.client}
                   />
                 ) : null}
               </div>

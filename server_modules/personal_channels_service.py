@@ -29,6 +29,207 @@ WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX = "whatsapp_personal:noreply:"
 TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX = "telegram_personal:noreply:"
 
 
+# ── Handler registry ──────────────────────────────────────────────────
+
+from server_modules.personal_channel_handler_registry import (
+    PersonalChannelHandler,
+    PersonalChannelHandlerRegistry,
+)
+
+
+class _WhatsAppPersonalChannelHandler(PersonalChannelHandler):
+    """Delegates to the existing WhatsApp functions in this module."""
+
+    @property
+    def channel_key(self) -> str:
+        return WHATSAPP_PERSONAL_CHANNEL_KEY
+
+    @property
+    def provider(self) -> str:
+        return WHATSAPP_PERSONAL_PROVIDER
+
+    def build_state_sync_payload(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "qr_code": str(message.get("qr_code") or "").strip() or None,
+            "linked_jid": str(message.get("linked_jid") or "").strip() or None,
+        }
+
+    def audit_action_prefix(self) -> str:
+        return "whatsapp"
+
+    async def handle_inbound(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return await _handle_whatsapp_gateway_channel_inbound(
+            gateway_id=gateway_id,
+            registration=registration,
+            payload=payload,
+        )
+
+    async def deliver_reply(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        inbound: Dict[str, Any],
+        remote_jid: str,
+        external_message_id: str,
+        text: str,
+        push_name: Optional[str],
+        duplicate: bool,
+    ) -> Dict[str, Any]:
+        return await _deliver_whatsapp_personal_reply(
+            gateway_id=gateway_id,
+            registration=registration,
+            inbound=inbound,
+            remote_jid=remote_jid,
+            external_message_id=external_message_id,
+            text=text,
+            push_name=push_name,
+            duplicate=duplicate,
+        )
+
+    async def send_message(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        remote_jid: str,
+        text: str,
+        idempotency_key: str,
+        reply_to_external_message_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await send_whatsapp_personal_message(
+            gateway_id=gateway_id,
+            registration=registration,
+            remote_jid=remote_jid,
+            text=text,
+            idempotency_key=idempotency_key,
+            reply_to_external_message_id=reply_to_external_message_id,
+        )
+
+    def get_view(self, gateway_id: str) -> Dict[str, Any]:
+        return get_whatsapp_gateway_view(gateway_id)
+
+    async def configure(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return await configure_whatsapp_personal_gateway(
+            gateway_id=gateway_id,
+            registration=registration,
+            payload=kwargs,
+        )
+
+
+class _TelegramPersonalChannelHandler(PersonalChannelHandler):
+    """Delegates to the existing Telegram functions in this module."""
+
+    @property
+    def channel_key(self) -> str:
+        return TELEGRAM_PERSONAL_CHANNEL_KEY
+
+    @property
+    def provider(self) -> str:
+        return TELEGRAM_PERSONAL_PROVIDER
+
+    def build_state_sync_payload(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "login_hint": str(message.get("login_hint") or "").strip() or None,
+            "linked_user_id": str(message.get("linked_user_id") or "").strip() or None,
+            "linked_username": str(message.get("linked_username") or "").strip() or None,
+            "linked_phone": str(message.get("linked_phone") or "").strip() or None,
+        }
+
+    def audit_action_prefix(self) -> str:
+        return "telegram"
+
+    async def handle_inbound(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return await _handle_telegram_gateway_channel_inbound(
+            gateway_id=gateway_id,
+            registration=registration,
+            payload=payload,
+        )
+
+    async def deliver_reply(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        inbound: Dict[str, Any],
+        remote_jid: str,
+        external_message_id: str,
+        text: str,
+        push_name: Optional[str],
+        duplicate: bool,
+    ) -> Dict[str, Any]:
+        # Telegram handler currently inlines the deliver-reply logic inside
+        # _handle_telegram_gateway_channel_inbound.  For registry dispatch we
+        # route through the full handler which handles delivery internally.
+        return await _handle_telegram_gateway_channel_inbound(
+            gateway_id=gateway_id,
+            registration=registration,
+            payload={
+                **inbound,
+                "reply_text": text,
+                "duplicate": duplicate,
+            },
+        )
+
+    async def send_message(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        remote_jid: str,
+        text: str,
+        idempotency_key: str,
+        reply_to_external_message_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await send_telegram_personal_message(
+            gateway_id=gateway_id,
+            registration=registration,
+            remote_jid=remote_jid,
+            text=text,
+            idempotency_key=idempotency_key,
+            reply_to_external_message_id=reply_to_external_message_id,
+        )
+
+    def get_view(self, gateway_id: str) -> Dict[str, Any]:
+        return get_telegram_gateway_view(gateway_id)
+
+    async def configure(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        return await configure_telegram_personal_gateway(
+            gateway_id=gateway_id,
+            registration=registration,
+            payload=kwargs,
+        )
+
+
+_handler_registry = PersonalChannelHandlerRegistry()
+_handler_registry.register(_WhatsAppPersonalChannelHandler())
+_handler_registry.register(_TelegramPersonalChannelHandler())
+
+
 def _sender_role_from_message(message: Dict[str, Any]) -> Optional[str]:
     metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
     for candidate in (
@@ -252,19 +453,12 @@ async def handle_gateway_channel_inbound(
         channel_key,
         str(payload.get("provider") or "").strip() or None,
     )
-    if channel_key == WHATSAPP_PERSONAL_CHANNEL_KEY:
-        return await _handle_whatsapp_gateway_channel_inbound(
-            gateway_id=gateway_id,
-            registration=registration,
-            payload=payload,
-        )
-    if channel_key == TELEGRAM_PERSONAL_CHANNEL_KEY:
-        return await _handle_telegram_gateway_channel_inbound(
-            gateway_id=gateway_id,
-            registration=registration,
-            payload=payload,
-        )
-    raise ValueError(f"Unsupported personal channel key: {channel_key}")
+    handler = _handler_registry.get(channel_key)
+    return await handler.handle_inbound(
+        gateway_id=gateway_id,
+        registration=registration,
+        payload=payload,
+    )
 
 
 async def _deliver_whatsapp_personal_reply(

@@ -10,18 +10,26 @@ export interface GatewayJournalEntry {
   payload: Record<string, unknown>;
 }
 
-interface GatewayJournalMeta {
-  lastCursor: number;
-}
+const MAX_JOURNAL_BYTES = 100 * 1024 * 1024; // 100MB
 
 export class GatewayJournal {
+  private lastKnownCursor = 0;
+
   constructor(private readonly db: GatewayStateDb) {}
 
+  journalFilePath(): string {
+    return this.db.filePath("journal.ndjson");
+  }
+
   private async durableLastCursor(): Promise<number> {
-    const meta = await this.db.readJson<GatewayJournalMeta>("journal-meta.json", { lastCursor: 0 });
-    let lastCursorFromFile = 0;
+    // First check if we have a cached value
+    if (this.lastKnownCursor > 0) {
+      return this.lastKnownCursor;
+    }
+    // Scan the journal file from the end to find the last cursor
+    let lastCursor = 0;
     try {
-      const raw = await fs.readFile(this.db.filePath("journal.ndjson"), "utf8");
+      const raw = await fs.readFile(this.journalFilePath(), "utf8");
       const lines = raw.split("\n");
       for (let index = lines.length - 1; index >= 0; index -= 1) {
         const token = lines[index]?.trim();
@@ -32,7 +40,7 @@ export class GatewayJournal {
           const entry = JSON.parse(token) as Partial<GatewayJournalEntry>;
           const cursor = Number(entry.cursor || 0);
           if (cursor > 0) {
-            lastCursorFromFile = cursor;
+            lastCursor = cursor;
             break;
           }
         } catch {
@@ -40,9 +48,10 @@ export class GatewayJournal {
         }
       }
     } catch {
-      lastCursorFromFile = 0;
+      lastCursor = 0;
     }
-    return Math.max(intOr(meta.lastCursor, 0), lastCursorFromFile);
+    this.lastKnownCursor = lastCursor;
+    return lastCursor;
   }
 
   async append(
@@ -58,16 +67,37 @@ export class GatewayJournal {
       createdAt: new Date().toISOString(),
       payload,
     };
+    this.lastKnownCursor = entry.cursor;
+
+    // Check if rotation is needed before appending
+    await this.maybeRotate();
+
     await this.db.appendNdjson("journal.ndjson", entry);
-    await this.db.writeJson("journal-meta.json", { lastCursor: entry.cursor });
     return entry;
   }
 
   async lastCursor(): Promise<number> {
     return this.durableLastCursor();
   }
-}
 
-function intOr(value: number | undefined, fallback: number): number {
-  return Number.isFinite(value) ? Number(value) : fallback;
+  private async maybeRotate(): Promise<void> {
+    try {
+      const stat = await fs.stat(this.journalFilePath());
+      if (stat.size >= MAX_JOURNAL_BYTES) {
+        const rotatedPath = `${this.journalFilePath()}.${new Date().toISOString().replace(/[:.]/g, "-")}`;
+        try {
+          // Read current file contents
+          const contents = await fs.readFile(this.journalFilePath(), "utf8");
+          // Write to rotated file
+          await fs.writeFile(rotatedPath, contents, "utf8");
+          // Truncate the original file
+          await fs.writeFile(this.journalFilePath(), "", "utf8");
+        } catch {
+          // If rotation fails (e.g., concurrent access), continue with current file
+        }
+      }
+    } catch {
+      // File doesn't exist yet or can't be read - that's fine
+    }
+  }
 }

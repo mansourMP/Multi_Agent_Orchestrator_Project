@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import crypto from "crypto";
 
 export interface GatewayStateSnapshot {
   lastAck?: number;
@@ -13,7 +14,27 @@ export interface GatewayStateSnapshot {
   lastRecoveryAt?: string;
   resumeReady?: boolean;
   pendingOutboxCount?: number;
+  uncertainOutboxCount?: number;
   updatedAt?: string;
+}
+
+/**
+ * Per-file mutex using a promise chain to serialize writes per file path.
+ */
+const fileMutexes = new Map<string, Promise<void>>();
+
+function serialize(filePath: string, fn: () => Promise<void>): Promise<void> {
+  const prev = fileMutexes.get(filePath) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  fileMutexes.set(filePath, next);
+  next.catch(() => {
+    /* errors handled by caller */
+  }).finally(() => {
+    if (fileMutexes.get(filePath) === next) {
+      fileMutexes.delete(filePath);
+    }
+  });
+  return next;
 }
 
 export class GatewayStateDb {
@@ -62,9 +83,16 @@ export class GatewayStateDb {
   async writeJson<T>(name: string, value: T): Promise<T> {
     await this.ensureReady();
     const target = this.filePath(name);
-    const tmp = `${target}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(value, null, 2), "utf8");
-    await fs.rename(tmp, target);
+    const tmp = `${target}.tmp.${crypto.randomBytes(4).toString("hex")}`;
+    await serialize(target, async () => {
+      await fs.writeFile(tmp, JSON.stringify(value, null, 2), "utf8");
+      await fs.rename(tmp, target);
+      try {
+        await fs.chmod(target, 0o600);
+      } catch {
+        /* best-effort, OK on Windows */
+      }
+    });
     return value;
   }
 
@@ -76,6 +104,11 @@ export class GatewayStateDb {
       await handle.sync();
     } finally {
       await handle.close();
+    }
+    try {
+      await fs.chmod(this.filePath(name), 0o600);
+    } catch {
+      /* best-effort, OK on Windows */
     }
   }
 }

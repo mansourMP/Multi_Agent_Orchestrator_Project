@@ -8,6 +8,11 @@ export interface GatewayTokenState {
   updatedAt?: string;
 }
 
+export function sanitizeTokenForLogging(token: string): string {
+  if (!token || token.length <= 8) return "[REDACTED]";
+  return `${token.slice(0, 4)}...${token.slice(-4)}`;
+}
+
 export class GatewayTokenStore {
   constructor(private readonly db: GatewayStateDb) {}
 

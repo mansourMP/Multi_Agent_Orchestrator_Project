@@ -6,6 +6,7 @@ from server_modules import (
     gateway_activity_service,
     gateway_protocol_service,
     gateway_state_repository,
+    gateway_transparency_service,
     secret_redaction_service,
 )
 
@@ -33,6 +34,20 @@ async def execute_tool_via_gateway(
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     registration = _require_active_gateway_registration(gateway_id)
+    _gw = str(registration.get("gateway_id") or "").strip()
+    _ws = str(registration.get("workspace_id") or workspace_id).strip()
+    _tid = str(trace_id or "").strip()
+    _cap = str(capability_id or "").strip()
+    gateway_transparency_service.emit_gateway_action_event(
+        event_type="gateway_action_started",
+        title=f"Gateway action: {_cap}",
+        summary=f"Executing {_cap} through paired gateway {_gw}",
+        status="running",
+        trace_id=_tid,
+        workspace_id=_ws,
+        gateway_id=_gw,
+        capability_id=_cap,
+    )
     response = await gateway_protocol_service.dispatch_tool_invoke(
         gateway_id=str(gateway_id or "").strip(),
         capability_id=str(capability_id or "").strip(),
@@ -58,6 +73,16 @@ async def execute_tool_via_gateway(
         payload=secret_redaction_service.sanitize_mapping(activity_payload),
         trace_id=str(trace_id or "").strip() or None,
     )
+    gateway_transparency_service.emit_gateway_action_event(
+        event_type="gateway_action_completed",
+        title=f"Gateway action completed: {_cap}",
+        summary=f"Completed {_cap} through gateway {_gw}",
+        status="completed",
+        trace_id=_tid,
+        workspace_id=_ws,
+        gateway_id=_gw,
+        capability_id=_cap,
+    )
     return {
         "gateway_id": str(registration.get("gateway_id") or "").strip(),
         "device_id": str(registration.get("device_id") or "").strip(),
@@ -81,6 +106,19 @@ async def interrupt_tool_via_gateway(
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     registration = _require_active_gateway_registration(gateway_id)
+    _gw = str(registration.get("gateway_id") or "").strip()
+    _ws = str(registration.get("workspace_id") or workspace_id).strip()
+    _tid = str(trace_id or "").strip()
+    gateway_transparency_service.emit_gateway_action_event(
+        event_type="gateway_action_started",
+        title="Gateway interrupt",
+        summary=f"Interrupting run {run_id} on gateway {_gw}",
+        status="running",
+        trace_id=_tid,
+        workspace_id=_ws,
+        gateway_id=_gw,
+        capability_id="tool.interrupt",
+    )
     response = await gateway_protocol_service.dispatch_tool_interrupt(
         gateway_id=str(gateway_id or "").strip(),
         run_id=str(run_id or "").strip(),
@@ -106,6 +144,16 @@ async def interrupt_tool_via_gateway(
         status="completed",
         payload=secret_redaction_service.sanitize_mapping(activity_payload),
         trace_id=str(trace_id or "").strip() or None,
+    )
+    gateway_transparency_service.emit_gateway_action_event(
+        event_type="gateway_action_completed",
+        title="Gateway interrupt completed",
+        summary=f"Interrupted run {run_id} on gateway {_gw}",
+        status="completed",
+        trace_id=_tid,
+        workspace_id=_ws,
+        gateway_id=_gw,
+        capability_id="tool.interrupt",
     )
     return {
         "gateway_id": str(registration.get("gateway_id") or "").strip(),

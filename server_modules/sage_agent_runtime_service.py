@@ -40,6 +40,7 @@ from server_modules.sage_approval_service import (
     APPROVAL_TTL_MINUTES,
 )
 from server_modules.skill_registry import list_skill_definitions
+from server_modules.sage_transparency_service import emit_sage_turn_transparency_events
 
 ALLOWED_MODES = {SAGE_MODE}
 CLOUD_PROVIDER_IDS = ("anthropic", "deepseek", "openai", "gemini")
@@ -586,6 +587,29 @@ async def handle_sage_chat(
         except Exception:
             pass
 
+    # ── Emit transparency events ──────────────────────────────────
+    try:
+        transparency_events = emit_sage_turn_transparency_events(
+            trace_id=trace_id,
+            workspace_id=normalized_workspace_id,
+            user_message=normalized_message,
+            sage_result={
+                "message": reply or "",
+                "used_context": [
+                    {"name": ctx_label} for ctx_label in used_context
+                ],
+                "tool_calls": [],
+                "blocked_tools": [
+                    {"name": ba.get("skill_id", "unknown")} for ba in blocked_actions
+                ],
+                "approvals_required": approvals_required,
+                "error": None,
+            },
+            surface=normalized_surface,
+        )
+    except Exception:
+        transparency_events = []
+
     return {
         "message": reply or "",
         "error": None,
@@ -598,4 +622,5 @@ async def handle_sage_chat(
         "trace_id": trace_id,
         "provider": effective_provider,
         "model": effective_model or None,
+        "transparency_events": transparency_events,
     }

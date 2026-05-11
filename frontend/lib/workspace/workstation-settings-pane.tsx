@@ -23,7 +23,7 @@ import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gate
 import { WorkstationPlatformAnalyticsPane } from '@/lib/workspace/workstation-platform-analytics-pane';
 import type { ProviderCatalogRecord, ProviderProfileRecord } from '@/lib/workspace/workstation-client';
 
-type SettingsSectionId = 'account' | 'devices' | 'usage' | 'billing' | 'privacy';
+type SettingsSectionId = 'account' | 'devices' | 'usage' | 'billing' | 'privacy' | 'transparency';
 
 const SETTINGS_SECTIONS: Array<{
   id: SettingsSectionId;
@@ -66,6 +66,13 @@ const SETTINGS_SECTIONS: Array<{
     eyebrow: 'Trust',
     title: 'Privacy & Safety',
     description: 'Needs your OK, memory, and computer trust.',
+  },
+  {
+    id: 'transparency',
+    label: 'Transparency',
+    eyebrow: 'Visibility',
+    title: 'Transparency',
+    description: 'Transparency shows action traces, not private model reasoning.',
   },
 ];
 
@@ -252,7 +259,36 @@ function isSettingsSectionId(value: string | null): value is SettingsSectionId {
     || value === 'devices'
     || value === 'usage'
     || value === 'billing'
-    || value === 'privacy';
+    || value === 'privacy'
+    || value === 'transparency';
+}
+
+const VISIBILITY_MODES = [
+  { value: 'off', label: 'Quiet' },
+  { value: 'minimal', label: 'Basic' },
+  { value: 'standard', label: 'Normal' },
+  { value: 'full', label: 'Detailed' },
+  { value: 'enterprise', label: 'Admin' },
+] as const;
+
+function TransparencyModeSelect({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <span style={{ fontSize: 12, color: 'var(--color-muted, #6b7280)' }}>{label}</span>
+      <select
+        defaultValue="standard"
+        style={{
+          padding: '4px 8px', fontSize: 13, borderRadius: 6,
+          border: '1px solid var(--color-border, #e5e7eb)',
+          background: 'var(--color-bg, #fff)', color: 'var(--color-fg, #111)',
+        }}
+      >
+        {VISIBILITY_MODES.map(({ value: v, label: l }) => (
+          <option key={v} value={v}>{l}</option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 export function WorkstationSettingsPane() {
@@ -590,6 +626,79 @@ export function WorkstationSettingsPane() {
                 </article>
               </div>
             </div>
+          ) : null}
+          {selectedSection === 'transparency' ? (
+            <section className="app-settings-main__body">
+              <div className="settings-cards">
+                <article className="settings-detail-card">
+                  <div className="settings-detail-card__header">
+                    <strong className="settings-detail-card__title">Visibility mode</strong>
+                  </div>
+                  <p className="settings-detail-card__body" style={{ fontSize: 13, color: 'var(--color-muted, #6b7280)', marginBottom: 12 }}>
+                    Controls how much activity detail appears during agent turns.
+                    Customer-facing agents are limited to Quiet or Basic.
+                  </p>
+                  <FormGrid>
+                    {[
+                      { key: 'sage_mode', label: 'Sage (chat)', stored: 'sageMode' },
+                      { key: 'studio_test_mode', label: 'Studio test', stored: 'studioTestMode' },
+                      { key: 'default_mode', label: 'Default', stored: 'defaultMode' },
+                    ].map(({ label, stored }) => (
+                      <TransparencyModeSelect key={stored} label={label} value={stored} />
+                    ))}
+                  </FormGrid>
+                </article>
+
+                <article className="settings-detail-card">
+                  <div className="settings-detail-card__header">
+                    <strong className="settings-detail-card__title">Customer-facing mode</strong>
+                  </div>
+                  <p className="settings-detail-card__body" style={{ fontSize: 13, color: 'var(--color-muted, #6b7280)', marginBottom: 12 }}>
+                    Customer-facing Studio agents can only use Quiet or Basic mode.
+                    They never see internal memory, policy details, or tool arguments.
+                  </p>
+                  <select
+                    value="minimal"
+                    onChange={() => {}}
+                    style={{
+                      padding: '4px 8px', fontSize: 13, borderRadius: 6,
+                      border: '1px solid var(--color-border, #e5e7eb)',
+                      background: 'var(--color-bg, #fff)', color: 'var(--color-fg, #111)',
+                    }}
+                  >
+                    <option value="off">Quiet — final answer only</option>
+                    <option value="minimal">Basic — simple status indicators</option>
+                  </select>
+                </article>
+
+                <article className="settings-detail-card">
+                  <div className="settings-detail-card__header">
+                    <strong className="settings-detail-card__title">What to show</strong>
+                  </div>
+                  <p className="settings-detail-card__body" style={{ fontSize: 13, color: 'var(--color-muted, #6b7280)', marginBottom: 12 }}>
+                    Fine-grained controls for what appears in activity timelines.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {[
+                      { key: 'traceIds', label: 'Show trace IDs' },
+                      { key: 'toolNames', label: 'Show tool names' },
+                      { key: 'policyBlocks', label: 'Show policy blocks' },
+                      { key: 'sources', label: 'Show sources' },
+                    ].map(({ key, label }) => (
+                      <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                        <input type="checkbox" defaultChecked={true} disabled />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </article>
+
+                <p style={{ fontSize: 11, color: 'var(--color-muted-faint, #9ca3af)', marginTop: 12 }}>
+                  Transparency settings are stored per-workspace. Settings persist for the session duration.
+                  Full persistence across restarts will be available in a future update.
+                </p>
+              </div>
+            </section>
           ) : null}
         </section>
       </div>

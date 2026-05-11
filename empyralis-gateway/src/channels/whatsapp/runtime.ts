@@ -96,6 +96,29 @@ function normalizeChannelOutboundOperation(operation: unknown): ChannelOutboundO
   return "send_final";
 }
 
+export function redactWhatsAppCredentials(state: Record<string, unknown>): Record<string, unknown> {
+  const redacted = JSON.parse(JSON.stringify(state)) as Record<string, unknown>;
+
+  function walk(obj: Record<string, unknown>): void {
+    for (const [key, value] of Object.entries(obj)) {
+      if (
+        (key === "creds" || key === "keys" || key === "authState" || key === "signalIdentities" || key === "preKeys" || key === "signedPreKey") &&
+        value &&
+        typeof value === "object"
+      ) {
+        obj[key] = { redacted: true };
+      } else if (key === "qrCode" || key === "pairingCode" || key === "sessionString" || key === "sessionToken") {
+        obj[key] = "[REDACTED]";
+      } else if (value && typeof value === "object" && !Array.isArray(value)) {
+        walk(value as Record<string, unknown>);
+      }
+    }
+  }
+
+  walk(redacted);
+  return redacted;
+}
+
 export class WhatsAppPersonalRuntime {
   private readonly configStore: PersonalChannelConfigStore;
   private readonly sessionStore: WhatsAppSessionStore;
@@ -508,7 +531,7 @@ export class WhatsAppPersonalRuntime {
     const snapshot = await this.sessionStore.load();
     try {
       await this.publisher.publishStateUpdate(
-        this.sessionStore.toGatewayStatePayload(snapshot),
+        redactWhatsAppCredentials(this.sessionStore.toGatewayStatePayload(snapshot)),
       );
     } catch {
       return;

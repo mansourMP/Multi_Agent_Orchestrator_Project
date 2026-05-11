@@ -13,6 +13,7 @@ import {
   SquareTerminal,
   Wrench,
 } from 'lucide-react';
+import { AgentTransparencyTimeline } from '@/lib/workspace/transparency-timeline';
 
 import type { CodexTranscriptCell } from './cells';
 
@@ -241,9 +242,21 @@ export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
   const timestamp = formatTimestamp(cell.createdAt);
   const effectiveLabel = providerLabel(cell);
   const text = cell.content.trim();
+  const transparencyEvents = (cell.metadata?.transparency_events as Array<Record<string, unknown>> | undefined) ?? [];
   return (
     <article data-chat-role="assistant" className="app-chat-message">
       <div className="app-chat-message__content">{text}</div>
+      {transparencyEvents.length > 0 ? (
+        <div style={{ marginTop: 4 }}>
+          <AgentTransparencyTimeline
+            events={transparencyEvents as Array<{
+              event_id?: string; trace_id?: string; event_type: string;
+              title: string; summary?: string; status?: string;
+              timestamp?: string; tool_name?: string; channel?: string;
+            }>}
+          />
+        </div>
+      ) : null}
       {(timestamp || effectiveLabel || cell.isIncomplete) ? (
         <div className={`app-chat-message__meta${effectiveLabel || cell.isIncomplete ? ' app-chat-message__meta--visible' : ''}`}>
           {effectiveLabel ? (

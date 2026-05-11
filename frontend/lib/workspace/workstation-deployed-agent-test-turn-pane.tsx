@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AgentTransparencyTimeline } from "@/lib/workspace/transparency-timeline";
 
 const CHANNELS = [
   { value: "test", label: "Test" },
@@ -25,6 +26,7 @@ interface TestTurnResult {
   approval_required: boolean;
   audit_events: Array<Record<string, unknown>>;
   trace_id: string;
+  transparency_events?: Array<Record<string, unknown>>;
 }
 
 export function DeployedAgentTestTurnPane({
@@ -137,6 +139,18 @@ export function DeployedAgentTestTurnPane({
           {result.audit_events.length > 0 && (
             <Section label="Audit Events">
               <pre style={preStyle}>{JSON.stringify(result.audit_events, null, 2)}</pre>
+            </Section>
+          )}
+          {result.transparency_events && result.transparency_events.length > 0 && (
+            <Section label="Activity Timeline">
+              <AgentTransparencyTimeline
+                events={result.transparency_events as Array<{
+                  event_id?: string; trace_id?: string; event_type: string;
+                  title: string; summary?: string; status?: string;
+                  timestamp?: string; tool_name?: string; channel?: string;
+                }>}
+                expanded={true}
+              />
             </Section>
           )}
         </div>

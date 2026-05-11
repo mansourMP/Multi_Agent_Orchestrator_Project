@@ -7,6 +7,7 @@ from server_modules import (
     channel_blocking_policy_service,
     channel_lane_contract_service,
     gateway_execution_service,
+    kill_switch_gate,
     personal_channel_sage_bridge_service,
     personal_channels_repository,
     security_audit_service,
@@ -245,6 +246,7 @@ async def handle_gateway_channel_inbound(
     registration: Dict[str, Any],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
+    kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
     channel_key = str(payload.get("channel_key") or "").strip()
     channel_lane_contract_service.assert_personal_gateway_channel(
         channel_key,
@@ -414,6 +416,7 @@ async def _handle_whatsapp_gateway_channel_inbound(
     registration: Dict[str, Any],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
+    kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
     channel_lane_contract_service.assert_personal_gateway_channel(
         WHATSAPP_PERSONAL_CHANNEL_KEY,
         str(payload.get("provider") or WHATSAPP_PERSONAL_PROVIDER).strip() or WHATSAPP_PERSONAL_PROVIDER,
@@ -484,6 +487,7 @@ async def _handle_telegram_gateway_channel_inbound(
     registration: Dict[str, Any],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
+    kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
     channel_lane_contract_service.assert_personal_gateway_channel(
         TELEGRAM_PERSONAL_CHANNEL_KEY,
         str(payload.get("provider") or TELEGRAM_PERSONAL_PROVIDER).strip() or TELEGRAM_PERSONAL_PROVIDER,
@@ -678,6 +682,7 @@ async def send_whatsapp_personal_message(
     idempotency_key: str,
     reply_to_external_message_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
     channel_lane_contract_service.assert_personal_gateway_channel(
         WHATSAPP_PERSONAL_CHANNEL_KEY,
         WHATSAPP_PERSONAL_PROVIDER,
@@ -777,6 +782,7 @@ async def send_telegram_personal_message(
     idempotency_key: str,
     reply_to_external_message_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
     channel_lane_contract_service.assert_personal_gateway_channel(
         TELEGRAM_PERSONAL_CHANNEL_KEY,
         TELEGRAM_PERSONAL_PROVIDER,

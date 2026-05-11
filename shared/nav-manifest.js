@@ -9,7 +9,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'studio',
-    label: 'Build',
+    label: 'Agents',
     iconName: 'boxes',
     defaultRouteId: 'studio',
     childRouteIds: ['studio', 'inbox', 'deploy', 'studioIntegrations', 'demo'],
@@ -17,7 +17,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'marketplace',
-    label: 'Discover',
+    label: 'Memory',
     iconName: 'compass',
     defaultRouteId: 'marketplace',
     childRouteIds: ['marketplace'],
@@ -25,7 +25,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'gateway',
-    label: 'This Computer',
+    label: 'Gateway',
     iconName: 'waypoints',
     defaultRouteId: 'gateway',
     childRouteIds: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
@@ -33,7 +33,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'settings',
-    label: 'Settings',
+    label: 'Activity & Safety',
     iconName: 'sliders-horizontal',
     defaultRouteId: 'settings',
     childRouteIds: ['settings'],
@@ -53,11 +53,11 @@ export const WORKSPACE_WEB_NAV_GROUP_LABELS = WORKSPACE_NAV_DESTINATIONS.reduce(
 
 export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = {
   ...WORKSPACE_WEB_NAV_GROUP_LABELS,
-  sage: 'Chat',
-  studio: 'Build',
-  marketplace: 'Discover',
-  gateway: 'This Computer',
-  settings: 'Settings',
+  sage: 'Sage',
+  studio: 'Agents',
+  marketplace: 'Memory',
+  gateway: 'Gateway',
+  settings: 'Activity & Safety',
 };
 
 export const WORKSPACE_ROUTE_DEFINITIONS = [
@@ -191,7 +191,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'studio',
-    label: 'Assistants',
+    label: 'Agents',
     segment: 'studio',
     legacySegments: ['deployed-agents'],
     destinationId: 'studio',
@@ -201,7 +201,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/kin/index',
       screenName: 'kin/index',
       groupId: 'studio',
-      tabLabel: 'Build',
+      tabLabel: 'Agents',
       includeInBottomTabs: true,
     },
   },
@@ -244,7 +244,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'settings',
-    label: 'Settings',
+    label: 'Activity & Safety',
     segment: 'settings',
     legacySegments: ['control', 'admin', 'admin/platform', 'admin/billing', 'admin/routing', 'admin/members', 'admin/policies'],
     destinationId: 'settings',
@@ -269,7 +269,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'marketplace',
-    label: 'Discover',
+    label: 'Memory',
     segment: 'marketplace',
     destinationId: 'marketplace',
     web: {},
@@ -277,16 +277,23 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/apps/index',
       screenName: 'apps/index',
       groupId: 'marketplace',
-      tabLabel: 'Discover',
+      tabLabel: 'Memory',
       includeInBottomTabs: true,
     },
   },
   {
     id: 'gateway',
-    label: 'This Computer',
+    label: 'Gateway',
     segment: 'gateway',
     destinationId: 'gateway',
     web: {},
+    mobile: {
+      screen: '/(tabs)/home/index',
+      screenName: 'home/index',
+      groupId: 'gateway',
+      tabLabel: 'Gateway',
+      includeInBottomTabs: true,
+    },
   },
   {
     id: 'gatewayApprovals',
@@ -299,7 +306,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'gatewayActivity',
-    label: 'Activity',
+    label: 'Gateway Activity',
     segment: 'gateway-activity',
     destinationId: 'gateway',
     web: {
@@ -375,7 +382,7 @@ export function resolveWorkspaceRouteIdFromSegment(segment) {
   return WORKSPACE_ROUTE_SEGMENT_INDEX[normalizedSegment] ?? null;
 }
 
-const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER = ['chat', 'studio', 'marketplace', 'notifications', 'settings'];
+const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER = ['chat', 'studio', 'gateway', 'marketplace', 'settings'];
 const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER_INDEX = WORKSPACE_MOBILE_BOTTOM_TAB_ORDER.reduce(
   (accumulator, routeId, index) => {
     accumulator[routeId] = index;

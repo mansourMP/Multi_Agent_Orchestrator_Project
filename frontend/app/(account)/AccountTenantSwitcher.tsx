@@ -12,6 +12,7 @@ import {
   Moon,
   Settings2,
   SunMedium,
+  Waypoints,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -31,7 +32,7 @@ import {
 import { useAppTheme } from '@/lib/ui/app-theme';
 import { APP_THEME_ATTRIBUTE } from '@/lib/ui/tokens';
 
-type RailDestinationId = 'chat' | 'studio' | 'marketplace' | 'activity' | 'settings';
+type RailDestinationId = 'chat' | 'studio' | 'gateway' | 'marketplace' | 'activity' | 'settings';
 
 type RailDestination = {
   id: RailDestinationId;
@@ -42,14 +43,15 @@ type RailDestination = {
 };
 
 const PRIMARY_DESTINATIONS: RailDestination[] = [
-  { id: 'chat', label: 'Chat', defaultRouteId: 'chat', icon: Bot, dataLinkId: 'sage' },
-  { id: 'studio', label: 'Build', defaultRouteId: 'studio', icon: LayoutGrid },
-  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
+  { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot, dataLinkId: 'sage' },
+  { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
+  { id: 'gateway', label: 'Gateway', defaultRouteId: 'gateway', icon: Waypoints },
+  { id: 'marketplace', label: 'Memory', defaultRouteId: 'marketplace', icon: Compass },
   { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
 ];
 
 const SECONDARY_DESTINATIONS: RailDestination[] = [
-  { id: 'settings', label: 'Settings', defaultRouteId: 'settings', icon: Settings2 },
+  { id: 'settings', label: 'Activity & Safety', defaultRouteId: 'settings', icon: Settings2 },
 ];
 
 const ACTIVITY_ROUTE_IDS = new Set<WorkspaceRouteId>([
@@ -103,7 +105,7 @@ function extractActiveRailId(pathname: string | null): RailDestinationId {
   }
 
   const destinationId = getWorkspaceNavRouteDefinition(routeId).destinationId;
-  if (destinationId === 'studio' || destinationId === 'marketplace' || destinationId === 'settings') {
+  if (destinationId === 'studio' || destinationId === 'gateway' || destinationId === 'marketplace' || destinationId === 'settings') {
     return destinationId;
   }
   return 'chat';

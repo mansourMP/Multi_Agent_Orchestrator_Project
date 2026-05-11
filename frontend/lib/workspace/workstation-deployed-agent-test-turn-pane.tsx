@@ -10,10 +10,10 @@ const CHANNELS = [
 ] as const;
 
 const RUNTIME_MODES = [
-  { value: "text_agent", label: "Text Only" },
-  { value: "cloud_computer_agent", label: "Cloud Computer" },
-  { value: "my_computer_agent", label: "My Computer" },
-  { value: "self_hosted_agent", label: "Self-Hosted" },
+  { value: "text_agent", label: "Text Agent" },
+  { value: "cloud_computer_agent", label: "Cloud Computer Agent" },
+  { value: "my_computer_agent", label: "My Computer Agent" },
+  { value: "self_hosted_agent", label: "Self-Hosted Agent" },
 ] as const;
 
 interface TestTurnResult {

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
-import { Activity, Bot, Compass, LayoutGrid, Menu, Settings2 } from 'lucide-react';
+import { Bot, Compass, LayoutGrid, Menu, Settings2, Waypoints } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
@@ -24,30 +24,23 @@ import {
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
   sage: ['chat', 'memory', 'integrations', 'heartbeat', 'activity'],
   studio: ['studio'],
-  gateway: ['integrations'],
+  gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
   settings: ['settings'],
 };
 
 const MOBILE_DESTINATION_NAV: readonly {
-  id: 'chat' | 'studio' | 'marketplace' | 'settings';
+  id: 'chat' | 'studio' | 'gateway' | 'marketplace' | 'settings';
   label: string;
   defaultRouteId: WorkspaceRouteId;
   icon: LucideIcon;
 }[] = [
-  { id: 'chat', label: 'Chat', defaultRouteId: 'chat', icon: Bot },
-  { id: 'studio', label: 'Build', defaultRouteId: 'studio', icon: LayoutGrid },
-  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
-  { id: 'settings', label: 'Settings', defaultRouteId: 'settings', icon: Settings2 },
+  { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot },
+  { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
+  { id: 'gateway', label: 'Gateway', defaultRouteId: 'gateway', icon: Waypoints },
+  { id: 'marketplace', label: 'Memory', defaultRouteId: 'marketplace', icon: Compass },
+  { id: 'settings', label: 'Activity & Safety', defaultRouteId: 'settings', icon: Settings2 },
 ];
-
-const ACTIVITY_ROUTE_IDS = new Set<WorkspaceRouteId>([
-  'activity',
-  'heartbeat',
-  'runs',
-  'approvals',
-  'notifications',
-]);
 
 function readPendingApprovalCount(payload: unknown): number {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
@@ -85,10 +78,12 @@ export function WorkstationKernelShell({
     return getWorkspaceNavRouteDefinition(activeRouteId).destinationId;
   }, [activeRouteId]);
   const activeMobileDestinationId = useMemo(() => {
-    if (activeRouteId && ACTIVITY_ROUTE_IDS.has(activeRouteId)) {
-      return 'activity';
-    }
-    if (activeDestinationId === 'studio' || activeDestinationId === 'marketplace' || activeDestinationId === 'settings') {
+    if (
+      activeDestinationId === 'studio'
+      || activeDestinationId === 'gateway'
+      || activeDestinationId === 'marketplace'
+      || activeDestinationId === 'settings'
+    ) {
       return activeDestinationId;
     }
     return 'chat';
@@ -155,7 +150,7 @@ export function WorkstationKernelShell({
       return routeManifest.routeIndex.marketplace?.href ?? `/w/${encodeURIComponent(workspaceId)}/marketplace`;
     }
     if (activeDestinationId === 'gateway') {
-      return routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(workspaceId)}/integrations`;
+      return routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(workspaceId)}/gateway`;
     }
     return routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(workspaceId)}/settings`;
   }, [activeDestinationId, routeManifest.routeIndex, workspaceId]);

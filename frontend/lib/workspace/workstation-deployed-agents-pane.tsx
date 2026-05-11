@@ -358,7 +358,7 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
 }> = [
   {
     value: 'managed_cloud',
-    label: 'Text only',
+    label: 'Text Agent',
     supplier: 'empyralis',
     hint: 'Cloud chat with approved tools. No browser or computer control.',
     capabilities: 'Chat, memory, knowledge lookup, and approved API-style tools.',
@@ -370,7 +370,7 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'hosted_hardware_pool',
-    label: 'Cloud Computer',
+    label: 'Cloud Computer Agent',
     supplier: 'empyralis',
     hint: 'Cloud agent with isolated computer/browser automation under policy controls.',
     capabilities: 'Browser, files, and task automation inside an isolated cloud session.',
@@ -382,7 +382,7 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'customer_local',
-    label: 'My Computer',
+    label: 'My Computer Agent',
     supplier: 'customer',
     hint: 'Agent uses your machine through the local companion with explicit permissions.',
     capabilities: 'Local browser/files/terminal actions after explicit grants.',
@@ -394,7 +394,7 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'customer_hosted',
-    label: 'Self-hosted',
+    label: 'Self-Hosted Agent',
     supplier: 'customer',
     hint: 'Agent runs on a customer-owned server or runtime node.',
     capabilities: 'Customer-managed execution with workspace-scoped controls.',
@@ -1425,7 +1425,7 @@ function runtimeSupplierForPlacement(value: WizardState['runtimePlacement']): Wi
 
 function runtimePlacementLabel(value: unknown): string {
   const placement = normalizeRuntimePlacement(value);
-  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Text only';
+  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Text Agent';
 }
 
 function normalizeApprovalModeFromPolicies(escalationPreset: unknown, handoffMode: unknown): WizardState['approvalMode'] {
@@ -2181,12 +2181,183 @@ function TranscriptEntryCard({
   );
 }
 
+type RuntimeCardStatus = {
+  label: 'Ready' | 'Needs Gateway' | 'Needs Approval Policy' | 'Unsupported in this workspace' | 'Dev-only';
+  tone: 'success' | 'warning' | 'danger' | 'neutral';
+};
+
+function resolveRuntimeCardStatus(
+  option: typeof STUDIO_RUNTIME_OPTIONS[number],
+  hasGatewayOnlineTarget: boolean,
+): RuntimeCardStatus[] {
+  if (option.value === 'managed_cloud') {
+    return [{ label: 'Ready', tone: 'success' }];
+  }
+  if (option.value === 'hosted_hardware_pool') {
+    return [
+      { label: 'Needs Approval Policy', tone: 'warning' },
+      { label: 'Ready', tone: 'success' },
+    ];
+  }
+  if (option.value === 'customer_local') {
+    if (!hasGatewayOnlineTarget) {
+      return [{ label: 'Needs Gateway', tone: 'warning' }];
+    }
+    return [{ label: 'Ready', tone: 'success' }];
+  }
+  return [{ label: 'Dev-only', tone: 'neutral' }];
+}
+
+function RuntimeModeSelector({
+  value,
+  options,
+  hasGatewayOnlineTarget,
+  onSelect,
+}: {
+  value: WizardState['runtimePlacement'];
+  options: ReadonlyArray<typeof STUDIO_RUNTIME_OPTIONS[number]>;
+  hasGatewayOnlineTarget: boolean;
+  onSelect: (next: WizardState['runtimePlacement']) => void;
+}) {
+  return (
+    <div className="deployed-agents-wizard__runtime-grid">
+      {options.map((option) => {
+        const selected = value === option.value;
+        const statuses = resolveRuntimeCardStatus(option, hasGatewayOnlineTarget);
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={selected}
+            className={joinClassNames(
+              'deployed-agents-wizard__tool-card',
+              'deployed-agents-wizard__runtime-card',
+              selected && 'deployed-agents-wizard__tool-card--selected',
+            )}
+            onClick={() => onSelect(normalizeRuntimePlacement(option.value))}
+          >
+            <div className="app-inline-actions app-inline-actions--tight">
+              <strong>{option.label}</strong>
+              {statuses.map((status) => (
+                <DataBadge key={`${option.value}:${status.label}`} tone={status.tone}>
+                  {status.label}
+                </DataBadge>
+              ))}
+            </div>
+            <small>{option.hint}</small>
+            <dl className="deployed-agents-wizard__runtime-metadata">
+              <div>
+                <dt>What it can do</dt>
+                <dd>{option.capabilities}</dd>
+              </div>
+              <div>
+                <dt>Where it runs</dt>
+                <dd>{option.runsWhere}</dd>
+              </div>
+              <div>
+                <dt>Privacy level</dt>
+                <dd>{option.privacy}</dd>
+              </div>
+              <div>
+                <dt>Cost risk</dt>
+                <dd>{option.costRisk}</dd>
+              </div>
+              <div>
+                <dt>Required setup</dt>
+                <dd>{option.setup}</dd>
+              </div>
+              <div>
+                <dt>Best use cases</dt>
+                <dd>{option.bestFor}</dd>
+              </div>
+            </dl>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AgentSafetySummary({
+  approvalMode,
+  memoryEnabled,
+  monthlyCostCapUsd,
+  dailyMessageLimit,
+}: {
+  approvalMode: WizardState['approvalMode'];
+  memoryEnabled: boolean;
+  monthlyCostCapUsd: string;
+  dailyMessageLimit: string;
+}) {
+  return (
+    <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
+      <FormReadout label="Approval posture" value={humanizeToken(approvalMode, 'Balanced')} />
+      <FormReadout label="Memory policy" value={memoryEnabled ? 'Enabled' : 'Disabled'} />
+      <FormReadout label="Monthly spend cap" value={monthlyCostCapUsd.trim() || 'Not set'} />
+      <FormReadout label="Daily message limit" value={dailyMessageLimit.trim() || 'Not set'} />
+    </FormGrid>
+  );
+}
+
+function AgentLaunchChecklist({
+  hasGatewayOnlineTarget,
+  state,
+}: {
+  hasGatewayOnlineTarget: boolean;
+  state: WizardState;
+}) {
+  const checks = [
+    { id: 'gateway', label: 'Gateway paired', ok: state.runtimePlacement !== 'customer_local' || hasGatewayOnlineTarget },
+    { id: 'runtime', label: 'Runtime mode valid', ok: Boolean(state.runtimePlacement) },
+    { id: 'tools', label: 'Tools policy valid', ok: state.selectedToolIds.length > 0 },
+    { id: 'memory', label: 'Memory policy valid', ok: true },
+    { id: 'approval', label: 'Approval policy valid', ok: Boolean(state.approvalMode) },
+    { id: 'limits', label: 'Rate limits active', ok: state.dailyMessageLimit.trim().length > 0 },
+    { id: 'audit', label: 'Audit active', ok: true },
+  ];
+  return (
+    <div className="studio-template-detail__group">
+      <span className="studio-template-detail__label">Launch checklist</span>
+      <ul className="studio-template-detail__checklist">
+        {checks.map((item) => (
+          <li key={item.id}>{item.ok ? 'Ready' : 'Pending'} - {item.label}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function AgentPlaygroundPanel({
+  deployedAgentId,
+  workspaceId,
+  client,
+}: {
+  deployedAgentId: string;
+  workspaceId: string;
+  client: { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null> };
+}) {
+  return (
+    <div className="app-stack-2">
+      <StateBanner
+        tone="neutral"
+        title="Agent playground"
+        detail="Run a safe private turn before going live."
+      />
+      <DeployedAgentTestTurnPane
+        deployedAgentId={deployedAgentId}
+        workspaceId={workspaceId}
+        client={client}
+      />
+    </div>
+  );
+}
+
 export function WorkstationDeployedAgentsPane({
   initialSubview = 'agents',
 }: {
   initialSubview?: StudioSubview;
 }) {
-  const { workspaceId } = useWorkspaceBoundary();
+  const { workspaceId, bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const searchParams = useSearchParams();
   const cachedStudioPane = studioPaneCache.get(workspaceId) ?? null;
@@ -3295,6 +3466,10 @@ export function WorkstationDeployedAgentsPane({
     : [];
   const overlayQualityStars = readNumber(overlayAgent?.quality_stars);
   const overlayCostTier = readString(overlayAgent?.cost_tier);
+  const hasGatewayOnlineTarget = useMemo(
+    () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'local_companion' && target.online),
+    [bootstrap.runtime.runtimeTargets],
+  );
 
   async function handleDeleteExternalUserData() {
     const agentId = readString(selectedAgent?.id);
@@ -4165,7 +4340,7 @@ export function WorkstationDeployedAgentsPane({
                 ) : null}
 
                 {overlayAgent && overlayAgent.id && workspaceId ? (
-                  <DeployedAgentTestTurnPane
+                  <AgentPlaygroundPanel
                     deployedAgentId={readString(overlayAgent.id)}
                     workspaceId={workspaceId}
                     client={services.client}
@@ -5077,60 +5252,18 @@ export function WorkstationDeployedAgentsPane({
                       </div>
                     </FormField>
                     <FormField label="Runtime mode" hint="Choose how this assistant runs. Internal runtime identifiers are hidden in this view.">
-                      <div className="deployed-agents-wizard__runtime-grid">
-                        {STUDIO_RUNTIME_OPTIONS.map((option) => {
-                          const selected = wizardState.runtimePlacement === option.value;
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              aria-pressed={selected}
-                              className={joinClassNames(
-                                'deployed-agents-wizard__tool-card',
-                                'deployed-agents-wizard__runtime-card',
-                                selected && 'deployed-agents-wizard__tool-card--selected',
-                              )}
-                              onClick={() => {
-                                const nextRuntime = normalizeRuntimePlacement(option.value);
-                                setWizardState((current) => ({
-                                  ...current,
-                                  runtimePlacement: nextRuntime,
-                                  runtimeTarget: runtimeTargetForPlacement(nextRuntime),
-                                }));
-                              }}
-                            >
-                              <strong>{option.label}</strong>
-                              <small>{option.hint}</small>
-                              <dl className="deployed-agents-wizard__runtime-metadata">
-                                <div>
-                                  <dt>What it can do</dt>
-                                  <dd>{option.capabilities}</dd>
-                                </div>
-                                <div>
-                                  <dt>Where it runs</dt>
-                                  <dd>{option.runsWhere}</dd>
-                                </div>
-                                <div>
-                                  <dt>Privacy level</dt>
-                                  <dd>{option.privacy}</dd>
-                                </div>
-                                <div>
-                                  <dt>Cost risk</dt>
-                                  <dd>{option.costRisk}</dd>
-                                </div>
-                                <div>
-                                  <dt>Required setup</dt>
-                                  <dd>{option.setup}</dd>
-                                </div>
-                                <div>
-                                  <dt>Best use cases</dt>
-                                  <dd>{option.bestFor}</dd>
-                                </div>
-                              </dl>
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <RuntimeModeSelector
+                        value={wizardState.runtimePlacement}
+                        options={STUDIO_RUNTIME_OPTIONS}
+                        hasGatewayOnlineTarget={hasGatewayOnlineTarget}
+                        onSelect={(nextRuntime) => {
+                          setWizardState((current) => ({
+                            ...current,
+                            runtimePlacement: nextRuntime,
+                            runtimeTarget: runtimeTargetForPlacement(nextRuntime),
+                          }));
+                        }}
+                      />
                     </FormField>
                     <FormField label="Approval mode" hint="How much autonomy this assistant gets before human handoff.">
                       <FormSelect
@@ -5179,6 +5312,16 @@ export function WorkstationDeployedAgentsPane({
                       </FormSelect>
                     </FormField>
                   </FormGrid>
+                  <AgentSafetySummary
+                    approvalMode={wizardState.approvalMode}
+                    memoryEnabled={wizardState.memoryEnabled}
+                    monthlyCostCapUsd={wizardState.monthlyCostCapUsd}
+                    dailyMessageLimit={wizardState.dailyMessageLimit}
+                  />
+                  <AgentLaunchChecklist
+                    hasGatewayOnlineTarget={hasGatewayOnlineTarget}
+                    state={wizardState}
+                  />
                   {wizardState.runtimePlacement === 'customer_hosted' ? (
                     <div className="app-stack-3">
                       <StateBanner

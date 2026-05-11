@@ -1,3 +1,5 @@
+export const PROTOCOL_VERSION = "v1alpha2";
+
 export type GatewayRequestType =
   | "gateway.connect"
   | "gateway.heartbeat"
@@ -24,6 +26,7 @@ export interface GatewayScope {
 
 export interface GatewayRequestEnvelope<TPayload = Record<string, unknown>> {
   kind: "request";
+  protocolVersion?: string;
   id: string;
   type: GatewayRequestType;
   ts: string;
@@ -33,6 +36,7 @@ export interface GatewayRequestEnvelope<TPayload = Record<string, unknown>> {
 
 export interface GatewayResponseEnvelope<TPayload = Record<string, unknown>> {
   kind: "response";
+  protocolVersion?: string;
   id: string;
   ok: boolean;
   ts: string;
@@ -46,10 +50,11 @@ export interface GatewayResponseEnvelope<TPayload = Record<string, unknown>> {
 
 export interface GatewayEventEnvelope<TPayload = Record<string, unknown>> {
   kind: "event";
+  protocolVersion?: string;
   type: GatewayEventType;
   ts: string;
-  scope: GatewayScope;
-  seq: number;
+  scope?: GatewayScope;
+  seq?: number;
   ack?: number;
   payload: TPayload;
 }

@@ -8,6 +8,20 @@ from starlette import status
 from pydantic import BaseModel, Field
 
 from server_modules.auth import enforce_workspace_access, workspace_tenant_id
+from server_modules.kill_switch_gate import assert_not_killed, KillSwitchBlockedError
+from server_modules.gateway_quota_enforcement import (
+    evaluate_gateway_quota,
+    GATEWAY_TOOL_EXECUTION,
+    GATEWAY_BROWSER_SESSION,
+    GATEWAY_APPROVAL_ACTION,
+    GATEWAY_WS_CONNECTION,
+)
+from server_modules.safety_error_contract import (
+    kill_switch_error,
+    quota_exceeded_error,
+    to_http_body,
+    to_http_status,
+)
 from server_modules.runtime_common import require_api_key
 from server_modules import (
     gateway_browser_service,
@@ -18,10 +32,81 @@ from server_modules import (
     gateway_protocol_service,
     gateway_registry_service,
     gateway_state_repository,
+    security_audit_service,
 )
 
 
 router = APIRouter()
+
+
+def _enforce_gateway_safety_gates(
+    *,
+    gateway_id: str,
+    workspace_id: str,
+    quota_profile: str,
+    agent_id: str = "",
+) -> None:
+    """Centralized safety enforcement for gateway endpoints.
+
+    Checks kill switches and quotas before any gateway operation.
+    Raises HTTPException with standardized error body on block.
+    """
+    try:
+        assert_not_killed(
+            workspace_id=workspace_id,
+            gateway_id=gateway_id,
+            agent_id=agent_id,
+        )
+    except KillSwitchBlockedError as exc:
+        error = kill_switch_error(
+            scope=exc.decision.scope,
+            detail=exc.decision.detail,
+            trace_id=exc.decision.trace_id,
+        )
+        raise HTTPException(
+            status_code=to_http_status(error),
+            detail=to_http_body(error),
+        )
+
+    if quota_profile:
+        decision = evaluate_gateway_quota(
+            profile=quota_profile,
+            gateway_id=gateway_id,
+        )
+        if not decision.allowed:
+            error = quota_exceeded_error(
+                profile=quota_profile,
+                retry_after_seconds=decision.retry_after_seconds,
+            )
+            raise HTTPException(
+                status_code=to_http_status(error),
+                detail=to_http_body(error),
+            )
+
+
+def _audit_approval_bypass(
+    *,
+    gateway_id: str,
+    capability_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    reason: str = "interactive_approvals_disabled",
+) -> None:
+    try:
+        security_audit_service.emit_security_audit_event(
+            action="gateway.approval_bypassed",
+            status="warning",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            detail=f"Approval bypassed for capability {capability_id}: {reason}",
+            metadata={
+                "gateway_id": gateway_id,
+                "capability_id": capability_id,
+                "reason": reason,
+            },
+        )
+    except Exception:
+        pass
 
 
 class GatewayPairingIntentCreateRequest(BaseModel):
@@ -320,6 +405,22 @@ async def execute_gateway_tool(
     )
     if resolved_workspace_id != registration_workspace_id:
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
+
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+    _enforce_gateway_safety_gates(
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        quota_profile=GATEWAY_TOOL_EXECUTION,
+    )
+
+    if not body.interactive_approvals:
+        _audit_approval_bypass(
+            gateway_id=gateway_id,
+            capability_id=body.capability_id,
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+        )
+
     if body.interactive_approvals and gateway_approval_service.capability_requires_owner_approval(body.capability_id):
         approval = await gateway_approval_service.request_gateway_tool_approval(
             registration=registration,
@@ -416,6 +517,11 @@ async def resolve_gateway_registration_approval(
         current_user,
         minimum_role="member",
     )
+    _enforce_gateway_safety_gates(
+        gateway_id=gateway_id,
+        workspace_id=_resolved_workspace_id,
+        quota_profile=GATEWAY_APPROVAL_ACTION,
+    )
     approval = gateway_state_repository.get_gateway_action_approval(approval_id)
     execute_fn = gateway_execution_service.execute_tool_via_gateway
     capability_id = str((approval or {}).get("capability_id") or "").strip()
@@ -471,6 +577,11 @@ async def start_gateway_browser_session(
         workspace_id=body.workspace_id,
         minimum_role="member",
     )
+    _enforce_gateway_safety_gates(
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        quota_profile=GATEWAY_BROWSER_SESSION,
+    )
     trace_id = str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id
     session_mode = gateway_browser_service.normalize_browser_session_mode(body.session_mode)
     attach_endpoint_url = str(body.attach_endpoint_url or "").strip() or None
@@ -510,6 +621,16 @@ async def start_gateway_browser_session(
             reason="Local gateway browser runtime is offline; cloud browser fallback prepared.",
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
+    if not body.interactive_approvals and gateway_browser_service.browser_action_requires_owner_approval(
+        None,
+        reviewed_approval_required=reviewed_required,
+    ):
+        _audit_approval_bypass(
+            gateway_id=gateway_id,
+            capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
+            workspace_id=resolved_workspace_id,
+            tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+        )
     if body.interactive_approvals and gateway_browser_service.browser_action_requires_owner_approval(
         None,
         reviewed_approval_required=reviewed_required,
@@ -573,6 +694,11 @@ async def execute_gateway_browser_action(
         workspace_id=body.workspace_id,
         minimum_role="member",
     )
+    _enforce_gateway_safety_gates(
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        quota_profile=GATEWAY_TOOL_EXECUTION,
+    )
     browser_session = gateway_state_repository.get_gateway_browser_session(browser_session_id)
     if not browser_session or str(browser_session.get("gateway_id") or "").strip() != str(gateway_id or "").strip():
         raise HTTPException(status_code=404, detail="Gateway browser session was not found.")
@@ -622,6 +748,16 @@ async def execute_gateway_browser_action(
             checkpoint=browser_session.get("checkpoint") if isinstance(browser_session.get("checkpoint"), dict) else {},
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
+    if not body.interactive_approvals and gateway_browser_service.browser_action_requires_owner_approval(
+        body.action,
+        reviewed_approval_required=reviewed_required,
+    ):
+        _audit_approval_bypass(
+            gateway_id=gateway_id,
+            capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
+            workspace_id=resolved_workspace_id,
+            tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+        )
     if body.interactive_approvals and gateway_browser_service.browser_action_requires_owner_approval(
         body.action,
         reviewed_approval_required=reviewed_required,
@@ -689,6 +825,11 @@ async def takeover_gateway_browser_session(
         workspace_id=body.workspace_id,
         minimum_role="member",
     )
+    _enforce_gateway_safety_gates(
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        quota_profile=GATEWAY_TOOL_EXECUTION,
+    )
     trace_id = str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id
     try:
         return await gateway_browser_service.execute_browser_capability_via_gateway(
@@ -722,6 +863,11 @@ async def resume_gateway_browser_session(
         current_user,
         workspace_id=body.workspace_id,
         minimum_role="member",
+    )
+    _enforce_gateway_safety_gates(
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        quota_profile=GATEWAY_BROWSER_SESSION,
     )
     trace_id = str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id
     session_metadata = browser_session.get("metadata") if isinstance(browser_session.get("metadata"), dict) else {}
@@ -787,6 +933,11 @@ async def interrupt_gateway_browser_session(
         current_user,
         workspace_id=body.workspace_id,
         minimum_role="member",
+    )
+    _enforce_gateway_safety_gates(
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        quota_profile=GATEWAY_TOOL_EXECUTION,
     )
     trace_id = str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id
     try:
@@ -875,6 +1026,19 @@ async def gateway_websocket(
     gateway_id: str = Query(..., min_length=1),
     session_token: str = Query(..., min_length=1),
 ):
+    registration = gateway_state_repository.get_gateway_registration(gateway_id)
+    workspace_id = str((registration or {}).get("workspace_id") or "").strip() or "default"
+    try:
+        _enforce_gateway_safety_gates(
+            gateway_id=gateway_id,
+            workspace_id=workspace_id,
+            quota_profile=GATEWAY_WS_CONNECTION,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": {"code": "GATEWAY_BLOCKED"}}
+        code = str((detail.get("error") or {}).get("code") or "GATEWAY_BLOCKED") if isinstance(detail, dict) else "GATEWAY_BLOCKED"
+        await websocket.close(code=4403, reason=code[:120])
+        return
     await gateway_protocol_service.handle_gateway_websocket(
         websocket,
         gateway_id=gateway_id,

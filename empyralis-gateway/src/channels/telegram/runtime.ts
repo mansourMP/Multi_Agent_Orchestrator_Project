@@ -72,6 +72,25 @@ function normalizeChannelOutboundOperation(operation: unknown): ChannelOutboundO
   return "send_final";
 }
 
+export function redactTelegramCredentials(state: Record<string, unknown>): Record<string, unknown> {
+  const redacted = JSON.parse(JSON.stringify(state)) as Record<string, unknown>;
+
+  function walk(obj: Record<string, unknown>): void {
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === "apiHash" || key === "phoneNumber" || key === "sessionString" || key === "sessionToken") {
+        obj[key] = "[REDACTED]";
+      } else if ((key === "authState" || key === "creds" || key === "keys") && value && typeof value === "object") {
+        obj[key] = { redacted: true };
+      } else if (value && typeof value === "object" && !Array.isArray(value)) {
+        walk(value as Record<string, unknown>);
+      }
+    }
+  }
+
+  walk(redacted);
+  return redacted;
+}
+
 export class TelegramPersonalRuntime {
   private readonly configStore: PersonalChannelConfigStore;
   private readonly sessionStore: TelegramSessionStore;
@@ -394,7 +413,7 @@ export class TelegramPersonalRuntime {
     const snapshot = await this.sessionStore.load();
     try {
       await this.publisher.publishStateUpdate(
-        this.sessionStore.toGatewayStatePayload(snapshot),
+        redactTelegramCredentials(this.sessionStore.toGatewayStatePayload(snapshot)),
       );
     } catch {
       return;

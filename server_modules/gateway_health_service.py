@@ -342,7 +342,7 @@ def _summarize_quota_health(
     }
 
 
-def gateway_doctor_payload(gateway_id: str, *, force_provider_probe: bool = False) -> Dict[str, Any]:
+def gateway_doctor_payload(gateway_id: str, *, force_provider_probe: bool = False, trace_id: Optional[str] = None) -> Dict[str, Any]:
     registration = gateway_state_repository.get_gateway_registration(gateway_id)
     if not registration:
         raise ValueError("Gateway registration was not found.")
@@ -550,6 +550,63 @@ def gateway_doctor_payload(gateway_id: str, *, force_provider_probe: bool = Fals
             },
         ]
     )
+
+    # P1 health checks
+    outbox_summary = gateway_state_repository.summarize_gateway_outbox(gateway_id)
+    outbox_pending = int(outbox_summary.get("pending") or 0)
+    outbox_uncertain = int(outbox_summary.get("uncertain") or 0)
+    outbox_abandoned = int(outbox_summary.get("abandoned") or 0)
+
+    checks.append({
+        "id": "outbox_backlog",
+        "status": "fail" if outbox_pending > 200 else ("warn" if outbox_pending > 50 else "pass"),
+        "summary": f"{outbox_pending} pending outbox item(s).",
+        "pending_count": outbox_pending,
+    })
+    checks.append({
+        "id": "uncertain_outbox",
+        "status": "fail" if outbox_uncertain > 50 else ("warn" if outbox_uncertain > 10 else "pass"),
+        "summary": f"{outbox_uncertain} uncertain outbox item(s).",
+        "uncertain_count": outbox_uncertain,
+    })
+    checks.append({
+        "id": "abandoned_outbox",
+        "status": "fail" if outbox_abandoned > 20 else ("warn" if outbox_abandoned > 5 else "pass"),
+        "summary": f"{outbox_abandoned} abandoned outbox item(s).",
+        "abandoned_count": outbox_abandoned,
+    })
+
+    # Database health check
+    db_ok = False
+    db_error = None
+    try:
+        _ = gateway_state_repository.get_gateway_registration(gateway_id)
+        db_ok = True
+    except Exception as exc:
+        db_error = str(exc)
+    checks.append({
+        "id": "database_health",
+        "status": "pass" if db_ok else "fail",
+        "summary": "Gateway state database is reachable." if db_ok else f"Gateway state database check failed: {db_error}",
+    })
+
+    # Stale websocket check
+    stale_ws = heartbeat_age is not None and heartbeat_age > (15 * 60)  # 15 minutes
+    checks.append({
+        "id": "stale_websocket",
+        "status": "fail" if stale_ws else ("warn" if heartbeat_age is not None and heartbeat_age > (5 * 60) else "pass"),
+        "summary": f"WebSocket heartbeat age: {heartbeat_age}s." if heartbeat_age is not None else "No heartbeat data.",
+        "heartbeat_age_seconds": heartbeat_age,
+    })
+
+    # Session sweep — mark stale sessions as expired
+    swept = gateway_state_repository.sweep_stale_gateway_sessions(gateway_id)
+    if swept > 0:
+        checks.append({
+            "id": "session_sweep",
+            "status": "warn",
+            "summary": f"{swept} stale session(s) swept.",
+        })
 
     if overall_status not in {"blocked", "offline"}:
         if any(_text(item.get("status")).lower() == "fail" for item in checks):

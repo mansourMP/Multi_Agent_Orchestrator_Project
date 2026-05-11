@@ -53,6 +53,7 @@ def evaluate_kill_switch(
     workspace_id: str = "",
     agent_id: str = "",
     gateway_id: str = "",
+    trace_id: str = "",
 ) -> KillSwitchDecision:
     if is_kill_active(GLOBAL_KILL_KEY):
         return KillSwitchDecision(
@@ -60,7 +61,7 @@ def evaluate_kill_switch(
             reason="global_kill_active",
             scope="global",
             detail="The platform is in emergency stop mode. All operations are blocked.",
-            trace_id="",
+            trace_id=trace_id,
         )
 
     if agent_id and is_kill_active(f"{AGENT_KILL_PREFIX}{agent_id}"):
@@ -69,7 +70,7 @@ def evaluate_kill_switch(
             reason="agent_kill_active",
             scope="agent",
             detail=f"Agent {agent_id} has been stopped by its owner.",
-            trace_id="",
+            trace_id=trace_id,
         )
 
     if gateway_id and is_kill_active(f"{GATEWAY_KILL_PREFIX}{gateway_id}"):
@@ -78,10 +79,10 @@ def evaluate_kill_switch(
             reason="gateway_kill_active",
             scope="gateway",
             detail=f"Gateway {gateway_id} has been stopped.",
-            trace_id="",
+            trace_id=trace_id,
         )
 
-    return KillSwitchDecision(blocked=False, reason="", scope="")
+    return KillSwitchDecision(blocked=False, reason="", scope="", trace_id=trace_id)
 
 
 def assert_not_killed(
@@ -89,11 +90,13 @@ def assert_not_killed(
     workspace_id: str = "",
     agent_id: str = "",
     gateway_id: str = "",
+    trace_id: str = "",
 ) -> None:
     decision = evaluate_kill_switch(
         workspace_id=workspace_id,
         agent_id=agent_id,
         gateway_id=gateway_id,
+        trace_id=trace_id,
     )
     if decision.blocked:
         from server_modules import security_audit_service

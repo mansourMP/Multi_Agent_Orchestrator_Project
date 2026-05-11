@@ -10,7 +10,7 @@ import {
   persistDeviceIdentityScope,
 } from "../pairing/device-identity";
 import { GatewayTokenStore } from "../pairing/token-store";
-import { encodeFrame, decodeFrame } from "../protocol/codec";
+import { encodeFrame, decodeFrame, SUPPORTED_PROTOCOL_VERSIONS } from "../protocol/codec";
 import type {
   GatewayChannelInboundPayload,
   GatewayChannelOutboundPayload,
@@ -23,11 +23,31 @@ import type {
   GatewayToolInterruptPayload,
   GatewayToolInvokePayload,
 } from "../protocol/types";
+import { PROTOCOL_VERSION } from "../protocol/types";
 import { GatewayRuntimeMetadata } from "../runtime/runtime-metadata";
 import { HeartbeatLoop } from "./heartbeat";
 import { ReconnectBackoff, classifyReconnectError, classifyCloseCode, sleep, type CloseCodeContext } from "./reconnect";
 import { GatewayCapabilityRouter } from "../supervisor/capability-router";
 import { PersonalChannelRuntimeRegistry } from "../channels/personal-runtime";
+
+/**
+ * Message types that are safe to replay automatically.
+ * Only idempotent read-like or declarative state updates.
+ */
+const SAFE_REPLAY_MESSAGE_TYPES: ReadonlySet<GatewayRequestEnvelope["type"]> = new Set([
+  "gateway.heartbeat",
+  "gateway.state.update",
+]);
+
+/**
+ * Message types that MUST NOT replay automatically unless an explicit
+ * idempotencyKey is provided.  These actions are destructive or side-effectful.
+ */
+const DANGEROUS_MESSAGE_TYPES: ReadonlySet<GatewayRequestEnvelope["type"]> = new Set([
+  "tool.invoke",
+  "tool.interrupt",
+  "channel.outbound",
+]);
 
 interface PendingResponse {
   messageType: GatewayRequestEnvelope["type"];
@@ -212,6 +232,16 @@ export class GatewayWsClient {
       if (!connectResponse.ok) {
         throw new Error(connectResponse.error?.message || "Gateway connect request was rejected.");
       }
+      const serverProtocolVersion = connectResponse.protocolVersion ??
+        (connectResponse.payload as Record<string, unknown> | undefined)?.["protocol_version"];
+      if (serverProtocolVersion && !SUPPORTED_PROTOCOL_VERSIONS.includes(serverProtocolVersion as typeof SUPPORTED_PROTOCOL_VERSIONS[number])) {
+        const versionStr = String(serverProtocolVersion ?? "undefined");
+        this.socketFailureReason = `unsupported_protocol_version:${versionStr}`;
+        this.socket.close();
+        throw new Error(
+          `Gateway server protocol version "${versionStr}" is not supported. Supported versions: ${SUPPORTED_PROTOCOL_VERSIONS.join(", ")}`,
+        );
+      }
       this.activeScope = session.scope;
       this.heartbeatLoop.start({
         intervalMs: session.heartbeat_interval_seconds * 1000,
@@ -340,6 +370,7 @@ export class GatewayWsClient {
     const nextSeq = Math.max(Number(checkpoints.lastClientSeq ?? 0), 0) + 1;
     const frame: GatewayEventEnvelope = {
       kind: "event",
+      protocolVersion: PROTOCOL_VERSION,
       type,
       seq: nextSeq,
       ack: checkpoints.lastServerSeq ?? checkpoints.lastAck ?? 0,
@@ -349,7 +380,10 @@ export class GatewayWsClient {
     };
     await this.journal.append("outbound", type, frame as unknown as Record<string, unknown>);
     await this.checkpoints.save({ lastClientSeq: nextSeq });
-    this.socket.send(encodeFrame(frame));
+    const encoded = encodeFrame(frame);
+    if (typeof encoded === "string") {
+      this.socket.send(encoded);
+    }
   }
 
   async disconnect(scope: GatewayScope, reason = "shutdown"): Promise<void> {
@@ -381,8 +415,21 @@ export class GatewayWsClient {
   private async openSocket(url: string): Promise<WebSocket> {
     return new Promise<WebSocket>((resolve, reject) => {
       const socket = new WebSocket(url);
-      socket.onopen = () => resolve(socket);
-      socket.onerror = () => reject(new Error(`WebSocket connection failed for ${url}`));
+      const timeout = setTimeout(() => {
+        socket.onopen = null;
+        socket.onerror = null;
+        socket.close();
+        reject(new Error(`WebSocket connection timed out for ${url}`));
+      }, 10_000);
+      timeout.unref?.();
+      socket.onopen = () => {
+        clearTimeout(timeout);
+        resolve(socket);
+      };
+      socket.onerror = () => {
+        clearTimeout(timeout);
+        reject(new Error(`WebSocket connection failed for ${url}`));
+      };
     });
   }
 
@@ -415,11 +462,24 @@ export class GatewayWsClient {
   ): Promise<GatewayResponseEnvelope> {
     const replayable =
       options.replayable ??
-      !["gateway.connect", "gateway.disconnect", "gateway.heartbeat"].includes(messageType);
+      SAFE_REPLAY_MESSAGE_TYPES.has(messageType);
+    if (replayable && DANGEROUS_MESSAGE_TYPES.has(messageType) && options.replayable === true) {
+      // Explicitly requested replay for a dangerous type — require idempotencyKey
+      const idempotencyKey =
+        typeof payload === "object" && payload !== null && "idempotency_key" in payload
+          ? String((payload as Record<string, unknown>).idempotency_key || "").trim()
+          : "";
+      if (!idempotencyKey) {
+        throw new Error(
+          `Replayable dangerous request "${messageType}" requires an idempotency_key in the payload.`,
+        );
+      }
+    }
     const persistOutbox = options.persistOutbox ?? replayable;
     const requestId = String(options.requestId || crypto.randomUUID()).trim();
     const frame: GatewayRequestEnvelope = {
       kind: "request",
+      protocolVersion: PROTOCOL_VERSION,
       id: requestId,
       type: messageType,
       ts: new Date().toISOString(),
@@ -462,8 +522,21 @@ export class GatewayWsClient {
       options.persistOutbox,
       options.timeoutMs,
     );
+    const encoded = encodeFrame(frame);
+    if (typeof encoded !== "string") {
+      const message = encoded.ok === false ? encoded.error : "Frame encoding failed";
+      this.clearPendingResponse(frame.id, new Error(message));
+      if (options.persistOutbox) {
+        if (options.replayable) {
+          await this.outbox.markForReplay(frame.id, message);
+        } else {
+          await this.outbox.markAttemptFailed(frame.id, message);
+        }
+      }
+      throw new Error(message);
+    }
     try {
-      this.socket.send(encodeFrame(frame));
+      this.socket.send(encoded);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.clearPendingResponse(frame.id, new Error(message));
@@ -520,11 +593,12 @@ export class GatewayWsClient {
     persistedOutbox: boolean,
     error: Error,
   ): Promise<void> {
+    this.clearPendingResponse(requestId, error);
     if (persistedOutbox) {
       if (replayable) {
         await this.outbox.markForReplay(requestId, error.message);
       } else {
-        await this.outbox.markAttemptFailed(requestId, error.message);
+        await this.outbox.markUncertain(requestId, `Request timed out: ${error.message}`);
       }
     }
     await this.checkpoints.saveHealthState("degraded", {
@@ -532,7 +606,6 @@ export class GatewayWsClient {
       lastOutboxError: error.message,
       pendingOutboxCount: (await this.outbox.summarize()).pending,
     });
-    await this.terminateSocket(`request_timeout:${requestId}`);
   }
 
   private async terminateSocket(reason: string): Promise<void> {
@@ -570,6 +643,7 @@ export class GatewayWsClient {
     await this.outbox.markAttemptStarted(item.requestId);
     const frame: GatewayRequestEnvelope = {
       kind: "request",
+      protocolVersion: PROTOCOL_VERSION,
       id: item.requestId,
       type: item.messageType as GatewayRequestEnvelope["type"],
       ts: new Date().toISOString(),
@@ -610,20 +684,28 @@ export class GatewayWsClient {
       if (entry.replayable) {
         await this.outbox.markForReplay(requestId, `Gateway socket closed before response: ${reason}`);
       } else if (await this.outbox.get(requestId)) {
-        await this.outbox.markAttemptFailed(requestId, `Gateway socket closed before response: ${reason}`);
+        await this.outbox.markUncertain(requestId, `Gateway socket closed before response: ${reason}`);
       }
     }
     const summary = await this.outbox.summarize();
     await this.checkpoints.saveHealthState("offline", {
       lastDisconnectReason: reason,
       pendingOutboxCount: summary.pending + summary.failed,
+      uncertainOutboxCount: summary.uncertain,
       lastOutboxError: reason,
       resumeReady: false,
     });
   }
 
   private async handleIncomingFrame(raw: string): Promise<void> {
-    const frame = decodeFrame(raw);
+    const result = decodeFrame(raw);
+    if (!result.ok) {
+      await this.journal.append("system", "gateway.frame.invalid", {
+        error: result.error,
+      });
+      return;
+    }
+    const frame = result.frame;
     if (frame.kind === "request") {
       await this.handleServerRequest(frame);
       return;
@@ -696,6 +778,7 @@ export class GatewayWsClient {
     }
     const frame: GatewayResponseEnvelope = {
       kind: "response",
+      protocolVersion: PROTOCOL_VERSION,
       id: requestId,
       ok,
       ts: new Date().toISOString(),
@@ -706,7 +789,10 @@ export class GatewayWsClient {
       frame.error = error ?? { message: "Unknown gateway request failure." };
     }
     await this.journal.append("outbound", "response", frame as unknown as Record<string, unknown>);
-    this.socket.send(encodeFrame(frame));
+    const encoded = encodeFrame(frame);
+    if (typeof encoded === "string") {
+      this.socket.send(encoded);
+    }
   }
 
   private async handleEvent(frame: GatewayEventEnvelope): Promise<void> {
@@ -720,6 +806,23 @@ export class GatewayWsClient {
     }
     if (frame.type === "gateway.hello") {
       await this.db.writeJson("hello.json", frame.payload);
+      const helloVersion = frame.protocolVersion ??
+        (frame.payload as Record<string, unknown> | undefined)?.["protocol_version"];
+      if (helloVersion && !SUPPORTED_PROTOCOL_VERSIONS.includes(helloVersion as typeof SUPPORTED_PROTOCOL_VERSIONS[number])) {
+        const versionStr = String(helloVersion ?? "undefined");
+        const error = new Error(
+          `Gateway hello event protocol version "${versionStr}" is not supported. Supported versions: ${SUPPORTED_PROTOCOL_VERSIONS.join(", ")}`,
+        );
+        this.socketFailureReason = `unsupported_protocol_version:${versionStr}`;
+        await this.journal.append("system", "gateway.protocol.version.mismatch", {
+          serverVersion: versionStr,
+          supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
+          error: error.message,
+        });
+        if (this.socket) {
+          this.socket.close();
+        }
+      }
     }
   }
 }

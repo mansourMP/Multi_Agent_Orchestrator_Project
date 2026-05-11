@@ -1,15 +1,58 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import sys
 import uuid
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from server_modules.execution_router import get_browser_adapter
+from server_modules.url_security import assert_safe_outbound_url, _allow_private_http_hosts
 
 
 def _token(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _validate_browser_url(url: str) -> None:
+    """Validate a navigation/new_tab URL using the shared assert_safe_outbound_url."""
+    token = str(url or "").strip()
+    if token:
+        assert_safe_outbound_url(token)
+
+
+def _validate_attach_endpoint_url(url: str) -> None:
+    """Validate a browser attach CDP/WebSocket endpoint URL.
+
+    Rejects loopback, private, link-local, and cloud-metadata addresses
+    unless private HTTP hosts are explicitly allowed (development mode).
+    """
+    if _allow_private_http_hosts():
+        return
+    token = str(url or "").strip()
+    if not token:
+        return
+    parsed = urlparse(token)
+    hostname = str(parsed.hostname or "").strip().lower()
+    if not hostname:
+        return
+    if hostname in {"localhost", "localhost.localdomain", "0.0.0.0", "[::1]", "::1"}:
+        raise RuntimeError("Browser attach endpoint URL must not point to loopback address.")
+    if hostname == "169.254.169.254":
+        raise RuntimeError("Browser attach endpoint URL must not point to cloud metadata address.")
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        if hostname.endswith(".local") or hostname.endswith(".internal"):
+            raise RuntimeError("Browser attach endpoint URL must not point to private host.")
+        return
+    if ip.is_loopback:
+        raise RuntimeError("Browser attach endpoint URL must not point to loopback address.")
+    if ip.is_private:
+        raise RuntimeError("Browser attach endpoint URL must not point to private address.")
+    if ip.is_link_local:
+        raise RuntimeError("Browser attach endpoint URL must not point to link-local address.")
 
 
 def _browser_session_mode(value: Any) -> str:
@@ -109,6 +152,30 @@ class GatewayBrowserRuntime:
             raise RuntimeError("Browser session was not found.")
         return session
 
+    def _require_session(
+        self,
+        browser_session_id: str,
+        *,
+        workspace_id: str,
+        gateway_id: str,
+    ) -> Dict[str, Any]:
+        session = self._session(browser_session_id)
+        session_workspace = _token(session.get("workspace_id"))
+        session_gateway = _token(session.get("gateway_id"))
+        caller_workspace = _token(workspace_id)
+        caller_gateway = _token(gateway_id)
+        if session_workspace and caller_workspace and session_workspace != caller_workspace:
+            raise RuntimeError(
+                f"Cross-workspace browser session access denied: "
+                f"session workspace {session_workspace} != caller {caller_workspace}"
+            )
+        if session_gateway and caller_gateway and session_gateway != caller_gateway:
+            raise RuntimeError(
+                f"Cross-gateway browser session access denied: "
+                f"session gateway {session_gateway} != caller {caller_gateway}"
+            )
+        return session
+
     def _session_mode_and_attach(self, payload: Dict[str, Any], session: Optional[Dict[str, Any]] = None) -> tuple[str, Optional[str]]:
         metadata = (
             payload.get("browser_metadata")
@@ -155,6 +222,10 @@ class GatewayBrowserRuntime:
         session_profile = _token(payload.get("session_profile")) or "gateway_default"
         url = _token(payload.get("url"))
         session_mode, attach_endpoint_url = self._session_mode_and_attach(payload)
+        # Validate URL and attach endpoint before any adapter call
+        _validate_browser_url(url)
+        if session_mode == "existing_session_attach" and attach_endpoint_url:
+            _validate_attach_endpoint_url(attach_endpoint_url)
         browser_metadata = payload.get("browser_metadata") if isinstance(payload.get("browser_metadata"), dict) else {}
         runtime_state = await self._configure_adapter(
             session_mode=session_mode,
@@ -190,6 +261,9 @@ class GatewayBrowserRuntime:
             "current_url": _token(snapshot.get("url")) or _token(runtime_state.get("current_url")) or url or None,
             "manual_takeover": False,
             "resume_supported": status in {"active", "attached"},
+            "workspace_id": _token(payload.get("workspace_id")),
+            "gateway_id": _token(payload.get("gateway_id")),
+            "tenant_id": _token(payload.get("tenant_id")),
             "checkpoint": checkpoint,
             "snapshot": snapshot,
             "metadata": metadata,
@@ -202,7 +276,11 @@ class GatewayBrowserRuntime:
 
     async def perform_action(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         browser_session_id = _token(payload.get("browser_session_id"))
-        session = self._session(browser_session_id)
+        workspace_id = _token(payload.get("workspace_id"))
+        gateway_id = _token(payload.get("gateway_id"))
+        session = self._require_session(browser_session_id, workspace_id=workspace_id, gateway_id=gateway_id)
+        if session.get("status") in ("interrupted",):
+            raise RuntimeError("Browser session has been interrupted and is no longer usable.")
         session_mode, attach_endpoint_url = self._session_mode_and_attach(payload, session)
         runtime_state = await self._configure_adapter(
             session_mode=session_mode,
@@ -228,7 +306,9 @@ class GatewayBrowserRuntime:
         action_args = dict(payload.get("action_args") or {})
         result: Dict[str, Any] = {}
         if action == "navigate":
-            result = dict(await self._adapter.navigate(_token(action_args.get("url"))))
+            nav_url = _token(action_args.get("url"))
+            _validate_browser_url(nav_url)
+            result = dict(await self._adapter.navigate(nav_url))
         elif action == "observe":
             result = dict(await self._adapter.observe())
         elif action == "click":
@@ -254,7 +334,10 @@ class GatewayBrowserRuntime:
         elif action == "screenshot":
             result = {"path": await self._adapter.screenshot(_token(action_args.get("selector")) or None)}
         elif action == "new_tab":
-            result = {"tab_id": await self._adapter.new_tab(_token(action_args.get("url")) or None)}
+            tab_url = _token(action_args.get("url"))
+            if tab_url:
+                _validate_browser_url(tab_url)
+            result = {"tab_id": await self._adapter.new_tab(tab_url or None)}
         elif action == "switch_tab":
             await self._adapter.switch_tab(int(action_args.get("tab_id") or 0))
             result = {"tab_id": int(action_args.get("tab_id") or 0)}
@@ -262,9 +345,11 @@ class GatewayBrowserRuntime:
             await self._adapter.close_tab(int(action_args.get("tab_id") or 0))
             result = {"tab_id": int(action_args.get("tab_id") or 0), "closed": True}
         elif action == "download_file":
+            dl_url = _token(action_args.get("url"))
+            _validate_browser_url(dl_url)
             result = {
                 "path": await self._adapter.download_file(
-                    _token(action_args.get("url")),
+                    dl_url,
                     _token(action_args.get("save_path")) or None,
                 )
             }
@@ -303,7 +388,10 @@ class GatewayBrowserRuntime:
         }
 
     async def takeover(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self._session(_token(payload.get("browser_session_id")))
+        browser_session_id = _token(payload.get("browser_session_id"))
+        workspace_id = _token(payload.get("workspace_id"))
+        gateway_id = _token(payload.get("gateway_id"))
+        session = self._require_session(browser_session_id, workspace_id=workspace_id, gateway_id=gateway_id)
         session_mode, attach_endpoint_url = self._session_mode_and_attach(payload, session)
         snapshot = await self._page_snapshot()
         session["manual_takeover"] = True
@@ -326,7 +414,10 @@ class GatewayBrowserRuntime:
         }
 
     async def resume_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self._session(_token(payload.get("browser_session_id")))
+        browser_session_id = _token(payload.get("browser_session_id"))
+        workspace_id = _token(payload.get("workspace_id"))
+        gateway_id = _token(payload.get("gateway_id"))
+        session = self._require_session(browser_session_id, workspace_id=workspace_id, gateway_id=gateway_id)
         checkpoint = payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else {}
         session_mode, attach_endpoint_url = self._session_mode_and_attach(payload, session)
         runtime_state = await self._configure_adapter(
@@ -382,14 +473,39 @@ class GatewayBrowserRuntime:
         }
 
     async def interrupt_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self._session(_token(payload.get("browser_session_id")))
+        browser_session_id = _token(payload.get("browser_session_id"))
+        workspace_id = _token(payload.get("workspace_id"))
+        gateway_id = _token(payload.get("gateway_id"))
+        session = self._require_session(browser_session_id, workspace_id=workspace_id, gateway_id=gateway_id)
+
+        # Safe repeated interrupt
+        if session.get("status") == "interrupted":
+            return {
+                "browser_session": session,
+                "status": "interrupted",
+                "interrupted": True,
+                "already_interrupted": True,
+            }
+
+        # Attempt to close the browser adapter/process
+        close_error = None
+        if self._adapter is not None:
+            try:
+                await self._adapter.close_browser()
+            except Exception as exc:
+                close_error = str(exc)
+
         session["status"] = "interrupted"
-        self._sessions[_token(payload.get("browser_session_id"))] = session
+        session["reusable"] = False
+        if close_error:
+            session.setdefault("metadata", {})["interrupt_close_error"] = close_error
+        self._sessions[browser_session_id] = session
         return {
             "browser_session": session,
             "status": "interrupted",
             "interrupted": True,
-            "interrupt_count": 1,
+            "already_interrupted": False,
+            "close_error": close_error,
         }
 
     async def dispatch(self, action: str, payload: Dict[str, Any]) -> Dict[str, Any]:

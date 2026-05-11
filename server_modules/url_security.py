@@ -17,16 +17,16 @@ def _ip_block_reason(value: str) -> str | None:
         return None
     if ip.is_loopback:
         return "loopback"
-    if ip.is_private:
-        return "private"
     if ip.is_link_local:
         return "link-local"
-    if ip.is_multicast:
-        return "multicast"
-    if ip.is_reserved:
-        return "reserved"
     if ip.is_unspecified:
         return "unspecified"
+    if ip.is_multicast:
+        return "multicast"
+    if ip.is_private:
+        return "private"
+    if ip.is_reserved:
+        return "reserved"
     return None
 
 

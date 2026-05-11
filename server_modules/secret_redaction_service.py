@@ -10,6 +10,7 @@ _SENSITIVE_KEY_PARTS = (
     "access_token",
     "refresh_token",
     "auth_token",
+    "token",
     "authorization",
     "password",
     "secret",

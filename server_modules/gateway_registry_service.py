@@ -152,6 +152,7 @@ async def create_gateway_session(
     gateway_token: str,
     session_ttl_seconds: Optional[int] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     registration = gateway_state_repository.get_gateway_registration(gateway_id)
     if not registration:
@@ -259,6 +260,7 @@ def rotate_gateway_registration_token(
     tenant_id: str,
     workspace_id: str,
     user_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     registration = gateway_state_repository.get_gateway_registration(gateway_id)
     if not registration:
@@ -320,6 +322,7 @@ def revoke_gateway_registration(
     workspace_id: str,
     user_id: Optional[str] = None,
     reason: Optional[str] = None,
+    trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     registration = gateway_state_repository.get_gateway_registration(gateway_id)
     if not registration:

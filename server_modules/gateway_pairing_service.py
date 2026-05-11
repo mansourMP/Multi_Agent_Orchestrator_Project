@@ -4,7 +4,12 @@ from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from server_modules import auth, gateway_state_repository
+from server_modules import (
+    activity_ledger_service,
+    auth,
+    gateway_activity_service,
+    gateway_state_repository,
+)
 
 
 DEFAULT_GATEWAY_PAIRING_TTL_SECONDS = 15 * 60
@@ -32,7 +37,11 @@ def create_gateway_pairing_intent(
     display_name: Optional[str] = None,
     platform: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    merged_metadata = dict(metadata or {})
+    if trace_id:
+        merged_metadata["trace_id"] = trace_id
     return gateway_state_repository.create_pairing_intent(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -40,7 +49,7 @@ def create_gateway_pairing_intent(
         ttl_seconds=_normalize_gateway_pairing_ttl_seconds(ttl_seconds),
         display_name=display_name,
         platform=platform,
-        metadata=metadata,
+        metadata=merged_metadata,
         max_pending_intents=MAX_PENDING_GATEWAY_PAIRING_INTENTS,
     )
 
@@ -54,7 +63,11 @@ def register_gateway(
     platform: Optional[str] = None,
     capabilities: Optional[list[str]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    merged_metadata = dict(metadata or {})
+    if trace_id:
+        merged_metadata["trace_id"] = trace_id
     registration = gateway_state_repository.register_gateway_from_pairing(
         pairing_token=pairing_token,
         device_id=device_id,
@@ -62,7 +75,7 @@ def register_gateway(
         display_name=display_name,
         platform=platform,
         capabilities=capabilities,
-        metadata=metadata,
+        metadata=merged_metadata,
     )
     try:
         device_link = auth.ensure_local_gateway_device_link(
@@ -104,4 +117,22 @@ def register_gateway(
         },
     ) or registration
     linked_registration["gateway_token"] = str(registration.get("gateway_token") or "")
+    try:
+        activity_ledger_service._run_coro_sync(
+            gateway_activity_service.append_gateway_activity(
+                linked_registration,
+                action="gateway_registered",
+                title="Gateway registered",
+                summary="Local gateway paired and registered to the control plane.",
+                status="active",
+                event_class="system_activity",
+                payload={
+                    "device_id": str(linked_registration.get("device_id") or ""),
+                    "gateway_id": str(linked_registration.get("gateway_id") or ""),
+                },
+                trace_id=trace_id,
+            )
+        )
+    except Exception:
+        pass
     return linked_registration

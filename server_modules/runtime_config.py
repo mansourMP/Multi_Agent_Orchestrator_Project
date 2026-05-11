@@ -386,6 +386,39 @@ async def app_lifespan(_: FastAPI):
 
 # --- CONFIG ---
 FRONTEND_ORIGINS = config_str("FRONTEND_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
+
+
+def _assert_frontend_origins_safe_for_environment() -> None:
+    """Refuse to start if FRONTEND_ORIGINS points at localhost in staging/production."""
+    resolved_env = _resolved_environment()
+    if resolved_env not in {"staging", "production", "prod"}:
+        return
+    origins = [o.strip() for o in FRONTEND_ORIGINS.split(",") if o.strip()]
+    if not origins:
+        raise RuntimeError(
+            "FRONTEND_ORIGINS is empty. In staging/production it must be set to HTTPS origin(s)."
+        )
+    blocked_hostnames = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+    for origin in origins:
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(origin)
+            hostname = (parsed.hostname or "").lower()
+        except Exception:
+            hostname = ""
+        if hostname in blocked_hostnames:
+            raise RuntimeError(
+                f"FRONTEND_ORIGINS contains localhost origin '{origin}'. "
+                f"In staging/production only HTTPS origins are allowed. "
+                f"Set FRONTEND_ORIGINS to your production frontend URL(s)."
+            )
+        if parsed.scheme and parsed.scheme != "https":
+            raise RuntimeError(
+                f"FRONTEND_ORIGINS origin '{origin}' must use HTTPS in staging/production."
+            )
+
+
+_assert_frontend_origins_safe_for_environment()
 EMPYRALIS_BILLING_PROVIDER = config_str("EMPYRALIS_BILLING_PROVIDER", "stripe")
 EMPYRALIS_STRIPE_SECRET_KEY = config_str("EMPYRALIS_STRIPE_SECRET_KEY", config_str("STRIPE_SECRET_KEY", ""))
 EMPYRALIS_STRIPE_WEBHOOK_SECRET = config_str("EMPYRALIS_STRIPE_WEBHOOK_SECRET", "")

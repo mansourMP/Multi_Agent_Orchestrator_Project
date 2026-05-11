@@ -134,17 +134,20 @@ loopback URLs; staging and production cannot.
 
 Production/staging fail-closed rules:
 
-- server startup rejects `FRONTEND_ORIGINS` if it is empty, non-HTTPS, or points
-  at localhost
-- server startup rejects the public API URL unless it is HTTPS
-- mobile Expo config rejects production/staging builds with missing, non-HTTPS,
-  or localhost runtime URLs
-- frontend server routing rejects localhost control-plane URLs in
-  staging/production
-- gateway companion rejects localhost or non-HTTPS `EMPYRALIS_GATEWAY_API_URL`
-  in staging/production
-- gateway websocket URLs, when configured, must use `wss://` in
-  staging/production
+- [x] server startup rejects `FRONTEND_ORIGINS` if it is empty, non-HTTPS, or points
+  at localhost  _(runtime_config.py:388-416, `_assert_frontend_origins_safe_for_environment`)_
+- [x] server startup rejects the public API URL unless it is HTTPS
+  _(control-plane-base-url.ts:18-36, `validateControlPlaneBaseUrl`)_
+- [x] mobile Expo config rejects production/staging builds with missing, non-HTTPS,
+  or localhost runtime URLs  _(mobile/src/lib/api.ts:33-80, `assertProductionRuntimeUrl`)_
+- [x] frontend server routing rejects localhost control-plane URLs in
+  staging/production  _(control-plane-base-url.ts:18-36, `validateControlPlaneBaseUrl`)_
+- [x] gateway companion rejects localhost or non-HTTPS `EMPYRALIS_GATEWAY_API_URL`
+  in staging/production  _(empyralis-gateway/src/config.ts:37-53, `assertCloudApiBaseUrl`)_
+- [x] gateway websocket URLs, when configured, must use `wss://` in
+  staging/production  _(empyralis-gateway/src/config.ts:80-91, `assertWebSocketUrl`; ws-client.ts:162)_
+- [x] gateway supervisor URL rejects localhost in staging/production
+  _(empyralis-gateway/src/config.ts:95-99, `assertCloudApiBaseUrl` applied to supervisorUrl)_
 
 Development exceptions:
 

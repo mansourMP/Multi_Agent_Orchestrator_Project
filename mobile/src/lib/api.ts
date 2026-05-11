@@ -30,8 +30,55 @@ const extra = (Constants.expoConfig?.extra ?? {}) as {
   empyralistChatModel?: string;
 };
 
+function isCloudEnvironment(): boolean {
+  const value = String(
+    process.env.EXPO_PUBLIC_EMPYRALIS_DEPLOY_ENV ||
+    process.env.EMPYRALIS_DEPLOY_ENV ||
+    process.env.NODE_ENV ||
+    "",
+  )
+    .trim()
+    .toLowerCase();
+  return value === "production" || value === "prod" || value === "staging";
+}
+
+function assertProductionRuntimeUrl(url: string): string {
+  if (!isCloudEnvironment()) {
+    return url;
+  }
+  const normalized = normalizeServerUrl(url);
+  if (!normalized) {
+    throw new Error(
+      "Production mobile runtime URL is not configured. " +
+      "Set EXPO_PUBLIC_RUNTIME_URL or EXPO_PUBLIC_EMPYRALIST_API_URL to an HTTPS runtime host.",
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error(
+      "Production mobile runtime URL must be an absolute HTTPS URL. " +
+      `Got: ${normalized || "(empty)"}`,
+    );
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(
+      "Production mobile runtime URL must use HTTPS. " +
+      `Got: ${parsed.protocol}//${parsed.hostname}`,
+    );
+  }
+  if (["127.0.0.1", "localhost", "0.0.0.0", "::1"].includes(parsed.hostname)) {
+    throw new Error(
+      "Production mobile runtime URL cannot point at localhost. " +
+      `Got: ${parsed.hostname}. Set EXPO_PUBLIC_RUNTIME_URL to your HTTPS runtime host.`,
+    );
+  }
+  return normalized;
+}
+
 export function getDefaultRuntimeUrl() {
-  return normalizeServerUrl(
+  return assertProductionRuntimeUrl(
     process.env.EXPO_PUBLIC_RUNTIME_URL ||
     getConfiguredEmpyralistApiUrl() ||
     extra.runtimeUrl ||

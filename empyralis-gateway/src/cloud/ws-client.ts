@@ -1,6 +1,6 @@
 import crypto from "crypto";
 
-import { GatewayConfig } from "../config";
+import { GatewayConfig, assertWebSocketUrl } from "../config";
 import { GatewayCheckpoints } from "../state/checkpoints";
 import { GatewayStateDb } from "../state/db";
 import { GatewayJournal } from "../state/journal";
@@ -159,7 +159,8 @@ export class GatewayWsClient {
   ): Promise<GatewaySessionPayload> {
     const session = await this.createSession(identity.gatewayId);
     try {
-      this.socket = await this.openSocket(session.ws_url);
+      const wsUrl = assertWebSocketUrl(session.ws_url);
+      this.socket = await this.openSocket(wsUrl);
       this._connectionStartedAt = Date.now();
       this.socket.onmessage = (event) => {
         void this.handleIncomingFrame(typeof event.data === "string" ? event.data : String(event.data));

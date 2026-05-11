@@ -77,6 +77,24 @@ function resolveBrowserPythonExecutable(projectRoot: string, explicitValue: stri
   return "python3";
 }
 
+export function assertWebSocketUrl(value: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (!isCloudEnvironment(env)) {
+    return value;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("WebSocket URL must be an absolute URL in staging/production.");
+  }
+  if (parsed.protocol !== "wss:") {
+    throw new Error(
+      `WebSocket URL must use wss:// in staging/production. Got: ${parsed.protocol}`,
+    );
+  }
+  return value;
+}
+
 export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const homeDir = env.HOME || os.homedir();
   const browserProjectRoot = path.resolve(env.EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT || process.cwd());
@@ -92,7 +110,10 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     heartbeatIntervalMs: normalizePositiveInt(env.EMPYRALIS_GATEWAY_HEARTBEAT_MS, 20_000),
     reconnectMinDelayMs: normalizePositiveInt(env.EMPYRALIS_GATEWAY_RECONNECT_MIN_MS, 1_000),
     reconnectMaxDelayMs: normalizePositiveInt(env.EMPYRALIS_GATEWAY_RECONNECT_MAX_MS, 30_000),
-    supervisorUrl: normalizeBaseUrl(env.EMPYRALIS_SUPERVISOR_URL, "http://127.0.0.1:7788"),
+    supervisorUrl: assertCloudApiBaseUrl(
+      normalizeBaseUrl(env.EMPYRALIS_SUPERVISOR_URL, "http://127.0.0.1:7788"),
+      env,
+    ),
     supervisorSecret: String(env.EMPYRALIS_SUPERVISOR_SECRET || "").trim() || undefined,
     supervisorTimeoutMs: normalizePositiveInt(env.EMPYRALIS_SUPERVISOR_TIMEOUT_MS, 10_000),
     pairingToken: String(env.EMPYRALIS_GATEWAY_PAIRING_TOKEN || "").trim() || undefined,

@@ -2,6 +2,7 @@ import pino from "pino";
 
 import { GatewayStateDb } from "../../state/db";
 import { redactCredentials } from "../foundation/credential-redactor";
+import { DraftManager, normalizeChannelOutboundOperation } from "../foundation/draft-manager";
 import type {
   GatewayChannelInboundPayload,
   GatewayChannelOutboundPayload,
@@ -55,24 +56,6 @@ export interface TelegramRuntimeDependencies {
   adapter?: TelegramRuntimeAdapter;
 }
 
-interface TelegramDraftState {
-  remoteJid: string;
-  idempotencyKey: string;
-  replyToExternalMessageId?: string;
-  text: string;
-  sequence: number;
-}
-
-type ChannelOutboundOperation = NonNullable<GatewayChannelOutboundPayload["operation"]>;
-
-function normalizeChannelOutboundOperation(operation: unknown): ChannelOutboundOperation {
-  const value = String(operation || "").trim();
-  if (value === "draft_start" || value === "draft_delta" || value === "draft_final") {
-    return value;
-  }
-  return "send_final";
-}
-
 const TELEGRAM_REDACT_STRING_KEYS = ["apiHash", "phoneNumber", "sessionString", "sessionToken"] as const;
 const TELEGRAM_REDACT_OBJECT_KEYS = ["authState", "creds", "keys"] as const;
 
@@ -92,7 +75,7 @@ export class TelegramPersonalRuntime {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private connectPromise: Promise<void> | null = null;
   private reconnectAttempts = 0;
-  private readonly drafts = new Map<string, TelegramDraftState>();
+  private readonly draftManager = new DraftManager();
 
   constructor(
     private readonly db: GatewayStateDb,
@@ -186,63 +169,24 @@ export class TelegramPersonalRuntime {
 
   private async handleDraftOutbound(
     frame: GatewayRequestEnvelope<GatewayChannelOutboundPayload>,
-    operation: Exclude<ChannelOutboundOperation, "send_final">,
+    operation: "draft_start" | "draft_delta" | "draft_final",
   ): Promise<Record<string, unknown>> {
     const payload = frame.payload;
-    const draftId = String(payload.draft_id || payload.idempotency_key || "").trim();
-    const remoteJid = String(payload.remote_jid || "").trim();
-    const idempotencyKey = String(payload.idempotency_key || "").trim();
-    const sequence = Number.isFinite(Number(payload.sequence)) ? Number(payload.sequence) : 0;
-    if (!draftId || !remoteJid || !idempotencyKey) {
-      throw new Error("channel.outbound draft operation requires draft_id, idempotency_key, and remote_jid.");
-    }
-    const previous = this.drafts.get(draftId);
-    if (previous && sequence < previous.sequence) {
-      return {
-        channel_key: TELEGRAM_PERSONAL_CHANNEL_KEY,
-        provider: TELEGRAM_PERSONAL_PROVIDER,
-        idempotency_key: idempotencyKey,
-        draft_id: draftId,
+    return this.draftManager.handleDraftOutbound(
+      {
+        draftId: String(payload.draft_id || payload.idempotency_key || "").trim(),
+        remoteJid: String(payload.remote_jid || "").trim(),
+        idempotencyKey: String(payload.idempotency_key || "").trim(),
+        sequence: Number.isFinite(Number(payload.sequence)) ? Number(payload.sequence) : 0,
         operation,
-        delivered: false,
-        stale: true,
-      };
-    }
-    const nextText =
-      operation === "draft_delta"
-        ? `${previous?.text ?? ""}${String(payload.delta || "")}`
-        : String(payload.text || previous?.text || payload.delta || "");
-    const draft: TelegramDraftState = {
-      remoteJid,
-      idempotencyKey,
-      replyToExternalMessageId: String(payload.reply_to_external_message_id || previous?.replyToExternalMessageId || "").trim() || undefined,
-      text: nextText,
-      sequence,
-    };
-    this.drafts.set(draftId, draft);
-    if (operation !== "draft_final") {
-      return {
-        channel_key: TELEGRAM_PERSONAL_CHANNEL_KEY,
+        text: String(payload.text || ""),
+        delta: String(payload.delta || ""),
+        replyToExternalMessageId: String(payload.reply_to_external_message_id || "").trim() || undefined,
+        channelKey: TELEGRAM_PERSONAL_CHANNEL_KEY,
         provider: TELEGRAM_PERSONAL_PROVIDER,
-        idempotency_key: idempotencyKey,
-        draft_id: draftId,
-        operation,
-        delivered: false,
-        text: draft.text,
-      };
-    }
-    try {
-      return await this.sendFinalOutbound({
-        ...payload,
-        idempotency_key: idempotencyKey,
-        remote_jid: remoteJid,
-        text: draft.text,
-        reply_to_external_message_id: draft.replyToExternalMessageId,
-        operation: "send_final",
-      });
-    } finally {
-      this.drafts.delete(draftId);
-    }
+      },
+      (augmented) => this.sendFinalOutbound(augmented as unknown as GatewayChannelOutboundPayload),
+    );
   }
 
   private async sendFinalOutbound(payload: GatewayChannelOutboundPayload): Promise<Record<string, unknown>> {
@@ -256,11 +200,20 @@ export class TelegramPersonalRuntime {
     if (!idempotencyKey || !remoteJid || !text) {
       throw new Error("channel.outbound requires idempotency_key, remote_jid, and text.");
     }
-    const existing = await this.outboundStore.beginSend(idempotencyKey, {
-      remoteJid,
-      text,
-      replyToExternalMessageId: String(payload.reply_to_external_message_id || "").trim() || undefined,
-    });
+    const now = new Date().toISOString();
+    const existing = await this.outboundStore.beginSend(
+      idempotencyKey,
+      {
+        idempotencyKey,
+        remoteJid,
+        text,
+        replyToExternalMessageId: String(payload.reply_to_external_message_id || "").trim() || undefined,
+        status: "pending" as const,
+        attemptCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+    );
     if (existing.status === "delivered") {
       return {
         channel_key: TELEGRAM_PERSONAL_CHANNEL_KEY,

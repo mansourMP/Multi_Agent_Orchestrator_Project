@@ -8,10 +8,12 @@ test("computeReconnectDelay is at least initialDelayMs on first attempt", () => 
     `delay ${delay} should be >= initialDelayMs ${DEFAULT_RECONNECT_POLICY.initialDelayMs}`);
 });
 
-test("computeReconnectDelay increases exponentially", () => {
-  const d0 = computeReconnectDelay(0);
-  const d2 = computeReconnectDelay(2);
-  assert.ok(d2 > d0, `delay at attempt 2 (${d2}) should be > delay at attempt 0 (${d0})`);
+test("computeReconnectDelay increases with attempts", () => {
+  // Use zero-jitter policy for deterministic test
+  const policy = { initialDelayMs: 1000, maxDelayMs: 30000, factor: 2, jitterRatio: 0, maxAttempts: 12 };
+  const d0 = computeReconnectDelay(0, policy);
+  const d3 = computeReconnectDelay(3, policy);
+  assert.ok(d3 >= d0 * 2, `delay at attempt 3 (${d3}) should be >= 2x delay at attempt 0 (${d0})`);
 });
 
 test("computeReconnectDelay caps at maxDelayMs", () => {

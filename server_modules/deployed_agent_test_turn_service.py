@@ -7,6 +7,7 @@ from server_modules import (
     deployed_agent_config_schema,
     deployed_agent_runtime_contract_service,
     deployed_agent_service,
+    deployed_agent_transparency_service,
     security_audit_service,
 )
 from server_modules.schemas import DeployedAgentTestTurnRequest, DeployedAgentTestTurnResponse
@@ -254,6 +255,28 @@ async def execute_test_turn(
         tools_used=tools_used,
     )
 
+    test_result = {
+        "reply": reply,
+        "policy_decisions": policy_decisions,
+        "tools_considered": tools_considered,
+        "tools_used": tools_used,
+        "memory_context": memory_context,
+        "approval_required": approval_required,
+        "audit_events": audit_events,
+        "trace_id": trace_id,
+    }
+    try:
+        events = deployed_agent_transparency_service.emit_deployed_agent_test_turn_events(
+            trace_id=trace_id,
+            workspace_id=workspace_id,
+            deployed_agent_id=deployed_agent_id,
+            user_message=normalized_message,
+            test_result=test_result,
+        )
+        transparency_payloads = [e.to_user_payload() for e in events]
+    except Exception:
+        transparency_payloads = []
+
     return DeployedAgentTestTurnResponse(
         reply=reply,
         policy_decisions=policy_decisions,
@@ -263,6 +286,7 @@ async def execute_test_turn(
         approval_required=approval_required,
         audit_events=audit_events,
         trace_id=trace_id,
+        transparency_events=transparency_payloads,
     )
 
 

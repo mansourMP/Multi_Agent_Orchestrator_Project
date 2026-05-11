@@ -304,3 +304,4 @@ class DeployedAgentTestTurnResponse(BaseModel):
     approval_required: bool = False
     audit_events: list[dict] = Field(default_factory=list)
     trace_id: str = ""
+    transparency_events: list[dict] = Field(default_factory=list)

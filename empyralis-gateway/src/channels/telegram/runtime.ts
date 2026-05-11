@@ -200,6 +200,11 @@ export class TelegramPersonalRuntime {
     if (!idempotencyKey || !remoteJid || !text) {
       throw new Error("channel.outbound requires idempotency_key, remote_jid, and text.");
     }
+    if (text.length > 4096) {
+      throw new Error(
+        `Telegram message exceeds maximum length of 4096 characters (got ${text.length}).`,
+      );
+    }
     const now = new Date().toISOString();
     const existing = await this.outboundStore.beginSend(
       idempotencyKey,

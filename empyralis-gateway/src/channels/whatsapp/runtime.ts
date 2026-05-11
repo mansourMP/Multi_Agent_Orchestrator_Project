@@ -230,6 +230,11 @@ export class WhatsAppPersonalRuntime {
     if (!idempotencyKey || !remoteJid || !text) {
       throw new Error("channel.outbound requires idempotency_key, remote_jid, and text.");
     }
+    if (text.length > 65536) {
+      throw new Error(
+        `WhatsApp message exceeds maximum length of 65536 characters (got ${text.length}).`,
+      );
+    }
     const clientMessageId = buildWhatsAppClientMessageId(idempotencyKey);
     const now = new Date().toISOString();
     const existing = await this.outboundStore.beginSend(

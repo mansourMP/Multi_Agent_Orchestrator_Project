@@ -1,6 +1,7 @@
 import pino from "pino";
 
 import { GatewayStateDb } from "../../state/db";
+import { redactCredentials } from "../foundation/credential-redactor";
 import type {
   GatewayChannelInboundPayload,
   GatewayChannelOutboundPayload,
@@ -72,23 +73,11 @@ function normalizeChannelOutboundOperation(operation: unknown): ChannelOutboundO
   return "send_final";
 }
 
+const TELEGRAM_REDACT_STRING_KEYS = ["apiHash", "phoneNumber", "sessionString", "sessionToken"] as const;
+const TELEGRAM_REDACT_OBJECT_KEYS = ["authState", "creds", "keys"] as const;
+
 export function redactTelegramCredentials(state: Record<string, unknown>): Record<string, unknown> {
-  const redacted = JSON.parse(JSON.stringify(state)) as Record<string, unknown>;
-
-  function walk(obj: Record<string, unknown>): void {
-    for (const [key, value] of Object.entries(obj)) {
-      if (key === "apiHash" || key === "phoneNumber" || key === "sessionString" || key === "sessionToken") {
-        obj[key] = "[REDACTED]";
-      } else if ((key === "authState" || key === "creds" || key === "keys") && value && typeof value === "object") {
-        obj[key] = { redacted: true };
-      } else if (value && typeof value === "object" && !Array.isArray(value)) {
-        walk(value as Record<string, unknown>);
-      }
-    }
-  }
-
-  walk(redacted);
-  return redacted;
+  return redactCredentials(state, TELEGRAM_REDACT_STRING_KEYS, TELEGRAM_REDACT_OBJECT_KEYS);
 }
 
 export class TelegramPersonalRuntime {

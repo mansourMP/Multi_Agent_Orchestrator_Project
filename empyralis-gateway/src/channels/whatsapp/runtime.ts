@@ -2,6 +2,7 @@ import path from "path";
 import pino from "pino";
 
 import { GatewayStateDb } from "../../state/db";
+import { redactCredentials } from "../foundation/credential-redactor";
 import type {
   GatewayChannelInboundPayload,
   GatewayChannelOutboundPayload,
@@ -96,27 +97,11 @@ function normalizeChannelOutboundOperation(operation: unknown): ChannelOutboundO
   return "send_final";
 }
 
+const WHATSAPP_REDACT_STRING_KEYS = ["qrCode", "pairingCode", "sessionString", "sessionToken"] as const;
+const WHATSAPP_REDACT_OBJECT_KEYS = ["creds", "keys", "authState", "signalIdentities", "preKeys", "signedPreKey"] as const;
+
 export function redactWhatsAppCredentials(state: Record<string, unknown>): Record<string, unknown> {
-  const redacted = JSON.parse(JSON.stringify(state)) as Record<string, unknown>;
-
-  function walk(obj: Record<string, unknown>): void {
-    for (const [key, value] of Object.entries(obj)) {
-      if (
-        (key === "creds" || key === "keys" || key === "authState" || key === "signalIdentities" || key === "preKeys" || key === "signedPreKey") &&
-        value &&
-        typeof value === "object"
-      ) {
-        obj[key] = { redacted: true };
-      } else if (key === "qrCode" || key === "pairingCode" || key === "sessionString" || key === "sessionToken") {
-        obj[key] = "[REDACTED]";
-      } else if (value && typeof value === "object" && !Array.isArray(value)) {
-        walk(value as Record<string, unknown>);
-      }
-    }
-  }
-
-  walk(redacted);
-  return redacted;
+  return redactCredentials(state, WHATSAPP_REDACT_STRING_KEYS, WHATSAPP_REDACT_OBJECT_KEYS);
 }
 
 export class WhatsAppPersonalRuntime {

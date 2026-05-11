@@ -54,6 +54,73 @@ def _row(**overrides):
     return row
 
 
+def test_phase7_row_filter_only_allows_pilot_channels_or_pilot_actions():
+    assert pilot_proof_service._is_phase7_pilot_row(_row(channel="telegram")) is True
+    assert pilot_proof_service._is_phase7_pilot_row(_row(channel="telegram_personal", action="sage_chat.completed")) is True
+    assert pilot_proof_service._is_phase7_pilot_row(_row(channel="pilot", action="pilot_feedback.reported")) is True
+    assert pilot_proof_service._is_phase7_pilot_row(_row(channel="email", action="pilot_feedback.reported")) is True
+    assert pilot_proof_service._is_phase7_pilot_row(_row(channel="pilot", action="sage_chat.completed")) is False
+
+
+def test_project_row_uses_action_or_event_class_for_workflow_fallback():
+    projected = pilot_proof_service._project_row(
+        _row(
+            channel="pilot",
+            action="sage_chat.completed",
+            event_class="sage_activity",
+            metadata={},
+            payload={"elapsed_seconds": 2.5},
+        )
+    )
+
+    assert projected["workflow"] == "sage_chat.completed"
+    assert projected["response_time_seconds"] == 2.5
+
+
+def test_open_p0_or_p1_issue_requires_open_status_and_review_required():
+    base_issue = {
+        "workflow": "customer_question_handling",
+        "severity": "p0",
+        "issue": {"severity": "p0", "fix_status": "open"},
+    }
+    assert (
+        pilot_proof_service._is_open_p0_p1_issue(
+            _row(
+                action="pilot_issue.reported",
+                status="open",
+                channel="pilot",
+                payload=base_issue,
+                review_required=False,
+            )
+        )
+        is False
+    )
+    assert (
+        pilot_proof_service._is_open_p0_p1_issue(
+            _row(
+                action="pilot_issue.reported",
+                status="open",
+                channel="pilot",
+                payload=base_issue,
+                review_required=True,
+            )
+        )
+        is True
+    )
+    assert (
+        pilot_proof_service._is_open_p0_p1_issue(
+            _row(
+                action="pilot_issue.reported",
+                status="resolved",
+                channel="pilot",
+                payload=base_issue,
+                review_required=True,
+            )
+        )
+        is False
+    )
+
+
 @pytest.mark.anyio
 async def test_insufficient_data_blocks_proof():
     with patch(
@@ -148,6 +215,7 @@ async def test_unresolved_p0_issue_blocks_readiness_and_ads():
             "severity": "p0",
             "issue": {"severity": "p0", "fix_status": "open"},
         },
+        review_required=True,
     )
     with patch(
         "server_modules.pilot_proof_service.pilot_operations_service.build_pilot_operations_report",

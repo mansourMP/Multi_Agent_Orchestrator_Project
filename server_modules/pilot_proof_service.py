@@ -52,6 +52,18 @@ def _trace_ids(events: List[Dict[str, Any]], *, limit: int = 20) -> List[str]:
 def _project_row(row: Dict[str, Any]) -> Dict[str, Any]:
     payload = _dict(row.get("payload"))
     metadata = _dict(row.get("metadata"))
+    response_time_seconds: Optional[float] = None
+    for source in (metadata, payload):
+        for key in ("response_time_seconds", "runtime_duration_seconds", "duration_seconds", "elapsed_seconds"):
+            try:
+                value = float(source.get(key))
+            except (TypeError, ValueError):
+                continue
+            if value >= 0:
+                response_time_seconds = value
+                break
+        if response_time_seconds is not None:
+            break
     return {
         "id": _text(row.get("id")) or None,
         "created_at": _text(row.get("created_at")) or None,
@@ -60,8 +72,9 @@ def _project_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "status": _token(row.get("status")) or None,
         "channel": _token(row.get("channel")) or _token(metadata.get("channel")) or _token(payload.get("channel")) or None,
         "trace_id": _text(row.get("trace_id")) or None,
-        "workflow": _token(metadata.get("workflow")) or _token(payload.get("workflow")) or None,
+        "workflow": _token(metadata.get("workflow")) or _token(payload.get("workflow")) or _token(row.get("action")) or _token(row.get("event_class")) or None,
         "severity": _token(payload.get("severity")) or _token(_dict(payload.get("issue")).get("severity")) or None,
+        "response_time_seconds": response_time_seconds,
         "summary": _text(row.get("summary")) or None,
     }
 
@@ -70,7 +83,6 @@ def _is_phase7_pilot_row(row: Dict[str, Any]) -> bool:
     return bool(
         pilot_operations_service._is_pilot_channel(row)
         or _token(row.get("action")).startswith("pilot_")
-        or _token(_dict(row.get("metadata")).get("phase")) == "phase_7_closed_pilot_operations"
     )
 
 
@@ -80,8 +92,15 @@ def _is_open_p0_p1_issue(row: Dict[str, Any]) -> bool:
     payload = _dict(row.get("payload"))
     issue = _dict(payload.get("issue"))
     severity = _token(payload.get("severity")) or _token(issue.get("severity"))
-    fix_status = _token(issue.get("fix_status")) or _token(row.get("status")) or "open"
-    return severity in {"p0", "p1"} and fix_status not in {"fixed", "closed", "resolved"}
+    if severity not in {"p0", "p1"}:
+        return False
+    status = _token(issue.get("fix_status")) or _token(row.get("status"))
+    if status != "open":
+        return False
+    review_required = row.get("review_required")
+    if isinstance(review_required, bool):
+        return review_required
+    return _token(review_required) == "true"
 
 
 def _top_failure_reason(events: List[Dict[str, Any]]) -> Optional[str]:

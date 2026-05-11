@@ -22,6 +22,8 @@ test("persists explicit gateway health states in checkpoints", async () => {
       const saved = await checkpoints.saveHealthState(healthState, {
         pendingOutboxCount: expectedStates.indexOf(healthState),
       });
+      // Flush debounced write so load() sees the persisted value
+      await checkpoints.flush();
       const loaded = await checkpoints.load();
 
       assert.equal(saved.healthState, healthState);

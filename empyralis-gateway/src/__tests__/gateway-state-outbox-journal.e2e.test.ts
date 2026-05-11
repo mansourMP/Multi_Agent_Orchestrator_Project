@@ -41,6 +41,8 @@ test("gateway state, outbox, and journal survive reconnect and recovery", async 
       lastAck: outboundEntry.cursor,
       resumeReady: true,
     });
+    // Flush debounced writes before reading from a new GatewayStateDb instance
+    await firstCheckpoints.flush();
 
     const reconnectDb = new GatewayStateDb(rootDir);
     const reconnectCheckpoints = new GatewayCheckpoints(reconnectDb);
@@ -69,6 +71,7 @@ test("gateway state, outbox, and journal survive reconnect and recovery", async 
       pendingOutboxCount: 0,
       lastAck: inboundEntry.cursor,
     });
+    await reconnectCheckpoints.flush();
 
     const recoveredDb = new GatewayStateDb(rootDir);
     const recoveredCheckpoints = new GatewayCheckpoints(recoveredDb);

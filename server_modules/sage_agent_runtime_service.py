@@ -41,6 +41,7 @@ from server_modules.sage_approval_service import (
 )
 from server_modules.skill_registry import list_skill_definitions
 from server_modules.sage_transparency_service import emit_sage_turn_transparency_events
+from server_modules.transparency_event_store_service import persist_transparency_events
 
 ALLOWED_MODES = {SAGE_MODE}
 CLOUD_PROVIDER_IDS = ("anthropic", "deepseek", "openai", "gemini")
@@ -609,6 +610,19 @@ async def handle_sage_chat(
         )
     except Exception:
         transparency_events = []
+
+    # Best-effort persistence — failure never breaks the response
+    if transparency_events:
+        try:
+            payloads = [e.to_user_payload() for e in transparency_events]
+            persist_transparency_events(
+                trace_id=trace_id,
+                workspace_id=normalized_workspace_id,
+                events=payloads,
+                surface=normalized_surface,
+            )
+        except Exception:
+            pass
 
     return {
         "message": reply or "",

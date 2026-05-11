@@ -8,6 +8,7 @@ from server_modules import (
     deployed_agent_runtime_contract_service,
     deployed_agent_service,
     deployed_agent_transparency_service,
+    transparency_event_store_service,
     security_audit_service,
 )
 from server_modules.schemas import DeployedAgentTestTurnRequest, DeployedAgentTestTurnResponse
@@ -276,6 +277,17 @@ async def execute_test_turn(
         transparency_payloads = [e.to_user_payload() for e in events]
     except Exception:
         transparency_payloads = []
+
+    if transparency_payloads:
+        try:
+            transparency_event_store_service.persist_transparency_events(
+                trace_id=trace_id,
+                workspace_id=workspace_id,
+                events=transparency_payloads,
+                surface="studio_test",
+            )
+        except Exception:
+            pass
 
     return DeployedAgentTestTurnResponse(
         reply=reply,

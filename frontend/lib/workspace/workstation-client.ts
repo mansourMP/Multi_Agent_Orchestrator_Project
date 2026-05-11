@@ -661,6 +661,10 @@ export type WorkstationClientPaths = {
   artifactContent: (artifactId: string) => string;
   notifications: (limit?: number) => string;
   activity: (limit?: number) => string;
+  pilotProofReadiness: (days?: number, limit?: number) => string;
+  pilotProofCaseStudy: (days?: number, limit?: number) => string;
+  pilotProofInvestorMemo: (days?: number, limit?: number) => string;
+  pilotProofAdsReadiness: (days?: number, limit?: number) => string;
   sageMemory: string;
   sageProfile: string;
   sageHeartbeat: string;
@@ -816,6 +820,10 @@ export type WorkstationClient = {
     markAll?: boolean;
   }) => Promise<Record<string, unknown> | null>;
   listActivityTimeline: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  getPilotProofReadiness: (options?: { days?: number; limit?: number }) => Promise<Record<string, unknown>>;
+  getPilotProofCaseStudy: (options?: { days?: number; limit?: number }) => Promise<Record<string, unknown>>;
+  getPilotProofInvestorMemo: (options?: { days?: number; limit?: number }) => Promise<Record<string, unknown>>;
+  getPilotProofAdsReadiness: (options?: { days?: number; limit?: number }) => Promise<Record<string, unknown>>;
   listSageMemory: () => Promise<Record<string, unknown>>;
   getSageProfile: () => Promise<WorkstationSageProfileRecord>;
   getSageHeartbeat: () => Promise<WorkstationSageHeartbeatRecord>;
@@ -1241,6 +1249,14 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/notifications${buildQueryString({ workspace_id: workspaceId, limit })}`,
     activity: (limit = 80) =>
       `/api/activity/timeline${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    pilotProofReadiness: (days = 30, limit = 1000) =>
+      `/api/pilot/proof/readiness${buildQueryString({ workspace_id: workspaceId, days, limit })}`,
+    pilotProofCaseStudy: (days = 30, limit = 1000) =>
+      `/api/pilot/proof/case-study${buildQueryString({ workspace_id: workspaceId, days, limit })}`,
+    pilotProofInvestorMemo: (days = 30, limit = 1000) =>
+      `/api/pilot/proof/investor-memo${buildQueryString({ workspace_id: workspaceId, days, limit })}`,
+    pilotProofAdsReadiness: (days = 30, limit = 1000) =>
+      `/api/pilot/proof/ads-readiness${buildQueryString({ workspace_id: workspaceId, days, limit })}`,
     sageMemory:
       `/api/sage-memory${buildQueryString({ workspace_id: workspaceId })}`,
     sageProfile:
@@ -2284,6 +2300,26 @@ export function createWorkstationClient(
     listActivityTimeline: ({ limit = 80 } = {}) =>
       requestJson<Record<string, unknown>>({
         path: paths.activity(limit),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getPilotProofReadiness: ({ days = 30, limit = 1000 } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.pilotProofReadiness(days, limit),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getPilotProofCaseStudy: ({ days = 30, limit = 1000 } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.pilotProofCaseStudy(days, limit),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getPilotProofInvestorMemo: ({ days = 30, limit = 1000 } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.pilotProofInvestorMemo(days, limit),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getPilotProofAdsReadiness: ({ days = 30, limit = 1000 } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.pilotProofAdsReadiness(days, limit),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     listSageMemory: () =>

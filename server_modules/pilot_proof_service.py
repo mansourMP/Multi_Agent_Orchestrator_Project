@@ -94,7 +94,7 @@ def _is_open_p0_p1_issue(row: Dict[str, Any]) -> bool:
     severity = _token(payload.get("severity")) or _token(issue.get("severity"))
     if severity not in {"p0", "p1"}:
         return False
-    status = _token(issue.get("fix_status")) or _token(row.get("status"))
+    status = _token(row.get("status"))
     if status != "open":
         return False
     review_required = row.get("review_required")

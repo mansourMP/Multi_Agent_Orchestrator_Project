@@ -62,10 +62,28 @@ type ActivityProofItem = {
 
 type ActivityFilterId = 'all' | ActivityProofType;
 
+type PilotProofSnapshot = {
+  status: string;
+  adsReady: boolean;
+  pilotUsers: number;
+  messagesHandled: number;
+  tasksCompleted: number;
+  failureRate: number;
+  approvalRate: number;
+  usefulnessScore: number | null;
+  missingEvidence: string[];
+  unresolvedIssueCount: number;
+  evidenceTraceIds: string[];
+  caseStudyStatus: string;
+  investorMemoStatus: string;
+  adsReasons: string[];
+};
+
 const ACTIVE_THREAD_STORAGE_PREFIX = 'empyralis.chat.active-thread.v1';
 const HISTORY_PAGE_SIZE = 50;
 const threadsPaneCache = new Map<string, ThreadListItem[]>();
 const activityPaneCache = new Map<string, ActivityProofItem[]>();
+const pilotProofPaneCache = new Map<string, PilotProofSnapshot | null>();
 
 const ACTIVITY_FILTERS: Array<{ id: ActivityFilterId; label: string }> = [
   { id: 'all', label: 'All' },
@@ -99,6 +117,10 @@ function readRecord(value: unknown): Record<string, unknown> {
 
 function readList(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function readStringList(value: unknown): string[] {
+  return readList(value).map((item) => readString(item)).filter(Boolean);
 }
 
 function activeThreadStorageKey(workspaceId: string): string {
@@ -421,6 +443,52 @@ function mergeProofItems(items: ActivityProofItem[]): ActivityProofItem[] {
     .sort((left, right) => parseTimestamp(right.occurredAt) - parseTimestamp(left.occurredAt));
 }
 
+function normalizePilotProofSnapshot(
+  readinessPayload: unknown,
+  caseStudyPayload: unknown,
+  investorMemoPayload: unknown,
+  adsPayload: unknown,
+): PilotProofSnapshot | null {
+  const readinessRecord = readRecord(readinessPayload);
+  const proofReadiness = readRecord(readinessRecord.proof_readiness);
+  const proofMetrics = readRecord(readinessRecord.proof_metrics);
+  const evidence = readRecord(readinessRecord.evidence);
+  const adsReadiness = readRecord(readRecord(adsPayload).ads_readiness);
+  const caseStudy = readRecord(readRecord(caseStudyPayload).case_study);
+  const investorMemo = readRecord(readRecord(investorMemoPayload).investor_memo);
+  const status = readString(proofReadiness.proof_status);
+  if (!status && Object.keys(readinessRecord).length === 0) {
+    return null;
+  }
+  return {
+    status: status || 'insufficient_data',
+    adsReady: adsReadiness.ads_ready === true,
+    pilotUsers: Math.max(0, Math.round(readNumber(proofMetrics.pilot_users, 0))),
+    messagesHandled: Math.max(0, Math.round(readNumber(proofMetrics.messages_handled, 0))),
+    tasksCompleted: Math.max(0, Math.round(readNumber(proofMetrics.tasks_completed, 0))),
+    failureRate: Math.max(0, readNumber(proofMetrics.failure_rate, 0)),
+    approvalRate: Math.max(0, readNumber(proofMetrics.manual_approval_rate, 0)),
+    usefulnessScore: proofMetrics.average_usefulness_score === null || proofMetrics.average_usefulness_score === undefined
+      ? null
+      : readNumber(proofMetrics.average_usefulness_score, 0),
+    missingEvidence: readStringList(proofReadiness.missing_evidence),
+    unresolvedIssueCount: readList(proofReadiness.unresolved_p0_p1_issues).length,
+    evidenceTraceIds: readStringList(evidence.trace_ids),
+    caseStudyStatus: readString(caseStudy.status, status || 'insufficient_data'),
+    investorMemoStatus: readString(investorMemo.status, status || 'insufficient_data'),
+    adsReasons: readStringList(adsReadiness.reasons),
+  };
+}
+
+function formatProofStatus(value: string): string {
+  const normalized = readString(value, 'insufficient_data').replace(/_/g, ' ');
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(Math.max(0, value) * 100)}%`;
+}
+
 function toThreadListItems(threads: ThreadRecord[]): ThreadListItem[] {
   return threads
     .map((thread, index) => ({
@@ -505,10 +573,12 @@ export function WorkstationRunsPane() {
   const activityVersion = useWorkstationActivityVersion();
   const cachedThreads = threadsPaneCache.get(workspaceId) ?? null;
   const cachedActivity = activityPaneCache.get(workspaceId) ?? null;
+  const cachedPilotProof = pilotProofPaneCache.get(workspaceId) ?? null;
   const [hadInitialCache] = useState(() => cachedThreads !== null && cachedActivity !== null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() => readPersistedActiveThread(workspaceId));
   const [threads, setThreads] = useState<ThreadListItem[]>(() => cachedThreads ?? []);
   const [activityItems, setActivityItems] = useState<ActivityProofItem[]>(() => cachedActivity ?? []);
+  const [pilotProof, setPilotProof] = useState<PilotProofSnapshot | null>(() => cachedPilotProof);
   const [activeFilter, setActiveFilter] = useState<ActivityFilterId>('all');
   const [showAdminAudit, setShowAdminAudit] = useState(false);
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
@@ -525,11 +595,15 @@ export function WorkstationRunsPane() {
       setIsLoading(true);
     }
     setError(null);
-    const [threadsPayload, activityPayload, runsPayload, approvalsPayload] = await Promise.all([
+    const [threadsPayload, activityPayload, runsPayload, approvalsPayload, proofPayload, caseStudyPayload, investorMemoPayload, adsReadinessPayload] = await Promise.all([
       services.client.listThreads({ includeTurns: true, limit: 200 }),
       services.client.listActivityTimeline({ limit: 200 }).catch(() => ({ items: [] })),
       services.client.listRuns({ limit: 80 }).catch(() => ({ items: [] })),
       services.client.listApprovals({ limit: 80 }).catch(() => ({ items: [] })),
+      services.client.getPilotProofReadiness({ days: 30, limit: 1000 }).catch(() => null),
+      services.client.getPilotProofCaseStudy({ days: 30, limit: 1000 }).catch(() => null),
+      services.client.getPilotProofInvestorMemo({ days: 30, limit: 1000 }).catch(() => null),
+      services.client.getPilotProofAdsReadiness({ days: 30, limit: 1000 }).catch(() => null),
     ]);
     const threadRecords = normalizeThreadItems(threadsPayload);
     const nextThreads = toThreadListItems(threadRecords);
@@ -541,8 +615,11 @@ export function WorkstationRunsPane() {
     ]);
     threadsPaneCache.set(workspaceId, nextThreads);
     activityPaneCache.set(workspaceId, nextActivityItems);
+    const nextPilotProof = normalizePilotProofSnapshot(proofPayload, caseStudyPayload, investorMemoPayload, adsReadinessPayload);
+    pilotProofPaneCache.set(workspaceId, nextPilotProof);
     setThreads(nextThreads);
     setActivityItems(nextActivityItems);
+    setPilotProof(nextPilotProof);
     setVisibleCount(HISTORY_PAGE_SIZE);
     setIsLoading(false);
   };
@@ -612,6 +689,53 @@ export function WorkstationRunsPane() {
           />
         ) : (
           <div className="app-stack-4">
+            {pilotProof ? (
+              <WorkstationSurfaceCard
+                title="Pilot proof"
+                description="Closed-pilot readiness from real WhatsApp/Telegram activity, feedback, issues, and trace IDs."
+              >
+                <div className="app-stack-3">
+                  <WorkstationSurfaceStatGrid>
+                    <WorkstationSurfaceStat label="Proof status" value={formatProofStatus(pilotProof.status)} hint={pilotProof.adsReady ? 'Ads review unlocked' : 'Keep pilot closed'} />
+                    <WorkstationSurfaceStat label="Pilot users" value={pilotProof.pilotUsers} hint={`${pilotProof.messagesHandled} messages handled`} />
+                    <WorkstationSurfaceStat label="Completed tasks" value={pilotProof.tasksCompleted} hint={`${formatPercent(pilotProof.failureRate)} failure rate`} />
+                    <WorkstationSurfaceStat label="Manual approval" value={formatPercent(pilotProof.approvalRate)} hint={pilotProof.usefulnessScore === null ? 'No usefulness score yet' : `${pilotProof.usefulnessScore}/5 usefulness`} />
+                  </WorkstationSurfaceStatGrid>
+                  <div className="app-runs-minimal-list app-runs-minimal-list--flat">
+                    <div className="app-runs-minimal-row app-runs-minimal-row--flat">
+                      <span className="app-runs-minimal-row__preview">
+                        Case study · {formatProofStatus(pilotProof.caseStudyStatus)}
+                      </span>
+                      <span className="app-runs-minimal-row__time">
+                        {pilotProof.evidenceTraceIds.length} trace IDs
+                      </span>
+                    </div>
+                    <div className="app-runs-minimal-row app-runs-minimal-row--flat">
+                      <span className="app-runs-minimal-row__preview">
+                        Investor memo · {formatProofStatus(pilotProof.investorMemoStatus)}
+                      </span>
+                      <span className="app-runs-minimal-row__time">
+                        {pilotProof.unresolvedIssueCount} open P0/P1
+                      </span>
+                    </div>
+                    <div className="app-runs-minimal-row app-runs-minimal-row--flat">
+                      <span className="app-runs-minimal-row__preview">
+                        Ads readiness · {pilotProof.adsReady ? 'Ready for copy review' : (pilotProof.adsReasons[0] || 'Blocked until proof improves')}
+                      </span>
+                      <span className="app-runs-minimal-row__time">
+                        {pilotProof.missingEvidence.length} gaps
+                      </span>
+                    </div>
+                  </div>
+                  {pilotProof.missingEvidence.length > 0 ? (
+                    <WorkstationSurfaceNotice tone="neutral">
+                      {pilotProof.missingEvidence.slice(0, 3).join(' ')}
+                    </WorkstationSurfaceNotice>
+                  ) : null}
+                </div>
+              </WorkstationSurfaceCard>
+            ) : null}
+
             <WorkstationSurfaceNotice tone="neutral">
               Activity is the proof timeline for chat history, tool runs, approvals, channel sends, gateway reconnects, provider failures, file/shell/browser events, and final outcomes.
             </WorkstationSurfaceNotice>

@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from server_modules import auth, pilot_invite_service, pilot_operations_service
+from server_modules import auth, pilot_invite_service, pilot_operations_service, pilot_proof_service
 
 router = APIRouter(prefix="/pilot", tags=["pilot"])
 
@@ -114,6 +114,87 @@ async def record_pilot_issue_route(
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+async def _pilot_proof_package_for_request(
+    *,
+    current_user: Any,
+    workspace_id: str,
+    days: int,
+    limit: int,
+) -> Dict[str, Any]:
+    resolved_workspace_id = auth.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
+    tenant_id = auth.workspace_tenant_id(current_user, resolved_workspace_id)
+    return await pilot_proof_service.build_pilot_proof_package(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        days=days,
+        limit=limit,
+    )
+
+
+@router.get("/proof/readiness")
+async def get_pilot_proof_readiness_route(
+    workspace_id: str,
+    days: int = 30,
+    limit: int = 1000,
+    current_user=Depends(auth.get_current_user),
+) -> Dict[str, Any]:
+    package = await _pilot_proof_package_for_request(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        days=days,
+        limit=limit,
+    )
+    return {"ok": True, **package}
+
+
+@router.get("/proof/case-study")
+async def get_pilot_case_study_route(
+    workspace_id: str,
+    days: int = 30,
+    limit: int = 1000,
+    current_user=Depends(auth.get_current_user),
+) -> Dict[str, Any]:
+    package = await _pilot_proof_package_for_request(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        days=days,
+        limit=limit,
+    )
+    return {"ok": True, "case_study": pilot_proof_service.build_case_study(package)}
+
+
+@router.get("/proof/investor-memo")
+async def get_pilot_investor_memo_route(
+    workspace_id: str,
+    days: int = 30,
+    limit: int = 1000,
+    current_user=Depends(auth.get_current_user),
+) -> Dict[str, Any]:
+    package = await _pilot_proof_package_for_request(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        days=days,
+        limit=limit,
+    )
+    return {"ok": True, "investor_memo": pilot_proof_service.build_investor_memo(package)}
+
+
+@router.get("/proof/ads-readiness")
+async def get_pilot_ads_readiness_route(
+    workspace_id: str,
+    days: int = 30,
+    limit: int = 1000,
+    current_user=Depends(auth.get_current_user),
+) -> Dict[str, Any]:
+    package = await _pilot_proof_package_for_request(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        days=days,
+        limit=limit,
+    )
+    return {"ok": True, "ads_readiness": pilot_proof_service.build_ads_readiness(package)}
 
 
 @router.post("/invites")

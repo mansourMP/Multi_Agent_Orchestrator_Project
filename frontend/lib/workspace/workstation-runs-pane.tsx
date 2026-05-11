@@ -47,6 +47,7 @@ type ActivityProofItem = {
   occurredAt: string | null;
   source: string;
   threadId: string | null;
+  traceId: string | null;
   adminAudit: {
     rawProvider: string | null;
     rawModel: string | null;
@@ -297,6 +298,7 @@ function proofItemsFromActivity(payload: unknown): ActivityProofItem[] {
       occurredAt: readString(event.created_at) || readString(event.ts) || null,
       source: 'Activity',
       threadId: readString(event.thread_id) || null,
+      traceId: readString(event.trace_id) || readString(adminAudit?.ledgerItemIds?.[0]) || null,
       adminAudit,
     };
   });
@@ -311,6 +313,7 @@ function proofItemsFromThreads(threads: ThreadRecord[]): ActivityProofItem[] {
     occurredAt: thread.occurredAt,
     source: 'Chat',
     threadId: thread.id,
+      traceId: null,
     adminAudit: null,
   }));
 }
@@ -329,6 +332,7 @@ function proofItemsFromRuns(payload: unknown): ActivityProofItem[] {
       occurredAt: readString(run.updated_at) || readString(run.created_at) || null,
       source: 'Run',
       threadId: readString(run.thread_id) || null,
+      traceId: readString(run.trace_id) || null,
       adminAudit,
     };
   });
@@ -346,6 +350,7 @@ function proofItemsFromApprovals(payload: unknown): ActivityProofItem[] {
       occurredAt: readString(approval.created_at) || readString(approval.updated_at) || null,
       source: 'Approval',
       threadId: readString(approval.thread_id) || null,
+      traceId: readString(approval.trace_id) || null,
       adminAudit: null,
     };
   });
@@ -580,6 +585,7 @@ export function WorkstationRunsPane() {
   const [activityItems, setActivityItems] = useState<ActivityProofItem[]>(() => cachedActivity ?? []);
   const [pilotProof, setPilotProof] = useState<PilotProofSnapshot | null>(() => cachedPilotProof);
   const [activeFilter, setActiveFilter] = useState<ActivityFilterId>('all');
+  const [traceIdFilter, setTraceIdFilter] = useState('');
   const [showAdminAudit, setShowAdminAudit] = useState(false);
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
   const [isLoading, setIsLoading] = useState(() => cachedThreads === null || cachedActivity === null);
@@ -657,10 +663,20 @@ export function WorkstationRunsPane() {
   }, [activityVersion, workspaceId]);
 
   const filteredActivityItems = useMemo(
-    () => activeFilter === 'all'
-      ? activityItems
-      : activityItems.filter((item) => item.type === activeFilter),
-    [activeFilter, activityItems],
+    () => {
+      let items = activeFilter === 'all'
+        ? activityItems
+        : activityItems.filter((item) => item.type === activeFilter);
+      if (traceIdFilter) {
+        const q = traceIdFilter.toLowerCase();
+        items = items.filter((item) =>
+          (item.traceId ?? '').toLowerCase().includes(q) ||
+          (item.id ?? '').toLowerCase().includes(q)
+        );
+      }
+      return items;
+    },
+    [activeFilter, traceIdFilter, activityItems],
   );
   const visibleActivityItems = useMemo(
     () => filteredActivityItems.slice(0, visibleCount),
@@ -775,6 +791,34 @@ export function WorkstationRunsPane() {
                       {showAdminAudit ? 'Hide admin audit' : 'Show admin audit'}
                     </button>
                   ) : null}
+                </div>
+                <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    placeholder="Search by trace ID"
+                    value={traceIdFilter}
+                    onChange={(e) => { setTraceIdFilter(e.target.value.trim()); setVisibleCount(HISTORY_PAGE_SIZE); }}
+                    style={{
+                      padding: '4px 10px', fontSize: 12, borderRadius: 6,
+                      border: '1px solid var(--color-border, #e5e7eb)',
+                      background: 'var(--color-bg, #fff)', color: 'var(--color-fg, #111)',
+                      width: 260,
+                    }}
+                  />
+                  {traceIdFilter && (
+                    <button type="button" onClick={() => setTraceIdFilter('')}
+                      style={{ padding: '2px 8px', fontSize: 11, borderRadius: 4,
+                        border: '1px solid var(--color-border, #e5e7eb)',
+                        background: 'transparent', cursor: 'pointer',
+                        color: 'var(--color-muted, #6b7280)', }}>
+                      Clear
+                    </button>
+                  )}
+                  {traceIdFilter && filteredActivityItems.length === 0 && (
+                    <span style={{ fontSize: 12, color: 'var(--color-muted, #6b7280)' }}>
+                      No events found for this trace ID
+                    </span>
+                  )}
                 </div>
                 {visibleActivityItems.length > 0 ? (
                   <div className="app-runs-minimal-list app-runs-minimal-list--flat" aria-label="Activity proof timeline">

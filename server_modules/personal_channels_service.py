@@ -255,6 +255,7 @@ def _emit_automatic_reply_audit(
     detail: str,
     metadata: Optional[Dict[str, Any]] = None,
     idempotency_key: Optional[str] = None,
+    trace_id: str = "",
 ) -> None:
     security_audit_service.emit_security_audit_event(
         action=action,
@@ -266,6 +267,7 @@ def _emit_automatic_reply_audit(
         channel=channel_key,
         machine_id=str(gateway_id or "").strip() or None,
         detail=detail,
+        trace_id=trace_id or "",
         metadata={
             "gateway_id": str(gateway_id or "").strip(),
             "channel_key": channel_key,
@@ -323,6 +325,7 @@ def _control_command_block_result(
             "sender_role": sender_role,
             "policy_reason": command_check.get("reason"),
         },
+        trace_id=trace_id,
         idempotency_key=f"personal_channel.control_command.denied:{gateway_id}:{channel_key}:{external_message_id}",
     )
     return {
@@ -453,6 +456,9 @@ async def handle_gateway_channel_inbound(
         channel_key,
         str(payload.get("provider") or "").strip() or None,
     )
+    # Generate or preserve trace_id once at the inbound boundary
+    trace_id = str(payload.get("trace_id") or "").strip() or f"channel-{channel_key}-{uuid4().hex[:16]}"
+    payload["trace_id"] = trace_id
     handler = _handler_registry.get(channel_key)
     return await handler.handle_inbound(
         gateway_id=gateway_id,
@@ -471,6 +477,7 @@ async def _deliver_whatsapp_personal_reply(
     text: str,
     push_name: Optional[str],
     duplicate: bool,
+    trace_id: str = "",
 ) -> Dict[str, Any]:
     reply_idempotency_key = str(inbound.get("reply_idempotency_key") or "").strip() or None
     if reply_idempotency_key and reply_idempotency_key.startswith(WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX):
@@ -518,6 +525,7 @@ async def _deliver_whatsapp_personal_reply(
                 provider=WHATSAPP_PERSONAL_PROVIDER,
                 detail="Automatic WhatsApp personal reply was skipped because Sage returned no reply.",
                 metadata={"remote_jid": remote_jid, "inbound_external_message_id": external_message_id},
+        trace_id=trace_id,
                 idempotency_key=f"personal_channel.whatsapp.automatic_reply.skipped:{gateway_id}:{external_message_id}",
             )
             return {"duplicate": duplicate, "inbound": refreshed_inbound or inbound, "outbound": None}
@@ -569,6 +577,7 @@ async def _deliver_whatsapp_personal_reply(
                 "inbound_external_message_id": external_message_id,
                 "reply_text_length": len(str(outbound.get("text") or "")),
             },
+        trace_id=trace_id,
             idempotency_key=f"personal_channel.whatsapp.automatic_reply.denied:{gateway_id}:{idempotency_key}",
         )
         raise
@@ -599,6 +608,7 @@ async def _deliver_whatsapp_personal_reply(
             "reply_text_length": len(str(outbound.get("text") or "")),
             "outbound_external_message_id": str(dispatch_result.get("external_message_id") or "").strip() or None,
         },
+        trace_id=trace_id,
         idempotency_key=f"personal_channel.whatsapp.automatic_reply.success:{gateway_id}:{idempotency_key}",
     )
     return {"duplicate": duplicate, "inbound": refreshed_inbound or inbound, "outbound": delivered}
@@ -615,6 +625,7 @@ async def _handle_whatsapp_gateway_channel_inbound(
         WHATSAPP_PERSONAL_CHANNEL_KEY,
         str(payload.get("provider") or WHATSAPP_PERSONAL_PROVIDER).strip() or WHATSAPP_PERSONAL_PROVIDER,
     )
+    trace_id = str(payload.get("trace_id") or "").strip()
     message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
     external_message_id = str(message.get("external_message_id") or "").strip()
     remote_jid = str(message.get("remote_jid") or "").strip()
@@ -672,6 +683,7 @@ async def _handle_whatsapp_gateway_channel_inbound(
         text=text,
         push_name=str(message.get("push_name") or "").strip() or None,
         duplicate=not created,
+        trace_id=trace_id,
     )
 
 
@@ -686,6 +698,7 @@ async def _handle_telegram_gateway_channel_inbound(
         TELEGRAM_PERSONAL_CHANNEL_KEY,
         str(payload.get("provider") or TELEGRAM_PERSONAL_PROVIDER).strip() or TELEGRAM_PERSONAL_PROVIDER,
     )
+    trace_id = str(payload.get("trace_id") or "").strip()
     message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
     external_message_id = str(message.get("external_message_id") or "").strip()
     remote_jid = str(message.get("remote_jid") or "").strip()
@@ -781,6 +794,7 @@ async def _handle_telegram_gateway_channel_inbound(
                 provider=TELEGRAM_PERSONAL_PROVIDER,
                 detail="Automatic Telegram personal reply was skipped because Sage returned no reply.",
                 metadata={"remote_jid": remote_jid, "inbound_external_message_id": external_message_id},
+        trace_id=trace_id,
                 idempotency_key=f"personal_channel.telegram.automatic_reply.skipped:{gateway_id}:{external_message_id}",
             )
             return {"duplicate": not created, "inbound": refreshed_inbound or inbound, "outbound": None}
@@ -832,6 +846,7 @@ async def _handle_telegram_gateway_channel_inbound(
                 "inbound_external_message_id": external_message_id,
                 "reply_text_length": len(str(outbound.get("text") or "")),
             },
+        trace_id=trace_id,
             idempotency_key=f"personal_channel.telegram.automatic_reply.denied:{gateway_id}:{idempotency_key}",
         )
         raise
@@ -862,6 +877,7 @@ async def _handle_telegram_gateway_channel_inbound(
             "reply_text_length": len(str(outbound.get("text") or "")),
             "outbound_external_message_id": str(dispatch_result.get("external_message_id") or "").strip() or None,
         },
+        trace_id=trace_id,
         idempotency_key=f"personal_channel.telegram.automatic_reply.success:{gateway_id}:{idempotency_key}",
     )
     return {"duplicate": not created, "inbound": refreshed_inbound or inbound, "outbound": delivered}

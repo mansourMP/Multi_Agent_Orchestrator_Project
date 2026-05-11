@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional
 # capability-gated execution router. Direct imports outside execution_router
 # are forbidden.
 
+from server_modules.url_security import assert_safe_outbound_url
+
 
 def enforce_browser_automation_gate(
     metadata: Optional[Dict[str, Any]] = None,
@@ -469,10 +471,12 @@ class BrowserEngine:
                         continue
 
     async def navigate(self, url: str) -> Dict[str, Any]:
+        target_url = str(url or "").strip()
+        assert_safe_outbound_url(target_url)  # defense-in-depth
         page = await self._active_page()
-        response = await page.goto(str(url or "").strip(), wait_until="domcontentloaded")
+        response = await page.goto(target_url, wait_until="domcontentloaded")
         await page.wait_for_load_state("networkidle")
-        final_url = str(getattr(page, "url", url) or url).strip()
+        final_url = str(getattr(page, "url", target_url) or target_url).strip()
         await self._apply_saved_credentials(page, final_url)
         title = await page.title()
         status_code = int(response.status) if response is not None else 0
@@ -626,7 +630,9 @@ class BrowserEngine:
         page = await self._context.new_page()
         tab_id = self._register_page(page)
         if url:
-            await page.goto(str(url).strip(), wait_until="domcontentloaded")
+            target_url = str(url).strip()
+            assert_safe_outbound_url(target_url)  # defense-in-depth
+            await page.goto(target_url, wait_until="domcontentloaded")
             await page.wait_for_load_state("networkidle")
         return tab_id
 

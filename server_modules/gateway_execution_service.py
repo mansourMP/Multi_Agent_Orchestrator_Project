@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from server_modules import gateway_activity_service, gateway_protocol_service, gateway_state_repository
+from server_modules import (
+    gateway_activity_service,
+    gateway_protocol_service,
+    gateway_state_repository,
+    secret_redaction_service,
+)
 
 
 def _require_active_gateway_registration(gateway_id: str) -> Dict[str, Any]:
@@ -38,18 +43,19 @@ async def execute_tool_via_gateway(
         timeout_seconds=timeout_seconds,
         request_id=request_id,
     )
+    activity_payload = {
+        "request_id": str(response.get("request_id") or request_id or "").strip() or None,
+        "capability_id": str(response.get("capability_id") or capability_id).strip(),
+        "run_id": str(response.get("run_id") or run_id).strip(),
+        "result": dict(response.get("result") or {}),
+    }
     await gateway_activity_service.append_gateway_activity(
         registration,
         action="gateway_tool_executed",
         title="Gateway tool executed",
         summary=f"Executed {capability_id} through the paired local gateway.",
         status="completed",
-        payload={
-            "request_id": str(response.get("request_id") or request_id or "").strip() or None,
-            "capability_id": str(response.get("capability_id") or capability_id).strip(),
-            "run_id": str(response.get("run_id") or run_id).strip(),
-            "result": dict(response.get("result") or {}),
-        },
+        payload=secret_redaction_service.sanitize_mapping(activity_payload),
         trace_id=str(trace_id or "").strip() or None,
     )
     return {
@@ -85,19 +91,20 @@ async def interrupt_tool_via_gateway(
         timeout_seconds=timeout_seconds,
         request_id=request_id,
     )
+    activity_payload = {
+        "request_id": str(response.get("request_id") or request_id or "").strip() or None,
+        "run_id": str(response.get("run_id") or run_id).strip(),
+        "target_request_id": str(response.get("target_request_id") or target_request_id or "").strip() or None,
+        "interrupted": bool(response.get("interrupted")),
+        "interrupt_count": int(response.get("interrupt_count") or 0),
+    }
     await gateway_activity_service.append_gateway_activity(
         registration,
         action="gateway_tool_interrupted",
         title="Gateway tool interrupted",
         summary=f"Interrupted local gateway run {run_id}.",
         status="completed",
-        payload={
-            "request_id": str(response.get("request_id") or request_id or "").strip() or None,
-            "run_id": str(response.get("run_id") or run_id).strip(),
-            "target_request_id": str(response.get("target_request_id") or target_request_id or "").strip() or None,
-            "interrupted": bool(response.get("interrupted")),
-            "interrupt_count": int(response.get("interrupt_count") or 0),
-        },
+        payload=secret_redaction_service.sanitize_mapping(activity_payload),
         trace_id=str(trace_id or "").strip() or None,
     )
     return {

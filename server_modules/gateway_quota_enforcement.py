@@ -9,6 +9,7 @@ GATEWAY_TOOL_EXECUTION = "gateway_tool_execution"
 GATEWAY_BROWSER_SESSION = "gateway_browser_session"
 GATEWAY_APPROVAL_ACTION = "gateway_approval_action"
 GATEWAY_WS_CONNECTION = "gateway_ws_connection"
+GATEWAY_CHANNEL_OUTBOUND = "gateway_channel_outbound"
 
 
 @dataclass
@@ -41,6 +42,7 @@ _GATEWAY_QUOTA_PROFILES: Dict[str, QuotaWindow] = {
     GATEWAY_BROWSER_SESSION: QuotaWindow(max_requests=5, window_seconds=60),
     GATEWAY_APPROVAL_ACTION: QuotaWindow(max_requests=30, window_seconds=60),
     GATEWAY_WS_CONNECTION: QuotaWindow(max_requests=10, window_seconds=60),
+    GATEWAY_CHANNEL_OUTBOUND: QuotaWindow(max_requests=100, window_seconds=60),
 }
 
 

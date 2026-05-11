@@ -1655,6 +1655,57 @@ def list_gateway_action_approvals(
     return [item for item in (_approval_from_row(row) for row in rows) if item]
 
 
+def resolve_gateway_action_approval_atomic(
+    *,
+    approval_id: str,
+    gateway_id: str,
+    decision: str,
+    actor: str,
+    note: Optional[str] = None,
+    db_path: Optional[Path | str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Atomically resolve a pending approval using an UPDATE with a WHERE clause
+    that checks status = 'pending'. Returns the updated approval dict if the
+    update succeeded, or None if the approval was already resolved (i.e. its
+    status was no longer 'pending').
+
+    This eliminates the read-check-write race condition: two concurrent callers
+    both try the same atomic UPDATE, but only the first to write wins.
+    """
+    now_iso = _utc_now_iso()
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE gateway_action_approvals
+                SET status = ?, decision = ?, decision_actor = ?, decision_note = ?,
+                    resolved_at = ?
+                WHERE approval_id = ? AND gateway_id = ? AND status = 'pending'
+                """,
+                (
+                    str(decision or "").strip(),
+                    str(decision or "").strip(),
+                    str(actor or "").strip(),
+                    str(note or "").strip() or None,
+                    now_iso,
+                    str(approval_id or "").strip(),
+                    str(gateway_id or "").strip(),
+                ),
+            )
+            if cursor.rowcount == 0:
+                return None  # Already resolved or does not exist
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM gateway_action_approvals WHERE approval_id = ?",
+                (str(approval_id or "").strip(),),
+            ).fetchone()
+        finally:
+            conn.close()
+    return _approval_from_row(row)
+
+
 def update_gateway_action_approval_decision(
     *,
     approval_id: str,
@@ -1999,3 +2050,56 @@ def upsert_gateway_browser_session(
         finally:
             conn.close()
     return _browser_session_from_row(row) or {}
+
+
+def summarize_gateway_outbox(gateway_id: str, *, db_path: Optional[Path | str] = None) -> Dict[str, Any]:
+    """Extract outbox summary from the latest gateway session heartbeat metadata."""
+    latest = get_latest_gateway_session(gateway_id)
+    if not isinstance(latest, dict):
+        return {"pending": 0, "failed": 0, "acknowledged": 0, "uncertain": 0, "abandoned": 0}
+    metadata = latest.get("metadata") if isinstance(latest.get("metadata"), dict) else {}
+    queue_summary = metadata.get("queue_depth_summary")
+    if isinstance(queue_summary, dict):
+        return {
+            "pending": int(queue_summary.get("pending") or 0),
+            "failed": int(queue_summary.get("failed") or 0),
+            "acknowledged": int(queue_summary.get("acknowledged") or 0),
+            "uncertain": int(queue_summary.get("uncertain") or 0),
+            "abandoned": int(queue_summary.get("abandoned") or 0),
+        }
+    return {"pending": 0, "failed": 0, "acknowledged": 0, "uncertain": 0, "abandoned": 0}
+
+
+def sweep_stale_gateway_sessions(
+    gateway_id: str,
+    *,
+    stale_threshold_seconds: int = 900,
+    db_path: Optional[Path | str] = None,
+) -> int:
+    """Mark gateway sessions that have been disconnected/stale for too long as expired."""
+    cutoff = (_utc_now() - timedelta(seconds=stale_threshold_seconds)).isoformat()
+    gateway_token = str(gateway_id or "").strip()
+    if not gateway_token:
+        return 0
+    swept = 0
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        try:
+            rows = conn.execute(
+                """SELECT session_id, status, updated_at FROM gateway_sessions
+                   WHERE gateway_id = ? AND status IN ('connected', 'disconnected')""",
+                (gateway_token,),
+            ).fetchall()
+            for row in rows:
+                updated_at = str(row[2] or "")
+                if updated_at < cutoff:
+                    conn.execute(
+                        "UPDATE gateway_sessions SET status = 'expired', metadata = json_set(coalesce(metadata, '{}'), '$.swept_at', ?) WHERE session_id = ?",
+                        (_utc_now_iso(), str(row[0] or "").strip()),
+                    )
+                    swept += 1
+            if swept > 0:
+                conn.commit()
+        finally:
+            conn.close()
+    return swept

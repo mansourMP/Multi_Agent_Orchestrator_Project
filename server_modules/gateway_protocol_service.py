@@ -4,13 +4,15 @@ import asyncio
 import json
 import threading
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 from fastapi import WebSocket, WebSocketDisconnect
 
-PROTOCOL_VERSION = "v1alpha1"
+PROTOCOL_VERSION = "v1alpha2"
+SUPPORTED_PROTOCOL_VERSIONS = {"v1alpha2"}
 DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS = 15
 MAX_GATEWAY_FRAME_BYTES = 256 * 1024
 MAX_GATEWAY_JSON_DEPTH = 32
@@ -22,6 +24,11 @@ from server_modules import (
     gateway_state_repository,
     personal_channels_service,
     session_service,
+)
+from server_modules.kill_switch_gate import assert_not_killed, KillSwitchBlockedError
+from server_modules.gateway_quota_enforcement import (
+    evaluate_gateway_quota,
+    GATEWAY_CHANNEL_OUTBOUND,
 )
 
 
@@ -60,6 +67,7 @@ class _LiveGatewayConnection:
         self.scope = dict(scope or {})
         self._pending_requests: Dict[str, _PendingGatewayRequest] = {}
         self._seen_inbound_frame_ids: set[str] = set()
+        self._frame_response_cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._send_lock = asyncio.Lock()
         self._closed = False
 
@@ -119,10 +127,21 @@ class _LiveGatewayConnection:
             return True
         if normalized in self._seen_inbound_frame_ids:
             return False
-        if len(self._seen_inbound_frame_ids) >= 2048:
-            self._seen_inbound_frame_ids.clear()
+        if len(self._seen_inbound_frame_ids) >= 4096:
+            import logging
+            logging.warning("Inbound frame ID set reached capacity (%d); clearing oldest 2048 entries", len(self._seen_inbound_frame_ids))
+            self._seen_inbound_frame_ids = set(list(self._seen_inbound_frame_ids)[2048:])
         self._seen_inbound_frame_ids.add(normalized)
         return True
+
+    def cache_frame_response(self, frame_id: str, response: Dict[str, Any]) -> None:
+        self._frame_response_cache[frame_id] = response
+        self._frame_response_cache.move_to_end(frame_id)
+        if len(self._frame_response_cache) > 2048:
+            self._frame_response_cache.popitem(last=False)
+
+    def get_cached_frame_response(self, frame_id: str) -> Optional[Dict[str, Any]]:
+        return self._frame_response_cache.get(frame_id)
 
     def fail_pending(self, reason: str) -> None:
         if self._closed:
@@ -174,6 +193,7 @@ async def dispatch_tool_invoke(
     timeout_seconds: int = DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    assert_not_killed(gateway_id=gateway_id, trace_id=trace_id)
     connection = _get_live_connection(gateway_id)
     if connection is None:
         raise ValueError("Gateway is not currently connected.")
@@ -244,6 +264,10 @@ async def dispatch_channel_outbound(
     timeout_seconds: int = DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    assert_not_killed(gateway_id=gateway_id)
+    quota_decision = evaluate_gateway_quota(profile=GATEWAY_CHANNEL_OUTBOUND, gateway_id=gateway_id)
+    if not quota_decision.allowed:
+        return {"ok": False, "error": "quota_exceeded", "detail": "Channel outbound quota exceeded.", "retry_after_seconds": quota_decision.retry_after_seconds}
     connection = _get_live_connection(gateway_id)
     if connection is None:
         raise ValueError("Gateway is not currently connected.")
@@ -353,6 +377,14 @@ def _parse_frame(raw_text: str) -> Dict[str, Any]:
 
 def _normalized_request_type(frame: Dict[str, Any]) -> str:
     return str(frame.get("type") or "").strip()
+
+
+def _validate_client_protocol_version(client_version: Optional[str]) -> Optional[str]:
+    if not client_version:
+        return "Protocol version is required. Supported: " + ", ".join(sorted(SUPPORTED_PROTOCOL_VERSIONS))
+    if client_version not in SUPPORTED_PROTOCOL_VERSIONS:
+        return "Unsupported protocol version: " + client_version + ". Supported: " + ", ".join(sorted(SUPPORTED_PROTOCOL_VERSIONS))
+    return None
 
 
 def _scope_matches_registration(frame_scope: Dict[str, Any], registration: Dict[str, Any]) -> bool:
@@ -554,8 +586,23 @@ async def handle_gateway_websocket(
             gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="scope_mismatch")
             return
 
-        gateway_state_repository.mark_gateway_session_connected(session_id)
         connect_payload = first_frame.get("payload") if isinstance(first_frame.get("payload"), dict) else {}
+        client_version = connect_payload.get("protocol_version")
+        version_error = _validate_client_protocol_version(client_version)
+        if version_error:
+            await websocket.send_json(
+                _response_frame(
+                    str(first_frame.get("id") or "connect"),
+                    ok=False,
+                    error={"code": "unsupported_protocol_version", "message": version_error},
+                )
+            )
+            await websocket.close(code=4408, reason="unsupported protocol version")
+            disconnected = True
+            gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="unsupported_protocol_version")
+            return
+
+        gateway_state_repository.mark_gateway_session_connected(session_id)
         gateway_state_repository.touch_gateway_session(
             session_id=session_id,
             gateway_id=gateway_id,
@@ -586,13 +633,14 @@ async def handle_gateway_websocket(
             scope=scope,
         )
         _register_live_connection(connection)
-        await websocket.send_json(
-            _response_frame(
-                str(first_frame.get("id") or "connect"),
-                ok=True,
-                payload={"accepted": True, "protocol_version": PROTOCOL_VERSION},
-            )
+        connect_response = _response_frame(
+            str(first_frame.get("id") or "connect"),
+            ok=True,
+            payload={"accepted": True, "protocol_version": PROTOCOL_VERSION},
         )
+        await websocket.send_json(connect_response)
+        if connection is not None:
+            connection.cache_frame_response(str(first_frame.get("id") or "").strip(), connect_response)
         server_event_seq += 1
         hello_frame = _event_frame(
             "gateway.hello",
@@ -683,20 +731,22 @@ async def handle_gateway_websocket(
             message_type = _normalized_request_type(frame)
             payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
             if frame_kind == "request" and connection is not None and not connection.remember_inbound_frame_id(frame.get("id")):
-                await websocket.send_json(
-                    _response_frame(
-                        str(frame.get("id") or "replayed"),
-                        ok=False,
-                        error={
-                            "code": "gateway_frame_replayed",
-                            "message": "Gateway frame id was already processed.",
-                        },
+                frame_id = str(frame.get("id") or "").strip()
+                cached = connection.get_cached_frame_response(frame_id)
+                if cached is not None:
+                    await websocket.send_json(cached)
+                else:
+                    await websocket.send_json(
+                        _response_frame(
+                            frame_id or "replayed",
+                            ok=False,
+                            error={
+                                "code": "duplicate_frame_id",
+                                "detail": "Frame ID already processed",
+                            },
+                        )
                     )
-                )
-                disconnected = True
-                gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="gateway_frame_replayed")
-                await websocket.close(code=4408, reason="gateway frame replay detected")
-                break
+                continue
             if frame_kind == "response" and connection is not None:
                 resolved_message_type = connection.resolve_response(frame)
                 if resolved_message_type == "tool.invoke":
@@ -789,16 +839,17 @@ async def handle_gateway_websocket(
                         or "verified",
                     },
                 )
-                await websocket.send_json(
-                    _response_frame(
-                        str(frame.get("id") or "heartbeat"),
-                        ok=True,
-                        payload={
-                            "status": "online",
-                            "heartbeat_interval_seconds": gateway_registry_service.DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_SECONDS,
-                        },
-                    )
+                heartbeat_response = _response_frame(
+                    str(frame.get("id") or "heartbeat"),
+                    ok=True,
+                    payload={
+                        "status": "online",
+                        "heartbeat_interval_seconds": gateway_registry_service.DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_SECONDS,
+                    },
                 )
+                await websocket.send_json(heartbeat_response)
+                if connection is not None:
+                    connection.cache_frame_response(str(frame.get("id") or "").strip(), heartbeat_response)
                 continue
             if message_type == "gateway.state.update":
                 previous_health_state = str(registration.get("metadata", {}).get("health_state") or "").strip().lower()
@@ -839,13 +890,14 @@ async def handle_gateway_websocket(
                         status=next_health_state or "online",
                         payload=payload,
                     )
-                await websocket.send_json(
-                    _response_frame(
-                        str(frame.get("id") or "state_update"),
-                        ok=True,
-                        payload={"updated": True},
-                    )
+                state_update_response = _response_frame(
+                    str(frame.get("id") or "state_update"),
+                    ok=True,
+                    payload={"updated": True},
                 )
+                await websocket.send_json(state_update_response)
+                if connection is not None:
+                    connection.cache_frame_response(str(frame.get("id") or "").strip(), state_update_response)
                 server_event_seq += 1
                 state_event = _event_frame(
                     "gateway.presence",
@@ -883,23 +935,25 @@ async def handle_gateway_websocket(
                     status="offline",
                     payload={"session_id": session_id, "reason": payload.get("reason")},
                 )
-                await websocket.send_json(
-                    _response_frame(
-                        str(frame.get("id") or "disconnect"),
-                        ok=True,
-                        payload={"disconnected": True},
-                    )
+                disconnect_response = _response_frame(
+                    str(frame.get("id") or "disconnect"),
+                    ok=True,
+                    payload={"disconnected": True},
                 )
+                await websocket.send_json(disconnect_response)
+                if connection is not None:
+                    connection.cache_frame_response(str(frame.get("id") or "").strip(), disconnect_response)
                 disconnected = True
                 break
 
-            await websocket.send_json(
-                _response_frame(
-                    str(frame.get("id") or "unsupported"),
-                    ok=False,
-                    error={"code": "unsupported_message_type", "message": f"Unsupported message type: {message_type}"},
-                )
+            unsupported_response = _response_frame(
+                str(frame.get("id") or "unsupported"),
+                ok=False,
+                error={"code": "unsupported_message_type", "message": f"Unsupported message type: {message_type}"},
             )
+            await websocket.send_json(unsupported_response)
+            if connection is not None:
+                connection.cache_frame_response(str(frame.get("id") or "").strip(), unsupported_response)
     except WebSocketDisconnect:
         if not disconnected:
             gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="websocket_disconnect")

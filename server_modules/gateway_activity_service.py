@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from server_modules import activity_ledger_service, agent_trace_service
+from server_modules import activity_ledger_service, agent_trace_service, secret_redaction_service
 
 
 def _gateway_actor_id(gateway_id: str) -> str:
@@ -28,6 +28,8 @@ async def append_gateway_activity(
     tenant_id = str(registration.get("tenant_id") or "").strip() or "default"
     if not gateway_id:
         return None
+    # Auto-redact secrets from payload before persisting to audit/activity log
+    safe_payload = secret_redaction_service.sanitize_mapping(payload) if payload else None
     return await activity_ledger_service.append_activity_event(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -47,7 +49,7 @@ async def append_gateway_activity(
         payload={
             "gateway_id": gateway_id,
             "device_id": str(registration.get("device_id") or "").strip() or None,
-            **dict(payload or {}),
+            **dict(safe_payload or {}),
         },
         metadata=dict(metadata or {}),
     )

@@ -255,6 +255,7 @@ class GatewayRoutesTests(unittest.TestCase):
                     "ts": "2026-04-22T12:00:00Z",
                     "scope": session_payload["scope"],
                     "payload": {
+                        "protocol_version": "v1alpha2",
                         "gateway_version": "0.1.0",
                         "device_metadata": {"hostname": "mansur-mac"},
                         "requested_capabilities": ["screen.read"],
@@ -349,6 +350,7 @@ class GatewayRoutesTests(unittest.TestCase):
                     "ts": "2026-04-22T12:00:10Z",
                     "scope": reconnect_session["scope"],
                     "payload": {
+                        "protocol_version": "v1alpha2",
                         "gateway_version": "0.1.0",
                         "device_metadata": {"hostname": "mansur-mac"},
                         "requested_capabilities": ["screen.read"],
@@ -449,7 +451,7 @@ class GatewayRoutesTests(unittest.TestCase):
                     "id": "req-connect-bad-scope",
                     "type": "gateway.connect",
                     "scope": bad_scope,
-                    "payload": {"gateway_version": "0.1.0"},
+                    "payload": {"protocol_version": "v1alpha2", "gateway_version": "0.1.0"},
                 }
             )
             response = websocket.receive_json()
@@ -481,7 +483,7 @@ class GatewayRoutesTests(unittest.TestCase):
                     "type": "gateway.connect",
                     "seq": 1,
                     "scope": session_payload["scope"],
-                    "payload": {"gateway_version": "0.1.0"},
+                    "payload": {"protocol_version": "v1alpha2", "gateway_version": "0.1.0"},
                 }
             )
             connect_ack = websocket.receive_json()
@@ -842,6 +844,7 @@ class GatewayRoutesTests(unittest.TestCase):
                     "ts": "2026-04-22T13:00:00Z",
                     "scope": pending_session_payload["scope"],
                     "payload": {
+                        "protocol_version": "v1alpha2",
                         "gateway_version": "0.1.0",
                         "device_metadata": {"hostname": "mansur-mac"},
                         "requested_capabilities": ["screen.read"],
@@ -1163,6 +1166,7 @@ class GatewayRoutesTests(unittest.TestCase):
                         "ts": "2026-04-22T12:30:00Z",
                         "scope": session_payload["scope"],
                         "payload": {
+                            "protocol_version": "v1alpha2",
                             "gateway_version": "0.1.0",
                             "device_metadata": {"hostname": "mansur-mac"},
                             "requested_capabilities": ["channel.whatsapp.personal"],
@@ -1360,6 +1364,7 @@ class GatewayRoutesTests(unittest.TestCase):
                         "ts": "2026-04-22T12:31:00Z",
                         "scope": reconnect_session["scope"],
                         "payload": {
+                            "protocol_version": "v1alpha2",
                             "gateway_version": "0.1.0",
                             "device_metadata": {"hostname": "mansur-mac"},
                             "requested_capabilities": ["channel.whatsapp.personal"],
@@ -1457,6 +1462,7 @@ class GatewayRoutesTests(unittest.TestCase):
                         "ts": "2026-04-22T13:30:00Z",
                         "scope": session_payload["scope"],
                         "payload": {
+                            "protocol_version": "v1alpha2",
                             "gateway_version": "0.1.0",
                             "device_metadata": {"hostname": "mansur-mac"},
                             "requested_capabilities": ["channel.telegram.personal"],
@@ -1622,6 +1628,7 @@ class GatewayRoutesTests(unittest.TestCase):
                         "ts": "2026-04-22T13:31:00Z",
                         "scope": reconnect_session["scope"],
                         "payload": {
+                            "protocol_version": "v1alpha2",
                             "gateway_version": "0.1.0",
                             "device_metadata": {"hostname": "mansur-mac"},
                             "requested_capabilities": ["channel.telegram.personal"],
@@ -1715,6 +1722,7 @@ class GatewayRoutesTests(unittest.TestCase):
                 "ts": "2026-04-22T12:00:00Z",
                 "scope": session_payload["scope"],
                 "payload": {
+                    "protocol_version": "v1alpha2",
                     "gateway_version": "0.1.0",
                     "device_metadata": {"hostname": "mansur-mac"},
                     "requested_capabilities": ["screen.read"],
@@ -1758,6 +1766,7 @@ class GatewayRoutesTests(unittest.TestCase):
                 "ts": "2026-04-22T12:00:00Z",
                 "scope": session_payload["scope"],
                 "payload": {
+                    "protocol_version": "v1alpha2",
                     "gateway_version": "0.1.0",
                     "device_metadata": {"hostname": "mansur-mac"},
                     "requested_capabilities": ["screen.read"],

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from server_modules import control_plane_repository
 from server_modules import entitlements_service
+from server_modules import secret_redaction_service
 
 
 DETAIL_LEVELS = {"feed_summary", "timeline_detail", "audit_reference"}
@@ -23,6 +24,18 @@ EVENT_CLASSES = {
     "run_status",
     "system_activity",
 }
+_PUBLIC_TIMELINE_FORBIDDEN_KEYS = frozenset(
+    {
+        "raw_chain_of_thought",
+        "raw_cot",
+        "chain_of_thought",
+        "internal_reasoning",
+        "model_internals",
+        "reasoning_trace",
+        "scratchpad",
+        "logprobs",
+    }
+)
 
 
 def _run_coro_sync(coro: Any) -> Any:
@@ -51,6 +64,26 @@ def _run_coro_sync(coro: Any) -> Any:
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _strip_forbidden_timeline_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: Dict[str, Any] = {}
+        for item_key, item_value in value.items():
+            key = str(item_key or "")
+            if key.strip().lower() in _PUBLIC_TIMELINE_FORBIDDEN_KEYS:
+                continue
+            sanitized[key] = _strip_forbidden_timeline_fields(item_value)
+        return sanitized
+    if isinstance(value, list):
+        return [_strip_forbidden_timeline_fields(item) for item in value]
+    return value
+
+
+def _public_timeline_dict(value: Any) -> Dict[str, Any]:
+    sanitized = secret_redaction_service.sanitize_mapping(_coerce_dict(value))
+    cleaned = _strip_forbidden_timeline_fields(sanitized)
+    return cleaned if isinstance(cleaned, dict) else {}
 
 
 def _coerce_artifacts(value: Any) -> List[Dict[str, Any]]:
@@ -201,6 +234,8 @@ def _project_timeline_item(row: Dict[str, Any]) -> Dict[str, Any]:
     app_id = str(row.get("app_id") or "").strip() or None
     metadata = _coerce_dict(row.get("metadata"))
     payload = _coerce_dict(row.get("payload"))
+    public_metadata = _public_timeline_dict(metadata)
+    public_payload = _public_timeline_dict(payload)
     visible_activity = _project_visible_activity(
         row=row,
         metadata=metadata,
@@ -240,8 +275,8 @@ def _project_timeline_item(row: Dict[str, Any]) -> Dict[str, Any]:
             "app_id": app_id,
         },
         "artifacts": _coerce_artifacts(row.get("artifacts")),
-        "metadata": metadata,
-        "payload": payload,
+        "metadata": public_metadata,
+        "payload": public_payload,
         "visible_activity": visible_activity,
         "admin_audit": admin_audit,
     }

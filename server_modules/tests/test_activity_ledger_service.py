@@ -277,6 +277,94 @@ class ActivityLedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(repo_mock.await_args.kwargs["trace_id"], "trace-lookup-1")
 
+    def test_list_activity_timeline_payload_redacts_public_metadata_and_payload(self) -> None:
+        created_at = datetime(2026, 4, 10, 9, 5, tzinfo=timezone.utc)
+        with patch(
+            "server_modules.activity_ledger_service.control_plane_repository.list_activity_ledger_events",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "aevt-sensitive",
+                        "workspace_id": "workspace-1",
+                        "actor_type": "sage",
+                        "actor_id": "install-sage",
+                        "event_class": "sage_activity",
+                        "detail_level": "timeline_detail",
+                        "action": "sage_chat.completed",
+                        "summary": "Sage responded.",
+                        "metadata": {
+                            "api_key": "sk-test-secret",
+                            "safe": "visible",
+                            "nested": {"authorization": "Bearer secret-token"},
+                        },
+                        "payload": {
+                            "headers": {"cookie": "session_cookie=secret"},
+                            "note": "Call me at +1 415 555 1234",
+                        },
+                        "created_at": created_at,
+                    }
+                ]
+            ),
+        ):
+            payload = asyncio.run(
+                activity_ledger_service.list_activity_timeline_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    trace_id="trace-sensitive",
+                )
+            )
+
+        item = payload["items"][0]
+        self.assertEqual(item["metadata"]["safe"], "visible")
+        self.assertEqual(item["metadata"]["api_key"], "[redacted]")
+        self.assertEqual(item["metadata"]["nested"]["authorization"], "[redacted]")
+        self.assertEqual(item["payload"]["headers"]["cookie"], "[redacted]")
+        self.assertNotIn("+1 415 555 1234", item["payload"]["note"])
+
+    def test_list_activity_timeline_payload_strips_raw_reasoning_fields(self) -> None:
+        created_at = datetime(2026, 4, 10, 9, 5, tzinfo=timezone.utc)
+        with patch(
+            "server_modules.activity_ledger_service.control_plane_repository.list_activity_ledger_events",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "aevt-cot",
+                        "workspace_id": "workspace-1",
+                        "actor_type": "sage",
+                        "actor_id": "install-sage",
+                        "event_class": "sage_activity",
+                        "detail_level": "timeline_detail",
+                        "action": "sage_chat.completed",
+                        "summary": "Sage responded.",
+                        "metadata": {
+                            "raw_chain_of_thought": "hidden",
+                            "model_internals": {"scratchpad": "hidden"},
+                            "safe": "visible",
+                        },
+                        "payload": {
+                            "chain_of_thought": "hidden",
+                            "steps": [{"internal_reasoning": "hidden", "title": "Checked policy"}],
+                        },
+                        "created_at": created_at,
+                    }
+                ]
+            ),
+        ):
+            payload = asyncio.run(
+                activity_ledger_service.list_activity_timeline_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    trace_id="trace-cot",
+                )
+            )
+
+        item = payload["items"][0]
+        self.assertNotIn("raw_chain_of_thought", item["metadata"])
+        self.assertNotIn("model_internals", item["metadata"])
+        self.assertEqual(item["metadata"]["safe"], "visible")
+        self.assertNotIn("chain_of_thought", item["payload"])
+        self.assertEqual(item["payload"]["steps"][0], {"title": "Checked policy"})
+
     def test_list_sage_recent_activity_payload_groups_by_class(self) -> None:
         created_at = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
         with patch(

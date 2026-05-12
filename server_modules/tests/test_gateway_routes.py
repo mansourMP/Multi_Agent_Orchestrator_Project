@@ -15,7 +15,9 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from server_modules import (
+    agent_computer_profile_service,
     auth,
+    kill_switch_gate,
     gateway_state_repository,
     personal_channels_repository,
     routes_gateway,
@@ -34,6 +36,8 @@ class GatewayRoutesTests(unittest.TestCase):
 
         auth = importlib.import_module("server_modules.auth")
         gateway_state_repository = importlib.import_module("server_modules.gateway_state_repository")
+        agent_computer_profile_service = importlib.import_module("server_modules.agent_computer_profile_service")
+        kill_switch_gate = importlib.import_module("server_modules.kill_switch_gate")
         personal_channels_repository = importlib.import_module("server_modules.personal_channels_repository")
         routes_gateway = importlib.import_module("server_modules.routes_gateway")
         routes_personal_channels = importlib.import_module("server_modules.routes_personal_channels")
@@ -44,6 +48,7 @@ class GatewayRoutesTests(unittest.TestCase):
         self.auth_db_path = Path(self.tmpdir.name) / "auth-users.sqlite3"
         self.runtime_state_db_path = Path(self.tmpdir.name) / "runtime-state.sqlite3"
         self.personal_channels_db_path = Path(self.tmpdir.name) / "personal-channels.sqlite3"
+        self.profile_scope_path = Path(self.tmpdir.name) / "workspace-scope"
         gateway_state_repository.init_gateway_state_db(self.db_path)
         personal_channels_repository.init_personal_channels_db(self.personal_channels_db_path)
         self.app = FastAPI()
@@ -54,6 +59,7 @@ class GatewayRoutesTests(unittest.TestCase):
         self.client = TestClient(self.app)
         self.patchers = [
             patch.object(gateway_state_repository, "GATEWAY_STATE_DB_FILE", self.db_path),
+            patch("server_modules.agent_computer_profile_service.workspace_context.workspace_scope_dir", return_value=self.profile_scope_path),
             patch.object(auth, "AUTH_DB_FILE", self.auth_db_path),
             patch.object(personal_channels_repository, "PERSONAL_CHANNELS_DB_FILE", self.personal_channels_db_path),
             patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(self.runtime_state_db_path)}, clear=False),
@@ -83,6 +89,7 @@ class GatewayRoutesTests(unittest.TestCase):
         self.app.dependency_overrides.clear()
         for patcher in reversed(self.patchers):
             patcher.stop()
+        kill_switch_gate.clear_kill_switch(f"{kill_switch_gate.GATEWAY_KILL_PREFIX}gateway_dedicated_test")
         safe_mode_service.reset_state_for_tests()
         self.tmpdir.cleanup()
 
@@ -229,6 +236,161 @@ class GatewayRoutesTests(unittest.TestCase):
         )
         self.assertEqual(registration_response.status_code, 200)
         return registration_response.json()
+
+    def test_dedicated_workstation_bind_creates_profile_and_readiness(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+
+        response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/dedicated-workstation/bind",
+            json={
+                "workspace_id": "default",
+                "policy_id": "policy-dedicated",
+                "machine_label": "Mansur Mac mini",
+                "trace_id": "trace-dedicated-bind",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["readiness"], "offline")
+        self.assertFalse(payload["ready"])
+        self.assertIn("connection_offline", payload["blockers"])
+        self.assertEqual(payload["profile"]["environment_kind"], "dedicated_workstation")
+        self.assertTrue(payload["profile"]["dedicated_to_agent"])
+        self.assertEqual(payload["profile"]["gateway_id"], gateway_id)
+        self.assertEqual(payload["profile"]["policy_id"], "policy-dedicated")
+
+        registration = gateway_state_repository.get_gateway_registration(gateway_id)
+        self.assertEqual(
+            registration["metadata"]["dedicated_workstation"]["profile_id"],
+            payload["profile"]["profile_id"],
+        )
+
+    def test_dedicated_workstation_readiness_reports_ready_for_healthy_session(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        session_response = self.client.post(
+            "/api/gateway/sessions",
+            json={
+                "gateway_id": gateway_id,
+                "gateway_token": registration_payload["gateway_token"],
+            },
+        )
+        self.assertEqual(session_response.status_code, 200)
+        session_id = session_response.json()["session_id"]
+        gateway_state_repository.mark_gateway_session_connected(session_id, db_path=self.db_path)
+        gateway_state_repository.touch_gateway_session(
+            session_id=session_id,
+            gateway_id=gateway_id,
+            health_state="healthy",
+            db_path=self.db_path,
+        )
+
+        bind_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/dedicated-workstation/bind",
+            json={"workspace_id": "default", "policy_id": "policy-dedicated"},
+        )
+        self.assertEqual(bind_response.status_code, 200)
+
+        readiness_response = self.client.get(
+            f"/api/gateway/registrations/{gateway_id}/dedicated-workstation/readiness",
+            params={"workspace_id": "default", "trace_id": "trace-ready"},
+        )
+
+        self.assertEqual(readiness_response.status_code, 200)
+        self.assertEqual(readiness_response.json()["readiness"], "ready")
+        self.assertTrue(readiness_response.json()["ready"])
+        self.assertEqual(readiness_response.json()["blockers"], [])
+
+    def test_dedicated_workstation_bind_rejects_wrong_workspace(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        self.app.dependency_overrides[routes_gateway.require_api_key] = lambda: self._other_workspace_user()
+
+        response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/dedicated-workstation/bind",
+            json={"workspace_id": "other", "policy_id": "policy-dedicated"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_dedicated_workstation_kill_blocks_and_clear_reenables_gateway(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        bind_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/dedicated-workstation/bind",
+            json={"workspace_id": "default", "policy_id": "policy-dedicated"},
+        )
+        self.assertEqual(bind_response.status_code, 200)
+
+        kill_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/dedicated-workstation/kill",
+            json={
+                "workspace_id": "default",
+                "reason": "operator stop",
+                "trace_id": "trace-dedicated-kill",
+            },
+        )
+        self.assertEqual(kill_response.status_code, 200)
+        self.assertEqual(kill_response.json()["readiness"], "killed")
+
+        blocked_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/tools/execute",
+            json={
+                "capability_id": "screen.read",
+                "arguments": {},
+                "run_id": "run-after-dedicated-kill",
+                "trace_id": "trace-after-dedicated-kill",
+                "request_id": "req-after-dedicated-kill",
+                "interactive_approvals": False,
+            },
+        )
+        self.assertEqual(blocked_response.status_code, 503)
+        self.assertEqual(blocked_response.json()["detail"]["error"]["code"], "KILL_SWITCH_ACTIVE")
+
+        clear_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/dedicated-workstation/clear-kill",
+            json={"workspace_id": "default", "trace_id": "trace-dedicated-clear"},
+        )
+        self.assertEqual(clear_response.status_code, 200)
+        self.assertNotEqual(clear_response.json()["readiness"], "killed")
+
+        not_kill_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/tools/execute",
+            json={
+                "capability_id": "screen.read",
+                "arguments": {},
+                "run_id": "run-after-dedicated-clear",
+                "trace_id": "trace-after-dedicated-clear",
+                "request_id": "req-after-dedicated-clear",
+                "interactive_approvals": False,
+            },
+        )
+        self.assertNotEqual(not_kill_response.status_code, 503)
+
+    def test_revoke_gateway_marks_dedicated_profile_revoked(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        bind_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/dedicated-workstation/bind",
+            json={"workspace_id": "default", "policy_id": "policy-dedicated"},
+        )
+        self.assertEqual(bind_response.status_code, 200)
+        profile_id = bind_response.json()["profile"]["profile_id"]
+
+        revoke_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/revoke",
+            json={"reason": "retired dedicated machine"},
+        )
+
+        self.assertEqual(revoke_response.status_code, 200)
+        profile = agent_computer_profile_service.get_agent_computer_profile(
+            workspace_id="default",
+            profile_id=profile_id,
+        )
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.health_state, "revoked")
 
     def test_workspace_kill_switch_blocks_gateway_tool_execution(self) -> None:
         registration_payload = self._register_gateway()

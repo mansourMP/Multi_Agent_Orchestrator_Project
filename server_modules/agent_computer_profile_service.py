@@ -247,6 +247,24 @@ def create_agent_computer_profile(payload: Mapping[str, Any]) -> AgentComputerPr
     return profile
 
 
+def upsert_agent_computer_profile(payload: Mapping[str, Any]) -> AgentComputerProfile:
+    profile = normalize_agent_computer_profile(payload)
+    try:
+        state = _read_state(profile.workspace_id)
+        profiles = state.setdefault("profiles", {})
+        existing = profiles.get(profile.profile_id)
+        next_payload = profile.as_dict()
+        if isinstance(existing, dict):
+            next_payload["created_at"] = _coerce_text(existing.get("created_at")) or profile.created_at
+        profiles[profile.profile_id] = next_payload
+        _write_state(profile.workspace_id, state)
+    except AgentComputerProfileError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Failed to persist agent computer profile.") from exc
+    return normalize_agent_computer_profile(next_payload)
+
+
 def get_agent_computer_profile(*, workspace_id: str, profile_id: str) -> AgentComputerProfile | None:
     workspace = _coerce_text(workspace_id)
     profile_token = _coerce_text(profile_id)

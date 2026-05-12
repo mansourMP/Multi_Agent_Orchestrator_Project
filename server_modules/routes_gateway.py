@@ -37,6 +37,7 @@ from server_modules.capability_risk_classifier_service import (
 from server_modules.runtime_common import require_api_key
 from server_modules import (
     agent_approval_memory_service,
+    dedicated_workstation_setup_service,
     gateway_browser_service,
     gateway_execution_service,
     gateway_approval_service,
@@ -382,6 +383,19 @@ class GatewayRegistrationRevokeRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class DedicatedWorkstationBindRequest(BaseModel):
+    workspace_id: Optional[str] = Field(default=None, min_length=1)
+    policy_id: str = Field(min_length=1, max_length=160)
+    machine_label: Optional[str] = Field(default=None, max_length=160)
+    trace_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class DedicatedWorkstationControlRequest(BaseModel):
+    workspace_id: Optional[str] = Field(default=None, min_length=1)
+    reason: Optional[str] = Field(default=None, max_length=500)
+    trace_id: Optional[str] = Field(default=None, max_length=200)
+
+
 class GatewayToolExecuteRequest(BaseModel):
     capability_id: str = Field(min_length=1)
     arguments: Dict[str, Any] = Field(default_factory=dict)
@@ -625,7 +639,123 @@ async def revoke_gateway_registration(
             gateway_id,
             reason="registration revoked",
         )
+        dedicated_workstation_setup_service.mark_dedicated_workstation_revoked(
+            gateway_id=gateway_id,
+            reason=str((body or GatewayRegistrationRevokeRequest()).reason or "").strip() or "Gateway registration revoked.",
+            actor_user_id=str((current_user or {}).get("user_id") or "").strip(),
+        )
         return revoked_payload
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/gateway/registrations/{gateway_id}/dedicated-workstation/bind")
+async def bind_dedicated_workstation(
+    gateway_id: str,
+    body: DedicatedWorkstationBindRequest,
+    current_user=Depends(require_api_key),
+):
+    registration, resolved_workspace_id = _accessible_gateway_registration(
+        gateway_id,
+        current_user,
+        workspace_id=body.workspace_id,
+        minimum_role="owner",
+    )
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+    try:
+        return dedicated_workstation_setup_service.bind_dedicated_workstation(
+            gateway_id=gateway_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            user_id=str((current_user or {}).get("user_id") or registration.get("user_id") or "").strip(),
+            policy_id=body.policy_id,
+            machine_label=str(body.machine_label or "").strip(),
+            trace_id=str(body.trace_id or "").strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/gateway/registrations/{gateway_id}/dedicated-workstation/readiness")
+async def get_dedicated_workstation_readiness(
+    gateway_id: str,
+    workspace_id: Optional[str] = Query(default=None, min_length=1),
+    trace_id: Optional[str] = Query(default=None, max_length=200),
+    current_user=Depends(require_api_key),
+):
+    registration, resolved_workspace_id = _accessible_gateway_registration(
+        gateway_id,
+        current_user,
+        workspace_id=workspace_id,
+        minimum_role="viewer",
+    )
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+    try:
+        return dedicated_workstation_setup_service.dedicated_workstation_readiness(
+            gateway_id=gateway_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            user_id=str((current_user or {}).get("user_id") or registration.get("user_id") or "").strip(),
+            trace_id=str(trace_id or "").strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/gateway/registrations/{gateway_id}/dedicated-workstation/kill")
+async def kill_dedicated_workstation(
+    gateway_id: str,
+    body: Optional[DedicatedWorkstationControlRequest] = None,
+    current_user=Depends(require_api_key),
+):
+    payload = body or DedicatedWorkstationControlRequest()
+    registration, resolved_workspace_id = _accessible_gateway_registration(
+        gateway_id,
+        current_user,
+        workspace_id=payload.workspace_id,
+        minimum_role="owner",
+    )
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+    try:
+        response = dedicated_workstation_setup_service.kill_dedicated_workstation(
+            gateway_id=gateway_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            user_id=str((current_user or {}).get("user_id") or registration.get("user_id") or "").strip(),
+            reason=str(payload.reason or "").strip(),
+            trace_id=str(payload.trace_id or "").strip(),
+        )
+        response["live_connection_shutdown"] = await _shutdown_revoked_live_gateway_connection(
+            gateway_id,
+            reason="dedicated workstation stopped",
+        )
+        return response
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/gateway/registrations/{gateway_id}/dedicated-workstation/clear-kill")
+async def clear_dedicated_workstation_kill(
+    gateway_id: str,
+    body: Optional[DedicatedWorkstationControlRequest] = None,
+    current_user=Depends(require_api_key),
+):
+    payload = body or DedicatedWorkstationControlRequest()
+    registration, resolved_workspace_id = _accessible_gateway_registration(
+        gateway_id,
+        current_user,
+        workspace_id=payload.workspace_id,
+        minimum_role="owner",
+    )
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+    try:
+        return dedicated_workstation_setup_service.clear_dedicated_workstation_kill(
+            gateway_id=gateway_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            user_id=str((current_user or {}).get("user_id") or registration.get("user_id") or "").strip(),
+            trace_id=str(payload.trace_id or "").strip(),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

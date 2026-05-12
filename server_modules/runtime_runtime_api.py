@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import io
-import os
-import re
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 import uuid
 
@@ -29,15 +25,11 @@ from server_modules import outbox_service
 from server_modules import run_state_repository, runs_output, shared, telemetry
 from server_modules import billing_service, entitlements_service
 from server_modules import security_audit_service
+from server_modules import multimodal_provider_service
 
-SUPPORTED_STT_CONTENT_TYPES: Dict[str, str] = {
-    "audio/webm": "input.webm",
-    "audio/wav": "input.wav",
-    "audio/wave": "input.wav",
-    "audio/x-wav": "input.wav",
-}
-TTS_MAX_CHARS = 4096
-TTS_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
+SUPPORTED_STT_CONTENT_TYPES = multimodal_provider_service.SUPPORTED_STT_CONTENT_TYPES
+TTS_MAX_CHARS = multimodal_provider_service.TTS_MAX_CHARS
+TTS_VOICES = multimodal_provider_service.TTS_VOICES
 
 
 class RuntimeRegisterPayload(BaseModel):
@@ -282,134 +274,31 @@ class RuntimeTtsPayload(BaseModel):
 
 
 def _normalized_openai_api_key() -> str:
-    return str(os.getenv("OPENAI_API_KEY") or "").strip()
+    return multimodal_provider_service._normalized_openai_api_key()
 
 
 async def _transcribe_with_openai(audio_bytes: bytes, content_type: str) -> Dict[str, Any]:
-    api_key = _normalized_openai_api_key()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not configured.")
-    filename = SUPPORTED_STT_CONTENT_TYPES.get(content_type, "input.webm")
-    files = {
-        "file": (filename, audio_bytes, content_type),
-    }
-    data = {
-        "model": "whisper-1",
-        "response_format": "json",
-    }
-    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            data=data,
-            files=files,
-        )
-    response.raise_for_status()
-    payload = response.json()
-    transcript = str(payload.get("text") or "").strip()
-    return {
-        "transcript": transcript,
-        "confidence": 1.0 if transcript else 0.0,
-        "provider": "openai_whisper",
-    }
+    return await multimodal_provider_service._transcribe_with_openai(audio_bytes, content_type)
 
 
 def _transcribe_with_google(audio_bytes: bytes, content_type: str) -> Dict[str, Any]:
-    if content_type not in {"audio/wav", "audio/wave", "audio/x-wav"}:
-        raise RuntimeError("Google speech fallback only supports WAV audio.")
-    try:
-        import speech_recognition as sr  # type: ignore
-    except ImportError as exc:
-        raise RuntimeError("Google speech fallback is unavailable.") from exc
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
-        audio = recognizer.record(source)
-    transcript = str(recognizer.recognize_google(audio) or "").strip()
-    return {
-        "transcript": transcript,
-        "confidence": 0.6 if transcript else 0.0,
-        "provider": "google_speech",
-    }
+    return multimodal_provider_service._transcribe_with_google(audio_bytes, content_type)
 
 
 async def _transcribe_audio_bytes(audio_bytes: bytes, content_type: str) -> Dict[str, Any]:
-    if _normalized_openai_api_key():
-        return await _transcribe_with_openai(audio_bytes, content_type)
-    return await asyncio.to_thread(_transcribe_with_google, audio_bytes, content_type)
+    return await multimodal_provider_service.transcribe_audio_bytes(audio_bytes, content_type)
 
 
 def _split_tts_text(text: str, max_chars: int = TTS_MAX_CHARS) -> List[str]:
-    normalized = re.sub(r"[ \t]+\n", "\n", str(text or "")).strip()
-    if not normalized:
-        return []
-    if len(normalized) <= max_chars:
-        return [normalized]
-
-    def flush_chunk(chunks: List[str], current: str) -> str:
-        value = current.strip()
-        if value:
-            chunks.append(value)
-        return ""
-
-    chunks: List[str] = []
-    current = ""
-    paragraphs = [part.strip() for part in re.split(r"\n{2,}", normalized) if part.strip()]
-    for paragraph in paragraphs:
-        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", paragraph) if part.strip()]
-        if not sentences:
-            sentences = [paragraph]
-        for sentence in sentences:
-            candidate = f"{current} {sentence}".strip() if current else sentence
-            if len(candidate) <= max_chars:
-                current = candidate
-                continue
-            current = flush_chunk(chunks, current)
-            if len(sentence) <= max_chars:
-                current = sentence
-                continue
-            start = 0
-            while start < len(sentence):
-                slice_end = min(start + max_chars, len(sentence))
-                piece = sentence[start:slice_end].strip()
-                if piece:
-                    chunks.append(piece)
-                start = slice_end
-        current = flush_chunk(chunks, current)
-    flush_chunk(chunks, current)
-    return chunks or [normalized[:max_chars]]
+    return multimodal_provider_service.split_tts_text(text, max_chars=max_chars)
 
 
 async def _synthesize_tts_chunk(text: str, voice: str, speed: float) -> bytes:
-    api_key = _normalized_openai_api_key()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not configured.")
-    async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/audio/speech",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "tts-1",
-                "voice": voice,
-                "input": text,
-                "speed": speed,
-                "format": "mp3",
-            },
-        )
-    response.raise_for_status()
-    return bytes(response.content)
+    return await multimodal_provider_service._synthesize_with_openai(text, voice, speed)
 
 
 async def _synthesize_tts_chunks(text: str, voice: str, speed: float) -> List[bytes]:
-    parts = _split_tts_text(text)
-    if not parts:
-        raise RuntimeError("Text is required.")
-    results: List[bytes] = []
-    for part in parts:
-        results.append(await _synthesize_tts_chunk(part, voice, speed))
-    return results
+    return await multimodal_provider_service.synthesize_speech_chunks(text, voice, speed)
 
 
 async def _iter_audio_chunks(chunks: List[bytes]) -> AsyncIterator[bytes]:

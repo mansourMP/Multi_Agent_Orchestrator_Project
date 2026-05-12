@@ -372,8 +372,8 @@ def register_live_run(
                     "runtime",
                     trace_id,
                 )
-            except run_state_repository.RunStatePersistenceError:
-                pass
+            except run_state_repository.RunStatePersistenceError as exc:
+                LOGGER.warning("Failed to record initial run transition for %s: %s", run_id, exc)
     runs_by_id[run_id] = run
     log_queue = run.get("logs")
     if log_queue is not None:
@@ -382,8 +382,8 @@ def register_live_run(
     if not callable(create_live_run_initial_fn):
         try:
             persist_live_run_state_fn(run_id, run)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("Failed to persist live run state for %s: %s", run_id, exc)
 
 
 def _json_safe_run_payload(value: Any) -> Any:
@@ -1373,8 +1373,8 @@ def wait_for_human_response(
                     correlation_id,
                     note=decision_note,
                 )
-            except run_state_repository.RunStatePersistenceError:
-                pass
+            except run_state_repository.RunStatePersistenceError as exc:
+                LOGGER.warning("Failed to sync recovered approval resolution for %s/%s: %s", run_id, approval_id, exc)
             record_run_approval_resolution(
                 run,
                 existing_pending,
@@ -1613,8 +1613,8 @@ def activate_live_run(
     if str(selected_target or "").strip().lower() == str(local_companion_target or "").strip().lower():
         try:
             hydrate_run_memory_context_fn(run_id, run)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("Failed to replay outbox events on startup: %s", exc)
         if not defer_local_enqueue:
             enqueue_local_companion_run_fn(run_id)
         return run_id
@@ -1665,8 +1665,8 @@ def create_live_run(
     if isinstance(run_context, dict) and callable(inject_runtime_skill_defaults_fn):
         try:
             inject_runtime_skill_defaults_fn(run_context)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("Failed to recover expired worker leases on startup: %s", exc)
     if engine == "orion" and isinstance(run_context, dict) and callable(compute_tool_policy_precheck_fn):
         metadata = run_context.get("metadata") if isinstance(run_context.get("metadata"), dict) else {}
         if isinstance(metadata, dict) and not isinstance(metadata.get("tool_policy_precheck"), dict):
@@ -2800,13 +2800,13 @@ def initialize_runtime_services(
             pass
     try:
         recover_orphaned_local_runs_on_startup_fn()
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("Failed to recover orphaned local runs on startup: %s", exc)
     if callable(recover_delegation_retries_on_startup_fn):
         try:
             recover_delegation_retries_on_startup_fn()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("Failed to recover delegation retries on startup: %s", exc)
     load_runtime_skills_state_fn()
     load_telegram_autopilot_state_fn()
     load_whatsapp_autopilot_state_fn()

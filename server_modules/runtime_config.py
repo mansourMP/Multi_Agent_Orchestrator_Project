@@ -423,7 +423,30 @@ def _assert_frontend_origins_safe_for_environment() -> None:
             )
 
 
+def _assert_auth_secrets_safe_for_environment() -> None:
+    resolved_env = _resolved_environment()
+    if resolved_env not in {"staging", "production", "prod"}:
+        return
+    from server_modules import jwt_secret
+
+    jwt_secret.assert_explicit_secret_safe_for_environment(resolved_env)
+    broker_secret_names = ("EMPYRALIS_SECRETS_BROKER_SECRET", "EMPYRALIS_TOOL_BROKER_SECRET")
+    placeholders = {
+        "empyralis-dev-tool-broker-secret",
+        "empyralis-dev-secrets-broker-secret",
+        "replace-with-a-random-32-plus-character-secret",
+        "change-me",
+        "changeme",
+        "secret",
+    }
+    for name in broker_secret_names:
+        value = str(os.getenv(name) or "").strip()
+        if len(value) < 32 or value.lower() in placeholders:
+            raise RuntimeError(f"{name} must be explicitly set to a non-placeholder 32+ character secret in staging/production.")
+
+
 _assert_frontend_origins_safe_for_environment()
+_assert_auth_secrets_safe_for_environment()
 EMPYRALIS_BILLING_PROVIDER = config_str("EMPYRALIS_BILLING_PROVIDER", "stripe")
 EMPYRALIS_STRIPE_SECRET_KEY = config_str("EMPYRALIS_STRIPE_SECRET_KEY", config_str("STRIPE_SECRET_KEY", ""))
 EMPYRALIS_STRIPE_WEBHOOK_SECRET = config_str("EMPYRALIS_STRIPE_WEBHOOK_SECRET", "")

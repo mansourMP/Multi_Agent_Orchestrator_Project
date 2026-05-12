@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 
 _SENSITIVE_KEY_PARTS = (
@@ -45,6 +45,7 @@ _SENSITIVE_VALUE_PATTERNS = (
 
 _MAX_RECURSION_DEPTH = 10
 _MAX_LIST_ITEMS = 100
+_UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 
 def is_sensitive_key(key: Any) -> bool:
@@ -96,3 +97,29 @@ def sanitize_mapping(mapping: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     if not isinstance(mapping, Mapping):
         return {}
     return sanitize_value(dict(mapping))
+
+
+def _secret_findings(value: Any, *, key: Any = None, path: str = "$", depth: int = 0) -> List[str]:
+    if depth > _MAX_RECURSION_DEPTH:
+        return []
+    findings: List[str] = []
+    if is_sensitive_key(key) and value not in {None, "", "[redacted]", "[redacted-secret]", "[redacted-token]"}:
+        findings.append(path)
+    if isinstance(value, Mapping):
+        for item_key, item_value in value.items():
+            child_path = f"{path}.{item_key}"
+            findings.extend(_secret_findings(item_value, key=item_key, path=child_path, depth=depth + 1))
+        return findings
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(list(value)[:_MAX_LIST_ITEMS]):
+            findings.extend(_secret_findings(item, key=key, path=f"{path}[{index}]", depth=depth + 1))
+        return findings
+    if isinstance(value, str) and not _UUID_PATTERN.match(value.strip()) and redact_text(value) != value:
+        findings.append(path)
+    return findings
+
+
+def assert_secrets_free(value: Any, *, context: str = "payload") -> None:
+    findings = _secret_findings(value)
+    if findings:
+        raise ValueError(f"Secret-like value detected in {context}: {', '.join(findings[:5])}")

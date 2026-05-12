@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import secrets
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any, Dict
 
 _server = None  # populated by _init()
 _LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
+LOGGER = logging.getLogger(__name__)
 
 
 def _init():
@@ -210,7 +212,8 @@ def load_vault() -> Dict[str, Any]:
         if not isinstance(creds, list):
             creds = []
         return {"version": data.get("version", 1), "credentials": creds}
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("Failed to load credential vault from configured path: %s", exc)
         return {"version": 1, "credentials": []}
 
 

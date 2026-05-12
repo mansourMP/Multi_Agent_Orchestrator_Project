@@ -433,6 +433,17 @@ async def append_activity_event(
     metadata: Optional[Dict[str, Any]] = None,
     event_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    sanitized_artifacts = secret_redaction_service.sanitize_value(_coerce_artifacts(artifacts))
+    sanitized_payload = secret_redaction_service.sanitize_mapping(payload)
+    sanitized_metadata = secret_redaction_service.sanitize_mapping(metadata)
+    sanitized_record = {
+        "title": secret_redaction_service.redact_text(title),
+        "summary": secret_redaction_service.redact_text(summary),
+        "artifacts": sanitized_artifacts,
+        "payload": sanitized_payload,
+        "metadata": sanitized_metadata,
+    }
+    secret_redaction_service.assert_secrets_free(sanitized_record, context="activity_ledger_event")
     return await control_plane_repository.append_activity_ledger_event(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -449,13 +460,13 @@ async def append_activity_event(
         direction=str(direction or "").strip().lower() or None,
         action=str(action or "").strip().lower() or None,
         trace_id=str(trace_id or "").strip() or None,
-        title=_compact_text(title, limit=140),
-        summary=_compact_text(summary, limit=320),
+        title=_compact_text(sanitized_record["title"], limit=140),
+        summary=_compact_text(sanitized_record["summary"], limit=320),
         status=str(status or "logged").strip().lower() or "logged",
         review_required=bool(review_required),
-        artifacts=_coerce_artifacts(artifacts),
-        payload=_coerce_dict(payload),
-        metadata=_coerce_dict(metadata),
+        artifacts=sanitized_artifacts if isinstance(sanitized_artifacts, list) else [],
+        payload=sanitized_payload,
+        metadata=sanitized_metadata,
         event_id=event_id,
     )
 

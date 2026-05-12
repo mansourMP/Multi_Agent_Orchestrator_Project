@@ -52,13 +52,14 @@ def emit_security_audit_event(
         "action": action_token,
         "status": str(status or "").strip() or "success",
         "actor_user_id": str(actor_user_id or current_user.get("user_id") or "").strip() or None,
-        "actor_email": str(actor_email or current_user.get("email") or "").strip().lower() or None,
+        "actor_email": secret_redaction_service.redact_text(str(actor_email or current_user.get("email") or "").strip().lower()) or None,
         "actor_auth_type": str(actor_auth_type or current_user.get("auth_type") or "").strip().lower() or None,
         "channel": str(channel or "").strip().lower() or None,
-        "detail": str(detail or "").strip() or None,
+        "detail": secret_redaction_service.redact_text(str(detail or "").strip()) or None,
         "metadata": sanitize_security_audit_metadata(metadata),
         "emitted_at": outbox_service._utc_now_iso(),
     }
+    secret_redaction_service.assert_secrets_free(payload, context="security_audit_event")
     try:
         return outbox_service.emit_runtime_event(
             event_type="security_audit",

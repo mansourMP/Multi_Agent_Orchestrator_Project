@@ -128,6 +128,79 @@ def test_google_identity_claims_fail_closed_without_runtime_audience(monkeypatch
     assert exc_info.value.detail == "Google authentication is not configured."
 
 
+def test_google_identity_claims_reject_missing_exp(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path, {"GOOGLE_CLIENT_ID": "web-client.apps.googleusercontent.com"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth._validate_external_identity_claims(
+            "google",
+            {
+                "iss": "https://accounts.google.com",
+                "aud": "web-client.apps.googleusercontent.com",
+                "sub": "google-user-1",
+                "email": "user@example.com",
+                "email_verified": True,
+            },
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Identity token expiration is missing."
+
+
+def test_provider_jwks_fetch_retries_then_caches(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    auth.PROVIDER_JWKS_CACHE.clear()
+    auth.PROVIDER_JWKS_RETRY_ATTEMPTS = 2
+    calls = {"count": 0}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"keys": [{"kid": "kid-1"}]}
+
+    def fake_get(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("temporary")
+        return Response()
+
+    monkeypatch.setattr(auth.requests, "get", fake_get)
+    payload = auth._fetch_provider_jwks("google-test", "https://example.test/jwks")
+
+    assert payload == {"keys": [{"kid": "kid-1"}]}
+    assert calls["count"] == 2
+    assert "google-test" in auth.PROVIDER_JWKS_CACHE
+
+
+def test_provider_jwks_fetch_uses_stale_cache_on_failure(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    auth.PROVIDER_JWKS_CACHE.clear()
+    auth.PROVIDER_JWKS_CACHE["google-test"] = {
+        "payload": {"keys": [{"kid": "stale"}]},
+        "expires_at": 0,
+        "stale_until": auth.time.time() + 60,
+    }
+    monkeypatch.setattr(auth.requests, "get", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("down")))
+
+    payload = auth._fetch_provider_jwks("google-test", "https://example.test/jwks")
+
+    assert payload == {"keys": [{"kid": "stale"}]}
+
+
+def test_provider_jwks_fetch_failure_returns_503(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    auth.PROVIDER_JWKS_CACHE.clear()
+    auth.PROVIDER_JWKS_RETRY_ATTEMPTS = 1
+    monkeypatch.setattr(auth.requests, "get", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("down")))
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth._fetch_provider_jwks("google-test", "https://example.test/jwks")
+
+    assert exc_info.value.status_code == 503
+
+
 def test_google_identity_claims_accept_configured_runtime_audience(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(
         monkeypatch,

@@ -13,7 +13,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import logging
+
 from server_modules import activity_ledger_service
+from server_modules import secret_redaction_service
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 async def persist_transparency_events(
@@ -37,6 +43,22 @@ async def persist_transparency_events(
 
     for evt in events:
         try:
+            event_type = str(evt.get("event_type") or "transparency_event")
+            title = secret_redaction_service.redact_text(str(evt.get("title") or "")[:200])
+            summary = secret_redaction_service.redact_text(str(evt.get("summary") or "")[:500])
+            metadata = secret_redaction_service.sanitize_mapping(
+                {
+                    "event_id": str(evt.get("event_id") or ""),
+                    "event_type": event_type,
+                    "tool_name": str(evt.get("tool_name") or ""),
+                    "surface": surface,
+                    "audience": audience,
+                }
+            )
+            secret_redaction_service.assert_secrets_free(
+                {"title": title, "summary": summary, "metadata": metadata},
+                context="transparency_event",
+            )
             await activity_ledger_service.append_activity_event(
                 tenant_id="",
                 workspace_id=str(workspace_id or "").strip(),
@@ -44,24 +66,23 @@ async def persist_transparency_events(
                 actor_id=f"transparency:{tid}",
                 event_class="transparency_event",
                 detail_level="standard",
-                action=str(evt.get("event_type") or "transparency_event"),
-                title=str(evt.get("title") or "")[:200],
-                summary=str(evt.get("summary") or "")[:500],
+                action=event_type,
+                title=title,
+                summary=summary,
                 status=str(evt.get("status") or "completed"),
                 trace_id=tid,
                 channel=str(evt.get("channel") or surface),
                 direction="internal",
-                metadata={
-                    "event_id": str(evt.get("event_id") or ""),
-                    "event_type": str(evt.get("event_type") or ""),
-                    "tool_name": str(evt.get("tool_name") or ""),
-                    "surface": surface,
-                    "audience": audience,
-                },
+                metadata=metadata,
             )
             stored += 1
-        except Exception:
+        except Exception as exc:
             # Persistence is best-effort — never break the caller
-            pass
+            LOGGER.warning(
+                "Failed to persist transparency event trace_id=%s event_type=%s: %s",
+                tid,
+                str(evt.get("event_type") or "transparency_event"),
+                exc,
+            )
 
     return stored

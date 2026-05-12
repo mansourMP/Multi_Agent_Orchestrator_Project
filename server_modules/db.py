@@ -105,8 +105,8 @@ def _load_database_url_from_backend_env() -> None:
             if key.strip() == "DATABASE_URL" and value.strip():
                 os.environ.setdefault("DATABASE_URL", value.strip())
                 break
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("Failed to inspect backend .env for DATABASE_URL backfill: %s", exc)
     _ENV_DSN_LOADED = True
 
 

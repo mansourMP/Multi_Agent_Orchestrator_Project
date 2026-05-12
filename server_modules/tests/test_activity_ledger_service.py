@@ -57,6 +57,35 @@ class ActivityLedgerServiceTests(unittest.TestCase):
         self.assertEqual(items[0]["metadata"]["detail_level"], "feed_summary")
         self.assertEqual(items[0]["session_key"], "run:run-1")
 
+    def test_append_activity_event_redacts_before_persistence(self) -> None:
+        repo_mock = AsyncMock(return_value={"id": "aevt-1"})
+        with patch(
+            "server_modules.activity_ledger_service.control_plane_repository.append_activity_ledger_event",
+            new=repo_mock,
+        ):
+            asyncio.run(
+                activity_ledger_service.append_activity_event(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    actor_type="system",
+                    actor_id="system",
+                    event_class="system_activity",
+                    title="Authorization: Bearer secret-token-value",
+                    summary="API key sk-test-secret-1234567890",
+                    payload={"headers": {"Cookie": "sid=secret"}},
+                    metadata={"api_key": "sk-test-secret-1234567890", "safe": "visible"},
+                    artifacts=[{"path": "export?token=secret"}],
+                )
+            )
+
+        kwargs = repo_mock.await_args.kwargs
+        self.assertEqual(kwargs["metadata"]["api_key"], "[redacted]")
+        self.assertEqual(kwargs["metadata"]["safe"], "visible")
+        self.assertEqual(kwargs["payload"]["headers"]["Cookie"], "[redacted]")
+        self.assertNotIn("Bearer secret-token-value", kwargs["title"])
+        self.assertNotIn("sk-test-secret", kwargs["summary"])
+        self.assertNotIn("token=secret", str(kwargs["artifacts"]))
+
     def test_list_notification_feed_items_forwards_cursor_filters(self) -> None:
         repo_mock = AsyncMock(return_value=[])
         with patch(

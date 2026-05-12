@@ -73,6 +73,25 @@ class SecurityAuditServiceTests(unittest.TestCase):
         self.assertEqual(metadata["customer_phone"], "[redacted]")
         self.assertEqual(metadata["safe"], "keep-me")
 
+    def test_emit_security_audit_event_redacts_detail_before_outbox(self):
+        captured = {}
+
+        def fake_emit_runtime_event(**kwargs):
+            captured.update(kwargs)
+            return {"id": "event-1"}
+
+        with patch(
+            "server_modules.security_audit_service.outbox_service.emit_runtime_event",
+            side_effect=fake_emit_runtime_event,
+        ):
+            security_audit_service.emit_security_audit_event(
+                action="provider.failed",
+                workspace_id="workspace-1",
+                detail="Authorization: Bearer secret-token-value",
+            )
+
+        self.assertEqual(captured["payload"]["detail"], "Authorization: [redacted]")
+
 
 if __name__ == "__main__":
     unittest.main()

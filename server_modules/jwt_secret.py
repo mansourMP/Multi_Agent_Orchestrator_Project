@@ -15,6 +15,14 @@ JWT_SECRET_FILE = Path(
 
 _JWT_SECRET_LOCK = threading.Lock()
 _JWT_SECRET_CACHE: str | None = None
+_LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
+_PLACEHOLDER_SECRET_TOKENS = {
+    "replace-with-a-random-32-plus-character-secret",
+    "change-me",
+    "changeme",
+    "secret",
+    "test-secret",
+}
 
 
 def _normalize_secret(raw: str | None) -> str:
@@ -27,6 +35,26 @@ def _explicit_secret() -> str:
         if secret:
             return secret
     return ""
+
+
+def explicit_secret_is_safe_for_environment(environment: str | None = None) -> bool:
+    env = str(environment or os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+    if env in _LOCAL_ENV_TOKENS:
+        return True
+    explicit = _explicit_secret()
+    if len(explicit) < 32:
+        return False
+    if explicit.strip().lower() in _PLACEHOLDER_SECRET_TOKENS:
+        return False
+    return True
+
+
+def assert_explicit_secret_safe_for_environment(environment: str | None = None) -> None:
+    if not explicit_secret_is_safe_for_environment(environment):
+        raise RuntimeError(
+            "ORION_JWT_SECRET or JWT_SECRET must be explicitly set to a non-placeholder "
+            "32+ character secret in staging/production."
+        )
 
 
 def _read_secret_file(path: Path) -> str:

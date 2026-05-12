@@ -125,6 +125,24 @@ class AuthHardeningTests(unittest.TestCase):
         with patch.dict(os.environ, {"ORION_ENV": "development"}, clear=True):
             self.assertTrue(runtime_common.config._should_load_dotenv())
 
+    def test_runtime_config_rejects_missing_auth_secrets_in_production(self):
+        with patch.dict(os.environ, {"ORION_ENV": "production"}, clear=True):
+            with self.assertRaises(RuntimeError):
+                runtime_common.config._assert_auth_secrets_safe_for_environment()
+
+    def test_runtime_config_accepts_strong_auth_secrets_in_production(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ORION_ENV": "production",
+                "ORION_JWT_SECRET": "j" * 40,
+                "EMPYRALIS_SECRETS_BROKER_SECRET": "s" * 40,
+                "EMPYRALIS_TOOL_BROKER_SECRET": "t" * 40,
+            },
+            clear=True,
+        ):
+            runtime_common.config._assert_auth_secrets_safe_for_environment()
+
     def test_require_member_api_key_accepts_local_dev_member_identity(self):
         request = _request()
         with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "0"}, clear=False):

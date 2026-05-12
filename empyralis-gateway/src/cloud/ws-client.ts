@@ -64,6 +64,10 @@ interface RequestDispatchOptions {
   timeoutMs?: number;
 }
 
+interface GatewayRunOptions {
+  afterConnected?: () => Promise<void>;
+}
+
 export class GatewayWsClient {
   private socket: WebSocket | null = null;
   private readonly heartbeatLoop = new HeartbeatLoop();
@@ -291,10 +295,19 @@ export class GatewayWsClient {
     }
   }
 
-  async run(identity: GatewayDeviceIdentity, runtimeMetadata: GatewayRuntimeMetadata): Promise<void> {
+  async run(
+    identity: GatewayDeviceIdentity,
+    runtimeMetadata: GatewayRuntimeMetadata,
+    options: GatewayRunOptions = {},
+  ): Promise<void> {
+    let afterConnectedCompleted = false;
     while (true) {
       try {
         await this.connect(identity, runtimeMetadata);
+        if (options.afterConnected && !afterConnectedCompleted) {
+          await options.afterConnected();
+          afterConnectedCompleted = true;
+        }
         await this.awaitSocketClose();
         await this.checkpoints.saveHealthState("reconnecting", {
           pendingOutboxCount: (await this.outbox.summarize()).pending,

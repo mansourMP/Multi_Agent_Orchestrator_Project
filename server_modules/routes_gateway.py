@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
@@ -35,6 +36,9 @@ from server_modules import (
     safe_mode_service,
     security_audit_service,
 )
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -125,8 +129,8 @@ def _block_disabled_interactive_approval(
                 "reason": reason,
             },
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("Failed to emit gateway approval blocked audit for %s: %s", gateway_id, exc)
     try:
         gateway_state_repository.record_gateway_event(
             gateway_id=gateway_id,
@@ -141,8 +145,8 @@ def _block_disabled_interactive_approval(
                 "status": "blocked",
             },
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("Failed to record gateway approval blocked event for %s: %s", gateway_id, exc)
     raise HTTPException(
         status_code=403,
         detail="Gateway action requires owner approval, but interactive approvals are disabled.",
@@ -169,8 +173,8 @@ def _audit_approval_bypass(
                 "interactive_approvals": False,
             },
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("Failed to emit gateway approval bypass audit for %s: %s", gateway_id, exc)
 
 
 class GatewayPairingIntentCreateRequest(BaseModel):

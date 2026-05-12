@@ -26,6 +26,12 @@ from server_modules import control_plane_repository
 from server_modules import entitlements_service
 from server_modules import quota_policy_service, quota_response_service
 from server_modules import security_audit_service
+from server_modules.downstream_resilience_service import (
+    CircuitBreakerPolicy,
+    DownstreamCircuitOpenError,
+    RetryPolicy,
+    call_with_retries,
+)
 from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules.jwt_secret import resolve_jwt_secret
 from server_modules.sqlite_helpers import connect_sqlite_rw
@@ -91,6 +97,8 @@ BROWSER_AUTH_SESSION_CHANNELS = {"web", "desktop"}
 PROVIDER_JWKS_CACHE_LOCK = threading.Lock()
 PROVIDER_JWKS_CACHE: Dict[str, dict[str, Any]] = {}
 PROVIDER_JWKS_CACHE_TTL_SECONDS = max(int(os.getenv("ORION_PROVIDER_JWKS_CACHE_TTL_SECONDS", "3600")), 60)
+PROVIDER_JWKS_STALE_TTL_SECONDS = max(int(os.getenv("ORION_PROVIDER_JWKS_STALE_TTL_SECONDS", "86400")), PROVIDER_JWKS_CACHE_TTL_SECONDS)
+PROVIDER_JWKS_RETRY_ATTEMPTS = max(int(os.getenv("ORION_PROVIDER_JWKS_RETRY_ATTEMPTS", "3")), 1)
 PROVIDER_HTTP_TIMEOUT_SECONDS = max(float(os.getenv("ORION_PROVIDER_HTTP_TIMEOUT_SECONDS", "8")), 1.0)
 AUTH_HOT_CACHE_LOCK = threading.Lock()
 AUTH_HOT_CACHE_TTL_SECONDS = max(int(os.getenv("ORION_AUTH_HOT_CACHE_TTL_SECONDS", "15")), 5)
@@ -403,17 +411,39 @@ def _parse_external_identity_jwt_payload(token: str) -> dict[str, Any]:
 
 def _fetch_provider_jwks(cache_key: str, url: str) -> dict[str, Any]:
     now = time.time()
+    stale_payload: dict[str, Any] | None = None
     with PROVIDER_JWKS_CACHE_LOCK:
         cached = PROVIDER_JWKS_CACHE.get(cache_key)
-        if isinstance(cached, dict) and float(cached.get("expires_at") or 0) > now:
+        if isinstance(cached, dict):
             payload = cached.get("payload")
-            if isinstance(payload, dict):
+            expires_at = float(cached.get("expires_at") or 0)
+            stale_until = float(cached.get("stale_until") or 0)
+            if isinstance(payload, dict) and expires_at > now:
                 return payload
-    try:
+            if isinstance(payload, dict) and stale_until > now:
+                stale_payload = payload
+
+    def _request_jwks() -> dict[str, Any]:
         response = requests.get(url, timeout=PROVIDER_HTTP_TIMEOUT_SECONDS)
         response.raise_for_status()
-        payload = response.json()
+        return response.json()
+
+    try:
+        payload = call_with_retries(
+            name=f"provider_jwks:{cache_key}",
+            operation=_request_jwks,
+            retry_policy=RetryPolicy(attempts=PROVIDER_JWKS_RETRY_ATTEMPTS, initial_delay_seconds=0.05),
+            circuit_policy=CircuitBreakerPolicy(failure_threshold=3, reset_after_seconds=30.0),
+        )
+    except DownstreamCircuitOpenError as exc:
+        if stale_payload is not None:
+            LOGGER.warning("Using stale provider JWKS for %s because circuit is open.", cache_key)
+            return stale_payload
+        raise HTTPException(status_code=503, detail="Authentication provider keys are unavailable.") from exc
     except Exception as exc:
+        if stale_payload is not None:
+            LOGGER.warning("Using stale provider JWKS for %s after fetch failure: %s", cache_key, exc)
+            return stale_payload
         raise HTTPException(status_code=503, detail="Authentication provider keys are unavailable.") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=503, detail="Authentication provider keys are unavailable.")
@@ -421,6 +451,7 @@ def _fetch_provider_jwks(cache_key: str, url: str) -> dict[str, Any]:
         PROVIDER_JWKS_CACHE[cache_key] = {
             "payload": payload,
             "expires_at": now + PROVIDER_JWKS_CACHE_TTL_SECONDS,
+            "stale_until": now + PROVIDER_JWKS_STALE_TTL_SECONDS,
         }
     return payload
 
@@ -484,6 +515,8 @@ def _validate_external_identity_claims(
         exp = 0
     if not subject:
         raise HTTPException(status_code=401, detail="Identity token is missing a subject.")
+    if normalized_provider in {"apple", "google"} and not exp:
+        raise HTTPException(status_code=401, detail="Identity token expiration is missing.")
     if exp and exp <= now:
         raise HTTPException(status_code=401, detail="Identity token has expired.")
     if normalized_provider == "apple":

@@ -159,8 +159,11 @@ async function main(): Promise<void> {
       stateDir: config.stateDir,
       apiBaseUrl: config.apiBaseUrl,
     });
-    await personalChannelRuntimes.startAll();
-    await client.run(identity, runtimeMetadata);
+    await client.run(identity, runtimeMetadata, {
+      afterConnected: async () => {
+        await personalChannelRuntimes.startAll();
+      },
+    });
   } finally {
     await releaseLock();
   }

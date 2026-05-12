@@ -407,6 +407,16 @@ function marketplaceInstallTargetLabel(kind: string): string {
   }
 }
 
+function marketplaceBillingPilotLabel(billing: Record<string, unknown>, monetizationKind: string): string {
+  const status = readString(billing.billing_status, 'metadata_only');
+  const paymentProcessingLive = readBoolean(billing.payment_processing_live);
+  const monetizationLabel = humanizeToken(monetizationKind || readString(billing.monetization_kind, 'free'));
+  if (!paymentProcessingLive || status === 'metadata_only') {
+    return `${monetizationLabel}; metadata only`;
+  }
+  return monetizationLabel;
+}
+
 function summarizeInstallReadiness(
   card: MarketplaceCardView,
   details: {
@@ -423,6 +433,7 @@ function summarizeInstallReadiness(
     lines.push('Preview only; not installable in the pilot');
   }
   lines.push(card.approvalRequired ? 'Needs your OK before install' : 'No install approval required');
+  lines.push(`Billing: ${marketplaceBillingPilotLabel(readRecord(details.item.billing), card.monetizationKind)}`);
   lines.push(marketplaceInstallTargetLabel(card.kind));
   if (card.kind === 'app' || card.kind === 'mini_app') {
     if (details.permissionList.length > 0) {
@@ -916,7 +927,7 @@ export function MarketplacePane() {
                               Policy: {humanizeToken(card.policyPosture)}
                             </span>
                             <span className="marketplace-pane__stat-token">
-                              Billing: {humanizeToken(card.monetizationKind)}
+                              Billing: {marketplaceBillingPilotLabel(readRecord(card.item.billing), card.monetizationKind)}
                             </span>
                             <span className="marketplace-pane__stat-token">
                               Surface: {humanizeToken(card.runtimeSurface)}
@@ -1035,7 +1046,7 @@ export function MarketplacePane() {
                           {`Policy: ${humanizeToken(selectedPackage.policyPosture)}`}
                         </span>
                         <span className="marketplace-pane__stat-token">
-                          {`Billing: ${humanizeToken(selectedPackage.monetizationKind)}`}
+                          {`Billing: ${marketplaceBillingPilotLabel(readRecord(selectedPackage.item.billing), selectedPackage.monetizationKind)}`}
                         </span>
                         {selectedPackage.approvalRequired ? (
                           <span className="marketplace-pane__stat-token">Approval required</span>
@@ -1584,7 +1595,7 @@ export function MarketplacePane() {
                           {POLICY_OPTIONS.map((option) => <option key={option} value={option}>{humanizeToken(option)}</option>)}
                         </select>
                       </MarketplaceField>
-                      <MarketplaceField label="Billing">
+                      <MarketplaceField label="Billing" hint="Metadata only in the pilot; this does not start payment processing.">
                         <select
                           className="marketplace-pane__input"
                           value={appDraft.monetizationKind}
@@ -1605,7 +1616,7 @@ export function MarketplacePane() {
                       </MarketplaceField>
                     </div>
                     <div className="marketplace-pane__field-grid">
-                      <MarketplaceField label="Billing product ID">
+                      <MarketplaceField label="Billing product ID" hint="Reference only; payment/subscription processing is not live from this field.">
                         <input
                           className="marketplace-pane__input"
                           value={appDraft.billingProductId}
@@ -1770,7 +1781,7 @@ export function MarketplacePane() {
                           {POLICY_OPTIONS.map((option) => <option key={option} value={option}>{humanizeToken(option)}</option>)}
                         </select>
                       </MarketplaceField>
-                      <MarketplaceField label="Billing">
+                      <MarketplaceField label="Billing" hint="Metadata only in the pilot; this does not start payment processing.">
                         <select
                           className="marketplace-pane__input"
                           value={providerDraft.monetizationKind}
@@ -1791,7 +1802,7 @@ export function MarketplacePane() {
                       </MarketplaceField>
                     </div>
                     <div className="marketplace-pane__field-grid">
-                      <MarketplaceField label="Billing product ID">
+                      <MarketplaceField label="Billing product ID" hint="Reference only; payment/subscription processing is not live from this field.">
                         <input
                           className="marketplace-pane__input"
                           value={providerDraft.billingProductId}

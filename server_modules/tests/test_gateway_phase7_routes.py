@@ -705,3 +705,77 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
         self.assertEqual(payload["risk_decision"]["decision"], "approval_required")
         self.assertEqual(payload["risk_decision"]["capability"], "terminal.command")
         execute_mock.assert_not_awaited()
+
+    def test_approval_memory_reuses_only_matching_narrow_gateway_scope(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        approval_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/tools/execute",
+            json={
+                "capability_id": "computer_control.click",
+                "arguments": {"url": "https://example.com/dashboard", "x": 10, "y": 20},
+                "run_id": "run-remember-request",
+                "trace_id": "trace-remember-request",
+                "request_id": "req-remember-request",
+            },
+        )
+        self.assertEqual(approval_response.status_code, 202)
+        approval_id = approval_response.json()["approval"]["approval_id"]
+
+        execute_mock = AsyncMock(
+            return_value={
+                "status": "completed",
+                "result": {"clicked": True},
+                "request_id": "req-remember-request",
+            }
+        )
+        with patch("server_modules.routes_gateway.gateway_execution_service.execute_tool_via_gateway", execute_mock):
+            resolve_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/approvals/{approval_id}/resolve",
+                json={
+                    "decision": "approved",
+                    "note": "Allow dashboard clicks for this test",
+                    "remember_for_seconds": 600,
+                    "remember_scope": {"target_domain": "example.com"},
+                },
+            )
+
+        self.assertEqual(resolve_response.status_code, 200)
+        self.assertIn("approval_memory_rule", resolve_response.json())
+        self.assertEqual(resolve_response.json()["approval_memory_rule"]["target_domain"], "example.com")
+
+        execute_mock = AsyncMock(return_value={"status": "completed", "result": {"clicked": True}})
+        with patch("server_modules.routes_gateway.gateway_execution_service.execute_tool_via_gateway", execute_mock):
+            reused_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/tools/execute",
+                json={
+                    "capability_id": "computer_control.click",
+                    "arguments": {"url": "https://app.example.com/dashboard", "x": 11, "y": 22},
+                    "run_id": "run-remember-reuse",
+                    "trace_id": "trace-remember-reuse",
+                    "request_id": "req-remember-reuse",
+                },
+            )
+
+        self.assertEqual(reused_response.status_code, 200)
+        execute_mock.assert_awaited_once()
+        events_payload = self.client.get(f"/api/gateway/registrations/{gateway_id}/events")
+        event_types = [item["message_type"] for item in events_payload.json()["items"]]
+        self.assertIn("gateway.approval_memory.used", event_types)
+
+        execute_mock = AsyncMock(return_value={"status": "completed"})
+        with patch("server_modules.routes_gateway.gateway_execution_service.execute_tool_via_gateway", execute_mock):
+            blocked_by_scope_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/tools/execute",
+                json={
+                    "capability_id": "computer_control.click",
+                    "arguments": {"url": "https://evil.test/dashboard", "x": 10, "y": 20},
+                    "run_id": "run-remember-miss",
+                    "trace_id": "trace-remember-miss",
+                    "request_id": "req-remember-miss",
+                },
+            )
+
+        self.assertEqual(blocked_by_scope_response.status_code, 202)
+        self.assertEqual(blocked_by_scope_response.json()["status"], "approval_required")
+        execute_mock.assert_not_awaited()

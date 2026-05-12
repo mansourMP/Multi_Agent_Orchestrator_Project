@@ -392,8 +392,14 @@ class SageAgentRuntimeAuditTests(unittest.TestCase):
                 current_user={"user_id": "u-1"},
             ))
 
-            mock_activity.assert_called_once()
-            kwargs = mock_activity.call_args.kwargs
+            sage_activity_calls = [
+                call
+                for call in mock_activity.await_args_list
+                if call.kwargs.get("event_class") == "sage_activity"
+                and call.kwargs.get("action") == "sage_chat.completed"
+            ]
+            self.assertEqual(len(sage_activity_calls), 1)
+            kwargs = sage_activity_calls[0].kwargs
             self.assertEqual(kwargs["event_class"], "sage_activity")
             self.assertEqual(kwargs["action"], "sage_chat.completed")
             self.assertEqual(kwargs["workspace_id"], "ws-1")

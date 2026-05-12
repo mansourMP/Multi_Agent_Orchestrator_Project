@@ -1,5 +1,6 @@
 import types
 import unittest
+from unittest import mock
 
 from server_modules import runtime_route_registry_service
 from server_modules import runtime_route_run_handlers_service
@@ -106,6 +107,76 @@ class RuntimeRouteRegistryServiceTests(unittest.TestCase):
 
         self.assertEqual(payload["approval_id"], "approval-1")
         self.assertEqual(captured["invalid_detail"], "Approval resolution body must be an object.")
+
+    def test_admin_kill_switch_route_awaits_json_object_payload_with_invalid_detail(self):
+        captured = {}
+        app = _FakeApp()
+
+        async def _read_json_object_payload(request, *, invalid_detail):
+            captured["invalid_detail"] = invalid_detail
+            return {"scope": "capability", "enabled": True, "capability_id": "shell.execute", "reason": "test"}
+
+        fake_safe_mode = types.SimpleNamespace(
+            set_kill_switch=lambda **kwargs: {"updated": kwargs},
+            state_snapshot=lambda: {"ok": True},
+        )
+        with mock.patch.object(runtime_route_registry_service, "safe_mode_service", fake_safe_mode):
+            runtime_route_registry_service.register_runtime_run_routes(
+                app,
+                **self._registry_kwargs(
+                    runtime_request_service=types.SimpleNamespace(
+                        read_json_object_payload=_read_json_object_payload,
+                        require_authenticated_user=lambda current_user: current_user,
+                        read_json_payload=lambda *args, **kwargs: {},
+                    ),
+                ),
+            )
+
+            payload = self._run_async(
+                app.routes[("POST", "/admin/kill-switch")](
+                    request=object(),
+                    current_user={"user_id": "admin-1"},
+                )
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(captured["invalid_detail"], "Kill switch body must be an object.")
+        self.assertEqual(payload["result"]["updated"]["capability_id"], "shell.execute")
+
+    def test_admin_safe_mode_route_awaits_json_object_payload_with_invalid_detail(self):
+        captured = {}
+        app = _FakeApp()
+
+        async def _read_json_object_payload(request, *, invalid_detail):
+            captured["invalid_detail"] = invalid_detail
+            return {"enabled": True, "reason": "test", "workspace_id": "ws-1"}
+
+        fake_safe_mode = types.SimpleNamespace(
+            set_safe_mode=lambda **kwargs: {"updated": kwargs},
+            state_snapshot=lambda: {"ok": True},
+        )
+        with mock.patch.object(runtime_route_registry_service, "safe_mode_service", fake_safe_mode):
+            runtime_route_registry_service.register_runtime_run_routes(
+                app,
+                **self._registry_kwargs(
+                    runtime_request_service=types.SimpleNamespace(
+                        read_json_object_payload=_read_json_object_payload,
+                        require_authenticated_user=lambda current_user: current_user,
+                        read_json_payload=lambda *args, **kwargs: {},
+                    ),
+                ),
+            )
+
+            payload = self._run_async(
+                app.routes[("POST", "/admin/safe-mode")](
+                    request=object(),
+                    current_user={"user_id": "admin-1"},
+                )
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(captured["invalid_detail"], "Safe mode body must be an object.")
+        self.assertEqual(payload["result"]["updated"]["workspace_id"], "ws-1")
 
     def test_memory_route_resolves_workspace_on_server(self):
         captured = {}

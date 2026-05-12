@@ -208,7 +208,10 @@ def register_runtime_run_routes(
     @app.post("/admin/kill-switch", dependencies=[depends(require_admin_api_key)])
     async def set_kill_switch(request: Request, current_user=depends(require_admin_api_key)):
         refresh_server_exports()
-        payload = runtime_request_service.read_json_object_payload(request)
+        payload = await runtime_request_service.read_json_object_payload(
+            request,
+            invalid_detail="Kill switch body must be an object.",
+        )
         return {
             "ok": True,
             "result": safe_mode_service.set_kill_switch(
@@ -226,7 +229,10 @@ def register_runtime_run_routes(
     @app.post("/admin/safe-mode", dependencies=[depends(require_admin_api_key)])
     async def set_safe_mode(request: Request, current_user=depends(require_admin_api_key)):
         refresh_server_exports()
-        payload = runtime_request_service.read_json_object_payload(request)
+        payload = await runtime_request_service.read_json_object_payload(
+            request,
+            invalid_detail="Safe mode body must be an object.",
+        )
         return {
             "ok": True,
             "result": safe_mode_service.set_safe_mode(

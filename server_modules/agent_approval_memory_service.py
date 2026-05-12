@@ -327,6 +327,7 @@ def _rule_matches(
     rule: AgentApprovalMemoryRule,
     *,
     owner_user_id: str,
+    agent_id: str = "",
     capability: str,
     policy_id: str = "",
     profile_id: str = "",
@@ -344,6 +345,10 @@ def _rule_matches(
     if rule.use_count >= rule.max_uses:
         return False
     if rule.owner_user_id != _coerce_text(owner_user_id):
+        return False
+    requested_agent_id = _coerce_text(agent_id)
+    rule_agent_id = _coerce_text(rule.metadata.get("agent_id") if isinstance(rule.metadata, Mapping) else "")
+    if requested_agent_id and rule_agent_id != requested_agent_id:
         return False
     if rule.capability != capability:
         return False
@@ -370,6 +375,7 @@ def find_matching_approval_memory_rule(
     *,
     workspace_id: str,
     owner_user_id: str,
+    agent_id: str = "",
     capability: Any,
     policy_id: str = "",
     profile_id: str = "",
@@ -390,12 +396,16 @@ def find_matching_approval_memory_rule(
     for raw in _read_state(workspace).get("rules", {}).values():
         if not isinstance(raw, Mapping):
             continue
-        rule = _normalize_rule(raw)
+        try:
+            rule = _normalize_rule(raw)
+        except AgentApprovalMemoryError:
+            continue
         if rule.workspace_id != workspace:
             continue
         if _rule_matches(
             rule,
             owner_user_id=owner_user_id,
+            agent_id=agent_id,
             capability=normalized_capability,
             policy_id=policy_id,
             profile_id=profile_id,
@@ -413,6 +423,7 @@ def consume_matching_approval_memory_rule(
     *,
     workspace_id: str,
     owner_user_id: str,
+    agent_id: str = "",
     capability: Any,
     policy_id: str = "",
     profile_id: str = "",
@@ -426,6 +437,7 @@ def consume_matching_approval_memory_rule(
     rule = find_matching_approval_memory_rule(
         workspace_id=workspace_id,
         owner_user_id=owner_user_id,
+        agent_id=agent_id,
         capability=capability,
         policy_id=policy_id,
         profile_id=profile_id,
@@ -459,7 +471,10 @@ def list_approval_memory_rules(*, workspace_id: str) -> List[Dict[str, Any]]:
     for raw in _read_state(workspace).get("rules", {}).values():
         if not isinstance(raw, Mapping):
             continue
-        rule = _normalize_rule(raw)
+        try:
+            rule = _normalize_rule(raw)
+        except AgentApprovalMemoryError:
+            continue
         if rule.workspace_id == workspace:
             items.append(rule.as_dict())
     return sorted(items, key=lambda item: (str(item.get("created_at") or ""), str(item.get("rule_id") or "")))

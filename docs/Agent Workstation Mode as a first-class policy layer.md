@@ -8,9 +8,9 @@
   What Empyralis already has: Sage runtime, Gateway, approvals, kill switch, no silent cloud fallback, trace IDs,
   transparency events, personal Telegram/WhatsApp through Gateway, and runtime mode separation.
 
-  Biggest missing layer: a persisted AgentComputerProfile + AgentComputerPolicy + CapabilityRiskClassifier. Right now
-  safety exists in pieces, but Sage does not have a clean product-level “this is my computer vs this is Sage’s
-  dedicated workstation” contract.
+  Biggest remaining gap: one product-level approval decision orchestrator and connected-computer routing contract. The
+  core policy/profile/risk/memory primitives now exist, but Sage, Gateway, Studio, Apps, and future computer actions
+  still need one shared allow/ask/block decision path that produces natural approval cards and auditable decisions.
 
   Copy:
 
@@ -268,25 +268,27 @@
   - Downstream resilience is required before Sage can depend on providers, JWKS, notifications, STT/TTS, or channel sends.
   - Silent exception cleanup is required before approval, audit, retention, and recovery can be trusted.
 
-  Correct Build Order
-  The architecture direction is still correct, but the first implementation step is not AgentComputerProfile. Agent
-  Workstation gives Sage more autonomy over real or dedicated computers, so the platform must first close the
-  enterprise security/reliability gate.
+  Correct Build Order And Current Status
+  The architecture direction is still correct, but the source of truth must now reflect implementation progress. Phases
+  0-5 are complete as backend primitives. The next gap is not another policy primitive; it is one product-level approval
+  decision orchestrator that every connected-computer action can share.
 
   Build order:
-  | Phase | Work | Gate |
-  |---|---|---|
-  | 0 | Enterprise Security & Reliability Gate | Secrets, auth-provider resilience, downstream circuit breakers, Gateway startup sequencing, and critical silent failures are fixed. |
-  | 1 | AgentComputerPolicy | The policy defines autonomy mode, auto/ask/block rules, filesystem scope, domain allowlist, terminal policy, external-send policy, screenshot retention, and cloud-storage policy. |
-  | 2 | AgentComputerProfile | The computer Sage can use is persisted, scoped, health-checked, and references policy_id. It describes the machine; it does not own autonomy mode. |
-  | 3 | CapabilityRiskClassifier | Every tool/computer/channel action gets a deterministic risk decision before Gateway execution. |
-  | 4 | Enforce policy before Gateway execution | No local action can bypass profile, policy, risk classification, approval, kill switch, quota, or audit. |
-  | 5 | Approval memory | Sage can remember narrow, expiring approvals without granting blanket trust. |
-  | 6 | Workstation settings and setup UI | User can understand/change workstation mode, policy, scopes, approval behavior, and pair/label a machine. |
-  | 7 | Dedicated workstation backend setup | Mac mini/VM/self-hosted machine enrollment, profile binding, health checks, session readiness, and kill/revoke behavior. UI shell is covered by Phase 6. |
-  | 8 | Voice input | Voice message becomes a Sage task, but voice cannot silently approve risky actions. |
-  | 9 | Notification/call policy | Sage can notify/call only for approvals, urgent failures, or explicit user-requested escalation. |
-  | 10 | End-to-end smoke | Real trace proves policy classification, approval, Gateway execution, audit, transparency, and kill switch. |
+  | Phase | Work | Status | Evidence | Gate |
+  |---|---|---|---|---|
+  | 0 | Enterprise Security & Reliability Gate | Done | dffcb7137 | Secrets, auth-provider resilience, downstream circuit breakers, Gateway startup sequencing, and critical silent failures are fixed. |
+  | 1 | AgentComputerPolicy | Done | 027e96bfd | The policy defines autonomy mode, auto/ask/block rules, filesystem scope, domain allowlist, terminal policy, external-send policy, screenshot retention, and cloud-storage policy. |
+  | 2 | AgentComputerProfile | Done | b1d8d9da | The computer Sage can use is persisted, scoped, health-checked, and references policy_id. It describes the machine; it does not own autonomy mode. |
+  | 3 | CapabilityRiskClassifier | Done | d14a48103 | Every tool/computer/channel action gets a deterministic risk decision before Gateway execution. |
+  | 4 | Enforce policy before Gateway execution | Done | b906b2366 | Gateway actions hit policy, risk classification, approval, kill switch, quota, and audit checks. |
+  | 5 | Approval memory | Done | 6431281bc | Sage/Gateway can remember narrow, expiring approvals without granting blanket trust. |
+  | 6 | Approval Decision Orchestrator | Next | not yet unified | One shared service returns allow/approval_required/block plus approval-card payload, trace metadata, audit visibility, and remembered-rule status. |
+  | 7 | Sage Connected Computer Routing | Remaining | partial | Sage actions route through the orchestrator before Gateway, cloud computer, connector, or app execution. |
+  | 8 | Studio + Apps Boundary | Remaining | partial | Studio Agents and mini-app URL/app surfaces cannot bypass Sage/computer boundaries or owner-private resources. |
+  | 9 | Connected Computers UI | Remaining | partial | Users see connected computers, dedicated computers, and cloud computers; normal UI does not expose Gateway/runtime internals. |
+  | 10 | Dedicated Computer Setup | Remaining | partial | Mac mini/VM/self-hosted machine enrollment, profile binding, health checks, session readiness, and kill/revoke behavior. |
+  | 11 | Voice/Notification Policy | Remaining | defer | Voice messages can request tasks, but voice cannot silently approve risky actions. |
+  | 12 | End-to-End Certification | Remaining | needed after all above | Real trace proves policy classification, approval, Gateway/cloud execution, audit, transparency, and kill switch. |
 
   Phase 0 Implementation Plan
   | Commit | Scope | Files likely touched | Tests | Acceptance |
@@ -318,29 +320,16 @@
   Do not commit .env values.
 
   Agent Workstation Implementation Plan
-  Start this only after Phase 0 passes.
+  Resume at Phase 6.
   | Phase | Work | Files to inspect/add | Tests | Acceptance |
   |---|---|---|---|---|
-  | 1 | AgentComputerPolicy | inspect gateway_approval_service.py, deployed_agent_runtime_contract_service.py; add
-  policy service | default policies by mode | Policy owns autonomy mode and says auto/ask/block |
-  | 2 | AgentComputerProfile | inspect gateway_health_service.py, runtime_attachment_service.py; add
-  agent_computer_profile_service.py | profile create/read/workspace scope | Profile references policy_id and identifies personal vs dedicated
-  computer |
-  | 3 | CapabilityRiskClassifier | inspect skill_registry.py, external_write_safety.py, routes_gateway.py | risky
-  sends/deletes/terminal/secrets classified | Every Gateway action has risk decision |
-  | 4 | Enforce before Gateway | modify Gateway execution path only | safe action proceeds, risky pauses, blocked fails
-  | No local action bypasses policy |
-  | 5 | Approval memory | extend sage_approval_service.py or add scoped service | expiry, scope, replay, workspace
-  binding | Remember narrow approvals only |
-  | 6 | Settings/setup UI | inspect Gateway/Sage settings panes | typecheck + rendering | User sees policy/profile/scopes and can pair/label a workstation |
-  | 7 | Dedicated setup backend | extend Gateway pairing/profile/session readiness | paired dedicated machine smoke | Mac mini/VM can be
-  bound, health-checked, killed, and revoked |
-  | 8 | Voice message -> Sage task | inspect personal channels/mobile | voice text path tests | Voice becomes normal
-  Sage turn |
-  | 9 | Notification/call policy | mobile/personal channel services | urgent approval notification tests | Calls only
-  for approval/urgent failure |
-  | 10 | E2E smoke | closed-pilot smoke harness | full trace with Gateway action | Trace shows risk, approval,
-  execution, kill |
+  | 6 | Approval Decision Orchestrator | add shared backend service over policy/profile/risk/approval-memory | allow/ask/block, remembered-scope, kill override, secret-free payloads | One canonical product-level decision exists for connected-computer actions. |
+  | 7 | Sage Connected Computer Routing | inspect Sage runtime/tool routing and Gateway action dispatch | Sage local action creates decision, approval, execution, trace | Sage cannot execute computer/connectors/apps without the orchestrator. |
+  | 8 | Studio + Apps Boundary | inspect deployed-agent runtime binding, mini-app bridge, marketplace install paths | crafted bypass tests for Sage memory/files/channels/computers | Studio/customer agents and mini-apps cannot touch owner-private resources by raw payload. |
+  | 9 | Connected Computers UI | inspect Settings, Gateway, Sage connectors panes | frontend typecheck + user-facing string checks | UI explains connected/dedicated/cloud computers without exposing Gateway/runtime jargon in normal flows. |
+  | 10 | Dedicated setup backend | extend Gateway pairing/profile/session readiness | paired dedicated-machine smoke | Mac mini/VM can be bound, health-checked, killed, revoked, and audited. |
+  | 11 | Voice message -> Sage task + notification policy | inspect personal channels/mobile | voice text path and approval notification tests | Voice becomes a normal Sage turn; risky actions still need explicit approval. |
+  | 12 | E2E certification | closed-pilot smoke harness | full trace with connected computer action | Trace shows risk, approval, remembered rule if used, execution, audit, transparency, and kill. |
 
   Stop conditions:
 
@@ -349,22 +338,17 @@
   - Any Studio customer agent can access Sage private memory/files.
   - Any production path falls back to in-memory/cloud/local silently.
 
-  Exact First Implementation Recommendation
-  Build Phase 0 first:
+  Exact Next Implementation Recommendation
+  Build Phase 6 now:
 
-  Enterprise Security & Reliability Gate
+  Approval Decision Orchestrator
 
-  Then build Phase 1-3 together as one backend contract slice:
+  Do not start UI, voice, or dedicated Mac mini setup first. The backend has policy/profile/risk/approval-memory pieces,
+  but the platform still needs one canonical allow/ask/block decision contract that Sage, Gateway, Studio, Apps, and
+  future computer actions can share.
 
-  AgentComputerPolicy + AgentComputerProfile + CapabilityRiskClassifier
-
-  Do not start UI or voice first. Do not give Sage more computer autonomy until secrets, auth-provider resilience,
-  Gateway startup readiness, downstream retry/circuit breaking, and critical failure visibility are clean. After Phase
-  0 passes, the product needs a durable backend workstation truth layer before new controls appear in the interface.
-  After that, enforce it before Gateway execution.
-
-  Final verdict: BUILD NOW, but start with Phase 0. The research is sufficient; the next work should be the enterprise
-  security/reliability gate, then the backend workstation policy contract.
+  Final verdict: RESUME AT PHASE 6. The research is sufficient; the next work should unify approvals into a product-level
+  connected-computer decision layer, then wire Sage and app/runtime paths through it.
 
   Sources used: OpenAI Agents SDK tracing/guardrails docs, Anthropic Computer Use docs, Microsoft Copilot Studio
   activity docs, Google Gemini/Vertex Agent Platform docs, LangSmith observability/masking docs, CrewAI docs, and local

@@ -280,6 +280,35 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
                 any(str(a.get("approval_token") or "").startswith("sap_") for a in result["approvals_required"])
             )
 
+    def test_write_skill_includes_connected_computer_decision_card(self):
+        from server_modules.skill_registry import SkillDefinition
+
+        dangerous = SkillDefinition(
+            id="email-access", label="Email Access", description="Send email",
+            permission_label="email", execution_mode="manual", action_class="write",
+            connector_scopes=("email",), trigger_terms=("send email",),
+            requires_approval=True,
+        )
+        mocks = self._setup_mocks(skills=[dangerous])
+        with (
+            mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
+            mocks["skills"], mocks["provider"],
+            mocks["generate"], mocks["persist"], mocks["activity"], mocks["audit"], mocks["approval"],
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="send email to boss",
+                current_user={"user_id": "owner-1"},
+            ))
+
+            approval = result["approvals_required"][0]
+            decision = approval["agent_computer_decision"]
+            self.assertEqual(decision["decision"], "approval_required")
+            self.assertEqual(decision["agent_id"], "sage_main_agent")
+            self.assertEqual(decision["risk_decision"]["capability"], "communication.send")
+            self.assertEqual(approval["approval_card"]["action"], "communication.send")
+            self.assertTrue(approval["approval_card"]["rememberable"])
+
     def test_blocks_execute_skill_triggers(self):
         from server_modules.skill_registry import SkillDefinition
 
@@ -300,6 +329,34 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             ))
 
             self.assertTrue(any(b["skill_id"] == "task-runner" for b in result["blocked_tools"]))
+            self.assertEqual(
+                result["blocked_tools"][0]["agent_computer_decision"]["risk_decision"]["capability"],
+                "terminal.command",
+            )
+
+    def test_connected_computer_decision_redacts_secret_like_payload(self):
+        from server_modules.skill_registry import SkillDefinition
+
+        dangerous = SkillDefinition(
+            id="email-access", label="Email Access", description="Send email",
+            permission_label="email", execution_mode="manual", action_class="write",
+            connector_scopes=("email",), trigger_terms=("send email",),
+            requires_approval=True,
+        )
+        mocks = self._setup_mocks(skills=[dangerous])
+        with (
+            mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
+            mocks["skills"], mocks["provider"],
+            mocks["generate"], mocks["persist"], mocks["activity"], mocks["audit"], mocks["approval"],
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="send email with sk-proj-this-should-not-leak",
+            ))
+
+            decision_text = str(result["approvals_required"][0]["agent_computer_decision"])
+            self.assertNotIn("sk-proj-this-should-not-leak", decision_text)
+            self.assertNotIn("sk-", decision_text)
 
     def test_approval_token_is_chat_surface_only(self):
         from server_modules.skill_registry import SkillDefinition

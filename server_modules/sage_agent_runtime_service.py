@@ -28,6 +28,17 @@ from server_modules.direct_chat_provider_service import (
     supports_direct_message_native_chat,
     credential_auth_mode,
 )
+from server_modules.agent_computer_approval_decision_service import decide_agent_computer_action
+from server_modules.agent_computer_policy_service import (
+    CAPABILITY_APP_CONTROL,
+    CAPABILITY_CLOUD_STORAGE_ACCESS,
+    CAPABILITY_COMMUNICATION_SEND,
+    CAPABILITY_FILE_WRITE,
+    CAPABILITY_MEMORY_WRITE,
+    CAPABILITY_TERMINAL_COMMAND,
+    AUTONOMY_ASK_EVERY_TIME,
+    build_default_agent_computer_policy,
+)
 from server_modules.sage_agent_runtime_contract import (
     SAGE_MODE,
     normalize_sage_mode,
@@ -48,6 +59,21 @@ CLOUD_PROVIDER_IDS = ("anthropic", "deepseek", "openai", "gemini")
 
 SAFE_ACTION_CLASSES = {"read"}
 BLOCKED_ACTION_CLASSES = {"write", "execute"}
+SAGE_MAIN_AGENT_ID = "sage_main_agent"
+_COMMUNICATION_SCOPES = {
+    "discord",
+    "email",
+    "gmail",
+    "imessage",
+    "mail",
+    "slack",
+    "sms",
+    "telegram",
+    "whatsapp",
+}
+_MEMORY_SCOPES = {"memory", "sage_memory", "agent_memory"}
+_FILE_SCOPES = {"file", "files", "filesystem", "drive"}
+_CLOUD_STORAGE_SCOPES = {"dropbox", "google_drive", "icloud", "onedrive"}
 
 
 def _coerce_text(value: Any) -> str:
@@ -234,6 +260,77 @@ def _build_prompt_envelope(
     }
 
 
+def _skill_capability(skill: Any) -> str:
+    action_class = _coerce_text(getattr(skill, "action_class", "")).lower()
+    scopes = {
+        _coerce_text(scope).lower().replace("-", "_")
+        for scope in (getattr(skill, "connector_scopes", ()) or ())
+        if _coerce_text(scope)
+    }
+    if action_class == "execute":
+        return CAPABILITY_TERMINAL_COMMAND
+    if scopes & _COMMUNICATION_SCOPES:
+        return CAPABILITY_COMMUNICATION_SEND
+    if scopes & _MEMORY_SCOPES:
+        return CAPABILITY_MEMORY_WRITE
+    if scopes & _CLOUD_STORAGE_SCOPES:
+        return CAPABILITY_CLOUD_STORAGE_ACCESS
+    if scopes & _FILE_SCOPES:
+        return CAPABILITY_FILE_WRITE
+    return CAPABILITY_APP_CONTROL
+
+
+def _skill_target_channel(skill: Any) -> str:
+    scopes = [
+        _coerce_text(scope).lower().replace("-", "_")
+        for scope in (getattr(skill, "connector_scopes", ()) or ())
+        if _coerce_text(scope)
+    ]
+    for scope in scopes:
+        if scope in _COMMUNICATION_SCOPES:
+            return scope
+    return ""
+
+
+def _build_agent_computer_decision_for_skill(
+    *,
+    workspace_id: str,
+    actor_user_id: str,
+    skill: Any,
+    triggered_by: str,
+    message: str,
+) -> dict:
+    """Classify Sage's requested connected-computer action before approval.
+
+    Sage chat is a pre-execution surface: this builds the same decision envelope
+    the Gateway path uses, but does not consume remembered approvals yet.
+    """
+    capability = _skill_capability(skill)
+    policy = build_default_agent_computer_policy(
+        autonomy_mode=AUTONOMY_ASK_EVERY_TIME,
+        policy_id=f"sage-chat:{workspace_id}",
+    )
+    decision = decide_agent_computer_action(
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id or "owner",
+        agent_id=SAGE_MAIN_AGENT_ID,
+        policy=policy,
+        capability=capability,
+        action_class=_coerce_text(getattr(skill, "action_class", "")),
+        target_channel=_skill_target_channel(skill),
+        payload={
+            "surface": "sage_chat",
+            "skill_id": _coerce_text(getattr(skill, "id", "")),
+            "skill_label": _coerce_text(getattr(skill, "label", "")),
+            "action_class": _coerce_text(getattr(skill, "action_class", "")),
+            "triggered_by": triggered_by,
+            "user_message": message,
+        },
+        consume_approval_memory=False,
+    )
+    return decision.as_dict()
+
+
 def _create_approval_for_blocked_action(
     *,
     workspace_id: str,
@@ -376,11 +473,19 @@ async def handle_sage_chat(
         if skill.action_class in BLOCKED_ACTION_CLASSES:
             for term in skill.trigger_terms:
                 if term and term in normalized_message.lower():
+                    computer_decision = _build_agent_computer_decision_for_skill(
+                        workspace_id=normalized_workspace_id,
+                        actor_user_id=actor_user_id,
+                        skill=skill,
+                        triggered_by=term,
+                        message=normalized_message,
+                    )
                     blocked = {
                         "skill_id": skill.id,
                         "label": skill.label,
                         "action_class": skill.action_class,
                         "triggered_by": term,
+                        "agent_computer_decision": computer_decision,
                     }
                     blocked_actions.append(blocked)
 
@@ -389,8 +494,12 @@ async def handle_sage_chat(
                         "skill_id": skill.id,
                         "label": skill.label,
                         "action_class": skill.action_class,
-                        "reason": "Requires explicit owner approval before write/execute action.",
+                        "reason": computer_decision.get("reason")
+                        or "Requires explicit owner approval before write/execute action.",
+                        "agent_computer_decision": computer_decision,
                     }
+                    if computer_decision.get("approval_card"):
+                        approval_entry["approval_card"] = computer_decision.get("approval_card")
                     if normalized_surface == "chat":
                         created = _create_approval_for_blocked_action(
                             workspace_id=normalized_workspace_id,

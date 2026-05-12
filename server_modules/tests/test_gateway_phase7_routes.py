@@ -424,6 +424,80 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
         event_types = [item["message_type"] for item in events_payload.json()["items"]]
         self.assertIn("gateway.browser.fallback_ready", event_types)
 
+    def test_gateway_browser_session_does_not_cloud_fallback_by_default(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        execute_mock = AsyncMock(side_effect=ValueError("Local gateway is not currently connected."))
+        fallback_mock = AsyncMock(return_value={"status": "fallback_ready"})
+        with (
+            patch(
+                "server_modules.routes_gateway.gateway_browser_service.execute_browser_capability_via_gateway",
+                execute_mock,
+            ),
+            patch(
+                "server_modules.routes_gateway.gateway_browser_service.build_cloud_browser_fallback_response",
+                fallback_mock,
+            ),
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions",
+                json={
+                    "url": "https://fallback.example.com",
+                    "session_profile": "qa-browser",
+                    "run_id": "run-browser-no-fallback",
+                    "trace_id": "trace-browser-no-fallback",
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("not currently connected", response.json()["detail"])
+        execute_mock.assert_awaited_once()
+        fallback_mock.assert_not_awaited()
+
+    def test_gateway_browser_action_does_not_cloud_fallback_by_default(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway = registration_payload["gateway"]
+        gateway_id = gateway["gateway_id"]
+        gateway_state_repository.upsert_gateway_browser_session(
+            gateway_id=gateway_id,
+            device_id=gateway["device_id"],
+            tenant_id="default",
+            workspace_id="default",
+            user_id="owner-1",
+            run_id="run-browser-action-no-fallback",
+            browser_session_id="gbsess-no-fallback",
+            status="active",
+            execution_target="local_gateway",
+            session_profile="qa-browser",
+            metadata={"browser_session_mode": "managed"},
+        )
+        execute_mock = AsyncMock(side_effect=ValueError("Local gateway is not currently connected."))
+        fallback_mock = AsyncMock(return_value={"status": "fallback_ready"})
+        with (
+            patch(
+                "server_modules.routes_gateway.gateway_browser_service.execute_browser_capability_via_gateway",
+                execute_mock,
+            ),
+            patch(
+                "server_modules.routes_gateway.gateway_browser_service.build_cloud_browser_fallback_response",
+                fallback_mock,
+            ),
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-no-fallback/actions",
+                json={
+                    "action": "navigate",
+                    "action_args": {"url": "https://safe.example"},
+                    "run_id": "run-browser-action-no-fallback",
+                    "trace_id": "trace-browser-action-no-fallback",
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("not currently connected", response.json()["detail"])
+        execute_mock.assert_awaited_once()
+        fallback_mock.assert_not_awaited()
+
     def test_gateway_browser_attach_mode_reports_attach_required_and_attached_states(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]

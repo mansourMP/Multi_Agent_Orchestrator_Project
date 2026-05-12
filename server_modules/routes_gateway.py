@@ -176,7 +176,7 @@ class GatewayBrowserSessionStartRequest(BaseModel):
     attach_endpoint_url: Optional[str] = None
     interactive_actions: list[str] = Field(default_factory=list)
     reviewed_approval_required: bool = False
-    allow_cloud_fallback: bool = True
+    allow_cloud_fallback: bool = False
     run_id: str = Field(min_length=1)
     trace_id: Optional[str] = None
     workspace_id: Optional[str] = None
@@ -195,7 +195,7 @@ class GatewayBrowserActionRequest(BaseModel):
     request_id: Optional[str] = None
     timeout_seconds: Optional[int] = Field(default=None, ge=1, le=120)
     interactive_approvals: bool = True
-    allow_cloud_fallback: bool = True
+    allow_cloud_fallback: bool = False
 
 
 class GatewayBrowserSessionControlRequest(BaseModel):

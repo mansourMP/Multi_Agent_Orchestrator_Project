@@ -435,7 +435,7 @@ export function ChatMessage({
       || lowerText.includes('selected provider')
       || lowerText.includes('selected for chat')
       || lowerText.includes('local-only')
-      ? 'Choose Empyralis credits, add an AI model key, or connect this computer.'
+      ? 'Choose Empyralis credits, add an AI model key, or connect a computer.'
       : text;
     return (
       <article

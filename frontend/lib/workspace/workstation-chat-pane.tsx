@@ -1228,7 +1228,7 @@ export function WorkstationChatPane() {
       }
       if (selectedModelOption.uiSection === 'local_ai') {
         return {
-          label: localToolingOnline ? 'This Computer' : 'This Computer offline',
+          label: localToolingOnline ? 'Connected computer' : 'Connected computer offline',
           tone: localToolingOnline ? 'success' as const : 'warning' as const,
         };
       }
@@ -1241,10 +1241,10 @@ export function WorkstationChatPane() {
       return { label: 'No AI model', tone: 'warning' as const };
     }
     if (localProvider && !localToolingOnline) {
-      return { label: 'This Computer offline', tone: 'warning' as const };
+      return { label: 'Connected computer offline', tone: 'warning' as const };
     }
     if (localProvider) {
-      return { label: providerPath ?? 'This Computer', tone: 'success' as const };
+      return { label: providerPath ?? 'Connected computer', tone: 'success' as const };
     }
     if (providerPath === 'Empyralis credits') {
       return { label: 'Empyralis credits', tone: 'success' as const };
@@ -1276,7 +1276,7 @@ export function WorkstationChatPane() {
     return [
       {
         id: 'local-machine',
-        label: 'This Computer',
+        label: 'Connected computer',
         items: [
           { id: 'files', label: 'Files', detail: fileEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && fileEnabled },
           { id: 'browser', label: 'Browser', detail: browserEnabled ? localReason : 'Browser is not connected', enabled: browserEnabled },
@@ -1553,7 +1553,7 @@ export function WorkstationChatPane() {
     if (!localToolingOnline) {
       pills.push({
         id: 'gateway',
-        label: 'This Computer: Offline',
+        label: 'Connected computer: Offline',
         tone: 'danger',
         target: 'integrations',
       });
@@ -2244,7 +2244,7 @@ export function WorkstationChatPane() {
           ? null
           : hasPendingApprovals
             ? responseExecutionTarget === 'local_companion'
-              ? 'Sage is waiting for approval before using this computer.'
+              ? 'Sage is waiting for approval before using the connected computer.'
               : 'Needs your OK is waiting.'
             : needsUserIntervention && !hasProviderFailure
               ? 'Sage needs your input before it can continue.'
@@ -2305,9 +2305,9 @@ export function WorkstationChatPane() {
         const serverFailure = (typeof normalizedError?.status === 'number' && normalizedError.status >= 500)
           || /bad gateway|gateway timeout|service unavailable|internal server error|server error/i.test(normalizedRawMessage);
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
-          ? 'This Computer is needed for this request. Connect this computer and try again.'
+          ? 'Connected computer is needed for this request. Connect a computer and try again.'
           : providerNeedsAttention
-            ? 'The selected AI path is not ready. Use Empyralis credits, connect your own AI account, connect this computer, or choose another model in Integrations.'
+            ? 'The selected AI path is not ready. Use Empyralis credits, connect your own AI account, connect a computer, or choose another model in Integrations.'
             : authNeedsAttention
               ? 'Your session needs attention before Sage can continue. Refresh the page or sign in again.'
               : rateLimitFailure

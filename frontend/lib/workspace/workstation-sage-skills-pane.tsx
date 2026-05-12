@@ -224,7 +224,7 @@ export function WorkstationSageSkillsPane() {
             <WorkstationSurfaceStatGrid>
               <WorkstationSurfaceStat label="Ready" value={readySkills.length} hint="Available to Sage right now" />
               <WorkstationSurfaceStat label="Needs setup" value={needsSetupSkills.length} hint="Configured conceptually, but still missing local setup" />
-              <WorkstationSurfaceStat label="Unsupported" value={unsupportedSkills.length} hint="Not supported on this device" />
+              <WorkstationSurfaceStat label="Unsupported" value={unsupportedSkills.length} hint="Not supported on the selected computer" />
               <WorkstationSurfaceStat label="Disabled" value={disabledSkills.length} hint="Blocked by workspace policy" />
             </WorkstationSurfaceStatGrid>
 
@@ -291,7 +291,7 @@ export function WorkstationSageSkillsPane() {
             {[
               { key: 'ready', title: 'Ready now', description: 'These skills are active and can be used by Sage right now.', items: readySkills, tone: 'success' as const },
               { key: 'needs_setup', title: 'Needs setup', description: 'These skills belong in the product, but local setup is still missing.', items: needsSetupSkills, tone: 'warning' as const },
-              { key: 'unsupported_device', title: 'Unsupported on this device', description: 'These skills exist, but not on the current computer.', items: unsupportedSkills, tone: 'neutral' as const },
+              { key: 'unsupported_device', title: 'Unsupported on the selected computer', description: 'These skills exist, but not on the selected computer.', items: unsupportedSkills, tone: 'neutral' as const },
               { key: 'disabled_policy', title: 'Disabled by policy', description: 'These skills are blocked by workspace policy even if the runtime could support them.', items: disabledSkills, tone: 'danger' as const },
             ].map((section) => (
               <WorkstationSurfaceCard

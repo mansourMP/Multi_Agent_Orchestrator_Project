@@ -89,11 +89,11 @@ const DEMO_STEPS: readonly DemoStep[] = [
   {
     id: 'gateway',
     number: 8,
-    title: 'Gateway Proof',
+    title: 'Connected Computer Proof',
     description: 'Local computer acts as a secure extension of the cloud brain.',
     proofPoint: 'Revocable pairing, WSS transport, frame validation, and tool manifest enforcement.',
     routeId: 'gateway',
-    actionLabel: 'Connect Gateway',
+    actionLabel: 'Connect Computer',
   },
 ];
 

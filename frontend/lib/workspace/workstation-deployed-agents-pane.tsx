@@ -384,12 +384,12 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
     value: 'customer_local',
     label: 'My Computer Agent',
     supplier: 'customer',
-    hint: 'Agent uses your machine through Gateway with explicit permissions.',
+    hint: 'Agent uses a connected computer with explicit permissions.',
     capabilities: 'Local browser/files/terminal actions after explicit grants.',
-    runsWhere: 'Your computer through the enrolled Gateway.',
+    runsWhere: 'A connected computer registered to this workspace.',
     privacy: 'Very high data locality, with host-device trust responsibility.',
     costRisk: 'Medium.',
-    setup: 'Install and enroll Gateway, then grant scoped permissions.',
+    setup: 'Connect a computer, then grant scoped permissions.',
     bestFor: 'Personal workflows and device-local automation.',
   },
   {
@@ -2182,7 +2182,7 @@ function TranscriptEntryCard({
 }
 
 type RuntimeCardStatus = {
-  label: 'Ready' | 'Needs Gateway' | 'Needs Approval Policy' | 'Unsupported in this workspace' | 'Dev-only';
+  label: 'Ready' | 'Needs connected computer' | 'Needs Approval Policy' | 'Unsupported in this workspace' | 'Dev-only';
   tone: 'success' | 'warning' | 'danger' | 'neutral';
 };
 
@@ -2205,7 +2205,7 @@ function resolveRuntimeCardStatus(
   }
   if (option.value === 'customer_local') {
     if (!hasGatewayOnlineTarget) {
-      return [{ label: 'Needs Gateway', tone: 'warning' }];
+      return [{ label: 'Needs connected computer', tone: 'warning' }];
     }
     return [{ label: 'Ready', tone: 'success' }];
   }
@@ -2317,7 +2317,7 @@ function AgentLaunchChecklist({
   const runtimeModeValid = state.runtimePlacement !== 'hosted_hardware_pool'
     || hasCloudComputerAvailableTarget;
   const checks = [
-    { id: 'gateway', label: 'Gateway paired', ok: state.runtimePlacement !== 'customer_local' || hasGatewayOnlineTarget },
+    { id: 'gateway', label: 'Connected computer ready', ok: state.runtimePlacement !== 'customer_local' || hasGatewayOnlineTarget },
     { id: 'runtime', label: 'Agent mode valid', ok: Boolean(state.runtimePlacement) && runtimeModeValid },
     { id: 'tools', label: 'Tools policy valid', ok: state.selectedToolIds.length > 0 },
     { id: 'memory', label: 'Memory policy valid', ok: true },
@@ -3665,7 +3665,7 @@ export function WorkstationDeployedAgentsPane({
                         <span className="deployed-agents-card__badge">5. Approval gate</span>
                         <span className="deployed-agents-card__badge">6. Activity</span>
                         <span className="deployed-agents-card__badge">7. Billing</span>
-                        <span className="deployed-agents-card__badge">8. Gateway proof if needed</span>
+                        <span className="deployed-agents-card__badge">8. Computer proof if needed</span>
                       </div>
                     </ListDetailPanel>
 

@@ -138,7 +138,7 @@ type CertificationLaneItem = {
 };
 
 type GatewayPrimaryAction = {
-  label: 'Connect this computer' | 'Reconnect' | 'Approve action' | 'Revoke access';
+  label: 'Connect a computer' | 'Reconnect' | 'Approve action' | 'Revoke access';
   tone: 'primary' | 'secondary' | 'danger';
   disabled?: boolean;
   action:
@@ -275,10 +275,10 @@ function sortBrowserSessions(items: GatewayBrowserSessionRecord[]): GatewayBrows
 
 function summarizeWhatsappState(state: PersonalChannelStateRecord | null | undefined): string {
   if (!state) {
-    return 'This computer has not reported WhatsApp status yet.';
+    return 'The selected computer has not reported WhatsApp status yet.';
   }
   if (state.qr_code) {
-    return 'A WhatsApp pairing QR is ready on this computer.';
+    return 'A WhatsApp pairing QR is ready on the selected computer.';
   }
   if (String(state.status ?? '').trim().toLowerCase() === 'connected') {
     const linkedName = readString(state.linked_name, '');
@@ -291,7 +291,7 @@ function summarizeWhatsappState(state: PersonalChannelStateRecord | null | undef
 
 function summarizeTelegramState(state: PersonalChannelStateRecord | null | undefined): string {
   if (!state) {
-    return 'This computer has not reported Telegram status yet.';
+    return 'The selected computer has not reported Telegram status yet.';
   }
   if (state.login_hint) {
     return 'Telegram is waiting for a login code or confirmation.';
@@ -351,7 +351,7 @@ function gatewayPairingCommand(token: unknown): string {
     return normalizeGatewayApiBase(window.location.origin);
   })();
   if (!apiUrl) {
-    return 'Gateway API URL unavailable. Set NEXT_PUBLIC_ORION_API_URL or NEXT_PUBLIC_API_URL before pairing.';
+    return 'Computer connector API URL unavailable. Set NEXT_PUBLIC_ORION_API_URL or NEXT_PUBLIC_API_URL before pairing.';
   }
   return [
     'cd "$(git rev-parse --show-toplevel)/empyralis-gateway"',
@@ -378,12 +378,12 @@ function detectGatewayPlatform(): string {
 
 const GATEWAY_SETUP_STEPS = [
   {
-    title: 'Install Gateway',
-    description: 'Gateway keeps the local engine running in the background. The terminal command below is the current launch setup path.',
+    title: 'Install the computer connector',
+    description: 'The connector keeps the local engine running in the background. The terminal command below is the current launch setup path.',
   },
   {
-    title: 'Pair this computer',
-    description: 'Pairing creates one revocable device identity. The cloud never needs inbound access to your machine.',
+    title: 'Pair a computer',
+    description: 'Pairing creates one revocable device identity. The cloud never needs inbound access to that machine.',
   },
   {
     title: 'Grant local permissions only when needed',
@@ -403,11 +403,11 @@ const GATEWAY_MODE_SUMMARIES = [
   {
     title: 'Default',
     subtitle: 'Recommended',
-    description: 'Sage can use safe tools automatically. Risky actions still pause for approval before they touch your computer or send anything externally.',
+    description: 'Sage can use safe tools automatically. Risky actions still pause for approval before they touch a connected computer or send anything externally.',
   },
   {
     title: 'Full Access',
-    subtitle: 'This computer only',
+    subtitle: 'Selected computer only',
     description: 'Sage can continue inside your paired computer with broad local access for the session. It is still audited, revocable, and never applies to hosted cloud computers.',
   },
 ] as const;
@@ -431,8 +431,8 @@ function gatewayTrustSummary(selectedGateway: GatewayRegistrationRecord | null):
 } {
   return {
     deviceLabel: selectedGateway
-      ? readString(selectedGateway.display_name, 'This computer')
-      : 'This computer',
+      ? readString(selectedGateway.display_name, 'Connected computer')
+      : 'Connected computer',
     platformLabel: selectedGateway
       ? humanizeToken(selectedGateway.platform, 'Unknown platform')
       : 'Unknown platform',
@@ -494,13 +494,13 @@ function summarizeMyComputerCapabilities(
     {
       id: 'files',
       label: 'Files',
-      description: 'Read and list local files from this computer.',
+      description: 'Read and list local files from the selected computer.',
       available: hasFiles,
     },
     {
       id: 'shell',
       label: 'Shell',
-      description: 'Run safe terminal commands on this computer.',
+      description: 'Run safe terminal commands on the selected computer.',
       available: hasShell,
     },
     {
@@ -536,7 +536,7 @@ function summarizeMyComputerCapabilities(
     {
       id: 'ollama',
       label: 'Ollama',
-      description: 'Use local Ollama models when available on this computer.',
+      description: 'Use local Ollama models when available on the selected computer.',
       available: hasOllama,
     },
   ];
@@ -564,9 +564,9 @@ function summarizeMyComputerStatus(params: {
         id: 'pairing',
         label: 'Pairing',
         tone: 'warning',
-        detail: 'A short-lived connection request is ready. Open the desktop app on this computer to finish pairing.',
+        detail: 'A short-lived connection request is ready. Open the desktop app on the computer you want to connect.',
         primaryAction: {
-          label: 'Connect this computer',
+          label: 'Connect a computer',
           tone: 'primary',
           disabled: true,
           action: { kind: 'connect' },
@@ -577,9 +577,9 @@ function summarizeMyComputerStatus(params: {
       id: 'not_connected',
       label: 'Not connected',
       tone: 'neutral',
-      detail: 'Connect this computer when Sage needs trusted local access.',
+      detail: 'Connect a computer when Sage needs trusted local access.',
       primaryAction: {
-        label: 'Connect this computer',
+        label: 'Connect a computer',
         tone: 'primary',
         action: { kind: 'connect' },
       },
@@ -596,7 +596,7 @@ function summarizeMyComputerStatus(params: {
       id: 'revoked',
       label: 'Revoked',
       tone: 'danger',
-      detail: 'Access from this computer was revoked. Pair it again before Sage can use any local tools.',
+      detail: 'Access from the selected computer was revoked. Pair it again before Sage can use any local tools.',
       primaryAction: {
         label: 'Reconnect',
         tone: 'primary',
@@ -626,7 +626,7 @@ function summarizeMyComputerStatus(params: {
       id: 'reconnecting',
       label: 'Reconnecting',
       tone: 'warning',
-      detail: 'This computer is reconnecting or waiting for the desktop app to finish attaching.',
+      detail: 'The selected computer is reconnecting or waiting for the desktop app to finish attaching.',
       primaryAction: {
         label: 'Reconnect',
         tone: 'primary',
@@ -642,7 +642,7 @@ function summarizeMyComputerStatus(params: {
       id: 'online',
       label: 'Online',
       tone: 'success',
-      detail: 'Sage can use this computer now.',
+      detail: 'Sage can use the selected computer now.',
       primaryAction: {
         label: 'Revoke access',
         tone: 'danger',
@@ -655,7 +655,7 @@ function summarizeMyComputerStatus(params: {
     id: 'offline',
     label: 'Offline',
     tone: 'danger',
-    detail: 'This computer is not ready for local tasks yet.',
+    detail: 'The selected computer is not ready for local tasks yet.',
     primaryAction: {
       label: 'Reconnect',
       tone: 'primary',
@@ -709,7 +709,7 @@ function channelRecoveryLane(params: {
       id: 'channel_recovery',
       title: 'Channel recovery',
       subtitle: 'Ready',
-      description: 'Telegram and WhatsApp recovery stays available from phone and web when this computer is online.',
+      description: 'Telegram and WhatsApp recovery stays available from phone and web when the selected computer is online.',
       tone: 'success',
     };
   }
@@ -717,7 +717,7 @@ function channelRecoveryLane(params: {
     id: 'channel_recovery',
     title: 'Channel recovery',
     subtitle: configured ? 'Standby' : 'Not configured',
-    description: 'Personal Channels are optional. Configure them here when Sage should use this computer to deliver messages.',
+    description: 'Personal Channels are optional. Configure them here when Sage should use a connected computer to deliver messages.',
     tone: configured ? 'neutral' : 'accent',
   };
 }
@@ -768,8 +768,8 @@ function buildCertificationLanes(params: {
       title: 'Degraded-state clarity',
       subtitle: degradedChecks.length > 0 ? `${degradedChecks.length} issue${degradedChecks.length === 1 ? '' : 's'} surfaced` : 'Clear',
       description: degradedChecks.length > 0
-        ? degradedChecks.map((check) => readString(check.summary, humanizeToken(check.id, 'Gateway check'))).slice(0, 2).join(' · ')
-        : 'Gateway health, browser attach, provider reachability, and quota checks are currently readable and quiet.',
+        ? degradedChecks.map((check) => readString(check.summary, humanizeToken(check.id, 'Computer check'))).slice(0, 2).join(' · ')
+        : 'Computer health, browser attach, provider reachability, and quota checks are currently readable and quiet.',
       tone: degradedTone,
     },
     channelRecoveryLane({
@@ -838,8 +838,8 @@ export function WorkstationGatewayOperatorPane({
   const [manualSetupVisible, setManualSetupVisible] = useState(false);
   const [advancedDiagnosticsVisible, setAdvancedDiagnosticsVisible] = useState(false);
   const [channelDrafts, setChannelDrafts] = useState<Record<ChannelKind, ChannelDraft>>({
-    whatsapp: defaultChannelDraft('Empyralis gateway test from this computer.'),
-    telegram: defaultChannelDraft('Empyralis gateway test from this computer.'),
+    whatsapp: defaultChannelDraft('Empyralis connected-computer test.'),
+    telegram: defaultChannelDraft('Empyralis connected-computer test.'),
   });
 
   const selectedGateway = useMemo(
@@ -1068,7 +1068,7 @@ export function WorkstationGatewayOperatorPane({
         },
       );
       setPairingIntent(payload);
-      setStatusMessage('Computer pairing is ready. Run the command below on this device to connect it to Sage.');
+      setStatusMessage('Computer pairing is ready. Run the command below on the computer you want to connect to Sage.');
       await refreshRegistrations(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not create a computer pairing token.');
@@ -1117,9 +1117,9 @@ export function WorkstationGatewayOperatorPane({
     if (!selectedGatewayId || !selectedGateway) {
       return;
     }
-    const deviceLabel = readString(selectedGateway.display_name, 'this computer');
+    const deviceLabel = readString(selectedGateway.display_name, 'the selected computer');
     const confirmed = window.confirm(
-      `Revoke ${deviceLabel}? Sage will stop using this computer until it is paired again.`,
+      `Revoke ${deviceLabel}? Sage will stop using that computer until it is paired again.`,
     );
     if (!confirmed) {
       return;
@@ -1149,7 +1149,7 @@ export function WorkstationGatewayOperatorPane({
       setBrowserSessions(null);
       await refreshRegistrations(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Could not revoke this computer.');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not revoke the selected computer.');
     } finally {
       setBusyActionKey(null);
     }
@@ -1277,7 +1277,7 @@ export function WorkstationGatewayOperatorPane({
           }),
         },
       );
-      setStatusMessage(`${channel === 'whatsapp' ? 'WhatsApp' : 'Telegram'} test message dispatched through this computer.`);
+      setStatusMessage(`${channel === 'whatsapp' ? 'WhatsApp' : 'Telegram'} test message dispatched through the selected computer.`);
       await refreshGatewayDetail(selectedGatewayId, false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'The channel test message could not be sent.');
@@ -1358,13 +1358,15 @@ export function WorkstationGatewayOperatorPane({
   });
   const trustSummary = gatewayTrustSummary(selectedGateway);
   const platformToken = String(selectedGateway?.platform ?? pairingDraft.platform ?? '').trim().toLowerCase();
-  const normalDeviceTitle = platformToken.includes('mac') || platformToken.includes('darwin')
-    ? 'This Mac'
-    : platformToken.includes('windows')
-      ? 'This Windows PC'
-      : platformToken.includes('linux')
-        ? 'This Linux computer'
-        : 'This computer';
+  const normalDeviceTitle = selectedGateway
+    ? trustSummary.deviceLabel
+    : platformToken.includes('mac') || platformToken.includes('darwin')
+      ? 'Connect a Mac'
+      : platformToken.includes('windows')
+        ? 'Connect a Windows PC'
+        : platformToken.includes('linux')
+          ? 'Connect a Linux computer'
+          : 'Connect a computer';
   const normalTrustLabel = myComputerStatus.id === 'online'
     ? (['Trusted', 'Verified'].includes(trustSummary.trustLabel) ? 'Verified' : trustSummary.trustLabel)
     : trustSummary.trustLabel;
@@ -1453,8 +1455,8 @@ export function WorkstationGatewayOperatorPane({
 
         {advancedDiagnosticsVisible ? (
           <FormSection
-          title="What Sage can use on this computer"
-          description="Capability groups from this paired computer, shown without protocol or token detail."
+          title="What Sage can use on the connected computer"
+          description="Capability groups from the selected computer, shown without protocol or token detail."
         >
           <WorkstationSurfaceList>
             {myComputerCapabilities.map((capability) => (
@@ -1475,8 +1477,8 @@ export function WorkstationGatewayOperatorPane({
 
         {manualSetupVisible ? (
           <FormSection
-          title={`Connect or reconnect this ${pairingDeviceLabel}`}
-          description="Create a short-lived connection request when this computer is not connected, reconnecting, or revoked."
+          title={`Connect or reconnect a ${pairingDeviceLabel}`}
+          description="Create a short-lived connection request when the selected computer is not connected, reconnecting, or revoked."
         >
           <FormGrid columns="repeat(2, minmax(0, 1fr))">
             <FormField label="Device label" hint="Human-readable name shown in operator surfaces.">
@@ -1504,7 +1506,7 @@ export function WorkstationGatewayOperatorPane({
               void handleCreatePairingIntent();
             }}
           >
-              {busyActionKey === 'pairing' ? 'Creating connection…' : 'Connect this computer'}
+              {busyActionKey === 'pairing' ? 'Creating connection…' : 'Connect a computer'}
             </WorkstationActionButton>
           </div>
           </FormSection>
@@ -1513,7 +1515,7 @@ export function WorkstationGatewayOperatorPane({
         {advancedDiagnosticsVisible ? (
           <FormSection
           title="How this trust lane works"
-          description="Default keeps risky local and external actions behind approval. Full Access only applies to a paired user-owned computer."
+          description="Default keeps risky local and external actions behind approval. Full Access only applies to the selected user-owned computer."
         >
           <WorkstationSurfaceList>
             {GATEWAY_MODE_SUMMARIES.map((mode) => (
@@ -1561,14 +1563,14 @@ export function WorkstationGatewayOperatorPane({
             <div className="gateway-pairing-command-card">
               <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
                 <div className="gateway-pairing-command-card__copy">
-                  <strong>Run on this computer</strong>
-                  <span>Use this only if Gateway is not already connected.</span>
+                  <strong>Run on the computer you want to connect</strong>
+                  <span>Use this only if the connector is not already online.</span>
                 </div>
                 <div className="app-inline-actions app-inline-actions--tight">
                   <WorkstationActionButton
                     type="button"
                     onClick={() => {
-                      void copyToClipboard('Gateway setup command', gatewayPairingCommand(pairingIntent.pairing_token));
+                      void copyToClipboard('Computer connector setup command', gatewayPairingCommand(pairingIntent.pairing_token));
                     }}
                   >
                     Copy setup command
@@ -1587,7 +1589,7 @@ export function WorkstationGatewayOperatorPane({
         ) : advancedDiagnosticsVisible && gateways.length === 0 ? (
           <EmptyPanel
             title="No computers connected yet"
-            body="Pair this computer when you want Sage to use local files, browser sessions, screenshots, clipboard, terminal, or personal channels."
+            body="Pair a computer when you want Sage to use local files, browser sessions, screenshots, clipboard, terminal, or personal channels."
           />
         ) : advancedDiagnosticsVisible ? (
           <WorkstationSurfaceList>
@@ -1598,7 +1600,7 @@ export function WorkstationGatewayOperatorPane({
                 <WorkstationSurfaceListItem
                   key={gatewayId}
                   title={readString(gateway.display_name, gatewayId)}
-                  subtitle={`${humanizeToken(gateway.platform, 'Unknown platform')}${selected ? ' · This device' : ''}`}
+                  subtitle={`${humanizeToken(gateway.platform, 'Unknown platform')}${selected ? ' · Selected' : ''}`}
                   description={`Trust ${humanizeToken(gateway.device_trust_state, 'unknown')} · last seen ${formatRelativeTimestamp(gateway.last_seen_at)}`}
                   actions={(
                     <div className="app-inline-actions app-inline-actions--tight">
@@ -1623,7 +1625,7 @@ export function WorkstationGatewayOperatorPane({
 
       <CommandSheet
         open={manageOpen}
-        title="Manage this computer"
+        title="Manage selected computer"
         description="Reconnect, revoke trust, or open advanced setup only when needed."
         onClose={() => setManageOpen(false)}
       >
@@ -1655,7 +1657,7 @@ export function WorkstationGatewayOperatorPane({
                 void handleCreatePairingIntent();
               }}
             >
-              {busyActionKey === 'pairing' ? 'Creating connection…' : selectedGateway ? 'Reconnect' : 'Connect this computer'}
+              {busyActionKey === 'pairing' ? 'Creating connection…' : selectedGateway ? 'Reconnect' : 'Connect a computer'}
             </WorkstationActionButton>
             {selectedGateway ? (
               <WorkstationActionButton
@@ -1714,7 +1716,7 @@ export function WorkstationGatewayOperatorPane({
           ) : null}
 
           <FormGrid>
-            <FormReadout label="Computer" value={readString(selectedGateway.display_name, 'This computer')} />
+            <FormReadout label="Computer" value={readString(selectedGateway.display_name, 'Selected computer')} />
             <FormReadout label="State" value={<DataBadge tone={myComputerStatus.tone}>{myComputerStatus.label}</DataBadge>} />
             <FormReadout label="Platform" value={humanizeToken(selectedGateway.platform, 'Unknown')} />
             <FormReadout label="Trust state" value={trustSummary.trustLabel} />
@@ -1748,7 +1750,7 @@ export function WorkstationGatewayOperatorPane({
           </FormSection>
 
           <FormSection
-            title="Revoke this computer"
+            title="Revoke selected computer"
             description="Revocation is immediate and server-side. The computer must be paired again before Sage can use its local tools or personal channels."
           >
             <div className="settings-action-row">
@@ -1874,7 +1876,7 @@ export function WorkstationGatewayOperatorPane({
           ) : (
             <EmptyPanel
               title="No device checks yet"
-              body="Pair and connect this computer to populate health and personal channel status."
+              body="Pair and connect a computer to populate health and personal channel status."
             />
           )}
         </WorkstationSurfaceCard>
@@ -1883,10 +1885,10 @@ export function WorkstationGatewayOperatorPane({
       {selectedGateway && showChannelsSection && advancedDiagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Personal Channels"
-          description="Current login, linked identity, and recent activity for personal WhatsApp and Telegram on this computer."
+          description="Current login, linked identity, and recent activity for personal WhatsApp and Telegram on the selected computer."
         >
           <WorkstationSurfaceNotice tone="neutral">
-            Telegram and WhatsApp are the live personal channels on this paired computer. Signal is next, iMessage waits for a stable Mac bridge, and Discord stays in the Studio/business lane.
+            Telegram and WhatsApp are the live personal channels on the selected paired computer. Signal is next, iMessage waits for a stable Mac bridge, and Discord stays in the Studio/business lane.
           </WorkstationSurfaceNotice>
           <WorkstationSurfaceList>
             <WorkstationSurfaceListItem
@@ -1902,7 +1904,7 @@ export function WorkstationGatewayOperatorPane({
             {whatsapp?.state?.qr_code ? (
               <FormReadout
                 label="WhatsApp pairing"
-                value="QR ready to scan on this computer"
+                value="QR ready to scan on the selected computer"
               />
             ) : null}
             <WorkstationSurfaceListItem
@@ -1918,16 +1920,16 @@ export function WorkstationGatewayOperatorPane({
             {telegram?.state?.login_hint ? (
               <FormReadout
                 label="Telegram login hint"
-                value={readString(telegram.state.login_hint, 'Waiting for this computer to confirm Telegram login.')}
+                value={readString(telegram.state.login_hint, 'Waiting for the selected computer to confirm Telegram login.')}
               />
             ) : null}
           </WorkstationSurfaceList>
           <FormSection
             title="WhatsApp setup and test"
-            description="Request local WhatsApp pairing on this computer, then send a controlled test message through the user-owned session."
+            description="Request local WhatsApp pairing on the selected computer, then send a controlled test message through the user-owned session."
           >
             <FormGrid columns="repeat(2, minmax(0, 1fr))">
-              <FormField label="Phone number" hint="Used only by this computer to request WhatsApp pairing.">
+              <FormField label="Phone number" hint="Used only by the selected computer to request WhatsApp pairing.">
                 <FormInput
                   value={channelDrafts.whatsapp.phoneNumber}
                   onChange={(event) => updateChannelDraft('whatsapp', { phoneNumber: event.currentTarget.value })}
@@ -1949,7 +1951,7 @@ export function WorkstationGatewayOperatorPane({
               </FormField>
               <FormReadout
                 label="Logout/revoke"
-                value="Use Revoke access for this computer to immediately disable WhatsApp local tools."
+                value="Use Revoke access for the selected computer to immediately disable WhatsApp local tools."
               />
             </FormGrid>
             <div className="settings-action-row">
@@ -1976,10 +1978,10 @@ export function WorkstationGatewayOperatorPane({
           </FormSection>
           <FormSection
             title="Telegram setup and test"
-            description="Configure the local Telegram session on this computer, then send a controlled test message through the user-owned session."
+            description="Configure the local Telegram session on the selected computer, then send a controlled test message through the user-owned session."
           >
             <FormGrid columns="repeat(2, minmax(0, 1fr))">
-              <FormField label="Telegram app ID" hint="Used only for this computer's Telegram login.">
+              <FormField label="Telegram app ID" hint="Used only for the selected computer's Telegram login.">
                 <FormInput
                   type="number"
                   value={channelDrafts.telegram.apiId}
@@ -1987,7 +1989,7 @@ export function WorkstationGatewayOperatorPane({
                   placeholder="123456"
                 />
               </FormField>
-              <FormField label="Telegram app secret" hint="Stored only in this computer's Telegram setup path.">
+              <FormField label="Telegram app secret" hint="Stored only in the selected computer's Telegram setup path.">
                 <FormInput
                   type="password"
                   value={channelDrafts.telegram.apiHash}
@@ -1995,7 +1997,7 @@ export function WorkstationGatewayOperatorPane({
                   placeholder="Telegram app secret"
                 />
               </FormField>
-              <FormField label="Phone number" hint="Used by Telegram login on this computer.">
+              <FormField label="Phone number" hint="Used by Telegram login on the selected computer.">
                 <FormInput
                   value={channelDrafts.telegram.phoneNumber}
                   onChange={(event) => updateChannelDraft('telegram', { phoneNumber: event.currentTarget.value })}
@@ -2030,7 +2032,7 @@ export function WorkstationGatewayOperatorPane({
               </FormField>
               <FormReadout
                 label="Logout/revoke"
-                value="Use Revoke access for this computer to immediately disable Telegram local tools."
+                value="Use Revoke access for the selected computer to immediately disable Telegram local tools."
               />
             </FormGrid>
             <div className="settings-action-row">
@@ -2124,7 +2126,7 @@ export function WorkstationGatewayOperatorPane({
           {browserItems.length === 0 ? (
             <EmptyPanel
               title="No device activity tracked"
-              body="Once this computer starts or attaches a browser session, it will appear here with governed control actions."
+              body="Once the selected computer starts or attaches a browser session, it will appear here with governed control actions."
             />
           ) : (
             <WorkstationSurfaceList>

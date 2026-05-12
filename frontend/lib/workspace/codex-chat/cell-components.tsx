@@ -476,7 +476,7 @@ export function ErrorCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind:
     || lowerMessage.includes('selected provider')
     || lowerMessage.includes('selected for chat')
     || lowerMessage.includes('local-only')
-    ? 'Choose Empyralis credits, add an AI model key, or connect this computer.'
+    ? 'Choose Empyralis credits, add an AI model key, or connect a computer.'
     : cell.message;
   return (
     <article data-chat-role="system" className="app-chat-transcript-error">

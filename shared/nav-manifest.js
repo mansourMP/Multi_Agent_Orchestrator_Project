@@ -25,7 +25,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'gateway',
-    label: 'Gateway',
+    label: 'Computers',
     iconName: 'waypoints',
     defaultRouteId: 'gateway',
     childRouteIds: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
@@ -56,7 +56,7 @@ export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = {
   sage: 'Sage',
   studio: 'Agents',
   marketplace: 'Discover',
-  gateway: 'Gateway',
+  gateway: 'Computers',
   settings: 'Settings',
 };
 
@@ -283,7 +283,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'gateway',
-    label: 'Gateway',
+    label: 'Computers',
     segment: 'gateway',
     destinationId: 'gateway',
     web: {},
@@ -291,7 +291,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/home/index',
       screenName: 'home/index',
       groupId: 'gateway',
-      tabLabel: 'Gateway',
+      tabLabel: 'Computers',
       includeInBottomTabs: true,
     },
   },
@@ -306,7 +306,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'gatewayActivity',
-    label: 'Gateway Activity',
+    label: 'Computer Activity',
     segment: 'gateway-activity',
     destinationId: 'gateway',
     web: {

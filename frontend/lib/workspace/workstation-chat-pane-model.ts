@@ -568,7 +568,7 @@ export function isProviderRuntimeGateMessage(message: string): boolean {
     || normalized.includes('needs a connected computer')
     || normalized.includes('the selected provider is not ready')
     || normalized.includes('the selected provider is not available right now')
-    || normalized.includes('connect this computer, switch to empyralis credits')
+    || normalized.includes('connect a computer, switch to empyralis credits')
     || normalized.includes('required local runtime')
     || normalized.includes('no provider configured')
     || normalized.includes('provider setup required')
@@ -1082,10 +1082,10 @@ export function providerPathLabel(provider: ProviderCatalogRecord | null | undef
   const providerLabel = readString(provider.label) || readString(provider.id);
 
   if (providerId === 'ollama') {
-    return 'This Computer · Ollama local';
+    return 'Connected computer · Ollama local';
   }
   if (providerId === 'openai-codex' || runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
-    return 'This Computer';
+    return 'Connected computer';
   }
   if (providerId === 'ollama_cloud') {
     return 'Ollama Cloud';
@@ -1097,7 +1097,7 @@ export function providerPathLabel(provider: ProviderCatalogRecord | null | undef
     return 'Your AI account';
   }
   if (provider.local_only === true || credentialPlane === 'local_runtime') {
-    return 'This Computer';
+    return 'Connected computer';
   }
   return providerLabel || null;
 }
@@ -1132,7 +1132,7 @@ export function providerFailureMessageForProvider(provider: ProviderCatalogRecor
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs this computer connected in Integrations. Use Empyralis credits, connect this computer, or connect your own AI account.`;
+    return `${providerLabel} needs a connected computer in Integrations. Use Empyralis credits, connect a computer, or connect your own AI account.`;
   }
   if (credentialPlane === 'workspace_connection') {
     return 'Your AI account needs attention. Check the connection, quota, or selected model in Integrations.';
@@ -1326,7 +1326,7 @@ export function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
       return [];
     }
     const routePathLabel = routeKind === 'local_ai'
-      ? 'This Computer'
+      ? 'Connected computer'
       : routeKind === 'my_ai_account'
         ? 'My AI Account'
         : 'My API Key';
@@ -1959,41 +1959,41 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
       tone: 'neutral',
       title: `${preferredLabel} is carrying Sage`,
       meta: `${preferredStatus} · cloud-first`,
-      body: 'Sage stays in cloud mode until Gateway is paired. Device work will not start from this workspace yet.',
+      body: 'Sage stays in cloud mode until a computer is connected. Computer work will not start from this workspace yet.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: 'Gateway · needs pairing',
+      localPill: 'Computer · needs connection',
     };
   }
 
   if (!local.online) {
     return {
       tone: 'warning',
-      title: 'Gateway is paired but offline',
+      title: 'Connected computer is offline',
       meta: `${preferredLabel} remains active`,
-      body: local.statusReason || 'Sage will stay in cloud mode until Gateway reconnects.',
+      body: local.statusReason || 'Sage will stay in cloud mode until the connected computer reconnects.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: `Gateway · ${local.statusLabel ?? 'Offline'}`,
+      localPill: `Computer · ${local.statusLabel ?? 'Offline'}`,
     };
   }
 
   if (!local.healthy) {
     return {
       tone: 'warning',
-      title: 'Gateway needs attention',
+      title: 'Connected computer needs attention',
       meta: `${preferredLabel} remains active`,
-      body: local.statusReason || 'Sage will avoid device work until Gateway is healthy again.',
+      body: local.statusReason || 'Sage will avoid computer work until the connection is healthy again.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: `Gateway · ${local.statusLabel ?? 'Needs attention'}`,
+      localPill: `Computer · ${local.statusLabel ?? 'Needs attention'}`,
     };
   }
 
   return {
     tone: 'success',
-    title: 'Gateway is ready',
+    title: 'Connected computer is ready',
     meta: `${local.sampleAttachmentLabel ?? local.label} · explicit approval`,
-    body: 'Sage still uses cloud execution for ordinary turns. If a step needs device work, Sage pauses for explicit approval before using this computer.',
+    body: 'Sage still uses cloud execution for ordinary turns. If a step needs device work, Sage pauses for explicit approval before using the connected computer.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
-    localPill: `Gateway · ${local.statusLabel ?? 'Ready'}`,
+    localPill: `Computer · ${local.statusLabel ?? 'Ready'}`,
   };
 }
 
@@ -2044,8 +2044,8 @@ export function classifyStatusNotice(message: string): {
   if (isGatewayBrowserMessage(message)) {
     return {
       tone: 'warning',
-      title: 'This Computer browser needed',
-      body: 'Localhost pages, signed-in sites, and private browser sessions stay on this device. Open Integrations to manage This Computer access.',
+      title: 'Connected computer browser needed',
+      body: 'Localhost pages, signed-in sites, and private browser sessions stay on the selected computer. Open Integrations to manage connected computer access.',
       requiresLocalAccess: true,
       actionTarget: 'integrations',
       actionLabel: 'Open Integrations',
@@ -2054,7 +2054,7 @@ export function classifyStatusNotice(message: string): {
   if (isLocalCompanionGateMessage(message)) {
     return {
       tone: 'warning',
-      title: 'This Computer attention needed',
+      title: 'Connected computer attention needed',
       body: message,
       requiresLocalAccess: true,
       actionTarget: 'integrations',
@@ -2077,7 +2077,7 @@ export function classifyStatusNotice(message: string): {
       title: 'AI model attention needed',
       body: /api key|credential/i.test(message)
         ? 'Check your AI model key or quota in Integrations.'
-        : 'Choose Empyralis credits, add an AI model key, or connect this computer.',
+        : 'Choose Empyralis credits, add an AI model key, or connect a computer.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
       actionLabel: 'Open Integrations',

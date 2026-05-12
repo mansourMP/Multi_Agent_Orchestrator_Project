@@ -45,7 +45,7 @@ type RailDestination = {
 const PRIMARY_DESTINATIONS: RailDestination[] = [
   { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot, dataLinkId: 'sage' },
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
-  { id: 'gateway', label: 'Gateway', defaultRouteId: 'gateway', icon: Waypoints },
+  { id: 'gateway', label: 'Computers', defaultRouteId: 'gateway', icon: Waypoints },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
   { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
 ];

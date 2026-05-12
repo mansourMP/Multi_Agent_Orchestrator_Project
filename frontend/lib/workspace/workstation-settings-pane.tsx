@@ -41,9 +41,9 @@ const SETTINGS_SECTIONS: Array<{
   },
   {
     id: 'devices',
-    label: 'This Computer',
-    eyebrow: 'This Computer',
-    title: 'This Computer',
+    label: 'Devices',
+    eyebrow: 'Connected computers',
+    title: 'Connected computers',
     description: 'Trusted computers, connection health, and local tool readiness.',
   },
   {
@@ -225,7 +225,7 @@ function deriveActiveModelPath(
       || readString(provider?.default_model)
       || 'Default model';
     const routeLabel = provider?.local_only === true || providerId === 'ollama'
-      ? 'This Computer'
+      ? 'Connected computer'
       : 'Your AI account';
     return {
       value: `${providerLabel} · ${modelLabel}`,
@@ -250,7 +250,7 @@ function deriveActiveModelPath(
 
   return {
     value: 'No AI model selected',
-    hint: 'Choose credits, connect your own AI account, or connect this computer.',
+    hint: 'Choose credits, connect your own AI account, or connect a computer.',
   };
 }
 
@@ -374,6 +374,13 @@ export function WorkstationSettingsPane() {
     () => bootstrap.runtime.runtimeTargets.find((target) => target.id === 'local_companion') ?? null,
     [bootstrap.runtime.runtimeTargets],
   );
+  const preferredComputerLabel = preferredRuntimeTarget
+    ? preferredRuntimeTarget.id === 'local_companion'
+      ? 'Connected computer'
+      : preferredRuntimeTarget.id === 'sage_cloud_computer'
+        ? 'Cloud computer'
+        : preferredRuntimeTarget.label
+    : 'Cloud';
   const activeSection = SETTINGS_SECTIONS.find((section) => section.id === selectedSection) ?? SETTINGS_SECTIONS[0];
   const accountDisplayName = bootstrap.account.displayName?.trim() || 'Empyralis User';
   const accountEmail = bootstrap.account.email;
@@ -541,10 +548,10 @@ export function WorkstationSettingsPane() {
                 <FormReadout label="Deployment mode" value={humanizeToken(bootstrap.runtime.deploymentMode)} />
                 <FormReadout
                   label="Preferred computer target"
-                  value={preferredRuntimeTarget ? preferredRuntimeTarget.label : 'Cloud'}
+                  value={preferredComputerLabel}
                 />
                 <FormReadout
-                  label="This Computer"
+                  label="Connected computer"
                   value={localCompanionTarget?.online ? 'Connected' : localCompanionTarget ? 'Available but offline' : 'Not detected'}
                 />
                 <FormReadout
@@ -594,10 +601,10 @@ export function WorkstationSettingsPane() {
                 </article>
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">This Computer boundary</strong>
+                    <strong className="settings-detail-card__title">Connected computer boundary</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Local files, browser, clipboard, screenshots, and terminal require an online paired computer on a trusted device.
+                    Local files, browser, clipboard, screenshots, and terminal require an online connected computer with trusted device access.
                   </p>
                 </article>
                 <article className="settings-detail-card">

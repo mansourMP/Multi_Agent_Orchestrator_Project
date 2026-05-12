@@ -133,6 +133,27 @@ def _deployed_agent(**overrides):
     return base
 
 
+def _local_gateway_attachment(**overrides):
+    base = {
+        "attachment_id": "local_companion:gateway-local-1",
+        "attachment_kind": "local_companion",
+        "workspace_id": "ws-1",
+        "runtime_id": "gateway-local-1",
+        "machine_id": "device-local-1",
+        "online": True,
+        "healthy": True,
+        "control_state": "active",
+        "gateway_identity": {
+            "gateway_id": "gateway-local-1",
+            "device_id": "device-local-1",
+            "workspace_id": "ws-1",
+            "device_trust_state": "verified",
+        },
+    }
+    base.update(overrides)
+    return base
+
+
 class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
     def test_builds_cloud_computer_runtime_payload(self):
         payload = deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(
@@ -389,6 +410,149 @@ class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
                 ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "Cloud Computer runtime provider is not configured"):
+                    await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
+                        deployed_agent_id="dagent_1",
+                        tenant_id="tenant-1",
+                        workspace_id="ws-1",
+                        session_id="sess-1",
+                        thread_id="thread-1",
+                        channel="web",
+                        actor={"type": "user", "id": "user-1"},
+                        turn_metadata={"deployed_agent_id": "dagent_1"},
+                    )
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_my_computer_agent_binding_uses_local_gateway_identity(self):
+        async def _run():
+            runtime = Mock()
+            runtime.create_session = AsyncMock(
+                return_value={
+                    "browser_session": {"browser_session_id": "localsess_1"},
+                    "provider_kind": "local_gateway",
+                }
+            )
+            registry = Mock()
+            registry.resolve.return_value = runtime
+            deployed = _deployed_agent(
+                config={
+                    "studio_agent_mode": "my_computer_agent",
+                    "runtime_target": "local_companion",
+                    "computer_automation": {
+                        "enabled": True,
+                        "runtime_class": "local_desktop",
+                        "allowed_domains": ["intranet.example"],
+                        "max_concurrent_sessions": 1,
+                        "daily_budget_usd": 5,
+                        "monthly_budget_usd": 25,
+                        "requires_owner_approval": True,
+                        "session_recording_policy": "metadata_only",
+                    },
+                },
+                metadata={
+                    "computer_safety_contract_snapshot": _computer_safety_contract_snapshot(
+                        studio_agent_mode="my_computer_agent",
+                        domain_allowlist=["intranet.example"],
+                    )
+                },
+            )
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.control_plane_repository,
+                    "get_deployed_agent_by_id",
+                    new=AsyncMock(return_value=deployed),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service.runtime_attachment_service,
+                    "list_workspace_runtime_attachments",
+                    new=AsyncMock(return_value={"attachments": [_local_gateway_attachment()]}),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service,
+                    "get_runtime_registry",
+                    return_value=registry,
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service.activity_ledger_service,
+                    "append_activity_event",
+                    new=AsyncMock(),
+                ) as append_activity_event,
+            ):
+                return await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
+                    deployed_agent_id="dagent_1",
+                    tenant_id="tenant-1",
+                    workspace_id="ws-1",
+                    session_id="sess-1",
+                    thread_id="thread-1",
+                    channel="telegram",
+                    actor={"type": "user", "id": "user-1"},
+                    session_metadata={},
+                    turn_metadata={"deployed_agent_id": "dagent_1"},
+                    machine_target=None,
+                ), registry, runtime, append_activity_event
+
+        import asyncio
+
+        binding, registry, runtime, append_activity_event = asyncio.run(_run())
+        self.assertEqual(binding["metadata_updates"]["runtime_session_id"], "localsess_1")
+        self.assertEqual(binding["metadata_updates"]["runtime_session_binding"], "my_computer_agent")
+        self.assertTrue(binding["metadata_updates"]["local_gateway_bound"])
+        self.assertFalse(binding["metadata_updates"]["virtual_runtime_bound"])
+        self.assertEqual(binding["metadata_updates"]["gateway_id"], "gateway-local-1")
+        registry.resolve.assert_called_once_with("local", preferred_provider_id=None)
+        runtime.create_session.assert_awaited_once()
+        payload = runtime.create_session.await_args.args[0]
+        self.assertEqual(payload["metadata"]["runtime_session_binding"], "my_computer_agent")
+        self.assertEqual(payload["local_gateway_attachment"]["gateway_id"], "gateway-local-1")
+        self.assertNotEqual(payload["metadata"]["runtime_session_binding"], "cloud_computer_agent")
+        self.assertEqual(
+            append_activity_event.await_args.kwargs["action"],
+            "deployed_agent_local_gateway_runtime_session_created",
+        )
+        self.assertEqual(
+            append_activity_event.await_args.kwargs["metadata"]["runtime_session_binding"],
+            "my_computer_agent",
+        )
+
+    def test_my_computer_agent_requires_healthy_paired_gateway(self):
+        async def _run():
+            deployed = _deployed_agent(
+                config={
+                    "studio_agent_mode": "my_computer_agent",
+                    "runtime_target": "local_companion",
+                    "computer_automation": {
+                        "enabled": True,
+                        "runtime_class": "local_desktop",
+                        "allowed_domains": ["intranet.example"],
+                        "max_concurrent_sessions": 1,
+                        "daily_budget_usd": 5,
+                        "monthly_budget_usd": 25,
+                        "requires_owner_approval": True,
+                        "session_recording_policy": "metadata_only",
+                    },
+                },
+                metadata={
+                    "computer_safety_contract_snapshot": _computer_safety_contract_snapshot(
+                        studio_agent_mode="my_computer_agent",
+                        domain_allowlist=["intranet.example"],
+                    )
+                },
+            )
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.control_plane_repository,
+                    "get_deployed_agent_by_id",
+                    new=AsyncMock(return_value=deployed),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service.runtime_attachment_service,
+                    "list_workspace_runtime_attachments",
+                    new=AsyncMock(return_value={"attachments": [_local_gateway_attachment(healthy=False)]}),
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "healthy paired Gateway"):
                     await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
                         deployed_agent_id="dagent_1",
                         tenant_id="tenant-1",

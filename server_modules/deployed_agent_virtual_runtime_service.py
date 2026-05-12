@@ -71,6 +71,7 @@ _FORBIDDEN_POLICY_OVERRIDE_KEYS = {
     "self_hosted_runtime_binding",
 }
 _RUNTIME_BINDING_CLOUD = "cloud_computer_agent"
+_RUNTIME_BINDING_LOCAL_GATEWAY = "my_computer_agent"
 _RUNTIME_BINDING_SELF_HOSTED = "self_hosted_agent"
 _RUNTIME_CONNECTOR_IDS = {"browser", "computer", "shell"}
 _SELF_HOSTED_ALLOWED_FILESYSTEM_SCOPES = {"none", "session_scoped", "workspace_scoped"}
@@ -425,6 +426,36 @@ async def _assert_self_hosted_runtime_gate(
             if active_count > max_concurrent_sessions:
                 raise ValueError("self_hosted_agent node concurrency quota exceeded.")
     return attachment
+
+
+async def _assert_my_computer_runtime_gate(
+    *,
+    deployed_agent: Dict[str, Any],
+    tenant_id: Any,
+    workspace_id: Any,
+) -> Dict[str, Any]:
+    config = deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent)
+    if _text(config.studio_agent_mode).lower() != deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER:
+        return {}
+    inventory = await runtime_attachment_service.list_workspace_runtime_attachments(
+        tenant_id=_text(tenant_id),
+        workspace_id=_text(workspace_id),
+    )
+    attachments = [
+        dict(item)
+        for item in list((inventory or {}).get("attachments") or [])
+        if isinstance(item, dict)
+        and _text(item.get("attachment_kind")).lower() == "local_companion"
+        and _text(item.get("workspace_id")) == _text(workspace_id)
+        and bool(item.get("online"))
+        and bool(item.get("healthy"))
+        and _text(item.get("control_state")).lower() != "revoked"
+    ]
+    if not attachments:
+        raise ValueError(
+            "my_computer_agent requires a healthy paired Gateway before runtime session creation."
+        )
+    return attachments[0]
 
 
 def build_deployed_agent_virtual_runtime_payload(
@@ -970,6 +1001,18 @@ async def ensure_cloud_runtime_session_binding(
         raise ValueError(
             f"Deployed agent studio_agent_mode '{mode or 'unknown'}' is not allowed to create runtime session binding."
         )
+    runtime_session_binding = (
+        _RUNTIME_BINDING_LOCAL_GATEWAY
+        if mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER
+        else _RUNTIME_BINDING_CLOUD
+    )
+    local_gateway_attachment: Dict[str, Any] = {}
+    if mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER:
+        local_gateway_attachment = await _assert_my_computer_runtime_gate(
+            deployed_agent=deployed_agent,
+            tenant_id=resolved_tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
 
     current_session_metadata = _coerce_dict(session_metadata)
     current_turn_metadata = _coerce_dict(turn_metadata)
@@ -979,14 +1022,14 @@ async def ensure_cloud_runtime_session_binding(
     existing_runtime_binding = _text(
         current_session_metadata.get("runtime_session_binding") or current_turn_metadata.get("runtime_session_binding")
     ).lower()
-    if existing_runtime_session_id and existing_runtime_binding == _RUNTIME_BINDING_CLOUD:
+    if existing_runtime_session_id and existing_runtime_binding == runtime_session_binding:
         return {
             "deployed_agent": None,
             "runtime_payload": None,
             "runtime_response": None,
             "metadata_updates": {
                 "runtime_session_id": existing_runtime_session_id,
-                "runtime_session_binding": _RUNTIME_BINDING_CLOUD,
+                "runtime_session_binding": runtime_session_binding,
             },
         }
 
@@ -1002,15 +1045,33 @@ async def ensure_cloud_runtime_session_binding(
             "channel": _text(channel) or "channel",
             "actor": dict(actor) if isinstance(actor, dict) else {},
             "machine_target": _text(machine_target) or None,
-            "app_title": _text(deployed_agent.get("name")) or "Cloud Computer Agent",
+            "app_title": _text(deployed_agent.get("name")) or (
+                "My Computer Agent"
+                if mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER
+                else "Cloud Computer Agent"
+            ),
             "metadata": {
                 "deployed_agent_id": resolved_deployed_agent_id,
                 "session_id": resolved_session_id,
                 "thread_id": _text(thread_id) or resolved_session_id,
-                "runtime_session_binding": _RUNTIME_BINDING_CLOUD,
+                "runtime_session_binding": runtime_session_binding,
             },
         }
     )
+    if local_gateway_attachment:
+        payload["local_gateway_attachment"] = {
+            "attachment_id": _text(local_gateway_attachment.get("attachment_id")) or None,
+            "gateway_id": _text(
+                (_coerce_dict(local_gateway_attachment.get("gateway_identity"))).get("gateway_id")
+                or local_gateway_attachment.get("runtime_id")
+            )
+            or None,
+            "device_id": _text(
+                (_coerce_dict(local_gateway_attachment.get("gateway_identity"))).get("device_id")
+                or local_gateway_attachment.get("machine_id")
+            )
+            or None,
+        }
     runtime = get_runtime_registry().resolve(
         payload.get("runtime_choice"),
         preferred_provider_id=payload.get("runtime_provider_id"),
@@ -1024,19 +1085,40 @@ async def ensure_cloud_runtime_session_binding(
     metadata_updates = {
         "deployed_agent_id": resolved_deployed_agent_id,
         "runtime_session_id": runtime_session_id,
-        "runtime_session_binding": _RUNTIME_BINDING_CLOUD,
+        "runtime_session_binding": runtime_session_binding,
         "runtime_choice": _text(payload.get("runtime_choice")) or None,
         "runtime_provider_id": _text(response.get("provider_id") or payload.get("runtime_provider_id")) or None,
         "runtime_provider_kind": _text(response.get("provider_kind")) or None,
-        "virtual_runtime_bound": True,
+        "virtual_runtime_bound": mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_CLOUD_COMPUTER,
+        "local_gateway_bound": mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER,
     }
+    if local_gateway_attachment:
+        metadata_updates.update(
+            {
+                "runtime_attachment_id": _text(local_gateway_attachment.get("attachment_id")) or None,
+                "gateway_id": _text(
+                    (_coerce_dict(local_gateway_attachment.get("gateway_identity"))).get("gateway_id")
+                    or local_gateway_attachment.get("runtime_id")
+                )
+                or None,
+            }
+        )
+    is_my_computer = mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER
     await _append_cloud_runtime_audit_event(
         deployed_agent=deployed_agent,
         tenant_id=resolved_tenant_id,
         workspace_id=resolved_workspace_id,
-        action="deployed_agent_cloud_runtime_session_created",
-        title="Cloud Computer session created",
-        summary="Cloud Computer runtime session was created for deployed agent execution.",
+        action=(
+            "deployed_agent_local_gateway_runtime_session_created"
+            if is_my_computer
+            else "deployed_agent_cloud_runtime_session_created"
+        ),
+        title="My Computer runtime session created" if is_my_computer else "Cloud Computer session created",
+        summary=(
+            "My Computer runtime session was created through a paired local Gateway."
+            if is_my_computer
+            else "Cloud Computer runtime session was created for deployed agent execution."
+        ),
         payload={
             "session_id": resolved_session_id,
             "runtime_session_id": runtime_session_id,
@@ -1044,7 +1126,7 @@ async def ensure_cloud_runtime_session_binding(
             "runtime_provider_id": _text(response.get("provider_id") or payload.get("runtime_provider_id")) or None,
         },
         metadata={
-            "runtime_session_binding": _RUNTIME_BINDING_CLOUD,
+            "runtime_session_binding": runtime_session_binding,
             "runtime_provider_kind": _text(response.get("provider_kind")) or None,
         },
     )

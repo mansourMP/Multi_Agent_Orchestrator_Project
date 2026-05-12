@@ -411,9 +411,9 @@ def canonical_run_reply(*, status: str, run_id: Optional[str]) -> str:
     base = {
         "accepted": "Run accepted.",
         "queued": "Run queued.",
-        "queued_local": "Run queued for local companion.",
+        "queued_local": "Run queued for Gateway.",
         "running": "Run started.",
-        "running_local": "Run started on local companion.",
+        "running_local": "Run started on Gateway.",
         "waiting_for_input": "Run is waiting for required input.",
     }.get(normalized, "")
     if not base and normalized:

@@ -66,7 +66,7 @@ class AutopilotRuntimeSupportServiceTests(unittest.TestCase):
 
     def test_humanize_telegram_run_summary(self) -> None:
         service = self._make_service()
-        self.assertIn("offline", service.humanize_telegram_run_summary("Local companion is offline right now."))
+        self.assertIn("offline", service.humanize_telegram_run_summary("Gateway is offline right now."))
         self.assertIn("Please retry", service.humanize_telegram_run_summary("missing required scope: api.responses.write"))
 
     def test_summarize_run_terminal_result_applies_health_safety_overlay(self) -> None:

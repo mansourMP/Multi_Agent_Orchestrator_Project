@@ -122,8 +122,8 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
                 },
                 {
                     "target_id": "local_companion",
-                    "label": "Local Companion",
-                    "description": "Paired local companion execution.",
+                    "label": "Gateway",
+                    "description": "Paired Gateway execution.",
                     "available": True,
                     "online": False,
                     "healthy": False,

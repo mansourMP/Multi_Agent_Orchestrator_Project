@@ -172,7 +172,7 @@ def _local_setup_required_payload(
     if not online:
         detail = "I can do that after you connect My Computer. Open Connected Apps to connect this device."
     elif online and not runtime_ok:
-        detail = "My Computer is connected, but its local runtime is not ready. Open Connected Apps and restart the local companion."
+        detail = "My Computer is connected, but Gateway is not ready. Open Connected Apps and restart Gateway."
     elif not local_tools_available:
         detail = "Local computer tools are not ready yet for this workspace. Open Connected Apps to finish setup."
     else:

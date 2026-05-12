@@ -330,7 +330,7 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   {
     id: 'deploy',
     label: 'Launch settings',
-    description: 'Choose AI tier, runtime, spending guardrails, and approval posture before launch.',
+    description: 'Choose AI tier, agent mode, spending guardrails, and approval posture before launch.',
   },
 ];
 
@@ -377,7 +377,7 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
     runsWhere: 'Isolated cloud computer managed by Empyralis.',
     privacy: 'Medium. Session activity can be logged for safety and audit.',
     costRisk: 'High.',
-    setup: 'Enable computer automation policy and runtime limits.',
+    setup: 'Enable computer automation policy and usage limits.',
     bestFor: 'Web workflows, operations playbooks, and guided back-office tasks.',
   },
   {
@@ -396,13 +396,13 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
     value: 'customer_hosted',
     label: 'Self-Hosted Agent',
     supplier: 'customer',
-    hint: 'Agent runs on a customer-owned server or runtime node.',
+    hint: 'Agent runs on a customer-owned server or self-hosted node.',
     capabilities: 'Customer-managed execution with workspace-scoped controls.',
     runsWhere: 'Customer-owned infrastructure registered to this workspace.',
     privacy: 'Highest control in your own environment.',
     costRisk: 'Variable, depends on your infrastructure.',
-    setup: 'Register and maintain a healthy self-hosted runtime node.',
-    bestFor: 'Regulated environments and enterprise-owned runtime operations.',
+    setup: 'Register and maintain a healthy self-hosted node.',
+    bestFor: 'Regulated environments and enterprise-owned operations.',
   },
 ];
 
@@ -797,7 +797,7 @@ function normalizeRuntimeAttachments(payload: unknown): RuntimeAttachmentSnapsho
       attachmentKind: readString(item.attachment_kind),
       runtimeProfileId: readString(item.runtime_profile_id),
       runtimeNodeId: readString(item.runtime_node_id),
-      label: readString(item.label, 'Runtime node'),
+      label: readString(item.label, 'Self-hosted node'),
       online: readBoolean(item.online),
       healthy: readBoolean(item.healthy),
       ownerApproved: readBoolean(item.owner_approved),
@@ -812,10 +812,10 @@ function normalizeRuntimeAttachments(payload: unknown): RuntimeAttachmentSnapsho
 
 function selfHostedNodeGateReason(node: RuntimeAttachmentSnapshot | null): string | null {
   if (!node) {
-    return 'Select a self-hosted runtime node.';
+    return 'Select a self-hosted node.';
   }
   if (!node.runtimeProfileId) {
-    return 'Selected node is missing runtime profile id.';
+    return 'Selected node is missing its binding id.';
   }
   if (!node.ownerApproved) {
     return 'Selected node is not owner-approved.';
@@ -1621,7 +1621,7 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     aiTier,
     runtimeSupplierKind,
     runtimeSupplierId: readString(runtimeSupplySupplier.id, runtimeSupplierKind),
-    runtimeSupplierLabel: readString(runtimeSupplySupplier.label, runtimeSupplierKind === 'empyralis' ? 'Empyralis' : 'Customer runtime'),
+    runtimeSupplierLabel: readString(runtimeSupplySupplier.label, runtimeSupplierKind === 'empyralis' ? 'Empyralis' : 'Customer-owned compute'),
     runtimePlacement,
     marketplacePublishAllowed: readString(runtimeSupplyMarketplace.visibility) === 'marketplace',
     thirdPartyRuntimeAllowed: runtimeSupplyMarketplace.third_party_runtime_allowed === true,
@@ -1747,7 +1747,7 @@ function buildDeploymentConfig(state: WizardState): Record<string, unknown> {
       supplier: {
         kind: runtimeSupplier,
         id: runtimeSupplier === 'empyralis' ? 'empyralis' : state.runtimeSupplierId.trim() || runtimeSupplier,
-        label: runtimeSupplier === 'empyralis' ? 'Empyralis' : state.runtimeSupplierLabel.trim() || 'Customer runtime',
+        label: runtimeSupplier === 'empyralis' ? 'Empyralis' : state.runtimeSupplierLabel.trim() || 'Customer-owned compute',
       },
       placement: {
         kind: state.runtimePlacement,
@@ -2308,7 +2308,7 @@ function AgentLaunchChecklist({
 }) {
   const checks = [
     { id: 'gateway', label: 'Gateway paired', ok: state.runtimePlacement !== 'customer_local' || hasGatewayOnlineTarget },
-    { id: 'runtime', label: 'Runtime mode valid', ok: Boolean(state.runtimePlacement) },
+    { id: 'runtime', label: 'Agent mode valid', ok: Boolean(state.runtimePlacement) },
     { id: 'tools', label: 'Tools policy valid', ok: state.selectedToolIds.length > 0 },
     { id: 'memory', label: 'Memory policy valid', ok: true },
     { id: 'approval', label: 'Approval policy valid', ok: Boolean(state.approvalMode) },
@@ -2493,7 +2493,7 @@ export function WorkstationDeployedAgentsPane({
       return null;
     }
     if (!selectedAgentSelfHostedProfileId) {
-      return 'Self-hosted deployment requires an explicit runtime node binding.';
+      return 'Self-hosted deployment requires an explicit self-hosted node binding.';
     }
     return selfHostedNodeGateReason(selectedAgentSelfHostedNode);
   }, [selectedAgentRuntimePlacement, selectedAgentSelfHostedNode, selectedAgentSelfHostedProfileId]);
@@ -2596,7 +2596,7 @@ export function WorkstationDeployedAgentsPane({
       setRuntimeAttachments(normalizeRuntimeAttachments(payload));
     } catch (error) {
       setRuntimeAttachments([]);
-      setErrorMessage(error instanceof Error ? error.message : 'Runtime node inventory is unavailable.');
+      setErrorMessage(error instanceof Error ? error.message : 'Self-hosted node inventory is unavailable.');
     } finally {
       setIsLoadingRuntimeAttachments(false);
     }
@@ -3159,7 +3159,7 @@ export function WorkstationDeployedAgentsPane({
     }
     if (wizardState.runtimePlacement === 'customer_hosted') {
       if (!wizardState.selfHostedRuntimeProfileId.trim()) {
-        setErrorMessage('Self-hosted mode requires selecting a runtime node.');
+        setErrorMessage('Self-hosted mode requires selecting a self-hosted node.');
         return;
       }
       if (selfHostedWizardNodeBlocker) {
@@ -3803,7 +3803,7 @@ export function WorkstationDeployedAgentsPane({
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />
                       <FormReadout label="Channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
-                      <FormReadout label="Runtime mode" value={runtimePlacementLabel(readRecord(selectedAgent?.config).runtime_placement ?? readRecord(selectedAgent?.metadata).runtime_placement ?? selectedAgent?.runtime_target)} />
+                      <FormReadout label="Agent mode" value={runtimePlacementLabel(readRecord(selectedAgent?.config).runtime_placement ?? readRecord(selectedAgent?.metadata).runtime_placement ?? selectedAgent?.runtime_target)} />
                     </FormGrid>
                     {selectedAgentRuntimePlacement === 'customer_hosted' ? (
                       <div className="app-stack-2">
@@ -3822,7 +3822,7 @@ export function WorkstationDeployedAgentsPane({
                           <StateBanner
                             tone="success"
                             title="Self-hosted readiness passed"
-                            detail="This assistant runs on customer-hosted compute only. No silent fallback to platform-hosted runtime."
+                            detail="This assistant runs on customer-hosted compute only. No silent fallback to platform-hosted compute."
                           />
                         )}
                       </div>
@@ -3943,7 +3943,7 @@ export function WorkstationDeployedAgentsPane({
                       ) : null}
                       <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
                         <FormReadout label="State" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
-                        <FormReadout label="Runtime mode" value={runtimePlacementLabel(readRecord(selectedAgent.config).runtime_placement ?? readRecord(selectedAgent.metadata).runtime_placement ?? selectedAgent.runtime_target)} />
+                        <FormReadout label="Agent mode" value={runtimePlacementLabel(readRecord(selectedAgent.config).runtime_placement ?? readRecord(selectedAgent.metadata).runtime_placement ?? selectedAgent.runtime_target)} />
                         <FormReadout label="AI model" value={humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
                         <FormReadout label="Model" value={selectedModelId(selectedAgent) || 'Not pinned'} />
                         <FormReadout label="Billing plan" value={humanizeToken(selectedAgent.billing_plan, 'Free')} />
@@ -5224,7 +5224,7 @@ export function WorkstationDeployedAgentsPane({
                   <StateBanner
                     tone="neutral"
                     title="Launch contract for this business assistant"
-                    detail="Set AI tier, runtime, budget cap, approval mode, and customer channel. Raw provider/model is kept in advanced overrides."
+                    detail="Set AI tier, agent mode, budget cap, approval mode, and customer channel. Raw provider/model is kept in advanced overrides."
                   />
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                     <FormField label="AI tier" hint="Product-level capability for this assistant.">
@@ -5251,7 +5251,7 @@ export function WorkstationDeployedAgentsPane({
                         {STUDIO_AI_TIER_OPTIONS.find((item) => item.value === wizardState.aiTier)?.hint}
                       </div>
                     </FormField>
-                    <FormField label="Runtime mode" hint="Choose how this assistant runs. Internal runtime identifiers are hidden in this view.">
+                    <FormField label="Agent mode" hint="Choose how this assistant runs. Internal identifiers are hidden in this view.">
                       <RuntimeModeSelector
                         value={wizardState.runtimePlacement}
                         options={STUDIO_RUNTIME_OPTIONS}
@@ -5330,7 +5330,7 @@ export function WorkstationDeployedAgentsPane({
                         detail="This mode runs only on your selected customer-owned node. Platform-hosted compute is not used as fallback."
                       />
                       <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                        <FormField label="Self-hosted node" hint="Choose an enrolled runtime node in this workspace.">
+                        <FormField label="Self-hosted node" hint="Choose an enrolled self-hosted node in this workspace.">
                           <FormSelect
                             value={wizardState.selfHostedRuntimeProfileId}
                             onChange={(event) => setWizardField('selfHostedRuntimeProfileId', event.currentTarget.value)}
@@ -5395,17 +5395,17 @@ export function WorkstationDeployedAgentsPane({
                           <option value="enabled">On — approval gated</option>
                         </FormSelect>
                       </FormField>
-                      <FormField label="Automation runtime" hint="Choose the isolated computer class for this add-on.">
+                      <FormField label="Computer add-on" hint="Choose the computer environment for this add-on.">
                         <FormSelect
                           value={wizardState.computerAutomationRuntimeClass}
                           disabled={!wizardState.computerAutomationEnabled}
                           onChange={(event) => setWizardField('computerAutomationRuntimeClass', event.currentTarget.value as WizardState['computerAutomationRuntimeClass'])}
                         >
-                          <option value="virtual_browser">Virtual browser</option>
-                          <option value="virtual_desktop">Virtual desktop</option>
-                          <option value="virtual_code_sandbox">Virtual code sandbox</option>
-                          <option value="local_browser">Local browser</option>
-                          <option value="local_desktop">Local desktop</option>
+                          <option value="virtual_browser">Cloud browser</option>
+                          <option value="virtual_desktop">Cloud desktop</option>
+                          <option value="virtual_code_sandbox">Cloud code sandbox</option>
+                          <option value="local_browser">Browser on my computer</option>
+                          <option value="local_desktop">Desktop on my computer</option>
                         </FormSelect>
                       </FormField>
                       <FormField label="Allowed domains" hint="Comma-separated domains. Required when automation is on.">

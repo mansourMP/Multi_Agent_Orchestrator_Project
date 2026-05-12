@@ -87,15 +87,15 @@ RUNTIME_TARGET_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Optional metered cloud computer for browser, terminal, and file work in an isolated hosted workspace. It never replaces the default cloud path automatically.",
     },
     "local_companion": {
-        "label": "Local Companion",
+        "label": "Gateway",
         "attachment_kind": "local_companion",
         "execution_target": "local_companion",
         "connection_mode": "platform_relay",
         "product_default": False,
-        "description": "Paired local companion execution routed through the same workspace identity and policy model.",
+        "description": "Paired Gateway execution routed through the same workspace identity and policy model.",
     },
     "self_host_runtime": {
-        "label": "Self-Host Runtime",
+        "label": "Self-hosted Node",
         "attachment_kind": "self_hosted_business_node",
         "execution_target": "cloud",
         "connection_mode": "workspace_hosted",

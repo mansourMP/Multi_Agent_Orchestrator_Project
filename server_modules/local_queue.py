@@ -3713,7 +3713,7 @@ def handle_heartbeat_local_runtime(runtime_id: str, payload: Optional[LocalWorke
 def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[str, Any]:
     _init()
     if not _server.ORION_LOCAL_COMPANION_ENABLED:
-        raise HTTPException(status_code=400, detail="Local companion routing is disabled on this runtime.")
+        raise HTTPException(status_code=400, detail="Gateway routing is disabled for this workspace.")
 
     worker_id = str((body.worker_id if body else None) or "").strip() if body else ""
     if not worker_id:
@@ -3789,7 +3789,7 @@ def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[
     _server.emit_log(
         run["logs"],
         "info",
-        f"Local companion claimed run ({worker_id}).",
+        f"Gateway claimed run ({worker_id}).",
         event="local_claimed",
         data={
             "run_id": run_id,

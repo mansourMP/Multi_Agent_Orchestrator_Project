@@ -125,7 +125,7 @@ class TelegramRunDispatchService:
                         return {
                             "status": "failed",
                             "summary": (
-                                "Local companion is offline. "
+                                "Gateway is offline. "
                                 f"pending={local_state['pending_runs']} claimed={local_state['claimed_runs']} "
                                 f"online_workers={local_state['online_workers']}. "
                                 f"Start it with: {stack_start_command_hint(self.project_root)}"

@@ -2608,7 +2608,7 @@ class RunServiceTests(unittest.TestCase):
             return_value={
                 "selected": "local_companion",
                 "requested": "local_companion",
-                "reason": "Run is pinned to local companion execution and no local runtime is online yet.",
+                "reason": "Run is pinned to Gateway execution and no local computer is online yet.",
                 "waiting_for_runtime": True,
                 "waiting_for_capacity": False,
             },

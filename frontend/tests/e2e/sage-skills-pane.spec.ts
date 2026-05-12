@@ -30,7 +30,7 @@ test.describe('sage skills pane', () => {
               active_now: true,
               curated: true,
               curated_rank: 0,
-              setup_requirement: 'Install and unlock 1Password on this Mac, then enable the local 1Password skill runtime for Sage.',
+              setup_requirement: 'Install and unlock 1Password on this Mac, then enable the 1Password skill for Sage through Gateway.',
             },
             {
               id: 'apple-notes',
@@ -42,7 +42,7 @@ test.describe('sage skills pane', () => {
               active_now: false,
               curated: true,
               curated_rank: 1,
-              setup_requirement: 'Use a paired Mac with Apple Notes available to the local companion, then enable the Apple Notes skill runtime.',
+              setup_requirement: 'Use a paired Mac with Apple Notes available through Gateway, then enable the Apple Notes skill.',
             },
             {
               id: 'apple-reminders',
@@ -54,7 +54,7 @@ test.describe('sage skills pane', () => {
               active_now: false,
               curated: true,
               curated_rank: 2,
-              setup_requirement: 'Use a paired Mac with Apple Reminders available to the local companion, then enable the Apple Reminders skill runtime.',
+              setup_requirement: 'Use a paired Mac with Apple Reminders available through Gateway, then enable the Apple Reminders skill.',
             },
             {
               id: 'tmux',
@@ -80,7 +80,7 @@ test.describe('sage skills pane', () => {
               active_now: true,
               curated: true,
               curated_rank: 0,
-              setup_requirement: 'Install and unlock 1Password on this Mac, then enable the local 1Password skill runtime for Sage.',
+              setup_requirement: 'Install and unlock 1Password on this Mac, then enable the 1Password skill for Sage through Gateway.',
             },
             {
               id: 'apple-notes',
@@ -92,7 +92,7 @@ test.describe('sage skills pane', () => {
               active_now: false,
               curated: true,
               curated_rank: 1,
-              setup_requirement: 'Use a paired Mac with Apple Notes available to the local companion, then enable the Apple Notes skill runtime.',
+              setup_requirement: 'Use a paired Mac with Apple Notes available through Gateway, then enable the Apple Notes skill.',
             },
             {
               id: 'apple-reminders',
@@ -104,7 +104,7 @@ test.describe('sage skills pane', () => {
               active_now: false,
               curated: true,
               curated_rank: 2,
-              setup_requirement: 'Use a paired Mac with Apple Reminders available to the local companion, then enable the Apple Reminders skill runtime.',
+              setup_requirement: 'Use a paired Mac with Apple Reminders available through Gateway, then enable the Apple Reminders skill.',
             },
             {
               id: 'tmux',

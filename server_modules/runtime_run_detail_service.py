@@ -154,19 +154,19 @@ def build_run_diagnostics(
             if browser_resume_supported
             else "This run was restored after a restart and is queued to resume."
         )
-        next_step = "Wait for the runtime or local companion to resume the run."
+        next_step = "Wait for Gateway to resume the run."
         blocked_on = "resume"
         local_status = "resuming_after_restart"
     elif status == "queued_local":
         category = "local_queue"
         headline = "Queued for local machine execution"
-        summary = route_reason or "This run is queued for the local companion."
-        next_step = "Keep the local companion online so the run can be claimed."
+        summary = route_reason or "This run is queued for Gateway."
+        next_step = "Keep Gateway online so the run can be claimed."
         local_status = "queued_local"
     elif status == "running_local":
         category = "local_running"
         headline = "Running on a local machine"
-        summary = route_reason or "This run is currently executing on the local companion."
+        summary = route_reason or "This run is currently executing on Gateway."
         next_step = "Monitor artifacts, workflow progress, or confirmations if the run pauses."
         local_status = "running_local"
     elif status in FAILURE_STATUSES:

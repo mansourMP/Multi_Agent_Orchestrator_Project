@@ -1223,7 +1223,7 @@ def enforce_advanced_features_access(
         install=install,
         entitlement_key="advanced_features_enabled",
         reason="advanced_features_unavailable",
-        message="Advanced runtime controls and local companion management are available on paid plans only.",
+        message="Advanced computer controls and Gateway management are available on paid plans only.",
     )
 
 

@@ -67,9 +67,9 @@ def schedule_restored_run_resume(
         late_server_export("_enqueue_local_companion_run")(
             run_id,
             message=(
-                "Resuming local companion run from saved browser checkpoint."
+                "Resuming Gateway run from saved browser checkpoint."
                 if checkpoint
-                else "Resuming local companion run."
+                else "Resuming Gateway run."
             ),
             event=("local_resumed_from_checkpoint" if checkpoint else "local_resumed"),
         )

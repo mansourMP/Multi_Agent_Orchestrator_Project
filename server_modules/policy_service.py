@@ -441,23 +441,23 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
                     fallback = "Bring a local machine online if you want automatic tasks to prefer local execution."
             else:
                 selected = runtime_policy.EXECUTION_TARGET_CLOUD
-                reason = "Default runtime route is cloud because local companion is unavailable."
+                reason = "Default runtime route is cloud because Gateway is unavailable."
     elif selected == runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION:
         if schedule_id:
             selected = runtime_policy.EXECUTION_TARGET_CLOUD
             reason = "Scheduled runs require cloud reliability."
-            fallback = "Local companion route requested, but schedules run in cloud mode."
+            fallback = "Gateway route requested, but schedules run in cloud mode."
         elif runtime_policy.ORION_LOCAL_COMPANION_ENABLED:
-            reason = "Run requested on local companion."
+            reason = "Run requested on Gateway."
         else:
             can_fallback_to_cloud, fallback_reason = runtime_policy._auto_cloud_capacity_fallback_allowed(clean_metadata)
             if can_fallback_to_cloud:
                 selected = runtime_policy.EXECUTION_TARGET_CLOUD
-                reason = "Local companion requested but not available; using cloud fallback."
-                fallback = "Local companion is not enabled on this runtime; using cloud fallback."
+                reason = "Gateway requested but not available; using cloud fallback."
+                fallback = "Gateway is not enabled on this workspace; using cloud fallback."
             else:
                 selected = runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
-                reason = "Local companion requested but unavailable; fallback to cloud is blocked by policy."
+                reason = "Gateway requested but unavailable; fallback to cloud is blocked by policy."
                 fallback = fallback_reason
                 waiting_for_runtime = True
                 waiting_for_capacity = False

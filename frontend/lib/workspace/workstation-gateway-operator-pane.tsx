@@ -378,8 +378,8 @@ function detectGatewayPlatform(): string {
 
 const GATEWAY_SETUP_STEPS = [
   {
-    title: 'Install Empyralis Companion',
-    description: 'The companion keeps the local engine running in the background. The terminal command below is the current launch setup path.',
+    title: 'Install Gateway',
+    description: 'Gateway keeps the local engine running in the background. The terminal command below is the current launch setup path.',
   },
   {
     title: 'Pair this computer',
@@ -1562,13 +1562,13 @@ export function WorkstationGatewayOperatorPane({
               <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
                 <div className="gateway-pairing-command-card__copy">
                   <strong>Run on this computer</strong>
-                  <span>Use this only if Empyralis Companion is not already connected.</span>
+                  <span>Use this only if Gateway is not already connected.</span>
                 </div>
                 <div className="app-inline-actions app-inline-actions--tight">
                   <WorkstationActionButton
                     type="button"
                     onClick={() => {
-                      void copyToClipboard('Companion command', gatewayPairingCommand(pairingIntent.pairing_token));
+                      void copyToClipboard('Gateway setup command', gatewayPairingCommand(pairingIntent.pairing_token));
                     }}
                   >
                     Copy setup command

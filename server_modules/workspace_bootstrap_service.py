@@ -126,20 +126,20 @@ def _runtime_target_status_reason(target: Dict[str, Any]) -> str:
     healthy = bool(target.get("healthy"))
     if target_id == "local_companion":
         if not available:
-            return "No local companion is paired to this workspace yet, so Sage stays in cloud mode."
+            return "No Gateway is paired to this workspace yet, so Sage stays in cloud mode."
         if not online:
-            return "The local companion is paired but offline, so Sage will not start device work until it reconnects."
+            return "Gateway is paired but offline, so Sage will not start device work until it reconnects."
         if not healthy:
-            return "The local companion is connected but not healthy enough for device work yet."
-        return "The local companion is ready. Sensitive device actions still require explicit approval."
+            return "Gateway is connected but not healthy enough for device work yet."
+        return "Gateway is ready. Sensitive device actions still require explicit approval."
     if target_id == "self_host_runtime":
         if not available:
-            return "No self-hosted runtime is configured for this workspace yet."
+            return "No self-hosted node is configured for this workspace yet."
         if not online:
-            return "The self-hosted runtime is configured but currently offline."
+            return "The self-hosted node is configured but currently offline."
         if not healthy:
-            return "The self-hosted runtime is reachable but needs attention before Sage can trust it."
-        return "The self-hosted runtime is ready under the workspace policy boundary."
+            return "The self-hosted node is reachable but needs attention before Sage can trust it."
+        return "The self-hosted node is ready under the workspace policy boundary."
     if target_id == "sage_cloud_computer":
         if not available:
             return "Sage Cloud Computer is not enabled for this workspace. Sage will not allocate a hosted computer automatically."
@@ -147,7 +147,7 @@ def _runtime_target_status_reason(target: Dict[str, Any]) -> str:
             return "Sage Cloud Computer is configured but no hosted session is currently available."
         if not healthy:
             return "Sage Cloud Computer is reachable but needs attention before hosted computer work can start."
-        return "Sage Cloud Computer is ready as an optional metered runtime. Personal device work still requires a paired gateway."
+        return "Sage Cloud Computer is ready as an optional metered computer. Personal device work still requires a paired Gateway."
     if not available:
         return f"{label} is not available for this workspace right now."
     if not online or not healthy:

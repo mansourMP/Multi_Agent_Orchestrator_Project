@@ -370,7 +370,7 @@ function buildVisibleActivitySummary(visibleProof: Record<string, unknown>): str
   }
   if (virtualMinutes > 0) {
     const rounded = Math.max(1, Math.round(virtualMinutes));
-    parts.push(`Virtual browser ran for ${rounded} minute${rounded === 1 ? '' : 's'}`);
+    parts.push(`Cloud browser ran for ${rounded} minute${rounded === 1 ? '' : 's'}`);
   }
   if (paymentApproval) {
     parts.push('Owner approval required for payment');

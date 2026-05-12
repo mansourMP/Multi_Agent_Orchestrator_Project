@@ -33,7 +33,7 @@ class RuntimeStatusService:
                 f"timeout={int(metrics.get('runs_timeout') or 0)}"
             ),
             (
-                f"- local companion: online_workers={int(companion.get('online_workers') or 0)} "
+                f"- Gateway: online_workers={int(companion.get('online_workers') or 0)} "
                 f"pending={int(companion.get('pending_runs') or 0)} "
                 f"claimed={int(companion.get('claimed_runs') or 0)}"
             ),

@@ -22,7 +22,7 @@ def local_worker_recovery_confirmation_prompt(run: dict[str, Any]) -> str:
     next_action_index = checkpoint_details.get("next_action_index")
     session_profile = str(checkpoint_details.get("session_profile") or "").strip()
     details = [
-        "Local companion recovery exhausted its automatic retry budget after repeated worker loss.",
+        "Gateway recovery exhausted its automatic retry budget after repeated worker loss.",
         "Approve only if you want to try resuming this unstable local checkpoint again.",
     ]
     if attempt_count > 0:

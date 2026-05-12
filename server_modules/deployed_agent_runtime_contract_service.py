@@ -654,7 +654,7 @@ def normalize_runtime_supply_contract(
         "supplier": {
             "kind": supplier_kind,
             "id": _text(supplier_payload.get("id"), default=supplier_kind),
-            "label": _text(supplier_payload.get("label"), default="Empyralis" if supplier_kind == RUNTIME_SUPPLIER_EMPYRALIS else "Customer runtime"),
+            "label": _text(supplier_payload.get("label"), default="Empyralis" if supplier_kind == RUNTIME_SUPPLIER_EMPYRALIS else "Customer-owned compute"),
             "owner_workspace_id": _text(supplier_payload.get("owner_workspace_id")) or None,
         },
         "placement": {

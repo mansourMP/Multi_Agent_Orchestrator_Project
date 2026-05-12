@@ -1365,10 +1365,10 @@ async def enqueue_self_hosted_runtime_command(
         raise ValueError("Runtime profile is not a self-hosted node.")
     metadata = _dict_json(profile.get("metadata"))
     if not bool(metadata.get("owner_approved")):
-        raise ValueError("Self-hosted runtime node is not owner approved.")
+        raise ValueError("Self-hosted node is not owner approved.")
     profile_runtime_node_id = _self_hosted_runtime_node_id(profile, metadata)
     if not profile_runtime_node_id:
-        raise ValueError("Self-hosted runtime profile is missing runtime_node_id.")
+        raise ValueError("Self-hosted node profile is missing its node id.")
     if str(runtime_node_id or "").strip() != profile_runtime_node_id:
         raise ValueError("runtime_node_id does not match runtime profile binding.")
     scoped_workspace_id = str(profile.get("workspace_id") or "").strip() or "default"
@@ -1409,7 +1409,7 @@ async def enqueue_self_hosted_runtime_command(
     terminal_items: List[Dict[str, Any]] = [item for item in queue if _is_terminal_self_hosted_command_state(item.get("state"))]
     active_items: List[Dict[str, Any]] = [item for item in queue if not _is_terminal_self_hosted_command_state(item.get("state"))]
     if len(active_items) > SELF_HOSTED_NODE_COMMAND_QUEUE_LIMIT:
-        raise ValueError("Self-hosted command queue limit reached for runtime node.")
+        raise ValueError("Self-hosted command queue limit reached for this node.")
     while len(active_items) + len(terminal_items) > SELF_HOSTED_NODE_COMMAND_QUEUE_LIMIT:
         terminal_items.pop(0)
     metadata["node_command_queue"] = active_items + terminal_items

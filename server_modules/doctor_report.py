@@ -497,14 +497,14 @@ def build_doctor_report(health_data: Dict[str, Any], config: Dict[str, Any]) -> 
         add_check(
             "execution_routing",
             "pass",
-            "Hybrid execution routing is enabled (cloud + local companion).",
+            "Hybrid execution routing is enabled (cloud + Gateway).",
         )
     else:
         add_check(
             "execution_routing",
             "warn",
-            "Local companion routing is disabled; runs will execute in cloud mode.",
-            "Set ORION_LOCAL_COMPANION_ENABLED=1 if you want hybrid routing with local companion.",
+            "Gateway routing is disabled; runs will execute in cloud mode.",
+            "Set ORION_LOCAL_COMPANION_ENABLED=1 if you want hybrid routing with Gateway.",
         )
 
     memory_enabled = bool(health_data.get("memory_enabled"))

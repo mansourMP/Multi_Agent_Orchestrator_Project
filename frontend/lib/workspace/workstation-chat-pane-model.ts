@@ -540,7 +540,7 @@ export function isSyntheticTranscriptMessage(message: WorkstationChatMessageReco
   ) {
     return true;
   }
-  return normalized.includes('local companion')
+  return (normalized.includes('local companion') || normalized.includes('gateway'))
     && (
       normalized.includes('approval is required')
       || normalized.includes('could not start device work')
@@ -1505,11 +1505,11 @@ export function buildPreRunCostEstimate({
   }
   if (runtimeCredits > 0) {
     if (virtualRuntimeKind === 'virtual_browser') {
-      detailParts.push('virtual browser time');
+      detailParts.push('cloud browser time');
     } else if (virtualRuntimeKind === 'virtual_desktop') {
-      detailParts.push('virtual desktop time');
+      detailParts.push('cloud desktop time');
     } else {
-      detailParts.push('virtual code sandbox time');
+      detailParts.push('cloud code sandbox time');
     }
   }
   if (artifactCredits > 0) {
@@ -1536,7 +1536,7 @@ export function buildPreRunCostEstimate({
       || /(monitor|crawl|scrape|batch|all pages|every item|run all)/i.test(draft)
     )
   ) {
-    warnings.push('Long virtual computer task warning');
+    warnings.push('Long cloud computer task warning');
   }
 
   const detail = detailParts.length > 0
@@ -2096,10 +2096,13 @@ export function classifyStatusNotice(message: string): {
 export function isLocalCompanionGateMessage(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   return normalized.includes('local companion')
+    || normalized.includes('gateway')
     || normalized.includes('local worker')
     || normalized.includes('requires local companion execution')
+    || normalized.includes('requires gateway execution')
     || normalized.includes('cannot run that request in this workspace right now')
-    || normalized.includes('path must stay inside local companion root');
+    || normalized.includes('path must stay inside local companion root')
+    || normalized.includes('path must stay inside the gateway workspace folder');
 }
 
 export function browserReadinessPill(

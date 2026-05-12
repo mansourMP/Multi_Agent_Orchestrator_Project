@@ -640,7 +640,7 @@ PACK_PHASES = {
     LOCAL_EXECUTION_PACK_ID: [
         "Phase 1/3: Resolving local execution plan.",
         "Phase 2/3: Validating local tool policy.",
-        "Phase 3/3: Executing local companion operations.",
+        "Phase 3/3: Executing Gateway operations.",
     ],
 }
 
@@ -1356,7 +1356,7 @@ TOOL_CONTRACTS: Dict[str, Dict[str, Any]] = {
     },
     "filesystem.read_write": {
         "tool_id": "filesystem.read_write",
-        "description": "Read, write, or append text files inside the local companion root.",
+        "description": "Read, write, or append text files inside the Gateway workspace folder.",
         "optional": True,
         "allowlist_roles": ["orion_operator"],
         "denylist_roles": [],
@@ -1391,7 +1391,7 @@ TOOL_CONTRACTS: Dict[str, Dict[str, Any]] = {
     },
     "screenshot.capture": {
         "tool_id": "screenshot.capture",
-        "description": "Capture a screenshot into the local companion artifact root.",
+        "description": "Capture a screenshot into the Gateway artifact folder.",
         "optional": True,
         "allowlist_roles": ["orion_operator"],
         "denylist_roles": [],
@@ -2770,7 +2770,7 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "requested": "",
             "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
-            "reason": "Shop Assistant supplier portal/order-status workflow runs in virtual browser without touching owner local machine.",
+            "reason": "Shop Assistant supplier portal/order-status workflow runs in Cloud Computer without touching the owner's machine.",
             "source": "router_rule_shop_assistant_virtual_browser",
             "studio_runtime_options": _studio_runtime_options_catalog(),
             "studio_template_requirements": template_requirements,
@@ -2779,7 +2779,7 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "requested": "",
             "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
-            "reason": "Template needs website login; routing to isolated virtual browser runtime.",
+            "reason": "Template needs website login; routing to an isolated Cloud Computer browser.",
             "source": "router_rule_template_website_login",
             "studio_runtime_options": _studio_runtime_options_catalog(),
             "studio_template_requirements": template_requirements,
@@ -2788,7 +2788,7 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "requested": "",
             "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
-            "reason": "Template declares browser dependency; routing to virtual browser runtime.",
+            "reason": "Template declares browser dependency; routing to an isolated Cloud Computer browser.",
             "source": "router_rule_template_browser",
             "studio_runtime_options": _studio_runtime_options_catalog(),
             "studio_template_requirements": template_requirements,
@@ -2797,7 +2797,7 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "requested": "",
             "selected": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
-            "reason": "Template declares files dependency; routing to virtual code sandbox runtime.",
+            "reason": "Template declares files dependency; routing to a Cloud Computer code sandbox.",
             "source": "router_rule_template_files",
             "studio_runtime_options": _studio_runtime_options_catalog(),
             "studio_template_requirements": template_requirements,
@@ -2806,7 +2806,7 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "requested": "",
             "selected": RUNTIME_CHOICE_VIRTUAL_DESKTOP,
-            "reason": "Template declares payments dependency; routing to dedicated virtual desktop workflow lane.",
+            "reason": "Template declares payments dependency; routing to a dedicated Cloud Computer desktop lane.",
             "source": "router_rule_template_payments",
             "studio_runtime_options": _studio_runtime_options_catalog(),
             "studio_template_requirements": template_requirements,
@@ -2816,7 +2816,7 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "requested": "",
             "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
-            "reason": "Risky or privileged browser automation is routed to virtual browser isolation.",
+            "reason": "Risky or privileged browser automation is routed to Cloud Computer isolation.",
             "source": "router_rule_virtual_browser",
             "studio_runtime_options": _studio_runtime_options_catalog(),
             "studio_template_requirements": template_requirements,
@@ -2826,7 +2826,7 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "requested": "",
             "selected": RUNTIME_CHOICE_VIRTUAL_BROWSER,
-            "reason": "Unknown/untrusted websites, files, and scraping routes default to virtual browser isolation.",
+            "reason": "Unknown/untrusted websites, files, and scraping routes default to Cloud Computer isolation.",
             "source": "router_rule_virtual_browser_untrusted",
             "studio_runtime_options": _studio_runtime_options_catalog(),
             "studio_template_requirements": template_requirements,
@@ -2836,7 +2836,7 @@ def decide_runtime_choice(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "requested": "",
             "selected": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
-            "reason": "Code/data style work is routed to virtual code sandbox execution.",
+            "reason": "Code/data style work is routed to Cloud Computer code sandbox execution.",
             "source": "router_rule_virtual_code_sandbox",
             "studio_runtime_options": _studio_runtime_options_catalog(),
             "studio_template_requirements": template_requirements,
@@ -3153,25 +3153,25 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
                     fallback = "Bring a local machine online if you want automatic tasks to prefer local execution."
             else:
                 selected = EXECUTION_TARGET_CLOUD
-                reason = "Default runtime route is cloud because local companion is unavailable."
+                reason = "Default runtime route is cloud because Gateway is unavailable."
     elif selected == EXECUTION_TARGET_LOCAL_COMPANION:
         if schedule_id:
             selected = EXECUTION_TARGET_CLOUD
             reason = "Scheduled runs require cloud reliability."
-            fallback = "Local companion route requested, but schedules run in cloud mode."
+            fallback = "Gateway route requested, but schedules run in cloud mode."
         else:
             if ORION_LOCAL_COMPANION_ENABLED:
                 selected = EXECUTION_TARGET_LOCAL_COMPANION
-                reason = "Run requested on local companion."
+                reason = "Run requested on Gateway."
             else:
                 can_fallback_to_cloud, fallback_reason = _auto_cloud_capacity_fallback_allowed(metadata)
                 if can_fallback_to_cloud:
                     selected = EXECUTION_TARGET_CLOUD
-                    reason = "Local companion requested but not available; using cloud fallback."
-                    fallback = "Local companion is not enabled on this runtime; using cloud fallback."
+                    reason = "Gateway requested but not available; using cloud fallback."
+                    fallback = "Gateway is not enabled on this workspace; using cloud fallback."
                 else:
                     selected = EXECUTION_TARGET_LOCAL_COMPANION
-                    reason = "Local companion requested but unavailable; fallback to cloud is blocked by policy."
+                    reason = "Gateway requested but unavailable; fallback to cloud is blocked by policy."
                     fallback = fallback_reason
                     waiting_for_runtime = True
                     waiting_for_capacity = False
@@ -3494,7 +3494,7 @@ def friendly_runtime_error_message(exc: Exception) -> str:
     if "unsupported outcome pack" in lower:
         return "This outcome pack is not supported by the current runtime version."
     if "requires local companion execution" in lower:
-        return "This run requires local companion execution. Start the local worker path and retry."
+        return "This run requires Gateway execution. Start Gateway and retry."
     if "action policy blocked" in lower:
         return "Run blocked by safety policy. Review trust/settings and retry."
     return raw

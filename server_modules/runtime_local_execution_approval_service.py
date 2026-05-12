@@ -257,7 +257,7 @@ def resolve_local_execution_start_approval(
     emit_log(
         run["logs"],
         "warn",
-        "Local companion execution was not started because confirmation was not granted.",
+        "Gateway execution was not started because confirmation was not granted.",
         event="approval_resolved",
         data={
             "approval_id": approval_id,
@@ -287,7 +287,7 @@ def resolve_local_execution_start_approval(
             "reusable": False,
         },
     )
-    run["result"] = "Local companion execution was not started because confirmation was not granted."
+    run["result"] = "Gateway execution was not started because confirmation was not granted."
     set_run_status(run_id, "failed")
     run["logs"].put(None)
     return {

@@ -3279,7 +3279,7 @@ def execute_workflow_local_tool(
         if has_command or has_argv or has_capability:
             raise RuntimeError("Code tool nodes cannot use command, argv, or capability in the current runtime.")
         raise RuntimeError(
-            "Code tool nodes are not executable in local companion V1; they require a reviewed higher-trust execution path."
+            "Code tool nodes are not executable through Gateway yet; they require a reviewed higher-trust execution path."
         )
     if variant == "file":
         file_access = assert_file_mount_access_fn(
@@ -4204,12 +4204,12 @@ def _resolve_runtime_mode_from_metadata(metadata: Dict[str, Any], *, selected_ta
         if selected_target == "local_companion" and explicit not in LOCAL_RUNTIME_MODES:
             raise HTTPException(
                 status_code=409,
-                detail="Runtime mode does not match local companion placement.",
+                detail="Agent mode does not match Gateway placement.",
             )
         if selected_target != "local_companion" and explicit in LOCAL_RUNTIME_MODES:
             raise HTTPException(
                 status_code=409,
-                detail="Runtime mode does not match hosted placement.",
+                detail="Agent mode does not match hosted placement.",
             )
         return explicit
     return _expected_runtime_mode_for_target(selected_target)
@@ -4226,25 +4226,25 @@ def _merge_runtime_selection_metadata(
     selected_attachment = _metadata_dict(runtime_selection.get("selected_attachment"))
     selection_target = _hint_text(runtime_selection.get("execution_target_selected"))
     if not selection_target:
-        raise HTTPException(status_code=409, detail="Runtime attachment selection is incomplete.")
+        raise HTTPException(status_code=409, detail="Computer selection is incomplete.")
     if selection_target != selected_target:
         raise HTTPException(
             status_code=409,
-            detail="Runtime attachment selection does not match the resolved execution target.",
+            detail="Computer selection does not match the resolved execution target.",
         )
     if runtime_mode in LOCAL_RUNTIME_MODES and selection_target != "local_companion":
         raise HTTPException(
             status_code=409,
-            detail="Local runtime mode requires a local companion attachment.",
+            detail="My Computer mode requires Gateway.",
         )
     if runtime_mode == "hosted_secure" and selection_target != "cloud":
         raise HTTPException(
             status_code=409,
-            detail="Hosted secure runtime mode requires a hosted execution attachment.",
+            detail="Hosted secure mode requires hosted execution.",
         )
     attachment_id = _hint_text(selected_attachment.get("attachment_id")) or _hint_text(resolved.get("runtime_attachment_id"))
     if not attachment_id:
-        raise HTTPException(status_code=409, detail="Runtime attachment selection is missing attachment_id.")
+        raise HTTPException(status_code=409, detail="Computer selection is missing its attachment id.")
     attachment_kind = _hint_text(selected_attachment.get("attachment_kind")) or _hint_text(resolved.get("runtime_attachment_kind"))
     if not attachment_kind:
         raise HTTPException(status_code=409, detail="Runtime attachment selection is missing attachment_kind.")
@@ -4671,8 +4671,8 @@ def precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "requ
 def local_execution_confirmation_prompt(precheck: Dict[str, Any]) -> str:
     labels = precheck_human_action_labels(precheck, decision="require_confirmation")
     if labels:
-        return f"Confirmation required before local companion execution: {', '.join(labels)}."
-    return "Confirmation required before local companion execution."
+        return f"Confirmation required before Gateway execution: {', '.join(labels)}."
+    return "Confirmation required before Gateway execution."
 
 
 def local_execution_block_prompt(precheck: Dict[str, Any]) -> str:

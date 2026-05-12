@@ -275,7 +275,7 @@ def build_summary_bridge_payload_record(
     if runtime_mode not in SUMMARY_BRIDGE_ALLOWED_RUNTIME_MODES:
         raise HybridPolicyError(
             reason="summary_bridge_runtime_not_local",
-            message="Summary bridge payloads may be published only from approved local runtime modes.",
+            message="Summary bridge payloads may be published only from approved local computer modes.",
             policy_state={
                 "source_runtime_mode": runtime_mode or None,
                 "allowed_runtime_modes": list(SUMMARY_BRIDGE_ALLOWED_RUNTIME_MODES),

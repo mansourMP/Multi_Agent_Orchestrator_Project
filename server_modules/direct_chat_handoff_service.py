@@ -135,11 +135,11 @@ def direct_chat_run_handoff_reply(
             open_action_fn("Open run", f"/runs/{run_id}", variant="primary") if run_id else open_action_fn("Open runs", "/executions", variant="primary"),
             open_action_fn("Open runs", "/executions", variant="secondary"),
         ]
-        detail = "Queued for Local Companion"
+        detail = "Queued for Gateway"
         intervention = build_intervention(
             "run_handoff",
             "Durable run started on your local machine",
-            detail="The run has been handed off to your local companion runtime.",
+            detail="The run has been handed off to Gateway.",
             severity="info",
             status="active",
             run_id=run_id or None,

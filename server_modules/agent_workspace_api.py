@@ -2275,7 +2275,7 @@ def register_agent_workspace_routes(app) -> None:
         try:
             target.relative_to(root)
         except Exception as exc:
-            raise HTTPException(status_code=403, detail="Path must stay inside local companion root.") from exc
+            raise HTTPException(status_code=403, detail="Path must stay inside the Gateway workspace folder.") from exc
 
     def _resolve_workspace_path(path_value: str, *, expect_dir: bool = False, must_exist: bool = True) -> Path:
         normalized = _normalize_workspace_material_path(path_value)

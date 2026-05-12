@@ -150,10 +150,10 @@ class AutopilotRuntimeSupportService:
             return "Something went wrong. Please try again."
 
         lower = text.lower()
-        if "run timed out waiting on local companion" in lower:
-            return "Still working on it, but the local helper is taking too long. Give me a moment and try again."
-        if "local companion is offline" in lower:
-            return "The local helper is offline right now. Start it in Setup and try again."
+        if "run timed out waiting on local companion" in lower or "run timed out waiting on gateway" in lower:
+            return "Still working on it, but Gateway is taking too long. Give me a moment and try again."
+        if "local companion is offline" in lower or "gateway is offline" in lower:
+            return "Gateway is offline right now. Start it in Setup and try again."
         if lower == "run not found." or "run not found" in lower:
             return "I lost track of that request. Please send it again."
         if "missing required scope" in lower or "api.responses.write" in lower:
@@ -170,8 +170,8 @@ class AutopilotRuntimeSupportService:
             return "I don’t have a working model connection right now. Please retry in a moment."
         if "approval window timed out" in lower or "approval timeout" in lower:
             return "I waited too long for approval. Please send the request again and approve it when prompted."
-        if "requires local companion execution" in lower:
-            return "That task needs local execution first. Start the local helper in Setup and try again."
+        if "requires local companion execution" in lower or "requires gateway execution" in lower:
+            return "That task needs Gateway first. Start Gateway in Setup and try again."
         if "run blocked by safety policy" in lower or "action policy blocked" in lower:
             return "That action is blocked by your current safety settings. Review approvals or trust settings and try again."
         if lower == "run failed." or "run failed on attempt" in lower:

@@ -144,7 +144,7 @@ def heartbeat_local_run(
     with local_queue_lock:
         claim = claimed_runs.get(run_id)
         if not isinstance(claim, dict):
-            raise HTTPException(status_code=409, detail="Run is not claimed by a local companion.")
+            raise HTTPException(status_code=409, detail="Run is not claimed by Gateway.")
         if incoming_worker and incoming_worker != str(claim.get("worker_id")):
             raise HTTPException(status_code=403, detail="Worker does not own this local run.")
         resolved_worker = incoming_worker or str(claim.get("worker_id") or "").strip()
@@ -230,7 +230,7 @@ def complete_local_run(
     if not resolved_text and isinstance(result_data, dict):
         resolved_text = str(result_data.get("summary") or "").strip()
     if not resolved_text:
-        resolved_text = "Local companion run completed."
+        resolved_text = "Gateway run completed."
     run["result"] = resolved_text
     machine_lease_service.clear_active_machine_lease_binding(run)
 
@@ -326,7 +326,7 @@ def pause_local_run(
     if not resolved_text and pause_data:
         resolved_text = str(pause_data.get("summary") or "").strip()
     if not resolved_text:
-        resolved_text = "Local companion paused and is waiting for human input."
+        resolved_text = "Gateway paused and is waiting for human input."
     run["result"] = resolved_text
     machine_lease_service.clear_active_machine_lease_binding(run)
     run.pop("_resume_after_confirmation_scheduled", None)
@@ -413,7 +413,7 @@ def fail_local_run(
     message = (
         str(error or "").strip()
         or str(run.get("interrupt_reason") or "").strip()
-        or "Local companion run failed."
+        or "Gateway run failed."
     )
     run["result"] = message
     run.pop("wait_reason", None)

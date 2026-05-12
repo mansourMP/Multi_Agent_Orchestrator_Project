@@ -1064,5 +1064,5 @@ def execute_outcome_pack(pack_id: str, context: Dict[str, Any], run_id: Optional
     if pack_id == DOCUMENT_STUDIO_PACK_ID:
         return execute_document_studio_pack(context, run_id=run_id)
     if pack_id == LOCAL_EXECUTION_PACK_ID:
-        raise RuntimeError("local-execution-v1 requires local companion execution and cannot run in cloud mode.")
+        raise RuntimeError("This local execution pack requires Gateway and cannot run in cloud mode.")
     raise RuntimeError(f"Unsupported outcome pack '{pack_id}'")

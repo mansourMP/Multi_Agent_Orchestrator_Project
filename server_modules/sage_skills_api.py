@@ -32,7 +32,7 @@ _CURATED_SKILL_PACK: tuple[CuratedSkillDefinition, ...] = (
         description="Use vault items and saved credentials without pasting secrets into chat.",
         supported_os=("macos",),
         what_it_does="Look up vault items, retrieve credentials, and keep secret handling on the paired computer.",
-        setup_requirement="Install and unlock 1Password on this Mac, then enable the local 1Password skill runtime for Sage.",
+        setup_requirement="Install and unlock 1Password on this Mac, then enable the 1Password skill for Sage through Gateway.",
         aliases=("onepassword", "1-password"),
     ),
     CuratedSkillDefinition(
@@ -41,7 +41,7 @@ _CURATED_SKILL_PACK: tuple[CuratedSkillDefinition, ...] = (
         description="Read and organize personal notes from Apple Notes on the paired Mac.",
         supported_os=("macos",),
         what_it_does="Read note content, organize personal knowledge, and use Apple Notes as a trusted local reference surface.",
-        setup_requirement="Use a paired Mac with Apple Notes available to the local companion, then enable the Apple Notes skill runtime.",
+        setup_requirement="Use a paired Mac with Apple Notes available through Gateway, then enable the Apple Notes skill.",
         aliases=("notes", "apple_notes"),
     ),
     CuratedSkillDefinition(
@@ -50,7 +50,7 @@ _CURATED_SKILL_PACK: tuple[CuratedSkillDefinition, ...] = (
         description="Review and manage reminders from Apple Reminders on the paired Mac.",
         supported_os=("macos",),
         what_it_does="Read reminder lists, keep recurring responsibilities current, and update personal tasks through Apple Reminders.",
-        setup_requirement="Use a paired Mac with Apple Reminders available to the local companion, then enable the Apple Reminders skill runtime.",
+        setup_requirement="Use a paired Mac with Apple Reminders available through Gateway, then enable the Apple Reminders skill.",
         aliases=("reminders", "apple_reminders"),
     ),
     CuratedSkillDefinition(

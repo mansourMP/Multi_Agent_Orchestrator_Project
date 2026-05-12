@@ -498,6 +498,78 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
         execute_mock.assert_awaited_once()
         fallback_mock.assert_not_awaited()
 
+    def test_risky_browser_action_with_interactive_approvals_disabled_is_blocked(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway = registration_payload["gateway"]
+        gateway_id = gateway["gateway_id"]
+        gateway_state_repository.upsert_gateway_browser_session(
+            gateway_id=gateway_id,
+            device_id=gateway["device_id"],
+            tenant_id="default",
+            workspace_id="default",
+            user_id="owner-1",
+            run_id="run-browser-risky-blocked",
+            browser_session_id="gbsess-risky-blocked",
+            status="active",
+            execution_target="local_gateway",
+            session_profile="qa-browser",
+            metadata={"browser_session_mode": "managed"},
+        )
+        execute_mock = AsyncMock(return_value={"status": "completed"})
+        with (
+            patch(
+                "server_modules.routes_gateway.gateway_browser_service.execute_browser_capability_via_gateway",
+                execute_mock,
+            ),
+            patch(
+                "server_modules.routes_gateway.security_audit_service.emit_security_audit_event",
+            ) as audit_mock,
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-risky-blocked/actions",
+                json={
+                    "action": "click",
+                    "action_args": {"selector": "#send"},
+                    "run_id": "run-browser-risky-blocked",
+                    "trace_id": "trace-browser-risky-blocked",
+                    "interactive_approvals": False,
+                },
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("requires owner approval", response.json()["detail"])
+        execute_mock.assert_not_awaited()
+        audit_mock.assert_called_once()
+        self.assertEqual(audit_mock.call_args.kwargs["action"], "gateway.approval_blocked")
+        self.assertEqual(audit_mock.call_args.kwargs["status"], "blocked")
+        events_payload = self.client.get(f"/api/gateway/registrations/{gateway_id}/events")
+        event_types = [item["message_type"] for item in events_payload.json()["items"]]
+        self.assertIn("gateway.approval_blocked", event_types)
+
+    def test_review_required_browser_session_with_interactive_approvals_disabled_is_blocked(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        execute_mock = AsyncMock(return_value={"status": "completed"})
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.execute_browser_capability_via_gateway",
+            execute_mock,
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions",
+                json={
+                    "url": "https://safe.example",
+                    "session_profile": "qa-browser",
+                    "reviewed_approval_required": True,
+                    "interactive_approvals": False,
+                    "run_id": "run-browser-start-blocked",
+                    "trace_id": "trace-browser-start-blocked",
+                },
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("requires owner approval", response.json()["detail"])
+        execute_mock.assert_not_awaited()
+
     def test_gateway_browser_attach_mode_reports_attach_required_and_attached_states(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]

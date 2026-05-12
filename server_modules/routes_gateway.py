@@ -84,7 +84,7 @@ def _enforce_gateway_safety_gates(
             )
 
 
-def _audit_approval_bypass(
+def _block_disabled_interactive_approval(
     *,
     gateway_id: str,
     capability_id: str,
@@ -94,11 +94,11 @@ def _audit_approval_bypass(
 ) -> None:
     try:
         security_audit_service.emit_security_audit_event(
-            action="gateway.approval_bypassed",
-            status="warning",
+            action="gateway.approval_blocked",
+            status="blocked",
             tenant_id=tenant_id,
             workspace_id=workspace_id,
-            detail=f"Approval bypassed for capability {capability_id}: {reason}",
+            detail=f"Approval-required gateway action blocked for capability {capability_id}: {reason}",
             metadata={
                 "gateway_id": gateway_id,
                 "capability_id": capability_id,
@@ -107,6 +107,26 @@ def _audit_approval_bypass(
         )
     except Exception:
         pass
+    try:
+        gateway_state_repository.record_gateway_event(
+            gateway_id=gateway_id,
+            session_id=None,
+            direction="server",
+            frame_kind="audit",
+            message_type="gateway.approval_blocked",
+            payload={
+                "workspace_id": workspace_id,
+                "capability_id": capability_id,
+                "reason": reason,
+                "status": "blocked",
+            },
+        )
+    except Exception:
+        pass
+    raise HTTPException(
+        status_code=403,
+        detail="Gateway action requires owner approval, but interactive approvals are disabled.",
+    )
 
 
 class GatewayPairingIntentCreateRequest(BaseModel):
@@ -625,7 +645,7 @@ async def start_gateway_browser_session(
         None,
         reviewed_approval_required=reviewed_required,
     ):
-        _audit_approval_bypass(
+        _block_disabled_interactive_approval(
             gateway_id=gateway_id,
             capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
             workspace_id=resolved_workspace_id,
@@ -752,7 +772,7 @@ async def execute_gateway_browser_action(
         body.action,
         reviewed_approval_required=reviewed_required,
     ):
-        _audit_approval_bypass(
+        _block_disabled_interactive_approval(
             gateway_id=gateway_id,
             capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
             workspace_id=resolved_workspace_id,

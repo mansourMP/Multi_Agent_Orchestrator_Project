@@ -270,8 +270,8 @@
 
   Correct Build Order And Current Status
   The architecture direction is still correct, but the source of truth must now reflect implementation progress. Phases
-  0-11 are complete. The next gap is end-to-end certification: a real closed-pilot trace must prove the complete
-  connected-computer lifecycle after the voice/notification policy boundary.
+  0-11B are complete. The next gap is end-to-end certification: a real closed-pilot trace must prove the complete
+  connected-computer lifecycle after the voice/notification policy boundary and multimodal provider abstraction.
 
   Build order:
   | Phase | Work | Status | Evidence | Gate |
@@ -288,6 +288,7 @@
   | 9 | Connected Computers UI | Done | 66c4cac80 | Users see connected computers, dedicated computers, and cloud computers; normal UI does not expose Gateway/runtime internals. |
   | 10 | Dedicated Computer Setup | Done | f88966884 | Mac mini/VM/self-hosted machine enrollment, profile binding, health checks, session readiness, and kill/revoke behavior. |
   | 11 | Voice/Notification Policy | Done | 4cf48a6ac | Voice messages become normal Sage tasks; voice/notification surfaces cannot silently approve risky actions or carry approval tokens. |
+  | 11B | Multimodal Provider Foundation | Done | 55c8de98d | STT/TTS are provider-backed; OpenAI/Google behavior is preserved; ElevenLabs is config-gated; image/video interfaces fail closed until configured. |
   | 12 | End-to-End Certification | Next | needed after all above | Real trace proves policy classification, approval, Gateway/cloud execution, audit, transparency, and kill switch. |
 
   Phase 0 Implementation Plan
@@ -329,6 +330,7 @@
   | 9 | Connected Computers UI | done in nav, Settings, Computers, Sage connectors, Studio runtime cards, Chat notices, Activity labels | frontend typecheck + user-facing string checks | UI explains connected/dedicated/cloud computers without exposing Gateway/runtime jargon in normal flows. |
   | 10 | Dedicated setup backend | done in dedicated_workstation_setup_service.py, routes_gateway.py, agent_computer_profile_service.py | Gateway route tests cover bind, ready/offline readiness, kill, clear-kill, revoke propagation | Mac mini/VM can be bound, health-checked, killed, revoked, and audited. |
   | 11 | Voice message -> Sage task + notification policy | done in voice_notification_policy_service.py, sage_chat_api.py | voice text path and approval notification tests | Voice becomes a normal Sage turn; risky actions still need explicit approval. |
+  | 11B | Multimodal provider foundation | done in multimodal_provider_service.py, runtime_runtime_api.py | STT/TTS/provider tests plus voice-policy bypass test | Media providers are interchangeable; missing image/video providers fail closed instead of returning fake output. |
   | 12 | E2E certification | closed-pilot smoke harness | full trace with connected computer action | Trace shows risk, approval, remembered rule if used, execution, audit, transparency, and kill. |
 
   Stop conditions:
@@ -343,9 +345,9 @@
 
   End-to-End Certification
 
-  The voice/notification boundary is now in place. The next step is to run and capture a complete real trace proving
-  policy classification, approval, Gateway/cloud execution, audit, transparency, and kill switch after all workstation
-  phases.
+  The voice/notification boundary and multimodal provider foundation are now in place. The next step is to run and
+  capture a complete real trace proving policy classification, approval, Gateway/cloud execution, audit, transparency,
+  and kill switch after all workstation phases.
 
   Final verdict: RESUME AT PHASE 12. Do not claim workstation launch readiness until a real certification trace is
   captured after Phase 11.

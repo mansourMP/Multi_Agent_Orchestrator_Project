@@ -17,7 +17,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'marketplace',
-    label: 'Memory',
+    label: 'Discover',
     iconName: 'compass',
     defaultRouteId: 'marketplace',
     childRouteIds: ['marketplace'],
@@ -33,7 +33,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'settings',
-    label: 'Activity & Safety',
+    label: 'Settings',
     iconName: 'sliders-horizontal',
     defaultRouteId: 'settings',
     childRouteIds: ['settings'],
@@ -55,9 +55,9 @@ export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = {
   ...WORKSPACE_WEB_NAV_GROUP_LABELS,
   sage: 'Sage',
   studio: 'Agents',
-  marketplace: 'Memory',
+  marketplace: 'Discover',
   gateway: 'Gateway',
-  settings: 'Activity & Safety',
+  settings: 'Settings',
 };
 
 export const WORKSPACE_ROUTE_DEFINITIONS = [
@@ -78,7 +78,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'memory',
-    label: 'Memory',
+    label: 'Sage Memory',
     segment: 'memory',
     destinationId: 'sage',
     web: {},
@@ -244,7 +244,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'settings',
-    label: 'Activity & Safety',
+    label: 'Settings',
     segment: 'settings',
     legacySegments: ['control', 'admin', 'admin/platform', 'admin/billing', 'admin/routing', 'admin/members', 'admin/policies'],
     destinationId: 'settings',
@@ -269,7 +269,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'marketplace',
-    label: 'Memory',
+    label: 'Discover',
     segment: 'marketplace',
     destinationId: 'marketplace',
     web: {},
@@ -277,7 +277,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/apps/index',
       screenName: 'apps/index',
       groupId: 'marketplace',
-      tabLabel: 'Memory',
+      tabLabel: 'Discover',
       includeInBottomTabs: true,
     },
   },

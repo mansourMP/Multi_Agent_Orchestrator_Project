@@ -2244,7 +2244,7 @@ export function WorkstationChatPane() {
           ? null
           : hasPendingApprovals
             ? responseExecutionTarget === 'local_companion'
-              ? 'Sage is waiting for approval before using the local companion.'
+              ? 'Sage is waiting for approval before using this computer.'
               : 'Needs your OK is waiting.'
             : needsUserIntervention && !hasProviderFailure
               ? 'Sage needs your input before it can continue.'

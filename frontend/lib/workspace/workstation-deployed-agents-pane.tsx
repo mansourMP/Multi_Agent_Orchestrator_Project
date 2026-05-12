@@ -309,12 +309,12 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   },
   {
     id: 'channels',
-    label: 'Customer channel',
+    label: 'Customer Channels',
     description: 'Connect the customer inbox or bot when the assistant is ready for live traffic.',
   },
   {
     id: 'memory',
-    label: 'Memory',
+    label: 'Agent Memory',
     description: 'Decide whether this assistant remembers customers across conversations.',
   },
   {
@@ -384,12 +384,12 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
     value: 'customer_local',
     label: 'My Computer Agent',
     supplier: 'customer',
-    hint: 'Agent uses your machine through the local companion with explicit permissions.',
+    hint: 'Agent uses your machine through Gateway with explicit permissions.',
     capabilities: 'Local browser/files/terminal actions after explicit grants.',
-    runsWhere: 'Your computer through the enrolled local companion.',
+    runsWhere: 'Your computer through the enrolled Gateway.',
     privacy: 'Very high data locality, with host-device trust responsibility.',
     costRisk: 'Medium.',
-    setup: 'Install and enroll the local companion, then grant scoped permissions.',
+    setup: 'Install and enroll Gateway, then grant scoped permissions.',
     bestFor: 'Personal workflows and device-local automation.',
   },
   {
@@ -481,8 +481,8 @@ const SPECIALIST_OVERLAY_TABS: Array<{
 }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'tools', label: 'Actions' },
-  { id: 'memory', label: 'Memory' },
-  { id: 'connectors', label: 'Customer channel' },
+  { id: 'memory', label: 'Agent Memory' },
+  { id: 'connectors', label: 'Customer Channels' },
   { id: 'analytics', label: 'Results' },
 ];
 
@@ -532,7 +532,7 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     description: 'Customer assistant for local shops, boutiques, auto-parts stores, and product catalogs.',
     setupTime: '5 min setup',
     channelLabel: 'Telegram / WhatsApp',
-    requiredConnectors: ['Customer channel', 'Product catalog'],
+    requiredConnectors: ['Customer Channels', 'Product catalog'],
     defaultName: 'Shop Assistant',
     persona: 'Friendly shop assistant that helps customers choose products and asks before promising availability.',
     systemPrompt: 'Answer product questions from approved catalog sources, ask clarifying questions when the customer is unsure, capture contact details, and escalate unavailable or uncertain items to a human.',
@@ -622,7 +622,7 @@ const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     description: 'Booking assistant for salons, clinics, services, and local businesses.',
     setupTime: '5 min setup',
     channelLabel: 'Telegram / Email',
-    requiredConnectors: ['Calendar', 'Customer channel'],
+    requiredConnectors: ['Calendar', 'Customer Channels'],
     defaultName: 'Appointment Booking Assistant',
     persona: 'Polite scheduling assistant that confirms details before booking.',
     systemPrompt: 'Collect service type, preferred date and time, customer contact details, and confirmation. Write calendar events only after details are clear.',
@@ -5293,7 +5293,7 @@ export function WorkstationDeployedAgentsPane({
                         {STUDIO_APPROVAL_MODE_OPTIONS.find((item) => item.value === wizardState.approvalMode)?.hint}
                       </div>
                     </FormField>
-                    <FormField label="Customer channel" hint="Primary live channel for this assistant.">
+                    <FormField label="Customer Channels" hint="Primary live channel for this assistant.">
                       <FormSelect
                         value={wizardState.customerChannel}
                         onChange={(event) => {

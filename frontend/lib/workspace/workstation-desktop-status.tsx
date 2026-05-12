@@ -17,8 +17,8 @@ export function WorkstationDesktopStatus() {
   }
 
   const localCompanionLabel = desktop.localCompanion.present
-    ? `${desktop.localCompanion.label ?? 'Local companion'} ${desktop.localCompanion.online ? 'ready' : 'needs attention'}`
-    : 'No local companion attached to this workstation';
+    ? `${desktop.localCompanion.label ?? 'Gateway'} ${desktop.localCompanion.online ? 'ready' : 'needs attention'}`
+    : 'No Gateway attached to this workstation';
 
   return (
     <section
@@ -38,7 +38,7 @@ export function WorkstationDesktopStatus() {
 
       {desktop.localCompanion.present && !desktop.localCompanion.online ? (
         <AppButton type="button" tone="secondary" onClick={handleOpenPermissions}>
-          Review companion permissions
+          Review Gateway permissions
         </AppButton>
       ) : null}
     </section>

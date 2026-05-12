@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
-import { Bot, Compass, LayoutGrid, Menu, Settings2, Waypoints } from 'lucide-react';
+import { Activity, Bot, Compass, LayoutGrid, Menu, Waypoints } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
@@ -30,7 +30,7 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
 };
 
 const MOBILE_DESTINATION_NAV: readonly {
-  id: 'chat' | 'studio' | 'gateway' | 'marketplace' | 'settings';
+  id: 'chat' | 'studio' | 'gateway' | 'marketplace' | 'activity';
   label: string;
   defaultRouteId: WorkspaceRouteId;
   icon: LucideIcon;
@@ -38,8 +38,8 @@ const MOBILE_DESTINATION_NAV: readonly {
   { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot },
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
   { id: 'gateway', label: 'Gateway', defaultRouteId: 'gateway', icon: Waypoints },
-  { id: 'marketplace', label: 'Memory', defaultRouteId: 'marketplace', icon: Compass },
-  { id: 'settings', label: 'Activity & Safety', defaultRouteId: 'settings', icon: Settings2 },
+  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
+  { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
 ];
 
 function readPendingApprovalCount(payload: unknown): number {
@@ -79,10 +79,17 @@ export function WorkstationKernelShell({
   }, [activeRouteId]);
   const activeMobileDestinationId = useMemo(() => {
     if (
+      activeRouteId === 'activity'
+      || activeRouteId === 'runs'
+      || activeRouteId === 'approvals'
+      || activeRouteId === 'notifications'
+    ) {
+      return 'activity';
+    }
+    if (
       activeDestinationId === 'studio'
       || activeDestinationId === 'gateway'
       || activeDestinationId === 'marketplace'
-      || activeDestinationId === 'settings'
     ) {
       return activeDestinationId;
     }

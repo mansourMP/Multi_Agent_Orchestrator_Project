@@ -46,12 +46,12 @@ const PRIMARY_DESTINATIONS: RailDestination[] = [
   { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot, dataLinkId: 'sage' },
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
   { id: 'gateway', label: 'Gateway', defaultRouteId: 'gateway', icon: Waypoints },
-  { id: 'marketplace', label: 'Memory', defaultRouteId: 'marketplace', icon: Compass },
+  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
   { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
 ];
 
 const SECONDARY_DESTINATIONS: RailDestination[] = [
-  { id: 'settings', label: 'Activity & Safety', defaultRouteId: 'settings', icon: Settings2 },
+  { id: 'settings', label: 'Settings', defaultRouteId: 'settings', icon: Settings2 },
 ];
 
 const ACTIVITY_ROUTE_IDS = new Set<WorkspaceRouteId>([

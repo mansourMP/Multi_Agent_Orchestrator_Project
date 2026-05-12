@@ -717,7 +717,7 @@ function channelRecoveryLane(params: {
     id: 'channel_recovery',
     title: 'Channel recovery',
     subtitle: configured ? 'Standby' : 'Not configured',
-    description: 'Personal channels are optional. Configure them here when Sage should use this computer to deliver messages.',
+    description: 'Personal Channels are optional. Configure them here when Sage should use this computer to deliver messages.',
     tone: configured ? 'neutral' : 'accent',
   };
 }
@@ -1882,7 +1882,7 @@ export function WorkstationGatewayOperatorPane({
 
       {selectedGateway && showChannelsSection && advancedDiagnosticsVisible ? (
         <WorkstationSurfaceCard
-          title="Personal channel state"
+          title="Personal Channels"
           description="Current login, linked identity, and recent activity for personal WhatsApp and Telegram on this computer."
         >
           <WorkstationSurfaceNotice tone="neutral">

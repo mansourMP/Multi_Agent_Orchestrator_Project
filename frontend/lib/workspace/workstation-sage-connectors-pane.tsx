@@ -2186,7 +2186,7 @@ export function WorkstationSageConnectorsPane({
           : 'WhatsApp pairing requested on This Computer.',
       );
     } catch (setupError) {
-      setError(setupError instanceof Error ? setupError.message : 'Personal channel setup failed.');
+      setError(setupError instanceof Error ? setupError.message : 'Personal Channels setup failed.');
     } finally {
       setBusyCardId(null);
     }
@@ -2227,7 +2227,7 @@ export function WorkstationSageConnectorsPane({
           : 'WhatsApp test sent through This Computer.',
       );
     } catch (testError) {
-      setError(testError instanceof Error ? testError.message : 'Personal channel test failed.');
+      setError(testError instanceof Error ? testError.message : 'Personal Channels test failed.');
     } finally {
       setBusyCardId(null);
     }
@@ -2690,7 +2690,7 @@ export function WorkstationSageConnectorsPane({
             </div>
             <div className="sage-unified-expand__tag-row">
               <span className="sage-unified-expand__tag">Runs on This Computer</span>
-              <span className="sage-unified-expand__tag">Personal channel</span>
+              <span className="sage-unified-expand__tag">Personal Channels</span>
               {record.id === 'whatsapp_personal' ? (
                 <span className="sage-unified-expand__tag">Not a business account</span>
               ) : null}

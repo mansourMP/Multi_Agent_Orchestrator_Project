@@ -1959,41 +1959,41 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
       tone: 'neutral',
       title: `${preferredLabel} is carrying Sage`,
       meta: `${preferredStatus} · cloud-first`,
-      body: 'Sage stays in cloud mode until a local companion is paired. Device work will not start from this workspace yet.',
+      body: 'Sage stays in cloud mode until Gateway is paired. Device work will not start from this workspace yet.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: 'Local companion · needs pairing',
+      localPill: 'Gateway · needs pairing',
     };
   }
 
   if (!local.online) {
     return {
       tone: 'warning',
-      title: 'Local companion is paired but offline',
+      title: 'Gateway is paired but offline',
       meta: `${preferredLabel} remains active`,
-      body: local.statusReason || 'Sage will stay in cloud mode until the local companion reconnects.',
+      body: local.statusReason || 'Sage will stay in cloud mode until Gateway reconnects.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: `Local companion · ${local.statusLabel ?? 'Offline'}`,
+      localPill: `Gateway · ${local.statusLabel ?? 'Offline'}`,
     };
   }
 
   if (!local.healthy) {
     return {
       tone: 'warning',
-      title: 'Local companion needs attention',
+      title: 'Gateway needs attention',
       meta: `${preferredLabel} remains active`,
-      body: local.statusReason || 'Sage will avoid device work until the local companion is healthy again.',
+      body: local.statusReason || 'Sage will avoid device work until Gateway is healthy again.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: `Local companion · ${local.statusLabel ?? 'Needs attention'}`,
+      localPill: `Gateway · ${local.statusLabel ?? 'Needs attention'}`,
     };
   }
 
   return {
     tone: 'success',
-    title: 'Local companion is ready',
+    title: 'Gateway is ready',
     meta: `${local.sampleAttachmentLabel ?? local.label} · explicit approval`,
-    body: 'Sage still uses cloud execution for ordinary turns. If a step needs device work, Sage pauses for explicit approval before using the local companion.',
+    body: 'Sage still uses cloud execution for ordinary turns. If a step needs device work, Sage pauses for explicit approval before using this computer.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
-    localPill: `Local companion · ${local.statusLabel ?? 'Ready'}`,
+    localPill: `Gateway · ${local.statusLabel ?? 'Ready'}`,
   };
 }
 

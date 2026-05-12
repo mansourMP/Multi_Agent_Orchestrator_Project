@@ -1018,10 +1018,15 @@ export function WorkstationActivityPane() {
         ) : (
           <>
             <section className="settings-workbench app-memory-settings-workbench" aria-label="Sage memory documents">
-              <aside className="settings-nav" aria-label="Memory documents">
+              <aside className="settings-nav" aria-label="Sage memory documents">
                 <div className="app-settings-sidebar__header">
-                  <h2 className="app-settings-sidebar__title">Memory</h2>
-                  <p className="app-settings-sidebar__subtitle">{Math.min(memoryUsed, memoryLimit)}/{memoryLimit} saved memory slots</p>
+                  <h2 className="app-settings-sidebar__title">Sage Memory</h2>
+                  <p className="app-settings-sidebar__subtitle">
+                    {Math.min(memoryUsed, memoryLimit)}/{memoryLimit} saved Sage memory slots
+                  </p>
+                  <p className="app-settings-sidebar__subtitle">
+                    Separate from Studio Agent Memory and Workspace Memory files.
+                  </p>
                 </div>
                 <div className="app-memory-document-nav">
                   {memoryDocumentNavItems.map((item) => (

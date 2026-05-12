@@ -8,6 +8,7 @@ from server_modules import (
     deployed_agent_runtime_contract_service,
     deployed_agent_service,
     deployed_agent_transparency_service,
+    studio_app_boundary_service,
     transparency_event_store_service,
     security_audit_service,
 )
@@ -193,6 +194,18 @@ def _load_memory_context_for_test(
         return {"applied": False, "enabled": False, "error": "memory_load_failed"}
 
 
+def _validate_test_customer_profile_boundary(customer_profile: Any) -> None:
+    if customer_profile in (None, {}, []):
+        return
+    try:
+        studio_app_boundary_service.assert_no_forbidden_owner_resource_keys(
+            customer_profile,
+            root_label="customer_profile",
+        )
+    except studio_app_boundary_service.StudioAppBoundaryError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 async def execute_test_turn(
     *,
     deployed_agent_id: str,
@@ -215,6 +228,7 @@ async def execute_test_turn(
         raise ValueError(f"Unsupported channel: {request.channel}. Allowed: {sorted(ALLOWED_TEST_CHANNELS)}")
     if normalized_mode not in ALLOWED_RUNTIME_MODES:
         raise ValueError(f"Unsupported runtime_mode: {request.runtime_mode}. Allowed: {sorted(ALLOWED_RUNTIME_MODES)}")
+    _validate_test_customer_profile_boundary(request.customer_profile)
 
     agent_detail = await deployed_agent_service.get_deployed_agent_detail(
         deployed_agent_id=deployed_agent_id,

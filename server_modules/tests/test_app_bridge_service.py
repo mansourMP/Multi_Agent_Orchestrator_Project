@@ -118,6 +118,46 @@ class AppBridgeServiceTests(unittest.TestCase):
         self.assertIn("raw_memory", str(ctx.exception.detail))
         self.assertIn("context_envelope.user_selected_inputs", str(ctx.exception.detail))
 
+    def test_normalize_app_context_envelope_rejects_connected_computer_bypass(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            app_bridge_service.normalize_app_context_envelope(
+                {
+                    "user_selected_inputs": [
+                        {
+                            "kind": "request",
+                            "connectedComputer": {
+                                "gateway_id": "gateway-local-1",
+                                "runtime_node_id": "node-1",
+                            },
+                        },
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("connected_computer", str(ctx.exception.detail))
+
+    def test_normalize_bridge_contract_rejects_nested_gateway_identity_bypass(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                app_bridge_service.normalize_bridge_contract(
+                    app_id="study",
+                    bridge_kind="app_to_sage",
+                    bridge_type="summary_request",
+                    metadata={
+                        "safe": {
+                            "route": "ok",
+                            "local_gateway_attachment": {"gateway_id": "gateway-local-1"},
+                        }
+                    },
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("local_gateway_attachment", str(ctx.exception.detail))
+
     def test_enforce_app_metadata_contract_rejects_implicit_captain_context(self) -> None:
         with patch(
             "server_modules.app_bridge_service._resolve_registry_app_item",

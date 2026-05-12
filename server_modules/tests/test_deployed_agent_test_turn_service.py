@@ -133,6 +133,29 @@ class TestTurnValidationTests(unittest.TestCase):
             ))
         self.assertIn("runtime_mode", str(ctx.exception).lower())
 
+    def test_rejects_customer_profile_owner_resource_bypass(self):
+        req = _make_request(
+            customer_profile={
+                "name": "customer",
+                "preferences": {
+                    "sage_memory": "SAGE_PRIVATE_MEMORY_DO_NOT_LEAK",
+                    "connectedComputer": {"gateway_id": "gateway-local-1"},
+                },
+            }
+        )
+        with self.assertRaises(ValueError) as ctx:
+            import asyncio
+            asyncio.run(execute_test_turn(
+                deployed_agent_id="a1",
+                workspace_id="ws-1",
+                tenant_id="t-1",
+                request=req,
+                current_user={},
+            ))
+
+        self.assertIn("customer_profile", str(ctx.exception))
+        self.assertIn("sage_memory", str(ctx.exception))
+
 
 class TestTurnPolicyTests(unittest.TestCase):
     def test_build_policy_decisions_includes_runtime_mode(self):

@@ -247,6 +247,51 @@ async def test_hosted_bridge_requires_explicit_permission_even_when_verified(mon
 
 
 @pytest.mark.anyio
+async def test_hosted_bridge_rejects_context_classes_outside_app_contract():
+    with pytest.raises(Exception) as exc_info:
+        await mini_app_host_service.process_hosted_bridge_request(
+            workspace_id="ws-1",
+            tenant_id="tenant-1",
+            current_user={"user_id": "user-1"},
+            app_contract=_hosted_contract(),
+            origin="https://miniapps.example.com",
+            bridge_kind="app_to_sage",
+            bridge_type="summary_request",
+            request_text="Summarize this",
+            context_envelope={"app_owned_history": [{"id": "history-1"}]},
+            metadata={"request_id": "req-contract-bypass"},
+        )
+
+    assert "context_envelope.app_owned_history is not supported" in str(exc_info.value)
+
+
+@pytest.mark.anyio
+async def test_hosted_bridge_rejects_nested_connected_computer_target_bypass():
+    with pytest.raises(Exception) as exc_info:
+        await mini_app_host_service.process_hosted_bridge_request(
+            workspace_id="ws-1",
+            tenant_id="tenant-1",
+            current_user={"user_id": "user-1"},
+            app_contract=_hosted_contract(),
+            origin="https://miniapps.example.com",
+            bridge_kind="app_to_sage",
+            bridge_type="summary_request",
+            request_text="Summarize this",
+            target={
+                "safe": {
+                    "local_gateway_attachment": {
+                        "gateway_id": "gateway-local-1",
+                    }
+                }
+            },
+            context_envelope={"user_selected_inputs": [{"id": "doc-1"}]},
+            metadata={"request_id": "req-target-bypass"},
+        )
+
+    assert "local_gateway_attachment" in str(exc_info.value)
+
+
+@pytest.mark.anyio
 async def test_hosted_bridge_cannot_trigger_sage_by_default_without_verified_enable(monkeypatch: pytest.MonkeyPatch):
     get_master_install = AsyncMock(return_value={"id": "install-sage"})
     execute_turn = AsyncMock(return_value={"run_id": "run-1"})

@@ -176,6 +176,46 @@ def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypa
     assert "app.bridge.sage.request" in hosted_contract["permissions"]
 
 
+def test_marketplace_install_blocks_owner_resource_permissions(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+    _patch_app_registry(monkeypatch, tmp_path)
+
+    registered = marketplace_distribution_service.register_marketplace_package(
+        "ws-1",
+        actor_user_id="user-1",
+        payload={
+            "package_id": "unsafe-owner-resource-app",
+            "kind": "app",
+            "label": "Unsafe Owner Resource App",
+            "description": "Attempts to request owner private runtime access.",
+            "verification_status": "verified",
+            "review_state": "approved",
+            "health_state": "healthy",
+            "policy_posture": "governed",
+            "app": {
+                "app_id": "unsafe_owner_resource_app",
+                "hosted_url": "https://apps.example.com/unsafe",
+                "allowed_origins": ["https://apps.example.com"],
+                "permissions": ["app.summary.read", "read_sage_memory", "connected_computer"],
+            },
+        },
+    )
+
+    assert "owner_resource_boundary_violation" in registered["marketplace_review_findings"]
+    listed = marketplace_distribution_service.get_marketplace_package("ws-1", "unsafe-owner-resource-app")
+    assert listed["install_eligible"] is False
+    assert "owner_resource_boundary_violation" in listed["install_blockers"]
+
+    with pytest.raises(ValueError) as exc_info:
+        marketplace_distribution_service.install_marketplace_package(
+            "ws-1",
+            package_id="unsafe-owner-resource-app",
+            actor_user_id="user-1",
+        )
+
+    assert "owner_resource_boundary_violation" in str(exc_info.value)
+
+
 def test_install_marketplace_provider_projects_into_provider_catalog(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
     _patch_app_registry(monkeypatch, tmp_path)

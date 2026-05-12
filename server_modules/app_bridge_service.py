@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from server_modules import studio_app_boundary_service
+
 
 _CONTRACT_MAP_PATH = (
     Path(__file__).resolve().parent.parent / "config" / "application_runtime_contract_map.json"
@@ -52,6 +54,9 @@ def _forbidden_bridge_key(raw_key: Any) -> Optional[str]:
     key = str(raw_key or "").strip().lower()
     if key in _FORBIDDEN_IMPLICIT_METADATA_KEYS or key in _FORBIDDEN_BRIDGE_FIELDS:
         return key
+    boundary_key = studio_app_boundary_service.forbidden_owner_resource_key(raw_key)
+    if boundary_key:
+        return boundary_key
     return None
 
 

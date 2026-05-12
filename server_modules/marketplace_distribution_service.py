@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from server_modules import app_registry_api
 from server_modules import mini_apps_service
 from server_modules import provider_profiles
+from server_modules import studio_app_boundary_service
 from server_modules import workspace_context
 
 
@@ -649,6 +650,11 @@ def _marketplace_contract_review_findings(contract: Dict[str, Any]) -> List[str]
         findings.append("excessive_permission_count")
     if any(marker in normalized_permission_markers for marker in EXCESSIVE_PERMISSION_MARKERS):
         findings.append("excessive_permissions_requested")
+    if any(
+        studio_app_boundary_service.permission_requests_owner_resource(marker)
+        for marker in normalized_permission_markers
+    ):
+        findings.append("owner_resource_boundary_violation")
     allowed_domains = _normalize_list_of_strings(contract.get("allowed_domains"))
     if len(allowed_domains) > MAX_MARKETPLACE_DOMAIN_COUNT:
         findings.append("excessive_domain_scope")
@@ -989,6 +995,8 @@ def _install_blockers(package: Dict[str, Any]) -> List[str]:
         blockers.append("excessive_domain_scope")
     if "unsafe_local_runtime_permission_combo" in review_findings:
         blockers.append("unsafe_local_runtime_permission_combo")
+    if "owner_resource_boundary_violation" in review_findings:
+        blockers.append("owner_resource_boundary_violation")
     return blockers
 
 

@@ -356,6 +356,7 @@ def _normalize_hosted_bridge_contract(
     bridge_type: str,
     target: Optional[Dict[str, Any]] = None,
     context_envelope: Optional[Dict[str, Any]] = None,
+    app_contract_context_envelope: Optional[Dict[str, Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     kind = _normalized_text(bridge_kind).lower()
@@ -368,10 +369,7 @@ def _normalize_hosted_bridge_contract(
         raise HTTPException(status_code=400, detail="Unsupported bridge_type for this bridge_kind.")
 
     target_payload = dict(target or {}) if isinstance(target, dict) else {}
-    for key in list(target_payload):
-        forbidden = app_bridge_service._forbidden_bridge_key(key)
-        if forbidden:
-            raise HTTPException(status_code=400, detail=f"bridge target field '{key}' is not allowed.")
+    app_bridge_service._assert_no_forbidden_bridge_keys(target_payload, root_label="bridge.target")
     if kind == "app_to_specialist" and not (
         _normalized_text(target_payload.get("target_install_id"))
         or _normalized_text(target_payload.get("target_capability"))
@@ -390,13 +388,11 @@ def _normalize_hosted_bridge_contract(
         raise HTTPException(status_code=400, detail="App -> connector/runtime bridges require connector_id, workflow_id, or route_key.")
 
     normalized_metadata = dict(metadata or {}) if isinstance(metadata, dict) else {}
-    for key in normalized_metadata:
-        forbidden = app_bridge_service._forbidden_bridge_key(key)
-        if forbidden:
-            raise HTTPException(status_code=400, detail=f"metadata.{key} is not allowed for explicit app bridges.")
+    app_bridge_service._assert_no_forbidden_bridge_keys(normalized_metadata, root_label="bridge.metadata")
+    contract_context = _normalize_context_envelope(app_contract_context_envelope)
     normalized_envelope = app_bridge_service.normalize_app_context_envelope(
         context_envelope,
-        contract={"context_envelope": _normalize_context_envelope(None)},
+        contract={"context_envelope": contract_context},
     )
     return {
         "app_id": app_id,
@@ -457,6 +453,9 @@ async def process_hosted_bridge_request(
         bridge_type=bridge_token,
         target=dict(target or {}) if isinstance(target, dict) else None,
         context_envelope=dict(context_envelope or {}) if isinstance(context_envelope, dict) else None,
+        app_contract_context_envelope=app_contract.get("context_envelope")
+        if isinstance(app_contract.get("context_envelope"), dict)
+        else {},
         metadata={
             **(dict(metadata or {}) if isinstance(metadata, dict) else {}),
             "request_origin": normalized_origin,

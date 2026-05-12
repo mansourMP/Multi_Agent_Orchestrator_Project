@@ -92,6 +92,9 @@ export function assertWebSocketUrl(value: string, env: NodeJS.ProcessEnv = proce
       `WebSocket URL must use wss:// in staging/production. Got: ${parsed.protocol}`,
     );
   }
+  if (["127.0.0.1", "localhost", "0.0.0.0", "::1"].includes(parsed.hostname)) {
+    throw new Error("WebSocket URL cannot point at localhost in staging/production.");
+  }
   return value;
 }
 

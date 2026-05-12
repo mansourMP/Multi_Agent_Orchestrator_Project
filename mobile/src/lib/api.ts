@@ -100,7 +100,7 @@ function getConfiguredEmpyralistApiUrl() {
 }
 
 export function getDefaultEmpyralistApiUrl() {
-  return normalizeServerUrl(
+  return assertProductionRuntimeUrl(
     getConfiguredEmpyralistApiUrl() ||
     process.env.EXPO_PUBLIC_RUNTIME_URL ||
     extra.runtimeUrl ||
@@ -567,7 +567,7 @@ function formatNetworkError(baseUrl: string) {
 }
 
 function requireCloudApiBaseUrl(value: string, purpose: string) {
-  const baseUrl = normalizeServerUrl(value);
+  const baseUrl = assertProductionRuntimeUrl(value);
   if (!baseUrl) {
     throw new Error(`Cloud API URL is not configured for ${purpose}.`);
   }

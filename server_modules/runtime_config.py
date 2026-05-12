@@ -406,6 +406,11 @@ def _assert_frontend_origins_safe_for_environment() -> None:
             hostname = (parsed.hostname or "").lower()
         except Exception:
             hostname = ""
+            parsed = None
+        if origin == "*" or not parsed or not parsed.scheme or not parsed.netloc:
+            raise RuntimeError(
+                f"FRONTEND_ORIGINS origin '{origin}' must be an absolute HTTPS origin in staging/production."
+            )
         if hostname in blocked_hostnames:
             raise RuntimeError(
                 f"FRONTEND_ORIGINS contains localhost origin '{origin}'. "

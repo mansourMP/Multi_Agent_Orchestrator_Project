@@ -31,6 +31,17 @@ def test_production_rejects_localhost_frontend_origin() -> None:
         )
 
 
+def test_production_rejects_wildcard_frontend_origin() -> None:
+    with pytest.raises(CloudCutoverConfigError, match="absolute URL"):
+        assert_cloud_cutover_config(
+            {
+                "ORION_ENV": "production",
+                "FRONTEND_ORIGINS": "*",
+                "EMPYRALIS_PUBLIC_API_URL": "https://runtime.example.com",
+            }
+        )
+
+
 def test_production_requires_https_public_api_url() -> None:
     with pytest.raises(CloudCutoverConfigError, match="scheme: https"):
         assert_cloud_cutover_config(

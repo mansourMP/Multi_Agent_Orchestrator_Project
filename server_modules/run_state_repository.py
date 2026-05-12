@@ -286,6 +286,25 @@ async def _ensure_live_run_tables(pool: Any) -> None:
     await pool.execute("CREATE INDEX IF NOT EXISTS idx_run_transitions_run_id ON run_transitions(run_id, timestamp DESC)")
 
 
+async def _ensure_run_archive_table(pool: Any) -> None:
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS run_archive (
+            run_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            final_state TEXT NOT NULL,
+            payload JSONB NOT NULL,
+            trace_id TEXT,
+            completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_run_archive_workspace_state ON run_archive(workspace_id, final_state, completed_at DESC)"
+    )
+
+
 async def _ensure_local_queue_tables(pool: Any) -> None:
     await pool.execute(
         """
@@ -948,6 +967,7 @@ async def archive_run(
         return None
     pool = await _require_pool(operation="archive_run")
     try:
+        await _ensure_run_archive_table(pool)
         await pool.execute(
             """
             INSERT INTO run_archive (run_id, workspace_id, tenant_id, final_state, payload, trace_id, completed_at)
@@ -1568,13 +1588,27 @@ def _approval_final_status(resolution: str) -> str:
     return "resolved"
 
 
-def _approval_request_timestamp(request_payload: Dict[str, Any]) -> Optional[str]:
+def _coerce_postgres_timestamptz(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    token = str(value or "").strip()
+    if not token:
+        return None
+    try:
+        return datetime.fromisoformat(token.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _approval_request_timestamp(request_payload: Dict[str, Any]) -> datetime | None:
     token = str(
         request_payload.get("requested_at")
         or request_payload.get("created_at")
         or ""
     ).strip()
-    return token or None
+    return _coerce_postgres_timestamptz(token)
 
 
 def _approval_record_from_row(row: Any) -> Dict[str, Any]:
@@ -1785,7 +1819,7 @@ async def create_or_update_approval_request(
     if not request_metadata and isinstance(request_item.get("metadata"), dict):
         request_metadata = _json_object(request_item.get("metadata"))
     requested_at = _approval_request_timestamp(request_item)
-    expires_at_token = str(expires_at or request_item.get("expires_at") or "").strip() or None
+    expires_at_token = _coerce_postgres_timestamptz(expires_at or request_item.get("expires_at"))
     try:
         await _ensure_run_approval_table(pool)
         row = await pool.fetchrow(
@@ -1999,7 +2033,7 @@ async def resolve_approval_if_pending(
                 resolution = $4,
                 actor = $5,
                 trace_id = COALESCE(NULLIF($6, ''), trace_id),
-                decision_payload = COALESCE(decision_payload, '{{}}'::jsonb) || $7::jsonb,
+                decision_payload = COALESCE(decision_payload, '{}'::jsonb) || $7::jsonb,
                 updated_at = NOW(),
                 version = version + 1
             WHERE run_id = $1
@@ -2070,7 +2104,7 @@ async def record_approval_resolution(
                 resolution = $4,
                 actor = $5,
                 trace_id = COALESCE(NULLIF($6, ''), trace_id),
-                decision_payload = COALESCE(decision_payload, '{{}}'::jsonb) || $7::jsonb,
+                decision_payload = COALESCE(decision_payload, '{}'::jsonb) || $7::jsonb,
                 updated_at = NOW(),
                 version = CASE
                     WHEN status IN ('requested', 'decision_submitted') THEN version + 1

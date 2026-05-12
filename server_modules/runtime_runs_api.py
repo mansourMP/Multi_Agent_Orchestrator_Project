@@ -3,6 +3,7 @@ import json
 import sentry_sdk
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, Request
@@ -107,6 +108,8 @@ execute_canonical_agent_turn = turn_ingress_service.start_turn
 def _late_server_export(name: str):
     import server as _server
 
+    if name == "ROOT_DIR" and not hasattr(_server, name):
+        return str(Path(__file__).resolve().parent.parent)
     return getattr(_server, name)
 
 

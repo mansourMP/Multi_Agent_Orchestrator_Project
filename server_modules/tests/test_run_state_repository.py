@@ -2,6 +2,7 @@ import asyncio
 import time
 import threading
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 from server_modules import run_state_repository
@@ -201,6 +202,45 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["workspace_id"], "workspace-1")
         self.assertEqual(result["owner_user_id"], "user-1")
 
+    async def test_create_or_update_approval_request_coerces_iso_timestamps_for_postgres(self):
+        pool = _FakePool(
+            fetchrow_result={
+                "run_id": "run-1",
+                "step_id": "approval-1",
+                "approval_id": "approval-1",
+                "status": "requested",
+                "requested_at": "2026-04-12T10:00:00Z",
+                "resolved_at": None,
+                "resolution": None,
+                "actor": "system",
+                "trace_id": "trace-1",
+                "request_payload": {"prompt": "Approve deploy", "workspace_id": "workspace-1", "tenant_id": "tenant-1"},
+                "decision_payload": {},
+                "metadata": {},
+                "expires_at": "2026-04-12T10:05:00Z",
+                "updated_at": "2026-04-12T10:00:00Z",
+                "version": 0,
+            }
+        )
+        with patch("server_modules.run_state_repository.runtime_db.require_durable_pool", return_value=pool):
+            await run_state_repository.create_or_update_approval_request(
+                "run-1",
+                "approval-1",
+                {
+                    "prompt": "Approve deploy",
+                    "workspace_id": "workspace-1",
+                    "tenant_id": "tenant-1",
+                    "requested_at": "2026-04-12T10:00:00Z",
+                    "expires_at": "2026-04-12T10:05:00Z",
+                },
+                "system",
+                "trace-1",
+            )
+
+        _, args = pool.fetchrow_calls[-1]
+        self.assertIsInstance(args[2], datetime)
+        self.assertIsInstance(args[7], datetime)
+
     async def test_resolve_approval_if_pending_blocks_duplicate_resolution(self):
         pool = _FakePool(
             fetchrow_results=[
@@ -235,6 +275,42 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         self.assertEqual(len(pool.fetchrow_calls), 2)
+
+    async def test_record_approval_resolution_uses_valid_jsonb_default(self):
+        pool = _FakePool(
+            fetchrow_result={
+                "run_id": "run-1",
+                "step_id": "approval-1",
+                "approval_id": "approval-1",
+                "status": "approved",
+                "requested_at": "2026-04-12T10:00:00Z",
+                "resolved_at": "2026-04-12T10:01:00Z",
+                "resolution": "approved",
+                "actor": "user-1",
+                "trace_id": "trace-1",
+                "request_payload": {"prompt": "Approve local action"},
+                "decision_payload": {"decision": "approved"},
+                "metadata": {},
+                "expires_at": None,
+                "updated_at": "2026-04-12T10:01:00Z",
+                "version": 1,
+            }
+        )
+        with patch("server_modules.run_state_repository.runtime_db.require_durable_pool", return_value=pool):
+            result = await run_state_repository.record_approval_resolution(
+                "run-1",
+                "approval-1",
+                "approved",
+                "user-1",
+                "trace-1",
+                note="ok",
+            )
+
+        self.assertEqual(result["approval_id"], "approval-1")
+        query, args = pool.fetchrow_calls[-1]
+        self.assertIn("'{}'::jsonb", query)
+        self.assertNotIn("'{{}}'::jsonb", query)
+        self.assertIn('"decision":"approved"', args[-1])
 
     async def test_list_pending_approvals_returns_requested_rows(self):
         pool = _FakePool(
@@ -357,6 +433,25 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
                     "trace-1",
                 )
         self.assertGreaterEqual(len(pool.execute_calls), 1)
+
+    async def test_archive_run_ensures_archive_table_before_insert(self):
+        pool = _FakePool()
+        with patch("server_modules.run_state_repository.runtime_db.require_durable_pool", return_value=pool):
+            await run_state_repository.archive_run(
+                "run-1",
+                "completed",
+                {
+                    "run_id": "run-1",
+                    "workspace_id": "workspace-1",
+                    "tenant_id": "tenant-1",
+                    "status": "completed",
+                },
+                "trace-1",
+            )
+
+        queries = [query for query, _args in pool.execute_calls]
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS run_archive" in query for query in queries))
+        self.assertIn("INSERT INTO run_archive", queries[-1])
 
     async def test_archive_run_claim_and_release_are_idempotent_calls(self):
         pool = _FakePool(fetchrow_results=[{"run_id": "run-1"}, {"run_id": "run-1"}])

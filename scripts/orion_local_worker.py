@@ -60,6 +60,12 @@ def build_runtime_capabilities() -> List[str]:
     ]
 
 
+def runtime_bootstrap_shape(enrollment_token: str) -> Tuple[str, List[str]]:
+    if str(enrollment_token or "").strip():
+        return "local_companion", ["local_companion", "local"]
+    return "local", ["local"]
+
+
 def _permission_entry(status: str, *, source: str, detail: str = "") -> Dict[str, Any]:
     return {
         "status": str(status or "unknown").strip().lower() or "unknown",
@@ -692,20 +698,22 @@ def main() -> int:
         print(f"Auth:    {auth_mode}")
         print(f"Registered tools: {registered_local_worker_tool_names()}")
 
+    runtime_type, execution_targets = runtime_bootstrap_shape(enrollment_token)
+
     try:
         permission_probe = build_runtime_permission_probe(
-            runtime_type="local",
+            runtime_type=runtime_type,
             capabilities=build_runtime_capabilities(),
-            execution_targets=["local"],
+            execution_targets=execution_targets,
         )
         registration = client.bootstrap_runtime_session(
             worker_id,
-            runtime_type="local",
+            runtime_type=runtime_type,
             display_name=f"Empyralis Local Worker ({socket.gethostname().split('.')[0]})",
             platform=sys.platform,
             policy_mode=str(os.getenv("ORION_RUNTIME_POLICY_MODE_DEFAULT") or "local_default").strip() or "local_default",
             capabilities=build_runtime_capabilities(),
-            execution_targets=["local"],
+            execution_targets=execution_targets,
             instance_id=runtime_instance_id,
             permission_probe=permission_probe,
         )
@@ -761,9 +769,9 @@ def main() -> int:
                         None,
                         "idle",
                         permission_probe=build_runtime_permission_probe(
-                            runtime_type="local",
+                            runtime_type=runtime_type,
                             capabilities=build_runtime_capabilities(),
-                            execution_targets=["local"],
+                            execution_targets=execution_targets,
                         ),
                     )
                     consecutive_errors = 0

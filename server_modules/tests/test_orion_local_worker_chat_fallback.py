@@ -24,6 +24,18 @@ worker = _load_module()
 
 
 class LocalWorkerChatFallbackTests(TestCase):
+    def test_enrollment_token_bootstraps_as_local_companion_gateway(self):
+        runtime_type, execution_targets = worker.runtime_bootstrap_shape("enroll-token")
+
+        self.assertEqual(runtime_type, "local_companion")
+        self.assertEqual(execution_targets, ["local_companion", "local"])
+
+    def test_api_key_bootstraps_as_generic_local_worker(self):
+        runtime_type, execution_targets = worker.runtime_bootstrap_shape("")
+
+        self.assertEqual(runtime_type, "local")
+        self.assertEqual(execution_targets, ["local"])
+
     @patch.object(worker, "generate_chat_reply_for_turn_request", return_value=(None, None, "openai,codex_cli", "llm unavailable"))
     def test_fallback_returns_minimal_model_error_message(self, _mock_generate):
         run = {

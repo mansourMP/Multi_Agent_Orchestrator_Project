@@ -23,6 +23,36 @@ def _capture_dispatched_operation(operations=None, event=None):
 
 
 class MachineLeaseServiceTests(unittest.TestCase):
+    def test_workspace_scoped_worker_accepts_legacy_default_tenant_run_for_same_workspace(self) -> None:
+        allowed = machine_lease_service._worker_runtime_scope_allows_run(
+            {
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "machine_enrollment_scope": "workspace",
+            },
+            {
+                "tenant_id": "default",
+                "workspace_id": "ws-1",
+            },
+        )
+
+        self.assertTrue(allowed)
+
+    def test_workspace_scoped_worker_rejects_legacy_default_tenant_run_for_other_workspace(self) -> None:
+        allowed = machine_lease_service._worker_runtime_scope_allows_run(
+            {
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "machine_enrollment_scope": "workspace",
+            },
+            {
+                "tenant_id": "default",
+                "workspace_id": "ws-2",
+            },
+        )
+
+        self.assertFalse(allowed)
+
     def test_build_machine_presence_record_clears_stale_run_binding_when_worker_is_idle(self) -> None:
         record = machine_lease_service.build_machine_presence_record(
             previous_record={

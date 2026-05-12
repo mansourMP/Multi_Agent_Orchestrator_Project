@@ -84,6 +84,13 @@ def _worker_runtime_scope_allows_run(record: Mapping[str, Any], run_scope: Mappi
     run_workspace = str(run_scope.get("workspace_id") or "default").strip() or "default"
     if enrollment_scope == "global":
         return True
+    if (
+        enrollment_scope == "workspace"
+        and run_tenant == "default"
+        and worker_workspace != "default"
+        and worker_workspace == run_workspace
+    ):
+        return True
     if worker_tenant != run_tenant:
         return False
     if enrollment_scope == "tenant":

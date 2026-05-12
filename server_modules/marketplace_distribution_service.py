@@ -360,6 +360,8 @@ def _normalize_billing(value: Any) -> Dict[str, Any]:
         "settlement_provider": str(payload.get("settlement_provider") or "").strip() or None,
         "revenue_share_bps": revenue_share_bps,
         "currency": str(payload.get("currency") or "usd").strip().lower() or "usd",
+        "payment_processing_live": False,
+        "billing_status": "metadata_only",
         "accounting_hook": {
             "ledger_key": str(_coerce_dict(payload.get("accounting_hook")).get("ledger_key") or "").strip() or None,
             "hook_kind": str(_coerce_dict(payload.get("accounting_hook")).get("hook_kind") or "distribution_install").strip() or "distribution_install",
@@ -811,6 +813,7 @@ def _preview_marketplace_packages() -> Dict[str, Dict[str, Any]]:
             continue
         package_id = str(package.get("package_id") or "").strip()
         installable_seed = package_id in INSTALLABLE_SEED_PACKAGE_IDS
+        preview_catalog_package = package_id.startswith("preview-")
         existing_review = str(package.get("review_state") or "").strip()
         existing_verification = str(package.get("verification_status") or "").strip()
         existing_posture = str(package.get("policy_posture") or "").strip()
@@ -819,8 +822,8 @@ def _preview_marketplace_packages() -> Dict[str, Dict[str, Any]]:
             and existing_verification in {"verified", "partner"}
             and existing_posture == "governed"
         )
-        package["preview_only"] = not (installable_seed or has_trust_metadata)
-        if installable_seed or has_trust_metadata:
+        package["preview_only"] = preview_catalog_package or not (installable_seed or has_trust_metadata)
+        if not preview_catalog_package and (installable_seed or has_trust_metadata):
             package["install_target"] = INSTALL_TARGETS.get(str(package.get("kind") or "").strip(), "marketplace_contract")
             package["review_state"] = "approved"
             package["verification_status"] = "verified"

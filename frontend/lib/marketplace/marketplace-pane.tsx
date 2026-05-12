@@ -419,6 +419,9 @@ function summarizeInstallReadiness(
   },
 ): string[] {
   const lines: string[] = [];
+  if (card.previewOnly) {
+    lines.push('Preview only; not installable in the pilot');
+  }
   lines.push(card.approvalRequired ? 'Needs your OK before install' : 'No install approval required');
   lines.push(marketplaceInstallTargetLabel(card.kind));
   if (card.kind === 'app' || card.kind === 'mini_app') {
@@ -1189,7 +1192,10 @@ export function MarketplacePane() {
                     </div>
 
                     <div className="marketplace-pane__detail-group">
-                      <strong className="marketplace-pane__detail-title">Billing and accounting</strong>
+                      <strong className="marketplace-pane__detail-title">Billing metadata</strong>
+                      <p className="marketplace-pane__panel-copy">
+                        Marketplace billing fields are accounting metadata only. They do not start payment processing or subscriptions in the pilot.
+                      </p>
                       <div className="marketplace-pane__detail-grid">
                         <div className="marketplace-pane__detail-item">
                           <span className="marketplace-pane__detail-label">Monetization</span>
@@ -1206,6 +1212,12 @@ export function MarketplacePane() {
                         <div className="marketplace-pane__detail-item">
                           <span className="marketplace-pane__detail-label">Billing product</span>
                           <span className="marketplace-pane__detail-value">{readString(selectedDetails.billing.billing_product_id, 'Not provided')}</span>
+                        </div>
+                        <div className="marketplace-pane__detail-item">
+                          <span className="marketplace-pane__detail-label">Payment processing</span>
+                          <span className="marketplace-pane__detail-value">
+                            {readBoolean(selectedDetails.billing.payment_processing_live) ? 'Live' : 'Not live; metadata only'}
+                          </span>
                         </div>
                         <div className="marketplace-pane__detail-item">
                           <span className="marketplace-pane__detail-label">Ledger hook</span>

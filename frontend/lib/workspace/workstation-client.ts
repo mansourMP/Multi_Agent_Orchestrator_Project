@@ -660,7 +660,7 @@ export type WorkstationClientPaths = {
   artifactFile: (artifactId: string) => string;
   artifactContent: (artifactId: string) => string;
   notifications: (limit?: number) => string;
-  activity: (limit?: number) => string;
+  activity: (limit?: number, traceId?: string | null) => string;
   pilotProofReadiness: (days?: number, limit?: number) => string;
   pilotProofCaseStudy: (days?: number, limit?: number) => string;
   pilotProofInvestorMemo: (days?: number, limit?: number) => string;
@@ -819,7 +819,7 @@ export type WorkstationClient = {
     notificationIds?: string[];
     markAll?: boolean;
   }) => Promise<Record<string, unknown> | null>;
-  listActivityTimeline: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  listActivityTimeline: (options?: { limit?: number; traceId?: string | null }) => Promise<Record<string, unknown>>;
   getPilotProofReadiness: (options?: { days?: number; limit?: number }) => Promise<Record<string, unknown>>;
   getPilotProofCaseStudy: (options?: { days?: number; limit?: number }) => Promise<Record<string, unknown>>;
   getPilotProofInvestorMemo: (options?: { days?: number; limit?: number }) => Promise<Record<string, unknown>>;
@@ -1247,8 +1247,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/artifacts/${encodeURIComponent(artifactId)}/content`,
     notifications: (limit = 80) =>
       `/api/notifications${buildQueryString({ workspace_id: workspaceId, limit })}`,
-    activity: (limit = 80) =>
-      `/api/activity/timeline${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    activity: (limit = 80, traceId: string | null = null) =>
+      `/api/activity/timeline${buildQueryString({ workspace_id: workspaceId, limit, trace_id: traceId })}`,
     pilotProofReadiness: (days = 30, limit = 1000) =>
       `/api/pilot/proof/readiness${buildQueryString({ workspace_id: workspaceId, days, limit })}`,
     pilotProofCaseStudy: (days = 30, limit = 1000) =>
@@ -2297,9 +2297,9 @@ export function createWorkstationClient(
         },
         policy: WRITE_REQUEST_POLICY,
       }),
-    listActivityTimeline: ({ limit = 80 } = {}) =>
+    listActivityTimeline: ({ limit = 80, traceId = null } = {}) =>
       requestJson<Record<string, unknown>>({
-        path: paths.activity(limit),
+        path: paths.activity(limit, traceId),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     getPilotProofReadiness: ({ days = 30, limit = 1000 } = {}) =>

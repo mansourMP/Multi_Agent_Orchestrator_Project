@@ -170,16 +170,18 @@ class RuntimeEventsApiTests(unittest.TestCase):
                 with patch(
                     "server_modules.runtime_events_api.activity_ledger_service.list_activity_timeline_payload",
                     new=AsyncMock(return_value={"items": [{"id": "aevt-1"}], "count": 1, "total": 1, "summary": {}}),
-                ):
+                ) as timeline_mock:
                     timeline_payload = self._run_async(
                         app.routes[("GET", "/activity/timeline")](
                             tenant_id="default",
                             workspace_id="default",
+                            trace_id="trace-timeline-1",
                             current_user=current_user,
                         )
                     )
                 self.assertEqual(timeline_payload["count"], 1)
                 self.assertEqual(timeline_payload["items"][0]["id"], "aevt-1")
+                self.assertEqual(timeline_mock.await_args.kwargs["trace_id"], "trace-timeline-1")
             finally:
                 if previous_server is None:
                     sys.modules.pop("server", None)

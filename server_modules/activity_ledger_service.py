@@ -553,6 +553,7 @@ async def list_activity_timeline_payload(
     tenant_id: str,
     workspace_id: str,
     limit: int = 80,
+    trace_id: Optional[str] = None,
     event_class: Optional[str] = None,
     detail_level: Optional[str] = None,
     actor_type: Optional[str] = None,
@@ -573,6 +574,7 @@ async def list_activity_timeline_payload(
         app_id=str(app_id or "").strip() or None,
         run_id=str(run_id or "").strip() or None,
         thread_id=str(thread_id or "").strip() or None,
+        trace_id=str(trace_id or "").strip() or None,
         limit=max(1, min(int(limit or 80), 500)),
     )
     rows = [

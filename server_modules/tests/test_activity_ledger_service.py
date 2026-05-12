@@ -261,6 +261,22 @@ class ActivityLedgerServiceTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in payload["items"]], ["aevt-new"])
 
+    def test_list_activity_timeline_payload_forwards_trace_id_filter(self) -> None:
+        repo_mock = AsyncMock(return_value=[])
+        with patch(
+            "server_modules.activity_ledger_service.control_plane_repository.list_activity_ledger_events",
+            new=repo_mock,
+        ):
+            asyncio.run(
+                activity_ledger_service.list_activity_timeline_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    trace_id="trace-lookup-1",
+                )
+            )
+
+        self.assertEqual(repo_mock.await_args.kwargs["trace_id"], "trace-lookup-1")
+
     def test_list_sage_recent_activity_payload_groups_by_class(self) -> None:
         created_at = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
         with patch(

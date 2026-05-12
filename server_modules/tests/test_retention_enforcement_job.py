@@ -60,7 +60,7 @@ class RetentionEnforcementTests(unittest.TestCase):
         ), patch(
             "server_modules.sage_memory_service.list_sage_memory",
             return_value={
-                "entries": [
+                "items": [
                     {"id": "old-1", "created_at": "2020-01-01T00:00:00Z"},
                     {"id": "future-1", "created_at": "2099-01-01T00:00:00Z"},
                 ]
@@ -92,7 +92,7 @@ class RetentionEnforcementTests(unittest.TestCase):
         ), patch(
             "server_modules.sage_memory_service.list_sage_memory",
             return_value={
-                "entries": [
+                "items": [
                     {"id": "old-1", "created_at": "2020-01-01T00:00:00Z"},
                     {"id": "future-1", "created_at": "2099-01-01T00:00:00Z"},
                 ]
@@ -144,6 +144,38 @@ class RetentionEnforcementTests(unittest.TestCase):
             mock_audit.assert_called()
             kwargs = mock_audit.call_args.kwargs
             self.assertEqual(kwargs["action"], "retention.run_completed")
+
+    def test_sage_memory_retention_supports_legacy_entries_shape(self):
+        inventory = {
+            "stores": [
+                {
+                    "store_id": "sage_memory",
+                    "retention_policy": {"ttl_days": 90},
+                    "row_count": 1,
+                    "supports_delete": True,
+                },
+            ],
+        }
+        with patch(
+            "server_modules.data_retention_service.build_workspace_retention_inventory",
+            new=AsyncMock(return_value=inventory),
+        ), patch(
+            "server_modules.sage_memory_service.list_sage_memory",
+            return_value={
+                "entries": [
+                    {"id": "old-legacy", "created_at": "2020-01-01T00:00:00Z"},
+                ]
+            },
+        ), patch(
+            "server_modules.sage_memory_service.delete_memory_entry",
+        ) as delete_mock, patch(
+            "server_modules.retention_enforcement_job.security_audit_service.emit_security_audit_event",
+        ):
+            result = _run(run_retention_apply(workspace_id="ws-1"))
+
+            self.assertEqual(result.records_eligible, 1)
+            self.assertEqual(result.records_deleted, 1)
+            delete_mock.assert_called_once()
 
 
 if __name__ == "__main__":

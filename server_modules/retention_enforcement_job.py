@@ -52,7 +52,7 @@ def _evaluate_sage_memory_store(
     from server_modules import sage_memory_service
 
     entries = sage_memory_service.list_sage_memory(workspace_id=workspace_id)
-    sage_entries = entries.get("entries", []) if isinstance(entries, dict) else []
+    sage_entries = (entries.get("items") or entries.get("entries") or []) if isinstance(entries, dict) else []
     eligible = 0
     deleted = 0
     for entry in sage_entries:

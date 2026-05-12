@@ -20,6 +20,7 @@ from server_modules import (
     personal_channels_repository,
     routes_gateway,
     routes_personal_channels,
+    safe_mode_service,
 )
 
 
@@ -36,6 +37,7 @@ class GatewayRoutesTests(unittest.TestCase):
         personal_channels_repository = importlib.import_module("server_modules.personal_channels_repository")
         routes_gateway = importlib.import_module("server_modules.routes_gateway")
         routes_personal_channels = importlib.import_module("server_modules.routes_personal_channels")
+        safe_mode_service.reset_state_for_tests()
 
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tmpdir.name) / "gateway-state.sqlite3"
@@ -81,6 +83,7 @@ class GatewayRoutesTests(unittest.TestCase):
         self.app.dependency_overrides.clear()
         for patcher in reversed(self.patchers):
             patcher.stop()
+        safe_mode_service.reset_state_for_tests()
         self.tmpdir.cleanup()
 
     @staticmethod
@@ -226,6 +229,48 @@ class GatewayRoutesTests(unittest.TestCase):
         )
         self.assertEqual(registration_response.status_code, 200)
         return registration_response.json()
+
+    def test_workspace_kill_switch_blocks_gateway_tool_execution(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        safe_mode_service.set_kill_switch(
+            scope="workspace",
+            enabled=True,
+            workspace_id="default",
+            reason="closed pilot smoke stop",
+        )
+
+        response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/tools/execute",
+            json={
+                "capability_id": "browser.session.start",
+                "arguments": {},
+                "run_id": "run-kill-switch",
+                "trace_id": "trace-kill-switch",
+                "request_id": "req-kill-switch",
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"]["error"]["code"], "KILL_SWITCH_ACTIVE")
+
+        safe_mode_service.set_kill_switch(
+            scope="workspace",
+            enabled=False,
+            workspace_id="default",
+            reason="closed pilot smoke resume",
+        )
+        response_after_clear = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/tools/execute",
+            json={
+                "capability_id": "browser.session.start",
+                "arguments": {},
+                "run_id": "run-kill-switch-clear",
+                "trace_id": "trace-kill-switch-clear",
+                "request_id": "req-kill-switch-clear",
+            },
+        )
+        self.assertEqual(response_after_clear.status_code, 202)
 
     def test_pair_register_connect_heartbeat_and_reconnect(self) -> None:
         registration_payload = self._register_gateway()

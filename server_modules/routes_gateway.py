@@ -32,6 +32,7 @@ from server_modules import (
     gateway_protocol_service,
     gateway_registry_service,
     gateway_state_repository,
+    safe_mode_service,
     security_audit_service,
 )
 
@@ -45,6 +46,8 @@ def _enforce_gateway_safety_gates(
     workspace_id: str,
     quota_profile: str,
     agent_id: str = "",
+    tenant_id: str = "",
+    capability_id: str = "",
 ) -> None:
     """Centralized safety enforcement for gateway endpoints.
 
@@ -67,6 +70,23 @@ def _enforce_gateway_safety_gates(
             status_code=to_http_status(error),
             detail=to_http_body(error),
         )
+
+    if capability_id:
+        disabled_state = safe_mode_service.resolve_capability_disable_state(
+            capability_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            machine_id=gateway_id,
+        )
+        if bool(disabled_state.get("disabled")) and str(disabled_state.get("type") or "") == "kill_switch":
+            error = kill_switch_error(
+                scope=str(disabled_state.get("scope") or "workspace"),
+                detail=str(disabled_state.get("reason") or "Gateway action blocked by kill switch."),
+            )
+            raise HTTPException(
+                status_code=to_http_status(error),
+                detail=to_http_body(error),
+            )
 
     if quota_profile:
         decision = evaluate_gateway_quota(
@@ -127,6 +147,30 @@ def _block_disabled_interactive_approval(
         status_code=403,
         detail="Gateway action requires owner approval, but interactive approvals are disabled.",
     )
+
+
+def _audit_approval_bypass(
+    *,
+    gateway_id: str,
+    capability_id: str,
+    workspace_id: str,
+    tenant_id: str,
+) -> None:
+    try:
+        security_audit_service.emit_security_audit_event(
+            action="gateway.approval_bypassed",
+            status="logged",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            detail=f"Gateway action executed without interactive approval for capability {capability_id}.",
+            metadata={
+                "gateway_id": gateway_id,
+                "capability_id": capability_id,
+                "interactive_approvals": False,
+            },
+        )
+    except Exception:
+        pass
 
 
 class GatewayPairingIntentCreateRequest(BaseModel):
@@ -431,7 +475,18 @@ async def execute_gateway_tool(
         gateway_id=gateway_id,
         workspace_id=resolved_workspace_id,
         quota_profile=GATEWAY_TOOL_EXECUTION,
+        tenant_id=tenant_id,
+        capability_id=body.capability_id,
     )
+
+    requires_owner_approval = gateway_approval_service.capability_requires_owner_approval(body.capability_id)
+    if not body.interactive_approvals and requires_owner_approval:
+        _block_disabled_interactive_approval(
+            gateway_id=gateway_id,
+            capability_id=body.capability_id,
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+        )
 
     if not body.interactive_approvals:
         _audit_approval_bypass(
@@ -441,7 +496,7 @@ async def execute_gateway_tool(
             tenant_id=tenant_id,
         )
 
-    if body.interactive_approvals and gateway_approval_service.capability_requires_owner_approval(body.capability_id):
+    if body.interactive_approvals and requires_owner_approval:
         approval = await gateway_approval_service.request_gateway_tool_approval(
             registration=registration,
             capability_id=body.capability_id,

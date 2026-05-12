@@ -387,6 +387,15 @@ def _validate_client_protocol_version(client_version: Optional[str]) -> Optional
     return None
 
 
+def _connect_frame_protocol_version(frame: Dict[str, Any], connect_payload: Dict[str, Any]) -> str:
+    return str(
+        frame.get("protocolVersion")
+        or frame.get("protocol_version")
+        or connect_payload.get("protocol_version")
+        or ""
+    ).strip()
+
+
 def _scope_matches_registration(frame_scope: Dict[str, Any], registration: Dict[str, Any]) -> bool:
     expected = gateway_registry_service.gateway_scope_payload(registration)
     for key, value in expected.items():
@@ -587,7 +596,7 @@ async def handle_gateway_websocket(
             return
 
         connect_payload = first_frame.get("payload") if isinstance(first_frame.get("payload"), dict) else {}
-        client_version = connect_payload.get("protocol_version")
+        client_version = _connect_frame_protocol_version(first_frame, connect_payload)
         version_error = _validate_client_protocol_version(client_version)
         if version_error:
             await websocket.send_json(

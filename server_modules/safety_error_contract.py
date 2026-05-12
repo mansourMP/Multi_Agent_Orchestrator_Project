@@ -90,6 +90,13 @@ def workspace_isolation_error(
 
 def to_http_body(error: SafetyError) -> dict:
     return {
+        "code": error.code,
+        "message": error.message,
+        "scope": error.scope,
+        "trace_id": error.trace_id,
+        "retryable": error.retryable,
+        "retry_after_seconds": error.retry_after_seconds,
+        "details": error.details,
         "error": {
             "code": error.code,
             "message": error.message,

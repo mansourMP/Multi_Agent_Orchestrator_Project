@@ -38,3 +38,4 @@ opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp
 asyncpg>=0.30.0
+pytest-asyncio>=0.24.0

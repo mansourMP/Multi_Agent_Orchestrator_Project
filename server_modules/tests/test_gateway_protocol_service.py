@@ -10,6 +10,7 @@ class GatewayProtocolServiceTests(unittest.TestCase):
             json.dumps(
                 {
                     "kind": "request",
+                    "protocolVersion": "v1alpha2",
                     "id": "connect",
                     "type": "gateway.connect",
                     "payload": {"ok": True},
@@ -18,6 +19,19 @@ class GatewayProtocolServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(frame["type"], "gateway.connect")
+
+    def test_connect_frame_protocol_version_accepts_client_camel_case(self) -> None:
+        frame = {
+            "kind": "request",
+            "protocolVersion": "v1alpha2",
+            "id": "connect",
+            "type": "gateway.connect",
+            "payload": {"gateway_version": "0.1.0"},
+        }
+
+        version = gateway_protocol_service._connect_frame_protocol_version(frame, frame["payload"])
+
+        self.assertEqual(version, "v1alpha2")
 
     def test_parse_frame_rejects_oversized_frame_before_json_parse(self) -> None:
         oversized = "x" * (gateway_protocol_service.MAX_GATEWAY_FRAME_BYTES + 1)

@@ -13,7 +13,7 @@ from server_modules import (
 )
 from server_modules.schemas import DeployedAgentTestTurnRequest, DeployedAgentTestTurnResponse
 
-ALLOWED_TEST_CHANNELS = {"telegram_personal", "whatsapp_personal", "web_chat", "test"}
+ALLOWED_TEST_CHANNELS = {"telegram", "whatsapp", "web_widget", "test"}
 ALLOWED_RUNTIME_MODES = {
     "text_agent",
     "cloud_computer_agent",

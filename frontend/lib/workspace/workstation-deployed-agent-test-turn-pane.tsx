@@ -3,11 +3,11 @@
 import { useState } from "react";
 import { AgentTransparencyTimeline } from "@/lib/workspace/transparency-timeline";
 
-const CHANNELS = [
-  { value: "test", label: "Test" },
-  { value: "telegram_personal", label: "Telegram" },
-  { value: "whatsapp_personal", label: "WhatsApp" },
-  { value: "web_chat", label: "Web Chat" },
+const CHANNELS: ReadonlyArray<{ value: string; label: string; disabled?: boolean }> = [
+  { value: "test", label: "Test (No customer send)" },
+  { value: "telegram", label: "Telegram Bot (Working)" },
+  { value: "whatsapp", label: "WhatsApp Business (Roadmap)", disabled: true },
+  { value: "web_widget", label: "Web Chat (Roadmap)", disabled: true },
 ] as const;
 
 const RUNTIME_MODES = [
@@ -86,7 +86,7 @@ export function DeployedAgentTestTurnPane({
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
         <select value={channel} onChange={(e) => setChannel(e.target.value)} style={selectStyle}>
           {CHANNELS.map((c) => (
-            <option key={c.value} value={c.value}>{c.label}</option>
+            <option key={c.value} value={c.value} disabled={Boolean(c.disabled)}>{c.label}</option>
           ))}
         </select>
         <select value={runtimeMode} onChange={(e) => setRuntimeMode(e.target.value)} style={selectStyle}>

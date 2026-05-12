@@ -59,9 +59,9 @@ def _make_request(**overrides) -> DeployedAgentTestTurnRequest:
 class TestTurnValidationTests(unittest.TestCase):
     def test_allowed_channels(self):
         self.assertIn("test", ALLOWED_TEST_CHANNELS)
-        self.assertIn("telegram_personal", ALLOWED_TEST_CHANNELS)
-        self.assertIn("whatsapp_personal", ALLOWED_TEST_CHANNELS)
-        self.assertIn("web_chat", ALLOWED_TEST_CHANNELS)
+        self.assertIn("telegram", ALLOWED_TEST_CHANNELS)
+        self.assertIn("whatsapp", ALLOWED_TEST_CHANNELS)
+        self.assertIn("web_widget", ALLOWED_TEST_CHANNELS)
 
     def test_allowed_runtime_modes(self):
         for mode in ("text_agent", "cloud_computer_agent", "my_computer_agent", "self_hosted_agent"):
@@ -108,7 +108,7 @@ class TestTurnValidationTests(unittest.TestCase):
         self.assertIn("message", str(ctx.exception).lower())
 
     def test_rejects_invalid_channel(self):
-        req = _make_request(channel="email")
+        req = _make_request(channel="telegram_personal")
         with self.assertRaises(ValueError) as ctx:
             import asyncio
             asyncio.run(execute_test_turn(

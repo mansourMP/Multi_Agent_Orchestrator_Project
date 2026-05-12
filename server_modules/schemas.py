@@ -131,6 +131,13 @@ class SageChatRequest(BaseModel):
     mode: Literal["owner_sage"] = "owner_sage"
 
 
+class SageVoiceTaskRequest(BaseModel):
+    workspace_id: str
+    transcript: str
+    source_channel: str = "mobile_voice"
+    source_message_id: Optional[str] = None
+
+
 class SageApprovalResolveRequest(BaseModel):
     workspace_id: str
     approval_token: str

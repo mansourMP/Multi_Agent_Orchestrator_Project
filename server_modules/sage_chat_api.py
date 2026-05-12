@@ -10,11 +10,12 @@ from server_modules.sage_agent_runtime_contract import (
     normalize_sage_surface,
 )
 from server_modules.sage_agent_runtime_service import handle_sage_chat
+from server_modules.voice_notification_policy_service import execute_voice_sage_task
 from server_modules.sage_approval_service import (
     resolve_approval,
     consume_approval,
 )
-from server_modules.schemas import SageChatRequest, SageApprovalResolveRequest
+from server_modules.schemas import SageChatRequest, SageVoiceTaskRequest, SageApprovalResolveRequest
 
 
 def _coerce_text(value) -> str:
@@ -110,6 +111,42 @@ def register_sage_chat_routes(app) -> None:
                 message=str(body.message).strip(),
                 surface=normalized_surface,
                 mode=normalized_mode,
+                current_user=current_user,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            **result,
+        }
+
+    @app.post("/api/sage/voice-task", dependencies=[Depends(member_dependency)])
+    async def sage_voice_task(
+        body: SageVoiceTaskRequest,
+        current_user=Depends(member_dependency),
+    ):
+        if not body.workspace_id or not _coerce_text(body.workspace_id):
+            raise HTTPException(status_code=400, detail="workspace_id is required.")
+        if not body.transcript or not _coerce_text(body.transcript):
+            raise HTTPException(status_code=400, detail="transcript must not be empty.")
+
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            body.workspace_id,
+            minimum_role="admin",
+        )
+        tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+        try:
+            result = await execute_voice_sage_task(
+                workspace_id=resolved_workspace_id,
+                tenant_id=tenant_id,
+                transcript=_coerce_text(body.transcript),
+                source_channel=_coerce_text(body.source_channel) or "mobile_voice",
+                source_message_id=_coerce_text(body.source_message_id),
                 current_user=current_user,
             )
         except ValueError as exc:

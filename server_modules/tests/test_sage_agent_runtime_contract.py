@@ -38,6 +38,7 @@ class SageContractNormalizationTests(unittest.TestCase):
         self.assertEqual(normalize_sage_surface("mobile"), "mobile")
         self.assertEqual(normalize_sage_surface("web"), "web")
         self.assertEqual(normalize_sage_surface("desktop"), "desktop")
+        self.assertEqual(normalize_sage_surface("voice"), "voice")
 
     def test_normalize_sage_surface_defaults_empty(self):
         self.assertEqual(normalize_sage_surface(""), "chat")

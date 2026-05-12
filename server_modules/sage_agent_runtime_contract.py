@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 SAGE_MODE = "owner_sage"
 SAGE_RUNTIME_KIND = "sage_main_runtime"
-SAGE_ALLOWED_SURFACES = {"chat", "mobile", "web", "desktop"}
+SAGE_ALLOWED_SURFACES = {"chat", "mobile", "web", "desktop", "voice"}
 
 SAGE_RESPONSE_KEYS: tuple[str, ...] = (
     "message",

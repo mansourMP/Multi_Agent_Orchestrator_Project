@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from pydantic import ValidationError
 
-from server_modules.schemas import SageChatRequest
+from server_modules.schemas import SageChatRequest, SageVoiceTaskRequest
 
 
 class SageChatApiContractTests(unittest.TestCase):
@@ -36,6 +36,12 @@ class SageChatApiContractTests(unittest.TestCase):
     def test_request_model_accepts_explicit_surface(self):
         req = SageChatRequest(workspace_id="ws-1", message="hello", surface="mobile")
         self.assertEqual(req.surface, "mobile")
+
+    def test_voice_task_request_defaults(self):
+        req = SageVoiceTaskRequest(workspace_id="ws-1", transcript="hello")
+        self.assertEqual(req.workspace_id, "ws-1")
+        self.assertEqual(req.transcript, "hello")
+        self.assertEqual(req.source_channel, "mobile_voice")
 
     def test_mode_gate_rejects_non_owner_sage(self):
         from server_modules.sage_agent_runtime_service import ALLOWED_MODES

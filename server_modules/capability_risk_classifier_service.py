@@ -58,6 +58,8 @@ CAPABILITY_ALIASES = {
     "computer_control.launch": "app.control",
     "computer_control.launch_app": "app.control",
     "computer_control.applescript": "terminal.command",
+    "screenshot.capture": "screen.read",
+    "system.presence": "screen.read",
     "screen.read": "screen.read",
     "file.list": "file.metadata",
     "file.read": "file.read",

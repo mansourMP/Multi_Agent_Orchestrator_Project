@@ -539,9 +539,14 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("requires owner approval", response.json()["detail"])
         execute_mock.assert_not_awaited()
-        audit_mock.assert_called_once()
-        self.assertEqual(audit_mock.call_args.kwargs["action"], "gateway.approval_blocked")
-        self.assertEqual(audit_mock.call_args.kwargs["status"], "blocked")
+        audit_actions = [call.kwargs["action"] for call in audit_mock.call_args_list]
+        self.assertIn("gateway.approval_blocked", audit_actions)
+        blocked_call = next(
+            call
+            for call in audit_mock.call_args_list
+            if call.kwargs["action"] == "gateway.approval_blocked"
+        )
+        self.assertEqual(blocked_call.kwargs["status"], "blocked")
         events_payload = self.client.get(f"/api/gateway/registrations/{gateway_id}/events")
         event_types = [item["message_type"] for item in events_payload.json()["items"]]
         self.assertIn("gateway.approval_blocked", event_types)
@@ -638,3 +643,65 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
         attach_approval_payload = attach_response.json()
         self.assertEqual(attach_approval_payload["status"], "approval_required")
         self.assertTrue(str(attach_approval_payload["approval"]["approval_id"]).strip())
+
+    def test_browser_start_blocks_domain_outside_agent_computer_policy(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_state_repository.update_gateway_registration_state(
+            gateway_id=gateway_id,
+            metadata={
+                "agent_computer_policy": {
+                    "policy_id": "policy-domain",
+                    "autonomy_mode": "safe_autopilot",
+                    "domain_allowlist": ["example.com"],
+                }
+            },
+        )
+        execute_mock = AsyncMock(return_value={"status": "completed"})
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.execute_browser_capability_via_gateway",
+            execute_mock,
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions",
+                json={
+                    "url": "https://evil.test",
+                    "run_id": "run-domain-block",
+                    "trace_id": "trace-domain-block",
+                },
+            )
+
+        self.assertEqual(response.status_code, 403)
+        payload = response.json()["detail"]
+        self.assertEqual(payload["error"], "GATEWAY_RISK_BLOCKED")
+        self.assertEqual(payload["reason"], "domain_not_allowed")
+        self.assertEqual(payload["risk_decision"]["decision"], "block")
+        execute_mock.assert_not_awaited()
+
+    def test_tool_execute_uses_classifier_approval_even_when_legacy_gate_is_safe(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        execute_mock = AsyncMock(return_value={"status": "completed"})
+        with patch(
+            "server_modules.routes_gateway.gateway_approval_service.capability_requires_owner_approval",
+            return_value=False,
+        ), patch(
+            "server_modules.routes_gateway.gateway_execution_service.execute_tool_via_gateway",
+            execute_mock,
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/tools/execute",
+                json={
+                    "capability_id": "shell.command",
+                    "arguments": {"command": "ls -la"},
+                    "run_id": "run-classifier-approval",
+                    "trace_id": "trace-classifier-approval",
+                },
+            )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["status"], "approval_required")
+        self.assertEqual(payload["risk_decision"]["decision"], "approval_required")
+        self.assertEqual(payload["risk_decision"]["capability"], "terminal.command")
+        execute_mock.assert_not_awaited()

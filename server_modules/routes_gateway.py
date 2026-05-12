@@ -23,6 +23,17 @@ from server_modules.safety_error_contract import (
     to_http_body,
     to_http_status,
 )
+from server_modules.agent_computer_policy_service import (
+    build_default_agent_computer_policy,
+    normalize_agent_computer_policy,
+)
+from server_modules.capability_risk_classifier_service import (
+    DECISION_APPROVAL_REQUIRED,
+    DECISION_BLOCK,
+    CapabilityRiskClassifierError,
+    classify_gateway_browser_action_risk,
+    classify_gateway_tool_risk,
+)
 from server_modules.runtime_common import require_api_key
 from server_modules import (
     gateway_browser_service,
@@ -175,6 +186,69 @@ def _audit_approval_bypass(
         )
     except Exception as exc:
         LOGGER.warning("Failed to emit gateway approval bypass audit for %s: %s", gateway_id, exc)
+
+
+def _gateway_policy_from_registration(registration: Dict[str, Any]):
+    metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+    policy_payload = (
+        metadata.get("agent_computer_policy")
+        or metadata.get("computer_policy")
+        or metadata.get("gateway_policy")
+    )
+    if isinstance(policy_payload, dict):
+        return normalize_agent_computer_policy(policy_payload)
+    gateway_token = str(registration.get("gateway_id") or "").strip() or "default"
+    return build_default_agent_computer_policy(policy_id=f"gateway:{gateway_token}")
+
+
+def _emit_gateway_risk_decision(
+    *,
+    gateway_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    risk_decision,
+) -> None:
+    payload = risk_decision.as_dict()
+    try:
+        security_audit_service.emit_security_audit_event(
+            action=f"gateway.risk_decision.{risk_decision.decision}",
+            status="blocked" if risk_decision.decision == DECISION_BLOCK else "logged",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            detail=f"Gateway risk decision {risk_decision.decision} for {risk_decision.capability}.",
+            metadata={
+                "gateway_id": gateway_id,
+                "risk_decision": payload,
+            },
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to emit gateway risk decision audit for %s: %s", gateway_id, exc)
+    try:
+        gateway_state_repository.record_gateway_event(
+            gateway_id=gateway_id,
+            session_id=None,
+            direction="server",
+            frame_kind="audit",
+            message_type=f"gateway.risk_decision.{risk_decision.decision}",
+            payload={
+                "workspace_id": workspace_id,
+                "risk_decision": payload,
+            },
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to record gateway risk decision event for %s: %s", gateway_id, exc)
+
+
+def _block_gateway_risk_decision(*, risk_decision) -> None:
+    reason = risk_decision.blocked_reason or "Gateway action blocked by risk policy."
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "GATEWAY_RISK_BLOCKED",
+            "reason": reason,
+            "risk_decision": risk_decision.as_dict(),
+        },
+    )
 
 
 class GatewayPairingIntentCreateRequest(BaseModel):
@@ -483,8 +557,26 @@ async def execute_gateway_tool(
         capability_id=body.capability_id,
     )
 
+    try:
+        risk_decision = classify_gateway_tool_risk(
+            policy=_gateway_policy_from_registration(registration),
+            capability_id=body.capability_id,
+            arguments=body.arguments,
+        )
+    except CapabilityRiskClassifierError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _emit_gateway_risk_decision(
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        risk_decision=risk_decision,
+    )
+    if risk_decision.decision == DECISION_BLOCK:
+        _block_gateway_risk_decision(risk_decision=risk_decision)
+
     requires_owner_approval = gateway_approval_service.capability_requires_owner_approval(body.capability_id)
-    if not body.interactive_approvals and requires_owner_approval:
+    risk_requires_approval = risk_decision.decision == DECISION_APPROVAL_REQUIRED
+    if not body.interactive_approvals and (requires_owner_approval or risk_requires_approval):
         _block_disabled_interactive_approval(
             gateway_id=gateway_id,
             capability_id=body.capability_id,
@@ -500,7 +592,7 @@ async def execute_gateway_tool(
             tenant_id=tenant_id,
         )
 
-    if body.interactive_approvals and requires_owner_approval:
+    if body.interactive_approvals and (requires_owner_approval or risk_requires_approval):
         approval = await gateway_approval_service.request_gateway_tool_approval(
             registration=registration,
             capability_id=body.capability_id,
@@ -515,6 +607,7 @@ async def execute_gateway_tool(
                 "status": "approval_required",
                 "gateway_id": gateway_id,
                 "approval": approval,
+                "risk_decision": risk_decision.as_dict(),
             },
         )
     try:
@@ -691,6 +784,24 @@ async def start_gateway_browser_session(
         "interactive_actions": list(body.interactive_actions or []),
         "browser_metadata": browser_metadata,
     }
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+    try:
+        risk_decision = classify_gateway_browser_action_risk(
+            policy=_gateway_policy_from_registration(registration),
+            browser_action="start",
+            payload=arguments,
+            reviewed_approval_required=reviewed_required,
+        )
+    except CapabilityRiskClassifierError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _emit_gateway_risk_decision(
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        risk_decision=risk_decision,
+    )
+    if risk_decision.decision == DECISION_BLOCK:
+        _block_gateway_risk_decision(risk_decision=risk_decision)
     if body.allow_cloud_fallback and not gateway_protocol_service.gateway_connection_is_live(gateway_id):
         fallback = await gateway_browser_service.build_cloud_browser_fallback_response(
             registration=registration,
@@ -700,19 +811,25 @@ async def start_gateway_browser_session(
             reason="Local gateway browser runtime is offline; cloud browser fallback prepared.",
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
-    if not body.interactive_approvals and gateway_browser_service.browser_action_requires_owner_approval(
-        None,
-        reviewed_approval_required=reviewed_required,
+    if not body.interactive_approvals and (
+        gateway_browser_service.browser_action_requires_owner_approval(
+            None,
+            reviewed_approval_required=reviewed_required,
+        )
+        or risk_decision.decision == DECISION_APPROVAL_REQUIRED
     ):
         _block_disabled_interactive_approval(
             gateway_id=gateway_id,
             capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
             workspace_id=resolved_workspace_id,
-            tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+            tenant_id=tenant_id,
         )
-    if body.interactive_approvals and gateway_browser_service.browser_action_requires_owner_approval(
-        None,
-        reviewed_approval_required=reviewed_required,
+    if body.interactive_approvals and (
+        gateway_browser_service.browser_action_requires_owner_approval(
+            None,
+            reviewed_approval_required=reviewed_required,
+        )
+        or risk_decision.decision == DECISION_APPROVAL_REQUIRED
     ):
         approval = await gateway_approval_service.request_gateway_tool_approval(
             registration=registration,
@@ -728,6 +845,7 @@ async def start_gateway_browser_session(
                 "status": "approval_required",
                 "gateway_id": gateway_id,
                 "approval": approval,
+                "risk_decision": risk_decision.as_dict(),
             },
         )
     try:
@@ -817,6 +935,24 @@ async def execute_gateway_browser_action(
         "browser_metadata": browser_metadata,
         "checkpoint": browser_session.get("checkpoint") if isinstance(browser_session.get("checkpoint"), dict) else {},
     }
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+    try:
+        risk_decision = classify_gateway_browser_action_risk(
+            policy=_gateway_policy_from_registration(registration),
+            browser_action=body.action,
+            payload=arguments,
+            reviewed_approval_required=reviewed_required,
+        )
+    except CapabilityRiskClassifierError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _emit_gateway_risk_decision(
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        risk_decision=risk_decision,
+    )
+    if risk_decision.decision == DECISION_BLOCK:
+        _block_gateway_risk_decision(risk_decision=risk_decision)
     if body.allow_cloud_fallback and not gateway_protocol_service.gateway_connection_is_live(gateway_id):
         fallback = await gateway_browser_service.build_cloud_browser_fallback_response(
             registration=registration,
@@ -827,19 +963,25 @@ async def execute_gateway_browser_action(
             checkpoint=browser_session.get("checkpoint") if isinstance(browser_session.get("checkpoint"), dict) else {},
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
-    if not body.interactive_approvals and gateway_browser_service.browser_action_requires_owner_approval(
-        body.action,
-        reviewed_approval_required=reviewed_required,
+    if not body.interactive_approvals and (
+        gateway_browser_service.browser_action_requires_owner_approval(
+            body.action,
+            reviewed_approval_required=reviewed_required,
+        )
+        or risk_decision.decision == DECISION_APPROVAL_REQUIRED
     ):
         _block_disabled_interactive_approval(
             gateway_id=gateway_id,
             capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
             workspace_id=resolved_workspace_id,
-            tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+            tenant_id=tenant_id,
         )
-    if body.interactive_approvals and gateway_browser_service.browser_action_requires_owner_approval(
-        body.action,
-        reviewed_approval_required=reviewed_required,
+    if body.interactive_approvals and (
+        gateway_browser_service.browser_action_requires_owner_approval(
+            body.action,
+            reviewed_approval_required=reviewed_required,
+        )
+        or risk_decision.decision == DECISION_APPROVAL_REQUIRED
     ):
         approval = await gateway_approval_service.request_gateway_tool_approval(
             registration=registration,
@@ -855,6 +997,7 @@ async def execute_gateway_browser_action(
                 "status": "approval_required",
                 "gateway_id": gateway_id,
                 "approval": approval,
+                "risk_decision": risk_decision.as_dict(),
             },
         )
     try:

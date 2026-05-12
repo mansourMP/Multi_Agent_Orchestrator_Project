@@ -72,11 +72,23 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
 
         self.assertEqual(
             [entry["channel_key"] for entry in studio_catalog],
-            ["telegram_bot", "whatsapp_twilio", "discord_bot"],
+            ["web_chat", "email", "telegram_bot", "whatsapp_twilio", "slack", "discord_bot"],
         )
-        self.assertEqual(studio_catalog[0]["stage"], "live")
-        self.assertEqual(studio_catalog[1]["stage"], "live")
-        self.assertEqual(studio_catalog[2]["stage"], "deferred")
+        by_key = {entry["channel_key"]: entry for entry in studio_catalog}
+        self.assertEqual(by_key["web_chat"]["status"], "roadmap")
+        self.assertEqual(by_key["email"]["status"], "partial")
+        self.assertEqual(by_key["telegram_bot"]["status"], "working_when_configured")
+        self.assertEqual(by_key["whatsapp_twilio"]["status"], "out_of_scope")
+        self.assertEqual(by_key["slack"]["status"], "partial")
+        self.assertEqual(by_key["discord_bot"]["status"], "roadmap")
+        self.assertEqual(by_key["telegram_bot"]["launch_allowed"], "true")
+        self.assertTrue(
+            all(
+                entry["launch_allowed"] == "false"
+                for entry in studio_catalog
+                if entry["channel_key"] != "telegram_bot"
+            )
+        )
         self.assertTrue(
             all(entry["runtime_lane"] == service.STUDIO_CONNECTOR_RUNTIME_LANE for entry in studio_catalog)
         )

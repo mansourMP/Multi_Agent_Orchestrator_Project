@@ -5,7 +5,7 @@ import { AgentTransparencyTimeline } from "@/lib/workspace/transparency-timeline
 
 const CHANNELS: ReadonlyArray<{ value: string; label: string; disabled?: boolean }> = [
   { value: "test", label: "Test (No customer send)" },
-  { value: "telegram", label: "Telegram Bot (Working)" },
+  { value: "telegram", label: "Telegram Bot (Simulated test only)" },
   { value: "whatsapp", label: "WhatsApp Business (Roadmap)", disabled: true },
   { value: "web_widget", label: "Web Chat (Roadmap)", disabled: true },
 ] as const;

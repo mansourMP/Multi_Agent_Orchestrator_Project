@@ -270,8 +270,8 @@
 
   Correct Build Order And Current Status
   The architecture direction is still correct, but the source of truth must now reflect implementation progress. Phases
-  0-8 are complete as backend primitives. The next gap is product presentation: users should see connected computers,
-  dedicated computers, and cloud computers clearly without normal flows exposing Gateway/runtime internals.
+  0-9 are complete. The next gap is dedicated-computer setup: a Mac mini/VM/self-hosted machine must be enrollable,
+  bindable, health-checked, killable, revocable, and audited without confusing it with a personal laptop or cloud runtime.
 
   Build order:
   | Phase | Work | Status | Evidence | Gate |
@@ -285,8 +285,8 @@
   | 6 | Approval Decision Orchestrator | Done | 6626a8acf | One shared service returns allow/approval_required/block plus approval-card payload, trace metadata, audit visibility, and remembered-rule status. |
   | 7 | Sage Connected Computer Routing | Done | 1d79a5e51 | Sage write/execute intents route through the orchestrator before approvals are issued; approval cards include risk, capability, target scope, and secret-free decision metadata. |
   | 8 | Studio + Apps Boundary | Done | 35da6e3f0 | Studio Agents, mini-app URL/app surfaces, marketplace/app installs, and raw test-turn payloads cannot request Sage private memory, personal channels, owner files, or connected computers by raw payload. |
-  | 9 | Connected Computers UI | Next | partial | Users see connected computers, dedicated computers, and cloud computers; normal UI does not expose Gateway/runtime internals. |
-  | 10 | Dedicated Computer Setup | Remaining | partial | Mac mini/VM/self-hosted machine enrollment, profile binding, health checks, session readiness, and kill/revoke behavior. |
+  | 9 | Connected Computers UI | Done | 66c4cac80 | Users see connected computers, dedicated computers, and cloud computers; normal UI does not expose Gateway/runtime internals. |
+  | 10 | Dedicated Computer Setup | Next | partial | Mac mini/VM/self-hosted machine enrollment, profile binding, health checks, session readiness, and kill/revoke behavior. |
   | 11 | Voice/Notification Policy | Remaining | defer | Voice messages can request tasks, but voice cannot silently approve risky actions. |
   | 12 | End-to-End Certification | Remaining | needed after all above | Real trace proves policy classification, approval, Gateway/cloud execution, audit, transparency, and kill switch. |
 
@@ -320,13 +320,13 @@
   Do not commit .env values.
 
   Agent Workstation Implementation Plan
-  Resume at Phase 9.
+  Resume at Phase 10.
   | Phase | Work | Files to inspect/add | Tests | Acceptance |
   |---|---|---|---|---|
   | 6 | Approval Decision Orchestrator | done in agent_computer_approval_decision_service.py | allow/ask/block, remembered-scope, kill override, secret-free payloads | One canonical product-level decision exists for connected-computer actions. |
   | 7 | Sage Connected Computer Routing | done in sage_agent_runtime_service.py | Sage risky-intent tests cover decision cards, communication send, terminal command, and redaction | Sage cannot create risky connected-computer approvals without the orchestrator. |
   | 8 | Studio + Apps Boundary | done in studio_app_boundary_service.py, app_bridge_service.py, mini_app_host_service.py, deployed_agent_test_turn_service.py, marketplace_distribution_service.py | crafted bypass tests for Sage memory/files/channels/computers | Studio/customer agents and mini-apps cannot touch owner-private resources by raw payload. |
-  | 9 | Connected Computers UI | inspect Settings, Gateway, Sage connectors panes | frontend typecheck + user-facing string checks | UI explains connected/dedicated/cloud computers without exposing Gateway/runtime jargon in normal flows. |
+  | 9 | Connected Computers UI | done in nav, Settings, Computers, Sage connectors, Studio runtime cards, Chat notices, Activity labels | frontend typecheck + user-facing string checks | UI explains connected/dedicated/cloud computers without exposing Gateway/runtime jargon in normal flows. |
   | 10 | Dedicated setup backend | extend Gateway pairing/profile/session readiness | paired dedicated-machine smoke | Mac mini/VM can be bound, health-checked, killed, revoked, and audited. |
   | 11 | Voice message -> Sage task + notification policy | inspect personal channels/mobile | voice text path and approval notification tests | Voice becomes a normal Sage turn; risky actions still need explicit approval. |
   | 12 | E2E certification | closed-pilot smoke harness | full trace with connected computer action | Trace shows risk, approval, remembered rule if used, execution, audit, transparency, and kill. |
@@ -339,16 +339,16 @@
   - Any production path falls back to in-memory/cloud/local silently.
 
   Exact Next Implementation Recommendation
-  Build Phase 9 now:
+  Build Phase 10 now:
 
-  Connected Computers UI
+  Dedicated Computer Setup
 
-  Backend boundary work is now in place. The next step is to make the product understandable without weakening safety:
-  Settings/Devices, Sage, and Studio should explain connected personal computers, dedicated computers, and cloud
-  computers with truthful readiness states while keeping Gateway/runtime jargon out of normal user flows.
+  The connected-computers UI truth layer is in place. The next step is to make a Mac mini/VM/self-hosted machine a real
+  dedicated Sage workstation: explicit enrollment, profile binding, health/readiness checks, kill/revoke behavior, audit,
+  and no silent fallback to personal or cloud runtime.
 
-  Final verdict: RESUME AT PHASE 9. The backend is ready for the connected-computers UI cleanup; do not start dedicated
-  Mac mini setup or voice before the UI truth layer is in place.
+  Final verdict: RESUME AT PHASE 10. Do not start voice before a dedicated workstation can be enrolled, bound, stopped,
+  revoked, and audited.
 
   Sources used: OpenAI Agents SDK tracing/guardrails docs, Anthropic Computer Use docs, Microsoft Copilot Studio
   activity docs, Google Gemini/Vertex Agent Platform docs, LangSmith observability/masking docs, CrewAI docs, and local

@@ -58,6 +58,14 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
         deployed_agent_cost_cap_service = importlib.import_module(
             "server_modules.deployed_agent_cost_cap_service"
         )
+        self.workspace_patcher = patch(
+            "server_modules.deployed_agent_cost_cap_service.control_plane_repository.get_workspace_by_id",
+            new=AsyncMock(return_value={"workspace_id": "ws-1", "tenant_id": "tenant-1"}),
+        )
+        self.workspace_patcher.start()
+
+    def tearDown(self) -> None:
+        self.workspace_patcher.stop()
 
     async def test_settle_records_80_percent_notification_once(self) -> None:
         deployed_agent = _deployed_agent(metadata={"monthly_cost_cap_usd": 10.0})

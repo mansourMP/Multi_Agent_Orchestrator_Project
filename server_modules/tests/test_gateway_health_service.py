@@ -12,6 +12,14 @@ class GatewayHealthServiceTests(unittest.TestCase):
         global gateway_health_service
         gateway_health_service = importlib.import_module("server_modules.gateway_health_service")
         gateway_health_service._PROVIDER_PROBE_CACHE.clear()
+        self.sweep_patcher = patch(
+            "server_modules.gateway_health_service.gateway_state_repository.sweep_stale_gateway_sessions",
+            return_value=0,
+        )
+        self.sweep_patcher.start()
+
+    def tearDown(self) -> None:
+        self.sweep_patcher.stop()
 
     def test_gateway_doctor_payload_includes_specialist_provider_and_quota_facets(self) -> None:
         registration = {

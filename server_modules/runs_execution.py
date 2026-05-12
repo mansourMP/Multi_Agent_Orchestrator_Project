@@ -146,6 +146,7 @@ def _execute_workflow_child_run_request(request: Any) -> Dict[str, Any]:
         request,
         execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,
         build_run_execution_services_fn=_workflow_child_run_execution_services,
+        create_run_from_request_fn=_runs_delegation._create_run_from_request,
     )
 
 

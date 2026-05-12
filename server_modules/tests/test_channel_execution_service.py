@@ -54,7 +54,20 @@ def _context(
         master_install_id="install-1",
         shared_metadata={"request_id": "req-1"},
         turn_request={"message": message},
-        execution_owner={"user_id": "owner-1", "role": "owner", "is_admin": True},
+        execution_owner={
+            "user_id": "owner-1",
+            "role": "owner",
+            "is_admin": True,
+            "workspace_roles": {"ws-1": "owner"},
+            "workspace_access": {
+                "ws-1": {
+                    "workspace_id": "ws-1",
+                    "tenant_id": "tenant-1",
+                    "role": "owner",
+                    "tenant_role": "owner",
+                }
+            },
+        },
         connector_id=connector_id,
         deployed_agent=deployed_agent,
         deployed_agent_id="dagent-shop" if deployed_agent else None,
@@ -106,15 +119,13 @@ async def test_shop_assistant_channel_turn_uses_revenue_evaluator_with_connector
     assert result.reply == "Nike Air Max 90 is 8 in stock."
     assert result.metadata["response_class"] == "shop_assistant"
     assert result.payload["intent"] == "catalog_lookup"
-    assert calls == [
-        {
-            "deployed_agent_id": "dagent-shop",
-            "current_user": {"user_id": "owner-1", "role": "owner", "is_admin": True},
-            "owner_workspace_id": "ws-1",
-            "customer_message": "Do you have Nike Air Max 90?",
-            "connector_id": "gsheet-products-1",
-        }
-    ]
+    assert len(calls) == 1
+    assert calls[0]["deployed_agent_id"] == "dagent-shop"
+    assert calls[0]["current_user"]["user_id"] == "owner-1"
+    assert calls[0]["current_user"]["workspace_access"]["ws-1"]["tenant_id"] == "tenant-1"
+    assert calls[0]["owner_workspace_id"] == "ws-1"
+    assert calls[0]["customer_message"] == "Do you have Nike Air Max 90?"
+    assert calls[0]["connector_id"] == "gsheet-products-1"
 
 
 @pytest.mark.anyio

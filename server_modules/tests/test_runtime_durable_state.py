@@ -126,7 +126,7 @@ class RuntimeDurableStateTests(unittest.TestCase):
         self.assertEqual(len(live_runs), 1)
         self.assertEqual(live_runs[0]["run_id"], run_id)
         self.assertEqual(live_runs[0]["status"], "queued_local")
-        self.assertEqual(live_runs[0]["_durable_version"], 2)
+        self.assertEqual(live_runs[0]["_durable_version"], 3)
 
         local_state = load_local_runtime_state(self.db_path)
         self.assertEqual(local_state["pending_run_ids"], [run_id])
@@ -245,7 +245,7 @@ class RuntimeDurableStateTests(unittest.TestCase):
         )
 
         self.assertEqual(self.live_run_store[run_id]["status"], "queued_local")
-        self.assertEqual(self.live_run_store[run_id]["_durable_version"], 2)
+        self.assertEqual(self.live_run_store[run_id]["_durable_version"], 3)
 
     def test_post_insert_activation_failure_leaves_durable_row_registered(self):
         with self.assertRaises(RuntimeError):

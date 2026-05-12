@@ -179,17 +179,23 @@ def _ensure_advanced_features_access(workspace_id: str) -> None:
         workspace_id=workspace_token,
     )
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
-    if str(payload.get("source") or "").strip().lower() == "default":
-        return
-    billing_summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_token)
-    subscription = billing_summary.get("subscription") if isinstance(billing_summary, dict) and isinstance(billing_summary.get("subscription"), dict) else {}
-    billing_metadata = subscription.get("metadata") if isinstance(subscription.get("metadata"), dict) else {}
-    if (
-        str(billing_metadata.get("source") or "").strip().lower() == "workspace_default"
-        and str(payload.get("source") or "").strip().lower() in {"default", "workspace_billing"}
-    ):
+    payload_source = str(payload.get("source") or "").strip().lower()
+    if payload_source == "default":
         return
     if not bool(capabilities.get("advanced_features_enabled")):
+        if payload_source == "workspace_billing":
+            try:
+                billing_summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_token)
+            except HTTPException:
+                billing_summary = {}
+            subscription = (
+                billing_summary.get("subscription")
+                if isinstance(billing_summary, dict) and isinstance(billing_summary.get("subscription"), dict)
+                else {}
+            )
+            billing_metadata = subscription.get("metadata") if isinstance(subscription.get("metadata"), dict) else {}
+            if str(billing_metadata.get("source") or "").strip().lower() == "workspace_default":
+                return
         raise HTTPException(
             status_code=403,
             detail="Advanced runtime controls are not included in this workspace plan.",

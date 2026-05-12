@@ -262,11 +262,18 @@ def projected_context_files(profile: Dict[str, Any]) -> Dict[str, str]:
 
 def sync_profile_context_files(*, workspace_id: str, profile: Dict[str, Any]) -> Dict[str, str]:
     projections = projected_context_files(profile)
+    empty_profile_projections = projected_context_files(_default_state()["profile"])
     existing_files = workspace_context.read_workspace_context_files(workspace_id=workspace_id)
     for filename, content in projections.items():
         existing_content = str(existing_files.get(filename) or "")
         default_content = str(workspace_context.DEFAULT_CONTEXT_FILE_CONTENTS.get(filename) or "")
-        if existing_content.strip() and existing_content.strip() != default_content.strip():
+        empty_projection_content = str(empty_profile_projections.get(filename) or "")
+        is_replaceable_projection = existing_content.strip() in {
+            "",
+            default_content.strip(),
+            empty_projection_content.strip(),
+        }
+        if not is_replaceable_projection:
             continue
         workspace_context.write_workspace_context_file(
             filename,

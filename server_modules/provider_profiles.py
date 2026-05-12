@@ -342,6 +342,14 @@ def _resolve_hosted_provider_api_key(
         actor_type="provider_profile",
         purpose=purpose,
     )
+    if provider_id == "ollama_cloud" and not str(resolution.value or "").strip():
+        env_key = str(
+            os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_API_KEY")
+            or os.getenv("OLLAMA_API_KEY")
+            or ""
+        ).strip()
+        if env_key:
+            return env_key, "env-ollama_cloud"
     source = f"env-{provider_id}"
     if provider_id in {"qwen", "deepseek", "mistral", "ollama_cloud"} and str(resolution.source or "").startswith("bundle-"):
         source = f"env-{provider_id}"

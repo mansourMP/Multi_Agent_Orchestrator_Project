@@ -802,7 +802,7 @@ class GoldenPathSmokeTests(unittest.TestCase):
             stack.enter_context(
                 patch(
                     "server_modules.runtime_runs_api.entitlements_service.workspace_entitlement_payload_for_workspace_id",
-                    return_value={"capabilities": {"approvals_enabled": True}},
+                    return_value={"capabilities": {"approvals_enabled": True, "history_window_days": 365}},
                 )
             )
             stack.enter_context(

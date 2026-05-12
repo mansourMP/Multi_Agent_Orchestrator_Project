@@ -144,7 +144,7 @@ class NotificationServiceTests(unittest.TestCase):
                 return_value="tenant-1",
             ), patch(
                 "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
-                return_value={"capabilities": {"history_window_days": 30}},
+                return_value={"capabilities": {"history_window_days": 90}},
             ):
                 payload = notification_service.list_notification_payload(
                     current_user=_current_user(workspace_id="workspace-1", tenant_id="tenant-1"),
@@ -198,7 +198,7 @@ class NotificationServiceTests(unittest.TestCase):
                 return_value=tenant_id,
             ), patch(
                 "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
-                return_value={"capabilities": {"history_window_days": 30}},
+                return_value={"capabilities": {"history_window_days": 90}},
             ):
                 before = notification_service.list_notification_payload(
                     current_user=current_user,
@@ -229,7 +229,7 @@ class NotificationServiceTests(unittest.TestCase):
                 return_value=tenant_id,
             ), patch(
                 "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
-                return_value={"capabilities": {"history_window_days": 30}},
+                return_value={"capabilities": {"history_window_days": 90}},
             ):
                 after = notification_service.list_notification_payload(
                     current_user=current_user,
@@ -366,7 +366,7 @@ class NotificationServiceTests(unittest.TestCase):
                 return_value="tenant-1",
             ), patch(
                 "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
-                return_value={"capabilities": {"history_window_days": 30}},
+                return_value={"capabilities": {"history_window_days": 90}},
             ):
                 payload = notification_service.list_notification_payload(
                     current_user=current_user,

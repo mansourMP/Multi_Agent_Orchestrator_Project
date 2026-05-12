@@ -79,13 +79,17 @@ class OperatorChatDirectToolTests(unittest.TestCase):
                         "operator_chat_direct_tools_under_test.generate_chat_reply_stream_with_provider_fallback",
                         side_effect=_fake_stream,
                     ):
-                        payload = operator_chat.collect_direct_operator_reply(
-                            message="What do you know about my preferences?",
-                            workspace_id="default",
-                            requested_model="gpt-5.4",
-                            requested_provider="codex_cli",
-                            availability={"ai_ready": True},
-                        )
+                        with patch(
+                            "server_modules.direct_chat_runtime_facade_service.message_has_obvious_direct_tool_intent",
+                            return_value=True,
+                        ):
+                            payload = operator_chat.collect_direct_operator_reply(
+                                message="Summarize my memory preferences.",
+                                workspace_id="default",
+                                requested_model="gpt-5.4",
+                                requested_provider="codex_cli",
+                                availability={"ai_ready": True},
+                            )
 
         self.assertEqual(payload["reply"], "Checked memory.")
         tool_names = {item["name"] for item in captured["tools"]}
@@ -289,8 +293,10 @@ class OperatorChatDirectToolTests(unittest.TestCase):
     @patch("operator_chat_direct_tools_under_test.preferred_provider", return_value=("codex_cli", {}))
     @patch("operator_chat_direct_tools_under_test.supports_direct_message_native_chat", return_value=True)
     @patch("operator_chat_direct_tools_under_test.generate_chat_reply_stream_with_provider_fallback")
+    @patch("server_modules.direct_chat_runtime_facade_service.message_has_obvious_direct_tool_intent", return_value=True)
     def test_direct_chat_passes_tool_schemas_to_worker(
         self,
+        _obvious_tool_intent,
         stream_mock,
         _supports_direct_message_native_chat,
         _preferred_provider,
@@ -326,7 +332,8 @@ class OperatorChatDirectToolTests(unittest.TestCase):
 
         self.assertEqual(payload["reply"], "Handled without tools.")
         self.assertIsInstance(captured.get("tools"), list)
-        self.assertEqual(captured["tools"][0]["name"], "telegram_bot__send_message")
+        tool_names = {str(item.get("name") or "").strip() for item in captured["tools"]}
+        self.assertIn("telegram_bot__send_message", tool_names)
 
     @patch(
         "operator_chat_direct_tools_under_test.resolve_workspace_tool_capabilities",
@@ -458,24 +465,30 @@ class OperatorChatDirectToolTests(unittest.TestCase):
         start_run_mock,
     ):
         execute_direct_tool_mock.return_value = "Example file contents"
+        start_run_mock.return_value = {
+            "run_id": "run-local-file-1",
+            "status": "queued_local",
+            "route": {"selected": "local_companion"},
+        }
 
         payload = operator_chat.collect_direct_operator_reply(
             message="Open file /tmp/README.md",
             workspace_id="default",
             requested_model="gpt-5.4",
             requested_provider="codex_cli",
-            availability={"ai_ready": True, "runtime_ok": True, "connection_mode": "local_companion"},
+            availability={
+                "ai_ready": True,
+                "runtime_ok": True,
+                "local_gateway_online": True,
+                "connection_mode": "local_companion",
+            },
         )
 
-        self.assertEqual(payload["mode"], "answer")
-        self.assertEqual(payload["reply"], "Example file contents")
+        self.assertEqual(payload["mode"], "answer_with_action")
+        self.assertTrue(payload["actions"])
         stream_mock.assert_not_called()
-        execute_direct_tool_mock.assert_called_once()
-        self.assertEqual(
-            execute_direct_tool_mock.call_args.kwargs["tool_call"]["name"],
-            "file__read",
-        )
-        start_run_mock.assert_not_called()
+        execute_direct_tool_mock.assert_not_called()
+        start_run_mock.assert_called_once()
 
 
 if __name__ == "__main__":

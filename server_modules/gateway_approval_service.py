@@ -155,17 +155,26 @@ async def resolve_gateway_tool_approval(
         raise ValueError("Gateway approval decision must be approved or rejected.")
 
     current_status = str(approval.get("status") or "").strip().lower()
-    # Fast path: already in a terminal state
+    # Fast path: already in a terminal state. An approved record with a retry
+    # count is intentionally not terminal: it represents an approval whose
+    # execution failed after approval and can be retried by the owner.
     if current_status == "executed":
         return {"status": "executed", "approval": approval, "execution": approval.get("result_payload") or {}}
-    if current_status in ("approved", "rejected"):
+    if current_status == "rejected":
+        return {"status": current_status, "approval": approval}
+    retrying_approved_execution = (
+        current_status == "approved"
+        and normalized_decision == "approved"
+        and int(approval.get("retry_count") or 0) > 0
+    )
+    if current_status == "approved" and not retrying_approved_execution:
         return {"status": current_status, "approval": approval}
 
     gateway_id = str(registration.get("gateway_id") or "").strip()
     resolved_actor = str(actor or "").strip() or "user"
 
     # --- TTL enforcement ---
-    if _approval_expired(approval, approval_ttl_seconds):
+    if not retrying_approved_execution and _approval_expired(approval, approval_ttl_seconds):
         expired_resolved = gateway_state_repository.resolve_gateway_action_approval_atomic(
             approval_id=approval_id,
             gateway_id=gateway_id,
@@ -193,24 +202,27 @@ async def resolve_gateway_tool_approval(
             "approval": expired_resolved or approval,
         }
 
-    # --- Atomic resolution: first writer wins ---
-    resolved = gateway_state_repository.resolve_gateway_action_approval_atomic(
-        approval_id=approval_id,
-        gateway_id=gateway_id,
-        decision=normalized_decision,
-        actor=resolved_actor,
-        note=note,
-    )
+    if retrying_approved_execution:
+        resolved = approval
+    else:
+        # --- Atomic resolution: first writer wins ---
+        resolved = gateway_state_repository.resolve_gateway_action_approval_atomic(
+            approval_id=approval_id,
+            gateway_id=gateway_id,
+            decision=normalized_decision,
+            actor=resolved_actor,
+            note=note,
+        )
 
-    if resolved is None:
-        # Lost the race — another caller already resolved this approval
-        current = gateway_state_repository.get_gateway_action_approval(approval_id) or approval
-        current_status = str(current.get("status") or "").strip().lower()
-        if current_status == "executed":
-            return {"status": "executed", "approval": current, "execution": current.get("result_payload") or {}}
-        return {"status": current_status, "approval": current}
+        if resolved is None:
+            # Lost the race — another caller already resolved this approval
+            current = gateway_state_repository.get_gateway_action_approval(approval_id) or approval
+            current_status = str(current.get("status") or "").strip().lower()
+            if current_status == "executed":
+                return {"status": "executed", "approval": current, "execution": current.get("result_payload") or {}}
+            return {"status": current_status, "approval": current}
 
-    # --- We won the atomic write ---
+        # --- We won the atomic write ---
 
     if normalized_decision == "rejected":
         gateway_state_repository.record_gateway_event(
@@ -230,20 +242,21 @@ async def resolve_gateway_tool_approval(
         return {"status": "rejected", "approval": resolved}
 
     # --- Approval won — emit side effects and execute ---
-    gateway_state_repository.record_gateway_event(
-        gateway_id=gateway_id,
-        session_id=None,
-        direction="system",
-        frame_kind="event",
-        message_type="gateway.approval.approved",
-        payload={"approval": resolved},
-    )
-    await gateway_activity_service.emit_gateway_approval_resolved(
-        registration,
-        _redact_approval_for_log(resolved),
-        decision="approved",
-        note=note,
-    )
+    if not retrying_approved_execution:
+        gateway_state_repository.record_gateway_event(
+            gateway_id=gateway_id,
+            session_id=None,
+            direction="system",
+            frame_kind="event",
+            message_type="gateway.approval.approved",
+            payload={"approval": resolved},
+        )
+        await gateway_activity_service.emit_gateway_approval_resolved(
+            registration,
+            _redact_approval_for_log(resolved),
+            decision="approved",
+            note=note,
+        )
 
     request_payload = dict(resolved.get("request_payload") or {})
     try:

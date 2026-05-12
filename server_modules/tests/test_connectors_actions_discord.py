@@ -122,7 +122,13 @@ class DiscordWebhookCanonicalizationTests(unittest.IsolatedAsyncioTestCase):
         signing_key = SigningKey.generate()
         body = _body_bytes({"id": "evt-2"})
         request = _request_from_body(body, headers=_signed_headers(body, signing_key))
-        connector_row = {"id": "cred-discord", "provider": "discord_bot", "workspace_id": "default", "metadata": {}}
+        connector_row = {
+            "id": "cred-discord",
+            "provider": "discord_bot",
+            "workspace_id": "default",
+            "tenant_id": "default",
+            "metadata": {},
+        }
 
         with (
             patch.dict(os.environ, {"DISCORD_APP_PUBLIC_KEY": ""}),
@@ -149,7 +155,13 @@ class DiscordWebhookCanonicalizationTests(unittest.IsolatedAsyncioTestCase):
         signing_key = SigningKey.generate()
         body = _body_bytes({"id": "evt-1"})
         request = _request_from_body(body, headers=_signed_headers(body, signing_key))
-        connector_row = {"id": "cred-discord", "provider": "discord_bot", "workspace_id": "default", "metadata": {}}
+        connector_row = {
+            "id": "cred-discord",
+            "provider": "discord_bot",
+            "workspace_id": "default",
+            "tenant_id": "default",
+            "metadata": {},
+        }
         route_message = AsyncMock(return_value={"ok": True, "triggered": True, "run_id": "run-123", "reply": "Working on it."})
 
         with (

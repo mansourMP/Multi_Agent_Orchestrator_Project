@@ -10,11 +10,11 @@
   "mobile_first": {
     "daily_use_default": true,
     "bottom_tabs": [
-      "Home",
       "Chat",
-      "Applications",
-      "Notifications",
-      "Profile"
+      "Build",
+      "Discover",
+      "Activity",
+      "Settings"
     ],
     "primary_responsibilities": [
       "chat",

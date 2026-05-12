@@ -101,11 +101,14 @@ class RunsExecutionRunServiceTests(unittest.TestCase):
             "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
         }
 
-        with patch.object(
-            runs_execution.run_service,
-            "execute_workflow_local_tool",
-            return_value={"summary": "Local tool finished", "result_data": {"local_child_run_id": "child-1"}},
-        ) as helper_mock:
+        with (
+            patch.object(runs_execution, "wait_for_human_decision", return_value=True),
+            patch.object(
+                runs_execution.run_service,
+                "execute_workflow_local_tool",
+                return_value={"summary": "Local tool finished", "result_data": {"local_child_run_id": "child-1"}},
+            ) as helper_mock,
+        ):
             result = runs_execution._execute_workflow_graph(
                 "run-tool-delegate",
                 {"workflow_id": "wf-tool", "user_goal": "Write file", "metadata": {}},

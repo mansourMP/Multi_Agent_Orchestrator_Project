@@ -369,6 +369,7 @@ def auto_delegate_run_children(
                 delegated_req,
                 stamp_request_owner_fn=stamp_request_owner_fn,
                 services=run_execution_services(),
+                current_user=current_user,
             )
         except Exception as exc:
             if trace_context is not None:

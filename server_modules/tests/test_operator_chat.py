@@ -193,7 +193,10 @@ def stream_direct_operator_reply(**kwargs):
 
 class OperatorChatTests(unittest.TestCase):
     def assertIntervention(self, payload, kind: str, *, title: str | None = None, detail_contains: str | None = None) -> dict:
-        self.assertEqual(payload["reply"], "")
+        if kind == "system_error":
+            self.assertTrue(str(payload.get("reply") or "").strip())
+        else:
+            self.assertEqual(payload["reply"], "")
         interventions = payload.get("interventions")
         self.assertTrue(interventions)
         intervention = interventions[0]
@@ -263,8 +266,12 @@ class OperatorChatTests(unittest.TestCase):
         "operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback",
         side_effect=AssertionError("generation path should not run for obvious direct tool prompts"),
     )
+    @patch("operator_chat_under_test.supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_under_test.provider_has_key", return_value=False)
     def test_obvious_direct_tool_prompt_bypasses_generation(
         self,
+        _provider_has_key,
+        _supports_direct_message_native_chat,
         _generate_chat_reply_stream_with_provider_fallback,
         _execute_single_direct_tool_call,
         _capabilities,
@@ -522,8 +529,8 @@ class OperatorChatTests(unittest.TestCase):
         self.assertIntervention(
             payload,
             "connect_required",
-            title="Hosted Sage AI is blocked",
-            detail_contains="Hosted Sage AI is disabled",
+            title="OpenAI is not available",
+            detail_contains="OpenAI",
         )
         self.assertFalse(payload["context_used"]["provider_overridden"])
         self.assertFalse(payload["context_used"]["fallback_used"])
@@ -549,8 +556,8 @@ class OperatorChatTests(unittest.TestCase):
         self.assertIntervention(
             payload,
             "connect_required",
-            title="Hosted Sage AI is blocked",
-            detail_contains="Hosted Sage AI is disabled",
+            title="OpenAI is not available",
+            detail_contains="OpenAI",
         )
         self.assertIsNone(payload["context_used"]["effective_provider"])
         self.assertFalse(payload["context_used"]["provider_overridden"])
@@ -640,12 +647,8 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIntervention(
-            payload,
-            "system_error",
-            title="Chat execution failed",
-            detail_contains="direct_chat_transport_unavailable: codex_cli_backend_unavailable",
-        )
+        self.assertIn("temporary error", payload["reply"])
+        self.assertEqual(payload.get("interventions") or [], [])
 
     @patch(
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
@@ -674,9 +677,10 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["reply"], "I can access Google Workspace here.")
+        self.assertIn("what I can actually do", payload["reply"])
+        self.assertIn("Google Workspace", payload["reply"])
         self.assertEqual(payload["mode"], "answer")
-        generate_reply.assert_called_once()
+        generate_reply.assert_not_called()
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
     @patch(
@@ -716,14 +720,14 @@ class OperatorChatTests(unittest.TestCase):
         self.assertIntervention(
             capability_payload,
             "connect_required",
-            title="Hosted Sage AI is blocked",
-            detail_contains="Hosted Sage AI is disabled",
+            title="OpenAI is not available",
+            detail_contains="OpenAI",
         )
         self.assertIntervention(
             plain_payload,
             "connect_required",
-            title="Hosted Sage AI is blocked",
-            detail_contains="Hosted Sage AI is disabled",
+            title="OpenAI is not available",
+            detail_contains="OpenAI",
         )
         generate_reply.assert_not_called()
 
@@ -828,12 +832,8 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIntervention(
-            payload,
-            "system_error",
-            title="Chat execution failed",
-            detail_contains="temporary backend error",
-        )
+        self.assertIn("temporary error", payload["reply"])
+        self.assertEqual(payload.get("interventions") or [], [])
 
     @patch("operator_chat_under_test.direct_chat_run_snapshot")
     @patch("operator_chat_under_test.start_direct_chat_run_handoff")
@@ -940,7 +940,12 @@ class OperatorChatTests(unittest.TestCase):
                 workspace_id="default",
                 requested_model="gpt-5.4",
                 requested_provider="codex_cli",
-                availability={"ai_ready": True, "runtime_ok": True, "connection_mode": "local_companion"},
+                availability={
+                    "ai_ready": True,
+                    "runtime_ok": True,
+                    "local_gateway_online": True,
+                    "connection_mode": "local_companion",
+                },
             )
         )
 

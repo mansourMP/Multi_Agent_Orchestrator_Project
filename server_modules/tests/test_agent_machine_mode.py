@@ -374,17 +374,18 @@ class AgentMachineModeTests(unittest.TestCase):
                         with patch("server_modules.turn_ingress_service.start_system_run_start", side_effect=_fake_execute_system_run_start_request):
                             with patch("server_modules.connectors.autopilot_runtime_exports._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
                                 with patch("server_modules.connectors.autopilot_runtime_exports._run_execution_services", side_effect=lambda: object(), create=True):
-                                    autopilot_connectors._autopilot_run_entry_service().create_telegram_run(
-                                        goal="Investigate this issue",
-                                        workspace_id="default",
-                                        connector_id="cred-telegram",
-                                        chat_id="123",
-                                        sender_id="456",
-                                        update_id=1,
-                                        media_max_items=autopilot_connectors.ORION_TELEGRAM_MEDIA_MAX_ITEMS,
-                                        trust_mode_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
-                                        execution_target_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
-                                    )
+                                    with patch("server_modules.connectors.telegram_autopilot_state_service.TelegramAutopilotStateService.persist_state", return_value=None):
+                                        autopilot_connectors._autopilot_run_entry_service().create_telegram_run(
+                                            goal="Investigate this issue",
+                                            workspace_id="default",
+                                            connector_id="cred-telegram",
+                                            chat_id="123",
+                                            sender_id="456",
+                                            update_id=1,
+                                            media_max_items=autopilot_connectors.ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+                                            trust_mode_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
+                                            execution_target_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
+                                        )
 
         self.assertEqual(captured["request"].metadata["owner_user_id"], "user-123")
 
@@ -404,17 +405,18 @@ class AgentMachineModeTests(unittest.TestCase):
                         with patch("server_modules.turn_ingress_service.start_system_run_start", side_effect=_fake_execute_system_run_start_request):
                             with patch("server_modules.connectors.autopilot_runtime_exports._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
                                 with patch("server_modules.connectors.autopilot_runtime_exports._run_execution_services", side_effect=lambda: object(), create=True):
-                                    autopilot_connectors._autopilot_run_entry_service().create_whatsapp_run(
-                                        goal="Handle this request",
-                                        workspace_id="default",
-                                        connector_id="cred-whatsapp",
-                                        from_number="whatsapp:+15551230000",
-                                        to_number="whatsapp:+15559870000",
-                                        message_sid="SM123",
-                                        account_sid="AC123",
-                                        trust_mode_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
-                                        execution_target_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
-                                    )
+                                    with patch("server_modules.connectors.whatsapp_autopilot_state_service.WhatsAppAutopilotStateService.persist_state", return_value=None):
+                                        autopilot_connectors._autopilot_run_entry_service().create_whatsapp_run(
+                                            goal="Handle this request",
+                                            workspace_id="default",
+                                            connector_id="cred-whatsapp",
+                                            from_number="whatsapp:+15551230000",
+                                            to_number="whatsapp:+15559870000",
+                                            message_sid="SM123",
+                                            account_sid="AC123",
+                                            trust_mode_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
+                                            execution_target_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
+                                        )
 
         self.assertEqual(captured["request"].metadata["owner_user_id"], "user-123")
 

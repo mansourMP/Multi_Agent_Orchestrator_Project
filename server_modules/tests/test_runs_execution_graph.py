@@ -1592,7 +1592,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
     @patch("server_modules.runs_execution.wait_for_human_response")
     @patch("server_modules.run_service.wait_for_workflow_child_run")
-    @patch("server_modules.runs_delegation._create_run_from_request")
+    @patch("server_modules.runs_execution._execute_workflow_child_run_request")
     def test_launch_gate_subflow_review_workflow(self, create_child_mock, wait_child_mock, human_mock):
         create_child_mock.return_value = {"run_id": "child-1", "route": {"selected": "cloud"}}
         wait_child_mock.return_value = {
@@ -1642,8 +1642,9 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertIn("Final handoff", result["result_text"])
         self.assertIn("Please publish after legal review", result["result_text"])
 
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
     @patch("server_modules.runs_execution.run_service.execute_workflow_local_tool")
-    def test_execute_workflow_graph_runs_local_tool_variant(self, local_tool_mock):
+    def test_execute_workflow_graph_runs_local_tool_variant(self, local_tool_mock, _wait_for_human_decision):
         local_tool_mock.return_value = {
             "summary": "Local tool node completed: Write file.",
             "result_data": {"local_child_run_id": "child-local-1"},
@@ -1830,7 +1831,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
         approval_mock.assert_called_once()
         self.assertIn("Browser automation completed", result["result_text"])
 
-    @patch("server_modules.runs_delegation._create_run_from_request")
+    @patch("server_modules.runs_execution._execute_workflow_child_run_request")
     def test_execute_workflow_graph_waits_for_subflow_completion(self, create_child_run_mock):
         create_child_run_mock.return_value = {
             "run_id": "child-run-1",
@@ -1871,7 +1872,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertEqual(result["result_text"], "Child workflow finished.")
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "subflow_1")
 
-    @patch("server_modules.runs_delegation._create_run_from_request")
+    @patch("server_modules.runs_execution._execute_workflow_child_run_request")
     def test_execute_workflow_graph_waits_for_local_companion_subflow_completion(self, create_child_run_mock):
         create_child_run_mock.return_value = {
             "run_id": "child-run-local-1",
@@ -1918,7 +1919,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertEqual(request.metadata["execution_target"], "local_companion")
 
     @patch("server_modules.run_service.wait_for_workflow_child_run")
-    @patch("server_modules.runs_delegation._create_run_from_request")
+    @patch("server_modules.runs_execution._execute_workflow_child_run_request")
     def test_execute_workflow_graph_waits_for_subflow_human_input_and_resumes(self, create_child_run_mock, wait_child_mock):
         create_child_run_mock.return_value = {
             "run_id": "child-run-wait",

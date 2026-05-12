@@ -124,8 +124,9 @@ class RunsCoreConnectorIntentBindingTests(unittest.TestCase):
         )
 
         self.assertEqual(precheck.get("tool_ids"), ["draft_email"])
-        self.assertEqual(precheck.get("allowed"), ["draft_email"])
-        self.assertEqual(precheck.get("require_confirmation"), [])
+        self.assertEqual(precheck.get("allowed"), [])
+        self.assertEqual(precheck.get("require_confirmation"), ["draft_email"])
+        self.assertEqual(precheck.get("approval_required"), ["draft_email"])
 
     @patch(
         "server_modules.runs_core.list_vault_connectors",

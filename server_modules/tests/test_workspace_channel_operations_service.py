@@ -255,6 +255,11 @@ async def test_build_workspace_channel_operations_filters_runtime_state_by_works
         dead_letter_file,
     )
     monkeypatch.setattr(
+        workspace_channel_operations_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id: [],
+    )
+    monkeypatch.setattr(
         workspace_channel_operations_service.gateway_state_repository,
         "list_workspace_gateway_registrations",
         lambda workspace_id, include_revoked=False: [

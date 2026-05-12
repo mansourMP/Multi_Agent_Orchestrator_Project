@@ -116,7 +116,12 @@ class ProviderProfilesTests(unittest.TestCase):
         self.assertTrue(models["gpt-oss:20b"]["supports_tools"])
 
     def test_runtime_truth_marks_ollama_cloud_env_as_platform_runtime(self) -> None:
-        with patch.dict(os.environ, {"OLLAMA_API_KEY": "ollama-cloud-test"}, clear=False):
+        provider_profiles._init()
+        with patch.dict(os.environ, {"OLLAMA_API_KEY": "ollama-cloud-test"}, clear=False), patch.object(
+            provider_profiles._server,
+            "PROVIDER_PROFILES",
+            {},
+        ), patch("server_modules.provider_profiles._default_vault_credential_present", return_value=False):
             payload = provider_profiles.build_provider_runtime_truth("default")
 
         ollama_cloud = next(item for item in payload["providers"] if item["id"] == "ollama_cloud")

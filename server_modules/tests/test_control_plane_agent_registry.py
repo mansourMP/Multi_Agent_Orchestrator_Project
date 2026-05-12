@@ -184,9 +184,11 @@ class ControlPlaneInstallIsolationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         query = connection.fetch.await_args.args[0]
-        self.assertIn("active_agent_install_id = $2", query)
+        self.assertIn("active_agent_install_id = $4", query)
         self.assertEqual(connection.fetch.await_args.args[1], "thread-1")
-        self.assertEqual(connection.fetch.await_args.args[2], "install-specialist")
+        self.assertEqual(connection.fetch.await_args.args[2], "tenant-1")
+        self.assertEqual(connection.fetch.await_args.args[3], "workspace-1")
+        self.assertEqual(connection.fetch.await_args.args[4], "install-specialist")
 
     async def test_list_security_control_states_can_filter_active_scope_rows(self):
         connection = AsyncMock()

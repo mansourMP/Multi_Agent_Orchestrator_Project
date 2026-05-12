@@ -296,6 +296,7 @@ def _control_command_block_result(
     sender_role: Optional[str],
     duplicate: bool,
     no_reply_prefix: str,
+    trace_id: str = "",
 ) -> Optional[Dict[str, Any]]:
     command_check = channel_blocking_policy_service.check_personal_channel_control_command(
         text=text,
@@ -671,6 +672,7 @@ async def _handle_whatsapp_gateway_channel_inbound(
         sender_role=_sender_role_from_message(message),
         duplicate=not created,
         no_reply_prefix=WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX,
+        trace_id=trace_id,
     )
     if blocked_result is not None:
         return blocked_result
@@ -745,6 +747,7 @@ async def _handle_telegram_gateway_channel_inbound(
         sender_role=_sender_role_from_message(message),
         duplicate=not created,
         no_reply_prefix=TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX,
+        trace_id=trace_id,
     )
     if blocked_result is not None:
         return blocked_result

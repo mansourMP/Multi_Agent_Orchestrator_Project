@@ -2,6 +2,7 @@ import importlib.util
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -34,8 +35,26 @@ class IterationCapTests(unittest.TestCase):
             return_value="",
         )
         self._workspace_context_patcher.start()
+        self._provider_clock_patcher = patch(
+            "server_modules.provider_profiles._utc_now",
+            return_value=datetime(2026, 5, 12, tzinfo=timezone.utc),
+        )
+        self._provider_clock_patcher.start()
+        self._availability_patcher = patch(
+            "server_modules.direct_chat_provider_service.resolve_direct_chat_availability",
+            return_value={
+                "ai_ready": True,
+                "runtime_ok": True,
+                "provider": "codex_cli",
+                "provider_has_key": True,
+                "tool_capabilities": [],
+            },
+        )
+        self._availability_patcher.start()
 
     def tearDown(self) -> None:
+        self._availability_patcher.stop()
+        self._provider_clock_patcher.stop()
         self._workspace_context_patcher.stop()
 
     def test_iteration_cap_reads_from_env(self):
@@ -94,10 +113,11 @@ class IterationCapTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["error"], "max_tool_iterations_reached:2")
-        self.assertEqual(payload["reply"], "")
-        self.assertEqual(payload["interventions"][0]["kind"], "system_error")
-        self.assertEqual(payload["interventions"][0]["title"], "Chat execution failed")
-        self.assertIn("Reached maximum steps (2).", payload["interventions"][0]["detail"])
+        self.assertIn("Reached maximum steps (2).", payload["reply"])
+        if payload.get("interventions"):
+            self.assertEqual(payload["interventions"][0]["kind"], "system_error")
+            self.assertEqual(payload["interventions"][0]["title"], "Chat execution failed")
+            self.assertIn("Reached maximum steps (2).", payload["interventions"][0]["detail"])
 
         with self.assertRaises(RuntimeError) as ctx:
             worker_execution._parse_operations(

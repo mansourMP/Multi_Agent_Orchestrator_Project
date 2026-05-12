@@ -43,7 +43,7 @@ class RuntimeEventsApiTests(unittest.TestCase):
                 db_path,
                 {
                     "id": "evt-1",
-                    "ts": "2026-04-08T00:00:00Z",
+                    "ts": "2026-05-12T00:00:00Z",
                     "tenant_id": "default",
                     "workspace_id": "default",
                     "channel": "runtime",
@@ -107,6 +107,9 @@ class RuntimeEventsApiTests(unittest.TestCase):
                 with patch(
                     "server_modules.notification_service.activity_ledger_service.list_notification_feed_items_sync",
                     return_value=[],
+                ), patch(
+                    "server_modules.notification_service.billing_service.workspace_billing_summary_for_workspace_id",
+                    return_value={"subscription": {"metadata": {"source": "workspace_default"}}},
                 ):
                     payload = self._run_async(
                         app.routes[("GET", "/notifications")](

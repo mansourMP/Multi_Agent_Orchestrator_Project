@@ -214,12 +214,12 @@ def test_frontend_map_keeps_dumb_ui_and_contract_shared_surfaces() -> None:
     text = _read(FRONTEND_MAP_DOC)
 
     assert "This is a strict dumb-UI strategy." in text
-    assert "Mobile stays the daily-use surface with the fixed tab contract:" in text
-    assert "- Home" in text
+    assert "Mobile stays the daily-use surface with the current mounted Expo tab contract:" in text
     assert "- Chat" in text
-    assert "- Applications" in text
-    assert "- Notifications" in text
-    assert "- Profile" in text
+    assert "- Build" in text
+    assert "- Discover" in text
+    assert "- Activity" in text
+    assert "- Settings" in text
     assert "### Channel Shells" in text
     assert "- Telegram" in text
     assert "- WhatsApp" in text
@@ -318,7 +318,8 @@ def test_workflow_baseline_covers_backend_typecheck_and_supply_chain() -> None:
     supply_chain = _read(SUPPLY_CHAIN_WORKFLOW)
     release = _read(RELEASE_WORKFLOW)
 
-    assert "python -m pytest server_modules/tests" in ci
+    assert "Run demo-critical server test suite" in ci
+    assert "python -m pytest \\" in ci
     assert "./node_modules/.bin/tsc --noEmit" in ci
     assert "cargo build --manifest-path empyralis-supervisor/Cargo.toml" in ci
     assert "actions/dependency-review-action@v4" in security
@@ -355,17 +356,17 @@ def test_product_surface_map_and_mobile_tabs_align_with_surface_truth() -> None:
     assert payload["shared_core"]["runtime_attachments"] == "shared"
     assert payload["mobile_first"]["daily_use_default"] is True
     assert payload["mobile_first"]["bottom_tabs"] == [
-        "Home",
         "Chat",
-        "Applications",
-        "Notifications",
-        "Profile",
+        "Build",
+        "Discover",
+        "Activity",
+        "Settings",
     ]
-    assert 'options={{ title: "Home" }}' in mobile_tabs_layout
     assert 'options={{ title: "Chat" }}' in mobile_tabs_layout
-    assert 'options={{ title: "Applications" }}' in mobile_tabs_layout
-    assert 'options={{ title: "Notifications" }}' in mobile_tabs_layout
-    assert 'options={{ title: "Profile" }}' in mobile_tabs_layout
+    assert 'options={{ title: "Build" }}' in mobile_tabs_layout
+    assert 'options={{ title: "Discover" }}' in mobile_tabs_layout
+    assert 'options={{ title: "Activity" }}' in mobile_tabs_layout
+    assert 'options={{ title: "Settings" }}' in mobile_tabs_layout
 
 
 def test_surface_parity_contract_map_preserves_same_platform_no_downgrade_rule() -> None:

@@ -278,10 +278,16 @@ class TestPilotProofRoutes:
     def _build_app(self) -> FastAPI:
         app = FastAPI()
         app.include_router(routes_pilot.router, prefix="/api")
-        app.dependency_overrides[routes_pilot.auth.get_current_user] = lambda: {
+        current_user = {
             "user_id": "user-1",
             "workspace_access": {"ws-1": {"role": "owner", "tenant_id": "tenant-1"}},
         }
+        app.dependency_overrides[routes_pilot.auth.get_current_user] = lambda: current_user
+        for route in app.routes:
+            dependant = getattr(route, "dependant", None)
+            for dependency in getattr(dependant, "dependencies", []) or []:
+                if getattr(dependency.call, "__name__", "") == "get_current_user":
+                    app.dependency_overrides[dependency.call] = lambda current_user=current_user: current_user
         return app
 
     @pytest.mark.anyio

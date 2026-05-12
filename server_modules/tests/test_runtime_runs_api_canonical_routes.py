@@ -977,22 +977,26 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             app = _FakeApp()
             runtime_runs_api.register_run_routes(app)
 
-            payload = self._run_async(
-                app.routes[("POST", "/threads/{thread_id}/turns")](
-                    "thread-1",
-                    ApiThreadTurnCreateRequest(
-                        workspace_id="default",
-                        tenant_id="default",
-                        session_id="session-1",
-                        channel="web",
-                        actor={"type": "user", "id": "user-1"},
-                        content="hello before stream",
-                        client_request_id="req-thread-1",
-                        metadata={"source": "workstation_chat_pane"},
-                    ),
-                    current_user=self._current_user(),
+            with patch(
+                "server_modules.runtime_runs_api.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"history_window_days": 365}},
+            ):
+                payload = self._run_async(
+                    app.routes[("POST", "/threads/{thread_id}/turns")](
+                        "thread-1",
+                        ApiThreadTurnCreateRequest(
+                            workspace_id="default",
+                            tenant_id="default",
+                            session_id="session-1",
+                            channel="web",
+                            actor={"type": "user", "id": "user-1"},
+                            content="hello before stream",
+                            client_request_id="req-thread-1",
+                            metadata={"source": "workstation_chat_pane"},
+                        ),
+                        current_user=self._current_user(),
+                    )
                 )
-            )
 
             self.assertEqual(payload["id"], "thread-1")
             self.assertEqual(payload["turns"][0]["content"], "hello before stream")

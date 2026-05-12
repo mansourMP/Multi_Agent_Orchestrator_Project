@@ -77,7 +77,7 @@ class StreamSessionStateTests(unittest.TestCase):
         self.assertIn("event: final", payload)
         self.assertIn('"reply": "Done"', payload)
 
-    def test_active_session_replays_interruption_after_simulated_restart(self) -> None:
+    def test_active_session_restarts_after_simulated_restart(self) -> None:
         session = runtime_runs_api._get_or_create_chat_stream_session(
             "user:thread:req-active",
             thread_id="thread",
@@ -95,12 +95,14 @@ class StreamSessionStateTests(unittest.TestCase):
             request_id="req-active",
             workspace_id="default",
         )
-        payload = b"".join(runtime_runs_api._iter_chat_stream_events(replay_session, "1")).decode("utf-8")
+        persisted = get_chat_stream_state(self.db_path, "user:thread:req-active")
 
-        self.assertTrue(replay_session["completed"])
-        self.assertEqual(replay_session["status"], "interrupted")
-        self.assertIn("event: final", payload)
-        self.assertIn("interrupted", payload.lower())
+        self.assertIsNotNone(persisted)
+        assert persisted is not None
+        self.assertEqual(persisted["status"], "active")
+        self.assertFalse(replay_session["completed"])
+        self.assertEqual(replay_session["status"], "active")
+        self.assertEqual(replay_session["events"], [])
 
     def test_stale_sessions_marked_interrupted_on_boot(self) -> None:
         upsert_chat_stream_state(

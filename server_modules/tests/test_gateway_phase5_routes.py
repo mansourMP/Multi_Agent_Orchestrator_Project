@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from server_modules import (
     auth,
+    control_plane_repository,
     gateway_activity_service,
     gateway_state_repository,
     personal_channels_repository,
@@ -20,12 +21,14 @@ from server_modules import (
 class GatewayPhase5RoutesTests(unittest.TestCase):
     def setUp(self) -> None:
         global auth
+        global control_plane_repository
         global gateway_activity_service
         global gateway_state_repository
         global personal_channels_repository
         global routes_gateway
 
         auth = importlib.import_module("server_modules.auth")
+        control_plane_repository = importlib.import_module("server_modules.control_plane_repository")
         gateway_activity_service = importlib.import_module("server_modules.gateway_activity_service")
         gateway_state_repository = importlib.import_module("server_modules.gateway_state_repository")
         personal_channels_repository = importlib.import_module("server_modules.personal_channels_repository")
@@ -62,8 +65,16 @@ class GatewayPhase5RoutesTests(unittest.TestCase):
         self.patchers = [
             patch.object(gateway_state_repository, "GATEWAY_STATE_DB_FILE", self.gateway_db_path),
             patch.object(auth, "AUTH_DB_FILE", self.auth_db_path),
+            patch.object(control_plane_repository, "LOCAL_IDENTITY_DB_FILE", self.auth_db_path),
             patch.object(personal_channels_repository, "PERSONAL_CHANNELS_DB_FILE", self.personal_channels_db_path),
-            patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(self.runtime_state_db_path)}, clear=False),
+            patch.dict(
+                os.environ,
+                {
+                    "ORION_RUNTIME_STATE_DB": str(self.runtime_state_db_path),
+                    "ORION_ALLOW_SERVER_SESSION_SQLITE_FALLBACK": "1",
+                },
+                clear=False,
+            ),
             patch("server_modules.session_service.runtime_db.get_pool", new=AsyncMock(return_value=None)),
         ]
         for patcher in self.patchers:
@@ -220,6 +231,7 @@ class GatewayPhase5RoutesTests(unittest.TestCase):
                     "kind": "request",
                     "id": "req-connect-phase5-2",
                     "type": "gateway.connect",
+                    "protocolVersion": "v1alpha2",
                     "ts": "2026-04-22T14:00:00Z",
                     "scope": session_payload["scope"],
                     "payload": {
@@ -322,6 +334,7 @@ class GatewayPhase5RoutesTests(unittest.TestCase):
                     "kind": "request",
                     "id": "req-connect-phase5-3",
                     "type": "gateway.connect",
+                    "protocolVersion": "v1alpha2",
                     "ts": "2026-04-22T14:01:00Z",
                     "scope": reconnect_session["scope"],
                     "payload": {

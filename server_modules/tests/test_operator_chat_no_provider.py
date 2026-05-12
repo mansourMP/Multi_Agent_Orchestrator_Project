@@ -66,7 +66,12 @@ class OperatorChatNoProviderTests(unittest.TestCase):
                 workspace_id="default",
                 requested_model="gpt-5.4",
                 requested_provider="openai",
-                availability={"ai_ready": False},
+                availability={
+                    "ai_ready": False,
+                    "runtime_ok": True,
+                    "local_gateway_online": True,
+                    "connection_mode": "local_companion",
+                },
             )
 
             self.assertEqual(payload["mode"], "answer")
@@ -242,7 +247,12 @@ class OperatorChatNoProviderTests(unittest.TestCase):
             workspace_id="default",
             requested_model="gpt-5.4",
             requested_provider="openai",
-            availability={"ai_ready": False, "runtime_ok": True},
+            availability={
+                "ai_ready": False,
+                "runtime_ok": True,
+                "local_gateway_online": True,
+                "connection_mode": "local_companion",
+            },
         )
 
         self.assertEqual(payload["mode"], "answer")
@@ -345,7 +355,12 @@ class OperatorChatNoProviderTests(unittest.TestCase):
                     workspace_id="default",
                     requested_model="gpt-5.4",
                     requested_provider="openai",
-                    availability={"ai_ready": False},
+                    availability={
+                        "ai_ready": False,
+                        "runtime_ok": True,
+                        "local_gateway_online": True,
+                        "connection_mode": "local_companion",
+                    },
                 )
 
         self._workspace_context_patcher.start()
@@ -377,7 +392,12 @@ class OperatorChatNoProviderTests(unittest.TestCase):
                 workspace_id="default",
                 requested_model="gpt-5.4",
                 requested_provider="openai",
-                availability={"ai_ready": False},
+                availability={
+                    "ai_ready": False,
+                    "runtime_ok": True,
+                    "local_gateway_online": True,
+                    "connection_mode": "local_companion",
+                },
             )
 
         self.assertEqual(payload["mode"], "answer")
@@ -405,7 +425,12 @@ class OperatorChatNoProviderTests(unittest.TestCase):
                 workspace_id="default",
                 requested_model="gpt-5.4",
                 requested_provider="openai",
-                availability={"ai_ready": False},
+                availability={
+                    "ai_ready": False,
+                    "runtime_ok": True,
+                    "local_gateway_online": True,
+                    "connection_mode": "local_companion",
+                },
             )
 
         self.assertEqual(payload["mode"], "answer")
@@ -436,5 +461,5 @@ class OperatorChatNoProviderTests(unittest.TestCase):
         interventions = payload.get("interventions") or []
         self.assertTrue(interventions)
         self.assertEqual(interventions[0]["kind"], "connect_required")
-        self.assertEqual(interventions[0]["title"], "Hosted Sage AI is blocked")
-        self.assertIn("Hosted Sage AI is disabled", str(interventions[0].get("detail") or ""))
+        self.assertEqual(interventions[0]["title"], "OpenAI is not available")
+        self.assertIn("OpenAI", str(interventions[0].get("detail") or ""))

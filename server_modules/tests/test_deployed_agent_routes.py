@@ -1536,7 +1536,10 @@ async def test_shop_evaluate_service_creates_durable_approval_for_all_gates(monk
 
         result = await deployed_agent_service.evaluate_deployed_shop_assistant_customer_question(
             deployed_agent_id="dagent_1",
-            current_user={"user_id": "user-owner", "workspace_access": {"ws-1": {"role": "owner"}}},
+            current_user={
+                "user_id": "user-owner",
+                "workspace_access": {"ws-1": {"role": "owner", "tenant_id": "tenant-1"}},
+            },
             owner_workspace_id="ws-1",
             customer_message=f"Can I get a {gate}?",
             connector_id="telegram_1",
@@ -1601,7 +1604,10 @@ async def test_shop_evaluate_service_fails_closed_when_approval_persistence_fail
 
     result = await deployed_agent_service.evaluate_deployed_shop_assistant_customer_question(
         deployed_agent_id="dagent_1",
-        current_user={"user_id": "user-owner", "workspace_access": {"ws-1": {"role": "owner"}}},
+        current_user={
+            "user_id": "user-owner",
+            "workspace_access": {"ws-1": {"role": "owner", "tenant_id": "tenant-1"}},
+        },
         owner_workspace_id="ws-1",
         customer_message="Can I get a discount?",
         connector_id="telegram_1",
@@ -1680,7 +1686,10 @@ async def test_shop_evaluate_service_persists_real_billing_ledger(monkeypatch: p
 
     result = await deployed_agent_service.evaluate_deployed_shop_assistant_customer_question(
         deployed_agent_id="dagent_1",
-        current_user={"user_id": "user-owner", "workspace_access": {"ws-1": {"role": "owner"}}},
+        current_user={
+            "user_id": "user-owner",
+            "workspace_access": {"ws-1": {"role": "owner", "tenant_id": "tenant-1"}},
+        },
         owner_workspace_id="ws-1",
         customer_message="Do you have blue widget?",
         connector_id="telegram_1",

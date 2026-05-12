@@ -342,7 +342,7 @@ class RunsDelegationTests(unittest.TestCase):
             }
             return {"run_id": retry_run_id, "status": "starting"}
 
-        with patch.object(runs_delegation, "_create_run_from_request", side_effect=_fake_create):
+        with patch.object(runs_delegation, "_execute_delegated_run_request", side_effect=_fake_create):
             summary = runs_delegation._refresh_parent_delegation_state(parent_run_id, triggering_run_id=child_run_id)
 
         self.assertIsNotNone(summary)
@@ -381,7 +381,7 @@ class RunsDelegationTests(unittest.TestCase):
             },
         }
 
-        with patch.object(runs_delegation, "_create_run_from_request") as create_mock:
+        with patch.object(runs_delegation, "_execute_delegated_run_request") as create_mock:
             summary = runs_delegation._refresh_parent_delegation_state(parent_run_id, triggering_run_id=child_run_id)
 
         self.assertIsNotNone(summary)
@@ -440,7 +440,7 @@ class RunsDelegationTests(unittest.TestCase):
             created.append(req)
             return {"run_id": "33333333-3333-4333-8333-333333333333", "status": "starting"}
 
-        with patch.object(runs_delegation, "_create_run_from_request", side_effect=_fake_create):
+        with patch.object(runs_delegation, "_execute_delegated_run_request", side_effect=_fake_create):
             recovered = runs_delegation.recover_pending_delegation_retries_on_startup()
 
         self.assertEqual(recovered, [parent_run_id])
@@ -500,7 +500,7 @@ class RunsDelegationTests(unittest.TestCase):
 
         with (
             patch.object(runs_delegation, "_utc_now", return_value=runs_delegation._parse_utc_ts("2026-04-02T00:10:30Z")),
-            patch.object(runs_delegation, "_create_run_from_request", side_effect=_fake_create),
+            patch.object(runs_delegation, "_execute_delegated_run_request", side_effect=_fake_create),
         ):
             summary = runs_delegation._refresh_parent_delegation_state(parent_run_id, triggering_run_id=child_run_id)
 
@@ -586,10 +586,6 @@ class RunsDelegationTests(unittest.TestCase):
         self.assertIs(
             execute_mock.call_args.kwargs["execute_system_run_start_request_via_turn_runtime_fn"],
             runs_delegation.execute_system_run_start_request_via_turn_runtime,
-        )
-        self.assertIs(
-            execute_mock.call_args.kwargs["create_run_from_request_fn"],
-            runs_delegation._create_run_from_request,
         )
 
 

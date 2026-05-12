@@ -7,13 +7,12 @@ This is a strict dumb-UI strategy.
 This document reflects the current active frontend structure.
 It replaces older maps that still referenced deleted roots such as `frontend/components`, `frontend/app/(shell)`, `mobile/src/screens`, and the old mobile `(tabs)` shell.
 
-Mobile stays the daily-use surface. The current mounted Expo tab contract is:
+Mobile stays the daily-use surface with the current mounted Expo tab contract:
 - Chat
-- Agents
-- Applications
-- Profile
-- Home
-- Notifications
+- Build
+- Discover
+- Activity
+- Settings
 
 ### Channel Shells
 
@@ -37,6 +36,7 @@ Mobile and desktop-power must use the same backend semantics.
 - `frontend/lib`: client-side auth, shell state, UI primitives, workspace surfaces, and server-facing helpers used by the web shell
 - `shared/design-system`: canonical cross-platform token source
 - `mobile/app`: Expo Router route groups for auth and the native workspace shell
+- `mobile/app/(tabs)/_layout.tsx`: current native bottom-tab contract
 - `mobile/src`: native runtime, storage, shell model, surfaces, and UI primitives
 - `src-tauri`: desktop window shell and sidecar lifecycle for the repo-local desktop target
 

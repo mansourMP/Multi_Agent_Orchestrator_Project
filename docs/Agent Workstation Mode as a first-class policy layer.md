@@ -270,8 +270,9 @@
 
   Correct Build Order And Current Status
   The architecture direction is still correct, but the source of truth must now reflect implementation progress. Phases
-  0-5 are complete as backend primitives. The next gap is not another policy primitive; it is one product-level approval
-  decision orchestrator that every connected-computer action can share.
+  0-7 are complete as backend primitives. The next gap is enforcing the Sage/Studio/App boundary so customer agents,
+  mini-app URL surfaces, and marketplace/app installs cannot reach owner-private Sage resources or connected computers
+  through raw payloads.
 
   Build order:
   | Phase | Work | Status | Evidence | Gate |
@@ -282,9 +283,9 @@
   | 3 | CapabilityRiskClassifier | Done | d14a48103 | Every tool/computer/channel action gets a deterministic risk decision before Gateway execution. |
   | 4 | Enforce policy before Gateway execution | Done | b906b2366 | Gateway actions hit policy, risk classification, approval, kill switch, quota, and audit checks. |
   | 5 | Approval memory | Done | 6431281bc | Sage/Gateway can remember narrow, expiring approvals without granting blanket trust. |
-  | 6 | Approval Decision Orchestrator | Next | not yet unified | One shared service returns allow/approval_required/block plus approval-card payload, trace metadata, audit visibility, and remembered-rule status. |
-  | 7 | Sage Connected Computer Routing | Remaining | partial | Sage actions route through the orchestrator before Gateway, cloud computer, connector, or app execution. |
-  | 8 | Studio + Apps Boundary | Remaining | partial | Studio Agents and mini-app URL/app surfaces cannot bypass Sage/computer boundaries or owner-private resources. |
+  | 6 | Approval Decision Orchestrator | Done | 6626a8acf | One shared service returns allow/approval_required/block plus approval-card payload, trace metadata, audit visibility, and remembered-rule status. |
+  | 7 | Sage Connected Computer Routing | Done | 1d79a5e51 | Sage write/execute intents route through the orchestrator before approvals are issued; approval cards include risk, capability, target scope, and secret-free decision metadata. |
+  | 8 | Studio + Apps Boundary | Next | not yet enforced | Studio Agents and mini-app URL/app surfaces cannot bypass Sage/computer boundaries or owner-private resources. |
   | 9 | Connected Computers UI | Remaining | partial | Users see connected computers, dedicated computers, and cloud computers; normal UI does not expose Gateway/runtime internals. |
   | 10 | Dedicated Computer Setup | Remaining | partial | Mac mini/VM/self-hosted machine enrollment, profile binding, health checks, session readiness, and kill/revoke behavior. |
   | 11 | Voice/Notification Policy | Remaining | defer | Voice messages can request tasks, but voice cannot silently approve risky actions. |
@@ -320,11 +321,11 @@
   Do not commit .env values.
 
   Agent Workstation Implementation Plan
-  Resume at Phase 6.
+  Resume at Phase 8.
   | Phase | Work | Files to inspect/add | Tests | Acceptance |
   |---|---|---|---|---|
-  | 6 | Approval Decision Orchestrator | add shared backend service over policy/profile/risk/approval-memory | allow/ask/block, remembered-scope, kill override, secret-free payloads | One canonical product-level decision exists for connected-computer actions. |
-  | 7 | Sage Connected Computer Routing | inspect Sage runtime/tool routing and Gateway action dispatch | Sage local action creates decision, approval, execution, trace | Sage cannot execute computer/connectors/apps without the orchestrator. |
+  | 6 | Approval Decision Orchestrator | done in agent_computer_approval_decision_service.py | allow/ask/block, remembered-scope, kill override, secret-free payloads | One canonical product-level decision exists for connected-computer actions. |
+  | 7 | Sage Connected Computer Routing | done in sage_agent_runtime_service.py | Sage risky-intent tests cover decision cards, communication send, terminal command, and redaction | Sage cannot create risky connected-computer approvals without the orchestrator. |
   | 8 | Studio + Apps Boundary | inspect deployed-agent runtime binding, mini-app bridge, marketplace install paths | crafted bypass tests for Sage memory/files/channels/computers | Studio/customer agents and mini-apps cannot touch owner-private resources by raw payload. |
   | 9 | Connected Computers UI | inspect Settings, Gateway, Sage connectors panes | frontend typecheck + user-facing string checks | UI explains connected/dedicated/cloud computers without exposing Gateway/runtime jargon in normal flows. |
   | 10 | Dedicated setup backend | extend Gateway pairing/profile/session readiness | paired dedicated-machine smoke | Mac mini/VM can be bound, health-checked, killed, revoked, and audited. |
@@ -339,16 +340,18 @@
   - Any production path falls back to in-memory/cloud/local silently.
 
   Exact Next Implementation Recommendation
-  Build Phase 6 now:
+  Build Phase 8 now:
 
-  Approval Decision Orchestrator
+  Studio + Apps Boundary
 
-  Do not start UI, voice, or dedicated Mac mini setup first. The backend has policy/profile/risk/approval-memory pieces,
-  but the platform still needs one canonical allow/ask/block decision contract that Sage, Gateway, Studio, Apps, and
-  future computer actions can share.
+  Do not start UI, voice, or dedicated Mac mini setup first. The backend now has policy/profile/risk/approval-memory,
+  one canonical allow/ask/block decision contract, and Sage risky-intent routing through that contract. The next risk is
+  boundary bypass: Studio Agents, mini-app URL/app surfaces, marketplace/app installs, or raw deployed-agent payloads
+  must not access Sage private memory, personal channels, owner files, or connected computers unless an explicit admin
+  policy says they may.
 
-  Final verdict: RESUME AT PHASE 6. The research is sufficient; the next work should unify approvals into a product-level
-  connected-computer decision layer, then wire Sage and app/runtime paths through it.
+  Final verdict: RESUME AT PHASE 8. The research is sufficient; the next work should close the Sage/Studio/App boundary
+  before adding connected-computer UI, dedicated setup, or voice.
 
   Sources used: OpenAI Agents SDK tracing/guardrails docs, Anthropic Computer Use docs, Microsoft Copilot Studio
   activity docs, Google Gemini/Vertex Agent Platform docs, LangSmith observability/masking docs, CrewAI docs, and local

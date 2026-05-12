@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from server_modules import activity_ledger_service
 
 
-def persist_transparency_events(
+async def persist_transparency_events(
     *,
     trace_id: str,
     workspace_id: str,
@@ -37,7 +37,7 @@ def persist_transparency_events(
 
     for evt in events:
         try:
-            activity_ledger_service.append_activity_event(
+            await activity_ledger_service.append_activity_event(
                 tenant_id="",
                 workspace_id=str(workspace_id or "").strip(),
                 actor_type="system",

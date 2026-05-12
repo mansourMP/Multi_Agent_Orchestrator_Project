@@ -280,7 +280,7 @@ async def execute_test_turn(
 
     if transparency_payloads:
         try:
-            transparency_event_store_service.persist_transparency_events(
+            await transparency_event_store_service.persist_transparency_events(
                 trace_id=trace_id,
                 workspace_id=workspace_id,
                 events=transparency_payloads,

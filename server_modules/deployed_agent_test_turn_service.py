@@ -27,6 +27,23 @@ def _coerce_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _authoritative_runtime_mode(config: Any) -> str:
+    configured_mode = _coerce_text(getattr(config, "studio_agent_mode", "")).lower()
+    if configured_mode:
+        return deployed_agent_runtime_contract_service.resolve_studio_agent_mode(
+            configured_mode,
+            runtime_placement=getattr(config, "runtime_placement", None),
+            runtime_target=getattr(config, "runtime_target", None),
+            runtime_supplier=getattr(config, "runtime_supplier", None),
+        )
+    return deployed_agent_runtime_contract_service.resolve_studio_agent_mode(
+        "",
+        runtime_placement=getattr(config, "runtime_placement", None),
+        runtime_target=getattr(config, "runtime_target", None),
+        runtime_supplier=getattr(config, "runtime_supplier", None),
+    )
+
+
 def _build_policy_decisions(
     *,
     config: Any,
@@ -35,19 +52,18 @@ def _build_policy_decisions(
 ) -> list[dict]:
     decisions: list[dict] = []
 
-    resolved_mode = deployed_agent_runtime_contract_service.resolve_studio_agent_mode(
-        requested_mode,
-        runtime_placement=getattr(config, "runtime_placement", None),
-        runtime_target=getattr(config, "runtime_target", None),
-    )
+    actual_mode = _authoritative_runtime_mode(config)
     contract = deployed_agent_runtime_contract_service.studio_agent_mode_contract(
-        resolved_mode,
+        actual_mode,
     )
+    runtime_allowed = actual_mode == requested_mode
     decisions.append({
         "policy": "runtime_mode",
         "requested": requested_mode,
-        "resolved": resolved_mode,
-        "allowed": resolved_mode == requested_mode,
+        "resolved": actual_mode,
+        "configured": actual_mode,
+        "allowed": runtime_allowed,
+        "reason": "configured_runtime_mode" if runtime_allowed else "runtime_mode_mismatch",
         "placement": contract.get("placement"),
         "supplier": contract.get("supplier"),
         "computer_allowed": contract.get("computer_allowed"),
@@ -157,7 +173,6 @@ def _load_memory_context_for_test(
 
     try:
         from server_modules.conversation_memory_policy import (
-            DIRECT_CHAT_PROFILE,
             build_external_channel_memory_profile,
         )
 
@@ -224,6 +239,12 @@ async def execute_test_turn(
         requested_mode=normalized_mode,
         requested_channel=normalized_channel,
     )
+    runtime_decision = next(
+        (item for item in policy_decisions if item.get("policy") == "runtime_mode"),
+        {},
+    )
+    effective_runtime_mode = _coerce_text(runtime_decision.get("resolved")) or normalized_mode
+    runtime_mode_allowed = bool(runtime_decision.get("allowed", False))
 
     tools_considered, tools_used, approval_required = _evaluate_tool_policy(
         config=config,
@@ -239,8 +260,10 @@ async def execute_test_turn(
     reply = _simulate_reply(
         message=normalized_message,
         channel=normalized_channel,
-        mode=normalized_mode,
+        mode=effective_runtime_mode,
         approval_required=approval_required,
+        runtime_mode_allowed=runtime_mode_allowed,
+        requested_mode=normalized_mode,
     )
 
     audit_events = _emit_test_turn_audit(
@@ -251,7 +274,7 @@ async def execute_test_turn(
         actor_user_id=actor_user_id,
         actor_email=actor_email,
         channel=normalized_channel,
-        mode=normalized_mode,
+        mode=effective_runtime_mode,
         approval_required=approval_required,
         tools_used=tools_used,
     )
@@ -308,7 +331,17 @@ def _simulate_reply(
     channel: str,
     mode: str,
     approval_required: bool,
+    runtime_mode_allowed: bool,
+    requested_mode: str,
 ) -> str:
+    if not runtime_mode_allowed:
+        return (
+            f"[TEST MODE] The requested runtime mode is not allowed for this agent:\n"
+            f"'{message[:200]}'\n\n"
+            f"Channel: {channel} | Configured mode: {mode} | Requested mode: {requested_mode}\n"
+            f"Status: runtime_mode_mismatch\n"
+            f"This is a test turn — no real actions were executed."
+        )
     if approval_required:
         return (
             f"[TEST MODE] Your request triggers actions that require approval:\n"

@@ -148,6 +148,25 @@ class TestTurnPolicyTests(unittest.TestCase):
         self.assertEqual(len(runtime_decisions), 1)
         self.assertEqual(runtime_decisions[0]["requested"], "text_agent")
 
+    def test_build_policy_decisions_uses_configured_runtime_not_raw_payload(self):
+        config = DummyConfig(
+            studio_agent_mode="text_agent",
+            runtime_placement="managed_cloud",
+            runtime_target="cloud_default",
+            channels={"test": MagicMock(enabled=True)},
+        )
+        decisions = _build_policy_decisions(
+            config=config,
+            requested_mode="cloud_computer_agent",
+            requested_channel="test",
+        )
+        runtime_decision = next(item for item in decisions if item["policy"] == "runtime_mode")
+        self.assertEqual(runtime_decision["requested"], "cloud_computer_agent")
+        self.assertEqual(runtime_decision["configured"], "text_agent")
+        self.assertEqual(runtime_decision["resolved"], "text_agent")
+        self.assertFalse(runtime_decision["allowed"])
+        self.assertEqual(runtime_decision["reason"], "runtime_mode_mismatch")
+
     def test_build_policy_decisions_includes_channel(self):
         config = DummyConfig(
             channels={"test": MagicMock(enabled=True)},
@@ -287,6 +306,42 @@ class TestTurnPolicyTests(unittest.TestCase):
             self.assertFalse(result.approval_required)
             self.assertIsInstance(result.audit_events, list)
             self.assertTrue(len(result.trace_id) > 0)
+
+    def test_test_turn_raw_runtime_payload_cannot_override_agent_config(self):
+        req = _make_request(message="open a browser", runtime_mode="cloud_computer_agent")
+        with patch(
+            "server_modules.deployed_agent_test_turn_service.deployed_agent_service.get_deployed_agent_detail",
+            new=AsyncMock(return_value={"deployed_agent": {"deployment_state": "draft", "id": "a1"}}),
+        ), patch(
+            "server_modules.deployed_agent_test_turn_service.deployed_agent_config_schema.deployed_agent_config_from_record",
+            return_value=DummyConfig(
+                deployment_state="draft",
+                studio_agent_mode="text_agent",
+                runtime_placement="managed_cloud",
+                runtime_target="cloud_default",
+                channels={"test": MagicMock(enabled=True)},
+            ),
+        ), patch(
+            "server_modules.skill_registry.list_skill_definitions",
+            return_value=[],
+        ), patch(
+            "server_modules.deployed_agent_test_turn_service.security_audit_service.emit_security_audit_event",
+        ) as mock_audit:
+            import asyncio
+            result = asyncio.run(execute_test_turn(
+                deployed_agent_id="a1",
+                workspace_id="ws-1",
+                tenant_id="t-1",
+                request=req,
+                current_user={"user_id": "u-1", "email": "test@test.com"},
+            ))
+
+            runtime_decision = next(item for item in result.policy_decisions if item["policy"] == "runtime_mode")
+            self.assertFalse(runtime_decision["allowed"])
+            self.assertEqual(runtime_decision["resolved"], "text_agent")
+            self.assertIn("runtime_mode_mismatch", result.reply)
+            audit_metadata = mock_audit.call_args.kwargs["metadata"]
+            self.assertEqual(audit_metadata["runtime_mode"], "text_agent")
 
     def test_test_turn_approval_required_for_risky_tool(self):
         from server_modules.skill_registry import SkillDefinition

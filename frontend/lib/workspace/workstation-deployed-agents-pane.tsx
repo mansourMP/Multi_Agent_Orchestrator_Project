@@ -2189,11 +2189,15 @@ type RuntimeCardStatus = {
 function resolveRuntimeCardStatus(
   option: typeof STUDIO_RUNTIME_OPTIONS[number],
   hasGatewayOnlineTarget: boolean,
+  hasCloudComputerAvailableTarget: boolean,
 ): RuntimeCardStatus[] {
   if (option.value === 'managed_cloud') {
     return [{ label: 'Ready', tone: 'success' }];
   }
   if (option.value === 'hosted_hardware_pool') {
+    if (!hasCloudComputerAvailableTarget) {
+      return [{ label: 'Unsupported in this workspace', tone: 'danger' }];
+    }
     return [
       { label: 'Needs Approval Policy', tone: 'warning' },
       { label: 'Ready', tone: 'success' },
@@ -2212,18 +2216,20 @@ function RuntimeModeSelector({
   value,
   options,
   hasGatewayOnlineTarget,
+  hasCloudComputerAvailableTarget,
   onSelect,
 }: {
   value: WizardState['runtimePlacement'];
   options: ReadonlyArray<typeof STUDIO_RUNTIME_OPTIONS[number]>;
   hasGatewayOnlineTarget: boolean;
+  hasCloudComputerAvailableTarget: boolean;
   onSelect: (next: WizardState['runtimePlacement']) => void;
 }) {
   return (
     <div className="deployed-agents-wizard__runtime-grid">
       {options.map((option) => {
         const selected = value === option.value;
-        const statuses = resolveRuntimeCardStatus(option, hasGatewayOnlineTarget);
+        const statuses = resolveRuntimeCardStatus(option, hasGatewayOnlineTarget, hasCloudComputerAvailableTarget);
         return (
           <button
             key={option.value}
@@ -2301,14 +2307,18 @@ function AgentSafetySummary({
 
 function AgentLaunchChecklist({
   hasGatewayOnlineTarget,
+  hasCloudComputerAvailableTarget,
   state,
 }: {
   hasGatewayOnlineTarget: boolean;
+  hasCloudComputerAvailableTarget: boolean;
   state: WizardState;
 }) {
+  const runtimeModeValid = state.runtimePlacement !== 'hosted_hardware_pool'
+    || hasCloudComputerAvailableTarget;
   const checks = [
     { id: 'gateway', label: 'Gateway paired', ok: state.runtimePlacement !== 'customer_local' || hasGatewayOnlineTarget },
-    { id: 'runtime', label: 'Agent mode valid', ok: Boolean(state.runtimePlacement) },
+    { id: 'runtime', label: 'Agent mode valid', ok: Boolean(state.runtimePlacement) && runtimeModeValid },
     { id: 'tools', label: 'Tools policy valid', ok: state.selectedToolIds.length > 0 },
     { id: 'memory', label: 'Memory policy valid', ok: true },
     { id: 'approval', label: 'Approval policy valid', ok: Boolean(state.approvalMode) },
@@ -3468,6 +3478,10 @@ export function WorkstationDeployedAgentsPane({
   const overlayCostTier = readString(overlayAgent?.cost_tier);
   const hasGatewayOnlineTarget = useMemo(
     () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'local_companion' && target.online),
+    [bootstrap.runtime.runtimeTargets],
+  );
+  const hasCloudComputerAvailableTarget = useMemo(
+    () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'sage_cloud_computer' && target.available),
     [bootstrap.runtime.runtimeTargets],
   );
 
@@ -5256,6 +5270,7 @@ export function WorkstationDeployedAgentsPane({
                         value={wizardState.runtimePlacement}
                         options={STUDIO_RUNTIME_OPTIONS}
                         hasGatewayOnlineTarget={hasGatewayOnlineTarget}
+                        hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
                         onSelect={(nextRuntime) => {
                           setWizardState((current) => ({
                             ...current,
@@ -5320,6 +5335,7 @@ export function WorkstationDeployedAgentsPane({
                   />
                   <AgentLaunchChecklist
                     hasGatewayOnlineTarget={hasGatewayOnlineTarget}
+                    hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
                     state={wizardState}
                   />
                   {wizardState.runtimePlacement === 'customer_hosted' ? (

@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import hashlib
 import json
+import os
 import shlex
 import time
 import uuid
@@ -16,6 +17,8 @@ from server_modules.gateway_browser_runtime import GatewayBrowserRuntime
 
 
 RUNTIME_INTERFACE_ID = "virtual_computer_runtime.v1"
+_CLOUD_RUNTIME_ENVIRONMENTS = {"prod", "production", "staging"}
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 
 RUNTIME_STATE_PROVISIONING = "provisioning"
 RUNTIME_STATE_READY = "ready"
@@ -36,6 +39,46 @@ RUNTIME_STATES = [
     RUNTIME_STATE_TERMINATED,
     RUNTIME_STATE_FAILED,
 ]
+
+
+def _resolved_runtime_environment() -> str:
+    for key in ("EMPYRALIS_DEPLOY_ENV", "ORION_ENV", "NODE_ENV"):
+        token = str(os.environ.get(key) or "").strip().lower()
+        if token:
+            return token
+    return "local"
+
+
+def _cloud_runtime_environment() -> bool:
+    return _resolved_runtime_environment() in _CLOUD_RUNTIME_ENVIRONMENTS
+
+
+def _explicit_inmemory_runtime_allowed() -> bool:
+    if _cloud_runtime_environment():
+        return False
+    return str(os.environ.get("EMPYRALIS_ALLOW_INMEMORY_RUNTIME") or "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _runtime_is_inmemory(runtime: Any) -> bool:
+    if isinstance(runtime, InMemoryVirtualComputerRuntime):
+        return True
+    wrapped = getattr(runtime, "_runtime", None)
+    return isinstance(wrapped, InMemoryVirtualComputerRuntime)
+
+
+def _assert_inmemory_runtime_allowed(runtime: Any, *, runtime_choice: Any) -> None:
+    choice = _token(runtime_choice).lower()
+    if choice == RUNTIME_CHOICE_LOCAL:
+        return
+    if not _runtime_is_inmemory(runtime):
+        return
+    if _explicit_inmemory_runtime_allowed():
+        return
+    if _cloud_runtime_environment():
+        raise RuntimeError(
+            "Cloud Computer runtime provider is not configured. "
+            "InMemoryVirtualComputerRuntime is blocked in staging/production."
+        )
 
 RUNTIME_METHODS = [
     "create_session",
@@ -4441,11 +4484,14 @@ class VirtualComputerRuntimeRegistry:
         if choice == RUNTIME_CHOICE_LOCAL:
             return self.local_runtime
         if self.provider_registry is not None:
-            return self.provider_registry.build_runtime(
+            runtime = self.provider_registry.build_runtime(
                 runtime_choice=runtime_choice,
                 preferred_provider_id=preferred_provider_id,
                 fallback_runtime=self.virtual_runtime,
             )
+            _assert_inmemory_runtime_allowed(runtime, runtime_choice=runtime_choice)
+            return runtime
+        _assert_inmemory_runtime_allowed(self.virtual_runtime, runtime_choice=runtime_choice)
         return self.virtual_runtime
 
     def describe_provider(self, runtime_choice: Any, *, preferred_provider_id: Any = None) -> Dict[str, Any]:

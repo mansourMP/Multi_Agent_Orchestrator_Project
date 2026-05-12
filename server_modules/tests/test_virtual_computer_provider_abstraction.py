@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
 from server_modules.virtual_computer_runtime import (
     InMemoryVirtualComputerRuntime,
@@ -65,6 +66,40 @@ class VirtualComputerProviderAbstractionTests(unittest.TestCase):
 
         runtime = runtime_registry.resolve(RUNTIME_CHOICE_VIRTUAL_BROWSER)
         created = asyncio.run(runtime.create_session({"runtime_choice": RUNTIME_CHOICE_VIRTUAL_BROWSER}))
+
+        self.assertEqual(created.get("provider_id"), PROVIDER_ID_BROWSERBASE)
+
+    def test_production_cloud_computer_without_real_provider_fails_closed(self):
+        provider_registry = default_virtual_computer_provider_registry()
+        runtime_registry = VirtualComputerRuntimeRegistry(
+            local_runtime=InMemoryVirtualComputerRuntime(),
+            virtual_runtime=InMemoryVirtualComputerRuntime(),
+            provider_registry=provider_registry,
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"ORION_ENV": "production", "EMPYRALIS_ALLOW_INMEMORY_RUNTIME": "true"},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "InMemoryVirtualComputerRuntime is blocked"):
+                runtime_registry.resolve(RUNTIME_CHOICE_VIRTUAL_BROWSER)
+
+    def test_dev_cloud_computer_can_use_inmemory_only_when_explicitly_enabled(self):
+        provider_registry = default_virtual_computer_provider_registry()
+        runtime_registry = VirtualComputerRuntimeRegistry(
+            local_runtime=InMemoryVirtualComputerRuntime(),
+            virtual_runtime=InMemoryVirtualComputerRuntime(),
+            provider_registry=provider_registry,
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"ORION_ENV": "local", "EMPYRALIS_ALLOW_INMEMORY_RUNTIME": "true"},
+            clear=False,
+        ):
+            runtime = runtime_registry.resolve(RUNTIME_CHOICE_VIRTUAL_BROWSER)
+            created = asyncio.run(runtime.create_session({"runtime_choice": RUNTIME_CHOICE_VIRTUAL_BROWSER}))
 
         self.assertEqual(created.get("provider_id"), PROVIDER_ID_BROWSERBASE)
 

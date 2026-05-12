@@ -374,6 +374,36 @@ class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
             "deployed_agent_cloud_runtime_session_created",
         )
 
+    def test_cloud_computer_agent_does_not_silently_fallback_to_inmemory_in_production(self):
+        async def _run():
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.control_plane_repository,
+                    "get_deployed_agent_by_id",
+                    new=AsyncMock(return_value=_deployed_agent()),
+                ),
+                patch.dict(
+                    "os.environ",
+                    {"ORION_ENV": "production", "EMPYRALIS_ALLOW_INMEMORY_RUNTIME": "true"},
+                    clear=False,
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Cloud Computer runtime provider is not configured"):
+                    await deployed_agent_virtual_runtime_service.ensure_cloud_runtime_session_binding(
+                        deployed_agent_id="dagent_1",
+                        tenant_id="tenant-1",
+                        workspace_id="ws-1",
+                        session_id="sess-1",
+                        thread_id="thread-1",
+                        channel="web",
+                        actor={"type": "user", "id": "user-1"},
+                        turn_metadata={"deployed_agent_id": "dagent_1"},
+                    )
+
+        import asyncio
+
+        asyncio.run(_run())
+
     def test_ensure_cloud_runtime_session_binding_rejects_text_agent(self):
         async def _run():
             with patch.object(

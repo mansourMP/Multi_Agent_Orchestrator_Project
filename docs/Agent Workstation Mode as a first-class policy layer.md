@@ -270,8 +270,8 @@
 
   Correct Build Order And Current Status
   The architecture direction is still correct, but the source of truth must now reflect implementation progress. Phases
-  0-10 are complete. The next gap is voice and notification policy: voice can create normal Sage tasks, but it must not
-  silently approve risky actions or bypass the connected-computer approval/kill/audit model.
+  0-11 are complete. The next gap is end-to-end certification: a real closed-pilot trace must prove the complete
+  connected-computer lifecycle after the voice/notification policy boundary.
 
   Build order:
   | Phase | Work | Status | Evidence | Gate |
@@ -287,8 +287,8 @@
   | 8 | Studio + Apps Boundary | Done | 35da6e3f0 | Studio Agents, mini-app URL/app surfaces, marketplace/app installs, and raw test-turn payloads cannot request Sage private memory, personal channels, owner files, or connected computers by raw payload. |
   | 9 | Connected Computers UI | Done | 66c4cac80 | Users see connected computers, dedicated computers, and cloud computers; normal UI does not expose Gateway/runtime internals. |
   | 10 | Dedicated Computer Setup | Done | f88966884 | Mac mini/VM/self-hosted machine enrollment, profile binding, health checks, session readiness, and kill/revoke behavior. |
-  | 11 | Voice/Notification Policy | Next | defer | Voice messages can request tasks, but voice cannot silently approve risky actions. |
-  | 12 | End-to-End Certification | Remaining | needed after all above | Real trace proves policy classification, approval, Gateway/cloud execution, audit, transparency, and kill switch. |
+  | 11 | Voice/Notification Policy | Done | 4cf48a6ac | Voice messages become normal Sage tasks; voice/notification surfaces cannot silently approve risky actions or carry approval tokens. |
+  | 12 | End-to-End Certification | Next | needed after all above | Real trace proves policy classification, approval, Gateway/cloud execution, audit, transparency, and kill switch. |
 
   Phase 0 Implementation Plan
   | Commit | Scope | Files likely touched | Tests | Acceptance |
@@ -320,7 +320,7 @@
   Do not commit .env values.
 
   Agent Workstation Implementation Plan
-  Resume at Phase 11.
+  Resume at Phase 12.
   | Phase | Work | Files to inspect/add | Tests | Acceptance |
   |---|---|---|---|---|
   | 6 | Approval Decision Orchestrator | done in agent_computer_approval_decision_service.py | allow/ask/block, remembered-scope, kill override, secret-free payloads | One canonical product-level decision exists for connected-computer actions. |
@@ -328,7 +328,7 @@
   | 8 | Studio + Apps Boundary | done in studio_app_boundary_service.py, app_bridge_service.py, mini_app_host_service.py, deployed_agent_test_turn_service.py, marketplace_distribution_service.py | crafted bypass tests for Sage memory/files/channels/computers | Studio/customer agents and mini-apps cannot touch owner-private resources by raw payload. |
   | 9 | Connected Computers UI | done in nav, Settings, Computers, Sage connectors, Studio runtime cards, Chat notices, Activity labels | frontend typecheck + user-facing string checks | UI explains connected/dedicated/cloud computers without exposing Gateway/runtime jargon in normal flows. |
   | 10 | Dedicated setup backend | done in dedicated_workstation_setup_service.py, routes_gateway.py, agent_computer_profile_service.py | Gateway route tests cover bind, ready/offline readiness, kill, clear-kill, revoke propagation | Mac mini/VM can be bound, health-checked, killed, revoked, and audited. |
-  | 11 | Voice message -> Sage task + notification policy | inspect personal channels/mobile | voice text path and approval notification tests | Voice becomes a normal Sage turn; risky actions still need explicit approval. |
+  | 11 | Voice message -> Sage task + notification policy | done in voice_notification_policy_service.py, sage_chat_api.py | voice text path and approval notification tests | Voice becomes a normal Sage turn; risky actions still need explicit approval. |
   | 12 | E2E certification | closed-pilot smoke harness | full trace with connected computer action | Trace shows risk, approval, remembered rule if used, execution, audit, transparency, and kill. |
 
   Stop conditions:
@@ -339,16 +339,16 @@
   - Any production path falls back to in-memory/cloud/local silently.
 
   Exact Next Implementation Recommendation
-  Build Phase 11 now:
+  Build Phase 12 now:
 
-  Voice/Notification Policy
+  End-to-End Certification
 
-  The dedicated-computer binding/readiness layer is in place. The next step is to let voice messages become normal Sage
-  tasks while preserving the same approval and kill-switch model: voice can request work, but it cannot silently approve
-  external sends, file writes/deletes, shell commands, payments, credential access, or public/customer-facing actions.
+  The voice/notification boundary is now in place. The next step is to run and capture a complete real trace proving
+  policy classification, approval, Gateway/cloud execution, audit, transparency, and kill switch after all workstation
+  phases.
 
-  Final verdict: RESUME AT PHASE 11. Do not start final E2E certification until voice/notification paths are policy-bound
-  or explicitly marked out of launch scope.
+  Final verdict: RESUME AT PHASE 12. Do not claim workstation launch readiness until a real certification trace is
+  captured after Phase 11.
 
   Sources used: OpenAI Agents SDK tracing/guardrails docs, Anthropic Computer Use docs, Microsoft Copilot Studio
   activity docs, Google Gemini/Vertex Agent Platform docs, LangSmith observability/masking docs, CrewAI docs, and local

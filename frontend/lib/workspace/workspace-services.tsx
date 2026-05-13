@@ -868,7 +868,12 @@ export function WorkstationKernelProvider({
   );
 
   useEffect(() => {
-    services.streams.start();
+    const liveStreamsEnabled = String(process.env.NEXT_PUBLIC_WORKSTATION_LIVE_STREAMS ?? '')
+      .trim()
+      .toLowerCase();
+    if (liveStreamsEnabled === '1' || liveStreamsEnabled === 'true') {
+      services.streams.start();
+    }
     return () => {
       services.dispose();
     };

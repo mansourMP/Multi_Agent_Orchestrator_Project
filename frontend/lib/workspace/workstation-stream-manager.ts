@@ -428,15 +428,14 @@ export class WorkstationStreamManager {
       if (this.notificationSource === source) {
         this.notificationSource = null;
       }
+      this.clearReconnect('notifications');
       this.patchState((current) => ({
         ...current,
         notifications: {
           ...current.notifications,
-          connectionState: 'reconnecting',
-          reconnectCount: current.notifications.reconnectCount + 1,
+          connectionState: 'closed',
         },
       }));
-      this.scheduleReconnect('notifications');
     });
 
     source.onerror = () => {
@@ -529,15 +528,14 @@ export class WorkstationStreamManager {
       if (this.activitySource === source) {
         this.activitySource = null;
       }
+      this.clearReconnect('activity');
       this.patchState((current) => ({
         ...current,
         activity: {
           ...current.activity,
-          connectionState: 'reconnecting',
-          reconnectCount: current.activity.reconnectCount + 1,
+          connectionState: 'closed',
         },
       }));
-      this.scheduleReconnect('activity');
     });
 
     source.onerror = () => {

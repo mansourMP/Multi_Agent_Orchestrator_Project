@@ -14,35 +14,35 @@ body[data-emp-theme='dark'] {
   --z-modal: 100;
   --z-toast: 200;
 
-  --app-bg-page: #1a1a1a;
-  --app-surface-1: #242424;
-  --app-surface-2: #2e2e2e;
-  --app-surface-hover: #333333;
-  --app-surface-inset: #202020;
+  --app-bg-page: #111111;
+  --app-surface-1: #181818;
+  --app-surface-2: #202020;
+  --app-surface-hover: #262626;
+  --app-surface-inset: #141414;
 
-  --app-bg-app: #1a1a1a;
-  --app-bg-canvas: #1a1a1a;
-  --app-bg-shell: #202020;
-  --app-bg-panel: #242424;
-  --app-bg-panel-elevated: #2e2e2e;
-  --app-bg-overlay: #2e2e2e;
+  --app-bg-app: #111111;
+  --app-bg-canvas: #111111;
+  --app-bg-shell: #151515;
+  --app-bg-panel: #181818;
+  --app-bg-panel-elevated: #202020;
+  --app-bg-overlay: #202020;
   --app-bg-raised: var(--app-bg-panel-elevated);
 
   --app-border-subtle: rgba(240, 240, 240, 0.1);
-  --app-border-strong: #3a3a3a;
+  --app-border-strong: #343434;
   --app-border-muted: rgba(240, 240, 240, 0.07);
-  --app-border-default: #333333;
-  --app-border-accent: #4a4a4a;
+  --app-border-default: #2a2a2a;
+  --app-border-accent: #3a3a3a;
 
   --app-text-primary: #f0f0f0;
   --app-text-secondary: #a4a4a4;
   --app-text-tertiary: rgba(164, 164, 164, 0.72);
   --app-text-inverse: #1a1a1a;
 
-  --app-accent: #3a3a3a;
-  --app-accent-strong: #4a4a4a;
-  --app-accent-muted: rgba(74, 74, 74, 0.3);
-  --app-accent-soft: rgba(74, 74, 74, 0.18);
+  --app-accent: #2f2f2f;
+  --app-accent-strong: #3a3a3a;
+  --app-accent-muted: rgba(58, 58, 58, 0.3);
+  --app-accent-soft: rgba(58, 58, 58, 0.18);
   --app-accent-text: #ffffff;
 
   --app-success: #4ec598;
@@ -164,7 +164,7 @@ body[data-emp-theme='dark'] {
 
   --app-shadow-subtle: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 8px 20px -20px rgba(4, 10, 13, 0.66);
   --app-shadow-panel: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 26px 60px -38px rgba(2, 8, 10, 0.84);
-  --app-shadow-focus: 0 0 0 2px rgba(46, 168, 149, 0.24);
+  --app-shadow-focus: 0 0 0 2px rgba(180, 180, 180, 0.18);
 
   --app-motion-fast: 120ms;
   --app-motion-normal: 160ms;
@@ -198,6 +198,45 @@ body {
   -webkit-user-select: none;
   user-select: none;
   cursor: default;
+}
+
+:root[data-emp-theme='dark'] .app-shell-frame,
+:root[data-emp-theme='dark'] .app-shell-frame__kernel,
+:root[data-emp-theme='dark'] .app-shell-viewport,
+:root[data-emp-theme='dark'] .workstation-shell,
+:root[data-emp-theme='dark'] .workstation-layout,
+:root[data-emp-theme='dark'] .workstation-primary-canvas,
+:root[data-emp-theme='dark'] .app-chat-page,
+:root[data-emp-theme='dark'] .app-chat-page--surface,
+:root[data-emp-theme='dark'] .app-chat-thread,
+:root[data-emp-theme='dark'] .app-chat-thread--surface,
+:root[data-emp-theme='dark'] .app-chat-thread--blank,
+body[data-emp-theme='dark'] .app-shell-frame,
+body[data-emp-theme='dark'] .app-shell-frame__kernel,
+body[data-emp-theme='dark'] .app-shell-viewport,
+body[data-emp-theme='dark'] .workstation-shell,
+body[data-emp-theme='dark'] .workstation-layout,
+body[data-emp-theme='dark'] .workstation-primary-canvas,
+body[data-emp-theme='dark'] .app-chat-page,
+body[data-emp-theme='dark'] .app-chat-page--surface,
+body[data-emp-theme='dark'] .app-chat-thread,
+body[data-emp-theme='dark'] .app-chat-thread--surface,
+body[data-emp-theme='dark'] .app-chat-thread--blank {
+  background: #101010;
+}
+
+:root[data-emp-theme='dark'] .workstation-shell__topbar,
+body[data-emp-theme='dark'] .workstation-shell__topbar {
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+  background: rgba(16, 16, 16, 0.82);
+  box-shadow: 0 10px 34px -28px rgba(0, 0, 0, 0.9);
+}
+
+:root[data-emp-theme='dark'] .app-chat-composer__surface,
+body[data-emp-theme='dark'] .app-chat-composer__surface {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #1a1a1a;
+  box-shadow: 0 18px 50px -38px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 :root[data-emp-theme='light'],
@@ -4811,30 +4850,30 @@ textarea {
 
 :root[data-emp-theme='dark'] .app-shell-frame__sidebar,
 body[data-emp-theme='dark'] .app-shell-frame__sidebar {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--app-bg-shell) 86%, transparent 14%) 0%,
-      color-mix(in srgb, var(--app-bg-shell) 94%, var(--app-bg-page) 6%) 100%
-    );
+  background: #141414;
   backdrop-filter: blur(14px);
   box-shadow:
-    inset -1px 0 0 color-mix(in srgb, var(--app-border-subtle) 64%, transparent 36%),
-    10px 0 24px -26px color-mix(in srgb, black 26%, transparent);
+    inset -1px 0 0 rgba(255, 255, 255, 0.07),
+    10px 0 24px -26px rgba(0, 0, 0, 0.72);
 }
 
 :root[data-emp-theme='dark'] .account-switcher__link:hover,
 body[data-emp-theme='dark'] .account-switcher__link:hover {
-  border-color: color-mix(in srgb, var(--app-border-subtle) 72%, transparent);
-  background: color-mix(in srgb, var(--app-bg-panel-elevated) 44%, transparent 56%);
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #1d1d1d;
   color: var(--text-primary);
 }
 
 :root[data-emp-theme='dark'] .account-switcher__link--active,
 body[data-emp-theme='dark'] .account-switcher__link--active {
-  border-color: color-mix(in srgb, var(--app-accent) 34%, var(--app-border-subtle) 66%);
-  background: color-mix(in srgb, var(--app-accent-soft) 36%, var(--app-bg-panel-elevated) 64%);
+  border-color: rgba(255, 255, 255, 0.13);
+  background: #202020;
   color: var(--text-primary);
+}
+
+:root[data-emp-theme='dark'] .account-switcher__link--active::before,
+body[data-emp-theme='dark'] .account-switcher__link--active::before {
+  background: #d2d2d2;
 }
 
 .app-empty-panel {

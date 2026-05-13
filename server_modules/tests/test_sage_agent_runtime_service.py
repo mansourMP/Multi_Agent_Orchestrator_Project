@@ -309,6 +309,43 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             self.assertEqual(approval["approval_card"]["action"], "communication.send")
             self.assertTrue(approval["approval_card"]["rememberable"])
 
+    def test_kill_switch_blocks_connected_computer_decision_without_approval_token(self):
+        from server_modules import kill_switch_gate
+        from server_modules.skill_registry import SkillDefinition
+
+        dangerous = SkillDefinition(
+            id="email-access", label="Email Access", description="Send email",
+            permission_label="email", execution_mode="manual", action_class="write",
+            connector_scopes=("email",), trigger_terms=("send email",),
+            requires_approval=True,
+        )
+        mocks = self._setup_mocks(skills=[dangerous])
+        kill_switch_gate.set_kill_switch("agent:sage_main_agent", active=True)
+        try:
+            with (
+                mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
+                mocks["skills"], mocks["provider"],
+                mocks["generate"], mocks["persist"], mocks["activity"], mocks["audit"],
+                mocks["approval"] as mock_approval,
+            ):
+                result = _run(sage_agent_runtime_service.handle_sage_chat(
+                    workspace_id="ws-1",
+                    message="send email to boss",
+                    current_user={"user_id": "owner-1"},
+                ))
+
+                approval = result["approvals_required"][0]
+                decision = approval["agent_computer_decision"]
+                self.assertEqual(decision["decision"], "block")
+                self.assertTrue(decision["blocked"])
+                self.assertEqual(decision["reason"], "kill_state:active")
+                self.assertEqual(decision["risk_decision"]["blocked_reason"], "kill_state:active")
+                self.assertIsNone(approval["approval_token"])
+                self.assertEqual(approval["status"], "blocked")
+                mock_approval.assert_not_called()
+        finally:
+            kill_switch_gate.clear_kill_switch("agent:sage_main_agent")
+
     def test_blocks_execute_skill_triggers(self):
         from server_modules.skill_registry import SkillDefinition
 

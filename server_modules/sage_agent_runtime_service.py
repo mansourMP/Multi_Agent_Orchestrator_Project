@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from server_modules import (
     activity_ledger_service,
+    kill_switch_gate,
     sage_heartbeat_service,
     sage_memory_service,
     sage_profile_service,
@@ -326,6 +327,14 @@ def _build_agent_computer_decision_for_skill(
             "triggered_by": triggered_by,
             "user_message": message,
         },
+        current_kill_state=(
+            "active"
+            if kill_switch_gate.evaluate_kill_switch(
+                workspace_id=workspace_id,
+                agent_id=SAGE_MAIN_AGENT_ID,
+            ).blocked
+            else None
+        ),
         consume_approval_memory=False,
     )
     return decision.as_dict()
@@ -500,7 +509,10 @@ async def handle_sage_chat(
                     }
                     if computer_decision.get("approval_card"):
                         approval_entry["approval_card"] = computer_decision.get("approval_card")
-                    if normalized_surface == "chat":
+                    if computer_decision.get("blocked"):
+                        approval_entry["approval_token"] = None
+                        approval_entry["status"] = "blocked"
+                    elif normalized_surface == "chat":
                         created = _create_approval_for_blocked_action(
                             workspace_id=normalized_workspace_id,
                             tenant_id=normalized_tenant_id,

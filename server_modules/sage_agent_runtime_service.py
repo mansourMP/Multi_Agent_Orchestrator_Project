@@ -726,6 +726,7 @@ async def handle_sage_chat(
             payloads = [e.to_user_payload() for e in transparency_events]
             await persist_transparency_events(
                 trace_id=trace_id,
+                tenant_id=normalized_tenant_id,
                 workspace_id=normalized_workspace_id,
                 events=payloads,
                 surface=normalized_surface,

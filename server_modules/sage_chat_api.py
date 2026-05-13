@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException
 
-from server_modules import security_audit_service
+from server_modules import activity_ledger_service, security_audit_service
 from server_modules.auth import enforce_workspace_access, workspace_tenant_id
 from server_modules.sage_agent_runtime_contract import (
     SAGE_MODE,
@@ -20,6 +20,38 @@ from server_modules.schemas import SageChatRequest, SageVoiceTaskRequest, SageAp
 
 def _coerce_text(value) -> str:
     return str(value or "").strip()
+
+
+def _resolve_tenant_id(current_user: dict | None, workspace_id: str) -> str:
+    try:
+        tenant_id = _coerce_text(workspace_tenant_id(current_user or {}, workspace_id))
+    except Exception:
+        tenant_id = ""
+    if tenant_id:
+        return tenant_id
+    workspace_access = (current_user or {}).get("workspace_access")
+    if isinstance(workspace_access, dict):
+        workspace_entry = workspace_access.get(workspace_id)
+        if isinstance(workspace_entry, dict):
+            entry_tenant = _coerce_text(workspace_entry.get("tenant_id"))
+            if entry_tenant:
+                return entry_tenant
+        for value in workspace_access.values():
+            if isinstance(value, dict):
+                entry_tenant = _coerce_text(value.get("tenant_id"))
+                if entry_tenant:
+                    return entry_tenant
+    for key in ("current_tenant_id", "default_tenant_id"):
+        candidate = _coerce_text((current_user or {}).get(key))
+        if candidate:
+            return candidate
+    tenant_ids = (current_user or {}).get("tenant_ids")
+    if isinstance(tenant_ids, list):
+        for value in tenant_ids:
+            candidate = _coerce_text(value)
+            if candidate:
+                return candidate
+    return "default"
 
 
 def _emit_approval_audit(
@@ -71,6 +103,43 @@ def _execute_approved_sage_action(*, workspace_id: str, approval_record) -> dict
     }
 
 
+async def _emit_approval_activity(
+    *,
+    action: str,
+    status: str,
+    approval_token: str,
+    tenant_id: str,
+    workspace_id: str,
+    actor_user_id: str,
+    trace_id: str,
+    review_required: bool = False,
+    summary: str = "",
+    payload: dict | None = None,
+) -> None:
+    try:
+        await activity_ledger_service.append_activity_event(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_type="user",
+            actor_id=actor_user_id or "owner",
+            event_class="approval",
+            detail_level="timeline_detail",
+            action=action,
+            trace_id=trace_id,
+            status=status,
+            review_required=review_required,
+            summary=summary or action,
+            payload={
+                "source": "sage_chat_surface",
+                "approval_token": approval_token,
+                **(payload or {}),
+            },
+            metadata={"surface": "chat"},
+        )
+    except Exception:
+        pass
+
+
 def register_sage_chat_routes(app) -> None:
     import server as _server
 
@@ -102,7 +171,7 @@ def register_sage_chat_routes(app) -> None:
             body.workspace_id,
             minimum_role="admin",
         )
-        tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+        tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
 
         try:
             result = await handle_sage_chat(
@@ -175,7 +244,7 @@ def register_sage_chat_routes(app) -> None:
             body.workspace_id,
             minimum_role="viewer",
         )
-        tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+        tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
         actor_user_id = _coerce_text((current_user or {}).get("user_id"))
 
         try:
@@ -198,6 +267,17 @@ def register_sage_chat_routes(app) -> None:
                 detail=str(exc),
             )
             raise HTTPException(status_code=400, detail=str(exc))
+        await _emit_approval_activity(
+            action="sage_approval_resolved",
+            status="approved",
+            approval_token=record.approval_token,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            actor_user_id=actor_user_id,
+            trace_id=record.trace_id,
+            summary=f"Approved action: {record.action}",
+            payload={"resolved_action": record.action},
+        )
 
         try:
             execution = _execute_approved_sage_action(
@@ -215,6 +295,17 @@ def register_sage_chat_routes(app) -> None:
                 detail=f"Executed approved action: {record.action}",
                 metadata={"action": record.action},
             )
+            await _emit_approval_activity(
+                action="sage_approval_executed",
+                status="completed",
+                approval_token=record.approval_token,
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                actor_user_id=actor_user_id,
+                trace_id=record.trace_id,
+                summary=f"Executed approved action: {record.action}",
+                payload={"executed_action": record.action},
+            )
         except Exception as exc:
             _emit_approval_audit(
                 action="approval.execute_failed",
@@ -226,6 +317,18 @@ def register_sage_chat_routes(app) -> None:
                 trace_id=record.trace_id,
                 detail=str(exc),
                 metadata={"action": record.action},
+            )
+            await _emit_approval_activity(
+                action="sage_approval_execution_failed",
+                status="failed",
+                approval_token=record.approval_token,
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                actor_user_id=actor_user_id,
+                trace_id=record.trace_id,
+                review_required=True,
+                summary=f"Failed approved action: {record.action}",
+                payload={"failed_action": record.action},
             )
             raise HTTPException(status_code=400, detail=str(exc))
 
@@ -266,7 +369,7 @@ def register_sage_chat_routes(app) -> None:
             body.workspace_id,
             minimum_role="admin",
         )
-        tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+        tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
         actor_user_id = _coerce_text((current_user or {}).get("user_id"))
 
         try:
@@ -289,6 +392,18 @@ def register_sage_chat_routes(app) -> None:
                 detail=str(exc),
             )
             raise HTTPException(status_code=400, detail=str(exc))
+        await _emit_approval_activity(
+            action="sage_approval_resolved",
+            status="rejected",
+            approval_token=record.approval_token,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            actor_user_id=actor_user_id,
+            trace_id=record.trace_id,
+            review_required=True,
+            summary=f"Rejected action: {record.action}",
+            payload={"resolved_action": record.action},
+        )
 
         _emit_approval_audit(
             action="approval.rejected",

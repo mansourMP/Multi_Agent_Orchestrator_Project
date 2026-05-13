@@ -25,6 +25,7 @@ LOGGER = logging.getLogger(__name__)
 async def persist_transparency_events(
     *,
     trace_id: str,
+    tenant_id: str = "",
     workspace_id: str,
     events: List[Dict[str, Any]],
     surface: str = "chat",
@@ -38,6 +39,7 @@ async def persist_transparency_events(
     """
     stored = 0
     tid = str(trace_id or "").strip()
+    normalized_tenant_id = str(tenant_id or "").strip() or "default"
     if not tid or not events:
         return 0
 
@@ -60,7 +62,7 @@ async def persist_transparency_events(
                 context="transparency_event",
             )
             await activity_ledger_service.append_activity_event(
-                tenant_id="",
+                tenant_id=normalized_tenant_id,
                 workspace_id=str(workspace_id or "").strip(),
                 actor_type="system",
                 actor_id=f"transparency:{tid}",

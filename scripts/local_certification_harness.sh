@@ -27,7 +27,7 @@ trim_ws() {
 }
 
 escape_field() {
-  printf '%s' "$1" | tr '|' '/' | tr '\n' ' ' | trim_ws
+  printf '%s' "${1-}" | tr '|' '/' | tr '\n' ' ' | trim_ws
 }
 
 record_result() {

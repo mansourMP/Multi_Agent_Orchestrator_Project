@@ -66,6 +66,15 @@ function getMockSocket(): MockWebSocketInstance {
   return mockWebSocketInstance;
 }
 
+async function keepEventLoopAliveUntil<T>(promise: Promise<T>): Promise<T> {
+  const keepAlive = setInterval(() => {}, 100);
+  try {
+    return await promise;
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
+
 test("connection timeout fires if onopen never called", async () => {
   const { GatewayWsClient } = await import("../cloud/ws-client");
 
@@ -167,7 +176,7 @@ test("connection timeout fires if onopen never called", async () => {
   // Don't trigger onopen - the timeout should fire
   const startTime = Date.now();
   await assert.rejects(
-    () => openSocket("ws://localhost:8080"),
+    keepEventLoopAliveUntil(openSocket("ws://localhost:8080")),
     /timed out/,
   );
   const elapsed = Date.now() - startTime;
@@ -321,7 +330,7 @@ test("timeout clears pending response without closing socket", async () => {
     timeoutMs: 50, // Very short timeout
   });
 
-  await assert.rejects(promise, /timed out/);
+  await assert.rejects(keepEventLoopAliveUntil(promise), /timed out/);
 
   // The socket should NOT have been closed
   assert.equal(mockSocket.closeWasCalled, false, "Socket should not be closed on timeout");
@@ -450,7 +459,7 @@ test("timeout clears pending response entry", async () => {
 
   // Start tracking a pending response with very short timeout
   const promise = trackPendingResponse("timeout-req-2", "gateway.heartbeat", false, false, 50);
-  await assert.rejects(promise, /timed out/);
+  await assert.rejects(keepEventLoopAliveUntil(promise), /timed out/);
 
   // After timeout, the pending response should be cleaned up
   // The pendingResponses map should be empty (the entries were cleared)
@@ -458,5 +467,5 @@ test("timeout clears pending response entry", async () => {
   // that a second request with the same ID doesn't find a duplicate
   const promise2 = trackPendingResponse("timeout-req-2", "gateway.heartbeat", false, false, 50);
   // It should reject again (meaning no pending entry was left behind blocking it)
-  await assert.rejects(promise2, /timed out/);
+  await assert.rejects(keepEventLoopAliveUntil(promise2), /timed out/);
 });

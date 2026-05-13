@@ -32,6 +32,29 @@ class TransparencyEventStoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["trace_id"], "trace-123")
         self.assertEqual(kwargs["workspace_id"], "workspace-1")
         self.assertEqual(kwargs["event_class"], "transparency_event")
+        self.assertEqual(kwargs["tenant_id"], "default")
+
+    async def test_persist_transparency_events_uses_explicit_tenant_scope(self) -> None:
+        event = {
+            "event_id": "stevt-tenant",
+            "event_type": "final_response_sent",
+            "title": "Response sent",
+            "summary": "Sage replied",
+            "status": "completed",
+        }
+        with patch(
+            "server_modules.transparency_event_store_service.activity_ledger_service.append_activity_event",
+            new_callable=AsyncMock,
+        ) as append_activity_event:
+            stored = await persist_transparency_events(
+                trace_id="trace-tenant",
+                tenant_id="tenant-42",
+                workspace_id="workspace-1",
+                events=[event],
+            )
+        self.assertEqual(stored, 1)
+        kwargs = append_activity_event.await_args.kwargs
+        self.assertEqual(kwargs["tenant_id"], "tenant-42")
 
     async def test_persist_transparency_events_redacts_before_activity_writer(self) -> None:
         event = {

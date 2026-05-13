@@ -319,6 +319,7 @@ async def execute_test_turn(
         try:
             await transparency_event_store_service.persist_transparency_events(
                 trace_id=trace_id,
+                tenant_id=tenant_id,
                 workspace_id=workspace_id,
                 events=transparency_payloads,
                 surface="studio_test",

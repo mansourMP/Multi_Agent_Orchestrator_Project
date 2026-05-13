@@ -22,17 +22,22 @@ export default async function LandingPage() {
     redirect('/workspaces/new');
   }
 
-    return (
+  return (
     <FirstLaunchPanel
       primaryAction={(
-        <AppGetStartedButton href="/signup" className="app-first-launch__primary">
-          Set up your personal agent
+        <AppGetStartedButton href="/login" className="app-first-launch__primary">
+          Log in
         </AppGetStartedButton>
       )}
       secondaryAction={(
-        <Link href="/preview" className="app-first-launch__secondary">
-          Or explore agents by others
-        </Link>
+        <>
+          <Link href="/signup" className="app-first-launch__secondary">
+            Create an account
+          </Link>
+          <Link href="/preview" className="app-first-launch__secondary">
+            Explore public agents
+          </Link>
+        </>
       )}
     />
   );

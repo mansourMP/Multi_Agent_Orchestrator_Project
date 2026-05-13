@@ -548,76 +548,76 @@ class ChannelUserAcquisitionService:
         campaign_token: str,
         metadata: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        connection = self.fallback_connection_factory()
-        self._ensure_fallback_tables(connection)
-        now_ts = self.now_epoch()
-        touch_id = f"acq_{uuid.uuid4().hex[:16]}"
-        connection.execute(
-            """
-            INSERT INTO channel_user_acquisition_touches (
-                id, tenant_id, workspace_id, deployed_agent_id, channel_key, endpoint_key,
-                external_user_id, source, campaign_token, start_count, metadata_json,
-                first_started_at, last_started_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-            ON CONFLICT(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
-            DO UPDATE SET
-                endpoint_key = CASE WHEN excluded.endpoint_key <> '' THEN excluded.endpoint_key ELSE channel_user_acquisition_touches.endpoint_key END,
-                source = CASE WHEN excluded.source <> '' THEN excluded.source ELSE channel_user_acquisition_touches.source END,
-                campaign_token = CASE WHEN excluded.campaign_token <> '' THEN excluded.campaign_token ELSE channel_user_acquisition_touches.campaign_token END,
-                start_count = channel_user_acquisition_touches.start_count + 1,
-                metadata_json = CASE
-                    WHEN excluded.metadata_json <> '{}' THEN excluded.metadata_json
-                    ELSE channel_user_acquisition_touches.metadata_json
-                END,
-                last_started_at = excluded.last_started_at,
-                updated_at = excluded.updated_at
-            """,
-            (
-                touch_id,
-                tenant_id,
-                workspace_id,
-                deployed_agent_id,
-                channel_key,
-                endpoint_key,
-                external_user_id,
-                source,
-                campaign_token,
-                json.dumps(_coerce_dict(metadata), sort_keys=True),
-                now_ts,
-                now_ts,
-                now_ts,
-                now_ts,
-            ),
-        )
-        connection.commit()
-        row = connection.execute(
-            """
-            SELECT *
-            FROM channel_user_acquisition_touches
-            WHERE tenant_id = ?
-              AND workspace_id = ?
-              AND deployed_agent_id = ?
-              AND channel_key = ?
-              AND external_user_id = ?
-            LIMIT 1
-            """,
-            (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id),
-        ).fetchone()
-        return self._fallback_row_to_touch(row)
+        with self.fallback_connection_factory() as connection:
+            self._ensure_fallback_tables(connection)
+            now_ts = self.now_epoch()
+            touch_id = f"acq_{uuid.uuid4().hex[:16]}"
+            connection.execute(
+                """
+                INSERT INTO channel_user_acquisition_touches (
+                    id, tenant_id, workspace_id, deployed_agent_id, channel_key, endpoint_key,
+                    external_user_id, source, campaign_token, start_count, metadata_json,
+                    first_started_at, last_started_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
+                DO UPDATE SET
+                    endpoint_key = CASE WHEN excluded.endpoint_key <> '' THEN excluded.endpoint_key ELSE channel_user_acquisition_touches.endpoint_key END,
+                    source = CASE WHEN excluded.source <> '' THEN excluded.source ELSE channel_user_acquisition_touches.source END,
+                    campaign_token = CASE WHEN excluded.campaign_token <> '' THEN excluded.campaign_token ELSE channel_user_acquisition_touches.campaign_token END,
+                    start_count = channel_user_acquisition_touches.start_count + 1,
+                    metadata_json = CASE
+                        WHEN excluded.metadata_json <> '{}' THEN excluded.metadata_json
+                        ELSE channel_user_acquisition_touches.metadata_json
+                    END,
+                    last_started_at = excluded.last_started_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    touch_id,
+                    tenant_id,
+                    workspace_id,
+                    deployed_agent_id,
+                    channel_key,
+                    endpoint_key,
+                    external_user_id,
+                    source,
+                    campaign_token,
+                    json.dumps(_coerce_dict(metadata), sort_keys=True),
+                    now_ts,
+                    now_ts,
+                    now_ts,
+                    now_ts,
+                ),
+            )
+            connection.commit()
+            row = connection.execute(
+                """
+                SELECT *
+                FROM channel_user_acquisition_touches
+                WHERE tenant_id = ?
+                  AND workspace_id = ?
+                  AND deployed_agent_id = ?
+                  AND channel_key = ?
+                  AND external_user_id = ?
+                LIMIT 1
+                """,
+                (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id),
+            ).fetchone()
+            return self._fallback_row_to_touch(row)
 
     def _get_touch_fallback(self, *, touch_id: str) -> Optional[Dict[str, Any]]:
-        connection = self.fallback_connection_factory()
-        self._ensure_fallback_tables(connection)
-        row = connection.execute(
-            """
-            SELECT *
-            FROM channel_user_acquisition_touches
-            WHERE id = ?
-            LIMIT 1
-            """,
-            (touch_id,),
-        ).fetchone()
-        return self._fallback_row_to_touch(row)
+        with self.fallback_connection_factory() as connection:
+            self._ensure_fallback_tables(connection)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM channel_user_acquisition_touches
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (touch_id,),
+            ).fetchone()
+            return self._fallback_row_to_touch(row)
 
     def _get_touch_fallback_by_scope(
         self,
@@ -628,22 +628,22 @@ class ChannelUserAcquisitionService:
         channel_key: str,
         external_user_id: str,
     ) -> Optional[Dict[str, Any]]:
-        connection = self.fallback_connection_factory()
-        self._ensure_fallback_tables(connection)
-        row = connection.execute(
-            """
-            SELECT *
-            FROM channel_user_acquisition_touches
-            WHERE tenant_id = ?
-              AND workspace_id = ?
-              AND deployed_agent_id = ?
-              AND channel_key = ?
-              AND external_user_id = ?
-            LIMIT 1
-            """,
-            (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id),
-        ).fetchone()
-        return self._fallback_row_to_touch(row)
+        with self.fallback_connection_factory() as connection:
+            self._ensure_fallback_tables(connection)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM channel_user_acquisition_touches
+                WHERE tenant_id = ?
+                  AND workspace_id = ?
+                  AND deployed_agent_id = ?
+                  AND channel_key = ?
+                  AND external_user_id = ?
+                LIMIT 1
+                """,
+                (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id),
+            ).fetchone()
+            return self._fallback_row_to_touch(row)
 
     def _mark_touch_converted_fallback(
         self,
@@ -653,46 +653,46 @@ class ChannelUserAcquisitionService:
         converted_email: Optional[str],
         auth_flow: Optional[str],
     ) -> Optional[Dict[str, Any]]:
-        connection = self.fallback_connection_factory()
-        self._ensure_fallback_tables(connection)
-        now_ts = self.now_epoch()
-        connection.execute(
-            """
-            UPDATE channel_user_acquisition_touches
-            SET
-                converted_user_id = CASE
-                    WHEN converted_user_id IS NULL OR converted_user_id = ? THEN ?
-                    ELSE converted_user_id
-                END,
-                converted_email = CASE
-                    WHEN converted_user_id IS NULL OR converted_user_id = ? THEN COALESCE(?, converted_email)
-                    ELSE converted_email
-                END,
-                converted_auth_flow = CASE
-                    WHEN converted_user_id IS NULL OR converted_user_id = ? THEN COALESCE(?, converted_auth_flow)
-                    ELSE converted_auth_flow
-                END,
-                converted_at = CASE
-                    WHEN converted_user_id IS NULL OR converted_user_id = ? THEN COALESCE(converted_at, ?)
-                    ELSE converted_at
-                END,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                converted_user_id,
-                converted_user_id,
-                converted_user_id,
-                str(converted_email or "").strip().lower() or None,
-                converted_user_id,
-                str(auth_flow or "").strip().lower() or None,
-                converted_user_id,
-                now_ts,
-                now_ts,
-                touch_id,
-            ),
-        )
-        connection.commit()
+        with self.fallback_connection_factory() as connection:
+            self._ensure_fallback_tables(connection)
+            now_ts = self.now_epoch()
+            connection.execute(
+                """
+                UPDATE channel_user_acquisition_touches
+                SET
+                    converted_user_id = CASE
+                        WHEN converted_user_id IS NULL OR converted_user_id = ? THEN ?
+                        ELSE converted_user_id
+                    END,
+                    converted_email = CASE
+                        WHEN converted_user_id IS NULL OR converted_user_id = ? THEN COALESCE(?, converted_email)
+                        ELSE converted_email
+                    END,
+                    converted_auth_flow = CASE
+                        WHEN converted_user_id IS NULL OR converted_user_id = ? THEN COALESCE(?, converted_auth_flow)
+                        ELSE converted_auth_flow
+                    END,
+                    converted_at = CASE
+                        WHEN converted_user_id IS NULL OR converted_user_id = ? THEN COALESCE(converted_at, ?)
+                        ELSE converted_at
+                    END,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    converted_user_id,
+                    converted_user_id,
+                    converted_user_id,
+                    str(converted_email or "").strip().lower() or None,
+                    converted_user_id,
+                    str(auth_flow or "").strip().lower() or None,
+                    converted_user_id,
+                    now_ts,
+                    now_ts,
+                    touch_id,
+                ),
+            )
+            connection.commit()
         return self._get_touch_fallback(touch_id=touch_id)
 
     def _fallback_row_to_touch(self, row: Any) -> Optional[Dict[str, Any]]:

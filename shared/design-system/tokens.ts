@@ -10,7 +10,7 @@ const px = (value: number): string => `${value}px`;
 const ms = (value: number): string => `${value}ms`;
 
 export const DESIGN_SYSTEM_THEME_ATTRIBUTE = 'data-emp-theme';
-export const DESIGN_SYSTEM_DEFAULT_THEME = 'light' as const;
+export const DESIGN_SYSTEM_DEFAULT_THEME = 'dark' as const;
 
 export const DESIGN_SYSTEM_FONTS = {
   sans: 'var(--font-dm-sans), "DM Sans", "Inter", "Geist", "SF Pro Text", "SF Pro Display", "Segoe UI", sans-serif',
@@ -191,20 +191,20 @@ export const DESIGN_SYSTEM_BRAND_COLORS = {
     errorMuted: 'rgba(194, 86, 86, 0.12)',
   },
   dark: {
-    app: '#0E1417',
-    sidebar: '#121B20',
-    surface: '#182126',
-    panel: '#182126',
-    panelMuted: '#223038',
-    border: 'rgba(191, 216, 223, 0.12)',
-    borderStrong: '#35505B',
-    borderMuted: 'rgba(191, 216, 223, 0.08)',
-    text: '#EDF2F4',
-    textMuted: '#96A7B0',
-    textSoft: 'rgba(150, 167, 176, 0.72)',
-    primary: '#1F7F73',
-    primaryMuted: 'rgba(31, 127, 115, 0.3)',
-    highlight: '#2EA895',
+    app: '#1A1A1A',
+    sidebar: '#202020',
+    surface: '#242424',
+    panel: '#242424',
+    panelMuted: '#2E2E2E',
+    border: 'rgba(240, 240, 240, 0.1)',
+    borderStrong: '#3A3A3A',
+    borderMuted: 'rgba(240, 240, 240, 0.07)',
+    text: '#F0F0F0',
+    textMuted: '#A4A4A4',
+    textSoft: 'rgba(164, 164, 164, 0.72)',
+    primary: '#3A3A3A',
+    primaryMuted: 'rgba(74, 74, 74, 0.3)',
+    highlight: '#4A4A4A',
     warning: '#E4AF58',
     warningMuted: 'rgba(228, 175, 88, 0.18)',
     success: '#4EC598',

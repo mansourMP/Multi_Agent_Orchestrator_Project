@@ -33,6 +33,7 @@ import {
   resolveWorkstationApproval,
   subscribeWorkstationApprovalResolved,
 } from '@/lib/workspace/workstation-approval-events';
+import { subscribeWorkstationChatThreadSelected } from '@/lib/workspace/workstation-chat-thread-events';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { subscribeWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import {
@@ -874,28 +875,6 @@ export function WorkstationChatPane() {
     }
   };
 
-  const openRecentThread = async (threadId: string) => {
-    const nextThreadId = readString(threadId);
-    if (!nextThreadId || nextThreadId === activeThreadId || isSending) {
-      return;
-    }
-    setHasEnteredConversationFlow(true);
-    setStatusMessage(null);
-    setShowProjectedAssistant(false);
-    setTimelineSettled(false);
-    setLiveTimelineEvents([]);
-    setIsLoading(true);
-    try {
-      activeThreadIdRef.current = nextThreadId;
-      setActiveThreadId(nextThreadId);
-      await refreshCanonicalState(nextThreadId);
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Could not open this thread.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const startNewThread = async (seed?: {
     title?: string;
     sourceRunId?: string | null;
@@ -977,6 +956,32 @@ export function WorkstationChatPane() {
   useEffect(() => {
     persistActiveThread(bootstrap.workspace.id, activeThreadId);
   }, [activeThreadId, bootstrap.workspace.id]);
+
+  useEffect(() => subscribeWorkstationChatThreadSelected((detail) => {
+    if (detail.workspaceId !== bootstrap.workspace.id) {
+      return;
+    }
+    const nextThreadId = readString(detail.threadId);
+    if (!nextThreadId || nextThreadId === activeThreadIdRef.current) {
+      return;
+    }
+    setHasEnteredConversationFlow(true);
+    setStatusMessage(null);
+    setSendFailureNotice(null);
+    setShowProjectedAssistant(false);
+    setTimelineSettled(false);
+    setLiveTimelineEvents([]);
+    activeThreadIdRef.current = nextThreadId;
+    setActiveThreadId(nextThreadId);
+    setIsLoading(true);
+    void refreshCanonicalState(nextThreadId)
+      .catch((error) => {
+        setStatusMessage(error instanceof Error ? error.message : 'Could not open this thread.');
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
+  }), [bootstrap.workspace.id]);
 
   useEffect(() => {
     const rememberedThreadId = readPersistedActiveThread(bootstrap.workspace.id) ?? PRIMARY_THREAD_ID;
@@ -1456,45 +1461,6 @@ export function WorkstationChatPane() {
     })),
     [runs],
   );
-  const recentThreadRows = useMemo(() => {
-    const normalized = [
-      {
-        threadId: activeThreadId,
-        title: readString(thread.title) || 'Current chat',
-        updatedAt: null as string | null,
-      },
-      ...recentThreads.map((item) => ({
-        threadId: readString(item.threadId),
-        title: readString(item.title) || 'Chat',
-        updatedAt: readString(item.updatedAt) || null,
-      })),
-    ].filter((item) => item.threadId.length > 0);
-
-    const deduped = new Map<string, {
-      threadId: string;
-      title: string;
-      updatedAt: string | null;
-    }>();
-    for (const item of normalized) {
-      if (!deduped.has(item.threadId)) {
-        deduped.set(item.threadId, item);
-      }
-    }
-
-    return Array.from(deduped.values())
-      .sort((left, right) => {
-        if (left.threadId === activeThreadId) {
-          return -1;
-        }
-        if (right.threadId === activeThreadId) {
-          return 1;
-        }
-        const leftTs = left.updatedAt ? Date.parse(left.updatedAt) : 0;
-        const rightTs = right.updatedAt ? Date.parse(right.updatedAt) : 0;
-        return rightTs - leftTs;
-      })
-      .slice(0, 8);
-  }, [activeThreadId, recentThreads, thread.title]);
   const visibleMemoryItems = filteredMemoryItems.slice(0, 6);
   const pendingDeleteMemory = pendingDeleteMemoryId
     ? memoryItems.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null
@@ -2374,44 +2340,6 @@ export function WorkstationChatPane() {
         data-workstation-chat="pane"
         className={`app-chat-page app-chat-page--surface${showFirstImpression ? ' app-chat-page--first-impression' : ''}`}
       >
-        <div className="app-chat-history-bar" aria-label="Recent chats">
-          <div className="app-chat-history-bar__head">
-            <span className="app-chat-history-bar__title">Recent chats</span>
-            <AppButton
-              type="button"
-              tone="secondary"
-              onClick={() => {
-                void startNewThread();
-              }}
-              disabled={isSending}
-            >
-              New chat
-            </AppButton>
-          </div>
-          <div className="app-chat-history-bar__list" role="list">
-            {recentThreadRows.map((item) => {
-              const isActive = item.threadId === activeThreadId;
-              return (
-                <button
-                  key={item.threadId}
-                  type="button"
-                  role="listitem"
-                  className={`app-chat-history-pill${isActive ? ' app-chat-history-pill--active' : ''}`}
-                  onClick={() => {
-                    void openRecentThread(item.threadId);
-                  }}
-                  disabled={isSending || isActive}
-                  aria-current={isActive ? 'true' : undefined}
-                >
-                  <span className="app-chat-history-pill__label">{item.title}</span>
-                  <span className="app-chat-history-pill__time">
-                    {isActive ? 'Current' : formatRelativeTime(item.updatedAt)}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
         <section className={`app-chat-thread app-chat-thread--surface${showBlankTranscript || showFirstImpression ? ' app-chat-thread--blank' : ''}`}>
           {showContextStrip ? (
             <div className="app-chat-context-strip" aria-label="Sage conversation context">

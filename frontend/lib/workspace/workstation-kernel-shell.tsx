@@ -3,9 +3,9 @@
 import type { PropsWithChildren } from 'react';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 
-import { Activity, Bot, Compass, LayoutGrid, Menu, Waypoints } from 'lucide-react';
+import { Activity, Bot, Compass, LayoutGrid, Menu, Plus, Waypoints } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
@@ -13,7 +13,12 @@ import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
 import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationActivityVersion } from '@/lib/workspace/workspace-services';
+import { emitWorkstationChatThreadSelected } from '@/lib/workspace/workstation-chat-thread-events';
 import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
+import {
+  activeThreadStorageKey,
+  persistActiveThread,
+} from '@/lib/workspace/workstation-chat-pane-model';
 import {
   buildWorkspaceRouteHref,
   getWorkspaceNavRouteDefinition,
@@ -22,11 +27,31 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'memory', 'integrations', 'heartbeat', 'activity'],
+  sage: ['chat', 'runs', 'memory', 'integrations', 'heartbeat', 'activity'],
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
   settings: ['settings'],
+};
+
+type ThreadTurnRecord = Record<string, unknown> & {
+  role?: string | null;
+  content?: string | null;
+};
+
+type ThreadRecord = Record<string, unknown> & {
+  id?: string | null;
+  title?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_turn_at?: string | null;
+  turns?: ThreadTurnRecord[] | null;
+};
+
+type ChatHistoryItem = {
+  id: string;
+  title: string;
+  occurredAt: string | null;
 };
 
 const MOBILE_DESTINATION_NAV: readonly {
@@ -56,6 +81,236 @@ function readPendingApprovalCount(payload: unknown): number {
   }).length;
 }
 
+function readString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function normalizeThreadItems(payload: unknown): ThreadRecord[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  const items = (payload as Record<string, unknown>).items;
+  return Array.isArray(items)
+    ? items.filter((item): item is ThreadRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function parseTimestamp(value: string | null): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function isPlaceholderTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return normalized === '' || normalized === 'new chat' || normalized === 'chat' || normalized === 'primary thread';
+}
+
+function compactHistoryTitle(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'Conversation';
+  }
+  return normalized.length > 72 ? `${normalized.slice(0, 69).trimEnd()}...` : normalized;
+}
+
+function threadHistoryTitle(thread: ThreadRecord): string {
+  const explicitTitle = readString(thread.title);
+  if (explicitTitle && !isPlaceholderTitle(explicitTitle)) {
+    return compactHistoryTitle(explicitTitle);
+  }
+  const turns = Array.isArray(thread.turns) ? thread.turns : [];
+  const firstUserTurn = turns.find((turn) => readString(turn.role).toLowerCase() === 'user');
+  const firstContent = readString(firstUserTurn?.content);
+  return compactHistoryTitle(firstContent || explicitTitle || 'Conversation');
+}
+
+function formatHistoryDate(value: string | null): string {
+  if (!value) {
+    return 'Recent';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'Recent';
+  }
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date);
+}
+
+function readActiveThreadId(workspaceId: string): string | null {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+    return null;
+  }
+  try {
+    return readString(window.localStorage.getItem(activeThreadStorageKey(workspaceId))) || null;
+  } catch {
+    return null;
+  }
+}
+
+function toHistoryItems(threads: ThreadRecord[]): ChatHistoryItem[] {
+  return threads
+    .map((thread) => {
+      const id = readString(thread.id);
+      if (!id) {
+        return null;
+      }
+      const occurredAt = readString(thread.last_turn_at)
+        || readString(thread.updated_at)
+        || readString(thread.created_at)
+        || null;
+      return {
+        id,
+        title: threadHistoryTitle(thread),
+        occurredAt,
+      } satisfies ChatHistoryItem;
+    })
+    .filter((item): item is ChatHistoryItem => item !== null)
+    .sort((left, right) => parseTimestamp(right.occurredAt) - parseTimestamp(left.occurredAt));
+}
+
+function MainAgentHistoryPopover({
+  chatHref,
+  client,
+  workspaceId,
+}: {
+  chatHref: string;
+  client: {
+    listThreads: (options?: { includeTurns?: boolean; limit?: number }) => Promise<Record<string, unknown>>;
+  };
+  workspaceId: string;
+}) {
+  const router = useRouter();
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<ChatHistoryItem[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(() => readActiveThreadId(workspaceId));
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+    client.listThreads({ includeTurns: true, limit: 120 })
+      .then((payload) => {
+        if (!cancelled) {
+          setItems(toHistoryItems(normalizeThreadItems(payload)));
+          setActiveThreadId(readActiveThreadId(workspaceId));
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, open, workspaceId]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (buttonRef.current?.contains(target) || popoverRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [open]);
+
+  const openThread = (threadId: string) => {
+    persistActiveThread(workspaceId, threadId);
+    emitWorkstationChatThreadSelected({ workspaceId, threadId });
+    setActiveThreadId(threadId);
+    setOpen(false);
+    router.push(chatHref);
+  };
+
+  const createThread = () => {
+    const threadId = `thread-${Date.now()}`;
+    persistActiveThread(workspaceId, threadId);
+    emitWorkstationChatThreadSelected({ workspaceId, threadId });
+    setActiveThreadId(threadId);
+    setOpen(false);
+    router.push(chatHref);
+  };
+
+  return (
+    <div className="workstation-history-tab">
+      <button
+        ref={buttonRef}
+        type="button"
+        className={joinClassNames(
+          'workstation-titlebar__link',
+          open && 'workstation-titlebar__link--active',
+        )}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>History</span>
+      </button>
+      {open ? (
+        <div
+          ref={popoverRef}
+          className="workstation-history-popover"
+          role="dialog"
+          aria-label="Chat history"
+        >
+          <button
+            type="button"
+            className="workstation-history-popover__new"
+            onClick={createThread}
+          >
+            <Plus size={20} aria-hidden="true" />
+            <span>New Chat</span>
+          </button>
+          <div className="workstation-history-popover__list" aria-label="Recent chats">
+            {isLoading ? (
+              <div className="workstation-history-popover__state">Loading history...</div>
+            ) : error ? (
+              <div className="workstation-history-popover__state">History could not refresh.</div>
+            ) : items.length === 0 ? (
+              <div className="workstation-history-popover__state">No chat history yet.</div>
+            ) : items.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={joinClassNames(
+                  'workstation-history-popover__row',
+                  activeThreadId === item.id && 'workstation-history-popover__row--active',
+                )}
+                onClick={() => openThread(item.id)}
+              >
+                <span className="workstation-history-popover__title">{item.title}</span>
+                <span className="workstation-history-popover__date">{formatHistoryDate(item.occurredAt)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function WorkstationKernelShell({
   children,
 }: PropsWithChildren) {
@@ -80,7 +335,6 @@ export function WorkstationKernelShell({
   const activeMobileDestinationId = useMemo(() => {
     if (
       activeRouteId === 'activity'
-      || activeRouteId === 'runs'
       || activeRouteId === 'approvals'
       || activeRouteId === 'notifications'
     ) {
@@ -209,19 +463,28 @@ export function WorkstationKernelShell({
             </Link>
           ) : null}
           navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
-            <Link
-              key={route.id}
-              href={route.href}
-              prefetch
-              aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
-              className={joinClassNames(
-                'workstation-titlebar__link',
-                route.id === 'artifacts' && 'workstation-titlebar__link--muted',
-                isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
-              )}
-            >
-              <span>{route.label}</span>
-            </Link>
+            route.id === 'runs' ? (
+              <MainAgentHistoryPopover
+                key={route.id}
+                chatHref={routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`}
+                client={services.client}
+                workspaceId={workspaceId}
+              />
+            ) : (
+              <Link
+                key={route.id}
+                href={route.href}
+                prefetch
+                aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
+                className={joinClassNames(
+                  'workstation-titlebar__link',
+                  route.id === 'artifacts' && 'workstation-titlebar__link--muted',
+                  isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
+                )}
+              >
+                <span>{route.label}</span>
+              </Link>
+            )
           )) : null}
         />
       </div>

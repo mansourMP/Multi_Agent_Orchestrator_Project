@@ -57,7 +57,6 @@ const SECONDARY_DESTINATIONS: RailDestination[] = [
 const ACTIVITY_ROUTE_IDS = new Set<WorkspaceRouteId>([
   'activity',
   'heartbeat',
-  'runs',
   'approvals',
   'notifications',
 ]);

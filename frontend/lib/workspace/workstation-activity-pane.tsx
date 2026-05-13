@@ -19,6 +19,7 @@ import {
   WorkstationSurfaceNotice,
   WorkstationSurfaceRoot,
 } from '@/lib/workspace/workstation-surface-primitives';
+import { WorkstationSplitWorkbench } from '@/lib/workspace/workstation-split-workbench';
 
 type SageMemoryCategoryRecord = {
   id: string;
@@ -1017,14 +1018,18 @@ export function WorkstationActivityPane() {
           </div>
         ) : (
           <>
-            <section className="settings-workbench app-memory-settings-workbench" aria-label="Sage memory documents">
-              <aside className="settings-nav" aria-label="Sage memory documents">
+            <WorkstationSplitWorkbench
+              ariaLabel="Memory"
+              className="app-memory-split-workbench"
+              sidebarHeader={(
                 <div className="app-settings-sidebar__header">
                   <h2 className="app-settings-sidebar__title">Memory</h2>
                   <p className="app-settings-sidebar__subtitle">
                     {Math.min(memoryUsed, memoryLimit)}/{memoryLimit} saved slots
                   </p>
                 </div>
+              )}
+              sidebar={(
                 <div className="app-memory-document-nav">
                   {memoryDocumentNavItems.map((item) => (
                     <button
@@ -1041,6 +1046,8 @@ export function WorkstationActivityPane() {
                     </button>
                   ))}
                 </div>
+              )}
+              sidebarFooter={(
                 <div className="app-memory-document-sidebar__footer">
                   <button
                     type="button"
@@ -1069,11 +1076,10 @@ export function WorkstationActivityPane() {
                     Export
                   </button>
                 </div>
-              </aside>
-              <div className="settings-content">
-                {renderSelectedMemoryDocument()}
-              </div>
-            </section>
+              )}
+            >
+              {renderSelectedMemoryDocument()}
+            </WorkstationSplitWorkbench>
           </>
         )}
       </main>

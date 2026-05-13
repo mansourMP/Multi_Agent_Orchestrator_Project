@@ -52,6 +52,7 @@ export function WorkstationTitlebar({
         ) : (
           <span className="workstation-titlebar__surface">{surfaceLabel}</span>
         )}
+        <div className="workstation-titlebar__brand-actions" id="workstation-titlebar-brand-actions-slot" />
       </div>
       {navigation ? (
         <nav className="workstation-titlebar__nav" aria-label="Workspace views">

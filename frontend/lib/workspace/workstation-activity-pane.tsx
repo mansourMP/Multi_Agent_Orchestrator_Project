@@ -603,7 +603,7 @@ export function WorkstationActivityPane() {
     if (typeof document === 'undefined') {
       return;
     }
-    setTitlebarActionsHost(document.getElementById('workstation-titlebar-actions-slot'));
+    setTitlebarActionsHost(document.getElementById('workstation-titlebar-brand-actions-slot'));
   }, []);
 
   useEffect(() => {

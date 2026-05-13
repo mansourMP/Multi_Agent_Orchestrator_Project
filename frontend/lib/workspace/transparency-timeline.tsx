@@ -59,7 +59,7 @@ function eventPillLabel(evt: TransparencyEventPayload): string {
 function statusColor(status?: string): string {
   switch (status) {
     case "running":
-      return "var(--color-accent, #3b82f6)";
+      return "var(--color-accent, var(--app-accent, #3a3a3a))";
     case "completed":
       return "var(--color-ok, #22c55e)";
     case "failed":

@@ -44,7 +44,7 @@ def register_sage_context_file_routes(app) -> None:
             ],
         }
 
-    @app.patch("/api/sage-context-files/{filename}", dependencies=[Depends(member_dependency)])
+    @app.patch("/api/sage-context-files/{filename:path}", dependencies=[Depends(member_dependency)])
     async def update_workspace_sage_context_file(
         filename: str,
         body: SageContextFileUpdateRequest,

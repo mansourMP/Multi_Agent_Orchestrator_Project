@@ -25,7 +25,7 @@ export const DESIGN_SYSTEM_FONT_WEIGHTS = {
 } as const;
 
 export const DESIGN_SYSTEM_LAYOUT = {
-  sidebarWidth: 68,
+  sidebarWidth: 88,
   inspectorWidth: 360,
   titlebarHeight: 40,
 } as const;
@@ -180,9 +180,9 @@ export const DESIGN_SYSTEM_BRAND_COLORS = {
     text: '#122026',
     textMuted: '#60737C',
     textSoft: 'rgba(96, 115, 124, 0.72)',
-    primary: '#1F7F73',
-    primaryMuted: 'rgba(31, 127, 115, 0.14)',
-    highlight: '#19695F',
+    primary: '#202020',
+    primaryMuted: 'rgba(32, 32, 32, 0.12)',
+    highlight: '#2F2F2F',
     warning: '#B77A1F',
     warningMuted: 'rgba(183, 122, 31, 0.12)',
     success: '#218E68',

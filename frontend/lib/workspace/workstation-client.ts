@@ -1275,7 +1275,7 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     sageContextFiles:
       `/api/sage-context-files${buildQueryString({ workspace_id: workspaceId })}`,
     sageContextFile: (filename) =>
-      `/api/sage-context-files/${encodeURIComponent(filename)}`,
+      `/api/sage-context-files/${filename.split('/').map((segment) => encodeURIComponent(segment)).join('/')}`,
     sageMemoryEntries: '/api/sage-memory/entries',
     sageMemoryEntry: (entryId) =>
       `/api/sage-memory/entries/${encodeURIComponent(entryId)}`,

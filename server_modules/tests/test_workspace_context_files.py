@@ -83,6 +83,22 @@ class WorkspaceContextFilesTests(unittest.TestCase):
                 self.assertIn("SOUL.md", files)
                 self.assertIn("REFLECTION.md", files)
 
+    def test_user_memory_files_round_trip_and_are_listed(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            with patch("server_modules.workspace_context._WORKSPACE_DIR", Path(tempdir)):
+                filename = "memory/files/SHOP_PLAYBOOK.md"
+                content = "# Shop playbook\n\n- Keep fulfillment notes here.\n"
+
+                saved = workspace_context.write_workspace_context_file(
+                    filename,
+                    content,
+                    workspace_id="workspace-1",
+                )
+                files = workspace_context.read_workspace_context_files(workspace_id="workspace-1")
+
+                self.assertEqual(saved["filename"], filename)
+                self.assertEqual(files[filename], content)
+
     def test_validate_rejects_illegal_context_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             with patch("server_modules.workspace_context._WORKSPACE_DIR", Path(tempdir)):
@@ -99,6 +115,11 @@ class WorkspaceContextFilesTests(unittest.TestCase):
                     "memory/.dreams",
                     "memory/.dreams/../../foo.md",
                     "memory/.dreams/.keep.md",
+                    "memory/files",
+                    "memory/files/.hidden.md",
+                    "memory/files/../../foo.md",
+                    "memory/files/bad/name.md",
+                    "memory/files/bad name.md",
                     "notes.txt",
                 ]
                 for filename in invalid_filenames:
@@ -164,6 +185,23 @@ class WorkspaceContextFilesTests(unittest.TestCase):
                     workspace_context.write_workspace_context_file(
                         "memory/.dreams/stage-overflow.md",
                         "# draft\n",
+                        workspace_id=workspace_id,
+                    )
+
+    def test_user_memory_file_quota_rejects_more_than_twenty_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            with patch("server_modules.workspace_context._WORKSPACE_DIR", Path(tempdir)):
+                workspace_id = "workspace-1"
+                for idx in range(workspace_context.MAX_CONTEXT_USER_MEMORY_FILES):
+                    workspace_context.write_workspace_context_file(
+                        f"memory/files/FILE_{idx}.md",
+                        "# memory\n",
+                        workspace_id=workspace_id,
+                    )
+                with self.assertRaises(ValueError):
+                    workspace_context.write_workspace_context_file(
+                        "memory/files/FILE_OVERFLOW.md",
+                        "# memory\n",
                         workspace_id=workspace_id,
                     )
 

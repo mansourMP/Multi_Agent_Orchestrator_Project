@@ -53,20 +53,28 @@ export function AppThemeProvider({
   preference: AppThemePreference;
 }>) {
   const [prefersDark, setPrefersDark] = useState<boolean>(() => {
-    const documentTheme = readDocumentTheme();
-    if (documentTheme) {
-      return documentTheme === 'dark';
-    }
     if (preference === 'dark') {
       return true;
     }
     if (preference === 'light') {
       return false;
     }
+    const documentTheme = readDocumentTheme();
+    if (documentTheme) {
+      return documentTheme === 'dark';
+    }
     return readSystemDarkPreference();
   });
 
   useEffect(() => {
+    if (preference === 'dark') {
+      setPrefersDark(true);
+      return undefined;
+    }
+    if (preference === 'light') {
+      setPrefersDark(false);
+      return undefined;
+    }
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
       return undefined;
     }
@@ -81,7 +89,7 @@ export function AppThemeProvider({
     }
     mediaQuery.addListener(onChange);
     return () => mediaQuery.removeListener(onChange);
-  }, []);
+  }, [preference]);
 
   const resolvedTheme = resolveAppThemePreference(preference, prefersDark);
 

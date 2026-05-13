@@ -29,11 +29,13 @@ MAX_CONTEXT_FILE_BYTES = 64_000
 MAX_CONTEXT_SCOPE_BYTES = 512_000
 MAX_CONTEXT_DAILY_NOTES = 365
 MAX_CONTEXT_DREAM_STAGING_NOTES = 10
+MAX_CONTEXT_USER_MEMORY_FILES = 20
 DREAM_STAGING_TTL_DAYS = 7
 
 _DATE_SEGMENT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 DAILY_NOTE_RE = re.compile(r"^memory/(\d{4}-\d{2}-\d{2})\.md$")
 DREAMS_NOTE_RE = re.compile(r"^memory/\.dreams/([A-Za-z0-9][A-Za-z0-9._-]*)\.md$")
+USER_MEMORY_FILE_RE = re.compile(r"^memory/files/([A-Za-z0-9][A-Za-z0-9._-]*)\.md$")
 
 DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
     "SOUL.md": (
@@ -154,7 +156,11 @@ def _validate_context_path(filename: str) -> str:
         raise ValueError(f"Path traversal is not allowed: {normalized}")
 
     if normalized not in ALLOWED_CONTEXT_FILENAMES:
-        if not DAILY_NOTE_RE.fullmatch(normalized) and not DREAMS_NOTE_RE.fullmatch(normalized):
+        if (
+            not DAILY_NOTE_RE.fullmatch(normalized)
+            and not DREAMS_NOTE_RE.fullmatch(normalized)
+            and not USER_MEMORY_FILE_RE.fullmatch(normalized)
+        ):
             raise ValueError(f"Unsupported context filename: {normalized}")
 
     if len(segments) == 1:
@@ -176,9 +182,13 @@ def _validate_context_path(filename: str) -> str:
         return normalized
 
     if len(segments) == 3 and segments[0] == "memory":
-        if not DREAMS_NOTE_RE.fullmatch(normalized):
-            raise ValueError(f"Unsupported context filename: {normalized}")
-        if segments[1] != ".dreams":
+        if segments[1] == ".dreams":
+            if not DREAMS_NOTE_RE.fullmatch(normalized):
+                raise ValueError(f"Unsupported context filename: {normalized}")
+        elif segments[1] == "files":
+            if not USER_MEMORY_FILE_RE.fullmatch(normalized):
+                raise ValueError(f"Unsupported context filename: {normalized}")
+        else:
             raise ValueError(f"Unsupported context filename: {normalized}")
         if not normalized.lower().endswith(".md"):
             raise ValueError(f"Only markdown files are allowed: {normalized}")
@@ -216,6 +226,18 @@ def _iter_context_file_paths(root: Path):
         if rel.startswith("memory/.dreams/"):
             continue
         yield rel, path
+
+    files_dir = memory_dir / "files"
+    if files_dir.exists() and files_dir.is_dir():
+        for path in sorted(files_dir.iterdir(), key=lambda item: item.name):
+            if not path.is_file():
+                continue
+            rel = f"memory/files/{path.name}"
+            try:
+                normalize_workspace_context_filename(rel)
+            except ValueError:
+                continue
+            yield rel, path
 
     dream_dir = memory_dir / ".dreams"
     if not dream_dir.exists() or not dream_dir.is_dir():
@@ -286,6 +308,20 @@ def _count_existing_dream_notes(root: Path) -> int:
             continue
         rel = f"memory/.dreams/{path.name}"
         if DREAMS_NOTE_RE.fullmatch(rel):
+            count += 1
+    return count
+
+
+def _count_existing_user_memory_files(root: Path) -> int:
+    files_dir = root / "memory" / "files"
+    if not files_dir.exists() or not files_dir.is_dir():
+        return 0
+    count = 0
+    for path in sorted(files_dir.iterdir(), key=lambda item: item.name):
+        if not path.is_file():
+            continue
+        rel = f"memory/files/{path.name}"
+        if USER_MEMORY_FILE_RE.fullmatch(rel):
             count += 1
     return count
 
@@ -372,6 +408,9 @@ def write_workspace_context_file(
     if DREAMS_NOTE_RE.fullmatch(normalized):
         if not path.exists() and _count_existing_dream_notes(root) >= MAX_CONTEXT_DREAM_STAGING_NOTES:
             raise ValueError("Dream staging storage exceeds file quota.")
+    if USER_MEMORY_FILE_RE.fullmatch(normalized):
+        if not path.exists() and _count_existing_user_memory_files(root) >= MAX_CONTEXT_USER_MEMORY_FILES:
+            raise ValueError("Memory file storage exceeds file quota.")
 
     payload = str(content or "")
     encoded = payload.encode("utf-8")

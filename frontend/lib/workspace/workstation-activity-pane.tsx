@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { Code2, Download, Eye, Pencil } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Code2, Download, Eye, Pencil, Plus } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
@@ -114,6 +115,49 @@ const MEMORY_SENSITIVITY_META: Record<MemorySensitivityClass, { label: string; d
 };
 
 const MEMORY_ITEM_LIMIT = 50;
+const MEMORY_FILE_LIMIT = 20;
+
+function formatMemoryDocumentLabel(filename: string): string {
+  const parts = filename.split('/');
+  return parts[parts.length - 1] || filename;
+}
+
+function formatMemoryDocumentDescription(filename: string): string {
+  if (filename.startsWith('memory/files/')) {
+    return 'Memory file';
+  }
+  if (filename.startsWith('memory/')) {
+    return 'Memory note';
+  }
+  return 'Markdown projection';
+}
+
+function normalizeUserMemoryFilename(input: string): string {
+  const baseName = input
+    .trim()
+    .replace(/\.md$/i, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^[._-]+|[._-]+$/g, '')
+    .slice(0, 48);
+  if (!baseName) {
+    return '';
+  }
+  return `memory/files/${baseName.toUpperCase()}.md`;
+}
+
+function titleFromMemoryFilename(filename: string): string {
+  return formatMemoryDocumentLabel(filename)
+    .replace(/\.md$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function defaultUserMemoryFileContent(filename: string): string {
+  const title = titleFromMemoryFilename(filename) || 'Memory file';
+  return `# ${title}\n\n- Add durable memory here.\n`;
+}
 
 function readString(value: unknown): string {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -476,12 +520,17 @@ export function WorkstationActivityPane() {
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   const [isIdentitySheetOpen, setIsIdentitySheetOpen] = useState(false);
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
+  const [isMemoryFileSheetOpen, setIsMemoryFileSheetOpen] = useState(false);
+  const [memoryFileNameDraft, setMemoryFileNameDraft] = useState('');
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultMemoryDraft());
   const [mutatingMemory, setMutatingMemory] = useState<string | null>(null);
   const [selectedMemoryDocumentId, setSelectedMemoryDocumentId] = useState('overview');
   const [memoryDocumentViewMode, setMemoryDocumentViewMode] = useState<MemoryDocumentViewMode>('preview');
   const [editingDocumentId, setEditingDocumentId] = useState<string | null>(null);
   const [editingDocumentText, setEditingDocumentText] = useState('');
+  const [isMemoryActionMenuOpen, setIsMemoryActionMenuOpen] = useState(false);
+  const [titlebarActionsHost, setTitlebarActionsHost] = useState<HTMLElement | null>(null);
+  const memoryActionMenuRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = async (showLoading = false) => {
     if (showLoading) {
@@ -550,6 +599,37 @@ export function WorkstationActivityPane() {
     };
   }, [services.client]);
 
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    setTitlebarActionsHost(document.getElementById('workstation-titlebar-actions-slot'));
+  }, []);
+
+  useEffect(() => {
+    if (!isMemoryActionMenuOpen) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && memoryActionMenuRef.current?.contains(target)) {
+        return;
+      }
+      setIsMemoryActionMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMemoryActionMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMemoryActionMenuOpen]);
+
   const categoryLabels = useMemo(
     () => new Map(snapshot.categories.map((category) => [readString(category.id), readString(category.label)])),
     [snapshot.categories],
@@ -609,8 +689,8 @@ export function WorkstationActivityPane() {
     },
     ...projectionDocuments.map((document) => ({
       id: `projection:${document.filename}`,
-      label: document.filename,
-      description: 'Markdown projection',
+      label: formatMemoryDocumentLabel(document.filename),
+      description: formatMemoryDocumentDescription(document.filename),
     })),
     {
       id: 'pinned',
@@ -628,6 +708,11 @@ export function WorkstationActivityPane() {
       description: `${sensitiveMemoryItems.length} private facts`,
     },
   ], [pinnedMemoryItems.length, projectionDocuments, recentMemoryItems.length, sensitiveMemoryItems.length]);
+  const userMemoryFileCount = useMemo(
+    () => projectionDocuments.filter((document) => document.filename.startsWith('memory/files/')).length,
+    [projectionDocuments],
+  );
+  const memoryFileLimitReached = userMemoryFileCount >= MEMORY_FILE_LIMIT;
 
   useEffect(() => {
     if (!memoryDocumentNavItems.some((item) => item.id === selectedMemoryDocumentId)) {
@@ -667,9 +752,15 @@ export function WorkstationActivityPane() {
     }
   };
 
-  const openCreateMemory = () => {
-    setMemoryDraft(defaultMemoryDraft());
-    setIsMemorySheetOpen(true);
+  const openCreateMemoryFile = () => {
+    if (memoryFileLimitReached) {
+      setStatusMessage(`Memory files are limited to ${MEMORY_FILE_LIMIT}.`);
+      return;
+    }
+    setMemoryFileNameDraft('');
+    setError(null);
+    setStatusMessage(null);
+    setIsMemoryFileSheetOpen(true);
   };
 
   const openEditMemory = (entry: WorkstationSageMemoryRecord) => {
@@ -789,6 +880,83 @@ export function WorkstationActivityPane() {
     } finally {
       setMutatingMemory(null);
     }
+  };
+
+  const createMemoryFile = async () => {
+    if (mutatingMemory) {
+      return;
+    }
+    if (memoryFileLimitReached) {
+      setError(`Memory files are limited to ${MEMORY_FILE_LIMIT}.`);
+      return;
+    }
+    const filename = normalizeUserMemoryFilename(memoryFileNameDraft);
+    if (!filename) {
+      setError('Enter a file name for the new memory file.');
+      return;
+    }
+    const filenameLabel = formatMemoryDocumentLabel(filename).toLowerCase();
+    if (projectionDocuments.some((document) => (
+      document.filename.toLowerCase() === filename.toLowerCase()
+      || formatMemoryDocumentLabel(document.filename).toLowerCase() === filenameLabel
+    ))) {
+      setError(`${formatMemoryDocumentLabel(filename)} already exists.`);
+      return;
+    }
+    const content = defaultUserMemoryFileContent(filename);
+    setMutatingMemory(`document:${filename}`);
+    setStatusMessage(null);
+    setError(null);
+    try {
+      const payload = await services.client.updateSageContextFile({
+        filename,
+        content,
+      });
+      const savedFilename = readString((payload as Record<string, unknown>).filename) || filename;
+      const savedContent = typeof (payload as Record<string, unknown>).content === 'string'
+        ? (payload as Record<string, unknown>).content as string
+        : content;
+      setContextDocuments((current) => ({
+        ...current,
+        [savedFilename]: savedContent,
+      }));
+      setSelectedMemoryDocumentId(`projection:${savedFilename}`);
+      setMemoryDocumentViewMode('preview');
+      setEditingDocumentId(`projection:${savedFilename}`);
+      setEditingDocumentText(savedContent);
+      setMemoryFileNameDraft('');
+      setIsMemoryFileSheetOpen(false);
+      setStatusMessage(`${formatMemoryDocumentLabel(savedFilename)} created.`);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : 'Could not create memory file.');
+    } finally {
+      setMutatingMemory(null);
+    }
+  };
+
+  const buildOverviewContent = () => {
+    const cleanIdentitySummary = markdownSection(profileSnapshot.profile.identity_summary, 'Identity') || profileSnapshot.profile.identity_summary;
+    return `# What Sage carries forward\n\n## Identity\n${cleanIdentitySummary || 'No durable identity summary saved yet.'}\n\n## Communication style\n${profileSnapshot.profile.communication_style || 'No communication preference saved yet.'}\n\n## Recurring responsibility\n${profileSnapshot.profile.recurring_responsibility || 'No recurring responsibility saved yet.'}\n\n## Standing rules\n${profileSnapshot.profile.standing_rules.length === 0 ? 'No standing rules saved yet.' : profileSnapshot.profile.standing_rules.map((rule) => `- ${rule}`).join('\n')}`;
+  };
+
+  const beginEditingSelectedMemoryFile = () => {
+    if (selectedMemoryDocumentId === 'overview') {
+      const overviewContent = contextDocuments['IDENTITY.md'] || buildOverviewContent();
+      setEditingDocumentId('overview');
+      setEditingDocumentText(overviewContent);
+      setMemoryDocumentViewMode('preview');
+      return;
+    }
+    if (selectedMemoryDocumentId.startsWith('projection:')) {
+      const selectedProjection = projectionDocuments.find((document) => `projection:${document.filename}` === selectedMemoryDocumentId);
+      if (selectedProjection) {
+        setEditingDocumentId(`projection:${selectedProjection.filename}`);
+        setEditingDocumentText(selectedProjection.content);
+        setMemoryDocumentViewMode('preview');
+        return;
+      }
+    }
+    setStatusMessage('Choose a memory file before editing.');
   };
 
   const renderMemoryDocumentRows = (items: WorkstationSageMemoryRecord[], emptyLabel: string) => (
@@ -989,9 +1157,7 @@ export function WorkstationActivityPane() {
         </article>
       );
     }
-    const cleanIdentitySummary = markdownSection(profileSnapshot.profile.identity_summary, 'Identity') || profileSnapshot.profile.identity_summary;
-    const generatedOverviewContent = `# What Sage carries forward\n\n## Identity\n${cleanIdentitySummary || 'No durable identity summary saved yet.'}\n\n## Communication style\n${profileSnapshot.profile.communication_style || 'No communication preference saved yet.'}\n\n## Recurring responsibility\n${profileSnapshot.profile.recurring_responsibility || 'No recurring responsibility saved yet.'}\n\n## Standing rules\n${profileSnapshot.profile.standing_rules.length === 0 ? 'No standing rules saved yet.' : profileSnapshot.profile.standing_rules.map((rule) => `- ${rule}`).join('\n')}`;
-    const overviewContent = contextDocuments['IDENTITY.md'] || generatedOverviewContent;
+    const overviewContent = contextDocuments['IDENTITY.md'] || buildOverviewContent();
     return (
       <div className="app-memory-document-shell">
         {renderDocumentToolbar('overview', 'IDENTITY.md', overviewContent)}
@@ -1002,8 +1168,68 @@ export function WorkstationActivityPane() {
     );
   };
 
+  const memoryActionsMenu = (
+    <div ref={memoryActionMenuRef} className="app-memory-document-sidebar__toolbar" aria-label="Memory actions">
+      <button
+        type="button"
+        className="app-memory-document-sidebar__menu-trigger workstation-titlebar__action"
+        onClick={() => {
+          setIsMemoryActionMenuOpen((open) => !open);
+        }}
+        aria-expanded={isMemoryActionMenuOpen}
+        aria-haspopup="menu"
+        aria-label="Memory options"
+        title="Memory options"
+      >
+        <Pencil size={18} strokeWidth={1.9} aria-hidden="true" />
+      </button>
+      {isMemoryActionMenuOpen ? (
+        <div className="app-memory-document-sidebar__menu" role="menu" aria-label="Memory options">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setIsMemoryActionMenuOpen(false);
+              openCreateMemoryFile();
+            }}
+            disabled={Boolean(mutatingMemory) || memoryFileLimitReached}
+          >
+            <Plus size={17} strokeWidth={1.9} aria-hidden="true" />
+            <span>New memory file</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setIsMemoryActionMenuOpen(false);
+              beginEditingSelectedMemoryFile();
+            }}
+            disabled={Boolean(mutatingMemory)}
+          >
+            <Pencil size={17} strokeWidth={1.9} aria-hidden="true" />
+            <span>Edit selected file</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setIsMemoryActionMenuOpen(false);
+              void exportMemory();
+            }}
+            disabled={Boolean(mutatingMemory) || snapshot.items.length === 0}
+          >
+            <Download size={17} strokeWidth={1.9} aria-hidden="true" />
+            <span>Export</span>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+
   return (
-    <WorkstationSurfaceRoot surface="memory">
+    <>
+      {titlebarActionsHost ? createPortal(memoryActionsMenu, titlebarActionsHost) : null}
+      <WorkstationSurfaceRoot surface="memory">
       <main className="app-memory-document-page">
         <div className="app-memory-document-notices">
           {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
@@ -1021,14 +1247,6 @@ export function WorkstationActivityPane() {
             <WorkstationSplitWorkbench
               ariaLabel="Memory"
               className="app-memory-split-workbench"
-              sidebarHeader={(
-                <div className="app-settings-sidebar__header">
-                  <h2 className="app-settings-sidebar__title">Memory</h2>
-                  <p className="app-settings-sidebar__subtitle">
-                    {Math.min(memoryUsed, memoryLimit)}/{memoryLimit} saved slots
-                  </p>
-                </div>
-              )}
               sidebar={(
                 <div className="app-memory-document-nav">
                   {memoryDocumentNavItems.map((item) => (
@@ -1045,36 +1263,6 @@ export function WorkstationActivityPane() {
                       <span className="settings-nav__label">{item.label}</span>
                     </button>
                   ))}
-                </div>
-              )}
-              sidebarFooter={(
-                <div className="app-memory-document-sidebar__footer">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsIdentitySheetOpen(true);
-                    }}
-                    disabled={isProfileSaving}
-                  >
-                    Edit memory
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openCreateMemory}
-                    disabled={Boolean(mutatingMemory)}
-                  >
-                    New memory
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void exportMemory();
-                    }}
-                    disabled={Boolean(mutatingMemory) || snapshot.items.length === 0}
-                  >
-                    <Download size={14} strokeWidth={1.9} aria-hidden="true" />
-                    Export
-                  </button>
                 </div>
               )}
             >
@@ -1180,6 +1368,62 @@ export function WorkstationActivityPane() {
       </CommandSheet>
 
       <CommandSheet
+        open={isMemoryFileSheetOpen}
+        title="New memory file"
+        description={`Create a durable markdown file for Sage. Custom memory files are capped at ${MEMORY_FILE_LIMIT}.`}
+        onClose={() => {
+          setIsMemoryFileSheetOpen(false);
+          setMemoryFileNameDraft('');
+        }}
+        actions={(
+          <>
+            <button
+              type="button"
+              className="app-memory-sheet__link"
+              disabled={Boolean(mutatingMemory)}
+              onClick={() => {
+                setIsMemoryFileSheetOpen(false);
+                setMemoryFileNameDraft('');
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="app-button"
+              disabled={Boolean(mutatingMemory) || memoryFileLimitReached}
+              onClick={() => {
+                void createMemoryFile();
+              }}
+            >
+              {mutatingMemory?.startsWith('document:memory/files/') ? 'Creating…' : 'Create file'}
+            </button>
+          </>
+        )}
+      >
+        <FormSection
+          title="File name"
+          description="Use a focused name. It will appear in the Memory list and open directly as an editable markdown file."
+        >
+          <FormGrid columns="1fr">
+            <FormField
+              label="Name"
+              hint={`Example: SHOP_PLAYBOOK. Stored as ${normalizeUserMemoryFilename(memoryFileNameDraft) || 'memory/files/NAME.md'}.`}
+            >
+              <FormInput
+                value={memoryFileNameDraft}
+                onChange={(event) => {
+                  setMemoryFileNameDraft(event.currentTarget.value);
+                }}
+                placeholder="SHOP_PLAYBOOK"
+                autoFocus
+              />
+            </FormField>
+          </FormGrid>
+        </FormSection>
+      </CommandSheet>
+
+      <CommandSheet
         open={isMemorySheetOpen}
         title={memoryDraft.entryId ? 'Edit memory' : 'Add memory'}
         description="Save only what Sage should carry into future turns."
@@ -1269,6 +1513,7 @@ export function WorkstationActivityPane() {
         </FormSection>
       </CommandSheet>
 
-    </WorkstationSurfaceRoot>
+      </WorkstationSurfaceRoot>
+    </>
   );
 }

@@ -8605,8 +8605,7 @@ body[data-emp-theme='dark'] .app-memory-document-nav .settings-nav__item[aria-se
   padding: clamp(28px, 4vw, 56px);
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 74%, transparent 26%);
   border-radius: calc(var(--app-radius-xl) + 8px);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--app-bg-panel) 96%, white 4%) 0%, var(--app-bg-panel) 100%);
+  background: var(--app-bg-panel);
   box-shadow: 0 30px 80px -58px color-mix(in srgb, black 34%, transparent);
 }
 

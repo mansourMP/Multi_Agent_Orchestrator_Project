@@ -2478,7 +2478,7 @@ export function WorkstationDeployedAgentsPane({
   const [wizardStepIndex, setWizardStepIndex] = useState(0);
   const [wizardState, setWizardState] = useState<WizardState>(() => buildWizardState(null));
   const [wizardErrorMessage, setWizardErrorMessage] = useState<string | null>(null);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() => DEFAULT_STUDIO_TEMPLATE.id);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() => CUSTOM_STUDIO_TEMPLATE.id);
   const handledTemplateDeepLinkRef = useRef<string | null>(null);
   const [isSubmittingWizard, setIsSubmittingWizard] = useState(false);
   const [detailConfigDraft, setDetailConfigDraft] = useState<DetailConfigDraft | null>(null);
@@ -3661,7 +3661,7 @@ export function WorkstationDeployedAgentsPane({
         title={studioTitle}
         subtitle={studioSubtitle}
         actions={currentStudioSubview === 'agents' ? (
-          <AppButton type="button" tone="primary" onClick={() => openCreateWizard(selectedTemplateId)}>
+          <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
             Add agent
           </AppButton>
         ) : undefined}
@@ -3690,7 +3690,7 @@ export function WorkstationDeployedAgentsPane({
             mainHeader={currentStudioSubview === 'agents' ? (
               <div className="studio-agents-workbench__header">
                 <span>Agents</span>
-                <AppButton type="button" tone="primary" onClick={() => openCreateWizard(selectedTemplateId)}>
+                <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
                   Add agent
                 </AppButton>
               </div>
@@ -4854,11 +4854,11 @@ export function WorkstationDeployedAgentsPane({
 
       <CommandSheet
         open={isWizardOpen}
-        title={wizardMode === 'create' ? `Create assistant · ${selectedStudioTemplate.title}` : 'Edit assistant'}
+        title={wizardMode === 'create' ? 'Create agent' : 'Edit agent'}
         description={
           wizardMode === 'create'
-            ? 'Start from the template, add the business facts, then create the assistant. Advanced choices stay optional.'
-            : 'Adjust the assistant, customer channel, and launch settings.'
+            ? 'Start with a custom draft. Add knowledge, integrations, channels, and advanced runtime settings after it exists.'
+            : 'Adjust the agent, customer channel, and launch settings.'
         }
         onClose={closeWizard}
           actions={(
@@ -4889,7 +4889,7 @@ export function WorkstationDeployedAgentsPane({
                   }}
                   disabled={isSubmittingWizard}
                 >
-                  {wizardMode === 'create' ? 'Create assistant' : 'Save'}
+                  {wizardMode === 'create' ? 'Create agent' : 'Save'}
                 </AppButton>
               )}
             </div>
@@ -4926,31 +4926,17 @@ export function WorkstationDeployedAgentsPane({
             <ModalSection title={wizardStep.label} description={wizardStep.description}>
               {wizardStep.id === 'overview' ? (
                 wizardMode === 'create' ? (
-                  <div className="deployed-agents-wizard__template-layout">
-                    <aside className="deployed-agents-wizard__template-summary">
-                      <span className="studio-template-card__icon deployed-agents-wizard__template-icon" aria-hidden="true">
-                        {selectedStudioTemplate.icon}
-                      </span>
-                      <span className="studio-template-card__category">{selectedStudioTemplate.category}</span>
-                      <strong className="deployed-agents-wizard__template-title">{selectedStudioTemplate.title}</strong>
-                      <p className="deployed-agents-wizard__template-copy">{selectedStudioTemplate.description}</p>
-                      <div className="studio-template-card__tags">
-                        {selectedStudioTemplate.requiredConnectors.map((connector) => (
-                          <span key={connector} className="studio-template-card__tag">{connector}</span>
-                        ))}
-                      </div>
-                    </aside>
-
+                  <div className="deployed-agents-wizard__create-draft">
                     <div className="deployed-agents-wizard__quickstart">
                       <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                        <FormField label="Assistant name" hint="The name your team sees for this customer assistant.">
+                        <FormField label="Agent name" hint="The name your team sees in the agent list.">
                           <FormInput
                             value={wizardState.name}
                             onChange={(event) => setWizardField('name', event.currentTarget.value)}
-                            placeholder={selectedStudioTemplate.defaultName}
+                            placeholder="New agent"
                           />
                         </FormField>
-                        <FormField label="Primary customer channel" hint="You can connect the exact bot or inbox later.">
+                        <FormField label="Channel" hint="Draft is safest. Connect Telegram, email, or web chat after the agent exists.">
                           <FormSelect
                             value={wizardState.customerChannel}
                             onChange={(event) => {
@@ -5033,21 +5019,21 @@ export function WorkstationDeployedAgentsPane({
                         ) : null}
                       </details>
 
-                      <FormField label="Business / use case" hint="Plain language is enough. The template turns it into assistant behavior.">
+                      <FormField label="What should this agent do?" hint="Plain language is enough. You can refine instructions after creation.">
                         <FormTextarea
                           rows={3}
                           value={wizardState.persona}
                           onChange={(event) => setWizardField('persona', event.currentTarget.value)}
-                          placeholder={selectedStudioTemplate.persona}
+                          placeholder="Describe the job for this custom agent."
                         />
                       </FormField>
 
-                      <FormField label="Knowledge source" hint="Optional. You can add files, integrations, and memory after the draft exists.">
+                      <FormField label="Knowledge source" hint="Optional. Files, integrations, and memory can be added after creation.">
                         <FormTextarea
                           rows={3}
                           value={wizardState.knowledgeSourceText}
                           onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
-                          placeholder={selectedStudioTemplate.knowledgePlaceholder}
+                          placeholder="Paste a URL, document note, sheet reference, or leave blank."
                         />
                       </FormField>
                     </div>

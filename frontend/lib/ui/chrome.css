@@ -7532,6 +7532,11 @@ body.theme-light .workstation-shell__topbar {
   align-items: start;
 }
 
+.deployed-agents-wizard__create-draft {
+  display: grid;
+  gap: var(--app-space-3);
+}
+
 .deployed-agents-wizard__template-summary {
   display: grid;
   gap: var(--app-space-2);

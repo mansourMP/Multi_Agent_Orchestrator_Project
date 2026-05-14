@@ -177,14 +177,14 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertEqual(quotas["mode_limits"]["my_computer_agent"]["live_agents_max"], 2)
         self.assertEqual(quotas["mode_limits"]["self_hosted_agent"]["live_agents_max"], 1)
 
-    def test_enforce_specialist_slot_access_rejects_free_workspace_after_one_specialist(self) -> None:
+    def test_enforce_specialist_slot_access_rejects_free_workspace_after_draft_limit(self) -> None:
         with self.assertRaises(entitlements_service.EntitlementQuotaExceededError) as ctx:
             entitlements_service.enforce_specialist_slot_access(
                 workspace={"metadata": {"billing": {"plan": "free"}}},
-                current_specialist_count=1,
+                current_specialist_count=10,
             )
 
-        self.assertEqual(ctx.exception.reason, "specialist_limit_exceeded")
+        self.assertEqual(ctx.exception.reason, "created_agent_limit_exceeded")
 
     def test_enforce_mobile_app_access_rejects_free_workspace(self) -> None:
         with self.assertRaises(entitlements_service.EntitlementDeniedError) as ctx:

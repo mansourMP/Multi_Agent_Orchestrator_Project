@@ -88,6 +88,8 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "advanced_features_enabled": False,
         "premium_tools_enabled": False,
         "max_deployed_agents": 1,
+        "max_deployed_agents_created": 10,
+        "max_deployed_agents_live": 1,
         "priority_sync_enabled": False,
         "mini_apps_unlimited": True,
         "telegram_channel_enabled": True,
@@ -125,6 +127,8 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "advanced_features_enabled": True,
         "premium_tools_enabled": True,
         "max_deployed_agents": 10,
+        "max_deployed_agents_created": 50,
+        "max_deployed_agents_live": 10,
         "priority_sync_enabled": True,
         "mini_apps_unlimited": True,
         "telegram_channel_enabled": True,
@@ -162,6 +166,8 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "advanced_features_enabled": True,
         "premium_tools_enabled": True,
         "max_deployed_agents": 3,
+        "max_deployed_agents_created": 20,
+        "max_deployed_agents_live": 3,
         "priority_sync_enabled": True,
         "mini_apps_unlimited": True,
         "telegram_channel_enabled": True,
@@ -922,13 +928,16 @@ def enforce_specialist_slot_access(
     current_specialist_count: int,
 ) -> Dict[str, Any]:
     state = resolve_workspace_entitlement_state(workspace=workspace, install=install)
-    max_specialists = max(1, _coerce_int(state.entitlements.get("max_deployed_agents"), 1))
+    max_specialists = max(1, _coerce_int(
+        state.entitlements.get("max_deployed_agents_created"),
+        _coerce_int(state.entitlements.get("max_deployed_agents"), 1),
+    ))
     if int(current_specialist_count or 0) >= max_specialists:
         raise EntitlementQuotaExceededError(
-            reason="specialist_limit_exceeded",
+            reason="created_agent_limit_exceeded",
             message=(
-                "This workspace has reached its specialist limit for the current plan. "
-                "Free allows 1 specialist and Pro allows 3."
+                "This workspace has reached its draft agent limit for the current plan. "
+                "Archive an unused draft or upgrade before creating another agent."
             ),
             entitlement_state=workspace_entitlement_payload(state=state),
             retry_after_seconds=3600,

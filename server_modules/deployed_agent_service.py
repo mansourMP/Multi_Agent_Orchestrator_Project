@@ -2960,10 +2960,6 @@ async def create_draft_deployed_agent(
         resolved_workspace_id,
         tenant_id=tenant_id,
     )
-    entitlements_service.enforce_specialist_slot_access(
-        workspace=workspace,
-        current_specialist_count=len(list(existing_deployed_agents or [])),
-    )
     normalized_name = _normalize_text(name)
     if not normalized_name:
         raise ValueError("name is required.")

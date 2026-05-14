@@ -343,8 +343,8 @@ const CREATE_AGENT_WIZARD_STEPS: Array<{
 }> = [
   {
     id: 'overview',
-    label: 'Create draft',
-    description: 'Name the agent and describe the job. Channels, integrations, and runtime settings come after creation.',
+    label: 'Create agent',
+    description: 'Name the agent. Memory, integrations, channels, and actions come after creation.',
   },
 ];
 
@@ -504,7 +504,7 @@ const SPECIALIST_OVERLAY_TABS: Array<{
   { id: 'overview', label: 'Overview' },
   { id: 'tools', label: 'Actions' },
   { id: 'memory', label: 'Agent Memory' },
-  { id: 'connectors', label: 'Customer Channels' },
+  { id: 'connectors', label: 'Integrations' },
   { id: 'analytics', label: 'Results' },
 ];
 
@@ -731,7 +731,7 @@ const CUSTOM_STUDIO_TEMPLATE: StudioTemplate = {
   persona: '',
   systemPrompt: '',
   knowledgePlaceholder: 'Add the trusted sources this assistant should use.',
-  selectedToolIds: ['web_search'],
+  selectedToolIds: [],
   memoryEnabled: false,
   contextBudgetPreset: 'balanced',
 };
@@ -1735,6 +1735,11 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
 function buildCreateDraftWizardState(state: WizardState): WizardState {
   return {
     ...state,
+    persona: '',
+    systemPrompt: '',
+    knowledgeSourceText: '',
+    selectedToolIds: [],
+    memoryEnabled: false,
     customerChannel: 'draft',
     telegramEnabled: false,
     telegramConnectorId: '',
@@ -3094,14 +3099,15 @@ export function WorkstationDeployedAgentsPane({
     setSelectedSessionId(readString(filteredConversations[0]?.session_id) || null);
   }, [filteredConversations, selectedSessionId]);
 
+  const overlayMemoryTargetAgentId = readString(overlayAgentId || selectedAgentId);
   useEffect(() => {
-    const agentId = readString(overlayAgentId);
+    const agentId = overlayMemoryTargetAgentId;
     if (!agentId || overlayTab !== 'memory') {
       return;
     }
     void loadMemoryEntries(agentId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overlayAgentId, overlayTab]);
+  }, [overlayMemoryTargetAgentId, overlayTab]);
 
   useEffect(() => {
     setDetailConfigDraft(buildDetailConfigDraft(selectedAgent));
@@ -3257,6 +3263,77 @@ export function WorkstationDeployedAgentsPane({
 
   async function persistWizard() {
     const stateForSave = wizardMode === 'create' ? buildCreateDraftWizardState(wizardState) : wizardState;
+    if (wizardMode === 'create') {
+      const name = stateForSave.name.trim();
+      if (!name) {
+        setWizardErrorMessage('Name the agent before creating it.');
+        return;
+      }
+      setIsSubmittingWizard(true);
+      setWizardErrorMessage(null);
+      try {
+        const created = await services.client.createDeployedAgent({
+          name,
+          avatar: null,
+          persona: '',
+          systemPrompt: '',
+          channels: {},
+          knowledgeSources: [],
+          runtimeTarget: 'cloud',
+          billingPlan: 'free',
+          config: {
+            studio_agent_mode: 'text_agent',
+            runtime_placement: 'managed_cloud',
+            runtime_target: 'cloud',
+            runtime_supplier: 'empyralis',
+            tool_policy: {
+              enabled_tools: [],
+            },
+            memory_policy: {
+              memory_enabled: false,
+              context_budget_preset: 'balanced',
+              retention_preset: 'standard',
+            },
+            computer_automation: {
+              enabled: false,
+            },
+          },
+          metadata: {
+            customer_channel: 'draft',
+            runtime_placement: 'managed_cloud',
+            runtime_supplier: 'empyralis',
+            computer_automation_enabled: false,
+            selected_tool_ids: [],
+            memory_enabled: false,
+          },
+          provider: null,
+          model: null,
+        });
+        const record = (created ?? {}) as DeployedAgentRecord;
+        const createdId = readString(record.id);
+        setAgents((current) => upsertAgentRecord(current, record));
+        setSelectedAgentDetail(record);
+        setSelectedAgentAnalytics(null);
+        setSelectedAgentId(createdId || null);
+        setOverlayAgentId(null);
+        setOverlayTab('overview');
+        setRecentlyCreatedAgentId(createdId || null);
+        setStatusMessage(`Created agent ${readString(record.name, name)}.`);
+        if (createdId) {
+          await Promise.all([
+            loadAgentAnalytics(createdId),
+            loadTelegramReadiness(createdId),
+            loadConversations(createdId),
+          ]);
+        }
+        setIsWizardOpen(false);
+      } catch (error) {
+        setWizardErrorMessage(error instanceof Error ? error.message : 'The agent could not be created.');
+      } finally {
+        setIsSubmittingWizard(false);
+      }
+      return;
+    }
     const dailyMessageLimit = stateForSave.dailyMessageLimit.trim();
     const monthlyCostCapUsd = stateForSave.monthlyCostCapUsd.trim();
     const route = resolveProviderModelForTier(stateForSave.aiTier, providerCatalog);
@@ -3373,43 +3450,24 @@ export function WorkstationDeployedAgentsPane({
     setIsSubmittingWizard(true);
     setWizardErrorMessage(null);
     try {
-      if (wizardMode === 'create') {
-        const created = await services.client.createDeployedAgent(payload);
-        const record = (created ?? {}) as DeployedAgentRecord;
-        const createdId = readString(record.id);
-        setAgents((current) => upsertAgentRecord(current, record));
-        setSelectedAgentDetail(record);
-        setSelectedAgentAnalytics(null);
-        setSelectedAgentId(createdId || null);
-        setRecentlyCreatedAgentId(createdId || null);
-        setStatusMessage(`Created assistant ${readString(record.name, payload.name)}.`);
-        if (createdId) {
-          await Promise.all([
-            loadAgentAnalytics(createdId),
-            loadTelegramReadiness(createdId),
-            loadConversations(createdId),
-          ]);
-        }
-      } else {
-        const agentId = readString(selectedAgent?.id);
-        if (!agentId) {
-          throw new Error('Select an assistant before editing it.');
-        }
-        const updated = await services.client.updateDeployedAgent({
-          deployedAgentId: agentId,
-          ...payload,
-        });
-        const record = (updated ?? {}) as DeployedAgentRecord;
-        setAgents((current) => upsertAgentRecord(current, record));
-        setSelectedAgentDetail(record);
-        await Promise.all([
-          refreshAgentAnalytics(upsertAgentRecord(agents, record)),
-          loadAgentAnalytics(agentId),
-          loadTelegramReadiness(agentId),
-        ]);
-        setRecentlyCreatedAgentId(null);
-        setStatusMessage(`Updated ${readString(record.name, 'assistant')} settings.`);
+      const agentId = readString(selectedAgent?.id);
+      if (!agentId) {
+        throw new Error('Select an assistant before editing it.');
       }
+      const updated = await services.client.updateDeployedAgent({
+        deployedAgentId: agentId,
+        ...payload,
+      });
+      const record = (updated ?? {}) as DeployedAgentRecord;
+      setAgents((current) => upsertAgentRecord(current, record));
+      setSelectedAgentDetail(record);
+      await Promise.all([
+        refreshAgentAnalytics(upsertAgentRecord(agents, record)),
+        loadAgentAnalytics(agentId),
+        loadTelegramReadiness(agentId),
+      ]);
+      setRecentlyCreatedAgentId(null);
+      setStatusMessage(`Updated ${readString(record.name, 'assistant')} settings.`);
       setIsWizardOpen(false);
     } catch (error) {
       setWizardErrorMessage(error instanceof Error ? error.message : 'The assistant could not be saved.');
@@ -3564,7 +3622,8 @@ export function WorkstationDeployedAgentsPane({
       : 'Go-live checks, spending guardrails, and optional advanced settings.';
   const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
   const showReadinessPanel = currentStudioSubview === 'deploy';
-  const showDetailPanel = currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && Boolean(selectedAgent));
+  const showDetailPanel = currentStudioSubview === 'deploy'
+    || (currentStudioSubview === 'agents' && Boolean(selectedAgent) && overlayTab === 'overview');
   const showInboxPanels = currentStudioSubview === 'inbox';
   const visibleErrorMessage = isWizardScopedError(errorMessage) ? null : summarizeStudioErrorMessage(errorMessage);
   const activeWizardSteps = wizardMode === 'create' ? CREATE_AGENT_WIZARD_STEPS : DEPLOYED_AGENT_WIZARD_STEPS;
@@ -3602,8 +3661,9 @@ export function WorkstationDeployedAgentsPane({
       || readRecord(overlayAgent.metadata).memory_enabled === true
     )
     : false;
-  const overlayMemoryEntries = overlayAgentId
-    ? agentMemoryById[overlayAgentId] ?? []
+  const overlayMemoryAgentId = readString(overlayAgentId || selectedAgentId);
+  const overlayMemoryEntries = overlayMemoryAgentId
+    ? agentMemoryById[overlayMemoryAgentId] ?? []
     : [];
   const overlayQualityStars = readNumber(overlayAgent?.quality_stars);
   const overlayCostTier = readString(overlayAgent?.cost_tier);
@@ -3653,7 +3713,8 @@ export function WorkstationDeployedAgentsPane({
     }
   }
 
-  const overlayConnectorCards = overlayAgent ? SPECIALIST_CONNECTOR_CARDS.map((connector) => {
+  const connectorCardAgent = overlayAgent ?? selectedAgent;
+  const overlayConnectorCards = connectorCardAgent ? SPECIALIST_CONNECTOR_CARDS.map((connector) => {
     const telegramBinding = readRecord(selectedTelegramReadiness?.configuredBinding);
     const telegramConnected = connector.id === 'telegram'
       ? Boolean(readString(telegramBinding.connector_id) || readString(telegramBinding.label))
@@ -3868,74 +3929,81 @@ export function WorkstationDeployedAgentsPane({
                       ) : null}
                     </ListDetailPanel>
 
-                    <div className="studio-agents-nav" aria-label="Workspace agents">
-                      <div className="studio-agents-nav__filters" aria-label="Agent filters">
-                        {AGENT_ROSTER_FILTERS.map((filter) => (
-                          <button
-                            key={filter.id}
-                            type="button"
-                            className={joinClassNames(
-                              'studio-agents-nav__filter',
-                              agentRosterFilter === filter.id && 'studio-agents-nav__filter--active',
-                            )}
-                            aria-pressed={agentRosterFilter === filter.id}
-                            onClick={() => setAgentRosterFilter(filter.id)}
-                          >
-                            <span>{filter.label}</span>
-                            <strong>{agentRosterCounts[filter.id]}</strong>
-                          </button>
-                        ))}
-                      </div>
+                    <div className={joinClassNames('studio-agents-nav', agents.length === 0 && 'studio-agents-nav--empty')} aria-label="Workspace agents">
                       {agents.length === 0 ? (
-                        <div className="studio-agents-nav__placeholder">
+                        <div className="studio-agents-nav__empty">
                           <strong>No agents yet</strong>
-                          <span>Add a text agent, cloud computer agent, or connected computer agent.</span>
-                        </div>
-                      ) : visibleAgents.length === 0 ? (
-                        <div className="studio-agents-nav__placeholder">
-                          <strong>No agents match</strong>
-                          <span>Switch filters to see more workspace agents.</span>
+                          <span>Create the first workspace agent.</span>
+                          <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+                            Create agent
+                          </AppButton>
                         </div>
                       ) : (
-                        <div className="studio-agents-nav__items">
-                          {visibleAgents.map((agent, index) => {
-                            const agentId = readString(agent.id, `deployed-agent-${index}`);
-                            const selected = agentId === selectedAgentId;
-                            const agentMetrics = agentMetricsById[agentId] ?? null;
-                            const channels = listEnabledChannels(agent.channels);
-                            const channelLabel = humanizeToken(channels[0] || 'no_channel', 'No channel');
-                            const modeLabel = runtimePlacementLabel(agentRuntimePlacement(agent));
-                            const stateLabel = deploymentStateLabel(agent.deployment_state);
-                            const displayName = readString(agent.name, agentId);
-                            const latestActivityLabel = agentMetrics?.latestActivityLabel ?? 'Syncing recent activity';
-                            return (
+                        <>
+                          <div className="studio-agents-nav__filters" aria-label="Agent filters">
+                            {AGENT_ROSTER_FILTERS.map((filter) => (
                               <button
-                                key={agentId}
+                                key={filter.id}
                                 type="button"
                                 className={joinClassNames(
-                                  'studio-agents-nav__agent',
-                                  selected && 'studio-agents-nav__agent--active',
+                                  'studio-agents-nav__filter',
+                                  agentRosterFilter === filter.id && 'studio-agents-nav__filter--active',
                                 )}
-                                aria-selected={selected}
-                                onClick={() => {
-                                  setSelectedAgentId(agentId);
-                                  setOverlayAgentId(null);
-                                  setOverlayTab('overview');
-                                }}
+                                aria-pressed={agentRosterFilter === filter.id}
+                                onClick={() => setAgentRosterFilter(filter.id)}
                               >
-                                <span className="studio-agents-nav__copy">
-                                  <span className="studio-agents-nav__label">{displayName}</span>
-                                  <span className="studio-agents-nav__detail">
-                                    {modeLabel} · {channelLabel} · {latestActivityLabel}
-                                  </span>
-                                </span>
-                                <span className={joinClassNames('studio-agents-nav__status', `studio-agents-nav__status--${rosterStatusTone(agent.deployment_state)}`)}>
-                                  {stateLabel}
-                                </span>
+                                <span>{filter.label}</span>
+                                <strong>{agentRosterCounts[filter.id]}</strong>
                               </button>
-                            );
-                          })}
-                        </div>
+                            ))}
+                          </div>
+                          {visibleAgents.length === 0 ? (
+                            <div className="studio-agents-nav__placeholder">
+                              <strong>No agents match</strong>
+                              <span>Switch filters to see more workspace agents.</span>
+                            </div>
+                          ) : (
+                            <div className="studio-agents-nav__items">
+                              {visibleAgents.map((agent, index) => {
+                                const agentId = readString(agent.id, `deployed-agent-${index}`);
+                                const selected = agentId === selectedAgentId;
+                                const agentMetrics = agentMetricsById[agentId] ?? null;
+                                const channels = listEnabledChannels(agent.channels);
+                                const channelLabel = humanizeToken(channels[0] || 'no_channel', 'No channel');
+                                const modeLabel = runtimePlacementLabel(agentRuntimePlacement(agent));
+                                const stateLabel = deploymentStateLabel(agent.deployment_state);
+                                const displayName = readString(agent.name, agentId);
+                                const latestActivityLabel = agentMetrics?.latestActivityLabel ?? 'Syncing recent activity';
+                                return (
+                                  <button
+                                    key={agentId}
+                                    type="button"
+                                    className={joinClassNames(
+                                      'studio-agents-nav__agent',
+                                      selected && 'studio-agents-nav__agent--active',
+                                    )}
+                                    aria-selected={selected}
+                                    onClick={() => {
+                                      setSelectedAgentId(agentId);
+                                      setOverlayAgentId(null);
+                                      setOverlayTab('overview');
+                                    }}
+                                  >
+                                    <span className="studio-agents-nav__copy">
+                                      <span className="studio-agents-nav__label">{displayName}</span>
+                                      <span className="studio-agents-nav__detail">
+                                        {modeLabel} · {channelLabel} · {latestActivityLabel}
+                                      </span>
+                                    </span>
+                                    <span className={joinClassNames('studio-agents-nav__status', `studio-agents-nav__status--${rosterStatusTone(agent.deployment_state)}`)}>
+                                      {stateLabel}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   </>
@@ -3983,13 +4051,203 @@ export function WorkstationDeployedAgentsPane({
             <div className="app-stack-4">
                 {currentStudioSubview === 'agents' && !selectedAgent ? (
                   <div className="studio-agent-detail-empty" aria-label="Agent detail">
-                    <strong>{agents.length === 0 ? 'No agents yet' : 'Select an agent'}</strong>
+                    <strong>{agents.length === 0 ? 'Add your agent' : 'Select an agent'}</strong>
                     <span>
                       {agents.length === 0
-                        ? 'Use Add agent to create the first workspace agent.'
+                        ? 'Create the first workspace agent, then configure its memory, integrations, channels, and actions here.'
                         : 'Agent configuration, channels, memory, analytics, and launch state will appear here.'}
                     </span>
+                    {agents.length === 0 ? (
+                      <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+                        Create agent
+                      </AppButton>
+                    ) : null}
                   </div>
+                ) : null}
+
+                {currentStudioSubview === 'agents' && selectedAgent ? (
+                  <div className="studio-agent-detail-tabs" role="tablist" aria-label="Agent sections">
+                    {SPECIALIST_OVERLAY_TABS.map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={overlayTab === tab.id}
+                        className={joinClassNames(
+                          'studio-agent-detail-tabs__button',
+                          overlayTab === tab.id && 'studio-agent-detail-tabs__button--active',
+                        )}
+                        onClick={() => setOverlayTab(tab.id)}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {currentStudioSubview === 'agents' && selectedAgent && overlayTab === 'tools' ? (
+                  <ListDetailPanel
+                    className="studio-panel studio-panel--detail"
+                    eyebrow="Actions"
+                    title="Agent actions"
+                    subtitle="Choose the tools this agent can use after creation."
+                  >
+                    {detailConfigDraft ? (
+                      <>
+                        <div className="sage-tool-list" role="list">
+                          {STUDIO_TOOL_OPTIONS.map((tool) => {
+                            const selected = detailConfigDraft.selectedToolIds.includes(tool.id);
+                            return (
+                              <article key={tool.id} className="sage-tool-row" role="listitem">
+                                <div className="sage-tool-row__copy">
+                                  <strong className="sage-tool-row__title">{tool.label}</strong>
+                                  <p className="sage-tool-row__description">{tool.description}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  className={joinClassNames('sage-tool-toggle', selected && 'sage-tool-toggle--enabled')}
+                                  role="switch"
+                                  aria-checked={selected}
+                                  onClick={() => {
+                                    setDetailConfigDraft((current) => {
+                                      if (!current) {
+                                        return current;
+                                      }
+                                      const nextSelected = current.selectedToolIds.includes(tool.id)
+                                        ? current.selectedToolIds.filter((item) => item !== tool.id)
+                                        : [...current.selectedToolIds, tool.id];
+                                      return { ...current, selectedToolIds: nextSelected };
+                                    });
+                                  }}
+                                >
+                                  <span className="sage-tool-toggle__thumb" />
+                                </button>
+                              </article>
+                            );
+                          })}
+                        </div>
+                        <div className="app-inline-actions">
+                          <AppButton type="button" onClick={() => { void saveDetailConfig(); }} disabled={isSavingDetailConfig}>
+                            {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                          </AppButton>
+                        </div>
+                      </>
+                    ) : null}
+                  </ListDetailPanel>
+                ) : null}
+
+                {currentStudioSubview === 'agents' && selectedAgent && overlayTab === 'memory' ? (
+                  <ListDetailPanel
+                    className="studio-panel studio-panel--detail"
+                    eyebrow="Memory"
+                    title="Agent memory"
+                    subtitle="Control what this agent can carry forward from customer conversations."
+                  >
+                    {detailConfigDraft ? (
+                      <>
+                        <div className="deployed-agents-overlay__toggle-row">
+                          <div className="sage-tool-row__copy">
+                            <strong className="sage-tool-row__title">Persistent memory</strong>
+                            <p className="sage-tool-row__description">Keep reusable agent context across customer sessions.</p>
+                          </div>
+                          <button
+                            type="button"
+                            className={joinClassNames('sage-tool-toggle', detailConfigDraft.memoryEnabled && 'sage-tool-toggle--enabled')}
+                            role="switch"
+                            aria-checked={detailConfigDraft.memoryEnabled}
+                            onClick={() => setDetailConfigDraft((current) => current ? { ...current, memoryEnabled: !current.memoryEnabled } : current)}
+                          >
+                            <span className="sage-tool-toggle__thumb" />
+                          </button>
+                        </div>
+                        <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                          <ContextPresetControl
+                            value={detailConfigDraft.contextBudgetPreset}
+                            onSelect={(nextValue) => setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current)}
+                          />
+                          <FormField label="Retention window">
+                            <FormSelect
+                              value={detailConfigDraft.retentionPreset}
+                              onChange={(event) => {
+                                const nextValue = event.currentTarget.value;
+                                setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
+                              }}
+                            >
+                              <option value="short">Short</option>
+                              <option value="standard">Standard</option>
+                              <option value="extended">Extended</option>
+                            </FormSelect>
+                          </FormField>
+                        </FormGrid>
+                        <div className="deployed-agents-overlay__memory-list">
+                          {isLoadingOverlayMemory && overlayMemoryEntries.length === 0 ? (
+                            <>
+                              <SkeletonBlock height="4rem" />
+                              <SkeletonBlock height="4rem" />
+                            </>
+                          ) : overlayMemoryEntries.length === 0 ? (
+                            <div className="deployed-agents-overlay__empty">No customer memory yet. Memory builds as customers chat with this agent.</div>
+                          ) : overlayMemoryEntries.map((entry) => (
+                            <article key={readString(entry.id, `${readString(entry.channel)}-${readString(entry.external_user_id)}`)} className="deployed-agents-overlay__memory-entry">
+                              <strong className="deployed-agents-overlay__memory-title">{truncateExternalUserId(entry.external_user_id)}</strong>
+                              <p className="deployed-agents-overlay__memory-body deployed-agents-overlay__memory-body--summary">
+                                {readString(entry.summary_text, 'No memory summary yet.')}
+                              </p>
+                              <span className="deployed-agents-overlay__memory-meta">{formatTimestamp(entry.updated_at)}</span>
+                            </article>
+                          ))}
+                        </div>
+                        <div className="app-inline-actions">
+                          <AppButton type="button" onClick={() => { void saveDetailConfig(); }} disabled={isSavingDetailConfig}>
+                            {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                          </AppButton>
+                        </div>
+                      </>
+                    ) : null}
+                  </ListDetailPanel>
+                ) : null}
+
+                {currentStudioSubview === 'agents' && selectedAgent && overlayTab === 'connectors' ? (
+                  <ListDetailPanel
+                    className="studio-panel studio-panel--detail"
+                    eyebrow="Integrations"
+                    title="Agent integrations"
+                    subtitle="Connect customer channels and trusted systems after the agent exists."
+                  >
+                    <div className="sage-unified-grid sage-unified-grid--4">
+                      {overlayConnectorCards.map((connector) => (
+                        <article key={connector.id} className="sage-unified-card deployed-agents-overlay__connector-card">
+                          <span className="sage-integration-brand" aria-hidden="true">
+                            <img src={connector.image} alt="" className="sage-integration-brand__image" />
+                          </span>
+                          <strong className="sage-unified-card__title">{connector.label}</strong>
+                          <span className={joinClassNames('sage-unified-card__status', connector.connected && 'sage-unified-card__status--connected')}>
+                            {connector.connected ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
+                            {connector.statusLabel}
+                          </span>
+                          <div className="sage-unified-expand__tag-row">
+                            {connector.capabilityTags.map((tag) => (
+                              <span key={tag} className="sage-unified-expand__tag">{tag}</span>
+                            ))}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </ListDetailPanel>
+                ) : null}
+
+                {currentStudioSubview === 'agents' && selectedAgent && overlayTab === 'analytics' ? (
+                  <ListDetailPanel
+                    className="studio-panel studio-panel--detail"
+                    eyebrow="Results"
+                    title="Agent results"
+                    subtitle="Activity and outcome signals for the selected agent."
+                  >
+                    <WorkstationDeployedAgentAnalyticsPane
+                      agentId={readString(selectedAgent.id)}
+                      workspaceId={services.scope.workspaceId}
+                    />
+                  </ListDetailPanel>
                 ) : null}
 
                 {showDetailPanel ? (
@@ -4953,24 +5211,6 @@ export function WorkstationDeployedAgentsPane({
                           value={wizardState.name}
                           onChange={(event) => setWizardField('name', event.currentTarget.value)}
                           placeholder="New agent"
-                        />
-                      </FormField>
-
-                      <FormField label="What should this agent do?" hint="Plain language is enough. You can refine instructions after creation.">
-                        <FormTextarea
-                          rows={3}
-                          value={wizardState.persona}
-                          onChange={(event) => setWizardField('persona', event.currentTarget.value)}
-                          placeholder="Describe the job for this custom agent."
-                        />
-                      </FormField>
-
-                      <FormField label="Knowledge source" hint="Optional. Files, integrations, and memory can be added after creation.">
-                        <FormTextarea
-                          rows={3}
-                          value={wizardState.knowledgeSourceText}
-                          onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
-                          placeholder="Paste a URL, document note, sheet reference, or leave blank."
                         />
                       </FormField>
                     </div>

@@ -1158,7 +1158,11 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.exception.status_code, 400)
         self.assertIn("local_companion", str(error.exception.detail))
 
-    async def test_create_draft_deployed_agent_enforces_free_specialist_limit(self) -> None:
+    async def test_create_draft_deployed_agent_enforces_default_created_agent_limit(self) -> None:
+        existing_agents = [
+            _deployed_agent_row(backing_install_id=f"ainstall_{index}")
+            for index in range(10)
+        ]
         with (
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
@@ -1166,17 +1170,18 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
-                new=AsyncMock(return_value=[_deployed_agent_row()]),
+                new=AsyncMock(return_value=existing_agents),
             ),
         ):
-            with self.assertRaises(deployed_agent_service.entitlements_service.EntitlementQuotaExceededError) as ctx:
+            with self.assertRaises(HTTPException) as error:
                 await deployed_agent_service.create_draft_deployed_agent(
                     current_user=_owner_user(),
                     owner_workspace_id="ws-1",
                     name="Second Specialist",
                 )
 
-        self.assertEqual(ctx.exception.reason, "specialist_limit_exceeded")
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("Created-agent quota reached", str(error.exception.detail))
 
     async def test_create_draft_deployed_agent_enforces_mode_created_quota(self) -> None:
         workspace = _workspace_record()

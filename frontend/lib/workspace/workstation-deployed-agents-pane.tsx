@@ -3175,7 +3175,20 @@ export function WorkstationDeployedAgentsPane({
     setWizardStepIndex(0);
     setWizardErrorMessage(null);
     setSelectedTemplateId(template.id);
-    setWizardState(applyProviderCatalogDefaults(applyStudioTemplate(buildWizardState(null), template), providerCatalog));
+    setWizardState(applyProviderCatalogDefaults({
+      ...applyStudioTemplate(buildWizardState(null), template),
+      customerChannel: 'draft',
+      telegramEnabled: false,
+      telegramConnectorId: '',
+      telegramEndpointKey: '',
+      runtimePlacement: 'managed_cloud',
+      runtimeTarget: runtimeTargetForPlacement('managed_cloud'),
+      runtimeSupplierKind: runtimeSupplierForPlacement('managed_cloud'),
+      selfHostedRuntimeProfileId: '',
+      selfHostedPrivacyAccepted: false,
+      selfHostedSafetyAccepted: false,
+      computerAutomationEnabled: false,
+    }, providerCatalog));
     setIsTelegramSetupOpen(false);
     setIsWizardOpen(true);
     void loadTelegramReadiness();
@@ -4957,60 +4970,68 @@ export function WorkstationDeployedAgentsPane({
                         </FormField>
                       </FormGrid>
 
-                      <FormField label="Agent type" hint="Start simple. Computer and self-hosted modes can still be changed before launch.">
-                        <RuntimeModeSelector
-                          value={wizardState.runtimePlacement}
-                          options={STUDIO_RUNTIME_OPTIONS}
-                          hasGatewayOnlineTarget={hasGatewayOnlineTarget}
-                          hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
-                          onSelect={(nextRuntime) => {
-                            setWizardState((current) => ({
-                              ...current,
-                              runtimePlacement: nextRuntime,
-                              runtimeTarget: runtimeTargetForPlacement(nextRuntime),
-                            }));
-                          }}
-                        />
-                      </FormField>
-
-                      {wizardState.runtimePlacement === 'customer_hosted' ? (
-                        <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                          <FormField label="Self-hosted node" hint="Required only for self-hosted agents.">
-                            <FormSelect
-                              value={wizardState.selfHostedRuntimeProfileId}
-                              onChange={(event) => setWizardField('selfHostedRuntimeProfileId', event.currentTarget.value)}
-                              disabled={isLoadingRuntimeAttachments}
-                            >
-                              <option value="">
-                                {isLoadingRuntimeAttachments ? 'Loading nodes...' : selfHostedNodeOptions.length > 0 ? 'Select a node' : 'No enrolled nodes found'}
+                      <details className="app-stack-3">
+                        <summary>Advanced agent type</summary>
+                        <FormField label="Agent type" hint="New agents start as text drafts. Choose another mode only when the runtime is already prepared.">
+                          <FormSelect
+                            value={wizardState.runtimePlacement}
+                            onChange={(event) => {
+                              const nextRuntime = normalizeRuntimePlacement(event.currentTarget.value);
+                              setWizardState((current) => ({
+                                ...current,
+                                runtimePlacement: nextRuntime,
+                                runtimeTarget: runtimeTargetForPlacement(nextRuntime),
+                                runtimeSupplierKind: runtimeSupplierForPlacement(nextRuntime),
+                              }));
+                            }}
+                          >
+                            {STUDIO_RUNTIME_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
                               </option>
-                              {selfHostedNodeOptions.map((node) => (
-                                <option key={node.runtimeProfileId} value={node.runtimeProfileId}>
-                                  {node.label} ({humanizeToken(node.nodeKind, 'node')})
+                            ))}
+                          </FormSelect>
+                        </FormField>
+
+                        {wizardState.runtimePlacement === 'customer_hosted' ? (
+                          <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                            <FormField label="Self-hosted node" hint="Required only for self-hosted agents.">
+                              <FormSelect
+                                value={wizardState.selfHostedRuntimeProfileId}
+                                onChange={(event) => setWizardField('selfHostedRuntimeProfileId', event.currentTarget.value)}
+                                disabled={isLoadingRuntimeAttachments}
+                              >
+                                <option value="">
+                                  {isLoadingRuntimeAttachments ? 'Loading nodes...' : selfHostedNodeOptions.length > 0 ? 'Select a node' : 'No enrolled nodes found'}
                                 </option>
-                              ))}
-                            </FormSelect>
-                          </FormField>
-                          <FormField label="Self-hosted contracts" hint="Required before creating this mode.">
-                            <FormGrid columns="repeat(2, minmax(0, 1fr))">
-                              <FormSelect
-                                value={wizardState.selfHostedPrivacyAccepted ? 'accepted' : 'pending'}
-                                onChange={(event) => setWizardField('selfHostedPrivacyAccepted', event.currentTarget.value === 'accepted')}
-                              >
-                                <option value="pending">Privacy pending</option>
-                                <option value="accepted">Privacy accepted</option>
+                                {selfHostedNodeOptions.map((node) => (
+                                  <option key={node.runtimeProfileId} value={node.runtimeProfileId}>
+                                    {node.label} ({humanizeToken(node.nodeKind, 'node')})
+                                  </option>
+                                ))}
                               </FormSelect>
-                              <FormSelect
-                                value={wizardState.selfHostedSafetyAccepted ? 'accepted' : 'pending'}
-                                onChange={(event) => setWizardField('selfHostedSafetyAccepted', event.currentTarget.value === 'accepted')}
-                              >
-                                <option value="pending">Safety pending</option>
-                                <option value="accepted">Safety accepted</option>
-                              </FormSelect>
-                            </FormGrid>
-                          </FormField>
-                        </FormGrid>
-                      ) : null}
+                            </FormField>
+                            <FormField label="Self-hosted contracts" hint="Required before creating this mode.">
+                              <FormGrid columns="repeat(2, minmax(0, 1fr))">
+                                <FormSelect
+                                  value={wizardState.selfHostedPrivacyAccepted ? 'accepted' : 'pending'}
+                                  onChange={(event) => setWizardField('selfHostedPrivacyAccepted', event.currentTarget.value === 'accepted')}
+                                >
+                                  <option value="pending">Privacy pending</option>
+                                  <option value="accepted">Privacy accepted</option>
+                                </FormSelect>
+                                <FormSelect
+                                  value={wizardState.selfHostedSafetyAccepted ? 'accepted' : 'pending'}
+                                  onChange={(event) => setWizardField('selfHostedSafetyAccepted', event.currentTarget.value === 'accepted')}
+                                >
+                                  <option value="pending">Safety pending</option>
+                                  <option value="accepted">Safety accepted</option>
+                                </FormSelect>
+                              </FormGrid>
+                            </FormField>
+                          </FormGrid>
+                        ) : null}
+                      </details>
 
                       <FormField label="Business / use case" hint="Plain language is enough. The template turns it into assistant behavior.">
                         <FormTextarea

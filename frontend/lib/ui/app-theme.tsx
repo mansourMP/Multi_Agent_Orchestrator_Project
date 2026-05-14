@@ -82,7 +82,10 @@ export function AppThemeProvider({
     const onChange = (event: MediaQueryListEvent) => {
       setPrefersDark(event.matches);
     };
-    setPrefersDark(mediaQuery.matches);
+    const documentTheme = readDocumentTheme();
+    if (!documentTheme) {
+      setPrefersDark(mediaQuery.matches);
+    }
     if (typeof mediaQuery.addEventListener === 'function') {
       mediaQuery.addEventListener('change', onChange);
       return () => mediaQuery.removeEventListener('change', onChange);

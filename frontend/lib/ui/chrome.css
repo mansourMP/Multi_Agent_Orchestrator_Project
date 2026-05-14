@@ -194,6 +194,28 @@ body[data-emp-theme='dark'] {
   --chat-content-width: 680px;
 }
 
+:root[data-emp-theme='dark'] .app-root,
+:root[data-emp-theme='dark'] .app-shell-frame,
+:root[data-emp-theme='dark'] .workstation-shell,
+:root[data-emp-theme='dark'] .workstation-shell-frame,
+body[data-emp-theme='dark'] .app-root,
+body[data-emp-theme='dark'] .app-shell-frame,
+body[data-emp-theme='dark'] .workstation-shell,
+body[data-emp-theme='dark'] .workstation-shell-frame {
+  --app-border-accent: #3a3a3a;
+  --app-accent: #2f2f2f;
+  --app-accent-primary: #2f2f2f;
+  --app-accent-strong: #3a3a3a;
+  --app-accent-muted: rgba(58, 58, 58, 0.3);
+  --app-accent-soft: rgba(58, 58, 58, 0.16);
+  --interactive-accent: #3a3a3a;
+  --interactive-accent-hover: #4a4a4a;
+  --accent: #3a3a3a;
+  --accent-hover: #4a4a4a;
+  --accent-subtle: rgba(58, 58, 58, 0.16);
+  --app-shadow-focus: 0 0 0 2px rgba(180, 180, 180, 0.14);
+}
+
 body {
   background: var(--bg-primary);
   -webkit-user-select: none;
@@ -742,6 +764,17 @@ textarea {
   border-color: color-mix(in srgb, var(--app-border-accent) 52%, transparent 48%);
   background: color-mix(in srgb, var(--app-bg-panel) 82%, var(--app-accent-soft) 18%);
   box-shadow: var(--app-shadow-focus);
+}
+
+:root[data-emp-theme='dark'] .app-field:focus,
+:root[data-emp-theme='dark'] .app-select:focus,
+:root[data-emp-theme='dark'] .app-textarea:focus,
+body[data-emp-theme='dark'] .app-field:focus,
+body[data-emp-theme='dark'] .app-select:focus,
+body[data-emp-theme='dark'] .app-textarea:focus {
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  background: #202020 !important;
+  box-shadow: 0 0 0 2px rgba(180, 180, 180, 0.12) !important;
 }
 
 .app-select {
@@ -3919,9 +3952,10 @@ body[data-emp-theme='dark'] .app-chat-composer__provider-pill:focus-visible {
 }
 
 .app-card-button--selected {
-  border-inline-start: 1px solid var(--interactive-accent);
+  border-inline-start: 1px solid rgba(255, 255, 255, 0.12);
   padding-inline-start: calc(var(--app-space-4) + 3px);
-  background: color-mix(in srgb, var(--app-surface-1) 88%, var(--app-bg-page) 12%);
+  background: #202020;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 .app-card-button__title {
@@ -8759,6 +8793,12 @@ body[data-emp-theme='dark'] .app-memory-document-nav .settings-nav__item[aria-se
 .app-memory-document-textarea:focus {
   border-color: color-mix(in srgb, var(--app-accent) 38%, var(--app-border-strong) 62%);
   box-shadow: var(--app-shadow-focus);
+}
+
+:root[data-emp-theme='dark'] .app-memory-document-textarea:focus,
+body[data-emp-theme='dark'] .app-memory-document-textarea:focus {
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  box-shadow: 0 0 0 2px rgba(180, 180, 180, 0.12) !important;
 }
 
 .app-memory-document-prose {

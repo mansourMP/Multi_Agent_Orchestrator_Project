@@ -22,7 +22,7 @@ import {
   FormSelect,
   FormTextarea,
 } from '@/lib/ui/form-controls';
-import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
+import { ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
 import { ModalSection } from '@/lib/ui/modal';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
@@ -43,11 +43,13 @@ import { DeployedAgentTestTurnPane } from '@/lib/workspace/workstation-deployed-
 import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
+import { WorkstationSplitWorkbench } from '@/lib/workspace/workstation-split-workbench';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
 type WizardMode = 'create' | 'edit';
 type WizardStepId = 'overview' | 'knowledge' | 'tools' | 'channels' | 'memory' | 'safety' | 'test' | 'deploy';
 type StudioSubview = 'agents' | 'inbox' | 'deploy';
+type AgentRosterFilterId = 'all' | 'text' | 'computer' | 'connected' | 'draft';
 type SpecialistOverlayTabId = 'overview' | 'tools' | 'memory' | 'connectors' | 'analytics';
 
 type StudioTemplate = {
@@ -332,6 +334,14 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
     label: 'Launch settings',
     description: 'Choose AI tier, agent mode, spending guardrails, and approval posture before launch.',
   },
+];
+
+const AGENT_ROSTER_FILTERS: ReadonlyArray<{ id: AgentRosterFilterId; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'text', label: 'Text' },
+  { id: 'computer', label: 'Computer' },
+  { id: 'connected', label: 'Connected' },
+  { id: 'draft', label: 'Draft' },
 ];
 
 const STUDIO_AI_TIER_OPTIONS: ReadonlyArray<{
@@ -1428,6 +1438,34 @@ function runtimePlacementLabel(value: unknown): string {
   return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Text Agent';
 }
 
+function agentRuntimePlacement(agent: DeployedAgentRecord | null | undefined): WizardState['runtimePlacement'] {
+  const config = readRecord(agent?.config);
+  const metadata = readRecord(agent?.metadata);
+  return normalizeRuntimePlacement(
+    config.runtime_placement
+    ?? metadata.runtime_placement
+    ?? agent?.runtime_target,
+  );
+}
+
+function agentModeBucket(agent: DeployedAgentRecord | null | undefined): 'text' | 'computer' {
+  return agentRuntimePlacement(agent) === 'managed_cloud' ? 'text' : 'computer';
+}
+
+function agentMatchesRosterFilter(agent: DeployedAgentRecord, filterId: AgentRosterFilterId): boolean {
+  if (filterId === 'all') {
+    return true;
+  }
+  if (filterId === 'text' || filterId === 'computer') {
+    return agentModeBucket(agent) === filterId;
+  }
+  if (filterId === 'connected') {
+    return listEnabledChannels(agent.channels).length > 0;
+  }
+  const state = readString(agent.deployment_state).toLowerCase();
+  return state !== 'live';
+}
+
 function normalizeApprovalModeFromPolicies(escalationPreset: unknown, handoffMode: unknown): WizardState['approvalMode'] {
   const escalation = readString(escalationPreset).toLowerCase();
   const handoff = readString(handoffMode).toLowerCase();
@@ -2087,6 +2125,22 @@ function summarizeStudioErrorMessage(message: string | null): string | null {
   return normalized;
 }
 
+function isWizardScopedError(message: string | null): boolean {
+  const normalized = readString(message).toLowerCase();
+  return Boolean(normalized) && (
+    normalized.includes('self-hosted mode requires selecting')
+    || normalized.includes('select a self-hosted node')
+    || normalized.includes('accept the privacy contract')
+    || normalized.includes('accept the safety contract')
+    || normalized.includes('daily message limit')
+    || normalized.includes('monthly cost cap')
+    || normalized.includes('telegram connected app')
+    || normalized.includes('assistant needs a public name')
+    || normalized.includes('ai tier route is unavailable')
+    || normalized.includes('computer automation needs')
+  );
+}
+
 function StudioTemplateCard({
   template,
   onSelect,
@@ -2123,27 +2177,28 @@ function StudioTemplateCard({
 
 function DeployedAgentsSkeleton() {
   return (
-    <ListDetailColumns
-      primary={(
+    <WorkstationSplitWorkbench
+      ariaLabel="Agents"
+      className="studio-agents-workbench"
+      sidebar={(
         <ListDetailPanel eyebrow="Assistants" title="Loading assistants">
           <SkeletonBlock height="3rem" />
           <SkeletonBlock height="3rem" />
           <SkeletonBlock height="3rem" />
         </ListDetailPanel>
       )}
-      secondary={(
-        <div className="app-stack-4">
-          <ListDetailPanel eyebrow="Detail" title="Loading assistant details">
-            <SkeletonBlock height="4rem" />
-            <SkeletonBlock height="5rem" />
-          </ListDetailPanel>
-          <ListDetailPanel eyebrow="Conversations" title="Loading inbox">
-            <SkeletonBlock height="3rem" />
-            <SkeletonBlock height="3rem" />
-          </ListDetailPanel>
-        </div>
-      )}
-    />
+    >
+      <div className="app-stack-4">
+        <ListDetailPanel eyebrow="Detail" title="Loading assistant details">
+          <SkeletonBlock height="4rem" />
+          <SkeletonBlock height="5rem" />
+        </ListDetailPanel>
+        <ListDetailPanel eyebrow="Conversations" title="Loading inbox">
+          <SkeletonBlock height="3rem" />
+          <SkeletonBlock height="3rem" />
+        </ListDetailPanel>
+      </div>
+    </WorkstationSplitWorkbench>
   );
 }
 
@@ -2410,6 +2465,7 @@ export function WorkstationDeployedAgentsPane({
   const [wizardMode, setWizardMode] = useState<WizardMode>('create');
   const [wizardStepIndex, setWizardStepIndex] = useState(0);
   const [wizardState, setWizardState] = useState<WizardState>(() => buildWizardState(null));
+  const [wizardErrorMessage, setWizardErrorMessage] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() => DEFAULT_STUDIO_TEMPLATE.id);
   const handledTemplateDeepLinkRef = useRef<string | null>(null);
   const [isSubmittingWizard, setIsSubmittingWizard] = useState(false);
@@ -2420,6 +2476,7 @@ export function WorkstationDeployedAgentsPane({
   const [recentlyCreatedAgentId, setRecentlyCreatedAgentId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [agentRosterFilter, setAgentRosterFilter] = useState<AgentRosterFilterId>('all');
   const [conversationFilters, setConversationFilters] = useState<ConversationFilters>({
     channel: 'all',
     escalationState: 'all',
@@ -2522,6 +2579,30 @@ export function WorkstationDeployedAgentsPane({
   const additionalStudioTemplates = useMemo(
     () => studioTemplates.filter((template) => !PRIMARY_STUDIO_TEMPLATE_IDS.has(template.id)),
     [studioTemplates],
+  );
+  const agentRosterCounts = useMemo(
+    () => agents.reduce<Record<AgentRosterFilterId, number>>((counts, agent) => {
+      counts.all += 1;
+      counts[agentModeBucket(agent)] += 1;
+      if (listEnabledChannels(agent.channels).length > 0) {
+        counts.connected += 1;
+      }
+      if (readString(agent.deployment_state).toLowerCase() !== 'live') {
+        counts.draft += 1;
+      }
+      return counts;
+    }, {
+      all: 0,
+      text: 0,
+      computer: 0,
+      connected: 0,
+      draft: 0,
+    }),
+    [agents],
+  );
+  const visibleAgents = useMemo(
+    () => agents.filter((agent) => agentMatchesRosterFilter(agent, agentRosterFilter)),
+    [agentRosterFilter, agents],
   );
   const filteredConversations = useMemo(
     () => conversations.filter((conversation) => matchesConversationFilters(conversation, conversationFilters)),
@@ -3080,6 +3161,7 @@ export function WorkstationDeployedAgentsPane({
     const template = studioTemplateById(templateId, studioTemplates);
     setWizardMode('create');
     setWizardStepIndex(0);
+    setWizardErrorMessage(null);
     setSelectedTemplateId(template.id);
     setWizardState(applyProviderCatalogDefaults(applyStudioTemplate(buildWizardState(null), template), providerCatalog));
     setIsTelegramSetupOpen(false);
@@ -3090,6 +3172,7 @@ export function WorkstationDeployedAgentsPane({
   function openEditWizard() {
     setWizardMode('edit');
     setWizardStepIndex(0);
+    setWizardErrorMessage(null);
     setWizardState(applyProviderCatalogDefaults(buildWizardState(selectedAgent), providerCatalog));
     setIsTelegramSetupOpen(false);
     setIsWizardOpen(true);
@@ -3102,12 +3185,14 @@ export function WorkstationDeployedAgentsPane({
     }
     setIsWizardOpen(false);
     setIsTelegramSetupOpen(false);
+    setWizardErrorMessage(null);
     if (selectedAgentId) {
       void loadTelegramReadiness(selectedAgentId);
     }
   }
 
   function setWizardField<K extends keyof WizardState>(field: K, value: WizardState[K]) {
+    setWizardErrorMessage(null);
     setWizardState((current) => ({
       ...current,
       [field]: value,
@@ -3131,62 +3216,62 @@ export function WorkstationDeployedAgentsPane({
     const monthlyCostCapUsd = wizardState.monthlyCostCapUsd.trim();
     const route = resolveProviderModelForTier(wizardState.aiTier, providerCatalog);
     if (!route.providerId || !route.modelId) {
-      setErrorMessage('AI tier route is unavailable. Refresh provider catalog and try again.');
+      setWizardErrorMessage('AI tier route is unavailable. Refresh provider catalog and try again.');
       return;
     }
     if (dailyMessageLimit) {
       const parsedLimit = Number(dailyMessageLimit);
       if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
-        setErrorMessage('Daily message limit must be a whole number greater than zero.');
+        setWizardErrorMessage('Daily message limit must be a whole number greater than zero.');
         return;
       }
       if (!wizardState.upgradeCtaLabel.trim()) {
-        setErrorMessage('Add an upgrade CTA label when a daily message limit is enabled.');
+        setWizardErrorMessage('Add an upgrade CTA label when a daily message limit is enabled.');
         return;
       }
       if (!wizardState.upgradeCtaUrl.trim()) {
-        setErrorMessage('Add an upgrade CTA URL when a daily message limit is enabled.');
+        setWizardErrorMessage('Add an upgrade CTA URL when a daily message limit is enabled.');
         return;
       }
     }
     if (monthlyCostCapUsd) {
       const parsedCap = Number(monthlyCostCapUsd);
       if (!Number.isFinite(parsedCap) || parsedCap <= 0) {
-        setErrorMessage('Monthly cost cap must be a number greater than zero.');
+        setWizardErrorMessage('Monthly cost cap must be a number greater than zero.');
         return;
       }
     }
     if (wizardState.computerAutomationEnabled) {
       if (!wizardState.computerAutomationAllowedDomains.trim()) {
-        setErrorMessage('Computer Automation needs at least one allowed domain.');
+        setWizardErrorMessage('Computer Automation needs at least one allowed domain.');
         return;
       }
       const parsedSessions = Number(wizardState.computerAutomationMaxSessions.trim());
       if (!Number.isFinite(parsedSessions) || parsedSessions < 1) {
-        setErrorMessage('Computer Automation needs at least one allowed session.');
+        setWizardErrorMessage('Computer Automation needs at least one allowed session.');
         return;
       }
     }
     if (wizardState.runtimePlacement === 'customer_hosted') {
       if (!wizardState.selfHostedRuntimeProfileId.trim()) {
-        setErrorMessage('Self-hosted mode requires selecting a self-hosted node.');
+        setWizardErrorMessage('Self-hosted mode requires selecting a self-hosted node.');
         return;
       }
       if (selfHostedWizardNodeBlocker) {
-        setErrorMessage(selfHostedWizardNodeBlocker);
+        setWizardErrorMessage(selfHostedWizardNodeBlocker);
         return;
       }
       if (!wizardState.selfHostedPrivacyAccepted) {
-        setErrorMessage('Accept the privacy contract before saving a self-hosted assistant.');
+        setWizardErrorMessage('Accept the privacy contract before saving a self-hosted assistant.');
         return;
       }
       if (!wizardState.selfHostedSafetyAccepted) {
-        setErrorMessage('Accept the safety contract before saving a self-hosted assistant.');
+        setWizardErrorMessage('Accept the safety contract before saving a self-hosted assistant.');
         return;
       }
     }
     if (wizardState.customerChannel === 'telegram' && wizardState.telegramEnabled && !wizardState.telegramConnectorId.trim()) {
-      setErrorMessage('Choose a Telegram connected app before saving a live-ready assistant.');
+      setWizardErrorMessage('Choose a Telegram connected app before saving a live-ready assistant.');
       return;
     }
     const approvalPolicy = applyApprovalModeToWizardState(wizardState.approvalMode, {
@@ -3236,12 +3321,12 @@ export function WorkstationDeployedAgentsPane({
     };
 
     if (!payload.name) {
-      setErrorMessage('An assistant needs a public name before it can be saved.');
+      setWizardErrorMessage('An assistant needs a public name before it can be saved.');
       return;
     }
 
     setIsSubmittingWizard(true);
-    setErrorMessage(null);
+    setWizardErrorMessage(null);
     try {
       if (wizardMode === 'create') {
         const created = await services.client.createDeployedAgent(payload);
@@ -3282,7 +3367,7 @@ export function WorkstationDeployedAgentsPane({
       }
       setIsWizardOpen(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'The assistant could not be saved.');
+      setWizardErrorMessage(error instanceof Error ? error.message : 'The assistant could not be saved.');
     } finally {
       setIsSubmittingWizard(false);
     }
@@ -3423,20 +3508,20 @@ export function WorkstationDeployedAgentsPane({
     : [];
   const knowledgeSourceCount = selectedKnowledgeSources.length;
   const studioTitle = currentStudioSubview === 'agents'
-    ? 'Create assistants'
+    ? 'Agents'
     : currentStudioSubview === 'inbox'
       ? 'Assistant inbox'
       : 'Assistant launch';
   const studioSubtitle = currentStudioSubview === 'agents'
-    ? 'Pick a business template, add your trusted info, then create one customer assistant.'
+    ? 'Manage text agents, computer agents, and connected customer assistants.'
     : currentStudioSubview === 'inbox'
       ? 'Customer sessions and handoffs for assistants that are already working.'
       : 'Go-live checks, spending guardrails, and optional advanced settings.';
   const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
   const showReadinessPanel = currentStudioSubview === 'deploy';
-  const showDetailPanel = currentStudioSubview === 'deploy';
+  const showDetailPanel = currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && Boolean(selectedAgent));
   const showInboxPanels = currentStudioSubview === 'inbox';
-  const visibleErrorMessage = summarizeStudioErrorMessage(errorMessage);
+  const visibleErrorMessage = isWizardScopedError(errorMessage) ? null : summarizeStudioErrorMessage(errorMessage);
   const wizardStep = DEPLOYED_AGENT_WIZARD_STEPS[wizardStepIndex];
   const transcriptEntries: TimelineEntry[] = Array.isArray(selectedTranscript?.entries)
     ? (selectedTranscript.entries as TimelineEntry[])
@@ -3543,9 +3628,17 @@ export function WorkstationDeployedAgentsPane({
   return (
     <WorkstationSurfaceRoot surface="deployed-agents">
       <ListDetailShell
-        className="app-studio-shell"
+        className={joinClassNames(
+          'app-studio-shell',
+          currentStudioSubview === 'agents' && 'app-studio-shell--agents',
+        )}
         title={studioTitle}
         subtitle={studioSubtitle}
+        actions={currentStudioSubview === 'agents' ? (
+          <AppButton type="button" tone="primary" onClick={() => openCreateWizard(selectedTemplateId)}>
+            Add agent
+          </AppButton>
+        ) : undefined}
       >
         {statusMessage ? (
           <StateBanner tone="success" title="Assistant updated">
@@ -3565,8 +3658,18 @@ export function WorkstationDeployedAgentsPane({
         {isLoadingAgents ? (
           <DeployedAgentsSkeleton />
         ) : (
-          <ListDetailColumns
-            primary={(
+          <WorkstationSplitWorkbench
+            ariaLabel="Agents"
+            className="studio-agents-workbench"
+            mainHeader={currentStudioSubview === 'agents' ? (
+              <div className="studio-agents-workbench__header">
+                <span>Agents</span>
+                <AppButton type="button" tone="primary" onClick={() => openCreateWizard(selectedTemplateId)}>
+                  Add agent
+                </AppButton>
+              </div>
+            ) : undefined}
+            sidebar={(
               <div className="app-stack-4">
                 {showAgentsIndex ? (
                   <>
@@ -3719,91 +3822,76 @@ export function WorkstationDeployedAgentsPane({
                       ) : null}
                     </ListDetailPanel>
 
-                    <ListDetailPanel
-                      className="studio-panel studio-panel--roster"
-                      eyebrow="Assistants"
-                      title="My assistants"
-                      subtitle={`${agents.length} in this workspace. Open one to manage its purpose, customer channel, and results.`}
-                    >
-                      {agents.length === 0 ? (
-                        <EmptyPanel
-                          title="No assistants yet"
-                          body="Choose one of the templates above, then use Create assistant. Advanced model and computer settings stay out of the way."
-                        />
-                      ) : (
-                      <div className="deployed-agents-card-grid">
-                        {agents.map((agent, index) => {
-                          const agentId = readString(agent.id, `deployed-agent-${index}`);
-                          const selected = agentId === selectedAgentId;
-                          const agentMetrics = agentMetricsById[agentId] ?? null;
-                          const agentAnalytics = agentAnalyticsById[agentId] ?? null;
-                          const channels = listEnabledChannels(agent.channels);
-                          const channelLabel = humanizeToken(channels[0] || 'no_channel', 'No channel');
-                          const stateLabel = deploymentStateLabel(agent.deployment_state);
-                          const modelLabel = formatDeploymentModelLabel(agent, providerCatalogIndex);
-                          const displayName = readString(agent.name, agentId);
-                          const latestActivityLabel = agentMetrics?.latestActivityLabel ?? 'Syncing recent activity';
-                          const outcomeMetric = formatRosterOutcomeMetric(agentAnalytics);
-                          return (
-                            <button
-                              key={agentId}
-                              type="button"
-                              onClick={() => {
-                                setSelectedAgentId(agentId);
-                                setOverlayAgentId(agentId);
-                                setOverlayTab('overview');
-                              }}
-                              className={`deployed-agents-card${selected ? ' deployed-agents-card--selected' : ''}`}
-                            >
-                              <span className="deployed-agents-card__header">
-                                <span className="deployed-agents-card__avatar" aria-hidden="true">
-                                  {displayName.charAt(0).toUpperCase()}
-                                </span>
-                                <span className="deployed-agents-card__copy">
-                                  <span className="deployed-agents-card__name-row">
-                                    <strong className="deployed-agents-card__title">{displayName}</strong>
-                                  </span>
-                                  <span className="deployed-agents-card__state-row">
-                                    <span
-                                      className={`deployed-agents-card__status deployed-agents-card__status--${rosterStatusTone(agent.deployment_state)}`}
-                                      aria-hidden="true"
-                                    />
-                                    <span className="deployed-agents-card__state">{stateLabel}</span>
-                                  </span>
-                                </span>
-                              </span>
-                              <div className="deployed-agents-card__badges">
-                                <span className="deployed-agents-card__badge">{channelLabel}</span>
-                                <span className="deployed-agents-card__badge">{modelLabel}</span>
-                              </div>
-                              <span className="deployed-agents-card__meta">{latestActivityLabel}</span>
-                              <div className="deployed-agents-card__metrics" aria-label={`${displayName} operational summary`}>
-                                <span className="deployed-agents-card__metric">
-                                  <span className="deployed-agents-card__metric-label">Messages</span>
-                                  <strong className="deployed-agents-card__metric-value">
-                                    {formatRosterMetricValue(agentAnalytics?.messageVolumeDay ?? 0, '0')}
-                                  </strong>
-                                </span>
-                                <span className="deployed-agents-card__metric">
-                                  <span className="deployed-agents-card__metric-label">{outcomeMetric.label}</span>
-                                  <strong className="deployed-agents-card__metric-value">{outcomeMetric.value}</strong>
-                                </span>
-                                <span className="deployed-agents-card__metric">
-                                  <span className="deployed-agents-card__metric-label">Spend</span>
-                                  <strong className="deployed-agents-card__metric-value">{formatRosterSpendMetric(agentAnalytics)}</strong>
-                                </span>
-                              </div>
-                              {agentMetrics?.unresolvedEscalations ? (
-                                <span className="deployed-agents-card__subtle">
-                                  {agentMetrics.unresolvedEscalationsLabel}
-                                </span>
-                              ) : null}
-                            </button>
-                          );
-                        })}
+                    <div className="studio-agents-nav" aria-label="Workspace agents">
+                      <div className="studio-agents-nav__filters" aria-label="Agent filters">
+                        {AGENT_ROSTER_FILTERS.map((filter) => (
+                          <button
+                            key={filter.id}
+                            type="button"
+                            className={joinClassNames(
+                              'studio-agents-nav__filter',
+                              agentRosterFilter === filter.id && 'studio-agents-nav__filter--active',
+                            )}
+                            aria-pressed={agentRosterFilter === filter.id}
+                            onClick={() => setAgentRosterFilter(filter.id)}
+                          >
+                            <span>{filter.label}</span>
+                            <strong>{agentRosterCounts[filter.id]}</strong>
+                          </button>
+                        ))}
                       </div>
+                      {agents.length === 0 ? (
+                        <div className="studio-agents-nav__placeholder">
+                          <strong>No agents yet</strong>
+                          <span>Add a text agent, cloud computer agent, or connected computer agent.</span>
+                        </div>
+                      ) : visibleAgents.length === 0 ? (
+                        <div className="studio-agents-nav__placeholder">
+                          <strong>No agents match</strong>
+                          <span>Switch filters to see more workspace agents.</span>
+                        </div>
+                      ) : (
+                        <div className="studio-agents-nav__items">
+                          {visibleAgents.map((agent, index) => {
+                            const agentId = readString(agent.id, `deployed-agent-${index}`);
+                            const selected = agentId === selectedAgentId;
+                            const agentMetrics = agentMetricsById[agentId] ?? null;
+                            const channels = listEnabledChannels(agent.channels);
+                            const channelLabel = humanizeToken(channels[0] || 'no_channel', 'No channel');
+                            const modeLabel = runtimePlacementLabel(agentRuntimePlacement(agent));
+                            const stateLabel = deploymentStateLabel(agent.deployment_state);
+                            const displayName = readString(agent.name, agentId);
+                            const latestActivityLabel = agentMetrics?.latestActivityLabel ?? 'Syncing recent activity';
+                            return (
+                              <button
+                                key={agentId}
+                                type="button"
+                                className={joinClassNames(
+                                  'studio-agents-nav__agent',
+                                  selected && 'studio-agents-nav__agent--active',
+                                )}
+                                aria-selected={selected}
+                                onClick={() => {
+                                  setSelectedAgentId(agentId);
+                                  setOverlayAgentId(null);
+                                  setOverlayTab('overview');
+                                }}
+                              >
+                                <span className="studio-agents-nav__copy">
+                                  <span className="studio-agents-nav__label">{displayName}</span>
+                                  <span className="studio-agents-nav__detail">
+                                    {modeLabel} · {channelLabel} · {latestActivityLabel}
+                                  </span>
+                                </span>
+                                <span className={joinClassNames('studio-agents-nav__status', `studio-agents-nav__status--${rosterStatusTone(agent.deployment_state)}`)}>
+                                  {stateLabel}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
                       )}
-                    </ListDetailPanel>
+                    </div>
                   </>
                 ) : null}
 
@@ -3845,8 +3933,19 @@ export function WorkstationDeployedAgentsPane({
                 ) : null}
               </div>
             )}
-            secondary={(
-              <div className="app-stack-4">
+          >
+            <div className="app-stack-4">
+                {currentStudioSubview === 'agents' && !selectedAgent ? (
+                  <div className="studio-agent-detail-empty" aria-label="Agent detail">
+                    <strong>{agents.length === 0 ? 'No agents yet' : 'Select an agent'}</strong>
+                    <span>
+                      {agents.length === 0
+                        ? 'Use Add agent to create the first workspace agent.'
+                        : 'Agent configuration, channels, memory, analytics, and launch state will appear here.'}
+                    </span>
+                  </div>
+                ) : null}
+
                 {showDetailPanel ? (
                 <ListDetailPanel
                   className="studio-panel studio-panel--detail"
@@ -4360,9 +4459,8 @@ export function WorkstationDeployedAgentsPane({
                     client={services.client}
                   />
                 ) : null}
-              </div>
-            )}
-          />
+            </div>
+          </WorkstationSplitWorkbench>
         )}
 
         {currentStudioSubview === 'agents' && overlayAgent ? (
@@ -4790,6 +4888,12 @@ export function WorkstationDeployedAgentsPane({
                 </button>
               ))}
             </div>
+
+            {summarizeStudioErrorMessage(wizardErrorMessage) ? (
+              <StateBanner tone="warning" title="Agent setup needs attention">
+                {summarizeStudioErrorMessage(wizardErrorMessage)}
+              </StateBanner>
+            ) : null}
 
             <ModalSection title={wizardStep.label} description={wizardStep.description}>
               {wizardStep.id === 'overview' ? (

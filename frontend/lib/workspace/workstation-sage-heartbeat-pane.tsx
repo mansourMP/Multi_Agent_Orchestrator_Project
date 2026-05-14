@@ -2,12 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { DataBadge } from '@/lib/ui/data-table';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { WorkstationSageHeartbeatRecord } from '@/lib/workspace/workstation-client';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import {
   WorkstationSurfaceCard,
-  WorkstationSurfaceList,
   WorkstationSurfaceListItem,
   WorkstationSurfaceNotice,
   WorkstationSurfaceRoot,
@@ -269,6 +269,32 @@ function formatTimestamp(value: string | null): string {
   });
 }
 
+function laneTone(laneId: ProductLaneId): 'neutral' | 'success' | 'warning' | 'danger' | 'accent' {
+  if (laneId === 'now') {
+    return 'success';
+  }
+  if (laneId === 'needs_ok') {
+    return 'warning';
+  }
+  if (laneId === 'done') {
+    return 'accent';
+  }
+  return 'neutral';
+}
+
+function laneStatusText(item: ProductQueueItem): string {
+  if (item.scheduledFor) {
+    return formatTimestamp(item.scheduledFor);
+  }
+  if (item.statusLabel) {
+    return item.statusLabel;
+  }
+  if (item.runId) {
+    return `Run ${item.runId}`;
+  }
+  return item.status;
+}
+
 export function WorkstationSageHeartbeatPane() {
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
@@ -349,10 +375,22 @@ export function WorkstationSageHeartbeatPane() {
       };
     });
   }, [snapshot]);
+  const liveCount = snapshot?.queueOverview.runningNowCount ?? 0;
+  const queuedCount = snapshot?.queueOverview.queuedCount ?? 0;
+  const approvalCount = snapshot?.queueOverview.blockedOnApprovalCount ?? 0;
+  const scheduledCount = snapshot?.exactJobs.length ?? 0;
+  const totalVisibleWork = liveCount + queuedCount + approvalCount + scheduledCount;
+  const queueStateLabel = snapshot?.laneQueue.draining
+    ? 'Draining'
+    : snapshot?.queueOverview.quietHours.active
+      ? 'Quiet hours'
+      : snapshot?.laneQueue.acceptingNewWork
+        ? 'Ready'
+        : 'Paused';
 
   return (
     <WorkstationSurfaceRoot surface="sage-tasks">
-      <main className="app-stack-4">
+      <main className="sage-work-board">
         {error ? <WorkstationSurfaceNotice tone="warning">{error}</WorkstationSurfaceNotice> : null}
 
         {isLoading || !snapshot ? (
@@ -363,16 +401,29 @@ export function WorkstationSageHeartbeatPane() {
           </div>
         ) : (
           <>
-            <WorkstationSurfaceNotice tone="neutral">
-              Tasks is where Sage shows heartbeat, reminders, recurring responsibilities, quiet hours, scheduled jobs, and governed work lanes.
-            </WorkstationSurfaceNotice>
+            <section className="sage-work-hero" aria-label="Task queue overview">
+              <div className="sage-work-hero__copy">
+                <span className="app-data-badge app-data-badge--accent">{queueStateLabel}</span>
+                <h2>Tasks</h2>
+                <p>{snapshot.recurringResponsibility || 'Sage has no recurring responsibility set.'}</p>
+              </div>
+              <div className="sage-work-hero__metrics" aria-label="Current task counts">
+                <div>
+                  <strong>{totalVisibleWork}</strong>
+                  <span>Total</span>
+                </div>
+                <div>
+                  <strong>{liveCount}</strong>
+                  <span>Live</span>
+                </div>
+                <div>
+                  <strong>{approvalCount}</strong>
+                  <span>Needs OK</span>
+                </div>
+              </div>
+            </section>
 
             <WorkstationSurfaceStatGrid>
-              <WorkstationSurfaceStat
-                label="Recurring responsibility"
-                value={snapshot.recurringResponsibility || 'Not set'}
-                hint={snapshot.bootstrapComplete ? 'Carried into normal Sage sessions' : `Bootstrap ${snapshot.progressLabel}`}
-              />
               <WorkstationSurfaceStat
                 label="Running now"
                 value={snapshot.queueOverview.runningNowCount}
@@ -396,70 +447,77 @@ export function WorkstationSageHeartbeatPane() {
             </WorkstationSurfaceStatGrid>
 
             <WorkstationSurfaceCard
-              title="Next scheduled task"
-              description="The next governed reminder, heartbeat, or recurring job Sage is already carrying."
-            >
-              {snapshot.nextAction ? (
-                <WorkstationSurfaceList>
-                  <WorkstationSurfaceListItem
-                    title={snapshot.nextAction.name}
-                    subtitle={formatTimestamp(snapshot.nextAction.nextRunAt)}
-                    description={`${snapshot.nextAction.scheduleKind} · ${snapshot.nextAction.wakeMode} · ${snapshot.nextAction.delivery} · ${snapshot.nextAction.timezone}`}
-                  />
-                </WorkstationSurfaceList>
-              ) : (
-                <WorkstationSurfaceNotice tone="neutral">
-                  No scheduled actions yet. Add a recurring responsibility or schedule to make Sage proactively follow up.
-                </WorkstationSurfaceNotice>
-              )}
-            </WorkstationSurfaceCard>
-
-            <WorkstationSurfaceCard
-              title="Reminders and recurring responsibilities"
-              description={`Scheduled jobs, reminders, and heartbeat wakeups. Plan tier ${snapshot.planTier}. ${snapshot.queueOverview.quietHours.label}`}
-            >
-              {upcomingItems.length > 0 ? (
-                <WorkstationSurfaceList>
-                  {upcomingItems.map((item) => (
-                    <WorkstationSurfaceListItem
-                      key={item.id || `${item.name}-${item.nextRunAt ?? 'none'}`}
-                      title={item.name}
-                      subtitle={formatTimestamp(item.nextRunAt)}
-                      description={`${item.scheduleKind} · ${item.wakeMode} · ${item.delivery}${item.pendingHeartbeat ? ' · waiting for next heartbeat' : ''}`}
-                    />
-                  ))}
-                </WorkstationSurfaceList>
-              ) : (
-                <WorkstationSurfaceNotice tone="neutral">
-                  No reminders or recurring schedules are active yet.
-                </WorkstationSurfaceNotice>
-              )}
-            </WorkstationSurfaceCard>
-
-            <WorkstationSurfaceCard
-              title="Task lanes"
+              title="Live Work Board"
               description={snapshot.laneQueue.draining
-                ? 'Governed work is draining for shutdown.'
+                ? 'Queue is draining for shutdown.'
                 : snapshot.laneQueue.acceptingNewWork
-                  ? 'Now, Waiting, Scheduled, Needs your OK, and Done show what Sage is doing now and what happens later.'
-                  : 'Queue is not accepting new work right now.'}
+                  ? 'Current work, waiting work, approvals, scheduled items, and recent completions.'
+                  : 'Queue is paused.'}
             >
               {queueSummaryRows.some((row) => row.count > 0) ? (
-                <WorkstationSurfaceList>
-                  {queueSummaryRows.map((row) => (
-                    <WorkstationSurfaceListItem
-                      key={row.id}
-                      title={row.title}
-                      subtitle={row.subtitle}
-                      description={row.description}
-                    />
-                  ))}
-                </WorkstationSurfaceList>
+                <div className="sage-task-lane-grid">
+                  {queueSummaryRows.map((row) => {
+                    const laneItems = snapshot.queueOverview.lanes[row.id] ?? [];
+                    return (
+                      <section key={row.id} className="sage-task-lane" aria-label={row.title}>
+                        <header className="sage-task-lane__header">
+                          <div>
+                            <h3>{row.title}</h3>
+                            <p>{row.subtitle}</p>
+                          </div>
+                          <DataBadge tone={laneTone(row.id)}>{row.count}</DataBadge>
+                        </header>
+                        {laneItems.length > 0 ? (
+                          <div className="sage-task-lane__items">
+                            {laneItems.slice(0, 4).map((item) => (
+                              <article key={item.id} className="sage-task-row">
+                                <span className="sage-task-row__title">{item.label}</span>
+                                <span className="sage-task-row__meta">{laneStatusText(item)}</span>
+                                {item.summary ? <p>{item.summary}</p> : null}
+                              </article>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="sage-task-lane__empty">{row.description}</p>
+                        )}
+                      </section>
+                    );
+                  })}
+                </div>
               ) : (
                 <WorkstationSurfaceNotice tone="neutral">
-                  No task work is active right now. When Sage has live work, waiting work, approvals, scheduled jobs, or finished recurring actions, they will appear here.
+                  No task work is active right now.
                 </WorkstationSurfaceNotice>
               )}
+            </WorkstationSurfaceCard>
+
+            <WorkstationSurfaceCard
+              title="Schedule"
+              description={`${snapshot.queueOverview.quietHours.label}. Plan tier ${snapshot.planTier}.`}
+            >
+              <div className="sage-schedule-grid">
+                <section className="sage-schedule-primary">
+                  <span className="app-meta-label">Next</span>
+                  <strong>{snapshot.nextAction ? snapshot.nextAction.name : 'Nothing scheduled'}</strong>
+                  <p>{snapshot.nextAction ? formatTimestamp(snapshot.nextAction.nextRunAt) : 'No next run scheduled'}</p>
+                </section>
+                <div className="sage-schedule-list">
+                  {upcomingItems.length > 0 ? (
+                    upcomingItems.slice(0, 6).map((item) => (
+                      <WorkstationSurfaceListItem
+                        key={item.id || `${item.name}-${item.nextRunAt ?? 'none'}`}
+                        title={item.name}
+                        subtitle={formatTimestamp(item.nextRunAt)}
+                        description={`${item.scheduleKind} · ${item.wakeMode} · ${item.delivery}${item.pendingHeartbeat ? ' · waiting for heartbeat' : ''}`}
+                      />
+                    ))
+                  ) : (
+                    <WorkstationSurfaceNotice tone="neutral">
+                      No reminders or recurring schedules are active yet.
+                    </WorkstationSurfaceNotice>
+                  )}
+                </div>
+              </div>
             </WorkstationSurfaceCard>
           </>
         )}

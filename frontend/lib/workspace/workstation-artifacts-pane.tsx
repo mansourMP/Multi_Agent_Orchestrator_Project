@@ -1,18 +1,18 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { DataBadge } from '@/lib/ui/data-table';
+import { Archive, Download, File, FileText, Image, RefreshCw, Search } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
 import { EmptyPanel } from '@/lib/ui/empty-panel';
+import { joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
+import { WorkstationClientError } from '@/lib/workspace/workstation-client';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import {
-  WorkstationActionButton,
-  WorkstationSurfaceCard,
   WorkstationSurfaceNotice,
   WorkstationSurfaceRoot,
-  WorkstationSurfaceStat,
-  WorkstationSurfaceStatGrid,
 } from '@/lib/workspace/workstation-surface-primitives';
 
 type ArtifactRecord = Record<string, unknown> & {
@@ -26,6 +26,9 @@ type ArtifactRecord = Record<string, unknown> & {
   created_at?: string | null;
   run_id?: string | null;
 };
+
+type ArtifactFilterId = 'all' | 'images' | 'files';
+type ArtifactPreviewKind = 'document' | 'image' | 'archive' | 'file';
 
 function normalizeArtifactItems(payload: unknown): ArtifactRecord[] {
   if (!payload || typeof payload !== 'object') {
@@ -70,21 +73,61 @@ function formatByteSize(value: unknown): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function artifactTone(mediaType: string): 'neutral' | 'success' | 'warning' | 'danger' | 'accent' {
+function artifactKind(mediaType: string): ArtifactFilterId {
   if (mediaType.startsWith('image/')) {
-    return 'accent';
+    return 'images';
   }
-  if (mediaType.startsWith('text/') || mediaType.includes('json')) {
-    return 'success';
+  return 'files';
+}
+
+function artifactPreviewKind(mediaType: string): ArtifactPreviewKind {
+  if (mediaType.startsWith('image/')) {
+    return 'image';
   }
-  if (mediaType.includes('zip') || mediaType.includes('octet-stream')) {
-    return 'warning';
+  if (mediaType.includes('zip') || mediaType.includes('octet-stream') || mediaType.includes('tar') || mediaType.includes('gzip')) {
+    return 'archive';
   }
-  return 'neutral';
+  if (
+    mediaType.startsWith('text/')
+    || mediaType.includes('json')
+    || mediaType.includes('pdf')
+    || mediaType.includes('markdown')
+    || mediaType.includes('xml')
+  ) {
+    return 'document';
+  }
+  return 'file';
+}
+
+function artifactKindLabel(kind: ArtifactFilterId): string {
+  if (kind === 'images') {
+    return 'Images';
+  }
+  if (kind === 'files') {
+    return 'Files';
+  }
+  return 'All';
+}
+
+function artifactKindIcon(kind: ArtifactFilterId | ArtifactPreviewKind): LucideIcon {
+  if (kind === 'document') {
+    return FileText;
+  }
+  if (kind === 'images' || kind === 'image') {
+    return Image;
+  }
+  if (kind === 'archive') {
+    return Archive;
+  }
+  return File;
 }
 
 function toArtifactId(item: ArtifactRecord, fallbackIndex: number): string {
   return String(item.artifact_id ?? item.id ?? '').trim() || `artifact-${fallbackIndex}`;
+}
+
+function artifactName(item: ArtifactRecord, fallbackId: string): string {
+  return readString(item.label ?? item.file_name, fallbackId);
 }
 
 export function WorkstationArtifactsPane() {
@@ -92,19 +135,34 @@ export function WorkstationArtifactsPane() {
   const streamState = useWorkstationStreamState();
   const activityRefreshTimerRef = useRef<number | null>(null);
   const [items, setItems] = useState<ArtifactRecord[]>([]);
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<ArtifactFilterId>('all');
+  const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [restrictedReason, setRestrictedReason] = useState<string | null>(null);
 
-  const refresh = async (showLoading = false) => {
+  const applyLoadError = useCallback((loadError: unknown) => {
+    if (loadError instanceof WorkstationClientError && loadError.status === 403) {
+      setItems([]);
+      setRestrictedReason('Artifacts are not enabled for this workspace yet.');
+      setError(null);
+      setIsLoading(false);
+      return;
+    }
+    setError(loadError instanceof Error ? loadError.message : 'Files are unavailable right now.');
+    setIsLoading(false);
+  }, []);
+
+  const refresh = useCallback(async (showLoading = false) => {
     if (showLoading) {
       setIsLoading(true);
     }
     setError(null);
+    setRestrictedReason(null);
     const payload = await services.client.listArtifacts({ limit: 80 });
     setItems(normalizeArtifactItems(payload));
     setIsLoading(false);
-  };
+  }, [services.client]);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,13 +170,12 @@ export function WorkstationArtifactsPane() {
       if (cancelled) {
         return;
       }
-      setError(loadError instanceof Error ? loadError.message : 'Files are unavailable right now.');
-      setIsLoading(false);
+      applyLoadError(loadError);
     });
     return () => {
       cancelled = true;
     };
-  }, [services.client]);
+  }, [applyLoadError, refresh]);
 
   useEffect(() => {
     if (streamState.activity.version === 0) {
@@ -129,10 +186,7 @@ export function WorkstationArtifactsPane() {
     }
     activityRefreshTimerRef.current = window.setTimeout(() => {
       activityRefreshTimerRef.current = null;
-      void refresh(false).catch((loadError) => {
-        setError(loadError instanceof Error ? loadError.message : 'Files are unavailable right now.');
-        setIsLoading(false);
-      });
+      void refresh(false).catch(applyLoadError);
     }, 750);
     return () => {
       if (activityRefreshTimerRef.current !== null) {
@@ -140,171 +194,154 @@ export function WorkstationArtifactsPane() {
         activityRefreshTimerRef.current = null;
       }
     };
-  }, [services.client, streamState.activity.version]);
+  }, [applyLoadError, refresh, streamState.activity.version]);
 
-  useEffect(() => {
-    if (items.length === 0) {
-      setSelectedArtifactId(null);
-      return;
-    }
-    if (selectedArtifactId && items.some((item, index) => toArtifactId(item, index) === selectedArtifactId)) {
-      return;
-    }
-    setSelectedArtifactId(toArtifactId(items[0], 0));
-  }, [items, selectedArtifactId]);
-
-  const selectedArtifact = useMemo(
-    () => items.find((item, index) => toArtifactId(item, index) === selectedArtifactId) ?? null,
-    [items, selectedArtifactId],
-  );
-
-  const totalBytes = useMemo(
-    () =>
-      items.reduce((sum, item) => (
-        typeof item.byte_size === 'number' && Number.isFinite(item.byte_size) && item.byte_size > 0
-          ? sum + item.byte_size
-          : sum
-      ), 0),
+  const kindCounts = useMemo(
+    () => items.reduce<Record<ArtifactFilterId, number>>((counts, item) => {
+      const mediaType = readString(item.mime_type ?? item.content_type, 'artifact');
+      counts.all += 1;
+      counts[artifactKind(mediaType)] += 1;
+      return counts;
+    }, {
+      all: 0,
+      images: 0,
+      files: 0,
+    }),
     [items],
   );
-
-  const textLikeCount = useMemo(
-    () => items.filter((item) => readString(item.mime_type ?? item.content_type, '').includes('text') || readString(item.mime_type ?? item.content_type, '').includes('json')).length,
-    [items],
-  );
+  const visibleItems = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return items.filter((item, index) => {
+      const artifactId = toArtifactId(item, index);
+      const mediaType = readString(item.mime_type ?? item.content_type, 'artifact');
+      if (activeFilter !== 'all' && artifactKind(mediaType) !== activeFilter) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      return [
+        artifactName(item, artifactId),
+        artifactId,
+        readString(item.run_id, ''),
+        mediaType,
+      ].join(' ').toLowerCase().includes(normalizedQuery);
+    });
+  }, [activeFilter, items, query]);
+  const filterOptions: ArtifactFilterId[] = ['all', 'images', 'files'];
 
   return (
     <WorkstationSurfaceRoot surface="artifacts">
-      <WorkstationSurfaceCard
-        title="Library"
-        description="Generated outputs from Sage: files, images, reports, code, pages, and downloads."
-        actions={(
-          <WorkstationActionButton
-            type="button"
-            tone="secondary"
-            onClick={() => {
-              void refresh(false);
-            }}
-          >
-            Refresh
-          </WorkstationActionButton>
-        )}
-      >
-        {error ? <WorkstationSurfaceNotice tone="danger">Library items could not refresh. Try again when ready.</WorkstationSurfaceNotice> : null}
+      <main className="artifact-library-page">
+        <section className="artifact-library-hero" aria-label="Library overview">
+          <h2>Library</h2>
+          <div className="artifact-library-hero__actions" aria-label="Library actions">
+            <label className="artifact-library-search">
+              <Search size={16} aria-hidden="true" />
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search"
+              />
+            </label>
+            <button
+              type="button"
+              className="artifact-library-icon-button"
+              aria-label="Refresh library"
+              onClick={() => {
+                void refresh(false).catch(applyLoadError);
+              }}
+            >
+              <RefreshCw size={16} aria-hidden="true" />
+            </button>
+          </div>
+        </section>
 
-        <WorkstationSurfaceStatGrid>
-          <WorkstationSurfaceStat
-            label="Items"
-            value={String(items.length)}
-            hint="Outputs available in this workspace"
-          />
-          <WorkstationSurfaceStat
-            label="Stored size"
-            value={formatByteSize(totalBytes)}
-            hint="Total visible file size"
-          />
-          <WorkstationSurfaceStat
-            label="Text files"
-            value={String(textLikeCount)}
-            hint="Markdown, JSON, and other text-like files"
-          />
-        </WorkstationSurfaceStatGrid>
+        <div className="artifact-library-filters" aria-label="Library filters">
+          {filterOptions.map((filterId) => (
+            <button
+              key={filterId}
+              type="button"
+              className={joinClassNames(
+                'artifact-library-filter',
+                activeFilter === filterId && 'artifact-library-filter--active',
+              )}
+              aria-pressed={activeFilter === filterId}
+              onClick={() => setActiveFilter(filterId)}
+            >
+              <span>{artifactKindLabel(filterId)}</span>
+              <strong>{kindCounts[filterId]}</strong>
+            </button>
+          ))}
+        </div>
+
+        {error ? <WorkstationSurfaceNotice tone="neutral">Library items could not refresh. Try again when ready.</WorkstationSurfaceNotice> : null}
+        {restrictedReason ? <WorkstationSurfaceNotice tone="neutral">{restrictedReason}</WorkstationSurfaceNotice> : null}
 
         {isLoading ? (
-          <div className="app-stack-3">
-            <SkeletonBlock height="4.8rem" />
-            <SkeletonBlock height="4.8rem" />
-            <SkeletonBlock height="4.8rem" />
+          <div className="artifact-library-loading">
+            <SkeletonBlock height="11rem" />
+            <SkeletonBlock height="11rem" />
+            <SkeletonBlock height="11rem" />
           </div>
         ) : items.length === 0 ? (
           <EmptyPanel
-            title="No library items yet"
-            body="Generated files, images, reports, code, pages, and downloads will appear here."
+            title={restrictedReason ? 'Library is not enabled here' : 'No library items yet'}
+            body={restrictedReason
+              ? 'When artifacts are available for this workspace, generated files, images, reports, code, pages, and downloads will appear here.'
+              : 'Generated files, images, reports, code, pages, and downloads will appear here.'}
           />
         ) : (
-          <div className="app-stack-3">
-            {items.map((item, index) => {
-              const artifactId = toArtifactId(item, index);
-              const mediaType = readString(item.mime_type ?? item.content_type, 'artifact');
-              const selected = artifactId === selectedArtifactId;
-              return (
-                <article key={artifactId} className={`app-card-button${selected ? ' app-card-button--selected' : ''}`}>
-                  <button
-                    type="button"
-                    className="app-card-button__title"
-                    onClick={() => setSelectedArtifactId(artifactId)}
-                  >
-                    {readString(item.label ?? item.file_name, artifactId)}
-                  </button>
-                  <span className="app-card-button__subtitle">Run: {readString(item.run_id, 'Workspace output')}</span>
-                  <span className="app-card-button__meta">
-                    {formatByteSize(item.byte_size)} · {formatTimestamp(item.created_at)}
-                  </span>
-                  <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
-                    <DataBadge tone={artifactTone(mediaType)}>{mediaType}</DataBadge>
-                    <WorkstationActionButton
+          <section className="artifact-library-gallery" aria-label="Library results">
+            {visibleItems.length === 0 ? (
+              <EmptyPanel
+                title="No matching files"
+                body="Adjust the search or filter to see more library items."
+              />
+            ) : (
+              <div className="artifact-file-grid">
+                {visibleItems.map((item, index) => {
+                  const artifactId = toArtifactId(item, index);
+                  const mediaType = readString(item.mime_type ?? item.content_type, 'artifact');
+                  const itemKind = artifactPreviewKind(mediaType);
+                  const ItemIcon = artifactKindIcon(itemKind);
+                  const isDocument = itemKind === 'document';
+                  return (
+                    <button
+                      key={artifactId}
                       type="button"
-                      tone="secondary"
+                      className={joinClassNames('artifact-file-tile', `artifact-file-tile--${itemKind}`)}
                       onClick={() => {
                         window.location.assign(services.client.artifactDownloadUrl(artifactId));
                       }}
                     >
-                      Download
-                    </WorkstationActionButton>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+                      <span className="artifact-file-tile__preview" aria-hidden="true">
+                        {isDocument ? (
+                          <span className="artifact-file-tile__document-lines">
+                            <span />
+                            <span />
+                            <span />
+                          </span>
+                        ) : (
+                          <ItemIcon size={34} />
+                        )}
+                        <span className="artifact-file-tile__download">
+                          <Download size={15} />
+                        </span>
+                      </span>
+                      <span className="artifact-file-tile__title">{artifactName(item, artifactId)}</span>
+                      <span className="artifact-file-tile__meta">
+                        {formatTimestamp(item.created_at)} · {formatByteSize(item.byte_size)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         )}
-      </WorkstationSurfaceCard>
-
-      <WorkstationSurfaceCard
-        title={selectedArtifact ? readString(selectedArtifact.label ?? selectedArtifact.file_name, 'Selected item') : 'Library item detail'}
-        description={selectedArtifact ? 'Metadata and download access for the selected library item.' : 'Select a library item to inspect details.'}
-      >
-        {!selectedArtifact ? (
-          <EmptyPanel
-            title="No library item selected"
-            body="Pick an item from the library to inspect its details and download it directly."
-          />
-        ) : (
-          <div className="app-meta-list">
-            <div className="app-meta-item">
-              <span className="app-meta-label">Result or file id</span>
-              <span className="app-meta-value app-meta-value--mono">{selectedArtifactId ?? 'Unknown'}</span>
-            </div>
-            <div className="app-meta-item">
-              <span className="app-meta-label">Type</span>
-              <span className="app-meta-value app-meta-value--secondary">
-                {readString(selectedArtifact.mime_type ?? selectedArtifact.content_type, 'result or file')}
-              </span>
-            </div>
-            <div className="app-meta-item">
-              <span className="app-meta-label">Size</span>
-              <span className="app-meta-value app-meta-value--secondary">{formatByteSize(selectedArtifact.byte_size)}</span>
-            </div>
-            <div className="app-meta-item">
-              <span className="app-meta-label">Created</span>
-              <span className="app-meta-value app-meta-value--secondary">{formatTimestamp(selectedArtifact.created_at)}</span>
-            </div>
-            <div className="app-inline-actions">
-              <WorkstationActionButton
-                type="button"
-                tone="secondary"
-                onClick={() => {
-                  if (!selectedArtifactId) {
-                    return;
-                  }
-                  window.location.assign(services.client.artifactDownloadUrl(selectedArtifactId));
-                }}
-              >
-                Download selected file
-              </WorkstationActionButton>
-            </div>
-          </div>
-        )}
-      </WorkstationSurfaceCard>
+      </main>
     </WorkstationSurfaceRoot>
   );
 }

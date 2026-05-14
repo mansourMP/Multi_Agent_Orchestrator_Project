@@ -27,7 +27,7 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'runs', 'memory', 'integrations', 'heartbeat', 'activity'],
+  sage: ['chat', 'runs', 'memory', 'integrations', 'heartbeat', 'artifacts'],
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
@@ -478,7 +478,6 @@ export function WorkstationKernelShell({
                 aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
                 className={joinClassNames(
                   'workstation-titlebar__link',
-                  route.id === 'artifacts' && 'workstation-titlebar__link--muted',
                   isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
                 )}
               >

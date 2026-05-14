@@ -4,7 +4,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'runs', 'memory', 'integrations', 'channels', 'heartbeat', 'activity', 'profile', 'approvals', 'artifacts', 'skills', 'notifications'],
+    childRouteIds: ['chat', 'runs', 'memory', 'integrations', 'channels', 'heartbeat', 'artifacts', 'activity', 'profile', 'approvals', 'skills', 'notifications'],
     direct: true,
   },
   {
@@ -128,10 +128,9 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'artifacts',
-    label: 'Results & Files',
+    label: 'Library',
     segment: 'artifacts',
     destinationId: 'sage',
-    requiredCapabilities: ['artifacts_enabled'],
     web: {
       hiddenFromNavigation: true,
     },
@@ -139,7 +138,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/artifacts',
       screenName: 'artifacts',
       groupId: 'sage',
-      tabLabel: 'Files',
+      tabLabel: 'Library',
       includeInBottomTabs: false,
     },
   },

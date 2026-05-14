@@ -176,8 +176,8 @@ export function WorkstationArtifactsPane() {
   return (
     <WorkstationSurfaceRoot surface="artifacts">
       <WorkstationSurfaceCard
-        title="Files"
-        description="Generated outputs, artifacts, and downloadable files from Sage work."
+        title="Library"
+        description="Generated outputs from Sage: files, images, reports, code, pages, and downloads."
         actions={(
           <WorkstationActionButton
             type="button"
@@ -190,13 +190,13 @@ export function WorkstationArtifactsPane() {
           </WorkstationActionButton>
         )}
       >
-        {error ? <WorkstationSurfaceNotice tone="danger">Artifacts could not refresh. Try again when ready.</WorkstationSurfaceNotice> : null}
+        {error ? <WorkstationSurfaceNotice tone="danger">Library items could not refresh. Try again when ready.</WorkstationSurfaceNotice> : null}
 
         <WorkstationSurfaceStatGrid>
           <WorkstationSurfaceStat
-            label="Files"
+            label="Items"
             value={String(items.length)}
-            hint="Artifacts available in this workspace"
+            hint="Outputs available in this workspace"
           />
           <WorkstationSurfaceStat
             label="Stored size"
@@ -204,7 +204,7 @@ export function WorkstationArtifactsPane() {
             hint="Total visible file size"
           />
           <WorkstationSurfaceStat
-            label="Text outputs"
+            label="Text files"
             value={String(textLikeCount)}
             hint="Markdown, JSON, and other text-like files"
           />
@@ -218,8 +218,8 @@ export function WorkstationArtifactsPane() {
           </div>
         ) : items.length === 0 ? (
           <EmptyPanel
-            title="No files yet"
-            body="Send a message that creates a document, export, or generated file and it will appear here."
+            title="No library items yet"
+            body="Generated files, images, reports, code, pages, and downloads will appear here."
           />
         ) : (
           <div className="app-stack-3">
@@ -260,13 +260,13 @@ export function WorkstationArtifactsPane() {
       </WorkstationSurfaceCard>
 
       <WorkstationSurfaceCard
-        title={selectedArtifact ? readString(selectedArtifact.label ?? selectedArtifact.file_name, 'Selected file') : 'File detail'}
-        description={selectedArtifact ? 'Focused file metadata and download access.' : 'Select a file to inspect details.'}
+        title={selectedArtifact ? readString(selectedArtifact.label ?? selectedArtifact.file_name, 'Selected item') : 'Library item detail'}
+        description={selectedArtifact ? 'Metadata and download access for the selected library item.' : 'Select a library item to inspect details.'}
       >
         {!selectedArtifact ? (
           <EmptyPanel
-            title="No file selected"
-            body="Pick a file from the list to inspect its details and download it directly."
+            title="No library item selected"
+            body="Pick an item from the library to inspect its details and download it directly."
           />
         ) : (
           <div className="app-meta-list">

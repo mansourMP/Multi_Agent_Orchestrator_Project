@@ -336,6 +336,18 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   },
 ];
 
+const CREATE_AGENT_WIZARD_STEPS: Array<{
+  id: WizardStepId;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: 'overview',
+    label: 'Create draft',
+    description: 'Name the agent, describe the job, and choose how it runs. Everything else can be tuned after creation.',
+  },
+];
+
 const AGENT_ROSTER_FILTERS: ReadonlyArray<{ id: AgentRosterFilterId; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'text', label: 'Text' },
@@ -3522,7 +3534,8 @@ export function WorkstationDeployedAgentsPane({
   const showDetailPanel = currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && Boolean(selectedAgent));
   const showInboxPanels = currentStudioSubview === 'inbox';
   const visibleErrorMessage = isWizardScopedError(errorMessage) ? null : summarizeStudioErrorMessage(errorMessage);
-  const wizardStep = DEPLOYED_AGENT_WIZARD_STEPS[wizardStepIndex];
+  const activeWizardSteps = wizardMode === 'create' ? CREATE_AGENT_WIZARD_STEPS : DEPLOYED_AGENT_WIZARD_STEPS;
+  const wizardStep = activeWizardSteps[Math.min(wizardStepIndex, activeWizardSteps.length - 1)] ?? activeWizardSteps[0];
   const transcriptEntries: TimelineEntry[] = Array.isArray(selectedTranscript?.entries)
     ? (selectedTranscript.entries as TimelineEntry[])
     : [];
@@ -4847,10 +4860,10 @@ export function WorkstationDeployedAgentsPane({
                   Back
                 </AppButton>
               ) : null}
-              {wizardStepIndex < DEPLOYED_AGENT_WIZARD_STEPS.length - 1 ? (
+              {wizardStepIndex < activeWizardSteps.length - 1 ? (
                 <AppButton
                   type="button"
-                  onClick={() => setWizardStepIndex((current) => Math.min(DEPLOYED_AGENT_WIZARD_STEPS.length - 1, current + 1))}
+                  onClick={() => setWizardStepIndex((current) => Math.min(activeWizardSteps.length - 1, current + 1))}
                   disabled={isSubmittingWizard}
                 >
                   Continue
@@ -4870,8 +4883,9 @@ export function WorkstationDeployedAgentsPane({
           )}
         >
           <div data-deployed-agent-wizard="root" className="deployed-agents-wizard">
+            {activeWizardSteps.length > 1 ? (
             <div className="deployed-agents-wizard__steps">
-              {DEPLOYED_AGENT_WIZARD_STEPS.map((step, index) => (
+              {activeWizardSteps.map((step, index) => (
                 <button
                   type="button"
                   key={step.id}
@@ -4888,6 +4902,7 @@ export function WorkstationDeployedAgentsPane({
                 </button>
               ))}
             </div>
+            ) : null}
 
             {summarizeStudioErrorMessage(wizardErrorMessage) ? (
               <StateBanner tone="warning" title="Agent setup needs attention">
@@ -4942,12 +4957,76 @@ export function WorkstationDeployedAgentsPane({
                         </FormField>
                       </FormGrid>
 
+                      <FormField label="Agent type" hint="Start simple. Computer and self-hosted modes can still be changed before launch.">
+                        <RuntimeModeSelector
+                          value={wizardState.runtimePlacement}
+                          options={STUDIO_RUNTIME_OPTIONS}
+                          hasGatewayOnlineTarget={hasGatewayOnlineTarget}
+                          hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
+                          onSelect={(nextRuntime) => {
+                            setWizardState((current) => ({
+                              ...current,
+                              runtimePlacement: nextRuntime,
+                              runtimeTarget: runtimeTargetForPlacement(nextRuntime),
+                            }));
+                          }}
+                        />
+                      </FormField>
+
+                      {wizardState.runtimePlacement === 'customer_hosted' ? (
+                        <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                          <FormField label="Self-hosted node" hint="Required only for self-hosted agents.">
+                            <FormSelect
+                              value={wizardState.selfHostedRuntimeProfileId}
+                              onChange={(event) => setWizardField('selfHostedRuntimeProfileId', event.currentTarget.value)}
+                              disabled={isLoadingRuntimeAttachments}
+                            >
+                              <option value="">
+                                {isLoadingRuntimeAttachments ? 'Loading nodes...' : selfHostedNodeOptions.length > 0 ? 'Select a node' : 'No enrolled nodes found'}
+                              </option>
+                              {selfHostedNodeOptions.map((node) => (
+                                <option key={node.runtimeProfileId} value={node.runtimeProfileId}>
+                                  {node.label} ({humanizeToken(node.nodeKind, 'node')})
+                                </option>
+                              ))}
+                            </FormSelect>
+                          </FormField>
+                          <FormField label="Self-hosted contracts" hint="Required before creating this mode.">
+                            <FormGrid columns="repeat(2, minmax(0, 1fr))">
+                              <FormSelect
+                                value={wizardState.selfHostedPrivacyAccepted ? 'accepted' : 'pending'}
+                                onChange={(event) => setWizardField('selfHostedPrivacyAccepted', event.currentTarget.value === 'accepted')}
+                              >
+                                <option value="pending">Privacy pending</option>
+                                <option value="accepted">Privacy accepted</option>
+                              </FormSelect>
+                              <FormSelect
+                                value={wizardState.selfHostedSafetyAccepted ? 'accepted' : 'pending'}
+                                onChange={(event) => setWizardField('selfHostedSafetyAccepted', event.currentTarget.value === 'accepted')}
+                              >
+                                <option value="pending">Safety pending</option>
+                                <option value="accepted">Safety accepted</option>
+                              </FormSelect>
+                            </FormGrid>
+                          </FormField>
+                        </FormGrid>
+                      ) : null}
+
                       <FormField label="Business / use case" hint="Plain language is enough. The template turns it into assistant behavior.">
                         <FormTextarea
                           rows={3}
                           value={wizardState.persona}
                           onChange={(event) => setWizardField('persona', event.currentTarget.value)}
                           placeholder={selectedStudioTemplate.persona}
+                        />
+                      </FormField>
+
+                      <FormField label="Knowledge source" hint="Optional. You can add files, integrations, and memory after the draft exists.">
+                        <FormTextarea
+                          rows={3}
+                          value={wizardState.knowledgeSourceText}
+                          onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
+                          placeholder={selectedStudioTemplate.knowledgePlaceholder}
                         />
                       </FormField>
                     </div>

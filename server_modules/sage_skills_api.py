@@ -12,6 +12,7 @@ from server_modules.installed_skills import (
     normalize_skill_id,
     skill_availability_state,
 )
+from server_modules.secret_redaction_service import redact_text
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,13 @@ _CURATED_SKILL_PACK: tuple[CuratedSkillDefinition, ...] = (
 
 def _coerce_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _safe_skill_document(value: Any) -> str | None:
+    text = _coerce_text(value)
+    if not text:
+        return None
+    return redact_text(text).strip() or None
 
 
 def _skill_status(item: Dict[str, Any]) -> str:
@@ -191,6 +199,8 @@ def _skill_payload(item: Dict[str, Any], curated: CuratedSkillDefinition | None 
         "action_class": _coerce_text(runtime_metadata.get("action_class")) or None,
         "requires_approval": bool(runtime_metadata.get("requires_approval")),
         "execution_mode": _coerce_text(runtime_metadata.get("execution_mode")) or None,
+        "skill_body": _safe_skill_document(item.get("skill_body")),
+        "readme": _safe_skill_document(item.get("readme")),
         "allowed_runtime_modes": [
             token for token in list(runtime_metadata.get("allowed_runtime_modes") or []) if _coerce_text(token)
         ],

@@ -48,6 +48,8 @@ class SageSkillsApiTests(unittest.TestCase):
                             "available": True,
                             "description": "Use vault items.",
                             "tools": ["vault.search"],
+                            "skill_body": "# 1Password\n\napi_key=sk-test-secret-value\nUse vault items safely.",
+                            "readme": "1Password skill package.",
                             "runtime_metadata": {"action_class": "read", "requires_approval": False},
                         },
                         {
@@ -85,6 +87,11 @@ class SageSkillsApiTests(unittest.TestCase):
             self.assertEqual(payload["curated_pack"][3]["name"], "tmux")
             self.assertEqual(payload["curated_pack"][0]["status"], "ready")
             self.assertTrue(payload["curated_pack"][0]["active_now"])
+            self.assertEqual(
+                payload["curated_pack"][0]["skill_body"],
+                "# 1Password\n\napi_key=[redacted-secret]\nUse vault items safely.",
+            )
+            self.assertEqual(payload["curated_pack"][0]["readme"], "1Password skill package.")
             self.assertEqual(payload["curated_pack"][1]["status"], "needs_setup")
             self.assertEqual(payload["curated_pack"][3]["status"], "needs_setup")
             self.assertEqual(

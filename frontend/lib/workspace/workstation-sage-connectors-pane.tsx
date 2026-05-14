@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, type ClipboardEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ClipboardEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, X } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
@@ -9,6 +9,7 @@ import { MotionSlidePanel } from '@/lib/ui/motion';
 import { AppButton, AppNotice, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { WorkstationSageToolsPane } from '@/lib/workspace/workstation-sage-tools-pane';
+import { WorkstationSplitWorkbench } from '@/lib/workspace/workstation-split-workbench';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { emitWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
@@ -193,6 +194,17 @@ type ExternalIntegrationCardRecord = {
   secondaryActionLabel?: string | null;
   actionTarget?: 'gateway' | 'computer' | 'ai' | 'close';
   channel?: PersonalCommunicationChannel | null;
+};
+
+type IntegrationWorkbenchCategoryId = 'ai' | 'apps' | 'channels' | 'computers' | 'knowledge' | 'skills' | 'developer';
+
+type IntegrationWorkbenchGroup = {
+  id: IntegrationWorkbenchCategoryId;
+  label: string;
+  description: string;
+  detail: string;
+  countLabel: string;
+  statusTone: PersonalCardStatusTone;
 };
 
 type SageConnectorsPaneCache = {
@@ -1453,6 +1465,7 @@ export function WorkstationSageConnectorsPane({
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
+  const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => showProviders ? 'ai' : 'channels');
   const [providerDraftKeys, setProviderDraftKeys] = useState<Record<string, string>>({});
   const [providerPickerOpen, setProviderPickerOpen] = useState(false);
   const [computerConnectOpen, setComputerConnectOpen] = useState(false);
@@ -1840,19 +1853,6 @@ export function WorkstationSageConnectorsPane({
     });
   }, [connectorIds, connectorVault, surface]);
 
-  const communicationConnectorCards = useMemo(
-    () => connectorCards.filter((card) =>
-      card.id === 'gmail'
-      || card.id === 'email'
-      || card.id === 'microsoft_365'
-      || card.id === 'slack'
-      || card.id === 'discord_bot'
-      || card.id === 'telegram_bot'
-      || card.id === 'whatsapp_twilio',
-    ),
-    [connectorCards],
-  );
-
   function connectorStatusTone(record: ConnectorCardRecord): PersonalCardStatusTone {
     return record.connected ? 'connected' : 'neutral';
   }
@@ -1896,14 +1896,6 @@ export function WorkstationSageConnectorsPane({
     };
   }
 
-  const communicationCards = useMemo<ExternalIntegrationCardRecord[]>(
-    () => [
-      ...communicationPersonalCards.map(personalAsExternalCard),
-      ...communicationConnectorCards.map(connectorAsExternalCard),
-    ],
-    [communicationConnectorCards, communicationPersonalCards],
-  );
-
   const knowledgeConnectorCards = useMemo(
     () => connectorCards.filter((card) =>
       card.id === 'drive'
@@ -1919,6 +1911,137 @@ export function WorkstationSageConnectorsPane({
     () => knowledgeConnectorCards.map(connectorAsExternalCard),
     [knowledgeConnectorCards],
   );
+
+  const appCards = useMemo<ExternalIntegrationCardRecord[]>(
+    () => connectorCards
+      .filter((card) =>
+        card.id === 'gmail'
+        || card.id === 'google_calendar'
+        || card.id === 'microsoft_365'
+        || card.id === 'webhook',
+      )
+      .map(connectorAsExternalCard),
+    [connectorCards],
+  );
+
+  const channelCards = useMemo<ExternalIntegrationCardRecord[]>(
+    () => [
+      ...communicationPersonalCards.map(personalAsExternalCard),
+      ...connectorCards
+        .filter((card) =>
+          card.id === 'email'
+          || card.id === 'slack'
+          || card.id === 'discord_bot'
+          || card.id === 'telegram_bot'
+          || card.id === 'whatsapp_twilio',
+        )
+        .map(connectorAsExternalCard),
+    ],
+    [communicationPersonalCards, connectorCards],
+  );
+
+  const integrationGroups = useMemo<IntegrationWorkbenchGroup[]>(() => {
+    const groups: IntegrationWorkbenchGroup[] = [];
+    if (showProviders) {
+      groups.push({
+        id: 'ai',
+        label: 'AI',
+        description: 'Models, credits, and AI accounts.',
+        detail: aiProviderSummary.activeLabel,
+        countLabel: activeProviderCard ? 'Active' : 'Setup',
+        statusTone: activeProviderCard ? 'connected' : 'warning',
+      });
+    }
+
+    if (appCards.length > 0) {
+      groups.push({
+        id: 'apps',
+        label: 'Apps',
+        description: 'Work apps and account connections.',
+        detail: 'Gmail, calendar, workspace apps, and webhooks.',
+        countLabel: `${appCards.length}`,
+        statusTone: appCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
+      });
+    }
+    if (channelCards.length > 0) {
+      groups.push({
+        id: 'channels',
+        label: 'Channels',
+        description: 'Places Sage can talk or receive messages.',
+        detail: surface === 'sage'
+          ? 'Personal and team message channels.'
+          : 'Customer-facing message channels.',
+        countLabel: `${channelCards.length}`,
+        statusTone: channelCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
+      });
+    }
+    if (showPersonalSurface && thisComputerCards.length > 0) {
+      groups.push({
+        id: 'computers',
+        label: 'Computers',
+        description: 'Connected devices and local capability.',
+        detail: 'Selected computer, browser, files, and local apps.',
+        countLabel: `${thisComputerCards.length}`,
+        statusTone: thisComputerCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'warning',
+      });
+    }
+    if (knowledgeCards.length > 0) {
+      groups.push({
+        id: 'knowledge',
+        label: 'Knowledge',
+        description: 'Approved sources Sage can read.',
+        detail: 'Drive, Notion, uploads, websites, and repos.',
+        countLabel: `${knowledgeCards.length}`,
+        statusTone: knowledgeCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
+      });
+    }
+    if (showTools) {
+      groups.push({
+        id: 'skills',
+        label: 'Skills',
+        description: 'Installable Skill.md packages.',
+        detail: 'Built-in, local, open-source, and marketplace packages.',
+        countLabel: 'Governed',
+        statusTone: 'neutral',
+      });
+    }
+    groups.push({
+      id: 'developer',
+      label: 'Developer',
+      description: 'Advanced connectors.',
+      detail: 'MCP servers, custom APIs, and developer-only wiring.',
+      countLabel: 'Advanced',
+      statusTone: 'neutral',
+    });
+    return groups;
+  }, [
+    activeProviderCard,
+    aiProviderSummary.activeLabel,
+    appCards,
+    channelCards,
+    knowledgeCards,
+    localCompanionOnline,
+    providerCards,
+    showPersonalSurface,
+    showProviders,
+    showTools,
+    surface,
+    thisComputerCards,
+  ]);
+
+  const selectedIntegrationGroup = useMemo(
+    () => integrationGroups.find((group) => group.id === selectedIntegrationId) ?? integrationGroups[0] ?? null,
+    [integrationGroups, selectedIntegrationId],
+  );
+
+  useEffect(() => {
+    if (integrationGroups.length === 0) {
+      return;
+    }
+    if (!integrationGroups.some((group) => group.id === selectedIntegrationId)) {
+      setSelectedIntegrationId(integrationGroups[0].id);
+    }
+  }, [integrationGroups, selectedIntegrationId]);
 
   useEffect(() => {
     setConnectorMemoryEnabled((current) => {
@@ -2233,16 +2356,6 @@ export function WorkstationSageConnectorsPane({
     }
   }
 
-  function handleBlockedToolAction(toolKey: string) {
-    if (toolKey === 'gmail') {
-      setExpandedCardId('gmail');
-      return;
-    }
-    if (toolKey === 'calendar') {
-      setExpandedCardId('google_calendar');
-    }
-  }
-
   function handleProviderKeyPaste(providerId: string, event: ClipboardEvent<HTMLInputElement>) {
     const pastedText = event.clipboardData.getData('text');
     if (!pastedText) {
@@ -2325,6 +2438,99 @@ export function WorkstationSageConnectorsPane({
           {status.showDot ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
           {status.label}
         </span>
+      </button>
+    );
+  }
+
+  function providerApiDisplayLabel(record: ProviderCardRecord): string {
+    switch (record.provider.id) {
+      case 'deepseek':
+        return 'DeepSeek API';
+      case 'gemini':
+        return 'Google Gemini API';
+      case 'openai':
+        return 'OpenAI API';
+      case 'anthropic':
+        return 'Anthropic API';
+      case 'ollama_cloud':
+        return 'Ollama Cloud API';
+      case 'ollama':
+        return 'Ollama on Connected Computer';
+      default:
+        return `${record.label} API`;
+    }
+  }
+
+  function renderAiProviderChoiceCard(record: ProviderCardRecord, section: ProviderPickerSection) {
+    if (section.id === 'hosted') {
+      return null;
+    }
+    const needsGateway = providerNeedsGateway(record.provider.id) && !localCompanionOnline;
+    const isActive = activeProviderCard?.id === record.id;
+    const connected = providerPickerConnected(record, localCompanionOnline);
+    const requiresSecret = providerRequiresSecret(record.provider, record.profile);
+    const modelLabel = providerActiveModelLabel(record);
+    const statusLabel = isActive
+      ? 'Active'
+      : connected
+        ? 'Connected'
+        : needsGateway
+          ? 'Connect computer'
+          : requiresSecret
+            ? 'Add API key'
+            : 'Available';
+    const actionLabel = isActive ? 'Selected' : connected ? 'Use' : requiresSecret ? 'Add key' : 'Use';
+    const detail = connected
+      ? `${modelLabel} · ${providerPathLabel(record)}`
+      : needsGateway
+        ? 'Connect a computer before using this provider.'
+        : requiresSecret
+          ? 'Add an API key to use this provider.'
+          : providerPathLabel(record);
+    return (
+      <button
+        key={`${section.id}-${record.id}`}
+        type="button"
+        className={joinClassNames(
+          'sage-ai-provider-card',
+          isActive && 'sage-ai-provider-card--active',
+        )}
+        disabled={busyCardId === record.id}
+        onClick={() => {
+          if (!connected && requiresSecret) {
+            setProviderPickerOpen(true);
+            setProviderPickerDraftId(record.id);
+            setStatus(null);
+            setError(null);
+            return;
+          }
+          void handleProviderSelect(record, { hosted: false });
+        }}
+      >
+        <BrandLogo
+          id={record.id}
+          label={record.label}
+          src={record.image}
+          failedLogos={failedLogos}
+          onError={markLogoFailed}
+        />
+        <span className="sage-ai-provider-card__copy">
+          <span className="sage-ai-provider-card__topline">
+            <strong className="sage-ai-provider-card__name">{providerApiDisplayLabel(record)}</strong>
+          </span>
+          <span className="sage-ai-provider-card__detail">{detail}</span>
+        </span>
+        <span className={joinClassNames('sage-ai-provider-card__status', connected && 'sage-ai-provider-card__status--connected')}>
+          <span
+            className={joinClassNames(
+              'sage-ai-provider-card__dot',
+              connected && 'sage-ai-provider-card__dot--connected',
+            )}
+            aria-hidden="true"
+          />
+          {statusLabel}
+        </span>
+        <span className="sage-ai-provider-card__action">{actionLabel}</span>
       </button>
     );
   }
@@ -2440,20 +2646,23 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
-  function renderProviderExpand(record: ProviderCardRecord) {
+  function renderProviderExpand(record: ProviderCardRecord, options: { showClose?: boolean } = {}) {
     const busy = busyCardId === record.id;
+    const showClose = options.showClose !== false;
     return (
       <MotionSlidePanel className="sage-unified-expand">
         <div className="sage-unified-expand__header">
           <strong className="sage-unified-expand__title">{record.label}</strong>
-          <button
-            type="button"
-            className="sage-unified-expand__close"
-            onClick={() => setExpandedCardId(null)}
-            aria-label={`Close ${record.label}`}
-          >
-            <X size={14} strokeWidth={1.9} aria-hidden="true" />
-          </button>
+          {showClose ? (
+            <button
+              type="button"
+              className="sage-unified-expand__close"
+              onClick={() => setExpandedCardId(null)}
+              aria-label={`Close ${record.label}`}
+            >
+              <X size={14} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
         {record.status === 'connected' ? (
           <>
@@ -2522,13 +2731,15 @@ export function WorkstationSageConnectorsPane({
               >
                 {busy ? 'Saving…' : 'Save'}
               </AppButton>
-              <button
-                type="button"
-                className="sage-unified-expand__link"
-                onClick={() => setExpandedCardId(null)}
-              >
-                Cancel
-              </button>
+              {showClose ? (
+                <button
+                  type="button"
+                  className="sage-unified-expand__link"
+                  onClick={() => setExpandedCardId(null)}
+                >
+                  Cancel
+                </button>
+              ) : null}
             </div>
           </>
         )}
@@ -2751,23 +2962,26 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
-  function renderExternalExpand(record: ExternalIntegrationCardRecord) {
+  function renderExternalExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
     const channel = record.channel ?? null;
     const channelDraft = channel ? channelDrafts[channel] : null;
     const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
     const advancedOpen = channel ? advancedChannelId === channel : false;
+    const showClose = options.showClose !== false;
     return (
       <MotionSlidePanel className="sage-unified-expand">
         <div className="sage-unified-expand__header">
           <strong className="sage-unified-expand__title">{record.label}</strong>
-          <button
-            type="button"
-            className="sage-unified-expand__close"
-            onClick={() => setExpandedCardId(null)}
-            aria-label={`Close ${record.label}`}
-          >
-            <X size={14} strokeWidth={1.9} aria-hidden="true" />
-          </button>
+          {showClose ? (
+            <button
+              type="button"
+              className="sage-unified-expand__close"
+              onClick={() => setExpandedCardId(null)}
+              aria-label={`Close ${record.label}`}
+            >
+              <X size={14} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
         <div className="sage-unified-expand__text">{record.summary}</div>
         {record.nextStep ? <div className="sage-unified-expand__text">{record.nextStep}</div> : null}
@@ -2810,13 +3024,15 @@ export function WorkstationSageConnectorsPane({
               {record.secondaryActionLabel}
             </AppButton>
           ) : null}
-          <button
-            type="button"
-            className="sage-unified-expand__link"
-            onClick={() => setExpandedCardId(null)}
-          >
-            Close
-          </button>
+          {showClose ? (
+            <button
+              type="button"
+              className="sage-unified-expand__link"
+              onClick={() => setExpandedCardId(null)}
+            >
+              Close
+            </button>
+          ) : null}
         </div>
         {channel && channelDraft && advancedOpen ? renderPersonalChannelAdvanced(channel, channelDraft, channelBusy) : null}
       </MotionSlidePanel>
@@ -2986,33 +3202,6 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
-  function renderSection<T extends { id: string }>(
-    label: string,
-    items: T[],
-    renderCard: (item: T) => ReactNode,
-    renderExpand: (item: T) => ReactNode,
-    description?: string,
-  ) {
-    const rows = chunkItems(items, gridColumns);
-    return (
-      <section className="sage-unified-section">
-        <p className="sage-unified-section__label">{label}</p>
-        {description ? <p className="sage-unified-section__description">{description}</p> : null}
-        {rows.map((row, rowIndex) => {
-          const expandedRecord = row.find((item) => item.id === expandedCardId) ?? null;
-          return (
-            <Fragment key={`${label}-${rowIndex}`}>
-              <div className={joinClassNames('sage-unified-grid', gridColumns === 2 ? 'sage-unified-grid--2' : 'sage-unified-grid--4')}>
-                {row.map((item) => renderCard(item))}
-              </div>
-              {expandedRecord ? renderExpand(expandedRecord) : null}
-            </Fragment>
-          );
-        })}
-      </section>
-    );
-  }
-
   function renderProviderPickerRow(record: ProviderCardRecord, sectionId: ProviderPickerSection['id']) {
     const isHostedSection = sectionId === 'hosted';
     const isLocalSection = sectionId === 'local';
@@ -3111,115 +3300,264 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderAiOverview() {
+    if (isLoading) {
+      return renderProviderSkeletons();
+    }
+    const creditMax = Math.max(1, hostedSageAi.monthlyCreditCap);
+    const creditValue = Math.max(0, Math.min(creditMax, hostedSageAi.monthlyCreditsRemaining));
+    const creditPercent = Math.round((creditValue / creditMax) * 100);
+    const activeConnected = activeProviderCard
+      ? activeProviderCard === hostedProviderCard && !explicitSelectedProfile
+        ? hostedSageAi.allowed
+        : providerPickerConnected(activeProviderCard, localCompanionOnline)
+      : false;
+    const configurableSections = providerPickerSections.filter((section) => section.id !== 'hosted');
+    return (
+      <section className="sage-unified-section">
+        <p className="sage-unified-section__label">AI</p>
+        <p className="sage-unified-section__description">Choose the model source Sage uses. Credits stay separate from API accounts.</p>
+        <div className="sage-ai-provider-panel">
+          <div className="sage-ai-credit-card">
+            <div className="sage-ai-credit-card__header">
+              <span>
+                <span className="sage-ai-credit-card__eyebrow">Empyralis credits</span>
+                <strong>{aiProviderSummary.creditsLabel}</strong>
+              </span>
+              <span className={joinClassNames('sage-ai-provider-card__status', hostedSageAi.allowed && 'sage-ai-provider-card__status--connected')}>
+                <span
+                  className={joinClassNames(
+                    'sage-ai-provider-card__dot',
+                    hostedSageAi.allowed && 'sage-ai-provider-card__dot--connected',
+                  )}
+                  aria-hidden="true"
+                />
+                {hostedSageAi.allowed ? 'Available' : 'Needs setup'}
+              </span>
+            </div>
+            <progress className="sage-ai-credit-card__meter" value={creditValue} max={creditMax}>
+              {creditPercent}%
+            </progress>
+            <div className="sage-ai-credit-card__footer">
+              <span>{aiProviderSummary.creditsDetail}</span>
+              <AppButton type="button" tone="ghost" onClick={openBillingSettings}>
+                Manage credits
+              </AppButton>
+            </div>
+          </div>
+
+          <div className="sage-ai-current-model">
+            <div className="sage-ai-current-model__identity">
+              {activeProviderCard ? (
+                <BrandLogo
+                  id={activeProviderCard.id}
+                  label={activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Empyralis credits' : activeProviderCard.label}
+                  src={activeProviderCard.image}
+                  failedLogos={failedLogos}
+                  onError={markLogoFailed}
+                />
+              ) : null}
+              <span>
+                <span className="sage-ai-credit-card__eyebrow">Current model</span>
+                <strong>{aiProviderSummary.activeLabel}</strong>
+                <small>{aiProviderSummary.activeDetail}</small>
+              </span>
+            </div>
+            <span className={joinClassNames('sage-ai-provider-card__status', activeConnected && 'sage-ai-provider-card__status--connected')}>
+              <span
+                className={joinClassNames(
+                  'sage-ai-provider-card__dot',
+                  activeConnected && 'sage-ai-provider-card__dot--connected',
+                )}
+                aria-hidden="true"
+              />
+              {activeConnected ? 'Connected' : 'Needs setup'}
+            </span>
+            <AppButton
+              type="button"
+              tone="secondary"
+              onClick={() => {
+                setProviderPickerOpen(true);
+                setProviderPickerDraftId(null);
+              }}
+            >
+              Change model
+            </AppButton>
+          </div>
+
+          <div className="sage-ai-provider-sections">
+            {configurableSections.map((section) => (
+              <section key={section.id} className="sage-ai-provider-section">
+                <div className="sage-ai-provider-section__header">
+                  <strong>{section.id === 'local' ? 'Models on Connected Computer' : 'AI APIs'}</strong>
+                  <span>{section.items.length} option{section.items.length === 1 ? '' : 's'}</span>
+                </div>
+                {section.items.length > 0 ? (
+                  <div className="sage-ai-provider-grid">
+                    {section.items.map((record) => renderAiProviderChoiceCard(record, section))}
+                  </div>
+                ) : (
+                  <div className="sage-integrations-detail-card">
+                    <strong>{section.label}</strong>
+                    <span>No provider is available in this section yet.</span>
+                  </div>
+                )}
+              </section>
+            ))}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderExternalCollection(
+    label: string,
+    description: string,
+    cards: ExternalIntegrationCardRecord[],
+    emptyMessage: string,
+  ) {
+    const expandedCard = cards.find((card) => card.id === expandedCardId) ?? null;
+    return (
+      <section className="sage-unified-section">
+        <p className="sage-unified-section__label">{label}</p>
+        <p className="sage-unified-section__description">{description}</p>
+        {cards.length > 0 ? (
+          <>
+            <div className="sage-unified-grid sage-unified-grid--4">
+              {cards.map(renderExternalCard)}
+            </div>
+            {expandedCard ? renderExternalExpand(expandedCard) : null}
+          </>
+        ) : (
+          <div className="sage-integrations-detail-card">
+            <strong>{label}</strong>
+            <span>{emptyMessage}</span>
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  function renderIntegrationSidebar() {
+    if (isLoading && integrationGroups.length === 0) {
+      return (
+        <div className="sage-integrations-nav">
+          <div className="sage-integrations-nav__group">
+            <span className="sage-integrations-nav__group-label">Loading</span>
+            <div className="sage-integrations-nav__placeholder">Loading apps and accounts…</div>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="sage-integrations-nav">
+        {integrationGroups.map((group) => (
+          <button
+            key={group.id}
+            type="button"
+            className={joinClassNames(
+              'sage-integrations-nav__bucket',
+              selectedIntegrationGroup?.id === group.id && 'sage-integrations-nav__bucket--active',
+            )}
+            aria-selected={selectedIntegrationGroup?.id === group.id}
+            onClick={() => {
+              setSelectedIntegrationId(group.id);
+              setExpandedCardId(null);
+            }}
+          >
+            <span className="sage-integrations-nav__bucket-copy">
+              <span className="sage-integrations-nav__label">{group.label}</span>
+              <span className="sage-integrations-nav__detail">{group.detail}</span>
+            </span>
+            <span className={joinClassNames('sage-integrations-nav__status', `sage-integrations-nav__status--${group.statusTone}`)}>
+              {group.countLabel}
+            </span>
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function renderSelectedIntegrationDetail() {
+    if (error) {
+      return <AppNotice tone="warning">Integrations could not refresh. Try again when ready.</AppNotice>;
+    }
+    if (!selectedIntegrationGroup) {
+      return (
+        <div className="sage-settings-empty">
+          No integrations available.
+        </div>
+      );
+    }
+    switch (selectedIntegrationGroup.id) {
+      case 'ai':
+        return renderAiOverview();
+      case 'apps':
+        return renderExternalCollection(
+          'Apps',
+          'Connect work apps here. Individual apps stay in the main pane, not in the sidebar.',
+          appCards,
+          'No app connectors are available for this surface yet.',
+        );
+      case 'channels':
+        return renderExternalCollection(
+          'Channels',
+          surface === 'sage'
+            ? 'Personal channels stay on Connected Computer. Business/customer channels stay separate.'
+            : 'Studio channels are customer-facing and separate from Sage personal channels.',
+          channelCards,
+          'No channel connectors are available for this surface yet.',
+        );
+      case 'computers':
+        return renderExternalCollection(
+          'Computers',
+          'Connect one selected computer for browser, files, local apps, personal channels, and local models.',
+          thisComputerCards,
+          'No computer capability is available for this surface yet.',
+        );
+      case 'knowledge':
+        return renderExternalCollection(
+          'Knowledge',
+          'Approved sources Sage can read when you ask.',
+          knowledgeCards,
+          'No knowledge sources are available yet.',
+        );
+      case 'skills':
+        return (
+          <section className="sage-unified-section">
+            <p className="sage-unified-section__label">Skills</p>
+            <p className="sage-unified-section__description">
+              Installable Skill.md packages for reusable Sage procedures. Each package carries its own setup and safety
+              requirements.
+            </p>
+            <WorkstationSageToolsPane />
+          </section>
+        );
+      case 'developer':
+      default:
+        return (
+          <section className="sage-unified-section">
+            <p className="sage-unified-section__label">Developer</p>
+            <p className="sage-unified-section__description">Advanced integration entry points stay here so normal users do not see infrastructure details.</p>
+            <div className="sage-integrations-detail-card">
+              <strong>MCP servers, custom APIs, and webhooks</strong>
+              <span>Use this lane for developer-owned integrations that should not be mixed with everyday apps and channels.</span>
+            </div>
+          </section>
+        );
+    }
+  }
+
   return (
     <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)} data-workstation-surface="integrations">
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
-      {error ? <AppNotice tone="warning">Integrations could not refresh. Try again when ready.</AppNotice> : null}
-
-      <div className="sage-unified-page">
-        {showProviders ? (
-          isLoading ? renderProviderSkeletons() : (
-            <section className="sage-unified-section">
-              <p className="sage-unified-section__label">AI</p>
-              <p className="sage-unified-section__description">Choose the AI Sage uses: credits, your own account, or models on Connected Computer.</p>
-              <div className="sage-provider-active">
-                <div className="sage-provider-active__row sage-provider-active__row--summary">
-                  {activeProviderCard ? (
-                    <div className="sage-provider-active__identity">
-                      <BrandLogo
-                        id={activeProviderCard.id}
-                        label={activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Empyralis default model' : activeProviderCard.label}
-                        src={activeProviderCard.image}
-                        failedLogos={failedLogos}
-                        onError={markLogoFailed}
-                      />
-                      <div className="sage-provider-active__copy">
-                        <strong className="sage-provider-active__name">
-                          Active: {aiProviderSummary.activeLabel}
-                        </strong>
-                        <span className="sage-provider-active__model">
-                          {aiProviderSummary.activeDetail}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="sage-provider-active__copy">
-                      <strong className="sage-provider-active__name">Active: {aiProviderSummary.activeLabel}</strong>
-                      <span className="sage-provider-active__model">{aiProviderSummary.activeDetail}</span>
-                    </div>
-                  )}
-                  <div className="sage-provider-active__summary-grid" aria-label="AI provider state">
-                    <div className="sage-provider-active__summary-item">
-                      <span>Credits</span>
-                      <strong>{aiProviderSummary.creditsLabel}</strong>
-                      <small>{aiProviderSummary.creditsDetail}</small>
-                    </div>
-                    <div className="sage-provider-active__summary-item">
-                      <span>Backup</span>
-                      <strong>{aiProviderSummary.backupLabel}</strong>
-                      <small>{aiProviderSummary.backupDetail}</small>
-                    </div>
-                    <div className="sage-provider-active__summary-item">
-                      <span>Advanced</span>
-                      <strong>{aiProviderSummary.advancedLabel}</strong>
-                      <small>{aiProviderSummary.advancedDetail}</small>
-                    </div>
-                  </div>
-                  <div className="sage-hosted-credits__actions">
-                    {hostedProviderCard ? (
-                      <AppButton
-                        type="button"
-                        tone="secondary"
-                        disabled={!hostedSageAi.allowed || busyCardId === hostedProviderCard.id}
-                        onClick={() => {
-                          void handleProviderSelect(hostedProviderCard, { hosted: true });
-                        }}
-                      >
-                        Use credits
-                      </AppButton>
-                    ) : null}
-                    <AppButton
-                      type="button"
-                      tone="ghost"
-                      onClick={openBillingSettings}
-                    >
-                      Manage credits
-                    </AppButton>
-                    <AppButton
-                      type="button"
-                      tone="secondary"
-                      onClick={() => {
-                        setProviderPickerOpen(true);
-                        setProviderPickerDraftId(null);
-                      }}
-                    >
-                      Change
-                    </AppButton>
-                  </div>
-                </div>
-              </div>
-            </section>
-          )
-        ) : null}
-        {isLoading ? (
-          <div className="sage-settings-empty">
-            Loading apps and accounts…
-          </div>
-        ) : (
-          <>
-            {showPersonalSurface && communicationCards.length > 0 ? renderSection('Communication', communicationCards, renderExternalCard, renderExternalExpand, 'Telegram, WhatsApp, email, and team apps Sage can use when you ask.') : null}
-            {showPersonalSurface ? renderSection('Connected Computer', thisComputerCards, renderExternalCard, renderExternalExpand, 'Browser, files, and local AI stay on the selected computer until you approve use.') : null}
-            {knowledgeCards.length > 0 ? renderSection('Knowledge', knowledgeCards, renderExternalCard, renderExternalExpand, 'Docs, files, and approved sources Sage can read with permission.') : null}
-          </>
-        )}
-        {showTools ? (
-          <section className="sage-unified-section">
-            <p className="sage-unified-section__label">Tools</p>
-            <p className="sage-unified-section__description">Actions Sage can run after you enable them.</p>
-            <WorkstationSageToolsPane onBlockedRequirementAction={handleBlockedToolAction} />
-          </section>
-        ) : null}
-      </div>
+      <WorkstationSplitWorkbench
+        ariaLabel="Integrations"
+        className="sage-integrations-workbench"
+        sidebar={renderIntegrationSidebar()}
+      >
+        {renderSelectedIntegrationDetail()}
+      </WorkstationSplitWorkbench>
 
       {renderComputerConnectSheet()}
 

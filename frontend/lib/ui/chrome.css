@@ -7532,6 +7532,348 @@ body.theme-light .workstation-shell__topbar {
   transform: translateX(18px);
 }
 
+.sage-skills-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.sage-skills-panel > .app-notice {
+  grid-column: 1 / -1;
+}
+
+.sage-skills-library,
+.sage-skill-document {
+  display: grid;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--app-radius-xl);
+  background: color-mix(in srgb, var(--bg-elevated) 86%, var(--bg-surface) 14%);
+  overflow: hidden;
+}
+
+.sage-skills-library__header,
+.sage-skill-document__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.sage-skills-library__header > div:first-child,
+.sage-skill-document__header > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sage-skills-library__header h3,
+.sage-skill-document__header h3,
+.sage-skill-document__preview h4 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.sage-skills-library__header h3,
+.sage-skill-document__header h3 {
+  overflow: hidden;
+  font-size: 22px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sage-skills-library__stats,
+.sage-skills-install__actions,
+.sage-skill-document__mode,
+.sage-skill-document__chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sage-skills-library__stats span,
+.sage-skills-install__option,
+.sage-skill-document__chips span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-surface) 86%, var(--bg-elevated) 14%);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.sage-skills-install {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-faint);
+  background: color-mix(in srgb, var(--bg-surface) 72%, var(--bg-elevated) 28%);
+}
+
+.sage-skills-install__copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.sage-skills-install__copy strong {
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.sage-skills-install__copy span {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.sage-skills-install__option--ready {
+  color: #66c778;
+}
+
+.sage-skills-file-list {
+  display: grid;
+}
+
+.sage-skills-file {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  width: 100%;
+  min-height: 88px;
+  padding: 16px 20px;
+  border: 0;
+  border-bottom: 1px solid var(--border-faint);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.sage-skills-file:hover {
+  background: color-mix(in srgb, var(--bg-elevated) 66%, var(--bg-surface) 34%);
+}
+
+.sage-skills-file--active {
+  background: color-mix(in srgb, var(--bg-elevated) 76%, var(--bg-surface) 24%);
+}
+
+.sage-skills-file__icon,
+.sage-skill-document__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-surface) 82%, var(--bg-elevated) 18%);
+  color: var(--text-secondary);
+}
+
+.sage-skills-file__copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sage-skills-file__copy strong,
+.sage-skills-file__copy small,
+.sage-skills-file__eyebrow {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sage-skills-file__copy strong {
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.sage-skills-file__copy small {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.sage-skills-file__eyebrow {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.sage-skills-file__status,
+.sage-skill-document__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.sage-skill-document__status span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sage-skills-file__status--ready,
+.sage-skill-document__status--ready {
+  color: #66c778;
+}
+
+.sage-skills-file__status--blocked,
+.sage-skill-document__status--blocked {
+  color: var(--text-secondary);
+}
+
+.sage-skill-document {
+  position: relative;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(940px, calc(100vw - 40px));
+  max-height: min(780px, calc(100vh - 64px));
+  overflow: hidden;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.46);
+}
+
+.sage-skill-document__body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.sage-skill-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: clamp(18px, 4vw, 56px);
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(18px);
+}
+
+.sage-skill-document__close {
+  border: 1px solid var(--border-faint);
+  cursor: pointer;
+}
+
+.sage-skill-document__close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sage-skill-document__mode {
+  padding: 16px 20px 0;
+}
+
+.sage-skill-document__mode-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+}
+
+.sage-skill-document__mode-button--active {
+  background: color-mix(in srgb, var(--bg-elevated) 86%, var(--bg-surface) 14%);
+  color: var(--text-primary);
+}
+
+.sage-skill-document__source {
+  margin: 20px;
+  padding: 22px;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--app-radius-lg);
+  background: color-mix(in srgb, var(--bg-surface) 88%, black 12%);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.sage-skill-document__preview {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.sage-skill-document__preview > p,
+.sage-skill-document__preview section p,
+.sage-skill-document__preview li {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+}
+
+.sage-skill-document__preview section {
+  display: grid;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-faint);
+}
+
+.sage-skill-document__preview h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.sage-skill-document__preview ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.sage-skill-document__setup {
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 980px) {
+  .sage-skills-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sage-skill-document {
+    width: min(100%, calc(100vw - 28px));
+    max-height: calc(100vh - 40px);
+  }
+
+  .sage-skills-install {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .deployed-agents-wizard__memory-toggle {
   display: flex;
   align-items: center;
@@ -9070,6 +9412,189 @@ body[data-emp-theme='dark'] .app-memory-document-nav .settings-nav__item[aria-se
 .sage-settings-panel--connectors {
   display: grid;
   gap: var(--space-lg);
+  min-height: 0;
+  height: 100%;
+}
+
+.sage-integrations-workbench {
+  --workstation-split-sidebar-width: 330px;
+  display: grid !important;
+  grid-template-columns: var(--workstation-split-sidebar-width) minmax(0, 1fr) !important;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.sage-integrations-workbench .workstation-split-workbench__sidebar {
+  grid-column: 1;
+  width: var(--workstation-split-sidebar-width);
+  max-width: var(--workstation-split-sidebar-width);
+  background: transparent;
+}
+
+.sage-integrations-workbench .workstation-split-workbench__main {
+  grid-column: 2;
+  min-width: 0;
+  padding: clamp(18px, 2.4vh, 30px) clamp(24px, 3vw, 48px) var(--app-space-6) var(--app-space-5);
+}
+
+.sage-integrations-nav {
+  display: grid;
+  gap: 0;
+  padding: 0;
+}
+
+.sage-integrations-nav__group {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.sage-integrations-nav__group-header {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 16px;
+}
+
+.sage-integrations-nav__group-label,
+.sage-integrations-nav__group-count,
+.sage-integrations-nav__eyebrow,
+.sage-integrations-nav__detail,
+.sage-integrations-nav__status {
+  color: var(--app-text-tertiary);
+  font-size: 11px;
+  font-weight: var(--app-weight-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sage-integrations-nav__group-count {
+  letter-spacing: 0;
+  opacity: 0.68;
+}
+
+.sage-integrations-nav__items {
+  display: grid;
+  gap: 0;
+}
+
+.sage-integrations-nav__bucket {
+  width: 100%;
+  min-height: 78px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--app-border-muted) 42%, transparent 58%);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.sage-integrations-nav__bucket:hover,
+.sage-integrations-nav__bucket--active {
+  background: color-mix(in srgb, #242424 88%, var(--app-bg-panel) 12%);
+}
+
+.sage-integrations-nav__bucket-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.sage-integrations-nav__item {
+  width: 100%;
+  min-height: 78px;
+  display: grid;
+  gap: 4px;
+  padding: 13px 16px;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--app-border-muted) 36%, transparent 64%);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.sage-integrations-nav__item:hover,
+.sage-integrations-nav__item--active {
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 72%, var(--app-bg-panel) 28%);
+}
+
+.sage-integrations-nav__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-text-primary);
+  font-size: 16px;
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.2;
+}
+
+.sage-integrations-nav__detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: var(--app-weight-regular);
+}
+
+.sage-integrations-nav__status {
+  width: fit-content;
+  margin-top: 2px;
+  padding: 3px 8px;
+  border-radius: var(--app-radius-pill);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 70%, transparent 30%);
+  letter-spacing: 0.03em;
+}
+
+.sage-integrations-nav__status--connected {
+  color: color-mix(in srgb, var(--app-text-secondary) 88%, #7b846f 12%);
+}
+
+.sage-integrations-nav__status--warning {
+  color: var(--app-warning);
+}
+
+.sage-integrations-nav__status--danger {
+  color: var(--color-danger);
+}
+
+.sage-integrations-nav__placeholder,
+.sage-integrations-detail-card {
+  color: var(--app-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sage-integrations-nav__placeholder {
+  padding: 10px 16px;
+}
+
+.sage-integrations-detail-card {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 56%, transparent 44%);
+  border-radius: var(--app-radius-lg);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 72%, var(--app-bg-panel) 28%);
+}
+
+.sage-integrations-detail-card strong {
+  color: var(--app-text-primary);
+  font-size: 18px;
 }
 
 .sage-unified-page,
@@ -9096,6 +9621,255 @@ body[data-emp-theme='dark'] .app-memory-document-nav .settings-nav__item[aria-se
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 84%, transparent 16%);
   border-radius: var(--app-radius-lg);
   background: color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-panel-elevated) 16%);
+}
+
+.sage-ai-provider-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.sage-ai-credit-card,
+.sage-ai-current-model {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 84%, transparent 16%);
+  border-radius: var(--app-radius-xl);
+  background: color-mix(in srgb, var(--app-bg-panel) 88%, var(--app-bg-panel-elevated) 12%);
+}
+
+.sage-ai-credit-card__header,
+.sage-ai-credit-card__footer,
+.sage-ai-current-model {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sage-ai-credit-card__header > span,
+.sage-ai-current-model__identity > span,
+.sage-ai-provider-card__copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.sage-ai-credit-card__eyebrow,
+.sage-ai-provider-section__header span {
+  color: var(--app-text-tertiary);
+  font-size: 11px;
+  font-weight: var(--app-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sage-ai-credit-card__header strong,
+.sage-ai-current-model strong {
+  min-width: 0;
+  color: var(--app-text-primary);
+  font-size: 20px;
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.18;
+}
+
+.sage-ai-current-model small,
+.sage-ai-credit-card__footer span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sage-ai-credit-card__meter {
+  width: 100%;
+  height: 9px;
+  overflow: hidden;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-border-muted) 52%, transparent 48%);
+}
+
+.sage-ai-credit-card__meter::-webkit-progress-bar {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-border-muted) 52%, transparent 48%);
+}
+
+.sage-ai-credit-card__meter::-webkit-progress-value {
+  border-radius: 999px;
+  background: #58c86d;
+}
+
+.sage-ai-credit-card__meter::-moz-progress-bar {
+  border-radius: 999px;
+  background: #58c86d;
+}
+
+.sage-ai-current-model {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.sage-ai-current-model__identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.sage-ai-provider-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  font-weight: var(--app-weight-semibold);
+  white-space: nowrap;
+}
+
+.sage-ai-provider-card__status--connected {
+  color: var(--app-text-primary);
+}
+
+.sage-ai-provider-card__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-text-tertiary) 55%, transparent 45%);
+}
+
+.sage-ai-provider-card__dot--connected {
+  background: #56c271;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #56c271 18%, transparent 82%);
+}
+
+.sage-ai-provider-sections,
+.sage-ai-provider-section {
+  display: grid;
+  gap: 12px;
+}
+
+.sage-ai-provider-sections {
+  margin-top: 4px;
+}
+
+.sage-ai-provider-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sage-ai-provider-section__header strong {
+  color: var(--app-text-primary);
+  font-size: 14px;
+  font-weight: var(--app-weight-semibold);
+}
+
+.sage-ai-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 10px;
+}
+
+.sage-ai-provider-card {
+  min-width: 0;
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 78%, transparent 22%);
+  border-radius: var(--app-radius-lg);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 68%, var(--app-bg-panel) 32%);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.sage-ai-provider-card:hover {
+  border-color: color-mix(in srgb, var(--app-border-strong) 84%, transparent 16%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-panel) 18%);
+}
+
+.sage-ai-provider-card--active {
+  border-color: color-mix(in srgb, var(--app-border-strong) 76%, transparent 24%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 88%, var(--app-bg-panel) 12%);
+}
+
+.sage-ai-provider-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.sage-ai-provider-card__topline {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sage-ai-provider-card__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text-primary);
+  font-size: 15px;
+  font-weight: var(--app-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sage-ai-provider-card__detail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sage-ai-provider-card__status {
+  grid-column: 2 / 3;
+  justify-self: start;
+}
+
+.sage-ai-provider-card__action {
+  grid-column: 3 / 4;
+  grid-row: 1 / 3;
+  justify-self: end;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 78%, transparent 22%);
+  border-radius: 999px;
+  color: var(--app-text-primary);
+  font-size: 12px;
+  font-weight: var(--app-weight-semibold);
+}
+
+@media (max-width: 1180px) {
+  .sage-ai-current-model,
+  .sage-ai-credit-card__header,
+  .sage-ai-credit-card__footer {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sage-ai-provider-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .sage-ai-provider-card__action {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-self: start;
+  }
 }
 
 .sage-hosted-credits {

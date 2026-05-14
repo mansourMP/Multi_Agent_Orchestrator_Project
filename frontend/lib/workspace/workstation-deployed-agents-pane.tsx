@@ -344,7 +344,7 @@ const CREATE_AGENT_WIZARD_STEPS: Array<{
   {
     id: 'overview',
     label: 'Create draft',
-    description: 'Name the agent, describe the job, and choose how it runs. Everything else can be tuned after creation.',
+    description: 'Name the agent and describe the job. Channels, integrations, and runtime settings come after creation.',
   },
 ];
 
@@ -1729,6 +1729,25 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     ),
     upgradeCtaUrl: readString(customerPolicy.upgrade_cta_url ?? metadata.upgrade_cta_url),
     upgradeCtaLabel: readString(customerPolicy.upgrade_cta_label ?? metadata.upgrade_cta_label),
+  };
+}
+
+function buildCreateDraftWizardState(state: WizardState): WizardState {
+  return {
+    ...state,
+    customerChannel: 'draft',
+    telegramEnabled: false,
+    telegramConnectorId: '',
+    telegramEndpointKey: '',
+    runtimePlacement: 'managed_cloud',
+    runtimeTarget: runtimeTargetForPlacement('managed_cloud'),
+    runtimeSupplierKind: runtimeSupplierForPlacement('managed_cloud'),
+    runtimeSupplierId: 'empyralis',
+    runtimeSupplierLabel: 'Empyralis',
+    selfHostedRuntimeProfileId: '',
+    selfHostedPrivacyAccepted: false,
+    selfHostedSafetyAccepted: false,
+    computerAutomationEnabled: false,
   };
 }
 
@@ -3237,9 +3256,10 @@ export function WorkstationDeployedAgentsPane({
   }
 
   async function persistWizard() {
-    const dailyMessageLimit = wizardState.dailyMessageLimit.trim();
-    const monthlyCostCapUsd = wizardState.monthlyCostCapUsd.trim();
-    const route = resolveProviderModelForTier(wizardState.aiTier, providerCatalog);
+    const stateForSave = wizardMode === 'create' ? buildCreateDraftWizardState(wizardState) : wizardState;
+    const dailyMessageLimit = stateForSave.dailyMessageLimit.trim();
+    const monthlyCostCapUsd = stateForSave.monthlyCostCapUsd.trim();
+    const route = resolveProviderModelForTier(stateForSave.aiTier, providerCatalog);
     if (!route.providerId || !route.modelId) {
       setWizardErrorMessage('AI tier route is unavailable. Refresh provider catalog and try again.');
       return;
@@ -3250,11 +3270,11 @@ export function WorkstationDeployedAgentsPane({
         setWizardErrorMessage('Daily message limit must be a whole number greater than zero.');
         return;
       }
-      if (!wizardState.upgradeCtaLabel.trim()) {
+      if (!stateForSave.upgradeCtaLabel.trim()) {
         setWizardErrorMessage('Add an upgrade CTA label when a daily message limit is enabled.');
         return;
       }
-      if (!wizardState.upgradeCtaUrl.trim()) {
+      if (!stateForSave.upgradeCtaUrl.trim()) {
         setWizardErrorMessage('Add an upgrade CTA URL when a daily message limit is enabled.');
         return;
       }
@@ -3266,19 +3286,19 @@ export function WorkstationDeployedAgentsPane({
         return;
       }
     }
-    if (wizardState.computerAutomationEnabled) {
-      if (!wizardState.computerAutomationAllowedDomains.trim()) {
+    if (stateForSave.computerAutomationEnabled) {
+      if (!stateForSave.computerAutomationAllowedDomains.trim()) {
         setWizardErrorMessage('Computer Automation needs at least one allowed domain.');
         return;
       }
-      const parsedSessions = Number(wizardState.computerAutomationMaxSessions.trim());
+      const parsedSessions = Number(stateForSave.computerAutomationMaxSessions.trim());
       if (!Number.isFinite(parsedSessions) || parsedSessions < 1) {
         setWizardErrorMessage('Computer Automation needs at least one allowed session.');
         return;
       }
     }
-    if (wizardState.runtimePlacement === 'customer_hosted') {
-      if (!wizardState.selfHostedRuntimeProfileId.trim()) {
+    if (stateForSave.runtimePlacement === 'customer_hosted') {
+      if (!stateForSave.selfHostedRuntimeProfileId.trim()) {
         setWizardErrorMessage('Self-hosted mode requires selecting a self-hosted node.');
         return;
       }
@@ -3286,61 +3306,61 @@ export function WorkstationDeployedAgentsPane({
         setWizardErrorMessage(selfHostedWizardNodeBlocker);
         return;
       }
-      if (!wizardState.selfHostedPrivacyAccepted) {
+      if (!stateForSave.selfHostedPrivacyAccepted) {
         setWizardErrorMessage('Accept the privacy contract before saving a self-hosted assistant.');
         return;
       }
-      if (!wizardState.selfHostedSafetyAccepted) {
+      if (!stateForSave.selfHostedSafetyAccepted) {
         setWizardErrorMessage('Accept the safety contract before saving a self-hosted assistant.');
         return;
       }
     }
-    if (wizardState.customerChannel === 'telegram' && wizardState.telegramEnabled && !wizardState.telegramConnectorId.trim()) {
+    if (stateForSave.customerChannel === 'telegram' && stateForSave.telegramEnabled && !stateForSave.telegramConnectorId.trim()) {
       setWizardErrorMessage('Choose a Telegram connected app before saving a live-ready assistant.');
       return;
     }
-    const approvalPolicy = applyApprovalModeToWizardState(wizardState.approvalMode, {
-      escalationPreset: wizardState.escalationPreset,
-      handoffMode: wizardState.handoffMode,
+    const approvalPolicy = applyApprovalModeToWizardState(stateForSave.approvalMode, {
+      escalationPreset: stateForSave.escalationPreset,
+      handoffMode: stateForSave.handoffMode,
     });
-    const resolvedRuntimeTarget = runtimeTargetForPlacement(wizardState.runtimePlacement);
+    const resolvedRuntimeTarget = runtimeTargetForPlacement(stateForSave.runtimePlacement);
     const payload = {
-      name: wizardState.name.trim(),
-      avatar: wizardState.avatar.trim() || null,
-      persona: wizardState.persona.trim(),
-      systemPrompt: wizardState.systemPrompt.trim(),
-      channels: buildChannelPayload(wizardState),
-      knowledgeSources: parseKnowledgeSources(wizardState.knowledgeSourceText),
+      name: stateForSave.name.trim(),
+      avatar: stateForSave.avatar.trim() || null,
+      persona: stateForSave.persona.trim(),
+      systemPrompt: stateForSave.systemPrompt.trim(),
+      channels: buildChannelPayload(stateForSave),
+      knowledgeSources: parseKnowledgeSources(stateForSave.knowledgeSourceText),
       runtimeTarget: resolvedRuntimeTarget,
-      runtimeProfileId: wizardState.runtimePlacement === 'customer_hosted'
-        ? wizardState.selfHostedRuntimeProfileId.trim() || null
+      runtimeProfileId: stateForSave.runtimePlacement === 'customer_hosted'
+        ? stateForSave.selfHostedRuntimeProfileId.trim() || null
         : null,
-      billingPlan: wizardState.billingPlan,
+      billingPlan: stateForSave.billingPlan,
       provider: route.providerId,
       model: route.modelId,
       config: buildDeploymentConfig({
-        ...wizardState,
+        ...stateForSave,
         runtimeTarget: resolvedRuntimeTarget,
         escalationPreset: approvalPolicy.escalationPreset,
         handoffMode: approvalPolicy.handoffMode,
       }),
       metadata: {
-        public_tier: wizardState.aiTier,
-        model_tier: wizardState.aiTier,
-        empyralis_model_tier: wizardState.aiTier,
-        runtime_placement: wizardState.runtimePlacement,
-        runtime_supplier: runtimeSupplierForPlacement(wizardState.runtimePlacement),
-        computer_automation_enabled: wizardState.computerAutomationEnabled,
-        approval_mode: wizardState.approvalMode,
-        customer_channel: wizardState.customerChannel,
-        self_hosted_runtime_profile_id: wizardState.runtimePlacement === 'customer_hosted'
-          ? wizardState.selfHostedRuntimeProfileId.trim() || null
+        public_tier: stateForSave.aiTier,
+        model_tier: stateForSave.aiTier,
+        empyralis_model_tier: stateForSave.aiTier,
+        runtime_placement: stateForSave.runtimePlacement,
+        runtime_supplier: runtimeSupplierForPlacement(stateForSave.runtimePlacement),
+        computer_automation_enabled: stateForSave.computerAutomationEnabled,
+        approval_mode: stateForSave.approvalMode,
+        customer_channel: stateForSave.customerChannel,
+        self_hosted_runtime_profile_id: stateForSave.runtimePlacement === 'customer_hosted'
+          ? stateForSave.selfHostedRuntimeProfileId.trim() || null
           : null,
-        self_hosted_privacy_contract_accepted: wizardState.runtimePlacement === 'customer_hosted'
-          ? wizardState.selfHostedPrivacyAccepted
+        self_hosted_privacy_contract_accepted: stateForSave.runtimePlacement === 'customer_hosted'
+          ? stateForSave.selfHostedPrivacyAccepted
           : null,
-        self_hosted_safety_contract_accepted: wizardState.runtimePlacement === 'customer_hosted'
-          ? wizardState.selfHostedSafetyAccepted
+        self_hosted_safety_contract_accepted: stateForSave.runtimePlacement === 'customer_hosted'
+          ? stateForSave.selfHostedSafetyAccepted
           : null,
       },
     };
@@ -3748,7 +3768,7 @@ export function WorkstationDeployedAgentsPane({
                       title="Create one working business assistant"
                       subtitle="Choose a common business job, add the facts it should trust, test privately, then go live."
                       actions={(
-                        <AppButton type="button" tone="primary" onClick={() => openCreateWizard(selectedTemplateId)}>
+                        <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
                           Create assistant
                         </AppButton>
                       )}
@@ -4928,96 +4948,13 @@ export function WorkstationDeployedAgentsPane({
                 wizardMode === 'create' ? (
                   <div className="deployed-agents-wizard__create-draft">
                     <div className="deployed-agents-wizard__quickstart">
-                      <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                        <FormField label="Agent name" hint="The name your team sees in the agent list.">
-                          <FormInput
-                            value={wizardState.name}
-                            onChange={(event) => setWizardField('name', event.currentTarget.value)}
-                            placeholder="New agent"
-                          />
-                        </FormField>
-                        <FormField label="Channel" hint="Draft is safest. Connect Telegram, email, or web chat after the agent exists.">
-                          <FormSelect
-                            value={wizardState.customerChannel}
-                            onChange={(event) => {
-                              const nextChannel = event.currentTarget.value as WizardState['customerChannel'];
-                              setWizardState((current) => ({
-                                ...current,
-                                customerChannel: nextChannel,
-                                telegramEnabled: nextChannel === 'telegram' ? current.telegramEnabled : false,
-                              }));
-                            }}
-                          >
-                            <option value="draft">Draft only</option>
-                            <option value="telegram">Telegram bot</option>
-                            <option value="whatsapp" disabled>WhatsApp Business soon</option>
-                            <option value="web_widget" disabled>Web chat soon</option>
-                          </FormSelect>
-                        </FormField>
-                      </FormGrid>
-
-                      <details className="app-stack-3">
-                        <summary>Advanced agent type</summary>
-                        <FormField label="Agent type" hint="New agents start as text drafts. Choose another mode only when the runtime is already prepared.">
-                          <FormSelect
-                            value={wizardState.runtimePlacement}
-                            onChange={(event) => {
-                              const nextRuntime = normalizeRuntimePlacement(event.currentTarget.value);
-                              setWizardState((current) => ({
-                                ...current,
-                                runtimePlacement: nextRuntime,
-                                runtimeTarget: runtimeTargetForPlacement(nextRuntime),
-                                runtimeSupplierKind: runtimeSupplierForPlacement(nextRuntime),
-                              }));
-                            }}
-                          >
-                            {STUDIO_RUNTIME_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </FormSelect>
-                        </FormField>
-
-                        {wizardState.runtimePlacement === 'customer_hosted' ? (
-                          <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                            <FormField label="Self-hosted node" hint="Required only for self-hosted agents.">
-                              <FormSelect
-                                value={wizardState.selfHostedRuntimeProfileId}
-                                onChange={(event) => setWizardField('selfHostedRuntimeProfileId', event.currentTarget.value)}
-                                disabled={isLoadingRuntimeAttachments}
-                              >
-                                <option value="">
-                                  {isLoadingRuntimeAttachments ? 'Loading nodes...' : selfHostedNodeOptions.length > 0 ? 'Select a node' : 'No enrolled nodes found'}
-                                </option>
-                                {selfHostedNodeOptions.map((node) => (
-                                  <option key={node.runtimeProfileId} value={node.runtimeProfileId}>
-                                    {node.label} ({humanizeToken(node.nodeKind, 'node')})
-                                  </option>
-                                ))}
-                              </FormSelect>
-                            </FormField>
-                            <FormField label="Self-hosted contracts" hint="Required before creating this mode.">
-                              <FormGrid columns="repeat(2, minmax(0, 1fr))">
-                                <FormSelect
-                                  value={wizardState.selfHostedPrivacyAccepted ? 'accepted' : 'pending'}
-                                  onChange={(event) => setWizardField('selfHostedPrivacyAccepted', event.currentTarget.value === 'accepted')}
-                                >
-                                  <option value="pending">Privacy pending</option>
-                                  <option value="accepted">Privacy accepted</option>
-                                </FormSelect>
-                                <FormSelect
-                                  value={wizardState.selfHostedSafetyAccepted ? 'accepted' : 'pending'}
-                                  onChange={(event) => setWizardField('selfHostedSafetyAccepted', event.currentTarget.value === 'accepted')}
-                                >
-                                  <option value="pending">Safety pending</option>
-                                  <option value="accepted">Safety accepted</option>
-                                </FormSelect>
-                              </FormGrid>
-                            </FormField>
-                          </FormGrid>
-                        ) : null}
-                      </details>
+                      <FormField label="Agent name" hint="The name your team sees in the agent list.">
+                        <FormInput
+                          value={wizardState.name}
+                          onChange={(event) => setWizardField('name', event.currentTarget.value)}
+                          placeholder="New agent"
+                        />
+                      </FormField>
 
                       <FormField label="What should this agent do?" hint="Plain language is enough. You can refine instructions after creation.">
                         <FormTextarea

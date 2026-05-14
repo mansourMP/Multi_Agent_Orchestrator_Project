@@ -26,7 +26,6 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         return direct_chat_runtime_service.DirectChatRuntimeServices(
             prepare_direct_chat_request=lambda **kwargs: prepared,
             direct_chat_response_services=self._response_services(),
-            tool_gate_response=lambda message, availability: None,
             with_context_used=lambda payload, context: {**payload, "context_used": context},
             tool_write_action_available=lambda connector, action, capabilities: True,
             approved_action_to_tool_call=lambda approved_action: {},

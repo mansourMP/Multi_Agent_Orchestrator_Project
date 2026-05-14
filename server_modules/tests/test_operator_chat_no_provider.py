@@ -40,14 +40,12 @@ class OperatorChatNoProviderTests(unittest.TestCase):
 
     @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
     @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
-    @patch("operator_chat_no_provider_under_test._tool_gate_response", return_value=None)
     @patch("operator_chat_no_provider_under_test._message_has_obvious_direct_tool_intent", return_value=True)
     @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
     def test_file_tool_runs_without_provider_configured(
         self,
         _capabilities,
         _direct_tool_intent,
-        _tool_gate_response,
         _supports_direct_message_native_chat,
         _preferred_provider,
     ):

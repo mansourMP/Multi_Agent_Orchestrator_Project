@@ -67,7 +67,6 @@ def _operator_namespace() -> dict:
         "_slash_command_help_text": lambda: "help text",
         "_execute_direct_tool_calls": lambda **kwargs: "tool reply",
         "_direct_chat_credentials": lambda workspace_id, provider: {"api_key": "sk-test"},
-        "_tool_gate_response": lambda message, availability: None,
         "_tool_write_action_available": lambda connector, action, capabilities: True,
         "_approved_action_to_tool_call": lambda approved_action: approved_action,
         "_resolve_provider_for_direct_chat_message": lambda workspace_id, requested_provider, message, **kwargs: ("openai", {}),
@@ -346,13 +345,9 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
             s3_keywords=("s3",),
         )
 
-        gate = bindings.tool_gate_response("summarize my gmail inbox", {})
         suggestions = bindings.build_proactive_suggestions("default")
 
         self.assertTrue(bindings.question_like("what can you do"))
-        self.assertIsNotNone(gate)
-        self.assertEqual(gate["reply"], "")
-        self.assertEqual(gate["interventions"][0]["title"], "Google Workspace is not connected")
         self.assertIsInstance(suggestions, list)
         self.assertTrue(suggestions)
 
@@ -892,7 +887,6 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertIn("_direct_chat_tool_routing_bindings", export_map)
         self.assertIn("_direct_chat_tool_support_bindings", export_map)
         self.assertIn("_provider_display_name", export_map)
-        self.assertTrue(callable(export_map["_tool_gate_response"]))
 
     def test_build_direct_chat_module_export_map_from_namespace_merges_shell_and_runtime_exports(self) -> None:
         namespace = _operator_namespace()

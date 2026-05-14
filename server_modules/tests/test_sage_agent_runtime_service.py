@@ -253,7 +253,7 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             system_prompt = mock_gen.call_args[0][3]
             self.assertNotIn("sk-", system_prompt)
 
-    def test_blocks_write_skill_triggers(self):
+    def test_write_skill_terms_do_not_preempt_model(self):
         from server_modules.skill_registry import SkillDefinition
 
         dangerous = SkillDefinition(
@@ -273,14 +273,12 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
                 workspace_id="ws-1", message="send email to boss",
             ))
 
-            self.assertTrue(any(b["skill_id"] == "email-access" for b in result["blocked_tools"]))
+            self.assertEqual(result["message"], "Reply")
+            self.assertEqual(result["blocked_tools"], [])
             self.assertEqual(len(result["available_tools"]), 0)
-            self.assertTrue(any(a["skill_id"] == "email-access" for a in result["approvals_required"]))
-            self.assertTrue(
-                any(str(a.get("approval_token") or "").startswith("sap_") for a in result["approvals_required"])
-            )
+            self.assertEqual(result["approvals_required"], [])
 
-    def test_write_skill_includes_connected_computer_decision_card(self):
+    def test_write_skill_does_not_create_keyword_approval_card(self):
         from server_modules.skill_registry import SkillDefinition
 
         dangerous = SkillDefinition(
@@ -301,15 +299,11 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
                 current_user={"user_id": "owner-1"},
             ))
 
-            approval = result["approvals_required"][0]
-            decision = approval["agent_computer_decision"]
-            self.assertEqual(decision["decision"], "approval_required")
-            self.assertEqual(decision["agent_id"], "sage_main_agent")
-            self.assertEqual(decision["risk_decision"]["capability"], "communication.send")
-            self.assertEqual(approval["approval_card"]["action"], "communication.send")
-            self.assertTrue(approval["approval_card"]["rememberable"])
+            self.assertEqual(result["message"], "Reply")
+            self.assertEqual(result["blocked_tools"], [])
+            self.assertEqual(result["approvals_required"], [])
 
-    def test_kill_switch_blocks_connected_computer_decision_without_approval_token(self):
+    def test_kill_switch_does_not_fire_from_keyword_scan(self):
         from server_modules import kill_switch_gate
         from server_modules.skill_registry import SkillDefinition
 
@@ -334,19 +328,14 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
                     current_user={"user_id": "owner-1"},
                 ))
 
-                approval = result["approvals_required"][0]
-                decision = approval["agent_computer_decision"]
-                self.assertEqual(decision["decision"], "block")
-                self.assertTrue(decision["blocked"])
-                self.assertEqual(decision["reason"], "kill_state:active")
-                self.assertEqual(decision["risk_decision"]["blocked_reason"], "kill_state:active")
-                self.assertIsNone(approval["approval_token"])
-                self.assertEqual(approval["status"], "blocked")
+                self.assertEqual(result["message"], "Reply")
+                self.assertEqual(result["blocked_tools"], [])
+                self.assertEqual(result["approvals_required"], [])
                 mock_approval.assert_not_called()
         finally:
             kill_switch_gate.clear_kill_switch("agent:sage_main_agent")
 
-    def test_blocks_execute_skill_triggers(self):
+    def test_execute_skill_terms_do_not_preempt_model(self):
         from server_modules.skill_registry import SkillDefinition
 
         dangerous = SkillDefinition(
@@ -365,13 +354,11 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
                 workspace_id="ws-1", message="run the deployment script",
             ))
 
-            self.assertTrue(any(b["skill_id"] == "task-runner" for b in result["blocked_tools"]))
-            self.assertEqual(
-                result["blocked_tools"][0]["agent_computer_decision"]["risk_decision"]["capability"],
-                "terminal.command",
-            )
+            self.assertEqual(result["message"], "Reply")
+            self.assertEqual(result["blocked_tools"], [])
+            self.assertEqual(result["approvals_required"], [])
 
-    def test_connected_computer_decision_redacts_secret_like_payload(self):
+    def test_keyword_scan_does_not_build_decision_payload_with_secret_like_text(self):
         from server_modules.skill_registry import SkillDefinition
 
         dangerous = SkillDefinition(
@@ -391,11 +378,11 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
                 message="send email with sk-proj-this-should-not-leak",
             ))
 
-            decision_text = str(result["approvals_required"][0]["agent_computer_decision"])
-            self.assertNotIn("sk-proj-this-should-not-leak", decision_text)
-            self.assertNotIn("sk-", decision_text)
+            self.assertEqual(result["message"], "Reply")
+            self.assertEqual(result["blocked_tools"], [])
+            self.assertEqual(result["approvals_required"], [])
 
-    def test_approval_token_is_chat_surface_only(self):
+    def test_keyword_scan_creates_no_surface_approval_tokens(self):
         from server_modules.skill_registry import SkillDefinition
 
         dangerous = SkillDefinition(
@@ -425,8 +412,8 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
                 )
             )
 
-            self.assertTrue(any(a.get("approval_token") for a in chat_result["approvals_required"]))
-            self.assertTrue(all("approval_token" not in a for a in mobile_result["approvals_required"]))
+            self.assertEqual(chat_result["approvals_required"], [])
+            self.assertEqual(mobile_result["approvals_required"], [])
 
 
 class SageAgentRuntimePersistenceTests(unittest.TestCase):
@@ -529,7 +516,7 @@ class SageAgentRuntimeAuditTests(unittest.TestCase):
             self.assertEqual(len(audit_calls), 1)
             self.assertEqual(audit_calls[0].kwargs["status"], "success")
 
-    def test_audit_event_for_blocked_tool(self):
+    def test_keyword_terms_do_not_emit_blocked_tool_audit(self):
         from server_modules.skill_registry import SkillDefinition
 
         dangerous = SkillDefinition(
@@ -562,8 +549,7 @@ class SageAgentRuntimeAuditTests(unittest.TestCase):
 
             blocked_calls = [c for c in mock_audit.call_args_list
                              if c.kwargs.get("action") == "sage_chat.tool_blocked"]
-            self.assertEqual(len(blocked_calls), 1)
-            self.assertEqual(blocked_calls[0].kwargs["status"], "blocked")
+            self.assertEqual(blocked_calls, [])
 
 
 class SageAgentRuntimeResultShapeTests(unittest.TestCase):

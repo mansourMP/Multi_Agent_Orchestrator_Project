@@ -26,7 +26,6 @@ from server_modules.direct_tool_config_service import run_async_tool_call
 class DirectChatRuntimeServices:
     prepare_direct_chat_request: Callable[..., Any]
     direct_chat_response_services: direct_chat_response_service.DirectChatResponseServices
-    tool_gate_response: Callable[[str, Dict[str, Any]], Optional[Dict[str, Any]]]
     with_context_used: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]
     tool_write_action_available: Callable[[str, str, List[Dict[str, Any]]], bool]
     approved_action_to_tool_call: Callable[[Dict[str, str]], Dict[str, Any]]
@@ -926,14 +925,6 @@ def build_direct_operator_reply(
                 tool_capabilities=tool_capabilities,
                 services=services,
             ),
-        }
-        return
-
-    gated = services.tool_gate_response(normalized_message, availability_payload)
-    if gated is not None:
-        yield {
-            "type": "final",
-            "payload": services.with_context_used({**gated, "suggestions": proactive_suggestions}, base_context_used),
         }
         return
 

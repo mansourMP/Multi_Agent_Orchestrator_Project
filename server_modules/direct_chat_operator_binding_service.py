@@ -96,7 +96,6 @@ class DirectChatOperatorAvailabilityBindings:
     connector_write_preview_allowed: Any
     is_explicit_workflow_request: Any
     no_ai_chat_response: Any
-    tool_gate_response: Any
     suggest_actions: Any
     heartbeat_pending_tasks_for_suggestions: Any
     recent_run_prompts_for_suggestions: Any
@@ -1194,24 +1193,6 @@ def build_direct_chat_availability_bindings(
             connect_action_fn=connect_action_fn,
         )
 
-    def tool_gate_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        return direct_chat_availability_service.tool_gate_response(
-            message,
-            availability,
-            compact_text_fn=compact_text_fn,
-            mentions_any_fn=mentions_any,
-            is_obvious_smtp_write_request_fn=is_obvious_smtp_write_request,
-            tool_connected_fn=tool_connected_fn,
-            tool_runtime_usable_fn=tool_runtime_usable_fn,
-            connect_action_fn=connect_action_fn,
-            google_repair_action_fn=google_repair_action_fn,
-            google_workspace_keywords=google_workspace_keywords,
-            telegram_keywords=telegram_keywords,
-            slack_keywords=slack_keywords,
-            dropbox_keywords=dropbox_keywords,
-            s3_keywords=s3_keywords,
-        )
-
     def suggest_actions(message: str, availability: Dict[str, Any]) -> list[Dict[str, Any]]:
         return direct_chat_availability_service.suggest_actions(
             message,
@@ -1258,7 +1239,6 @@ def build_direct_chat_availability_bindings(
         connector_write_preview_allowed=connector_write_preview_allowed,
         is_explicit_workflow_request=is_explicit_workflow_request,
         no_ai_chat_response=no_ai_chat_response,
-        tool_gate_response=tool_gate_response,
         suggest_actions=suggest_actions,
         heartbeat_pending_tasks_for_suggestions=heartbeat_pending_tasks_for_suggestions,
         recent_run_prompts_for_suggestions=recent_run_prompts_for_suggestions,
@@ -2220,7 +2200,6 @@ def build_direct_chat_shell_export_map(
         "_connector_write_preview_allowed": availability_bindings.connector_write_preview_allowed,
         "_is_explicit_workflow_request": availability_bindings.is_explicit_workflow_request,
         "_no_ai_chat_response": availability_bindings.no_ai_chat_response,
-        "_tool_gate_response": availability_bindings.tool_gate_response,
         "_suggest_actions": availability_bindings.suggest_actions,
         "_heartbeat_pending_tasks_for_suggestions": availability_bindings.heartbeat_pending_tasks_for_suggestions,
         "_recent_run_prompts_for_suggestions": availability_bindings.recent_run_prompts_for_suggestions,

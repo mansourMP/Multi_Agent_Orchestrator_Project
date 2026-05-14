@@ -54,7 +54,6 @@ class DirectChatRuntimeFacadeCallbacks:
     execute_direct_tool_calls: Callable[..., str]
     direct_chat_credentials: Callable[[str, str], Dict[str, Any]]
     capture_exception: Callable[[BaseException], None]
-    tool_gate_response: Callable[[str, Dict[str, Any]], Optional[Dict[str, Any]]]
     tool_write_action_available: Callable[[str, str, List[Dict[str, Any]]], bool]
     approved_action_to_tool_call: Callable[[Dict[str, str]], Dict[str, Any]]
     resolve_provider_for_direct_chat_message: Callable[[str, str, str], tuple[str, Dict[str, Any]]]
@@ -203,7 +202,6 @@ def build_direct_chat_runtime_services(
     return direct_chat_runtime_service.DirectChatRuntimeServices(
         prepare_direct_chat_request=lambda **kwargs: prepare_direct_chat_request(callbacks=callbacks, **kwargs),
         direct_chat_response_services=build_direct_chat_response_services(callbacks),
-        tool_gate_response=callbacks.tool_gate_response,
         with_context_used=callbacks.with_context_used,
         tool_write_action_available=callbacks.tool_write_action_available,
         approved_action_to_tool_call=callbacks.approved_action_to_tool_call,

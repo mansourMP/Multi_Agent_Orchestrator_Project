@@ -338,7 +338,7 @@ _BUILT_IN_SKILLS: tuple[SkillDefinition, ...] = (
         execution_mode="manual",
         action_class="write",
         connector_scopes=("email",),
-        trigger_terms=("email", "inbox", "reply", "respond by email"),
+        trigger_terms=(),
         requires_approval=True,
         skill_class="system",
     ),
@@ -350,7 +350,7 @@ _BUILT_IN_SKILLS: tuple[SkillDefinition, ...] = (
         execution_mode="live",
         action_class="read",
         connector_scopes=("web",),
-        trigger_terms=("latest", "research", "search", "find online", "web", "source", "look up", "compare"),
+        trigger_terms=(),
         executor=_live_web_search,
         execution_adapter="web_search",
         skill_class="system",
@@ -363,7 +363,7 @@ _BUILT_IN_SKILLS: tuple[SkillDefinition, ...] = (
         execution_mode="live",
         action_class="read",
         connector_scopes=("browser",),
-        trigger_terms=("browser", "browse", "open site", "open website", "navigate", "inspect page", "open http", "open https"),
+        trigger_terms=(),
         executor=_live_browser_skill,
         execution_adapter="browser",
         skill_class="system",
@@ -376,7 +376,7 @@ _BUILT_IN_SKILLS: tuple[SkillDefinition, ...] = (
         execution_mode="manual",
         action_class="write",
         connector_scopes=("calendar",),
-        trigger_terms=("appointment", "book", "schedule", "calendar", "reschedule"),
+        trigger_terms=(),
         requires_approval=True,
         skill_class="system",
     ),
@@ -390,7 +390,7 @@ _BUILT_IN_SKILLS: tuple[SkillDefinition, ...] = (
         connector_scopes=("task_runner",),
         allowed_runtime_modes=("local_secure", "privileged_device"),
         requires_approval=True,
-        trigger_terms=("run task", "execute", "automation", "update system"),
+        trigger_terms=(),
         skill_class="system",
     ),
     SkillDefinition(
@@ -401,7 +401,7 @@ _BUILT_IN_SKILLS: tuple[SkillDefinition, ...] = (
         execution_mode="live",
         action_class="read",
         connector_scopes=("inventory",),
-        trigger_terms=("inventory", "stock", "availability", "fitment", "sku", "part", "parts", "wiper", "brake", "rotor", "filter", "tesla", "toyota", "model 3", "eta", "delivery"),
+        trigger_terms=(),
         executor=inventory_skill.execute_inventory_skill,
         execution_adapter="inventory",
         skill_class="business",
@@ -415,7 +415,7 @@ _BUILT_IN_SKILLS: tuple[SkillDefinition, ...] = (
         action_class="write",
         connector_scopes=("crm",),
         requires_approval=True,
-        trigger_terms=("crm", "lead note", "follow up note", "save note"),
+        trigger_terms=(),
         skill_class="system",
     ),
 )
@@ -539,20 +539,7 @@ def skill_connector_scopes(skill_ids: list[str] | tuple[str, ...], *, workspace_
 
 
 def detect_skill_need(goal: str, *, workspace_id: str | None = None) -> SkillDefinition | None:
-    normalized = str(goal or "").strip().lower()
-    if not normalized:
-        return None
-    best_match: SkillDefinition | None = None
-    best_score = -1
-    for skill in list_skill_definitions(workspace_id=workspace_id):
-        matched_terms = [len(term) for term in skill.trigger_terms if term and term in normalized]
-        if not matched_terms:
-            continue
-        score = max(matched_terms)
-        if score > best_score:
-            best_score = score
-            best_match = skill
-    return best_match
+    return None
 
 
 async def execute_skill(

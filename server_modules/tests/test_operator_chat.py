@@ -365,8 +365,12 @@ class OperatorChatTests(unittest.TestCase):
         self.assertEqual(len(final_payloads), 1)
         self.assertEqual(final_payloads[0]["reply"], "Hello")
 
+    @patch(
+        "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
+        return_value=("Email can be discussed normally.", {"provider": "openai", "model": "gpt-5.4"}, "openai", ""),
+    )
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    def test_missing_google_workspace_returns_connect_action(self, _capabilities):
+    def test_missing_google_workspace_does_not_block_generation(self, _capabilities, generate_reply):
         payload = build_direct_operator_reply(
             message="Could you summarize my emails?",
             workspace_id="default",
@@ -375,9 +379,10 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIntervention(payload, "connect_required", title="Google Workspace is not connected")
-        self.assertEqual(payload["actions"][0]["kind"], "connect")
-        self.assertEqual(payload["actions"][0]["label"], "Connect")
+        self.assertEqual(payload["reply"], "Email can be discussed normally.")
+        self.assertEqual(payload["actions"], [])
+        self.assertEqual(payload.get("interventions") or [], [])
+        generate_reply.assert_called()
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
     @patch("operator_chat_under_test.can_auto_start_run_handoff", return_value=False)
@@ -732,6 +737,10 @@ class OperatorChatTests(unittest.TestCase):
         generate_reply.assert_not_called()
 
     @patch(
+        "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
+        return_value=("Gmail can be discussed normally.", {"provider": "openai", "model": "gpt-5.4"}, "openai", ""),
+    )
+    @patch(
         "operator_chat_under_test.resolve_workspace_tool_capabilities",
         return_value=[{
             "id": "google_workspace",
@@ -744,24 +753,24 @@ class OperatorChatTests(unittest.TestCase):
             "approval_required_actions": [],
         }],
     )
-    def test_connected_but_unverified_google_workspace_does_not_claim_usability(self, _capabilities):
+    def test_connected_but_unverified_google_workspace_does_not_block_generation(self, _capabilities, generate_reply):
         payload = build_direct_operator_reply(
-            message="Check my Gmail inbox.",
+            message="What does a Gmail inbox label mean?",
             workspace_id="default",
             requested_model="gpt-5.4",
             requested_provider="openai",
             availability={"ai_ready": True},
         )
 
-        self.assertIntervention(
-            payload,
-            "connect_required",
-            title="Google Workspace capability not verified",
-            detail_contains="not verified",
-        )
-        self.assertEqual(payload["mode"], "connect")
+        self.assertEqual(payload["reply"], "Gmail can be discussed normally.")
         self.assertEqual(payload["actions"], [])
+        self.assertEqual(payload.get("interventions") or [], [])
+        generate_reply.assert_called()
 
+    @patch(
+        "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
+        return_value=("Gmail can be discussed normally.", {"provider": "openai", "model": "gpt-5.4"}, "openai", ""),
+    )
     @patch(
         "operator_chat_under_test.resolve_workspace_tool_capabilities",
         return_value=[{
@@ -775,26 +784,19 @@ class OperatorChatTests(unittest.TestCase):
             "approval_required_actions": [],
         }],
     )
-    def test_connected_but_not_usable_google_workspace_blocks_execution_claims(self, _capabilities):
+    def test_connected_but_not_usable_google_workspace_does_not_block_generation(self, _capabilities, generate_reply):
         payload = build_direct_operator_reply(
-            message="Check my Gmail inbox.",
+            message="What does a Gmail inbox label mean?",
             workspace_id="default",
             requested_model="gpt-5.4",
             requested_provider="openai",
             availability={"ai_ready": True},
         )
 
-        self.assertIntervention(
-            payload,
-            "connect_required",
-            title="Google Workspace is unavailable",
-            detail_contains="not usable right now",
-        )
-        self.assertEqual(payload["mode"], "connect")
-        self.assertEqual(len(payload["actions"]), 1)
-        self.assertEqual(payload["actions"][0]["kind"], "connect")
-        self.assertEqual(payload["actions"][0]["label"], "Reconnect Google Workspace")
-        self.assertEqual(payload["actions"][0]["href"], "/credentials?connector=google_workspace")
+        self.assertEqual(payload["reply"], "Gmail can be discussed normally.")
+        self.assertEqual(payload["actions"], [])
+        self.assertEqual(payload.get("interventions") or [], [])
+        generate_reply.assert_called()
 
     @patch(
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",

@@ -23,30 +23,6 @@ class DirectChatAvailabilityServiceTests(unittest.TestCase):
         self.assertIn("Unavailable now: Telegram.", payload["interventions"][0]["detail"])
         self.assertEqual(payload["actions"][0]["kind"], "connect")
 
-    def test_tool_gate_response_requires_google_connection(self) -> None:
-        payload = direct_chat_availability_service.tool_gate_response(
-            "summarize my gmail inbox",
-            {},
-            compact_text_fn=lambda value: str(value or "").strip().lower(),
-            mentions_any_fn=lambda text, markers: any(marker in text for marker in markers),
-            is_obvious_smtp_write_request_fn=lambda _text: False,
-            tool_connected_fn=lambda _availability, _tool_id: False,
-            tool_runtime_usable_fn=lambda _availability, _tool_id: None,
-            connect_action_fn=direct_chat_availability_service.connect_action,
-            google_repair_action_fn=lambda: {"kind": "repair"},
-            google_workspace_keywords=("gmail", "emails"),
-            telegram_keywords=("telegram",),
-            slack_keywords=("slack",),
-            dropbox_keywords=("dropbox",),
-            s3_keywords=("s3",),
-        )
-
-        self.assertIsNotNone(payload)
-        self.assertEqual(payload["reply"], "")
-        self.assertEqual(payload["interventions"][0]["kind"], "connect_required")
-        self.assertEqual(payload["interventions"][0]["title"], "Google Workspace is not connected")
-        self.assertEqual(payload["actions"][0]["href"], "/credentials?connector=google_workspace")
-
     def test_suggest_actions_prefers_workflow_action(self) -> None:
         actions = direct_chat_availability_service.suggest_actions(
             "turn this into a workflow",

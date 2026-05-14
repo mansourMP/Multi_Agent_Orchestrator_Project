@@ -116,6 +116,8 @@ import {
   buildLiveTraceRecord,
   isTextEditingTarget,
   isSyntheticTranscriptMessage,
+  isConnectorSetupIntervention,
+  connectorSetupNoticeFromInterventions,
   isProviderRuntimeGateMessage,
   isProviderGateSystemCell,
   isProviderGateTranscriptCell,
@@ -1265,11 +1267,9 @@ export function WorkstationChatPane() {
   );
   const composerToolGroups = useMemo<ComposerToolGroup[]>(() => {
     const localReason = localToolingOnline ? 'Available through this paired computer' : 'Requires a connected computer';
-    const emailAvailable = hasConnectedConnector(connectorCredentials, ['google_workspace', 'smtp', 'microsoft_365']);
     const telegramAvailable = hasConnectedConnector(connectorCredentials, ['telegram_bot']);
     const telegramChannelEnabled = hasCapability('telegram_channel_enabled');
     const whatsappChannelEnabled = hasCapability('whatsapp_channel_enabled');
-    const spreadsheetAvailable = hasConnectedConnector(connectorCredentials, ['google_workspace', 'microsoft_365']);
     const webSearchEnabled = toolPolicyEnabled(toolPolicy, 'web_search');
     const fetchEnabled = toolPolicyEnabled(toolPolicy, 'http_request');
     const fileEnabled = toolPolicyEnabled(toolPolicy, 'file_access');
@@ -1318,14 +1318,12 @@ export function WorkstationChatPane() {
               : (whatsappChannelEnabled ? 'Connect your computer to send WhatsApp messages' : 'WhatsApp channel is disabled in this workspace'),
             enabled: whatsappSendEnabled,
           },
-          { id: 'email-send', label: 'Email', detail: emailAvailable ? 'Email connected app is active' : 'Connect email first', enabled: emailAvailable },
         ],
       },
       {
         id: 'data',
         label: 'Data',
         items: [
-          { id: 'spreadsheet', label: 'Spreadsheet', detail: spreadsheetAvailable ? 'Spreadsheet connected app is active' : 'Connect Google Workspace or Microsoft 365', enabled: spreadsheetAvailable },
           { id: 'code-execution', label: 'Code execution', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && codeEnabled },
         ],
       },
@@ -2202,8 +2200,13 @@ export function WorkstationChatPane() {
       const hasProviderFailure = Boolean(providerFailureIntervention);
       const providerGateDetected = hasProviderFailure
         || isProviderRuntimeGateMessage(readString(normalizedResponse.reply));
-      const needsUserIntervention = Array.isArray(normalizedResponse.interventions)
-        && normalizedResponse.interventions.length > 0
+      const responseInterventions = Array.isArray(normalizedResponse.interventions)
+        ? normalizedResponse.interventions
+        : [];
+      const connectorSetupNotice = connectorSetupNoticeFromInterventions(responseInterventions);
+      const connectorSetupInterventionOnly = responseInterventions.length > 0
+        && responseInterventions.every(isConnectorSetupIntervention);
+      const needsUserIntervention = responseInterventions.length > 0
         && !hasVisibleAssistantReply;
       setStatusMessage(
         providerGateDetected
@@ -2212,7 +2215,7 @@ export function WorkstationChatPane() {
             ? responseExecutionTarget === 'local_companion'
               ? 'Sage is waiting for approval before using the connected computer.'
               : 'Needs your OK is waiting.'
-            : needsUserIntervention && !hasProviderFailure
+            : needsUserIntervention && !hasProviderFailure && !connectorSetupInterventionOnly
               ? 'Sage needs your input before it can continue.'
               : null,
       );
@@ -2222,7 +2225,7 @@ export function WorkstationChatPane() {
               providerFailureRecord,
               providerFailureMessageForProvider(providerFailureRecord),
             )
-          : null,
+          : connectorSetupNotice,
       );
     } catch (error) {
       updatePendingUserMessage(null);

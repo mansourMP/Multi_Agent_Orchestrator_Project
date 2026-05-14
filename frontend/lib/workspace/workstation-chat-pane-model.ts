@@ -515,6 +515,9 @@ export function isSyntheticTranscriptMessage(message: WorkstationChatMessageReco
   if (isProviderRuntimeGateMessage(normalized)) {
     return true;
   }
+  if (isConnectorSetupText(normalized)) {
+    return true;
+  }
   if (normalized.startsWith('turn submitted.')) {
     return true;
   }
@@ -547,6 +550,96 @@ export function isSyntheticTranscriptMessage(message: WorkstationChatMessageReco
       || normalized.includes('started work')
       || normalized.includes('started working on it')
     );
+}
+
+export function isConnectorSetupText(message: string): boolean {
+  const normalized = readString(message).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.includes('before using those actions from chat')
+    || normalized.includes('before sending email from chat')
+    || normalized.includes('connect google workspace before')
+    || normalized.includes('google workspace is not connected')
+    || normalized.includes('google workspace capability not verified')
+    || normalized.includes('google workspace is unavailable')
+    || normalized.includes('no email connector connected')
+    || normalized.includes('email connector unavailable')
+    || normalized.includes('smtp capability not verified')
+    || normalized.includes('connect smtp before')
+    || normalized.includes('connect email first');
+}
+
+export function isConnectorSetupIntervention(intervention: unknown): boolean {
+  const record = readObject(intervention);
+  if (!record) {
+    return false;
+  }
+  const kind = readString(record.kind).toLowerCase();
+  const code = readString(record.code).toLowerCase();
+  const title = readString(record.title).toLowerCase();
+  const detail = readString(record.detail).toLowerCase();
+  if (kind !== 'connect_required') {
+    return false;
+  }
+  if (
+    code.startsWith('google_workspace_')
+    || code.startsWith('smtp_')
+    || code.startsWith('email_connector_')
+    || code.startsWith('telegram_bot_')
+    || code.startsWith('slack_')
+    || code.startsWith('dropbox_')
+    || code.startsWith('s3_')
+  ) {
+    return true;
+  }
+  return isConnectorSetupText(title) || isConnectorSetupText(detail);
+}
+
+export function connectorSetupNoticeFromInterventions(interventions: unknown[]): SendFailureNotice | null {
+  const intervention = Array.isArray(interventions)
+    ? interventions.find(isConnectorSetupIntervention)
+    : null;
+  const record = readObject(intervention);
+  if (!record) {
+    return null;
+  }
+
+  const code = readString(record.code).toLowerCase();
+  const title = readString(record.title);
+  const detail = readString(record.detail);
+  const combinedText = `${code} ${title} ${detail}`.toLowerCase();
+  let message = detail || title || 'Connect the required app before Sage can use that action.';
+
+  if (code.startsWith('google_workspace_') || combinedText.includes('google workspace')) {
+    message = 'Connect Google Workspace to let Sage use Gmail, Calendar, or Drive actions. You can keep chatting normally.';
+  } else if (
+    code.startsWith('smtp_')
+    || code.startsWith('email_connector_')
+    || combinedText.includes('smtp')
+    || combinedText.includes('email connector')
+  ) {
+    message = 'Connect an email account before Sage sends email. You can keep chatting normally.';
+  } else if (code.startsWith('telegram_bot_') || combinedText.includes('telegram')) {
+    message = 'Connect Telegram before Sage uses Telegram actions. You can keep chatting normally.';
+  } else if (code.startsWith('slack_') || combinedText.includes('slack')) {
+    message = 'Connect Slack before Sage uses Slack actions. You can keep chatting normally.';
+  } else if (code.startsWith('dropbox_') || combinedText.includes('dropbox')) {
+    message = 'Connect Dropbox before Sage uses Dropbox actions. You can keep chatting normally.';
+  } else if (code.startsWith('s3_') || combinedText.includes('s3')) {
+    message = 'Connect S3 before Sage uses S3 storage actions. You can keep chatting normally.';
+  }
+
+  return {
+    message,
+    retryable: false,
+    actions: [
+      {
+        label: 'Open Integrations',
+        target: 'integrations',
+      },
+    ],
+  };
 }
 
 export function isProviderRuntimeGateMessage(message: string): boolean {

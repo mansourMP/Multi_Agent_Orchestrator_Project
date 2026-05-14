@@ -66,7 +66,6 @@ class DirectChatCallbackFacadeInputs:
     slash_command_help_text: Callable[[], str]
     execute_direct_tool_calls: Callable[..., str]
     direct_chat_credentials: Callable[[str, str], Dict[str, Any]]
-    tool_gate_response: Callable[[str, Dict[str, Any]], Dict[str, Any] | None]
     tool_write_action_available: Callable[[str, str, List[Dict[str, Any]]], bool]
     approved_action_to_tool_call: Callable[[Dict[str, str]], Dict[str, Any]]
     resolve_provider_for_direct_chat_message: Callable[[str, str, str], tuple[str, Dict[str, Any]]]
@@ -153,7 +152,6 @@ def build_direct_chat_runtime_facade_callbacks(
         execute_direct_tool_calls=inputs.execute_direct_tool_calls,
         direct_chat_credentials=inputs.direct_chat_credentials,
         capture_exception=inputs.capture_exception,
-        tool_gate_response=inputs.tool_gate_response,
         tool_write_action_available=inputs.tool_write_action_available,
         approved_action_to_tool_call=inputs.approved_action_to_tool_call,
         resolve_provider_for_direct_chat_message=inputs.resolve_provider_for_direct_chat_message,

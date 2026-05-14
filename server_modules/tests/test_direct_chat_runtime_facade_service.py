@@ -51,7 +51,6 @@ def _callbacks() -> service.DirectChatRuntimeFacadeCallbacks:
         execute_direct_tool_calls=lambda **kwargs: "tool reply",
         direct_chat_credentials=lambda workspace_id, provider: {"api_key": "sk-test"},
         capture_exception=lambda exc: None,
-        tool_gate_response=lambda message, availability: None,
         tool_write_action_available=lambda connector, action, capabilities: True,
         approved_action_to_tool_call=lambda approved_action: approved_action,
         resolve_provider_for_direct_chat_message=lambda workspace_id, requested_provider, message: ("openai", {}),

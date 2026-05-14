@@ -474,62 +474,6 @@ async def handle_sage_chat(
     if safe_skills:
         used_context.append("sage_skills")
 
-    # --- Safety: redact secrets, check for blocked tool requests ---
-    all_skills = list_skill_definitions(workspace_id=normalized_workspace_id, include_disabled=False)
-    for skill in all_skills:
-        if not skill.enabled or not skill.available:
-            continue
-        if skill.action_class in BLOCKED_ACTION_CLASSES:
-            for term in skill.trigger_terms:
-                if term and term in normalized_message.lower():
-                    computer_decision = _build_agent_computer_decision_for_skill(
-                        workspace_id=normalized_workspace_id,
-                        actor_user_id=actor_user_id,
-                        skill=skill,
-                        triggered_by=term,
-                        message=normalized_message,
-                    )
-                    blocked = {
-                        "skill_id": skill.id,
-                        "label": skill.label,
-                        "action_class": skill.action_class,
-                        "triggered_by": term,
-                        "agent_computer_decision": computer_decision,
-                    }
-                    blocked_actions.append(blocked)
-
-                    approval_entry = {
-                        "type": "tool_action",
-                        "skill_id": skill.id,
-                        "label": skill.label,
-                        "action_class": skill.action_class,
-                        "reason": computer_decision.get("reason")
-                        or "Requires explicit owner approval before write/execute action.",
-                        "agent_computer_decision": computer_decision,
-                    }
-                    if computer_decision.get("approval_card"):
-                        approval_entry["approval_card"] = computer_decision.get("approval_card")
-                    if computer_decision.get("blocked"):
-                        approval_entry["approval_token"] = None
-                        approval_entry["status"] = "blocked"
-                    elif normalized_surface == "chat":
-                        created = _create_approval_for_blocked_action(
-                            workspace_id=normalized_workspace_id,
-                            tenant_id=normalized_tenant_id,
-                            trace_id=trace_id,
-                            skill_id=skill.id,
-                            label=skill.label,
-                            action_class=skill.action_class,
-                            requester_actor=actor_user_id,
-                        )
-                        if created is not None:
-                            approval_entry.update(created)
-                        else:
-                            approval_entry["approval_token"] = None
-                            approval_entry["status"] = "failed"
-                    approvals_required.append(approval_entry)
-                    break
-
     # --- Build prompt ---
     system_prompt = _build_system_prompt(
         workspace_id=normalized_workspace_id,

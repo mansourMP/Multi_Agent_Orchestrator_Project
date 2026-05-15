@@ -5895,7 +5895,6 @@ body.theme-light .workstation-shell__topbar {
   max-width: var(--workstation-split-sidebar-width);
   grid-template-rows: minmax(0, 1fr);
   background: transparent;
-  border-right: 0;
   overflow: hidden;
 }
 

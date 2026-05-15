@@ -225,7 +225,7 @@ Implementation prompt:
 PHASE 1 - DEMO RELIABILITY AND SAGE TRUST SURFACE
 
 Read first:
-- docs/current-state-handoff-2026-04-29.md
+- docs/archive/2026-05-15-outdated-docs/current-state-handoff-2026-04-29.md
 - docs/pending-tasks.md
 - frontend/lib/workspace/workstation-chat-pane.tsx
 - frontend/lib/workspace/chat-composer.tsx
@@ -476,7 +476,7 @@ Implementation prompt:
 PHASE 5 - BILLING PRIVACY CERTIFICATION AND LAUNCH
 
 Read first:
-- docs/current-state-handoff-2026-04-29.md
+- docs/archive/2026-05-15-outdated-docs/current-state-handoff-2026-04-29.md
 - docs/pending-tasks.md
 - server_modules/provider_catalog_service.py
 - server_modules/direct_chat_tool_catalog_service.py

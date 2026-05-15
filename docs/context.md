@@ -414,4 +414,5 @@ The platform is ready for execution-focused work, not more sprawling architectur
 The next session should assume:
 - `docs/` is the only canonical handoff
 - archived documents are history, not source of truth
+- stale planning, packet, audit, and certification documents live under `docs/archive/`
 - runtime, policy, and memory boundaries above are non-negotiable

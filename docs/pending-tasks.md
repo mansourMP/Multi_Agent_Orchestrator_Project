@@ -2,17 +2,21 @@
 
 Last verified: 2026-05-02
 
+Archive note 2026-05-15:
+- Older phase plans, audit packets, launch certificates, and dated runbooks were moved to `docs/archive/2026-05-15-outdated-docs/`.
+- Treat this file as a historical execution ledger. Current Studio Agents launch readiness is tracked in `docs/studio-agents-launch-readiness-2026-05-15.md`.
+
 Update 2026-05-02 canonical roadmap:
-- added `docs/empyralis-must-do-roadmap-2026-05-02.md` as the current launch-to-beta execution roadmap
+- added `docs/archive/2026-05-15-outdated-docs/empyralis-must-do-roadmap-2026-05-02.md` as the then-current launch-to-beta execution roadmap
 - it supersedes the scattered 12/15-phase planning threads for practical execution order
 - it keeps the current decision: web/phone-first Sage, hosted credits by default, BYOK advanced, local gateway as the moat, Studio for B2B specialists, Marketplace for governed installs, Cloud Computer deferred
-- added `docs/openclaw-gateway-comparison-2026-05-02.md` to capture the OpenClaw code review and explain why Empyralis should use a cloud-brain plus local-gateway pattern rather than official WhatsApp Cloud API or pure remote desktop as the default
+- added `docs/archive/2026-05-15-outdated-docs/openclaw-gateway-comparison-2026-05-02.md` to capture the OpenClaw code review and explain why Empyralis should use a cloud-brain plus local-gateway pattern rather than official WhatsApp Cloud API or pure remote desktop as the default
 - latest polish pass tightened phone navigation, top tab density, and Integrations tool-row alignment; provider routing and gateway routing were intentionally not changed
 - remaining launch-critical cert: final production phone browser pass after Render deploy, plus one visual sweep for Sage, History, Memory, Integrations, Studio, Marketplace, and Gateway offline/online states
 
 Update 2026-05-01 launch companion/status:
 - added `docs/tauri-desktop-companion-contract-2026-05-01.md` to lock Tauri as the local desktop companion/gateway lane, not a second Sage brain
-- added `docs/launch-implementation-status-2026-05-01.md` to separate web Sage demo readiness from native mobile, Tauri, Cloud Computer, billing, and Marketplace publishing certification lanes
+- added `docs/archive/2026-05-15-outdated-docs/launch-implementation-status-2026-05-01.md` to separate web Sage demo readiness from native mobile, Tauri, Cloud Computer, billing, and Marketplace publishing certification lanes
 - account-shell and onboarding degraded states now use client-side recovery controls for mobile-safe Reload and Sign in again actions
 - public demo remains web Sage first; native mobile and Tauri are optional follow-up cert tracks unless explicitly included in the demo
 
@@ -105,8 +109,8 @@ Environment blockers from this audit:
 Partially done on 2026-04-29.
 
 Completed:
-- documented current launch state in `docs/current-state-handoff-2026-04-29.md`
-- documented repo hygiene findings in `docs/repo-hygiene-audit-2026-04-29.md`
+- documented current launch state in `docs/archive/2026-05-15-outdated-docs/current-state-handoff-2026-04-29.md`
+- documented repo hygiene findings in `docs/archive/2026-05-15-outdated-docs/repo-hygiene-audit-2026-04-29.md`
 - corrected stale mobile docs that claimed `mobile/app/(workspace)` was active
 - removed product-unreachable trace/detail/provider workspace modules and stale E2E specs
 - corrected the shared mobile route manifest away from non-existent `/(workspace)` paths

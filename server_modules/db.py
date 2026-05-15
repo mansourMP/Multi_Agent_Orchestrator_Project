@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover - optional dependency at import time
 LOGGER = logging.getLogger(__name__)
 
 _POOLS_BY_LOOP: dict[int, tuple[Any, Any, str]] = {}
+_POOL_INIT_LOCKS_BY_LOOP: dict[int, Any] = {}
 _POOL_INIT_FAILED = False
 _MISSING_DSN_LOGGED = False
 _ENV_DSN_LOADED = False
@@ -35,7 +36,10 @@ def _truthy_env(value: Any) -> bool:
 
 
 def _allow_database_url_backfill() -> bool:
-    return _truthy_env(os.getenv("ORION_LOCAL_RUNTIME_USE_POSTGRES")) and _resolved_environment() in _LOCAL_ENV_TOKENS
+    environment = _resolved_environment()
+    return _truthy_env(os.getenv("ORION_LOCAL_RUNTIME_USE_POSTGRES")) and (
+        not environment or environment in _LOCAL_ENV_TOKENS
+    )
 
 
 def durable_runtime_required() -> bool:
@@ -189,6 +193,7 @@ async def get_pool() -> Any:
     ]
     for loop_key in stale_loop_keys:
         _loop_obj, stale_pool, _dsn = _POOLS_BY_LOOP.pop(loop_key)
+        _POOL_INIT_LOCKS_BY_LOOP.pop(loop_key, None)
         try:
             stale_pool.terminate()
         except Exception:
@@ -208,23 +213,43 @@ async def get_pool() -> Any:
                 pass
         _POOLS_BY_LOOP.pop(current_loop_key, None)
 
-    try:
-        pool = await asyncpg.create_pool(
-            dsn=database_url,
-            min_size=1,
-            max_size=configured_postgres_pool_max_size(),
-            command_timeout=10.0,
-        )
-        _POOLS_BY_LOOP[current_loop_key] = (current_loop, pool, database_url)
-        _POOL_INIT_FAILED = False
-        LOGGER.info("Postgres pool initialized — run state will be durable")
-        return pool
-    except Exception as exc:  # pragma: no cover - network/db dependent
-        if not _POOL_INIT_FAILED:
-            LOGGER.error(_pool_unavailable_message(operation="runtime startup", reason="unreachable")) if durable_runtime_required() else LOGGER.warning(
-                _pool_unavailable_message(operation="runtime startup", reason="unreachable")
+    lock = _POOL_INIT_LOCKS_BY_LOOP.get(current_loop_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _POOL_INIT_LOCKS_BY_LOOP[current_loop_key] = lock
+
+    async with lock:
+        existing = _POOLS_BY_LOOP.get(current_loop_key)
+        if existing is not None:
+            loop_obj, pool, dsn = existing
+            if loop_obj is current_loop and dsn == database_url:
+                return pool
+            try:
+                await pool.close()
+            except Exception:
+                try:
+                    pool.terminate()
+                except Exception:
+                    pass
+            _POOLS_BY_LOOP.pop(current_loop_key, None)
+
+        try:
+            pool = await asyncpg.create_pool(
+                dsn=database_url,
+                min_size=1,
+                max_size=configured_postgres_pool_max_size(),
+                command_timeout=10.0,
             )
-            LOGGER.debug("Postgres pool initialization failure detail: %s", exc)
-        _POOLS_BY_LOOP.pop(current_loop_key, None)
-        _POOL_INIT_FAILED = True
-        return None
+            _POOLS_BY_LOOP[current_loop_key] = (current_loop, pool, database_url)
+            _POOL_INIT_FAILED = False
+            LOGGER.info("Postgres pool initialized — run state will be durable")
+            return pool
+        except Exception as exc:  # pragma: no cover - network/db dependent
+            if not _POOL_INIT_FAILED:
+                LOGGER.error(_pool_unavailable_message(operation="runtime startup", reason="unreachable")) if durable_runtime_required() else LOGGER.warning(
+                    _pool_unavailable_message(operation="runtime startup", reason="unreachable")
+                )
+                LOGGER.debug("Postgres pool initialization failure detail: %s", exc)
+            _POOLS_BY_LOOP.pop(current_loop_key, None)
+            _POOL_INIT_FAILED = True
+            return None

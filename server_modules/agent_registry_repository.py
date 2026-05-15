@@ -2009,9 +2009,6 @@ async def get_workspace_agent_install_bundle(
     tenant_id: Optional[str] = None,
     workspace_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    pool = await control_plane_repository.ensure_control_plane_schema()
-    if pool is None:
-        return None
     clauses = ["wai.id = $1"]
     params: List[Any] = [str(install_id or "").strip()]
     if tenant_id:
@@ -2020,60 +2017,70 @@ async def get_workspace_agent_install_bundle(
     if workspace_id:
         params.append(str(workspace_id or "").strip())
         clauses.append(f"wai.workspace_id = ${len(params)}")
-    row = await pool.fetchrow(
-        f"""
-        SELECT
-            wai.*,
-            ad.slug AS agent_definition_slug,
-            ad.name AS agent_definition_name,
-            ad.description AS agent_definition_description,
-            ad.agent_kind,
-            ad.visibility AS agent_definition_visibility,
-            ad.status AS agent_definition_status,
-            ad.source_workflow_definition_id,
-            ad.metadata AS agent_definition_metadata,
-            adv.status AS agent_definition_version_status,
-            adv.manifest,
-            adv.capability_manifest,
-            adv.memory_scope_manifest,
-            adv.policy_manifest,
-            adv.placement_manifest,
-            adv.template_inputs_schema,
-            adv.metadata AS agent_definition_version_metadata,
-            adv.compiled_workflow_version_id AS definition_compiled_workflow_version_id,
-            rp.slug AS runtime_profile_slug,
-            rp.label AS runtime_profile_label,
-            rp.runtime_class,
-            rp.placement_mode,
-            rp.runtime_id,
-            rp.machine_id,
-            rp.default_execution_target,
-            rp.supported_capabilities,
-            rp.root_folder_uri AS runtime_profile_root_folder_uri,
-            rp.allowed_connector_scopes,
-            rp.status AS runtime_profile_status,
-            rp.last_seen_at AS runtime_profile_last_seen_at,
-            rp.metadata AS runtime_profile_metadata,
-            arp.runtime_mode,
-            cwv.workflow_id AS compiled_workflow_id
-        FROM workspace_agent_installs wai
-        INNER JOIN agent_definitions ad
-            ON ad.id = wai.agent_definition_id
-        INNER JOIN agent_definition_versions adv
-            ON adv.id = wai.agent_definition_version_id
-        LEFT JOIN runtime_profiles rp
-            ON rp.id = wai.runtime_profile_id
-        LEFT JOIN agent_runtime_profiles arp
-            ON arp.agent_install_id = wai.id
-           AND arp.tenant_id = wai.tenant_id
-           AND arp.workspace_id = wai.workspace_id
-        LEFT JOIN workflow_versions cwv
-            ON cwv.id = wai.compiled_workflow_version_id
-        WHERE {' AND '.join(clauses)}
-        LIMIT 1
-        """,
-        *params,
-    )
+    query = f"""
+    SELECT
+        wai.*,
+        ad.slug AS agent_definition_slug,
+        ad.name AS agent_definition_name,
+        ad.description AS agent_definition_description,
+        ad.agent_kind,
+        ad.visibility AS agent_definition_visibility,
+        ad.status AS agent_definition_status,
+        ad.source_workflow_definition_id,
+        ad.metadata AS agent_definition_metadata,
+        adv.status AS agent_definition_version_status,
+        adv.manifest,
+        adv.capability_manifest,
+        adv.memory_scope_manifest,
+        adv.policy_manifest,
+        adv.placement_manifest,
+        adv.template_inputs_schema,
+        adv.metadata AS agent_definition_version_metadata,
+        adv.compiled_workflow_version_id AS definition_compiled_workflow_version_id,
+        rp.slug AS runtime_profile_slug,
+        rp.label AS runtime_profile_label,
+        rp.runtime_class,
+        rp.placement_mode,
+        rp.runtime_id,
+        rp.machine_id,
+        rp.default_execution_target,
+        rp.supported_capabilities,
+        rp.root_folder_uri AS runtime_profile_root_folder_uri,
+        rp.allowed_connector_scopes,
+        rp.status AS runtime_profile_status,
+        rp.last_seen_at AS runtime_profile_last_seen_at,
+        rp.metadata AS runtime_profile_metadata,
+        arp.runtime_mode,
+        cwv.workflow_id AS compiled_workflow_id
+    FROM workspace_agent_installs wai
+    INNER JOIN agent_definitions ad
+        ON ad.id = wai.agent_definition_id
+    INNER JOIN agent_definition_versions adv
+        ON adv.id = wai.agent_definition_version_id
+    LEFT JOIN runtime_profiles rp
+        ON rp.id = wai.runtime_profile_id
+    LEFT JOIN agent_runtime_profiles arp
+        ON arp.agent_install_id = wai.id
+       AND arp.tenant_id = wai.tenant_id
+       AND arp.workspace_id = wai.workspace_id
+    LEFT JOIN workflow_versions cwv
+        ON cwv.id = wai.compiled_workflow_version_id
+    WHERE {' AND '.join(clauses)}
+    LIMIT 1
+    """
+    if tenant_id and workspace_id:
+        async with control_plane_repository._scoped_connection(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        ) as connection:
+            if connection is None:
+                return None
+            row = await connection.fetchrow(query, *params)
+    else:
+        pool = await control_plane_repository.ensure_control_plane_schema()
+        if pool is None:
+            return None
+        row = await pool.fetchrow(query, *params)
     if row is None:
         return None
     payload = dict(row)

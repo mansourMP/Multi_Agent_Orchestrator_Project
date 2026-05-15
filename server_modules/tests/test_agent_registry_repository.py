@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import unittest
+from contextlib import asynccontextmanager
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
@@ -55,6 +56,22 @@ class _FakeExecutePool:
         return "UPDATE 1"
 
 
+class _FakeFetchConnection:
+    def __init__(self, row):
+        self.row = row
+        self.calls = []
+
+    async def fetchrow(self, query, *args):
+        self.calls.append((query, args))
+        return self.row
+
+
+@asynccontextmanager
+async def _fake_scoped_connection(connection: _FakeFetchConnection, scopes: list[dict[str, str]], **kwargs):
+    scopes.append(kwargs)
+    yield connection
+
+
 class AgentRegistryRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
         global agent_registry_repository
@@ -95,6 +112,59 @@ class AgentRegistryRepositoryTests(unittest.TestCase):
         self.assertEqual(result["workflow_id"], "wf-test")
         self.assertEqual(result["workflow_version_id"], "wfver-test")
         fetch_snapshot.assert_awaited_once()
+
+    def test_get_workspace_agent_install_bundle_uses_scoped_connection_when_scope_provided(self) -> None:
+        row = {
+            "id": "ainstall_1",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "agent_definition_id": "agentdef_1",
+            "agent_definition_version_id": "agentver_1",
+            "label": "QA Agent",
+            "status": "draft",
+            "enabled": True,
+            "tool_toggles": {},
+            "folder_grants": [],
+            "connector_bindings": {},
+            "memory_scope_overrides": {},
+            "policy_context_overrides": {},
+            "metadata": {"specialist_mode": "owner_edit"},
+            "agent_definition_slug": "qa-agent",
+            "agent_definition_name": "QA Agent",
+            "agent_definition_description": "",
+            "agent_kind": "specialist",
+            "manifest": {},
+            "capability_manifest": {},
+            "policy_manifest": {},
+            "placement_manifest": {},
+        }
+        connection = _FakeFetchConnection(row)
+        scopes: list[dict[str, str]] = []
+
+        with (
+            patch(
+                "server_modules.agent_registry_repository.control_plane_repository._scoped_connection",
+                side_effect=lambda **kwargs: _fake_scoped_connection(connection, scopes, **kwargs),
+            ),
+            patch(
+                "server_modules.agent_registry_repository.control_plane_repository.ensure_control_plane_schema",
+                new=AsyncMock(side_effect=AssertionError("unscoped pool should not be used")),
+            ),
+        ):
+            result = asyncio.run(
+                agent_registry_repository.get_workspace_agent_install_bundle(
+                    "ainstall_1",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+            )
+
+        self.assertEqual(result["id"], "ainstall_1")
+        self.assertEqual(scopes, [{"tenant_id": "tenant-1", "workspace_id": "workspace-1"}])
+        query, args = connection.calls[0]
+        self.assertIn("wai.tenant_id", query)
+        self.assertIn("wai.workspace_id", query)
+        self.assertEqual(args[:3], ("ainstall_1", "tenant-1", "workspace-1"))
 
     def test_enqueue_self_hosted_runtime_command_rejects_runtime_node_scope_mismatch(self) -> None:
         profile = {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { ArrowUp, Loader2 } from "lucide-react";
 import { joinClassNames } from "@/lib/ui/primitives";
@@ -10,13 +10,6 @@ const CHANNELS: ReadonlyArray<{ value: string; label: string; disabled?: boolean
   { value: "telegram", label: "Telegram Bot (Simulated test only)" },
   { value: "whatsapp", label: "WhatsApp Business (Roadmap)", disabled: true },
   { value: "web_widget", label: "Web Chat (Roadmap)", disabled: true },
-] as const;
-
-const RUNTIME_MODES = [
-  { value: "text_agent", label: "Text Agent" },
-  { value: "cloud_computer_agent", label: "Cloud Computer Agent" },
-  { value: "my_computer_agent", label: "My Computer Agent" },
-  { value: "self_hosted_agent", label: "Self-Hosted Agent" },
 ] as const;
 
 interface TestTurnResult {
@@ -43,17 +36,24 @@ export function DeployedAgentTestTurnPane({
   deployedAgentId,
   workspaceId,
   client,
+  agentName,
+  runtimeMode = "text_agent",
 }: {
   deployedAgentId: string;
   workspaceId: string;
   client: { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null> };
+  agentName?: string | null;
+  runtimeMode?: string;
 }) {
   const [message, setMessage] = useState("");
   const [channel, setChannel] = useState<string>("test");
-  const [runtimeMode, setRuntimeMode] = useState<string>("text_agent");
   const [loading, setLoading] = useState(false);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const threadRef = useRef<HTMLDivElement | null>(null);
+  const friendlyAgentName = useMemo(() => {
+    const token = String(agentName || "").trim();
+    return token || "this agent";
+  }, [agentName]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -73,7 +73,7 @@ export function DeployedAgentTestTurnPane({
     setTurns((current) => [
       ...current,
       { id: `${turnId}-user`, role: "user", content: trimmedMessage },
-      { id: responseTurnId, role: "agent", content: "Thinking...", tone: "loading" },
+      { id: responseTurnId, role: "agent", content: "Checking the agent response...", tone: "loading" },
     ]);
     try {
       const res = await client.testTurnDeployedAgent({
@@ -119,8 +119,7 @@ export function DeployedAgentTestTurnPane({
       <div ref={threadRef} className="deployed-agent-chat__thread" aria-live="polite">
         {turns.length === 0 ? (
           <div className="deployed-agent-chat__empty">
-            <strong>Start testing this agent</strong>
-            <span>Ask it the same way a customer would. Nothing here is sent to a live channel.</span>
+            <span>No private test messages yet.</span>
           </div>
         ) : null}
 
@@ -149,24 +148,17 @@ export function DeployedAgentTestTurnPane({
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleComposerKeyDown}
-          placeholder="Message this agent..."
+          placeholder={`Ask ${friendlyAgentName} a customer question...`}
           rows={2}
         />
         <div className="deployed-agent-chat__toolbar" aria-label="Private test controls">
           <div className="deployed-agent-chat__controls">
+            <span className="deployed-agent-chat__test-pill">Private test</span>
             <label className="deployed-agent-chat__select-shell">
               <span>Channel</span>
               <select aria-label="Test channel" value={channel} onChange={(e) => setChannel(e.target.value)}>
                 {CHANNELS.map((c) => (
                   <option key={c.value} value={c.value} disabled={Boolean(c.disabled)}>{c.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="deployed-agent-chat__select-shell">
-              <span>Agent type</span>
-              <select aria-label="Agent type" value={runtimeMode} onChange={(e) => setRuntimeMode(e.target.value)}>
-                {RUNTIME_MODES.map((m) => (
-                  <option key={m.value} value={m.value}>{m.label}</option>
                 ))}
               </select>
             </label>

@@ -389,8 +389,8 @@ test.describe('deployed agents surface', () => {
     await loginAsOwner(page);
     await page.goto('/w/ws-1/chat');
 
-    await expect(page.getByRole('link', { name: /^build$/i })).toBeVisible();
-    await page.getByRole('link', { name: /^build$/i }).click();
+    await expect(page.getByRole('link', { name: /^agents$/i })).toBeVisible();
+    await page.getByRole('link', { name: /^agents$/i }).click();
     await expect(page).toHaveURL(/\/w\/ws-1\/studio$/);
     await expect(page.locator('[data-workstation-surface="deployed-agents"]')).toBeVisible();
   });
@@ -987,17 +987,13 @@ test.describe('deployed agents surface', () => {
     await expect(surface).toContainText(/store assistant/i);
     await expect(surface).toContainText(/messages/i);
     await expect(surface).toContainText(/open/i);
-    await expect(surface).toContainText(/spend/i);
+    await expect(surface).toContainText(/budget/i);
     await expect(surface).toContainText(/\$8\.00/);
-    await page.getByRole('button', { name: /store assistant/i }).click();
-    const assistantSettings = page.getByRole('dialog', { name: /assistant settings/i });
-    await expect(assistantSettings).toBeVisible();
     await page.getByRole('tab', { name: /results/i }).click();
-    await expect(assistantSettings).toContainText(/owner intelligence/i);
-    await expect(assistantSettings).toContainText(/price-match or discount pressure detected/i);
+    await expect(surface).toContainText(/owner intelligence/i);
+    await expect(surface).toContainText(/price-match or discount pressure detected/i);
     await page.getByRole('button', { name: /^approve$/i }).click();
-    await expect(assistantSettings).toContainText(/orange · approved/i);
-    await page.getByRole('button', { name: /close assistant settings/i }).click();
+    await expect(surface).toContainText(/orange · approved/i);
     await page.goto('/w/ws-1/inbox');
     const inboxSurface = page.locator('[data-workstation-surface="deployed-agents"]');
     await expect(inboxSurface).toContainText(/assistant inbox/i);
@@ -1011,8 +1007,8 @@ test.describe('deployed agents surface', () => {
     await expect(page.locator('[data-deployed-agent-transcript="detail"]')).toContainText(/escalation triggered/i);
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: /delete customer data/i }).click();
-    await expect(inboxSurface).toContainText(/deleted saved data for customer one/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).not.toContainText(/customer one/i);
+    await expect(inboxSurface).toContainText(/showing 2 of 2 customer sessions/i);
     await page.getByLabel(/channel filter/i).selectOption('whatsapp');
     await expect(inboxSurface).toContainText(/showing 1 of 2 customer sessions/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).toContainText(/customer two/i);
@@ -1026,18 +1022,11 @@ test.describe('deployed agents surface', () => {
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).not.toContainText(/customer one/i);
 
     await page.goto('/w/ws-1/studio');
-    await page.getByRole('button', { name: /shop assistant/i }).first().click();
+    await page.getByRole('button', { name: /add agent/i }).first().click();
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toBeVisible();
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/basics/i);
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/knowledge/i);
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/actions/i);
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/customer channel/i);
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/memory/i);
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/safety/i);
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/review/i);
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/launch settings/i);
-    await page.getByLabel(/assistant name/i).first().fill('Returns Concierge');
-    await page.getByLabel(/business \/ use case/i).fill('Returns-focused retail assistant');
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/shop assistant/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/create agent/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/agent name/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).not.toContainText(/launch settings/i);
+    await page.getByLabel(/agent name/i).first().fill('Returns Concierge');
   });
 });

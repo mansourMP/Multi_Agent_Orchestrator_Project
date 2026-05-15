@@ -254,6 +254,15 @@ type TelegramConnectorOption = {
   lastErrorAt: string | null;
 };
 
+type AgentIntegrationConnectorCard = {
+  id: string;
+  label: string;
+  image: string;
+  connected: boolean;
+  statusLabel: string;
+  capabilityTags: string[];
+};
+
 type TelegramReadinessSnapshot = {
   readyForLive: boolean;
   status: string;
@@ -1565,6 +1574,30 @@ function formatDeploymentModelLabel(
   return model?.label ?? modelId ?? provider?.label ?? humanizeToken(providerId, providerId || 'Model');
 }
 
+function providerIsReadyForStudio(provider: ProviderCatalogSnapshot | null | undefined): boolean {
+  const state = readString(provider?.state).toLowerCase();
+  return ['ready', 'connected', 'active', 'configured'].includes(state);
+}
+
+function agentModelDeployBlocker(
+  agent: DeployedAgentRecord | null | undefined,
+  catalogByProvider: Record<string, ProviderCatalogSnapshot>,
+): string | null {
+  if (!agent) {
+    return null;
+  }
+  const providerId = selectedProviderId(agent);
+  const modelId = selectedModelId(agent);
+  if (!providerId || !modelId) {
+    return 'Connect a model provider before launch.';
+  }
+  const provider = catalogByProvider[providerId] ?? null;
+  if (!provider || !providerIsReadyForStudio(provider)) {
+    return 'Connect a model provider before launch.';
+  }
+  return null;
+}
+
 function normalizeWizardAiTier(value: unknown): WizardState['aiTier'] {
   const token = readString(value).toLowerCase().replace('-', '_');
   if (token === 'light' || token === 'pro' || token === 'max') {
@@ -1622,6 +1655,20 @@ function runtimeSupplierForPlacement(value: WizardState['runtimePlacement']): Wi
 function runtimePlacementLabel(value: unknown): string {
   const placement = normalizeRuntimePlacement(value);
   return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Text Agent';
+}
+
+function testRuntimeModeForPlacement(value: unknown): string {
+  const placement = normalizeRuntimePlacement(value);
+  if (placement === 'customer_hosted') {
+    return 'self_hosted_agent';
+  }
+  if (placement === 'customer_local') {
+    return 'my_computer_agent';
+  }
+  if (placement === 'hosted_hardware_pool') {
+    return 'cloud_computer_agent';
+  }
+  return 'text_agent';
 }
 
 function agentRuntimePlacement(agent: DeployedAgentRecord | null | undefined): WizardState['runtimePlacement'] {
@@ -2999,14 +3046,100 @@ function AgentActionCapabilitySections({
   );
 }
 
+function AgentIntegrationsSections({
+  providerCatalog,
+  connectorCards,
+  workspaceId,
+}: {
+  providerCatalog: ProviderCatalogSnapshot[];
+  connectorCards: AgentIntegrationConnectorCard[];
+  workspaceId: string;
+}) {
+  const connectedProviderCount = providerCatalog.filter((provider) => providerIsReadyForStudio(provider)).length;
+  return (
+    <div className="studio-agent-integrations">
+      <section className="studio-agent-integrations__section" aria-label="Model providers">
+        <div className="studio-agent-integrations__head">
+          <div>
+            <span>Model providers</span>
+            <strong>AI accounts this agent can use</strong>
+            <p>Connect API providers here. Studio agents use cloud API accounts only; personal and local routes stay with Sage.</p>
+          </div>
+          <AppButton
+            type="button"
+            tone="secondary"
+            onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}/integrations`)}
+          >
+            Open provider setup
+          </AppButton>
+        </div>
+        <div className="studio-agent-integrations__provider-grid">
+          {providerCatalog.length === 0 ? (
+            <div className="deployed-agents-overlay__empty">Connect a model provider before launch.</div>
+          ) : providerCatalog.slice(0, 8).map((provider) => {
+            const ready = providerIsReadyForStudio(provider);
+            return (
+              <article key={provider.id} className="studio-agent-integrations__provider-card">
+                <div>
+                  <strong>{provider.label}</strong>
+                  <span>{provider.models.length} model{provider.models.length === 1 ? '' : 's'} available</span>
+                </div>
+                <span className={joinClassNames('studio-agent-integrations__status', ready && 'studio-agent-integrations__status--ready')}>
+                  {ready ? 'Connected' : 'Setup required'}
+                </span>
+              </article>
+            );
+          })}
+        </div>
+        <div className="studio-agent-integrations__foot">
+          {connectedProviderCount > 0 ? `${connectedProviderCount} provider${connectedProviderCount === 1 ? '' : 's'} connected for Studio agents.` : 'Connect a model provider before launch.'}
+        </div>
+      </section>
+
+      <section className="studio-agent-integrations__section" aria-label="Channels and systems">
+        <div className="studio-agent-integrations__head">
+          <div>
+            <span>Channels and systems</span>
+            <strong>Where the agent talks and what it can access</strong>
+            <p>Use Actions for permissions. Use Integrations for accounts, channels, and external systems.</p>
+          </div>
+        </div>
+        <div className="sage-unified-grid sage-unified-grid--4">
+          {connectorCards.map((connector) => (
+            <article key={connector.id} className="sage-unified-card deployed-agents-overlay__connector-card">
+              <span className="sage-integration-brand" aria-hidden="true">
+                <img src={connector.image} alt="" className="sage-integration-brand__image" />
+              </span>
+              <strong className="sage-unified-card__title">{connector.label}</strong>
+              <span className={joinClassNames('sage-unified-card__status', connector.connected && 'sage-unified-card__status--connected')}>
+                {connector.connected ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
+                {connector.statusLabel}
+              </span>
+              <div className="sage-unified-expand__tag-row">
+                {connector.capabilityTags.map((tag) => (
+                  <span key={tag} className="sage-unified-expand__tag">{tag}</span>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AgentPlaygroundPanel({
   deployedAgentId,
   workspaceId,
   client,
+  agentName,
+  runtimeMode,
 }: {
   deployedAgentId: string;
   workspaceId: string;
   client: { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null> };
+  agentName?: string | null;
+  runtimeMode?: string;
 }) {
   return (
     <div className="studio-agent-chat">
@@ -3014,6 +3147,8 @@ function AgentPlaygroundPanel({
         deployedAgentId={deployedAgentId}
         workspaceId={workspaceId}
         client={client}
+        agentName={agentName}
+        runtimeMode={runtimeMode}
       />
     </div>
   );
@@ -3166,6 +3301,10 @@ export function WorkstationDeployedAgentsPane({
     }
     return selfHostedNodeGateReason(selectedAgentSelfHostedNode);
   }, [selectedAgentRuntimePlacement, selectedAgentSelfHostedNode, selectedAgentSelfHostedProfileId]);
+  const selectedAgentModelDeployBlocker = useMemo(
+    () => agentModelDeployBlocker(selectedAgent, providerCatalogIndex),
+    [providerCatalogIndex, selectedAgent],
+  );
   const selectedWizardConnector = useMemo(
     () => selectedTelegramReadiness?.connectors.find((item) => item.id === wizardState.telegramConnectorId) ?? null,
     [selectedTelegramReadiness, wizardState.telegramConnectorId],
@@ -4089,6 +4228,11 @@ export function WorkstationDeployedAgentsPane({
       setErrorMessage(selectedAgentSelfHostedDeployBlocker);
       return;
     }
+    if (action === 'deploy' && selectedAgentModelDeployBlocker) {
+      setOverlayTab('connectors');
+      setErrorMessage(`${selectedAgentModelDeployBlocker} Open Integrations and connect OpenRouter, OpenAI, Anthropic, Google Gemini, or another API provider.`);
+      return;
+    }
     if (
       action === 'deploy'
       && selectedAgentNeedsTelegramReadiness
@@ -4791,8 +4935,16 @@ export function WorkstationDeployedAgentsPane({
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />
                       <FormReadout label="Channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
+                      <FormReadout label="Model provider" value={selectedAgentModelDeployBlocker ? 'Needs connection' : formatDeploymentModelLabel(selectedAgent, providerCatalogIndex)} />
                       <FormReadout label="Agent mode" value={runtimePlacementLabel(readRecord(selectedAgent?.config).runtime_placement ?? readRecord(selectedAgent?.metadata).runtime_placement ?? selectedAgent?.runtime_target)} />
                     </FormGrid>
+                    {selectedAgentModelDeployBlocker ? (
+                      <StateBanner
+                        tone="warning"
+                        title="Connect a model provider before launch"
+                        detail="Open Integrations and connect OpenRouter, OpenAI, Anthropic, Google Gemini, or another API provider."
+                      />
+                    ) : null}
                     {selectedAgentRuntimePlacement === 'customer_hosted' ? (
                       <div className="app-stack-2">
                         <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
@@ -4872,6 +5024,8 @@ export function WorkstationDeployedAgentsPane({
                         deployedAgentId={readString(selectedAgent.id)}
                         workspaceId={workspaceId}
                         client={services.client}
+                        agentName={readString(selectedAgent.name, 'agent')}
+                        runtimeMode={testRuntimeModeForPlacement(selectedAgentRuntimePlacement)}
                       />
                     ) : (
                       <EmptyPanel title="Agent is not ready yet" body="Save the agent first, then test it here." />
@@ -5102,25 +5256,11 @@ export function WorkstationDeployedAgentsPane({
                     title="Agent integrations"
                     subtitle="Connect customer channels and trusted systems after the agent exists."
                   >
-                    <div className="sage-unified-grid sage-unified-grid--4">
-                      {overlayConnectorCards.map((connector) => (
-                        <article key={connector.id} className="sage-unified-card deployed-agents-overlay__connector-card">
-                          <span className="sage-integration-brand" aria-hidden="true">
-                            <img src={connector.image} alt="" className="sage-integration-brand__image" />
-                          </span>
-                          <strong className="sage-unified-card__title">{connector.label}</strong>
-                          <span className={joinClassNames('sage-unified-card__status', connector.connected && 'sage-unified-card__status--connected')}>
-                            {connector.connected ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
-                            {connector.statusLabel}
-                          </span>
-                          <div className="sage-unified-expand__tag-row">
-                            {connector.capabilityTags.map((tag) => (
-                              <span key={tag} className="sage-unified-expand__tag">{tag}</span>
-                            ))}
-                          </div>
-                        </article>
-                      ))}
-                    </div>
+                    <AgentIntegrationsSections
+                      providerCatalog={providerCatalog}
+                      connectorCards={overlayConnectorCards}
+                      workspaceId={workspaceId}
+                    />
                   </ListDetailPanel>
                 ) : null}
 
@@ -5161,6 +5301,7 @@ export function WorkstationDeployedAgentsPane({
                           || isLoadingRuntimeAttachments
                           || (selectedAgentNeedsTelegramReadiness && !selectedTelegramReadiness)
                           || (selectedAgentNeedsTelegramReadiness && selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
+                          || Boolean(selectedAgentModelDeployBlocker)
                           || Boolean(selectedAgentSelfHostedDeployBlocker)
                         }
                       >
@@ -5691,6 +5832,7 @@ export function WorkstationDeployedAgentsPane({
                               || isLoadingRuntimeAttachments
                               || (selectedAgentNeedsTelegramReadiness && !selectedTelegramReadiness)
                               || (selectedAgentNeedsTelegramReadiness && selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
+                              || Boolean(selectedAgentModelDeployBlocker)
                               || Boolean(selectedAgentSelfHostedDeployBlocker)
                             }
                           >
@@ -5825,25 +5967,11 @@ export function WorkstationDeployedAgentsPane({
 
                 {overlayTab === 'connectors' ? (
                   <div className="deployed-agents-overlay__section">
-                    <div className="sage-unified-grid sage-unified-grid--4">
-                      {overlayConnectorCards.map((connector) => (
-                        <article key={connector.id} className="sage-unified-card deployed-agents-overlay__connector-card">
-                          <span className="sage-integration-brand" aria-hidden="true">
-                            <img src={connector.image} alt="" className="sage-integration-brand__image" />
-                          </span>
-                          <strong className="sage-unified-card__title">{connector.label}</strong>
-                          <span className={joinClassNames('sage-unified-card__status', connector.connected && 'sage-unified-card__status--connected')}>
-                            {connector.connected ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
-                            {connector.statusLabel}
-                          </span>
-                          <div className="sage-unified-expand__tag-row">
-                            {connector.capabilityTags.map((tag) => (
-                              <span key={tag} className="sage-unified-expand__tag">{tag}</span>
-                            ))}
-                          </div>
-                        </article>
-                      ))}
-                    </div>
+                    <AgentIntegrationsSections
+                      providerCatalog={providerCatalog}
+                      connectorCards={overlayConnectorCards}
+                      workspaceId={workspaceId}
+                    />
                   </div>
                 ) : null}
 
@@ -6654,7 +6782,7 @@ export function WorkstationDeployedAgentsPane({
                         onClick={() => {
                           void handleDeploymentAction('deploy');
                         }}
-                        disabled={busyAgentId === readString(selectedAgent.id) || Boolean(selectedAgentSelfHostedDeployBlocker)}
+                        disabled={busyAgentId === readString(selectedAgent.id) || Boolean(selectedAgentModelDeployBlocker) || Boolean(selectedAgentSelfHostedDeployBlocker)}
                       >
                         Deploy
                       </AppButton>

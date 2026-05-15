@@ -4054,7 +4054,7 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
 }
 
 .app-chat-composer__runtime-section-title {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-tertiary);
   font-size: var(--app-font-12);
   font-weight: var(--app-weight-semibold);
   line-height: 1.2;
@@ -4073,7 +4073,7 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
   border: 0;
   border-radius: 12px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.94);
+  color: var(--text-primary);
   font: inherit;
   font-size: var(--app-font-14);
   font-weight: var(--app-weight-medium);
@@ -4099,23 +4099,24 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
 .app-chat-composer__runtime-menu-row:hover:not(:disabled),
 .app-chat-composer__runtime-menu-row:focus-visible,
 .app-chat-composer__runtime-menu-row--active {
-  background: rgba(255, 255, 255, 0.14);
+  background: color-mix(in srgb, var(--bg-hover) 78%, var(--bg-surface) 22%);
   outline: 0;
 }
 
 .app-chat-composer__runtime-menu-row:disabled {
-  color: rgba(255, 255, 255, 0.42);
+  color: var(--text-tertiary);
+  opacity: 0.58;
   cursor: default;
 }
 
 .app-chat-composer__runtime-menu-row--setup {
-  color: rgba(255, 255, 255, 0.88);
+  color: var(--text-secondary);
 }
 
 .app-chat-composer__runtime-divider {
   height: 1px;
   margin: 8px 8px;
-  background: rgba(255, 255, 255, 0.14);
+  background: color-mix(in srgb, var(--border-default) 72%, transparent);
 }
 
 .app-chat-composer__icon-button {
@@ -4548,10 +4549,10 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
 }
 
 .app-card-button--selected {
-  border-inline-start: 1px solid rgba(255, 255, 255, 0.12);
+  border-inline-start: 1px solid color-mix(in srgb, var(--app-border-strong) 70%, transparent);
   padding-inline-start: calc(var(--app-space-4) + 3px);
-  background: #202020;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--text-primary) 7%, var(--app-bg-panel) 93%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-border-default) 82%, transparent);
 }
 
 .app-card-button__title {
@@ -5138,16 +5139,16 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
 }
 
 .workstation-titlebar__link:hover {
-  background: #171717;
+  background: color-mix(in srgb, var(--text-primary) 5%, var(--app-bg-panel) 95%);
   color: var(--text-primary);
   transform: translateY(-1px);
 }
 
 .workstation-titlebar__link--active {
-  background: #202020;
+  background: color-mix(in srgb, var(--text-primary) 8%, var(--app-bg-panel) 92%);
   color: var(--text-primary);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px color-mix(in srgb, var(--border-default) 88%, transparent),
     0 10px 20px -22px color-mix(in srgb, black 24%, transparent);
 }
 
@@ -5310,9 +5311,9 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
   align-items: center;
   gap: 7px;
   padding: 0 11px;
-  border: 1px solid color-mix(in srgb, var(--app-border-muted) 82%, transparent 18%);
+  border: 1px solid color-mix(in srgb, var(--app-border-default) 88%, transparent 12%);
   border-radius: var(--app-radius-pill);
-  background: color-mix(in srgb, var(--app-bg-panel) 80%, transparent 20%);
+  background: color-mix(in srgb, var(--app-bg-panel) 92%, var(--app-bg-panel-elevated) 8%);
   color: var(--text-secondary);
   font: inherit;
   font-size: var(--app-font-12);
@@ -5387,9 +5388,9 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
   content: '';
   position: absolute;
   inset: 0;
-  border: 1px solid color-mix(in srgb, var(--app-border-muted) 82%, transparent 18%);
+  border: 1px solid color-mix(in srgb, var(--app-border-default) 88%, transparent 12%);
   border-radius: var(--app-radius-lg);
-  background: color-mix(in srgb, var(--app-bg-panel) 80%, transparent 20%);
+  background: color-mix(in srgb, var(--app-bg-panel) 92%, var(--app-bg-panel-elevated) 8%);
   transition:
     border-color var(--transition),
     background-color var(--transition),
@@ -9309,20 +9310,20 @@ body.theme-light .workstation-shell__topbar {
 }
 
 .settings-nav__item--active {
-  border-color: rgba(255, 255, 255, 0.13);
-  background: #202020;
+  border-color: color-mix(in srgb, var(--app-border-strong) 70%, transparent);
+  background: color-mix(in srgb, var(--app-text-primary) 7%, var(--app-surface-1) 93%);
   color: var(--app-text-primary);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+    inset 0 0 0 1px color-mix(in srgb, var(--app-border-default) 80%, transparent),
     0 10px 22px color-mix(in srgb, var(--app-bg-page) 88%, transparent);
 }
 
 .settings-nav__item[aria-selected='true'] {
-  border-color: rgba(255, 255, 255, 0.13);
-  background: #202020;
+  border-color: color-mix(in srgb, var(--app-border-strong) 70%, transparent);
+  background: color-mix(in srgb, var(--app-text-primary) 7%, var(--app-surface-1) 93%);
   color: var(--app-text-primary);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+    inset 0 0 0 1px color-mix(in srgb, var(--app-border-default) 80%, transparent),
     0 10px 22px color-mix(in srgb, var(--app-bg-page) 88%, transparent);
 }
 
@@ -10913,16 +10914,16 @@ body.theme-light .workstation-shell__topbar {
 
 .app-memory-document-nav .settings-nav__item:hover,
 .app-memory-document-nav .settings-nav__item:focus-visible {
-  border-color: rgba(255, 255, 255, 0.1);
-  background: #171717;
+  border-color: color-mix(in srgb, var(--app-border-default) 76%, transparent);
+  background: color-mix(in srgb, var(--app-text-primary) 5%, var(--app-surface-1) 95%);
   box-shadow: none;
   transform: none;
 }
 
 .app-memory-document-nav .settings-nav__item--active,
 .app-memory-document-nav .settings-nav__item[aria-selected='true'] {
-  border-color: #3a3a3a !important;
-  background: #202020 !important;
+  border-color: color-mix(in srgb, var(--app-border-strong) 82%, transparent) !important;
+  background: color-mix(in srgb, var(--app-text-primary) 7%, var(--app-surface-1) 93%) !important;
   box-shadow: none;
   transform: none;
 }

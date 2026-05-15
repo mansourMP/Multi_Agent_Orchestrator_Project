@@ -2277,6 +2277,7 @@ body[data-emp-theme='dark'] .app-textarea:focus {
   position: relative;
   display: flex;
   align-items: center;
+  color-scheme: light;
 }
 
 .app-auth-input-shell__icon {
@@ -2344,6 +2345,54 @@ body[data-emp-theme='dark'] .app-textarea:focus {
     0 0 0 1000px #ffffff inset,
     inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
   transition: background-color 9999s ease-out;
+}
+
+:root[data-emp-theme='light'] .app-auth-input-shell,
+body[data-emp-theme='light'] .app-auth-input-shell,
+body.theme-light .app-auth-input-shell {
+  color-scheme: light !important;
+  border-radius: var(--app-radius-pill);
+  background: #ffffff !important;
+}
+
+:root[data-emp-theme='light'] input.app-auth-input,
+body[data-emp-theme='light'] input.app-auth-input,
+body.theme-light input.app-auth-input,
+:root[data-emp-theme='light'] input.app-auth-input:hover,
+body[data-emp-theme='light'] input.app-auth-input:hover,
+body.theme-light input.app-auth-input:hover,
+:root[data-emp-theme='light'] input.app-auth-input:focus,
+body[data-emp-theme='light'] input.app-auth-input:focus,
+body.theme-light input.app-auth-input:focus,
+:root[data-emp-theme='light'] input.app-auth-input:focus-visible,
+body[data-emp-theme='light'] input.app-auth-input:focus-visible,
+body.theme-light input.app-auth-input:focus-visible,
+:root[data-emp-theme='light'] input.app-auth-input:active,
+body[data-emp-theme='light'] input.app-auth-input:active,
+body.theme-light input.app-auth-input:active,
+:root[data-emp-theme='light'] input.app-auth-input:-webkit-autofill,
+body[data-emp-theme='light'] input.app-auth-input:-webkit-autofill,
+body.theme-light input.app-auth-input:-webkit-autofill,
+:root[data-emp-theme='light'] input.app-auth-input:-webkit-autofill:hover,
+body[data-emp-theme='light'] input.app-auth-input:-webkit-autofill:hover,
+body.theme-light input.app-auth-input:-webkit-autofill:hover,
+:root[data-emp-theme='light'] input.app-auth-input:-webkit-autofill:focus,
+body[data-emp-theme='light'] input.app-auth-input:-webkit-autofill:focus,
+body.theme-light input.app-auth-input:-webkit-autofill:focus {
+  border-color: #d7dce3 !important;
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  background-image: none !important;
+  color: #1e2024 !important;
+  -webkit-text-fill-color: #1e2024 !important;
+  caret-color: #202020 !important;
+  color-scheme: light !important;
+  box-shadow:
+    0 0 0 1000px #ffffff inset,
+    inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
+  -webkit-box-shadow:
+    0 0 0 1000px #ffffff inset,
+    inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
 }
 
 .app-auth-submit {

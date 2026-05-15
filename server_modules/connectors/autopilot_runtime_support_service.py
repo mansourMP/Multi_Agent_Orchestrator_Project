@@ -181,9 +181,18 @@ class AutopilotRuntimeSupportService:
         return text
 
     def summarize_run_terminal_result(self, run: Dict[str, Any], summary_limit: int) -> str:
-        summary = str(run.get("result") or "").strip()
+        summary = (
+            str(run.get("result") or "").strip()
+            or str(run.get("result_summary") or "").strip()
+        )
         if not summary and isinstance(run.get("result_data"), dict):
-            summary = self.truncate_one_line(json.dumps(run.get("result_data")), summary_limit)
+            result_data = run.get("result_data") or {}
+            for key in ("reply", "summary", "result", "text"):
+                summary = str(result_data.get(key) or "").strip()
+                if summary:
+                    break
+            if not summary:
+                summary = self.truncate_one_line(json.dumps(result_data), summary_limit)
         if not summary:
             latest_error = self.latest_run_error_message(run)
             if latest_error:

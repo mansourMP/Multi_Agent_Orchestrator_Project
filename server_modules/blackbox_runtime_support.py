@@ -404,6 +404,37 @@ class BlackboxHarness:
         assert response.status_code == 200, response.text
         return response.json()
 
+    def pause_deployed_agent(self, *, owner: Dict[str, Any], deployed_agent_id: str) -> Dict[str, Any]:
+        response = self.client.post(
+            f"/api/deployed-agents/{deployed_agent_id}/pause",
+            headers=owner["headers"],
+            json={"workspace_id": owner["workspace_id"]},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def test_deployed_agent_turn(
+        self,
+        *,
+        owner: Dict[str, Any],
+        deployed_agent_id: str,
+        message: str,
+        channel: str = "test",
+        runtime_mode: str = "text_agent",
+    ) -> Dict[str, Any]:
+        response = self.client.post(
+            f"/api/deployed-agents/{deployed_agent_id}/test-turn",
+            headers=owner["headers"],
+            json={
+                "workspace_id": owner["workspace_id"],
+                "message": message,
+                "channel": channel,
+                "runtime_mode": runtime_mode,
+            },
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
     def seed_live_deployed_agent(
         self,
         *,
@@ -893,6 +924,35 @@ class BlackboxHarness:
                 thread_id=thread_id,
                 run_id=run_id,
                 limit=200,
+            )
+        )
+
+    def summarize_deployed_agent_monthly_cost(
+        self,
+        *,
+        owner: Dict[str, Any],
+        deployed_agent_id: str,
+    ) -> Dict[str, Any]:
+        return self._run(
+            self.control_plane_repository.summarize_deployed_agent_monthly_cost_ledger(
+                tenant_id=owner["tenant_id"],
+                workspace_id=owner["workspace_id"],
+                deployed_agent_id=deployed_agent_id,
+            )
+        )
+
+    def list_deployed_agent_memory(
+        self,
+        *,
+        owner: Dict[str, Any],
+        deployed_agent_id: str,
+    ) -> List[Dict[str, Any]]:
+        return self._run(
+            self.control_plane_repository.list_deployed_agent_conversation_memory(
+                tenant_id=owner["tenant_id"],
+                workspace_id=owner["workspace_id"],
+                deployed_agent_id=deployed_agent_id,
+                limit=50,
             )
         )
 

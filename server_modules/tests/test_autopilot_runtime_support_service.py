@@ -64,6 +64,17 @@ class AutopilotRuntimeSupportServiceTests(unittest.TestCase):
         summary = service.summarize_run_terminal_result(run, 120)
         self.assertIn("Missing required scope", summary)
 
+    def test_summarize_run_terminal_result_uses_durable_result_summary(self) -> None:
+        service = self._make_service(truncate_one_line=lambda text, limit: str(text or "").strip()[:limit])
+
+        summary = service.summarize_run_terminal_result(
+            {"status": "completed", "result_summary": "Blackbox durable reply: customer-facing answer"},
+            120,
+        )
+
+        self.assertIn("customer-facing answer", summary)
+        self.assertNotEqual(summary, "Run finished.")
+
     def test_humanize_telegram_run_summary(self) -> None:
         service = self._make_service()
         self.assertIn("offline", service.humanize_telegram_run_summary("Gateway is offline right now."))

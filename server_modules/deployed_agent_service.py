@@ -1899,6 +1899,20 @@ def _apply_workspace_admin_defaults_to_config(
     ):
         safety_policy["health_safety_enabled"] = bool(workspace_defaults.health_safety_enabled)
     payload["safety_policy"] = safety_policy
+
+    commerce_policy = dict(payload.get("commerce_policy") or {})
+    if (
+        not _config_field_present(config_payload, "commerce_policy", "monthly_cost_cap_usd")
+        and "monthly_cost_cap_usd" not in owner_metadata
+        and not commerce_policy.get("monthly_cost_cap_usd")
+        and float(workspace_defaults.hosted_sage_ai_monthly_cap_usd or 0.0) > 0
+    ):
+        automation_policy = dict(payload.get("computer_automation") or {})
+        commerce_policy["monthly_cost_cap_usd"] = max(
+            float(workspace_defaults.hosted_sage_ai_monthly_cap_usd),
+            float(automation_policy.get("monthly_budget_usd") or 0.0),
+        )
+    payload["commerce_policy"] = commerce_policy
     return deployed_agent_config_schema.DeployedAgentConfig.model_validate(payload)
 
 
@@ -2725,7 +2739,7 @@ def validate_state_transition(current_state: Any, next_state: Any) -> str:
     resolved_current = _normalize_deployment_state(current_state)
     resolved_next = _normalize_deployment_state(next_state)
     allowed_transitions = {
-        "draft": {"draft", "private_test", "ready_for_review", "archived"},
+        "draft": {"draft", "private_test", "ready_for_review", "live", "archived"},
         "private_test": {"private_test", "ready_for_review", "paused", "archived"},
         "ready_for_review": {"ready_for_review", "private_test", "live", "paused", "archived"},
         "live": {"live", "paused", "suspended", "archived"},

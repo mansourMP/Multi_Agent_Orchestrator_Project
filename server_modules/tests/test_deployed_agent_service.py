@@ -1610,6 +1610,12 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             "live",
         )
 
+    def test_validate_state_transition_allows_draft_to_live(self) -> None:
+        self.assertEqual(
+            deployed_agent_service.validate_state_transition("draft", "live"),
+            "live",
+        )
+
     def test_validate_can_deploy_requires_customer_live_backing_install(self) -> None:
         with self.assertRaises(ValueError) as error:
             deployed_agent_service.validate_can_deploy(

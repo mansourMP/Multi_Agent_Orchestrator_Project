@@ -15,7 +15,6 @@ import os
 import logging
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
-from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from contextlib import asynccontextmanager
 import uvicorn
 
@@ -24,9 +23,21 @@ from server_modules.logging_config import configure_logging
 
 configure_logging()
 
+try:
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+except Exception:  # pragma: no cover - optional dependency guard
+    SqlalchemyIntegration = None  # type: ignore[assignment]
+
+sentry_integrations = [FastApiIntegration()]
+if SqlalchemyIntegration is not None:
+    try:
+        sentry_integrations.append(SqlalchemyIntegration())
+    except Exception:
+        logging.getLogger(__name__).debug("SQLAlchemy Sentry integration is unavailable.", exc_info=True)
+
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN", ""),
-    integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+    integrations=sentry_integrations,
     traces_sample_rate=0.1,
     environment=os.environ.get("ORION_ENV", "development"),
     before_send=lambda event, hint: event if os.environ.get("SENTRY_DSN") else None,

@@ -1308,6 +1308,8 @@ async def ensure_runtime_session_binding(
     mode = _text(
         deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent).studio_agent_mode
     ).lower()
+    if mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_TEXT:
+        return None
     if mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED:
         return await ensure_self_hosted_runtime_session_binding(
             deployed_agent_id=deployed_agent_id,

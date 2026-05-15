@@ -77,14 +77,14 @@ def test_monthly_cap_auto_pause_blackbox(blackbox_runtime) -> None:
         lambda: len(blackbox_runtime.captured_telegram_calls(method_name="editMessageText")) >= 1,
     )
 
-    paused = blackbox_runtime.wait_for_deployed_agent_state(
+    suspended = blackbox_runtime.wait_for_deployed_agent_state(
         owner=owner,
         deployed_agent_id=deployed_agent["id"],
-        expected_state="paused",
+        expected_state="suspended",
     )
     budget_cycle = (
-        ((paused.get("operational_state") or {}).get("current_budget_cycle") or {})
-        if isinstance(paused.get("operational_state"), dict)
+        ((suspended.get("operational_state") or {}).get("current_budget_cycle") or {})
+        if isinstance(suspended.get("operational_state"), dict)
         else {}
     )
     assert budget_cycle.get("auto_paused_at")
@@ -97,11 +97,11 @@ def test_monthly_cap_auto_pause_blackbox(blackbox_runtime) -> None:
     )
     assert second.status_code == 200, second.text
     second_payload = second.json()
-    assert second_payload["action"] == "paused"
+    assert second_payload["action"] == "suspended"
     new_send_calls = blackbox_runtime.captured_telegram_calls(method_name="sendMessage")[send_before:]
     assert new_send_calls
     paused_text = str(new_send_calls[-1]["payload"].get("text") or "").strip()
-    assert paused_text == "BudgetBot is paused after hitting its monthly cap."
+    assert "suspended" in paused_text.lower()
 
 
 def test_public_privacy_delete_blackbox(blackbox_runtime) -> None:

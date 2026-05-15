@@ -150,6 +150,24 @@ class AutopilotConnectorShellService:
     def _g(self, name: str, default: Any = None) -> Any:
         return self.global_namespace.get(name, default)
 
+    def runs_get(self, run_id: Any) -> Optional[Dict[str, Any]]:
+        resolved_run_id = str(run_id or "").strip()
+        if not resolved_run_id:
+            return None
+        runs = self._g("runs")
+        if isinstance(runs, dict) and isinstance(runs.get(resolved_run_id), dict):
+            return runs.get(resolved_run_id)
+        try:
+            from server_modules import run_state_repository
+
+            live = run_state_repository.sync_get_live_run(resolved_run_id)
+            if isinstance(live, dict):
+                return live
+            archived = run_state_repository.sync_get_archived_run(resolved_run_id)
+            return archived if isinstance(archived, dict) else None
+        except Exception:
+            return None
+
     def _telegram_lock(self) -> Any:
         return self._g("TELEGRAM_AUTOPILOT_LOCK") or threading.Lock()
 
@@ -217,7 +235,7 @@ class AutopilotConnectorShellService:
                 mark_telegram_started=lambda started_at: self.runtime_facade_service().mark_telegram_autopilot_started(started_at),
                 resolve_vault_credential=self.resolve_vault_credential,
                 safe_path_token=lambda value: self.compatibility_bridge_service().safe_path_token(value),
-                runs_get=lambda run_id: self._g("runs").get(run_id) if isinstance(self._g("runs"), dict) else None,
+                runs_get=self.runs_get,
                 telegram_space_question_via_mcp=self.telegram_space_question_via_mcp,
                 helper_profile_state_file=self.telegram_profile_state_file,
                 helper_onboarding_state_file=self.telegram_onboarding_state_file,

@@ -221,7 +221,7 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
     def test_resolve_provider_model_selection_defaults_model_for_provider(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(provider="openai", model=None)
 
-        self.assertEqual(selection, {"provider": "openai", "model": "gpt-5.2"})
+        self.assertEqual(selection, {"provider": "openai", "model": "gpt-5.4"})
 
     def test_resolve_provider_model_selection_defaults_to_gemini_25_flash(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(provider="gemini", model=None)
@@ -231,7 +231,21 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
     def test_resolve_provider_model_selection_defaults_to_live_anthropic_model(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(provider="anthropic", model=None)
 
-        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-sonnet-4-20250514"})
+        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-sonnet-4-6"})
+
+    def test_static_fallback_catalog_includes_current_frontier_models(self) -> None:
+        openai_models = {item["id"]: item for item in provider_catalog_service.provider_profiles.provider_model_catalog("openai")}
+        anthropic_models = {item["id"]: item for item in provider_catalog_service.provider_profiles.provider_model_catalog("anthropic")}
+        gemini_models = {item["id"]: item for item in provider_catalog_service.provider_profiles.provider_model_catalog("gemini")}
+
+        self.assertIn("gpt-5.5", openai_models)
+        self.assertIn("gpt-5.4", openai_models)
+        self.assertEqual(openai_models["gpt-5.5"]["context_window_tokens"], 1050000)
+        self.assertIn("claude-opus-4-7", anthropic_models)
+        self.assertIn("claude-sonnet-4-6", anthropic_models)
+        self.assertEqual(anthropic_models["claude-sonnet-4-6"]["context_window_tokens"], 1000000)
+        self.assertIn("gemini-3-pro-preview", gemini_models)
+        self.assertIn("gemini-3-flash-preview", gemini_models)
 
     def test_resolve_provider_model_selection_normalizes_prefixed_model_ids(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(

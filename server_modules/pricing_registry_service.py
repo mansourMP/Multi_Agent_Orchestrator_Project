@@ -60,6 +60,11 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
         "sonnet": {"input": None, "output": None, "source": "subscription_cli"},
     },
     "openai": {
+        "gpt-5.5": {"input": 5.00, "output": 30.00, "source": "https://developers.openai.com/api/docs/models"},
+        "gpt-5.5-pro": {"input": 30.00, "output": 180.00, "source": "https://openai.com/index/introducing-gpt-5-5/"},
+        "gpt-5.4": {"input": 2.50, "output": 15.00, "source": "https://developers.openai.com/api/docs/models/gpt-5.4/"},
+        "gpt-5.4-mini": {"input": 0.75, "output": 4.50, "source": "https://developers.openai.com/api/docs/models"},
+        "gpt-5.4-nano": {"input": 0.20, "output": 1.25, "source": "https://developers.openai.com/api/docs/models/gpt-5.4-nano/"},
         "gpt-5.2": {"input": 1.75, "output": 14.00, "source": "https://platform.openai.com/docs/pricing"},
         "gpt-5.1": {"input": 1.25, "output": 10.00, "source": "https://platform.openai.com/docs/pricing"},
         "gpt-5": {"input": 1.25, "output": 10.00, "source": "https://platform.openai.com/docs/pricing"},
@@ -73,6 +78,9 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
         "gpt-4o-mini": {"input": 0.15, "output": 0.60, "source": "https://platform.openai.com/pricing"},
     },
     "anthropic": {
+        "claude-opus-4-7": {"input": 5.00, "output": 25.00, "source": "https://platform.claude.com/docs/en/about-claude/models/overview"},
+        "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "source": "https://platform.claude.com/docs/en/about-claude/models/overview"},
+        "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00, "source": "https://platform.claude.com/docs/en/about-claude/models/overview"},
         "claude-opus-4-1-20250805": {"input": 15.00, "output": 75.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
         "claude-opus-4-20250514": {"input": 15.00, "output": 75.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
         "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
@@ -84,6 +92,9 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
         "claude-3-7-sonnet-latest": {"input": 3.00, "output": 15.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
     },
     "gemini": {
+        "gemini-3-pro-preview": {"input": None, "output": None, "source": "https://ai.google.dev/gemini-api/docs/models"},
+        "gemini-3-flash-preview": {"input": None, "output": None, "source": "https://ai.google.dev/gemini-api/docs/models"},
+        "gemini-2.5-flash-lite": {"input": None, "output": None, "source": "https://ai.google.dev/gemini-api/docs/models"},
         "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "source": "https://ai.google.dev/gemini-api/docs/pricing"},
         "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "source": "https://ai.google.dev/gemini-api/docs/pricing"},
         "gemini-1.5-flash": {"input": 0.10, "output": 0.30, "source": "https://ai.google.dev/gemini-api/docs/pricing"},
@@ -92,6 +103,9 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
         "gemini-2.0-flash-001": {"input": 0.10, "output": 0.40, "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     },
     "vertex": {
+        "gemini-3-pro-preview": {"input": None, "output": None, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
+        "gemini-3-flash-preview": {"input": None, "output": None, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
+        "gemini-2.5-flash-lite": {"input": None, "output": None, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
         "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
         "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
         "gemini-1.5-pro": {"input": 1.25, "output": 5.00, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
@@ -134,6 +148,11 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
         "mistral-small-latest": {"input": 0.10, "output": 0.30, "source": "https://docs.mistral.ai/models/mistral-small-3-2-25-06"},
         "mistral-medium-latest": {"input": 0.40, "output": 2.00, "source": "https://docs.mistral.ai/models/mistral-medium-3-1-25-08"},
         "mistral-large-latest": {"input": 0.50, "output": 1.50, "source": "https://docs.mistral.ai/models/mistral-large-3-25-12"},
+    },
+    "xai": {
+        "grok-4-0709": {"input": 3.00, "output": 15.00, "source": "https://docs.x.ai/docs/models/grok-4"},
+        "grok-4": {"input": 3.00, "output": 15.00, "source": "https://docs.x.ai/docs/models/grok-4"},
+        "grok-4-latest": {"input": 3.00, "output": 15.00, "source": "https://docs.x.ai/docs/models/grok-4"},
     },
     "local_companion": {
         "local-worker-v0": {"input": None, "output": None, "source": "local_runtime"},

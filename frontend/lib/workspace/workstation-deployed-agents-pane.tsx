@@ -2770,8 +2770,10 @@ function AgentAiSettingsSections({
       }
       return `${left.provider.label} ${left.model.label}`.localeCompare(`${right.provider.label} ${right.model.label}`);
     });
-  const recommendedOptions = filteredModelOptions.slice(0, 6);
+  const visibleModelOptions = filteredModelOptions.slice(0, 18);
   const liveModelCount = providerCatalog.reduce((total, provider) => total + provider.models.length, 0);
+  const liveProviderCount = providerCatalog.filter((provider) => provider.modelsSource === 'workspace_cached_models').length;
+  const catalogModeLabel = liveProviderCount > 0 ? 'Live catalog' : 'Fallback catalog';
   const sourceLabel = selectedProvider?.modelsSource === 'workspace_cached_models'
     ? 'Live catalog'
     : selectedProvider?.modelsSource === 'static_catalog'
@@ -2787,11 +2789,11 @@ function AgentAiSettingsSections({
         <div>
           <span>Model setup</span>
           <strong>{selectedModel?.label ?? selectedTier.label} · {selectedProvider?.label ?? 'Connect provider'}</strong>
-          <p>Connect a provider in Integrations, then choose the default model this customer-facing agent should use.</p>
+          <p>Connect a provider in Integrations to fetch the live model list. The fallback catalog keeps setup usable before a key is connected.</p>
         </div>
         <div className="studio-ai-settings__badges" aria-label="Model setup constraints">
-          <span>{liveModelCount} models</span>
-          <span>{sourceLabel}</span>
+          <span>{liveProviderCount > 0 ? `${liveModelCount} models` : `${liveModelCount} fallback models`}</span>
+          <span>{catalogModeLabel}</span>
         </div>
       </div>
 
@@ -2827,7 +2829,7 @@ function AgentAiSettingsSections({
             <strong>Default model for this agent</strong>
           </div>
           <div className="studio-actions__section-head-actions">
-            <small>{providerCatalog.length} provider{providerCatalog.length === 1 ? '' : 's'} · {liveModelCount} model{liveModelCount === 1 ? '' : 's'}</small>
+            <small>{providerCatalog.length} provider{providerCatalog.length === 1 ? '' : 's'} · {filteredModelOptions.length} visible model{filteredModelOptions.length === 1 ? '' : 's'}</small>
             {activeProvider && onRefreshProviderModels ? (
               <button type="button" className="studio-actions__link-button" onClick={() => onRefreshProviderModels(activeProvider.id)}>
                 <RefreshCw aria-hidden="true" />
@@ -2862,7 +2864,7 @@ function AgentAiSettingsSections({
                 }}
               >
                 <strong>{provider.label}</strong>
-                <span>{provider.models.length} model{provider.models.length === 1 ? '' : 's'}</span>
+                <span>{provider.models.length} model{provider.models.length === 1 ? '' : 's'} · {provider.modelsSource === 'workspace_cached_models' ? 'live' : 'fallback'}</span>
               </button>
             ))}
           </div>
@@ -2875,7 +2877,7 @@ function AgentAiSettingsSections({
             />
           </FormField>
           <div className="studio-ai-settings__model-grid" aria-label="Model choices">
-            {recommendedOptions.length > 0 ? recommendedOptions.map(({ provider, model }) => {
+            {visibleModelOptions.length > 0 ? visibleModelOptions.map(({ provider, model }) => {
               const selected = provider.id === value.providerId && model.id === value.modelId;
               const tags = [
                 model.supportsReasoning ? 'Reasoning' : null,
@@ -2907,6 +2909,13 @@ function AgentAiSettingsSections({
               />
             )}
           </div>
+          <p className="studio-ai-settings__catalog-foot">
+            {filteredModelOptions.length > visibleModelOptions.length
+              ? `Showing the strongest ${visibleModelOptions.length} matches. Search by provider, model, or capability to narrow the full catalog.`
+              : liveProviderCount > 0
+                ? 'Live models are synced from connected provider accounts.'
+                : 'Connect OpenRouter for the broad marketplace catalog, or connect a direct provider for its live model list.'}
+          </p>
           {selectedProvider ? (
             <FormField label="Manual model ID" hint="Use this when the provider supports a model that did not appear in discovery yet.">
               <FormInput

@@ -6710,6 +6710,13 @@ body.theme-light .workstation-shell__topbar {
   line-height: 1.4;
 }
 
+.studio-ai-settings__catalog-foot {
+  margin: calc(var(--app-space-2) * -1) 0 0;
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-13);
+  line-height: 1.45;
+}
+
 .studio-agent-integrations {
   display: grid;
   gap: var(--app-space-4);
@@ -7647,6 +7654,8 @@ body.theme-light .workstation-shell__topbar {
 
 .app-studio-shell--agents .studio-agent-overview,
 .app-studio-shell--agents .studio-agent-knowledge,
+.app-studio-shell--agents .studio-ai-settings,
+.app-studio-shell--agents .studio-actions,
 .app-studio-shell--agents .studio-agent-memory-settings {
   display: grid;
   gap: var(--app-space-4);

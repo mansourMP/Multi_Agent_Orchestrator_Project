@@ -210,7 +210,7 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
     def test_resolve_provider_model_selection_defaults_model_for_provider(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(provider="openai", model=None)
 
-        self.assertEqual(selection, {"provider": "openai", "model": "gpt-4o"})
+        self.assertEqual(selection, {"provider": "openai", "model": "gpt-5.2"})
 
     def test_resolve_provider_model_selection_defaults_to_gemini_25_flash(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(provider="gemini", model=None)
@@ -220,7 +220,7 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
     def test_resolve_provider_model_selection_defaults_to_live_anthropic_model(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(provider="anthropic", model=None)
 
-        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-3-5-haiku-20241022"})
+        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-sonnet-4-20250514"})
 
     def test_resolve_provider_model_selection_normalizes_prefixed_model_ids(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(

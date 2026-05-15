@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { AgentTransparencyTimeline } from "@/lib/workspace/transparency-timeline";
+import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
+import { ArrowUp, Loader2 } from "lucide-react";
+import { joinClassNames } from "@/lib/ui/primitives";
 
 const CHANNELS: ReadonlyArray<{ value: string; label: string; disabled?: boolean }> = [
   { value: "test", label: "Test (No customer send)" },
@@ -29,6 +31,14 @@ interface TestTurnResult {
   transparency_events?: Array<Record<string, unknown>>;
 }
 
+type ChatTurn = {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+  tone?: "normal" | "loading" | "error";
+  result?: TestTurnResult | null;
+};
+
 export function DeployedAgentTestTurnPane({
   deployedAgentId,
   workspaceId,
@@ -42,20 +52,35 @@ export function DeployedAgentTestTurnPane({
   const [channel, setChannel] = useState<string>("test");
   const [runtimeMode, setRuntimeMode] = useState<string>("text_agent");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<TestTurnResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const threadRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (!thread) {
+      return;
+    }
+    thread.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
+  }, [turns]);
 
   const handleRun = async () => {
-    if (!message.trim()) return;
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || loading) return;
+    const turnId = `${Date.now()}`;
+    const responseTurnId = `${turnId}-agent`;
     setLoading(true);
-    setError(null);
-    setResult(null);
+    setMessage("");
+    setTurns((current) => [
+      ...current,
+      { id: `${turnId}-user`, role: "user", content: trimmedMessage },
+      { id: responseTurnId, role: "agent", content: "Thinking...", tone: "loading" },
+    ]);
     try {
       const res = await client.testTurnDeployedAgent({
         deployedAgentId,
         body: {
           workspace_id: workspaceId,
-          message: message.trim(),
+          message: trimmedMessage,
           channel,
           runtime_mode: runtimeMode,
         },
@@ -63,117 +88,115 @@ export function DeployedAgentTestTurnPane({
       if (!res) {
         throw new Error("Test turn returned an empty response");
       }
-      setResult(res as unknown as TestTurnResult);
+      const result = res as unknown as TestTurnResult;
+      setTurns((current) => current.map((turn) => (
+        turn.id === responseTurnId
+          ? { ...turn, content: result.reply || "No reply returned.", tone: "normal", result }
+          : turn
+      )));
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Test turn failed");
+      const errorMessage = err instanceof Error ? err.message : "Test turn failed";
+      setTurns((current) => current.map((turn) => (
+        turn.id === responseTurnId
+          ? { ...turn, content: errorMessage, tone: "error" }
+          : turn
+      )));
     } finally {
       setLoading(false);
     }
   };
 
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    void handleRun();
+  };
+
   return (
-    <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Test Playground</h3>
+    <div className="deployed-agent-chat">
+      <div ref={threadRef} className="deployed-agent-chat__thread" aria-live="polite">
+        {turns.length === 0 ? (
+          <div className="deployed-agent-chat__empty">
+            <strong>Start testing this agent</strong>
+            <span>Ask it the same way a customer would. Nothing here is sent to a live channel.</span>
+          </div>
+        ) : null}
 
-      <textarea
-        value={message}
-        onChange={(e) => setMessage(e.target.value)}
-        placeholder="Enter a test message..."
-        rows={3}
-        style={{ width: "100%", padding: 8, fontSize: 13, borderRadius: 6, border: "1px solid var(--border)", marginBottom: 8 }}
-      />
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        <select value={channel} onChange={(e) => setChannel(e.target.value)} style={selectStyle}>
-          {CHANNELS.map((c) => (
-            <option key={c.value} value={c.value} disabled={Boolean(c.disabled)}>{c.label}</option>
-          ))}
-        </select>
-        <select value={runtimeMode} onChange={(e) => setRuntimeMode(e.target.value)} style={selectStyle}>
-          {RUNTIME_MODES.map((m) => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
+        {turns.map((turn) => (
+          <article
+            key={turn.id}
+            className={joinClassNames(
+              "deployed-agent-chat__message",
+              turn.role === "user" ? "deployed-agent-chat__message--user" : "deployed-agent-chat__message--agent",
+              turn.tone === "error" && "deployed-agent-chat__message--error",
+              turn.tone === "loading" && "deployed-agent-chat__message--loading",
+            )}
+          >
+            <div className="deployed-agent-chat__bubble">
+              {turn.tone === "loading" ? <Loader2 className="deployed-agent-chat__loader" aria-hidden="true" /> : null}
+              <p>{turn.content}</p>
+            </div>
+            {turn.result ? <RunMeta result={turn.result} /> : null}
+          </article>
+        ))}
       </div>
 
-      <button
-        onClick={handleRun}
-        disabled={loading || !message.trim()}
-        style={{
-          padding: "6px 16px", fontSize: 13, borderRadius: 6,
-          background: loading ? "var(--muted)" : "var(--primary)",
-          color: "#fff", border: "none", cursor: loading ? "default" : "pointer",
-          marginBottom: 12,
-        }}
-      >
-        {loading ? "Running..." : "Run Test Turn"}
-      </button>
-
-      {error && (
-        <div style={{ padding: 8, background: "#fff0f0", borderRadius: 6, marginBottom: 8, fontSize: 12, color: "#c00" }}>
-          {error}
+      <div className="deployed-agent-chat__composer">
+        <textarea
+          className="deployed-agent-chat__input"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={handleComposerKeyDown}
+          placeholder="Message this agent..."
+          rows={2}
+        />
+        <div className="deployed-agent-chat__toolbar" aria-label="Private test controls">
+          <div className="deployed-agent-chat__controls">
+            <label className="deployed-agent-chat__select-shell">
+              <span>Channel</span>
+              <select aria-label="Test channel" value={channel} onChange={(e) => setChannel(e.target.value)}>
+                {CHANNELS.map((c) => (
+                  <option key={c.value} value={c.value} disabled={Boolean(c.disabled)}>{c.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="deployed-agent-chat__select-shell">
+              <span>Agent type</span>
+              <select aria-label="Agent type" value={runtimeMode} onChange={(e) => setRuntimeMode(e.target.value)}>
+                {RUNTIME_MODES.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <button
+            className="deployed-agent-chat__send"
+            type="button"
+            onClick={handleRun}
+            disabled={loading || !message.trim()}
+            aria-label={loading ? "Sending private test message" : "Send private test message"}
+          >
+            {loading ? <Loader2 aria-hidden="true" /> : <ArrowUp aria-hidden="true" />}
+          </button>
         </div>
-      )}
-
-      {result && (
-        <div style={{ fontSize: 12 }}>
-          <Section label="Reply" content={result.reply} />
-          <Section label="Trace ID" content={result.trace_id} />
-          <Section label="Approval Required" content={result.approval_required ? "Yes" : "No"} />
-          {result.tools_considered.length > 0 && (
-            <Section label="Tools Considered">
-              <pre style={preStyle}>{JSON.stringify(result.tools_considered, null, 2)}</pre>
-            </Section>
-          )}
-          {result.tools_used.length > 0 && (
-            <Section label="Tools Used" content={result.tools_used.join(", ")} />
-          )}
-          {result.policy_decisions.length > 0 && (
-            <Section label="Policy Decisions">
-              <pre style={preStyle}>{JSON.stringify(result.policy_decisions, null, 2)}</pre>
-            </Section>
-          )}
-          <Section label="Memory Context">
-            <pre style={preStyle}>{JSON.stringify(result.memory_context, null, 2)}</pre>
-          </Section>
-          {result.audit_events.length > 0 && (
-            <Section label="Audit Events">
-              <pre style={preStyle}>{JSON.stringify(result.audit_events, null, 2)}</pre>
-            </Section>
-          )}
-          {result.transparency_events && result.transparency_events.length > 0 && (
-            <Section label="Activity Timeline">
-              <AgentTransparencyTimeline
-                events={result.transparency_events as Array<{
-                  event_id?: string; trace_id?: string; event_type: string;
-                  title: string; summary?: string; status?: string;
-                  timestamp?: string; tool_name?: string; channel?: string;
-                }>}
-                expanded={true}
-              />
-            </Section>
-          )}
-        </div>
-      )}
+      </div>
     </div>
   );
 }
 
-function Section({ label, content, children }: { label: string; content?: string; children?: React.ReactNode }) {
+function RunMeta({ result }: { result: TestTurnResult }) {
+  const toolsUsed = Array.isArray(result.tools_used) ? result.tools_used : [];
+  const traceId = typeof result.trace_id === "string" ? result.trace_id : "";
+  const memoryApplied = result.memory_context && Object.keys(result.memory_context).length > 0;
+
   return (
-    <div style={{ marginBottom: 6 }}>
-      <strong style={{ color: "var(--muted-foreground)" }}>{label}:</strong>{" "}
-      {content !== undefined ? <span>{content}</span> : children}
+    <div className="deployed-agent-chat__meta" aria-label="Private test result">
+      <span>{result.approval_required ? "Needs approval" : "No approval needed"}</span>
+      <span>{toolsUsed.length > 0 ? `${toolsUsed.length} tool${toolsUsed.length === 1 ? "" : "s"} used` : "No tools used"}</span>
+      <span>{memoryApplied ? "Memory checked" : "Memory off for test"}</span>
+      {traceId ? <span title={traceId}>Trace {traceId.slice(0, 8)}</span> : null}
     </div>
   );
 }
-
-const selectStyle: React.CSSProperties = {
-  padding: "4px 8px", fontSize: 12, borderRadius: 4,
-  border: "1px solid var(--border)", background: "var(--background)",
-};
-
-const preStyle: React.CSSProperties = {
-  margin: 0, padding: "4px 8px", background: "var(--muted)", borderRadius: 4,
-  fontSize: 11, overflow: "auto", maxHeight: 120,
-};

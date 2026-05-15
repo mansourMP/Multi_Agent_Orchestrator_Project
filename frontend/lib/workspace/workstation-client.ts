@@ -1582,6 +1582,13 @@ const PROVIDER_READ_REQUEST_POLICY: WorkstationRequestPolicy = {
   refreshSessionOn401: true,
 };
 
+const AGENT_STUDIO_READ_REQUEST_POLICY: WorkstationRequestPolicy = {
+  timeoutMs: 25_000,
+  retryCount: 2,
+  retryOnStatuses: [408, 425, 500, 502, 503, 504],
+  refreshSessionOn401: true,
+};
+
 const WRITE_REQUEST_POLICY: WorkstationRequestPolicy = {
   timeoutMs: 15_000,
   retryCount: 0,
@@ -2767,7 +2774,7 @@ export function createWorkstationClient(
     listDeployedAgents: ({ deploymentState = null } = {}) =>
       requestJson<Record<string, unknown>>({
         path: paths.deployedAgents(deploymentState),
-        policy: READ_REQUEST_POLICY,
+        policy: AGENT_STUDIO_READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     createDeployedAgent: ({
       name,

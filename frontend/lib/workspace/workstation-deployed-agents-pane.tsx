@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { RefreshCw, X } from 'lucide-react';
+import { Plus, RefreshCw, X } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import {
@@ -24,6 +24,7 @@ import {
 } from '@/lib/ui/form-controls';
 import { ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
 import { ModalSection } from '@/lib/ui/modal';
+import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
@@ -50,7 +51,7 @@ type WizardMode = 'create' | 'edit';
 type WizardStepId = 'overview' | 'knowledge' | 'tools' | 'channels' | 'memory' | 'safety' | 'test' | 'deploy';
 type StudioSubview = 'agents' | 'inbox' | 'deploy';
 type AgentRosterFilterId = 'all' | 'text' | 'computer' | 'connected' | 'draft';
-type SpecialistOverlayTabId = 'overview' | 'tools' | 'memory' | 'connectors' | 'analytics';
+type SpecialistOverlayTabId = 'overview' | 'chat' | 'knowledge' | 'ai' | 'tools' | 'memory' | 'connectors' | 'analytics';
 
 type StudioTemplate = {
   id: string;
@@ -167,10 +168,14 @@ type StudioPaneCache = {
 
 type DetailConfigDraft = Pick<
   WizardState,
-  'selectedToolIds' | 'memoryEnabled' | 'contextBudgetPreset' | 'retentionPreset'
+  'aiTier' | 'providerId' | 'modelId' | 'billingPlan' | 'selectedToolIds' | 'memoryEnabled' | 'contextBudgetPreset' | 'retentionPreset'
 >;
 
 const studioPaneCache = new Map<string, StudioPaneCache>();
+
+const DEFAULT_SAFE_AGENT_PERSONA = 'Helpful customer-facing assistant that answers clearly, stays within the configured business information, and asks a human for help when unsure.';
+const DEFAULT_SAFE_AGENT_SYSTEM_PROMPT = 'Answer using the agent instructions and trusted knowledge sources. If the answer is not known, say so clearly and ask for a human follow-up. Do not invent prices, policies, availability, legal advice, medical advice, or financial advice.';
+const DEFAULT_SAFE_MONTHLY_COST_CAP_USD = '25';
 
 function updateStudioPaneCache(workspaceId: string, partial: Partial<StudioPaneCache>) {
   const current = studioPaneCache.get(workspaceId);
@@ -181,7 +186,7 @@ function updateStudioPaneCache(workspaceId: string, partial: Partial<StudioPaneC
     agentMetricsById: current?.agentMetricsById ?? {},
     agentAnalyticsById: current?.agentAnalyticsById ?? {},
     selectedAgentId: current?.selectedAgentId ?? null,
-    overlayAgentId: current?.overlayAgentId ?? null,
+    overlayAgentId: null,
     selectedAgentDetail: current?.selectedAgentDetail ?? null,
     selectedAgentAnalytics: current?.selectedAgentAnalytics ?? null,
     selectedTelegramReadiness: current?.selectedTelegramReadiness ?? null,
@@ -329,11 +334,6 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
     label: 'Review',
     description: 'Review the simple launch checklist before creating the assistant.',
   },
-  {
-    id: 'deploy',
-    label: 'Launch settings',
-    description: 'Choose AI tier, agent mode, spending guardrails, and approval posture before launch.',
-  },
 ];
 
 const CREATE_AGENT_WIZARD_STEPS: Array<{
@@ -361,10 +361,32 @@ const STUDIO_AI_TIER_OPTIONS: ReadonlyArray<{
   label: string;
   hint: string;
 }> = [
-  { value: 'light', label: 'Light', hint: 'Fast and low-cost for routine customer replies.' },
-  { value: 'pro', label: 'Pro', hint: 'Default quality for production customer support.' },
-  { value: 'max', label: 'Max', hint: 'Highest quality tier with higher credit burn.' },
+  { value: 'light', label: 'Fast', hint: 'Lower cost for routine customer replies.' },
+  { value: 'pro', label: 'Balanced', hint: 'Recommended default for production customer support.' },
+  { value: 'max', label: 'Best', hint: 'Highest answer quality when accuracy matters more than cost.' },
 ];
+
+const STUDIO_API_PROVIDER_IDS = new Set([
+  'anthropic',
+  'azure_openai',
+  'bedrock',
+  'deepseek',
+  'gemini',
+  'mistral',
+  'ollama_cloud',
+  'openai',
+  'qwen',
+  'vertex',
+]);
+
+const STUDIO_LOCAL_PROVIDER_IDS = new Set([
+  'codex',
+  'codex_cli',
+  'local',
+  'local_ollama',
+  'ollama',
+  'openai-codex',
+]);
 
 const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   value: WizardState['runtimePlacement'];
@@ -475,6 +497,44 @@ const STUDIO_TOOL_OPTIONS: ReadonlyArray<{
   },
 ];
 
+const STUDIO_ACTION_SKILL_OPTIONS: ReadonlyArray<{
+  id: string;
+  label: string;
+  description: string;
+  requiredToolIds: string[];
+}> = [
+  {
+    id: 'book_appointment',
+    label: 'Book appointment',
+    description: 'Coordinate a time, create the calendar event, and send the customer a confirmation.',
+    requiredToolIds: ['calendar_write', 'gmail_send'],
+  },
+  {
+    id: 'look_up_sheet_record',
+    label: 'Look up sheet records',
+    description: 'Check approved sheets before answering about availability, orders, or accounts.',
+    requiredToolIds: ['spreadsheet_read'],
+  },
+  {
+    id: 'log_workspace_note',
+    label: 'Log workspace note',
+    description: 'Write confirmed orders, handoff notes, or follow-up tasks to a connected sheet.',
+    requiredToolIds: ['spreadsheet_append'],
+  },
+  {
+    id: 'send_email_update',
+    label: 'Send email update',
+    description: 'Draft or send a customer-ready email from the connected workspace mailbox.',
+    requiredToolIds: ['gmail_send'],
+  },
+  {
+    id: 'call_approved_api',
+    label: 'Call approved API',
+    description: 'Use an approved webhook or API endpoint for live account, order, or inventory lookups.',
+    requiredToolIds: ['http_request'],
+  },
+];
+
 const CONTEXT_PRESET_OPTIONS: ReadonlyArray<{
   id: string;
   label: string;
@@ -483,7 +543,7 @@ const CONTEXT_PRESET_OPTIONS: ReadonlyArray<{
   {
     id: 'compact',
     label: 'Compact',
-    description: 'Faster, lower cost',
+    description: 'Lower cost',
   },
   {
     id: 'balanced',
@@ -493,7 +553,29 @@ const CONTEXT_PRESET_OPTIONS: ReadonlyArray<{
   {
     id: 'deep',
     label: 'Deep',
-    description: 'More context, higher cost',
+    description: 'More source context',
+  },
+];
+
+const RETENTION_PRESET_OPTIONS: ReadonlyArray<{
+  id: string;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: 'short',
+    label: 'Short',
+    description: 'Recent conversation only',
+  },
+  {
+    id: 'standard',
+    label: 'Standard',
+    description: 'Normal support memory',
+  },
+  {
+    id: 'extended',
+    label: 'Extended',
+    description: 'Long-running customer relationship',
   },
 ];
 
@@ -502,8 +584,11 @@ const SPECIALIST_OVERLAY_TABS: Array<{
   label: string;
 }> = [
   { id: 'overview', label: 'Overview' },
+  { id: 'chat', label: 'Chat' },
+  { id: 'knowledge', label: 'Knowledge' },
+  { id: 'ai', label: 'Model' },
   { id: 'tools', label: 'Actions' },
-  { id: 'memory', label: 'Agent Memory' },
+  { id: 'memory', label: 'Memory' },
   { id: 'connectors', label: 'Integrations' },
   { id: 'analytics', label: 'Results' },
 ];
@@ -541,6 +626,20 @@ const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
     image: '/integrations/microsoft365.png',
     connectorIds: ['google_workspace', 'microsoft_365'],
     capabilityTags: ['Calendar', 'Events'],
+  },
+  {
+    id: 'custom_api',
+    label: 'Custom API',
+    image: '/integrations/webhook.png',
+    connectorIds: ['webhook'],
+    capabilityTags: ['API', 'Webhook'],
+  },
+  {
+    id: 'tool_server',
+    label: 'Tool server',
+    image: '/integrations/github.png',
+    connectorIds: ['mcp_server'],
+    capabilityTags: ['MCP', 'Custom tools'],
   },
 ];
 
@@ -1011,6 +1110,10 @@ function listEnabledChannels(channels: unknown): string[] {
     .map(([channelKey]) => humanizeToken(channelKey, channelKey));
 }
 
+function hasEnabledChannel(channels: unknown, channelKey: string): boolean {
+  return readRecord(readRecord(channels)[channelKey]).enabled === true;
+}
+
 function serializeKnowledgeSources(knowledgeSources: unknown): string {
   if (!Array.isArray(knowledgeSources)) {
     return '';
@@ -1033,7 +1136,25 @@ function parseKnowledgeSources(text: string): Array<Record<string, unknown>> {
       id: `source-${index + 1}`,
       uri,
       label: uri,
+      kind: inferKnowledgeSourceKind(uri),
     }));
+}
+
+function inferKnowledgeSourceKind(uri: string): string {
+  const token = uri.trim().toLowerCase();
+  if (token.startsWith('http://') || token.startsWith('https://')) {
+    return 'Website';
+  }
+  if (token.startsWith('sheet://') || token.includes('docs.google.com/spreadsheets')) {
+    return 'Table or sheet';
+  }
+  if (token.startsWith('app://') || token.startsWith('drive://') || token.includes('docs.google.com/document')) {
+    return 'App document';
+  }
+  if (token.startsWith('note://') || token.startsWith('text://')) {
+    return 'Manual note';
+  }
+  return 'File or document';
 }
 
 function normalizeLabelList(value: unknown): string[] {
@@ -1235,6 +1356,24 @@ function studioProviderRank(providerId: string): number {
   }
 }
 
+function isStudioApiProvider(
+  providerId: string,
+  provider: ProviderCatalogRecord,
+  providerScopes: string[],
+): boolean {
+  const normalizedProviderId = providerId.trim().toLowerCase();
+  if (!normalizedProviderId || STUDIO_LOCAL_PROVIDER_IDS.has(normalizedProviderId)) {
+    return false;
+  }
+  if (provider.local_only === true) {
+    return false;
+  }
+  if (providerScopes.some((scope) => scope.includes('local') || scope.includes('cli'))) {
+    return false;
+  }
+  return providerScopes.includes('studio_safe') || STUDIO_API_PROVIDER_IDS.has(normalizedProviderId);
+}
+
 function normalizeProviderCatalog(payload: unknown): ProviderCatalogSnapshot[] {
   return readProviderCatalogItems(payload)
     .map((provider) => {
@@ -1266,7 +1405,7 @@ function normalizeProviderCatalog(payload: unknown): ProviderCatalogSnapshot[] {
         label: readString(provider.label, humanizeToken(providerId, providerId)),
         state: readString(provider.state, 'unknown'),
         defaultModel: readOptionalString(provider.default_model),
-        studioVisible: providerScopes.includes('studio_safe'),
+        studioVisible: isStudioApiProvider(providerId, provider, providerScopes),
         providerScopes,
         privacyPosture: readOptionalString(provider.privacy_posture),
         jurisdiction: readOptionalString(provider.jurisdiction),
@@ -1526,15 +1665,57 @@ function inferCustomerChannel(channels: Record<string, unknown>): WizardState['c
 }
 
 function inferAiTierFromProviderModel(providerId: string, modelId: string): WizardState['aiTier'] {
-  const provider = providerId.trim().toLowerCase();
   const model = modelId.trim().toLowerCase();
-  if (provider === 'deepseek' && model.includes('flash')) {
+  if (/flash|mini|haiku|small|lite|fast/.test(model)) {
     return 'light';
   }
-  if (provider === 'deepseek' && model.includes('pro')) {
-    return 'pro';
+  if (/opus|max|premium|large|gpt-5\.5/.test(model)) {
+    return 'max';
   }
   return 'pro';
+}
+
+function modelPreferenceScore(model: ProviderCatalogModelSnapshot, tier: WizardState['aiTier']): number {
+  const id = `${model.id} ${model.label}`.toLowerCase();
+  if (tier === 'light') {
+    if (/flash|mini|haiku|small|lite|fast/.test(id)) {
+      return 0;
+    }
+    return model.inputCostPer1kUsd !== null ? 10 + model.inputCostPer1kUsd : 50;
+  }
+  if (tier === 'max') {
+    if (/opus|max|premium|large|gpt-5\.2|gpt-5\.5/.test(id)) {
+      return 0;
+    }
+    if (/pro|sonnet|gpt-5|reason/.test(id)) {
+      return 4;
+    }
+    return 20;
+  }
+  if (/pro|sonnet|gpt-5|reason/.test(id)) {
+    return 0;
+  }
+  if (/flash|mini|haiku|small|lite|fast/.test(id)) {
+    return 8;
+  }
+  return 4;
+}
+
+function pickStudioModelForTier(provider: ProviderCatalogSnapshot, tier: WizardState['aiTier']): string {
+  if (provider.models.length === 0) {
+    return '';
+  }
+  const rankedModels = [...provider.models].sort((left, right) => {
+    const scoreDelta = modelPreferenceScore(left, tier) - modelPreferenceScore(right, tier);
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+    return left.label.localeCompare(right.label);
+  });
+  const defaultModel = provider.defaultModel && provider.models.some((item) => item.id === provider.defaultModel)
+    ? provider.defaultModel
+    : '';
+  return rankedModels[0]?.id || defaultModel || provider.models[0]?.id || '';
 }
 
 function resolveProviderModelForTier(
@@ -1542,24 +1723,13 @@ function resolveProviderModelForTier(
   catalog: ProviderCatalogSnapshot[],
 ): { providerId: string; modelId: string } {
   const catalogByProvider = providerCatalogById(catalog);
-  const deepseek = catalogByProvider.deepseek ?? null;
-  if (deepseek && deepseek.models.length > 0) {
-    const preferredModelId = tier === 'light'
-      ? (
-        deepseek.models.find((item) => item.id === 'deepseek-v4-flash')
-        ?? deepseek.models.find((item) => item.id.toLowerCase().includes('flash'))
-        ?? deepseek.models[0]
-      )?.id
-      : (
-        deepseek.models.find((item) => item.id === 'deepseek-v4-pro')
-        ?? deepseek.models.find((item) => item.id.toLowerCase().includes('pro'))
-        ?? deepseek.models.find((item) => !item.id.toLowerCase().includes('flash'))
-        ?? deepseek.models[0]
-      )?.id;
-    if (preferredModelId) {
+  const providerOrder = ['gemini', 'openai', 'anthropic', 'deepseek', 'mistral', 'qwen', 'azure_openai', 'vertex', 'bedrock', 'ollama_cloud'];
+  for (const providerId of providerOrder) {
+    const provider = catalogByProvider[providerId] ?? null;
+    if (provider && provider.models.length > 0) {
       return {
-        providerId: deepseek.id,
-        modelId: preferredModelId,
+        providerId: provider.id,
+        modelId: pickStudioModelForTier(provider, tier),
       };
     }
   }
@@ -1660,12 +1830,10 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   return {
     name: readString(agent?.name),
     avatar: readString(agent?.avatar),
-    persona: readString(agent?.persona, isNewDraft ? 'Fast, friendly customer assistant for a cafe, clinic, shop, or support desk.' : ''),
+    persona: readString(agent?.persona, DEFAULT_SAFE_AGENT_PERSONA),
     systemPrompt: readString(
       agent?.system_prompt,
-      isNewDraft
-        ? 'Answer menu questions, confirm orders clearly, track availability from connected sheets, and escalate edge cases to a human when uncertain.'
-        : '',
+      DEFAULT_SAFE_AGENT_SYSTEM_PROMPT,
     ),
     knowledgeSourceText: serializeKnowledgeSources(agent?.knowledge_sources),
     aiTier,
@@ -1708,7 +1876,7 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     selectedToolIds: selectedToolIds.length > 0 ? selectedToolIds : ['spreadsheet_read', 'spreadsheet_append'],
     memoryEnabled: agent
       ? memoryPolicy.memory_enabled === true || metadata.memory_enabled === true
-      : true,
+      : false,
     contextBudgetPreset: readString(memoryPolicy.context_budget_preset ?? metadata.context_budget_preset, 'balanced'),
     retentionPreset: readString(memoryPolicy.retention_preset ?? metadata.retention_preset, 'standard'),
     healthSafetyEnabled: safetyPolicy.health_safety_enabled === true || metadata.health_safety_enabled === true,
@@ -1726,7 +1894,7 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     dailyMessageLimit: readIntegerString(customerPolicy.daily_message_limit ?? metadata.daily_message_limit),
     monthlyCostCapUsd: readPositiveDecimalString(
       commercePolicy.monthly_cost_cap_usd ?? metadata.monthly_cost_cap_usd,
-    ),
+    ) || DEFAULT_SAFE_MONTHLY_COST_CAP_USD,
     upgradeCtaUrl: readString(customerPolicy.upgrade_cta_url ?? metadata.upgrade_cta_url),
     upgradeCtaLabel: readString(customerPolicy.upgrade_cta_label ?? metadata.upgrade_cta_label),
   };
@@ -1735,8 +1903,8 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
 function buildCreateDraftWizardState(state: WizardState): WizardState {
   return {
     ...state,
-    persona: '',
-    systemPrompt: '',
+    persona: DEFAULT_SAFE_AGENT_PERSONA,
+    systemPrompt: DEFAULT_SAFE_AGENT_SYSTEM_PROMPT,
     knowledgeSourceText: '',
     selectedToolIds: [],
     memoryEnabled: false,
@@ -1753,6 +1921,13 @@ function buildCreateDraftWizardState(state: WizardState): WizardState {
     selfHostedPrivacyAccepted: false,
     selfHostedSafetyAccepted: false,
     computerAutomationEnabled: false,
+    monthlyCostCapUsd: state.monthlyCostCapUsd || DEFAULT_SAFE_MONTHLY_COST_CAP_USD,
+    dailyMessageLimit: '',
+    upgradeCtaLabel: '',
+    upgradeCtaUrl: '',
+    approvalMode: 'balanced',
+    escalationPreset: 'standard',
+    handoffMode: 'notify_owner',
   };
 }
 
@@ -1880,6 +2055,10 @@ function buildDeploymentConfig(state: WizardState): Record<string, unknown> {
 function buildDetailConfigDraft(agent?: DeployedAgentRecord | null): DetailConfigDraft {
   const state = buildWizardState(agent);
   return {
+    aiTier: state.aiTier,
+    providerId: state.providerId,
+    modelId: state.modelId,
+    billingPlan: state.billingPlan,
     selectedToolIds: state.selectedToolIds,
     memoryEnabled: state.memoryEnabled,
     contextBudgetPreset: state.contextBudgetPreset,
@@ -1901,9 +2080,44 @@ function ContextPresetControl({
 }) {
   return (
     <div className="deployed-agents-context-presets">
-      <div className="deployed-agents-context-presets__label">Context window</div>
-      <div className="deployed-agents-context-presets__grid" role="tablist" aria-label="Context window presets">
+      <div className="deployed-agents-context-presets__label">Source depth</div>
+      <div className="deployed-agents-context-presets__grid" role="tablist" aria-label="Source depth presets">
         {CONTEXT_PRESET_OPTIONS.map((option) => {
+          const selected = value === option.id;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              className={joinClassNames(
+                'deployed-agents-context-presets__button',
+                selected && 'deployed-agents-context-presets__button--selected',
+              )}
+              role="tab"
+              aria-selected={selected}
+              onClick={() => onSelect(option.id)}
+            >
+              <strong className="deployed-agents-context-presets__title">{option.label}</strong>
+              <span className="deployed-agents-context-presets__description">{option.description}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RetentionPresetControl({
+  value,
+  onSelect,
+}: {
+  value: string;
+  onSelect: (nextValue: string) => void;
+}) {
+  return (
+    <div className="deployed-agents-context-presets">
+      <div className="deployed-agents-context-presets__label">Customer memory length</div>
+      <div className="deployed-agents-context-presets__grid" role="tablist" aria-label="Customer memory length presets">
+        {RETENTION_PRESET_OPTIONS.map((option) => {
           const selected = value === option.id;
           return (
             <button
@@ -2428,6 +2642,250 @@ function AgentLaunchChecklist({
   );
 }
 
+function AgentAiSettingsSections({
+  value,
+  providerCatalog,
+  isLoadingProviderCatalog,
+  onSelectTier,
+  onSelectProvider,
+  onSelectModel,
+  onOpenIntegrations,
+}: {
+  value: DetailConfigDraft;
+  providerCatalog: ProviderCatalogSnapshot[];
+  isLoadingProviderCatalog: boolean;
+  onSelectTier: (nextTier: WizardState['aiTier']) => void;
+  onSelectProvider: (nextProviderId: string) => void;
+  onSelectModel: (nextModelId: string) => void;
+  onOpenIntegrations?: () => void;
+}) {
+  const selectedProvider = providerCatalog.find((provider) => provider.id === value.providerId) ?? null;
+  const selectedModel = selectedProvider?.models.find((model) => model.id === value.modelId) ?? null;
+  const selectedTier = STUDIO_AI_TIER_OPTIONS.find((option) => option.value === value.aiTier) ?? STUDIO_AI_TIER_OPTIONS[1];
+  const providerReady = selectedProvider?.state.toLowerCase() === 'ready' || selectedProvider?.state.toLowerCase() === 'connected';
+  return (
+    <div className="studio-ai-settings">
+      <div className="studio-ai-settings__summary" aria-label="Model setup summary">
+        <div>
+          <span>Model setup</span>
+          <strong>{selectedTier.label} · {selectedProvider?.label ?? 'Provider account'}</strong>
+          <p>Customers bring their own provider account. Empyralis uses that key for this agent and shows the provider usage price before launch.</p>
+        </div>
+        <div className="studio-ai-settings__badges" aria-label="Model setup constraints">
+          <span>Customer key</span>
+          <span>Provider pricing</span>
+        </div>
+      </div>
+
+      <section className="studio-ai-settings__section" aria-label="AI quality tier">
+        <div className="studio-actions__section-head">
+          <div>
+            <span>Quality tier</span>
+            <strong>Choose the default answer quality</strong>
+          </div>
+          <small>{selectedTier.label}</small>
+        </div>
+        <div className="studio-ai-settings__tier-grid" role="radiogroup" aria-label="AI quality tier">
+          {STUDIO_AI_TIER_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={joinClassNames('studio-ai-settings__tier', value.aiTier === option.value && 'studio-ai-settings__tier--selected')}
+              aria-checked={value.aiTier === option.value}
+              role="radio"
+              onClick={() => onSelectTier(option.value)}
+            >
+              <strong>{option.label}</strong>
+              <span>{option.hint}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="studio-ai-settings__section" aria-label="Provider and model">
+        <div className="studio-actions__section-head">
+          <div>
+            <span>Provider and model</span>
+            <strong>Model route for this agent</strong>
+          </div>
+          <div className="studio-actions__section-head-actions">
+            <small>{providerCatalog.length} available</small>
+            {onOpenIntegrations ? (
+              <button type="button" className="studio-actions__link-button" onClick={onOpenIntegrations}>
+                <Plus aria-hidden="true" />
+                Connect provider
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <div className="studio-ai-settings__form">
+          {providerCatalog.length === 0 ? (
+            <StateBanner
+              tone="warning"
+              title={isLoadingProviderCatalog ? 'Loading model providers' : 'No model providers connected'}
+              detail={isLoadingProviderCatalog ? 'Checking workspace provider catalog.' : 'Connect a provider account before changing the model route.'}
+            />
+          ) : null}
+          <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+            <FormField label="Provider account" hint="Only cloud provider accounts appear here. CLI and local providers stay with Sage.">
+              <FormSelect
+                value={value.providerId}
+                onChange={(event) => onSelectProvider(event.currentTarget.value)}
+                disabled={isLoadingProviderCatalog || providerCatalog.length === 0}
+              >
+                <option value="">
+                  {isLoadingProviderCatalog ? 'Loading providers...' : 'Select a provider'}
+                </option>
+                {providerCatalog.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.label}
+                  </option>
+                ))}
+              </FormSelect>
+            </FormField>
+            <FormField label="Model" hint="The available models come from the selected provider account.">
+              <FormSelect
+                value={value.modelId}
+                onChange={(event) => onSelectModel(event.currentTarget.value)}
+                disabled={!selectedProvider || selectedProvider.models.length === 0}
+              >
+                <option value="">
+                  {selectedProvider ? 'Select a model' : 'Select a provider first'}
+                </option>
+                {(selectedProvider?.models ?? []).map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label}
+                  </option>
+                ))}
+              </FormSelect>
+            </FormField>
+          </FormGrid>
+          <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
+            <FormReadout label="Provider connection" value={providerReady ? 'Connected' : humanizeToken(selectedProvider?.state, isLoadingProviderCatalog ? 'Loading' : 'Setup required')} />
+            <FormReadout label="Input price" value={selectedModel ? formatUsdPer1k(selectedModel.inputCostPer1kUsd) : 'n/a'} />
+            <FormReadout label="Output price" value={selectedModel ? formatUsdPer1k(selectedModel.outputCostPer1kUsd) : 'n/a'} />
+            <FormReadout label="Model capacity" value={formatContextWindow(selectedModel?.contextWindowTokens)} />
+            <FormReadout
+              label="Model capabilities"
+              value={selectedModel?.capabilityLabels.length ? selectedModel.capabilityLabels.join(', ') : selectedProvider?.capabilityLabels.join(', ') || 'n/a'}
+            />
+          </FormGrid>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AgentActionCapabilitySections({
+  selectedToolIds,
+  onToggleTool,
+  onOpenIntegrations,
+}: {
+  selectedToolIds: string[];
+  onToggleTool: (toolId: string) => void;
+  onOpenIntegrations?: () => void;
+}) {
+  const selectedToolSet = new Set(selectedToolIds);
+  const readySkills = STUDIO_ACTION_SKILL_OPTIONS.filter((skill) => skill.requiredToolIds.every((toolId) => selectedToolSet.has(toolId)));
+  const blockedSkills = STUDIO_ACTION_SKILL_OPTIONS.length - readySkills.length;
+  return (
+    <div className="studio-actions">
+      <div className="studio-actions__summary" aria-label="Actions summary">
+        <div className="studio-actions__summary-copy">
+          <span>Action system</span>
+          <strong>{readySkills.length} workflows ready</strong>
+          <p>Playbooks are the customer-facing workflows. Tools are the permissions those workflows can call.</p>
+        </div>
+        <div className="studio-actions__summary-stats" aria-label="Action readiness">
+          <div>
+            <strong>{readySkills.length}</strong>
+            <span>Playbooks</span>
+          </div>
+          <div>
+            <strong>{blockedSkills}</strong>
+            <span>Needs setup</span>
+          </div>
+          <div>
+            <strong>{selectedToolIds.length}</strong>
+            <span>Tools on</span>
+          </div>
+        </div>
+      </div>
+      <section className="studio-actions__section" aria-label="Skills and playbooks">
+        <div className="studio-actions__section-head">
+          <div>
+            <span>Action playbooks</span>
+            <strong>Workflows this agent can perform</strong>
+          </div>
+          <small>Powered by enabled actions</small>
+        </div>
+        <div className="studio-actions__skills">
+          {STUDIO_ACTION_SKILL_OPTIONS.map((skill) => {
+            const missingToolIds = skill.requiredToolIds.filter((toolId) => !selectedToolSet.has(toolId));
+            const ready = missingToolIds.length === 0;
+            return (
+              <article
+                key={skill.id}
+                className={joinClassNames('studio-actions__skill', ready && 'studio-actions__skill--ready')}
+              >
+                <div className="studio-actions__skill-copy">
+                  <strong>{skill.label}</strong>
+                  <p>{skill.description}</p>
+                </div>
+                <span className={joinClassNames('studio-actions__status', ready ? 'studio-actions__status--ready' : 'studio-actions__status--blocked')}>
+                  {ready ? 'Ready' : `Needs ${missingToolIds.map((toolId) => toolLabel(toolId)).join(', ')}`}
+                </span>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+      <section className="studio-actions__section" aria-label="Tool permissions">
+        <div className="studio-actions__section-head">
+          <div>
+            <span>Tools</span>
+            <strong>Actions this agent is allowed to use</strong>
+          </div>
+          <div className="studio-actions__section-head-actions">
+            <small>{selectedToolIds.length} enabled</small>
+            {onOpenIntegrations ? (
+              <button type="button" className="studio-actions__link-button" onClick={onOpenIntegrations}>
+                <Plus aria-hidden="true" />
+                Add tool
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <div className="sage-tool-list" role="list">
+          {STUDIO_TOOL_OPTIONS.map((tool) => {
+            const selected = selectedToolSet.has(tool.id);
+            return (
+              <article key={tool.id} className={joinClassNames('sage-tool-row', selected && 'sage-tool-row--enabled')} role="listitem">
+                <div className="sage-tool-row__identity">
+                  <div className="sage-tool-row__icon" aria-hidden="true">{tool.label.slice(0, 1)}</div>
+                  <div className="sage-tool-row__copy">
+                    <strong className="sage-tool-row__title">{tool.label}</strong>
+                    <p className="sage-tool-row__description">{tool.description}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={joinClassNames('sage-tool-toggle', selected && 'sage-tool-toggle--enabled')}
+                  role="switch"
+                  aria-checked={selected}
+                  onClick={() => onToggleTool(tool.id)}
+                >
+                  <span className="sage-tool-toggle__thumb" />
+                </button>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AgentPlaygroundPanel({
   deployedAgentId,
   workspaceId,
@@ -2438,12 +2896,7 @@ function AgentPlaygroundPanel({
   client: { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null> };
 }) {
   return (
-    <div className="app-stack-2">
-      <StateBanner
-        tone="neutral"
-        title="Agent playground"
-        detail="Run a safe private turn before going live."
-      />
+    <div className="studio-agent-chat">
       <DeployedAgentTestTurnPane
         deployedAgentId={deployedAgentId}
         workspaceId={workspaceId}
@@ -2466,28 +2919,28 @@ export function WorkstationDeployedAgentsPane({
   const [currentStudioSubview, setCurrentStudioSubview] = useState<StudioSubview>(initialSubview);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogSnapshot[]>(() => cachedStudioPane?.providerCatalog ?? []);
   const [studioTemplates, setStudioTemplates] = useState<StudioTemplate[]>(() => [...STUDIO_TEMPLATES]);
-  const [agents, setAgents] = useState<DeployedAgentRecord[]>(() => cachedStudioPane?.agents ?? []);
+  const [agents, setAgents] = useState<DeployedAgentRecord[]>([]);
   const [connectorVaultIds, setConnectorVaultIds] = useState<Set<string>>(() => new Set(cachedStudioPane?.connectorVaultIds ?? []));
   const [agentMetricsById, setAgentMetricsById] = useState<Record<string, AgentOperationalMetrics>>(() => cachedStudioPane?.agentMetricsById ?? {});
   const [agentAnalyticsById, setAgentAnalyticsById] = useState<Record<string, AgentAnalyticsSnapshot>>(() => cachedStudioPane?.agentAnalyticsById ?? {});
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(() => cachedStudioPane?.selectedAgentId ?? null);
-  const [overlayAgentId, setOverlayAgentId] = useState<string | null>(() => cachedStudioPane?.overlayAgentId ?? cachedStudioPane?.selectedAgentId ?? null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [overlayAgentId, setOverlayAgentId] = useState<string | null>(null);
   const [overlayTab, setOverlayTab] = useState<SpecialistOverlayTabId>('overview');
   const [overlayName, setOverlayName] = useState('');
   const [overlayPersona, setOverlayPersona] = useState('');
   const [overlayMarketplaceListed, setOverlayMarketplaceListed] = useState(false);
   const [overlayMarketplaceCategory, setOverlayMarketplaceCategory] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [isSavingOverlayOverview, setIsSavingOverlayOverview] = useState(false);
-  const [selectedAgentDetail, setSelectedAgentDetail] = useState<DeployedAgentRecord | null>(() => cachedStudioPane?.selectedAgentDetail ?? null);
-  const [selectedAgentAnalytics, setSelectedAgentAnalytics] = useState<AgentAnalyticsSnapshot | null>(() => cachedStudioPane?.selectedAgentAnalytics ?? null);
-  const [selectedTelegramReadiness, setSelectedTelegramReadiness] = useState<TelegramReadinessSnapshot | null>(() => cachedStudioPane?.selectedTelegramReadiness ?? null);
-  const [conversations, setConversations] = useState<DeployedAgentConversationRecord[]>(() => cachedStudioPane?.conversations ?? []);
+  const [selectedAgentDetail, setSelectedAgentDetail] = useState<DeployedAgentRecord | null>(null);
+  const [selectedAgentAnalytics, setSelectedAgentAnalytics] = useState<AgentAnalyticsSnapshot | null>(null);
+  const [selectedTelegramReadiness, setSelectedTelegramReadiness] = useState<TelegramReadinessSnapshot | null>(null);
+  const [conversations, setConversations] = useState<DeployedAgentConversationRecord[]>([]);
   const [agentMemoryById, setAgentMemoryById] = useState<Record<string, DeployedAgentMemoryRecord[]>>({});
   const [runtimeAttachments, setRuntimeAttachments] = useState<RuntimeAttachmentSnapshot[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => cachedStudioPane?.selectedSessionId ?? null);
-  const [selectedTranscript, setSelectedTranscript] = useState<DeployedAgentConversationDetail | null>(() => cachedStudioPane?.selectedTranscript ?? null);
-  const [isLoadingAgents, setIsLoadingAgents] = useState(() => (cachedStudioPane?.agents?.length ?? 0) === 0);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedTranscript, setSelectedTranscript] = useState<DeployedAgentConversationDetail | null>(null);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(true);
+  const [hasLoadedAgentListOnce, setHasLoadedAgentListOnce] = useState(false);
   const [isLoadingProviderCatalog, setIsLoadingProviderCatalog] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
@@ -2751,6 +3204,7 @@ export function WorkstationDeployedAgentsPane({
       const payload = await services.client.listDeployedAgents();
       const items = readItems<DeployedAgentRecord>(payload);
       setAgents(items);
+      setHasLoadedAgentListOnce(true);
       void refreshAgentAnalytics(items);
       setAgentMetricsById((current) => {
         const nextValue = {
@@ -2953,7 +3407,7 @@ export function WorkstationDeployedAgentsPane({
     }
     setCurrentStudioSubview('agents');
     setSelectedAgentId(requestedAgentId);
-    setOverlayAgentId(requestedAgentId);
+    setOverlayAgentId(null);
   }, [agents, requestedAgentId]);
 
   useEffect(() => {
@@ -2974,10 +3428,9 @@ export function WorkstationDeployedAgentsPane({
   useEffect(() => {
     updateStudioPaneCache(workspaceId, {
       selectedAgentId,
-      overlayAgentId,
       selectedSessionId,
     });
-  }, [overlayAgentId, selectedAgentId, selectedSessionId, workspaceId]);
+  }, [selectedAgentId, selectedSessionId, workspaceId]);
 
   useEffect(() => {
     if (!isWizardOpen) {
@@ -3010,7 +3463,6 @@ export function WorkstationDeployedAgentsPane({
       setSelectedTranscript(null);
       updateStudioPaneCache(workspaceId, {
         selectedAgentId: null,
-        overlayAgentId,
         selectedAgentDetail: null,
         selectedAgentAnalytics: null,
         selectedTelegramReadiness: null,
@@ -3272,11 +3724,12 @@ export function WorkstationDeployedAgentsPane({
       setIsSubmittingWizard(true);
       setWizardErrorMessage(null);
       try {
+        const route = resolveProviderModelForTier(stateForSave.aiTier, providerCatalog);
         const created = await services.client.createDeployedAgent({
           name,
           avatar: null,
-          persona: '',
-          systemPrompt: '',
+          persona: stateForSave.persona,
+          systemPrompt: stateForSave.systemPrompt,
           channels: {},
           knowledgeSources: [],
           runtimeTarget: 'cloud',
@@ -3294,6 +3747,13 @@ export function WorkstationDeployedAgentsPane({
               context_budget_preset: 'balanced',
               retention_preset: 'standard',
             },
+            escalation_policy: {
+              preset: 'standard',
+              handoff_mode: 'notify_owner',
+            },
+            commerce_policy: {
+              monthly_cost_cap_usd: Number(DEFAULT_SAFE_MONTHLY_COST_CAP_USD),
+            },
             computer_automation: {
               enabled: false,
             },
@@ -3305,9 +3765,12 @@ export function WorkstationDeployedAgentsPane({
             computer_automation_enabled: false,
             selected_tool_ids: [],
             memory_enabled: false,
+            monthly_cost_cap_usd: Number(DEFAULT_SAFE_MONTHLY_COST_CAP_USD),
+            escalation_preset: 'standard',
+            handoff_mode: 'notify_owner',
           },
-          provider: null,
-          model: null,
+          provider: route.providerId || null,
+          model: route.modelId || null,
         });
         const record = (created ?? {}) as DeployedAgentRecord;
         const createdId = readString(record.id);
@@ -3337,10 +3800,8 @@ export function WorkstationDeployedAgentsPane({
     const dailyMessageLimit = stateForSave.dailyMessageLimit.trim();
     const monthlyCostCapUsd = stateForSave.monthlyCostCapUsd.trim();
     const route = resolveProviderModelForTier(stateForSave.aiTier, providerCatalog);
-    if (!route.providerId || !route.modelId) {
-      setWizardErrorMessage('AI tier route is unavailable. Refresh provider catalog and try again.');
-      return;
-    }
+    const resolvedProviderId = route.providerId || stateForSave.providerId || selectedProviderId(selectedAgent) || null;
+    const resolvedModelId = route.modelId || stateForSave.modelId || selectedModelId(selectedAgent) || null;
     if (dailyMessageLimit) {
       const parsedLimit = Number(dailyMessageLimit);
       if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
@@ -3413,8 +3874,8 @@ export function WorkstationDeployedAgentsPane({
         ? stateForSave.selfHostedRuntimeProfileId.trim() || null
         : null,
       billingPlan: stateForSave.billingPlan,
-      provider: route.providerId,
-      model: route.modelId,
+      provider: resolvedProviderId,
+      model: resolvedModelId,
       config: buildDeploymentConfig({
         ...stateForSave,
         runtimeTarget: resolvedRuntimeTarget,
@@ -3481,30 +3942,66 @@ export function WorkstationDeployedAgentsPane({
     if (!agentId) {
       return;
     }
+    const selectedConfig = readRecord(selectedAgent?.config);
+    const selectedMetadata = readRecord(selectedAgent?.metadata);
+    const selectedCommercePolicy = readRecord(selectedConfig.commerce_policy);
+    const selectedMonthlyCostCap = readPositiveDecimalString(
+      selectedCommercePolicy.monthly_cost_cap_usd ?? selectedMetadata.monthly_cost_cap_usd,
+    );
+    const needsDeploySafeDefaults = action === 'deploy' && Boolean(selectedAgent) && (
+      !readString(selectedAgent?.persona)
+      || !readString(selectedAgent?.system_prompt)
+      || !selectedMonthlyCostCap
+    );
     if (action === 'deploy' && selectedAgentSelfHostedDeployBlocker) {
       setErrorMessage(selectedAgentSelfHostedDeployBlocker);
       return;
     }
     if (
       action === 'deploy'
+      && selectedAgentNeedsTelegramReadiness
       && !selectedTelegramReadiness
     ) {
-      setErrorMessage('Launch checks are still loading. Wait for readiness to finish before going live.');
+      setErrorMessage('Telegram checks are still loading. Wait for readiness to finish before enabling that customer channel.');
       return;
     }
     if (
       action === 'deploy'
+      && selectedAgentNeedsTelegramReadiness
       && selectedTelegramReadiness
       && selectedTelegramReadiness.readyForLive !== true
     ) {
       const firstBlocker = selectedTelegramReadiness.blockers[0];
-      const guidance = firstBlocker?.guidance || selectedTelegramReadiness.nextAction || 'Resolve the Telegram readiness blockers before deploying.';
+      const guidance = firstBlocker?.guidance || selectedTelegramReadiness.nextAction || 'Resolve the Telegram readiness blockers before enabling that customer channel.';
       setErrorMessage(firstBlocker?.message ? `${firstBlocker.message} ${guidance}` : guidance);
       return;
     }
     setBusyAgentId(agentId);
     setErrorMessage(null);
     try {
+      if (needsDeploySafeDefaults) {
+        const currentState = buildWizardState(selectedAgent);
+        const route = resolveProviderModelForTier(currentState.aiTier, providerCatalog);
+        const resolvedProviderId = route.providerId || currentState.providerId || selectedProviderId(selectedAgent) || null;
+        const resolvedModelId = route.modelId || currentState.modelId || selectedModelId(selectedAgent) || null;
+        const patched = await services.client.updateDeployedAgent({
+          deployedAgentId: agentId,
+          persona: currentState.persona,
+          systemPrompt: currentState.systemPrompt,
+          provider: resolvedProviderId,
+          model: resolvedModelId,
+          config: buildDeploymentConfig({
+            ...currentState,
+            providerId: resolvedProviderId || '',
+            modelId: resolvedModelId || '',
+          }),
+        });
+        if (patched) {
+          const patchedRecord = patched as DeployedAgentRecord;
+          setAgents((current) => upsertAgentRecord(current, patchedRecord));
+          setSelectedAgentDetail(patchedRecord);
+        }
+      }
       const payload =
         action === 'deploy'
           ? await services.client.deployDeployedAgent({ deployedAgentId: agentId })
@@ -3514,7 +4011,9 @@ export function WorkstationDeployedAgentsPane({
       setSelectedAgentDetail(record);
       setStatusMessage(
         action === 'deploy'
-          ? `${readString(record.name, 'Assistant')} is now live on its configured channels.`
+          ? activeChannels.length > 0
+            ? `${readString(record.name, 'Assistant')} is now live on its configured channels.`
+            : `${readString(record.name, 'Assistant')} is live with safe defaults. Connect a customer channel when ready.`
           : `${readString(record.name, 'Assistant')} is paused and will no longer reply to live customer messages.`,
       );
       await Promise.all([
@@ -3567,13 +4066,26 @@ export function WorkstationDeployedAgentsPane({
     const currentState = buildWizardState(selectedAgent);
     const nextState: WizardState = {
       ...currentState,
+      aiTier: detailConfigDraft.aiTier,
+      providerId: detailConfigDraft.providerId,
+      modelId: detailConfigDraft.modelId,
+      billingPlan: detailConfigDraft.billingPlan,
       selectedToolIds: detailConfigDraft.selectedToolIds,
       memoryEnabled: detailConfigDraft.memoryEnabled,
       contextBudgetPreset: detailConfigDraft.contextBudgetPreset,
       retentionPreset: detailConfigDraft.retentionPreset,
     };
+    const resolvedProviderModel = resolveProviderModelForTier(nextState.aiTier, providerCatalog);
+    const resolvedProviderId = nextState.providerId || resolvedProviderModel.providerId;
+    const resolvedProvider = providerCatalogIndex[resolvedProviderId] ?? null;
+    const resolvedModelId = nextState.modelId && resolvedProvider?.models.some((item) => item.id === nextState.modelId)
+      ? nextState.modelId
+      : resolvedProvider
+        ? pickStudioModelForTier(resolvedProvider, nextState.aiTier)
+        : resolvedProviderModel.modelId;
     const nextConfigPayload = buildDeploymentConfig(nextState);
     const currentConfig = readRecord(selectedAgent?.config);
+    const currentMetadata = readRecord(selectedAgent?.metadata);
     const mergedConfig = {
       ...currentConfig,
       memory_policy: {
@@ -3585,27 +4097,73 @@ export function WorkstationDeployedAgentsPane({
         ...readRecord(nextConfigPayload.tool_policy),
       },
     };
+    const mergedMetadata = {
+      ...currentMetadata,
+      public_tier: nextState.aiTier,
+      model_tier: nextState.aiTier,
+      empyralis_model_tier: nextState.aiTier,
+    };
 
     setIsSavingDetailConfig(true);
     setErrorMessage(null);
     try {
       const updated = await services.client.updateDeployedAgent({
         deployedAgentId: agentId,
+        provider: resolvedProviderId || null,
+        model: resolvedModelId || null,
+        billingPlan: nextState.billingPlan,
         config: mergedConfig,
+        metadata: mergedMetadata,
       });
       const record = (updated ?? {}) as DeployedAgentRecord;
       setAgents((current) => upsertAgentRecord(current, record));
       setSelectedAgentDetail(record);
       setDetailConfigDraft(buildDetailConfigDraft(record));
-      setStatusMessage(`Updated ${readString(record.name, 'assistant')} actions and memory settings.`);
+      setStatusMessage(`Updated ${readString(record.name, 'assistant')} AI, actions, and memory settings.`);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Actions and memory settings could not be saved.');
+      setErrorMessage(error instanceof Error ? error.message : 'AI, actions, and memory settings could not be saved.');
     } finally {
       setIsSavingDetailConfig(false);
     }
   }
 
+  function updateDetailAiTier(nextTier: WizardState['aiTier']) {
+    const route = resolveProviderModelForTier(nextTier, providerCatalog);
+    setDetailConfigDraft((current) => current ? {
+      ...current,
+      aiTier: nextTier,
+      providerId: route.providerId || current.providerId,
+      modelId: route.modelId || current.modelId,
+    } : current);
+  }
+
+  function updateDetailProvider(nextProviderId: string) {
+    const nextProvider = providerCatalogIndex[nextProviderId] ?? null;
+    setDetailConfigDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const nextModelId = nextProvider
+        ? pickStudioModelForTier(nextProvider, current.aiTier)
+        : '';
+      return {
+        ...current,
+        providerId: nextProviderId,
+        modelId: nextModelId,
+      };
+    });
+  }
+
+  function updateDetailModel(nextModelId: string) {
+    setDetailConfigDraft((current) => current ? {
+      ...current,
+      modelId: nextModelId,
+      aiTier: inferAiTierFromProviderModel(current.providerId, nextModelId),
+    } : current);
+  }
+
   const activeChannels = listEnabledChannels(selectedAgent?.channels);
+  const selectedAgentNeedsTelegramReadiness = hasEnabledChannel(selectedAgent?.channels, 'telegram');
   const selectedKnowledgeSources = Array.isArray(selectedAgent?.knowledge_sources)
     ? selectedAgent.knowledge_sources
     : [];
@@ -3619,18 +4177,53 @@ export function WorkstationDeployedAgentsPane({
     ? 'Manage text agents, computer agents, and connected customer assistants.'
     : currentStudioSubview === 'inbox'
       ? 'Customer sessions and handoffs for assistants that are already working.'
-      : 'Go-live checks, spending guardrails, and optional advanced settings.';
+      : 'Go-live checks and spending guardrails for customer-facing assistants.';
   const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
   const showReadinessPanel = currentStudioSubview === 'deploy';
   const showDetailPanel = currentStudioSubview === 'deploy'
     || (currentStudioSubview === 'agents' && Boolean(selectedAgent) && overlayTab === 'overview');
   const showInboxPanels = currentStudioSubview === 'inbox';
   const visibleErrorMessage = isWizardScopedError(errorMessage) ? null : summarizeStudioErrorMessage(errorMessage);
+  const isRecoverableLoadTimeout = Boolean(visibleErrorMessage && /too long to respond|timed out/i.test(visibleErrorMessage));
+  const isAgentListUnavailable = Boolean(visibleErrorMessage && !isRecoverableLoadTimeout && !isLoadingAgents && agents.length === 0);
+  const isAgentListPriming = agents.length === 0 && (
+    isLoadingAgents
+    || isRecoverableLoadTimeout
+    || (!hasLoadedAgentListOnce && !isAgentListUnavailable)
+  );
+  const visibleGlobalErrorMessage = isRecoverableLoadTimeout ? null : visibleErrorMessage;
   const activeWizardSteps = wizardMode === 'create' ? CREATE_AGENT_WIZARD_STEPS : DEPLOYED_AGENT_WIZARD_STEPS;
   const wizardStep = activeWizardSteps[Math.min(wizardStepIndex, activeWizardSteps.length - 1)] ?? activeWizardSteps[0];
   const transcriptEntries: TimelineEntry[] = Array.isArray(selectedTranscript?.entries)
     ? (selectedTranscript.entries as TimelineEntry[])
     : [];
+  const overviewTrendValues = selectedAnalytics
+    ? [
+        0,
+        selectedAnalytics.messageVolumeDay,
+        Math.max(selectedAnalytics.messageVolumeWeek - selectedAnalytics.messageVolumeDay, 0),
+        Math.max(selectedAnalytics.messageVolumeMonth - selectedAnalytics.messageVolumeWeek, 0),
+        selectedAnalytics.messageVolumeMonth,
+      ]
+    : [0, 0, 0, 0, 0];
+  const overviewTrendMax = Math.max(...overviewTrendValues, 1);
+  const overviewTrendPoints = overviewTrendValues
+    .map((value, index) => {
+      const x = (index / Math.max(overviewTrendValues.length - 1, 1)) * 100;
+      const y = 76 - (Math.max(value, 0) / overviewTrendMax) * 56;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  const selectedAgentModeLabel = selectedAgent
+    ? runtimePlacementLabel(
+        readRecord(selectedAgent.config).runtime_placement
+        ?? readRecord(selectedAgent.metadata).runtime_placement
+        ?? selectedAgent.runtime_target,
+      )
+    : 'Text Agent';
+  const selectedContextPresetLabel = detailConfigDraft
+    ? CONTEXT_PRESET_OPTIONS.find((option) => option.id === detailConfigDraft.contextBudgetPreset)?.label ?? 'Balanced'
+    : 'Balanced';
   const selectedTranscriptCustomer = readRecord(selectedTranscript?.customer);
   const selectedExternalUserId = readString(selectedTranscriptCustomer.id || readRecord(selectedConversation?.customer).id);
   const selectedExternalUserLabel = readString(
@@ -3747,30 +4340,50 @@ export function WorkstationDeployedAgentsPane({
           </AppButton>
         ) : undefined}
       >
-        {statusMessage ? (
-          <StateBanner tone="success" title="Assistant updated">
-            {statusMessage}
-          </StateBanner>
-        ) : null}
-        {visibleErrorMessage ? (
-          <StateBanner
+        {visibleGlobalErrorMessage ? (
+          <PlatformNotification
             tone="danger"
             title="Build is having trouble loading"
             detail="Build keeps any successfully loaded assistant data visible while retrying failed requests."
+            onClose={() => setErrorMessage(null)}
           >
-            {visibleErrorMessage}
-          </StateBanner>
+            {visibleGlobalErrorMessage}
+          </PlatformNotification>
+        ) : statusMessage ? (
+          <PlatformNotification
+            tone="success"
+            title="Assistant updated"
+            detail={statusMessage}
+            onClose={() => setStatusMessage(null)}
+          />
         ) : null}
 
-        {isLoadingAgents ? (
-          <DeployedAgentsSkeleton />
-        ) : (
           <WorkstationSplitWorkbench
             ariaLabel="Agents"
             className="studio-agents-workbench"
             mainHeader={currentStudioSubview === 'agents' ? (
               <div className="studio-agents-workbench__header">
-                <span>Agents</span>
+                {selectedAgent ? (
+                  <div className="studio-agent-detail-tabs studio-agent-detail-tabs--header" role="tablist" aria-label="Agent sections">
+                    {SPECIALIST_OVERLAY_TABS.map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={overlayTab === tab.id}
+                        className={joinClassNames(
+                          'studio-agent-detail-tabs__button',
+                          overlayTab === tab.id && 'studio-agent-detail-tabs__button--active',
+                        )}
+                        onClick={() => setOverlayTab(tab.id)}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="studio-agents-workbench__header-spacer" aria-hidden="true" />
+                )}
                 <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
                   Add agent
                 </AppButton>
@@ -3813,7 +4426,7 @@ export function WorkstationDeployedAgentsPane({
                             tone="secondary"
                             onClick={() => {
                               setSelectedAgentId(recentlyCreatedAgentId);
-                              setOverlayAgentId(recentlyCreatedAgentId);
+                              setOverlayAgentId(null);
                               setOverlayTab('overview');
                             }}
                           >
@@ -3930,10 +4543,37 @@ export function WorkstationDeployedAgentsPane({
                     </ListDetailPanel>
 
                     <div className={joinClassNames('studio-agents-nav', agents.length === 0 && 'studio-agents-nav--empty')} aria-label="Workspace agents">
-                      {agents.length === 0 ? (
+                      {isAgentListPriming ? (
                         <div className="studio-agents-nav__empty">
-                          <strong>No agents yet</strong>
-                          <span>Create the first workspace agent.</span>
+                          <div className="studio-agents-nav__empty-copy">
+                            <strong>Loading agents</strong>
+                            <span>Checking this workspace for agents.</span>
+                          </div>
+                          <AppButton type="button" tone="secondary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+                            Create agent
+                          </AppButton>
+                        </div>
+                      ) : isAgentListUnavailable ? (
+                        <div className="studio-agents-nav__empty">
+                          <div className="studio-agents-nav__empty-copy">
+                            <strong>Could not load agents</strong>
+                            <span>Retry the agent list, or create a new workspace agent.</span>
+                          </div>
+                          <div className="studio-agents-nav__empty-actions">
+                            <AppButton type="button" tone="primary" onClick={() => { void refreshAgents(); }}>
+                              Retry
+                            </AppButton>
+                            <AppButton type="button" tone="secondary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+                              Create agent
+                            </AppButton>
+                          </div>
+                        </div>
+                      ) : agents.length === 0 ? (
+                        <div className="studio-agents-nav__empty">
+                          <div className="studio-agents-nav__empty-copy">
+                            <strong>No agents yet</strong>
+                            <span>Create the first workspace agent.</span>
+                          </div>
                           <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
                             Create agent
                           </AppButton>
@@ -4050,39 +4690,182 @@ export function WorkstationDeployedAgentsPane({
           >
             <div className="app-stack-4">
                 {currentStudioSubview === 'agents' && !selectedAgent ? (
-                  <div className="studio-agent-detail-empty" aria-label="Agent detail">
-                    <strong>{agents.length === 0 ? 'Add your agent' : 'Select an agent'}</strong>
-                    <span>
-                      {agents.length === 0
-                        ? 'Create the first workspace agent, then configure its memory, integrations, channels, and actions here.'
-                        : 'Agent configuration, channels, memory, analytics, and launch state will appear here.'}
-                    </span>
-                    {agents.length === 0 ? (
-                      <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                        Create agent
-                      </AppButton>
-                    ) : null}
-                  </div>
+                  isAgentListPriming ? (
+                    <div className="studio-agent-detail-loading" aria-label="Loading agent profile">
+                      <SkeletonBlock height="2.75rem" />
+                      <SkeletonBlock height="8rem" />
+                      <div className="studio-agent-detail-loading__grid">
+                        <SkeletonBlock height="6rem" />
+                        <SkeletonBlock height="6rem" />
+                        <SkeletonBlock height="6rem" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="studio-agent-detail-empty" aria-label="Agent detail">
+                      <strong>{isAgentListUnavailable ? 'Agent list did not load' : agents.length === 0 ? 'Add your agent' : 'Select an agent'}</strong>
+                      <span>
+                        {isAgentListUnavailable
+                          ? 'Retry the workspace agent list. Once an agent is selected, its overview, actions, memory, integrations, and results appear here.'
+                          : agents.length === 0
+                          ? 'Create the first workspace agent, then configure its memory, integrations, channels, and actions here.'
+                          : 'Agent configuration, channels, memory, analytics, and launch state will appear here.'}
+                      </span>
+                      {isAgentListUnavailable ? (
+                        <div className="app-inline-actions app-inline-actions--tight">
+                          <AppButton type="button" tone="primary" onClick={() => { void refreshAgents(); }}>
+                            Retry
+                          </AppButton>
+                          <AppButton type="button" tone="secondary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+                            Create agent
+                          </AppButton>
+                        </div>
+                      ) : agents.length === 0 ? (
+                        <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+                          Create agent
+                        </AppButton>
+                      ) : null}
+                    </div>
+                  )
                 ) : null}
 
-                {currentStudioSubview === 'agents' && selectedAgent ? (
-                  <div className="studio-agent-detail-tabs" role="tablist" aria-label="Agent sections">
-                    {SPECIALIST_OVERLAY_TABS.map((tab) => (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={overlayTab === tab.id}
-                        className={joinClassNames(
-                          'studio-agent-detail-tabs__button',
-                          overlayTab === tab.id && 'studio-agent-detail-tabs__button--active',
-                        )}
-                        onClick={() => setOverlayTab(tab.id)}
-                      >
-                        {tab.label}
-                      </button>
-                    ))}
-                  </div>
+                {currentStudioSubview === 'agents' && selectedAgent && overlayTab === 'chat' ? (
+                  <ListDetailPanel
+                    className="studio-panel studio-panel--detail"
+                    eyebrow="Chat"
+                    title="Chat"
+                    subtitle="Private messages for checking the selected agent before live customer traffic."
+                  >
+                    {selectedAgent.id && workspaceId ? (
+                      <AgentPlaygroundPanel
+                        deployedAgentId={readString(selectedAgent.id)}
+                        workspaceId={workspaceId}
+                        client={services.client}
+                      />
+                    ) : (
+                      <EmptyPanel title="Agent is not ready yet" body="Save the agent first, then test it here." />
+                    )}
+                  </ListDetailPanel>
+                ) : null}
+
+                {currentStudioSubview === 'agents' && selectedAgent && overlayTab === 'knowledge' ? (
+                  <ListDetailPanel
+                    className="studio-panel studio-panel--detail"
+                    eyebrow="Knowledge"
+                    title="Agent knowledge"
+                    subtitle="Instructions and trusted sources this agent should use when answering."
+                    actions={(
+                      <AppButton type="button" tone="secondary" onClick={openEditWizard}>
+                        Edit
+                      </AppButton>
+                    )}
+                  >
+                    <div className="studio-agent-knowledge">
+                      <div className="studio-agent-knowledge__block">
+                        <span>Instructions</span>
+                        <strong>Behavior document</strong>
+                        <p>{readString(selectedAgent.system_prompt, 'No response instructions configured yet.')}</p>
+                      </div>
+                      <div className="studio-agent-knowledge__block">
+                        <span>Role and tone</span>
+                        <p>{readString(selectedAgent.persona, 'No persona configured yet.')}</p>
+                      </div>
+                      <div className="studio-agent-knowledge__grid">
+                        <div>
+                          <span>Sources</span>
+                          <strong>{knowledgeSourceCount} connected</strong>
+                        </div>
+                        <div>
+                          <span>Source depth</span>
+                          <strong>{selectedContextPresetLabel}</strong>
+                        </div>
+                        <div>
+                          <span>Retrieval test</span>
+                          <strong>{knowledgeSourceCount > 0 ? 'Ready' : 'Add sources'}</strong>
+                        </div>
+                      </div>
+                      {detailConfigDraft ? (
+                        <ContextPresetControl
+                          value={detailConfigDraft.contextBudgetPreset}
+                          onSelect={(nextValue) => setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current)}
+                        />
+                      ) : null}
+                      <div className="studio-agent-knowledge__sources">
+                        <div className="studio-agent-knowledge__section-head">
+                          <div>
+                            <span>Sources</span>
+                            <strong>Files, URLs, app docs, tables, or notes</strong>
+                          </div>
+                          <AppButton type="button" tone="secondary" onClick={openEditWizard}>
+                            Add source
+                          </AppButton>
+                        </div>
+                        {selectedKnowledgeSources.length === 0 ? (
+                          <div className="deployed-agents-overlay__empty">No knowledge sources connected yet.</div>
+                        ) : selectedKnowledgeSources.map((source, index) => {
+                          const record = readRecord(source);
+                          const label = readString(record.label ?? record.uri ?? record.id, `Knowledge source ${index + 1}`);
+                          return (
+                            <div key={`${label}-${index}`} className="studio-agent-knowledge__source">
+                              <strong>{label}</strong>
+                              <span>{readString(record.kind, humanizeToken(record.type, inferKnowledgeSourceKind(label)))}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="studio-agent-knowledge__block">
+                        <span>Retrieval / Test</span>
+                        <strong>Ask what the agent would use</strong>
+                        <div className="studio-agent-knowledge__test">
+                          <input
+                            type="text"
+                            readOnly
+                            value=""
+                            placeholder="Example: What sources would answer a refund policy question?"
+                            aria-label="Knowledge retrieval test prompt"
+                          />
+                          <AppButton type="button" tone="secondary" onClick={() => setOverlayTab('chat')}>
+                            Test in chat
+                          </AppButton>
+                        </div>
+                        <p>{knowledgeSourceCount > 0 ? `${knowledgeSourceCount} source${knowledgeSourceCount === 1 ? '' : 's'} available for private test chat.` : 'Add a source, then test whether the agent cites the right material.'}</p>
+                      </div>
+                      {detailConfigDraft ? (
+                        <div className="app-inline-actions">
+                          <AppButton type="button" onClick={() => { void saveDetailConfig(); }} disabled={isSavingDetailConfig}>
+                            {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                          </AppButton>
+                        </div>
+                      ) : null}
+                    </div>
+                  </ListDetailPanel>
+                ) : null}
+
+                {currentStudioSubview === 'agents' && selectedAgent && overlayTab === 'ai' ? (
+                  <ListDetailPanel
+                    className="studio-panel studio-panel--detail"
+                    eyebrow="Model"
+                    title="Agent model"
+                    subtitle="Choose the provider account, model, and visible usage price for this agent."
+                  >
+                    {detailConfigDraft ? (
+                      <>
+                        <AgentAiSettingsSections
+                          value={detailConfigDraft}
+                          providerCatalog={providerCatalog}
+                          isLoadingProviderCatalog={isLoadingProviderCatalog}
+                          onSelectTier={updateDetailAiTier}
+                          onSelectProvider={updateDetailProvider}
+                          onSelectModel={updateDetailModel}
+                          onOpenIntegrations={() => setOverlayTab('connectors')}
+                        />
+                        <div className="app-inline-actions">
+                          <AppButton type="button" onClick={() => { void saveDetailConfig(); }} disabled={isSavingDetailConfig}>
+                            {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                          </AppButton>
+                        </div>
+                      </>
+                    ) : null}
+                  </ListDetailPanel>
                 ) : null}
 
                 {currentStudioSubview === 'agents' && selectedAgent && overlayTab === 'tools' ? (
@@ -4090,42 +4873,25 @@ export function WorkstationDeployedAgentsPane({
                     className="studio-panel studio-panel--detail"
                     eyebrow="Actions"
                     title="Agent actions"
-                    subtitle="Choose the tools this agent can use after creation."
+                    subtitle="Choose what this agent may do with connected services."
                   >
                     {detailConfigDraft ? (
                       <>
-                        <div className="sage-tool-list" role="list">
-                          {STUDIO_TOOL_OPTIONS.map((tool) => {
-                            const selected = detailConfigDraft.selectedToolIds.includes(tool.id);
-                            return (
-                              <article key={tool.id} className="sage-tool-row" role="listitem">
-                                <div className="sage-tool-row__copy">
-                                  <strong className="sage-tool-row__title">{tool.label}</strong>
-                                  <p className="sage-tool-row__description">{tool.description}</p>
-                                </div>
-                                <button
-                                  type="button"
-                                  className={joinClassNames('sage-tool-toggle', selected && 'sage-tool-toggle--enabled')}
-                                  role="switch"
-                                  aria-checked={selected}
-                                  onClick={() => {
-                                    setDetailConfigDraft((current) => {
-                                      if (!current) {
-                                        return current;
-                                      }
-                                      const nextSelected = current.selectedToolIds.includes(tool.id)
-                                        ? current.selectedToolIds.filter((item) => item !== tool.id)
-                                        : [...current.selectedToolIds, tool.id];
-                                      return { ...current, selectedToolIds: nextSelected };
-                                    });
-                                  }}
-                                >
-                                  <span className="sage-tool-toggle__thumb" />
-                                </button>
-                              </article>
-                            );
-                          })}
-                        </div>
+                        <AgentActionCapabilitySections
+                          selectedToolIds={detailConfigDraft.selectedToolIds}
+                          onOpenIntegrations={() => setOverlayTab('connectors')}
+                          onToggleTool={(toolId) => {
+                            setDetailConfigDraft((current) => {
+                              if (!current) {
+                                return current;
+                              }
+                              const nextSelected = current.selectedToolIds.includes(toolId)
+                                ? current.selectedToolIds.filter((item) => item !== toolId)
+                                : [...current.selectedToolIds, toolId];
+                              return { ...current, selectedToolIds: nextSelected };
+                            });
+                          }}
+                        />
                         <div className="app-inline-actions">
                           <AppButton type="button" onClick={() => { void saveDetailConfig(); }} disabled={isSavingDetailConfig}>
                             {isSavingDetailConfig ? 'Saving…' : 'Save'}
@@ -4148,7 +4914,7 @@ export function WorkstationDeployedAgentsPane({
                         <div className="deployed-agents-overlay__toggle-row">
                           <div className="sage-tool-row__copy">
                             <strong className="sage-tool-row__title">Persistent memory</strong>
-                            <p className="sage-tool-row__description">Keep reusable agent context across customer sessions.</p>
+                            <p className="sage-tool-row__description">Remember useful customer facts across conversations.</p>
                           </div>
                           <button
                             type="button"
@@ -4160,25 +4926,14 @@ export function WorkstationDeployedAgentsPane({
                             <span className="sage-tool-toggle__thumb" />
                           </button>
                         </div>
-                        <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                          <ContextPresetControl
-                            value={detailConfigDraft.contextBudgetPreset}
-                            onSelect={(nextValue) => setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current)}
+                        {detailConfigDraft.memoryEnabled ? (
+                          <div className="studio-agent-memory-settings">
+                          <RetentionPresetControl
+                            value={detailConfigDraft.retentionPreset}
+                            onSelect={(nextValue) => setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current)}
                           />
-                          <FormField label="Retention window">
-                            <FormSelect
-                              value={detailConfigDraft.retentionPreset}
-                              onChange={(event) => {
-                                const nextValue = event.currentTarget.value;
-                                setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
-                              }}
-                            >
-                              <option value="short">Short</option>
-                              <option value="standard">Standard</option>
-                              <option value="extended">Extended</option>
-                            </FormSelect>
-                          </FormField>
-                        </FormGrid>
+                          </div>
+                        ) : null}
                         <div className="deployed-agents-overlay__memory-list">
                           {isLoadingOverlayMemory && overlayMemoryEntries.length === 0 ? (
                             <>
@@ -4269,10 +5024,10 @@ export function WorkstationDeployedAgentsPane({
                         disabled={
                           busyAgentId === readString(selectedAgent.id)
                           || readString(selectedAgent.deployment_state).toLowerCase() === 'live'
-                          || isLoadingTelegramReadiness
+                          || (selectedAgentNeedsTelegramReadiness && isLoadingTelegramReadiness)
                           || isLoadingRuntimeAttachments
-                          || !selectedTelegramReadiness
-                          || (selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
+                          || (selectedAgentNeedsTelegramReadiness && !selectedTelegramReadiness)
+                          || (selectedAgentNeedsTelegramReadiness && selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
                           || Boolean(selectedAgentSelfHostedDeployBlocker)
                         }
                       >
@@ -4305,7 +5060,7 @@ export function WorkstationDeployedAgentsPane({
                         <FormReadout label="Setup time" value={selectedStudioTemplate.setupTime} />
                         <FormReadout label="Channel" value={selectedStudioTemplate.channelLabel} />
                         <FormReadout label="Memory" value={selectedStudioTemplate.memoryEnabled ? 'Enabled by default' : 'Off by default'} />
-                        <FormReadout label="Context" value={humanizeToken(selectedStudioTemplate.contextBudgetPreset, 'Balanced')} />
+                        <FormReadout label="Source depth" value={humanizeToken(selectedStudioTemplate.contextBudgetPreset, 'Balanced')} />
                       </FormGrid>
                       <div className="studio-template-detail__group">
                         <span className="studio-template-detail__label">What you’ll connect</span>
@@ -4345,7 +5100,7 @@ export function WorkstationDeployedAgentsPane({
                     </>
                   ) : (
                     <>
-                      {selectedTelegramReadiness ? (
+                      {selectedAgentNeedsTelegramReadiness && selectedTelegramReadiness ? (
                         <StateBanner
                           tone={selectedTelegramReadiness.readyForLive ? 'success' : selectedTelegramReadiness.blockers.length > 0 ? 'warning' : 'neutral'}
                           title={selectedTelegramReadiness.readyForLive ? 'Telegram launch ready' : 'Telegram launch not ready'}
@@ -4355,185 +5110,56 @@ export function WorkstationDeployedAgentsPane({
                             ? selectedTelegramReadiness.blockers.map((item) => item.message).join(' · ')
                             : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || `${selectedTelegramReadiness.connectors.length} connected app${selectedTelegramReadiness.connectors.length === 1 ? '' : 's'} checked.`}
                         </StateBanner>
-                      ) : isLoadingTelegramReadiness ? (
+                      ) : selectedAgentNeedsTelegramReadiness && isLoadingTelegramReadiness ? (
                         <SkeletonBlock height="5rem" />
                       ) : null}
-                      <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
-                        <FormReadout label="State" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
-                        <FormReadout label="Agent mode" value={runtimePlacementLabel(readRecord(selectedAgent.config).runtime_placement ?? readRecord(selectedAgent.metadata).runtime_placement ?? selectedAgent.runtime_target)} />
-                        <FormReadout label="AI model" value={humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
-                        <FormReadout label="Model" value={selectedModelId(selectedAgent) || 'Not pinned'} />
-                        <FormReadout label="Billing plan" value={humanizeToken(selectedAgent.billing_plan, 'Free')} />
-                        <FormReadout
-                          label="Persistent memory"
-                          value={
-                            readRecord(readRecord(selectedAgent.config).memory_policy).memory_enabled === true
-                            || readRecord(selectedAgent.metadata).memory_enabled === true
-                              ? 'Enabled'
-                              : 'Disabled'
-                          }
-                        />
-                        <FormReadout
-                          label="Monthly cap"
-                          value={formatUsd(
-                            readRecord(readRecord(selectedAgent.config).commerce_policy).monthly_cost_cap_usd
-                            ?? readRecord(selectedAgent.metadata).monthly_cost_cap_usd,
-                          )}
-                        />
-                        <FormReadout label="Assistant id" value={readString(selectedAgent.backing_install_id, 'pending')} />
-                      </FormGrid>
-                      <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
-                        <FormReadout label="Live channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
-                        <FormReadout
-                          label="Allowed actions"
-                          value={
-                            normalizeToolIds(readRecord(readRecord(selectedAgent.config).tool_policy).enabled_tools ?? readRecord(selectedAgent.metadata).selected_tool_ids)
-                              .map((item) => toolLabel(item))
-                              .join(', ')
-                            || 'No actions selected'
-                          }
-                        />
-                        <FormReadout
-                          label="Telegram connected app"
-                          value={readString(
-                            readRecord(selectedTelegramReadiness?.configuredBinding).label,
-                            readString(readRecord(selectedTelegramReadiness?.configuredBinding).connector_id, 'Not bound'),
-                          )}
-                        />
-                        <FormReadout
-                          label="Inbound key"
-                          value={readString(readRecord(selectedTelegramReadiness?.configuredBinding).endpoint_key, 'Not bound')}
-                        />
-                        <FormReadout
-                          label="Webhook status"
-                          value={humanizeToken(readRecord(selectedTelegramReadiness?.webhook).status, 'Checking')}
-                        />
-                        <FormReadout label="Knowledge refs" value={`${knowledgeSourceCount} referenced sources`} />
-                        <FormReadout label="Conversation count" value={selectedAgentMetrics?.conversationCountLabel ?? 'Syncing inbox'} />
-                        <FormReadout label="Latest activity" value={selectedAgentMetrics?.latestActivityLabel ?? 'Fetching recent customer activity'} />
-                        <FormReadout label="Last updated" value={formatTimestamp(selectedAgent.updated_at)} />
-                      </FormGrid>
-                      <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
-                        <FormReadout label="Current burn" value={formatUsd(selectedBudgetCycle.current_burn_usd)} />
-                        <FormReadout label="Percent used" value={readNumber(selectedBudgetCycle.percent_used) === null ? 'n/a' : `${readNumber(selectedBudgetCycle.percent_used)?.toFixed(2)}%`} />
-                        <FormReadout label="Last threshold" value={humanizeToken(selectedBudgetCycle.last_threshold_reached, 'None')} />
-                        <FormReadout label="Budget month" value={readString(selectedBudgetCycle.usage_month, 'No tracked spend yet')} />
-                      </FormGrid>
-                      <div data-deployed-agent-analytics="detail">
-                        <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
-                          <FormReadout label="Active users (30d)" value={selectedAnalytics ? formatCompactCount(selectedAnalytics.activeUsersLast30d) : (isLoadingAnalytics ? 'Syncing analytics' : '0')} />
-                          <FormReadout label="Messages (24h)" value={selectedAnalytics ? formatCompactCount(selectedAnalytics.messageVolumeDay) : (isLoadingAnalytics ? 'Syncing analytics' : '0')} />
-                          <FormReadout label="Messages (7d)" value={selectedAnalytics ? formatCompactCount(selectedAnalytics.messageVolumeWeek) : (isLoadingAnalytics ? 'Syncing analytics' : '0')} />
-                          <FormReadout label="Messages (30d)" value={selectedAnalytics ? formatCompactCount(selectedAnalytics.messageVolumeMonth) : (isLoadingAnalytics ? 'Syncing analytics' : '0')} />
-                          <FormReadout
-                            label="Escalation rate"
-                            value={selectedAnalytics ? `${selectedAnalytics.escalationRatePercent.toFixed(1)}%` : (isLoadingAnalytics ? 'Syncing analytics' : '0.0%')}
-                          />
-                          <FormReadout label="Outcomes" value={formatOutcomeSummary(selectedAnalytics)} />
-                        </FormGrid>
-                      </div>
-                      {detailConfigDraft ? (
-                        <>
-                          <FormField label="Actions" hint="Choose the minimum allowed actions for this assistant after creation.">
-                            <div className="app-inline-actions studio-inline-wrap">
-                              {STUDIO_TOOL_OPTIONS.map((tool) => {
-                                const selected = detailConfigDraft.selectedToolIds.includes(tool.id);
-                                return (
-                                  <AppButton
-                                    key={tool.id}
-                                    type="button"
-                                    tone={selected ? 'primary' : 'secondary'}
-                                    onClick={() => {
-                                      setDetailConfigDraft((current) => {
-                                        if (!current) {
-                                          return current;
-                                        }
-                                        const nextSelected = current.selectedToolIds.includes(tool.id)
-                                          ? current.selectedToolIds.filter((item) => item !== tool.id)
-                                          : [...current.selectedToolIds, tool.id];
-                                        return {
-                                          ...current,
-                                          selectedToolIds: nextSelected,
-                                        };
-                                      });
-                                    }}
-                                  >
-                                    {selected ? `Enabled · ${tool.label}` : tool.label}
-                                  </AppButton>
-                                );
-                              })}
-                            </div>
-                          </FormField>
-                          <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                            <FormField label="Persistent memory" hint="Enable memory and adjust retention after the assistant has been created.">
-                              <FormSelect
-                                value={detailConfigDraft.memoryEnabled ? 'enabled' : 'disabled'}
-                                onChange={(event) => {
-                                  const nextValue = event.currentTarget.value === 'enabled';
-                                  setDetailConfigDraft((current) => current ? { ...current, memoryEnabled: nextValue } : current);
-                                }}
-                              >
-                                <option value="disabled">Disabled</option>
-                                <option value="enabled">Enabled</option>
-                              </FormSelect>
-                            </FormField>
-                            {showAdvanced && (
-                              <ContextPresetControl
-                                value={detailConfigDraft.contextBudgetPreset}
-                                onSelect={(nextValue) => {
-                                  setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current);
-                                }}
-                              />
-                            )}
-                            {showAdvanced && (
-                              <FormField label="Retention" hint="Controls how long this assistant can retain reusable memory state.">
-                                <FormSelect
-                                  value={detailConfigDraft.retentionPreset}
-                                  onChange={(event) => {
-                                    const nextValue = event.currentTarget.value;
-                                    setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
-                                  }}
-                                >
-                                  <option value="short">Short</option>
-                                  <option value="standard">Standard</option>
-                                  <option value="extended">Extended</option>
-                                </FormSelect>
-                              </FormField>
-                            )}
-                          </FormGrid>
-                          <div className="app-inline-actions">
-                            <AppButton
-                              type="button"
-                              onClick={() => {
-                                void saveDetailConfig();
-                              }}
-                              disabled={isSavingDetailConfig}
-                            >
-                              {isSavingDetailConfig ? 'Saving…' : 'Save'}
-                            </AppButton>
-                            <AppButton
-                              type="button"
-                              tone="secondary"
-                              onClick={() => setShowAdvanced(!showAdvanced)}
-                              className="app-button--subtle"
-                            >
-                              {showAdvanced ? 'Hide Advanced' : 'Advanced'}
-                            </AppButton>
-                            <FormReadout
-                              label="Selected actions"
-                              value={detailConfigDraft.selectedToolIds.length > 0
-                                ? detailConfigDraft.selectedToolIds.map((toolId) => toolLabel(toolId)).join(', ')
-                                : 'No actions selected'}
-                            />
+                      <div className="studio-agent-overview">
+                        <div className="studio-agent-overview__metrics">
+                          <div className="studio-agent-metric">
+                            <span>Active users</span>
+                            <strong>{selectedAnalytics ? formatCompactCount(selectedAnalytics.activeUsersLast30d) : (isLoadingAnalytics ? 'Syncing' : '0')}</strong>
+                            <small>Last 30 days</small>
                           </div>
-                        </>
-                      ) : null}
-                      <div className="app-meta-item">
-                        <div className="app-meta-label">
-                          System prompt
+                          <div className="studio-agent-metric">
+                            <span>Messages</span>
+                            <strong>{selectedAnalytics ? formatCompactCount(selectedAnalytics.messageVolumeMonth) : (isLoadingAnalytics ? 'Syncing' : '0')}</strong>
+                            <small>This month</small>
+                          </div>
+                          <div className="studio-agent-metric">
+                            <span>Customers</span>
+                            <strong>{selectedAgentMetrics?.conversationCountLabel ?? '0'}</strong>
+                            <small>Total conversations</small>
+                          </div>
+                          <div className="studio-agent-metric">
+                            <span>Escalation rate</span>
+                            <strong>{selectedAnalytics ? `${selectedAnalytics.escalationRatePercent.toFixed(1)}%` : '0.0%'}</strong>
+                            <small>Owner review pressure</small>
+                          </div>
                         </div>
-                        <div className="app-meta-value app-meta-value--body">
-                          {readString(selectedAgent.system_prompt, 'No launch prompt configured yet.')}
+
+                        <div className="studio-agent-overview__chart">
+                          <div className="studio-agent-overview__chart-copy">
+                            <span>Traffic trend</span>
+                            <strong>{selectedAnalytics ? formatCompactCount(selectedAnalytics.messageVolumeMonth) : '0'} messages</strong>
+                            <small>Daily, weekly, and monthly message signal for this agent.</small>
+                          </div>
+                          <svg className="studio-agent-overview__sparkline" viewBox="0 0 100 88" preserveAspectRatio="none" aria-hidden="true">
+                            <line x1="0" y1="76" x2="100" y2="76" />
+                            <polyline points={overviewTrendPoints} />
+                          </svg>
+                        </div>
+
+                        <div className="studio-agent-overview__facts">
+                          <div><span>State</span><strong>{humanizeToken(selectedAgent.deployment_state, 'Draft')}</strong></div>
+                          <div><span>Mode</span><strong>{selectedAgentModeLabel}</strong></div>
+                          <div><span>Model</span><strong>{selectedModelId(selectedAgent) || humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')}</strong></div>
+                          <div><span>Channels</span><strong>{activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'}</strong></div>
+                          <div><span>Actions</span><strong>{normalizeToolIds(readRecord(readRecord(selectedAgent.config).tool_policy).enabled_tools ?? readRecord(selectedAgent.metadata).selected_tool_ids).length || 0} enabled</strong></div>
+                          <div><span>Memory</span><strong>{selectedAgentMemoryEnabled ? 'Enabled' : 'Disabled'}</strong></div>
+                          <div><span>Knowledge</span><strong>{knowledgeSourceCount} sources</strong></div>
+                          <div><span>Source depth</span><strong>{selectedContextPresetLabel}</strong></div>
+                          <div><span>Budget</span><strong>{formatUsd(selectedBudgetCycle.current_burn_usd)}</strong></div>
+                          <div><span>Last activity</span><strong>{selectedAgentMetrics?.latestActivityLabel ?? 'No recent activity'}</strong></div>
                         </div>
                       </div>
                     </>
@@ -4755,17 +5381,8 @@ export function WorkstationDeployedAgentsPane({
                   )}
                 </ListDetailPanel>
                 ) : null}
-
-                {overlayAgent && overlayAgent.id && workspaceId ? (
-                  <AgentPlaygroundPanel
-                    deployedAgentId={readString(overlayAgent.id)}
-                    workspaceId={workspaceId}
-                    client={services.client}
-                  />
-                ) : null}
             </div>
           </WorkstationSplitWorkbench>
-        )}
 
         {currentStudioSubview === 'agents' && overlayAgent ? (
           <div className="deployed-agents-overlay" role="dialog" aria-modal="true" aria-label="Assistant settings">
@@ -4937,10 +5554,10 @@ export function WorkstationDeployedAgentsPane({
                             disabled={
                               busyAgentId === readString(overlayAgent.id)
                               || readString(overlayAgent.deployment_state).toLowerCase() === 'live'
-                              || isLoadingTelegramReadiness
+                              || (selectedAgentNeedsTelegramReadiness && isLoadingTelegramReadiness)
                               || isLoadingRuntimeAttachments
-                              || !selectedTelegramReadiness
-                              || (selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
+                              || (selectedAgentNeedsTelegramReadiness && !selectedTelegramReadiness)
+                              || (selectedAgentNeedsTelegramReadiness && selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
                               || Boolean(selectedAgentSelfHostedDeployBlocker)
                             }
                           >
@@ -4967,42 +5584,46 @@ export function WorkstationDeployedAgentsPane({
                   </div>
                 ) : null}
 
+                {overlayTab === 'ai' ? (
+                  <div className="deployed-agents-overlay__section">
+                    {detailConfigDraft ? (
+                      <>
+                        <AgentAiSettingsSections
+                          value={detailConfigDraft}
+                          providerCatalog={providerCatalog}
+                          isLoadingProviderCatalog={isLoadingProviderCatalog}
+                          onSelectTier={updateDetailAiTier}
+                          onSelectProvider={updateDetailProvider}
+                          onSelectModel={updateDetailModel}
+                          onOpenIntegrations={() => setOverlayTab('connectors')}
+                        />
+                        <div className="deployed-agents-overlay__footer">
+                          <AppButton type="button" onClick={() => { void saveDetailConfig(); }} disabled={isSavingDetailConfig}>
+                            {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                          </AppButton>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 {overlayTab === 'tools' ? (
                   <div className="deployed-agents-overlay__section">
-                    <div className="sage-tool-list" role="list">
-                      {STUDIO_TOOL_OPTIONS.map((tool) => {
-                        const selected = detailConfigDraft?.selectedToolIds.includes(tool.id) ?? false;
-                        return (
-                          <article key={tool.id} className="sage-tool-row" role="listitem">
-                            <div className="sage-tool-row__copy">
-                              <strong className="sage-tool-row__title">{tool.label}</strong>
-                              <p className="sage-tool-row__description">{tool.description}</p>
-                            </div>
-                            <div className="sage-tool-row__actions">
-                              <button
-                                type="button"
-                                className={joinClassNames('sage-tool-toggle', selected && 'sage-tool-toggle--enabled')}
-                                role="switch"
-                                aria-checked={selected}
-                                onClick={() => {
-                                  setDetailConfigDraft((current) => {
-                                    if (!current) {
-                                      return current;
-                                    }
-                                    const nextSelected = current.selectedToolIds.includes(tool.id)
-                                      ? current.selectedToolIds.filter((item) => item !== tool.id)
-                                      : [...current.selectedToolIds, tool.id];
-                                    return { ...current, selectedToolIds: nextSelected };
-                                  });
-                                }}
-                              >
-                                <span className="sage-tool-toggle__thumb" />
-                              </button>
-                            </div>
-                          </article>
-                        );
-                      })}
-                    </div>
+                    <AgentActionCapabilitySections
+                      selectedToolIds={detailConfigDraft?.selectedToolIds ?? []}
+                      onOpenIntegrations={() => setOverlayTab('connectors')}
+                      onToggleTool={(toolId) => {
+                        setDetailConfigDraft((current) => {
+                          if (!current) {
+                            return current;
+                          }
+                          const nextSelected = current.selectedToolIds.includes(toolId)
+                            ? current.selectedToolIds.filter((item) => item !== toolId)
+                            : [...current.selectedToolIds, toolId];
+                          return { ...current, selectedToolIds: nextSelected };
+                        });
+                      }}
+                    />
                     <div className="deployed-agents-overlay__footer">
                       <AppButton type="button" onClick={() => { void saveDetailConfig(); }} disabled={isSavingDetailConfig}>
                         {isSavingDetailConfig ? 'Saving…' : 'Save'}
@@ -5018,7 +5639,7 @@ export function WorkstationDeployedAgentsPane({
                         <div className="deployed-agents-overlay__toggle-row">
                           <div className="sage-tool-row__copy">
                             <strong className="sage-tool-row__title">Persistent memory</strong>
-                            <p className="sage-tool-row__description">Keep reusable assistant context across customer sessions.</p>
+                            <p className="sage-tool-row__description">Remember useful customer facts across conversations.</p>
                           </div>
                           <button
                             type="button"
@@ -5032,39 +5653,14 @@ export function WorkstationDeployedAgentsPane({
                             <span className="sage-tool-toggle__thumb" />
                           </button>
                         </div>
-                        <div className="app-inline-actions app-inline-actions--end">
-                          <AppButton
-                            type="button"
-                            tone="secondary"
-                            onClick={() => setShowAdvanced(!showAdvanced)}
-                            className="app-button--subtle"
-                          >
-                            {showAdvanced ? 'Hide Advanced' : 'Advanced'}
-                          </AppButton>
-                        </div>
-                        {showAdvanced && (
-                          <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                            <ContextPresetControl
-                              value={detailConfigDraft.contextBudgetPreset}
-                              onSelect={(nextValue) => {
-                                setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current);
-                              }}
-                            />
-                            <FormField label="Retention window">
-                              <FormSelect
-                                value={detailConfigDraft.retentionPreset}
-                                onChange={(event) => {
-                                  const nextValue = event.currentTarget.value;
-                                  setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
-                                }}
-                              >
-                                <option value="short">Short</option>
-                                <option value="standard">Standard</option>
-                                <option value="extended">Extended</option>
-                              </FormSelect>
-                            </FormField>
-                          </FormGrid>
-                        )}
+                        {detailConfigDraft.memoryEnabled ? (
+                          <RetentionPresetControl
+                            value={detailConfigDraft.retentionPreset}
+                            onSelect={(nextValue) => {
+                              setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
+                            }}
+                          />
+                        ) : null}
                         <div className="deployed-agents-overlay__memory-list">
                           {isLoadingOverlayMemory && overlayMemoryEntries.length === 0 ? (
                             <>
@@ -5135,8 +5731,8 @@ export function WorkstationDeployedAgentsPane({
         title={wizardMode === 'create' ? 'Create agent' : 'Edit agent'}
         description={
           wizardMode === 'create'
-            ? 'Start with a custom draft. Add knowledge, integrations, channels, and advanced runtime settings after it exists.'
-            : 'Adjust the agent, customer channel, and launch settings.'
+            ? 'Start with a deploy-safe draft. Add knowledge, integrations, and channels after it exists.'
+            : 'Adjust the agent profile, knowledge, customer channel, and safety behavior.'
         }
         onClose={closeWizard}
           actions={(
@@ -5241,7 +5837,7 @@ export function WorkstationDeployedAgentsPane({
                       <div className="deployed-agents-wizard__memory-toggle">
                         <div className="sage-tool-row__copy">
                           <strong className="sage-tool-row__title">Enable persistent memory</strong>
-                          <p className="sage-tool-row__description">Assistant remembers each customer across conversations.</p>
+                          <p className="sage-tool-row__description">Assistant remembers useful customer facts across conversations.</p>
                         </div>
                         <button
                           type="button"
@@ -5253,22 +5849,6 @@ export function WorkstationDeployedAgentsPane({
                           <span className="sage-tool-toggle__thumb" />
                         </button>
                       </div>
-                      <div className="app-inline-actions app-inline-actions--end">
-                        <AppButton
-                          type="button"
-                          tone="secondary"
-                          onClick={() => setShowAdvanced(!showAdvanced)}
-                          className="app-button--subtle"
-                        >
-                          {showAdvanced ? 'Hide Advanced' : 'Advanced'}
-                        </AppButton>
-                      </div>
-                      {showAdvanced && (
-                        <ContextPresetControl
-                          value={wizardState.contextBudgetPreset}
-                          onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
-                        />
-                      )}
                     </FormField>
                     <FormField label="Purpose and behavior" hint="Core customer instructions this assistant follows.">
                       <FormTextarea
@@ -5284,6 +5864,10 @@ export function WorkstationDeployedAgentsPane({
                         value={wizardState.knowledgeSourceText}
                         onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
                         placeholder={'kb://menu-pdf\nsheet://daily-menu'}
+                      />
+                      <ContextPresetControl
+                        value={wizardState.contextBudgetPreset}
+                        onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
                       />
                     </FormField>
                   </FormGrid>
@@ -5477,7 +6061,7 @@ export function WorkstationDeployedAgentsPane({
                     <div className="sage-tool-row__copy">
                       <strong className="sage-tool-row__title">Persistent customer memory</strong>
                       <p className="sage-tool-row__description">
-                        Enable this only when the assistant benefits from remembering customers across conversations.
+                        Remember useful customer facts across conversations.
                       </p>
                     </div>
                     <button
@@ -5490,34 +6074,12 @@ export function WorkstationDeployedAgentsPane({
                       <span className="sage-tool-toggle__thumb" />
                     </button>
                   </div>
-                  <div className="app-inline-actions app-inline-actions--end">
-                    <AppButton
-                      type="button"
-                      tone="secondary"
-                      onClick={() => setShowAdvanced(!showAdvanced)}
-                      className="app-button--subtle"
-                    >
-                      {showAdvanced ? 'Hide Advanced' : 'Advanced'}
-                    </AppButton>
-                  </div>
-                  {showAdvanced && (
-                    <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                      <ContextPresetControl
-                        value={wizardState.contextBudgetPreset}
-                        onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
-                      />
-                      <FormField label="Retention" hint="How long reusable memory should be kept.">
-                        <FormSelect
-                          value={wizardState.retentionPreset}
-                          onChange={(event) => setWizardField('retentionPreset', event.currentTarget.value)}
-                        >
-                          <option value="short">Short</option>
-                          <option value="standard">Standard</option>
-                          <option value="long">Long</option>
-                      </FormSelect>
-                    </FormField>
-                  </FormGrid>
-                  )}
+                  {wizardState.memoryEnabled ? (
+                    <RetentionPresetControl
+                      value={wizardState.retentionPreset}
+                      onSelect={(nextValue) => setWizardField('retentionPreset', nextValue)}
+                    />
+                  ) : null}
                 </div>
               ) : null}
 
@@ -5605,7 +6167,7 @@ export function WorkstationDeployedAgentsPane({
                   <StateBanner
                     tone="neutral"
                     title="Launch contract for this business assistant"
-                    detail="Set AI tier, agent mode, budget cap, approval mode, and customer channel. Raw provider/model is kept in advanced overrides."
+                    detail="Defaults are safe for production. Change these only when the assistant needs a different runtime, channel, or spending cap."
                   />
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                     <FormField label="AI tier" hint="Product-level capability for this assistant.">
@@ -5831,7 +6393,7 @@ export function WorkstationDeployedAgentsPane({
                     </FormGrid>
                   </details>
                   <details className="app-stack-3">
-                    <summary>Advanced provider/model overrides</summary>
+                    <summary>AI model and cost details</summary>
                     <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                       <FormField label="AI model provider" hint="Choose the AI model provider for this assistant.">
                         <FormSelect
@@ -5886,24 +6448,13 @@ export function WorkstationDeployedAgentsPane({
                           ))}
                         </FormSelect>
                       </FormField>
-                      <FormField label="Billing plan" hint="Choose the plan tied to this assistant.">
-                        <FormSelect
-                          value={wizardState.billingPlan}
-                          onChange={(event) => setWizardField('billingPlan', event.currentTarget.value)}
-                        >
-                          <option value="free">Free</option>
-                          <option value="pro">Pro</option>
-                          <option value="team">Team</option>
-                          <option value="enterprise">Enterprise</option>
-                        </FormSelect>
-                      </FormField>
                     </FormGrid>
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="AI model provider state" value={humanizeToken(selectedProviderCatalog?.state, isLoadingProviderCatalog ? 'Loading' : 'Unknown')} />
                       <FormReadout label="Privacy profile" value={selectedProviderCatalog?.privacyPosture || 'n/a'} />
                       <FormReadout label="Jurisdiction" value={selectedProviderCatalog?.jurisdiction || 'n/a'} />
                       <FormReadout label="Residency" value={selectedProviderCatalog?.residency || 'n/a'} />
-                      <FormReadout label="Context window" value={formatContextWindow(selectedProviderModelCatalog?.contextWindowTokens)} />
+                      <FormReadout label="Model capacity" value={formatContextWindow(selectedProviderModelCatalog?.contextWindowTokens)} />
                       <FormReadout
                         label="Pricing"
                         value={

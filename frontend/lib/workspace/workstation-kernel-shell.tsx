@@ -438,55 +438,57 @@ export function WorkstationKernelShell({
         activeRouteId === 'chat' && 'workstation-shell--chat',
       )}
     >
-      <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
-        <WorkstationTitlebar
-          surfaceLabel={workspaceLabel}
-          surfaceHref={surfaceHomeHref}
-          diagnosticsVisible={false}
-          onToggleDiagnostics={() => {}}
-          leftAction={(
-            <button
-              type="button"
-              className="workstation-titlebar__mobile-menu-trigger"
-              aria-label="Open sidebar"
-              onClick={() => setIsSidebarOpen(true)}
-            >
-              <Menu size={20} />
-            </button>
-          )}
-          actions={pendingApprovalCount > 0 && routeManifest.routeIndex.heartbeat ? (
-            <Link
-              href={routeManifest.routeIndex.heartbeat.href}
-              className="workstation-titlebar__link workstation-titlebar__link--active"
-            >
-              Needs your OK · {pendingApprovalCount}
-            </Link>
-          ) : null}
-          navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
-            route.id === 'runs' ? (
-              <MainAgentHistoryPopover
-                key={route.id}
-                chatHref={routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`}
-                client={services.client}
-                workspaceId={workspaceId}
-              />
-            ) : (
-              <Link
-                key={route.id}
-                href={route.href}
-                prefetch
-                aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
-                className={joinClassNames(
-                  'workstation-titlebar__link',
-                  isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
-                )}
+      {activeDestinationId !== 'studio' ? (
+        <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
+          <WorkstationTitlebar
+            surfaceLabel={workspaceLabel}
+            surfaceHref={surfaceHomeHref}
+            diagnosticsVisible={false}
+            onToggleDiagnostics={() => {}}
+            leftAction={(
+              <button
+                type="button"
+                className="workstation-titlebar__mobile-menu-trigger"
+                aria-label="Open sidebar"
+                onClick={() => setIsSidebarOpen(true)}
               >
-                <span>{route.label}</span>
+                <Menu size={20} />
+              </button>
+            )}
+            actions={pendingApprovalCount > 0 && routeManifest.routeIndex.heartbeat ? (
+              <Link
+                href={routeManifest.routeIndex.heartbeat.href}
+                className="workstation-titlebar__link workstation-titlebar__link--active"
+              >
+                Needs your OK · {pendingApprovalCount}
               </Link>
-            )
-          )) : null}
-        />
-      </div>
+            ) : null}
+            navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
+              route.id === 'runs' ? (
+                <MainAgentHistoryPopover
+                  key={route.id}
+                  chatHref={routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`}
+                  client={services.client}
+                  workspaceId={workspaceId}
+                />
+              ) : (
+                <Link
+                  key={route.id}
+                  href={route.href}
+                  prefetch
+                  aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
+                  className={joinClassNames(
+                    'workstation-titlebar__link',
+                    isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
+                  )}
+                >
+                  <span>{route.label}</span>
+                </Link>
+              )
+            )) : null}
+          />
+        </div>
+      ) : null}
 
       <AppDrawer
         open={isSidebarOpen}

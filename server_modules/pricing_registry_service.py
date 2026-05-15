@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
 
 
-PRICING_REGISTRY_VERSION = "2026-04-13"
+PRICING_REGISTRY_VERSION = "2026-05-15"
 QWEN_CNY_PER_USD = 7.108
 QWEN_USD_PER_CNY = 1.0 / QWEN_CNY_PER_USD
 
@@ -60,17 +60,22 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
         "sonnet": {"input": None, "output": None, "source": "subscription_cli"},
     },
     "openai": {
-        "gpt-5.4": {"input": 2.50, "output": 15.00, "source": "https://openai.com/api/pricing/"},
-        "gpt-5.4-mini": {"input": 0.75, "output": 4.50, "source": "https://openai.com/api/pricing/"},
-        "gpt-5.4-nano": {"input": 0.20, "output": 1.25, "source": "https://openai.com/api/pricing/"},
+        "gpt-5.2": {"input": 1.75, "output": 14.00, "source": "https://platform.openai.com/docs/pricing"},
+        "gpt-5.1": {"input": 1.25, "output": 10.00, "source": "https://platform.openai.com/docs/pricing"},
+        "gpt-5": {"input": 1.25, "output": 10.00, "source": "https://platform.openai.com/docs/pricing"},
+        "gpt-5-mini": {"input": 0.25, "output": 2.00, "source": "https://platform.openai.com/docs/pricing"},
+        "gpt-5-nano": {"input": 0.05, "output": 0.40, "source": "https://platform.openai.com/docs/pricing"},
         "gpt-4.1": {"input": 2.00, "output": 8.00, "source": "https://platform.openai.com/pricing"},
         "gpt-4.1-mini": {"input": 0.40, "output": 1.60, "source": "https://platform.openai.com/pricing"},
         "gpt-4.1-nano": {"input": 0.10, "output": 0.40, "source": "https://platform.openai.com/pricing"},
         "gpt-4": {"input": 30.00, "output": 60.00, "source": "https://platform.openai.com/docs/models/gpt-4"},
-        "gpt-4o": {"input": 5.00, "output": 15.00, "source": "https://platform.openai.com/pricing"},
+        "gpt-4o": {"input": 2.50, "output": 10.00, "source": "https://platform.openai.com/docs/pricing"},
         "gpt-4o-mini": {"input": 0.15, "output": 0.60, "source": "https://platform.openai.com/pricing"},
     },
     "anthropic": {
+        "claude-opus-4-1-20250805": {"input": 15.00, "output": 75.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
+        "claude-opus-4-20250514": {"input": 15.00, "output": 75.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
+        "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
         "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
         "claude-3-7-sonnet": {"input": 3.00, "output": 15.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
         "claude-sonnet-4": {"input": 3.00, "output": 15.00, "source": "https://docs.anthropic.com/en/docs/about-claude/models/all-models"},
@@ -87,6 +92,8 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
         "gemini-2.0-flash-001": {"input": 0.10, "output": 0.40, "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     },
     "vertex": {
+        "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
+        "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
         "gemini-1.5-pro": {"input": 1.25, "output": 5.00, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
         "gemini-1.5-flash": {"input": 0.10, "output": 0.30, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
     },

@@ -1889,7 +1889,7 @@ export function WorkstationSageConnectorsPane({
       statusTone: record.statusTone,
       summary: record.summary,
       nextStep: record.nextStep,
-      actionLabel: record.channel ? 'Advanced setup' : record.statusTone === 'connected' ? 'Review connection' : 'Set up',
+      actionLabel: record.channel ? 'Setup details' : record.statusTone === 'connected' ? 'Review connection' : 'Set up',
       secondaryActionLabel: record.channel ? 'Connected Computer settings' : null,
       actionTarget: 'gateway',
       channel: record.channel ?? null,
@@ -2007,10 +2007,10 @@ export function WorkstationSageConnectorsPane({
     }
     groups.push({
       id: 'developer',
-      label: 'Developer',
-      description: 'Advanced connectors.',
-      detail: 'MCP servers, custom APIs, and developer-only wiring.',
-      countLabel: 'Advanced',
+      label: 'Developer tools',
+      description: 'Custom tool connections.',
+      detail: 'Tool servers, custom APIs, and webhooks.',
+      countLabel: 'Custom',
       statusTone: 'neutral',
     });
     return groups;
@@ -2778,7 +2778,7 @@ export function WorkstationSageConnectorsPane({
     return (
       <div className="sage-unified-expand__advanced app-stack-3">
         <div className="sage-unified-expand__text">
-          Advanced setup is only for login, pairing, and controlled test messages.
+          Setup details are only for login, pairing, and controlled test messages.
         </div>
         {channel === 'whatsapp' ? (
           <>
@@ -2799,7 +2799,7 @@ export function WorkstationSageConnectorsPane({
           </>
         ) : (
           <>
-            <FormField label="Telegram app ID" hint="Used only for advanced Telegram setup on Connected Computer.">
+            <FormField label="Telegram app ID" hint="Used only for controlled Telegram setup on Connected Computer.">
               <FormInput
                 value={channelDraft.apiId}
                 placeholder="123456"
@@ -2920,7 +2920,7 @@ export function WorkstationSageConnectorsPane({
                 setAdvancedChannelId(advancedOpen ? null : channel);
               }}
             >
-              Advanced setup
+              Setup details
             </AppButton>
           ) : (
             <AppButton
@@ -3105,8 +3105,8 @@ export function WorkstationSageConnectorsPane({
             </div>
           </div>
           <details className="sage-computer-connect__advanced">
-            <summary>Advanced details</summary>
-            <p>Advanced setup is only for reconnecting, revoking, or debugging the selected computer. Normal users should only need the connect button.</p>
+            <summary>Connection details</summary>
+            <p>Connection details are only for reconnecting, revoking, or debugging the selected computer. Normal users should only need the connect button.</p>
           </details>
         </div>
       </CommandSheet>
@@ -3116,7 +3116,7 @@ export function WorkstationSageConnectorsPane({
   function renderConnectorAdvancedDetails(record: ConnectorCardRecord) {
     return (
       <details className="sage-unified-expand__advanced-disclosure">
-        <summary className="sage-unified-expand__advanced-summary">Advanced details</summary>
+        <summary className="sage-unified-expand__advanced-summary">Connection details</summary>
         <div className="sage-unified-expand__text">
           App actions Sage can use after you connect this integration.
         </div>
@@ -3537,8 +3537,8 @@ export function WorkstationSageConnectorsPane({
       default:
         return (
           <section className="sage-unified-section">
-            <p className="sage-unified-section__label">Developer</p>
-            <p className="sage-unified-section__description">Advanced integration entry points stay here so normal users do not see infrastructure details.</p>
+            <p className="sage-unified-section__label">Developer tools</p>
+            <p className="sage-unified-section__description">Custom APIs, tool servers, and webhooks stay separate from everyday app connections.</p>
             <div className="sage-integrations-detail-card">
               <strong>MCP servers, custom APIs, and webhooks</strong>
               <span>Use this lane for developer-owned integrations that should not be mixed with everyday apps and channels.</span>

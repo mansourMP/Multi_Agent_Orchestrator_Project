@@ -6787,6 +6787,11 @@ body.theme-light .workstation-shell__topbar {
   background: color-mix(in srgb, var(--app-bg-page) 36%, transparent);
 }
 
+.studio-agent-integrations__provider-card:has(.studio-agent-integrations__status--ready) {
+  border-color: color-mix(in srgb, var(--app-success) 22%, var(--app-border-muted) 78%);
+  background: color-mix(in srgb, var(--app-success) 6%, var(--app-bg-page) 36%);
+}
+
 .studio-agent-integrations__provider-card > div {
   min-width: 0;
   display: grid;
@@ -6920,6 +6925,10 @@ body.theme-light .workstation-shell__topbar {
 .studio-actions__section--compact {
   padding: var(--app-space-4);
   gap: var(--app-space-3);
+}
+
+.studio-actions__section--compact .studio-actions__skills {
+  padding: 0;
 }
 
 .studio-actions__section-head {

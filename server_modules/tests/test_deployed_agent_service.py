@@ -956,6 +956,50 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(created["config"]["computer_automation"]["enabled"])
         self.assertFalse(created["config"]["agent_workspace"]["isolation"]["sage_memory_access"])
 
+    async def test_create_draft_deployed_agent_defaults_to_text_mode_on_managed_cloud(self) -> None:
+        backing_install = _backing_install()
+        persisted_row = _deployed_agent_row(
+            metadata={
+                "runtime_placement": "managed_cloud",
+                "studio_agent_mode": "text_agent",
+            }
+        )
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
+                new=AsyncMock(return_value=backing_install),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.create_deployed_agent",
+                new=AsyncMock(return_value=persisted_row),
+            ) as create_deployed_agent_mock,
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(return_value=backing_install),
+            ),
+        ):
+            created = await deployed_agent_service.create_draft_deployed_agent(
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                name="Store Assistant",
+            )
+
+        persisted_kwargs = create_deployed_agent_mock.await_args.kwargs
+        self.assertEqual(persisted_kwargs["runtime_target"], "cloud")
+        self.assertEqual(persisted_kwargs["metadata"]["runtime_placement"], "managed_cloud")
+        self.assertEqual(persisted_kwargs["metadata"]["studio_agent_mode"], "text_agent")
+        self.assertEqual(created["config"]["runtime_placement"], "managed_cloud")
+        self.assertEqual(created["config"]["studio_agent_mode"], "text_agent")
+
     async def test_create_draft_deployed_agent_supports_customer_hosted_without_cloud_computer(self) -> None:
         backing_install = _backing_install()
         persisted_row = _deployed_agent_row(

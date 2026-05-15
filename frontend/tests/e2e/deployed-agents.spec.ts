@@ -1028,5 +1028,17 @@ test.describe('deployed agents surface', () => {
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/agent name/i);
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).not.toContainText(/launch settings/i);
     await page.getByLabel(/agent name/i).first().fill('Returns Concierge');
+    await page.getByRole('button', { name: /^create agent$/i }).click();
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toHaveCount(0);
+
+    const studioSurface = page.locator('[data-workstation-surface="deployed-agents"]');
+    const createdAgentRow = studioSurface
+      .locator('.studio-agents-nav__agent')
+      .filter({ hasText: /returns concierge/i });
+    await expect(createdAgentRow).toContainText(/empyralis cloud/i);
+    await expect(createdAgentRow).not.toContainText(/customer computer|self-hosted/i);
+    await page.getByRole('tab', { name: /^integrations$/i }).click();
+    await expect(studioSurface).toContainText(/model providers/i);
+    await expect(studioSurface).toContainText(/studio agents use cloud api accounts only/i);
   });
 });

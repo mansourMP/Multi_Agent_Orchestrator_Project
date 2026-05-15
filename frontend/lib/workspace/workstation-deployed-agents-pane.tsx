@@ -410,6 +410,8 @@ const STUDIO_LOCAL_PROVIDER_IDS = new Set([
   'openai-codex',
 ]);
 
+const STUDIO_DEFAULT_RUNTIME_PLACEMENT: WizardState['runtimePlacement'] = 'managed_cloud';
+
 const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   value: WizardState['runtimePlacement'];
   label: string;
@@ -424,21 +426,21 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
 }> = [
   {
     value: 'managed_cloud',
-    label: 'Text Agent',
+    label: 'Empyralis Cloud',
     supplier: 'empyralis',
-    hint: 'Cloud chat with approved tools. No browser or computer control.',
-    capabilities: 'Chat, memory, knowledge lookup, and approved API-style tools.',
-    runsWhere: 'Managed cloud runtime in the Empyralis control plane.',
+    hint: 'Text/API agent for customer conversations. No virtual machine, browser, or computer control.',
+    capabilities: 'Chat, memory, knowledge lookup, and approved API tools.',
+    runsWhere: 'Empyralis managed cloud. The agent calls the selected API model provider from the platform.',
     privacy: 'High. No direct computer access surface.',
-    costRisk: 'Low to medium.',
-    setup: 'No extra setup.',
+    costRisk: 'Predictable platform usage plus provider API cost.',
+    setup: 'Default production path.',
     bestFor: 'Support, FAQs, triage, and policy-safe assistants.',
   },
   {
     value: 'hosted_hardware_pool',
-    label: 'Cloud Computer Agent',
+    label: 'Empyralis Cloud Computer',
     supplier: 'empyralis',
-    hint: 'Cloud agent with isolated computer/browser automation under policy controls.',
+    hint: 'Agent with isolated browser/computer automation under policy controls.',
     capabilities: 'Browser, files, and task automation inside an isolated cloud session.',
     runsWhere: 'Isolated cloud computer managed by Empyralis.',
     privacy: 'Medium. Session activity can be logged for safety and audit.',
@@ -448,7 +450,7 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'customer_local',
-    label: 'My Computer Agent',
+    label: 'Customer Computer',
     supplier: 'customer',
     hint: 'Agent uses a connected computer with explicit permissions.',
     capabilities: 'Local browser/files/terminal actions after explicit grants.',
@@ -460,7 +462,7 @@ const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'customer_hosted',
-    label: 'Self-Hosted Agent',
+    label: 'Customer Server',
     supplier: 'customer',
     hint: 'Agent runs on a customer-owned server or self-hosted node.',
     capabilities: 'Customer-managed execution with workspace-scoped controls.',
@@ -1654,7 +1656,7 @@ function runtimeSupplierForPlacement(value: WizardState['runtimePlacement']): Wi
 
 function runtimePlacementLabel(value: unknown): string {
   const placement = normalizeRuntimePlacement(value);
-  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Text Agent';
+  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Empyralis Cloud';
 }
 
 function testRuntimeModeForPlacement(value: unknown): string {
@@ -1994,9 +1996,9 @@ function buildCreateDraftWizardState(state: WizardState): WizardState {
     telegramEnabled: false,
     telegramConnectorId: '',
     telegramEndpointKey: '',
-    runtimePlacement: 'managed_cloud',
-    runtimeTarget: runtimeTargetForPlacement('managed_cloud'),
-    runtimeSupplierKind: runtimeSupplierForPlacement('managed_cloud'),
+    runtimePlacement: STUDIO_DEFAULT_RUNTIME_PLACEMENT,
+    runtimeTarget: runtimeTargetForPlacement(STUDIO_DEFAULT_RUNTIME_PLACEMENT),
+    runtimeSupplierKind: runtimeSupplierForPlacement(STUDIO_DEFAULT_RUNTIME_PLACEMENT),
     runtimeSupplierId: 'empyralis',
     runtimeSupplierLabel: 'Empyralis',
     selfHostedRuntimeProfileId: '',
@@ -2569,9 +2571,13 @@ function TranscriptEntryCard({
 }
 
 type RuntimeCardStatus = {
-  label: 'Ready' | 'Needs connected computer' | 'Needs Approval Policy' | 'Unsupported in this workspace' | 'Dev-only';
+  label: 'Ready' | 'Default' | 'Needs connected computer' | 'Needs Approval Policy' | 'Unsupported in this workspace' | 'Requires setup';
   tone: 'success' | 'warning' | 'danger' | 'neutral';
 };
+
+function studioRuntimeOption(value: WizardState['runtimePlacement']) {
+  return STUDIO_RUNTIME_OPTIONS.find((option) => option.value === value) ?? STUDIO_RUNTIME_OPTIONS[0];
+}
 
 function resolveRuntimeCardStatus(
   option: typeof STUDIO_RUNTIME_OPTIONS[number],
@@ -2579,7 +2585,10 @@ function resolveRuntimeCardStatus(
   hasCloudComputerAvailableTarget: boolean,
 ): RuntimeCardStatus[] {
   if (option.value === 'managed_cloud') {
-    return [{ label: 'Ready', tone: 'success' }];
+    return [
+      { label: 'Default', tone: 'success' },
+      { label: 'Ready', tone: 'success' },
+    ];
   }
   if (option.value === 'hosted_hardware_pool') {
     if (!hasCloudComputerAvailableTarget) {
@@ -2596,7 +2605,7 @@ function resolveRuntimeCardStatus(
     }
     return [{ label: 'Ready', tone: 'success' }];
   }
-  return [{ label: 'Dev-only', tone: 'neutral' }];
+  return [{ label: 'Requires setup', tone: 'neutral' }];
 }
 
 function RuntimeModeSelector({
@@ -2612,61 +2621,79 @@ function RuntimeModeSelector({
   hasCloudComputerAvailableTarget: boolean;
   onSelect: (next: WizardState['runtimePlacement']) => void;
 }) {
+  const defaultOption = options.find((option) => option.value === STUDIO_DEFAULT_RUNTIME_PLACEMENT) ?? options[0];
+  const specialOptions = options.filter((option) => option.value !== defaultOption.value);
+  function renderRuntimeCard(option: typeof STUDIO_RUNTIME_OPTIONS[number]) {
+    const selected = value === option.value;
+    const statuses = resolveRuntimeCardStatus(option, hasGatewayOnlineTarget, hasCloudComputerAvailableTarget);
+    return (
+      <button
+        key={option.value}
+        type="button"
+        aria-pressed={selected}
+        className={joinClassNames(
+          'deployed-agents-wizard__tool-card',
+          'deployed-agents-wizard__runtime-card',
+          selected && 'deployed-agents-wizard__tool-card--selected',
+        )}
+        onClick={() => onSelect(normalizeRuntimePlacement(option.value))}
+      >
+        <div className="app-inline-actions app-inline-actions--tight">
+          <strong>{option.label}</strong>
+          {statuses.map((status) => (
+            <DataBadge key={`${option.value}:${status.label}`} tone={status.tone}>
+              {status.label}
+            </DataBadge>
+          ))}
+        </div>
+        <small>{option.hint}</small>
+        <dl className="deployed-agents-wizard__runtime-metadata">
+          <div>
+            <dt>What it can do</dt>
+            <dd>{option.capabilities}</dd>
+          </div>
+          <div>
+            <dt>Where it runs</dt>
+            <dd>{option.runsWhere}</dd>
+          </div>
+          <div>
+            <dt>Privacy level</dt>
+            <dd>{option.privacy}</dd>
+          </div>
+          <div>
+            <dt>Cost posture</dt>
+            <dd>{option.costRisk}</dd>
+          </div>
+          <div>
+            <dt>Required setup</dt>
+            <dd>{option.setup}</dd>
+          </div>
+          <div>
+            <dt>Best use cases</dt>
+            <dd>{option.bestFor}</dd>
+          </div>
+        </dl>
+      </button>
+    );
+  }
   return (
-    <div className="deployed-agents-wizard__runtime-grid">
-      {options.map((option) => {
-        const selected = value === option.value;
-        const statuses = resolveRuntimeCardStatus(option, hasGatewayOnlineTarget, hasCloudComputerAvailableTarget);
-        return (
-          <button
-            key={option.value}
-            type="button"
-            aria-pressed={selected}
-            className={joinClassNames(
-              'deployed-agents-wizard__tool-card',
-              'deployed-agents-wizard__runtime-card',
-              selected && 'deployed-agents-wizard__tool-card--selected',
-            )}
-            onClick={() => onSelect(normalizeRuntimePlacement(option.value))}
-          >
-            <div className="app-inline-actions app-inline-actions--tight">
-              <strong>{option.label}</strong>
-              {statuses.map((status) => (
-                <DataBadge key={`${option.value}:${status.label}`} tone={status.tone}>
-                  {status.label}
-                </DataBadge>
-              ))}
+    <div className="app-stack-3">
+      <div className="deployed-agents-wizard__runtime-grid">
+        {renderRuntimeCard(defaultOption)}
+      </div>
+      {specialOptions.length > 0 ? (
+        <section className="studio-actions__section studio-actions__section--compact" aria-label="Special deployment modes">
+          <div className="studio-actions__section-head">
+            <div>
+              <span>Special deployment modes</span>
+              <strong>Use only when this agent needs a computer or customer-owned infrastructure</strong>
             </div>
-            <small>{option.hint}</small>
-            <dl className="deployed-agents-wizard__runtime-metadata">
-              <div>
-                <dt>What it can do</dt>
-                <dd>{option.capabilities}</dd>
-              </div>
-              <div>
-                <dt>Where it runs</dt>
-                <dd>{option.runsWhere}</dd>
-              </div>
-              <div>
-                <dt>Privacy level</dt>
-                <dd>{option.privacy}</dd>
-              </div>
-              <div>
-                <dt>Cost risk</dt>
-                <dd>{option.costRisk}</dd>
-              </div>
-              <div>
-                <dt>Required setup</dt>
-                <dd>{option.setup}</dd>
-              </div>
-              <div>
-                <dt>Best use cases</dt>
-                <dd>{option.bestFor}</dd>
-              </div>
-            </dl>
-          </button>
-        );
-      })}
+          </div>
+          <div className="deployed-agents-wizard__runtime-grid">
+            {specialOptions.map(renderRuntimeCard)}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -2703,13 +2730,20 @@ function AgentLaunchChecklist({
 }) {
   const runtimeModeValid = state.runtimePlacement !== 'hosted_hardware_pool'
     || hasCloudComputerAvailableTarget;
+  const selectedRuntime = studioRuntimeOption(state.runtimePlacement);
+  const hasInstructions = state.systemPrompt.trim().length > 0;
+  const hasModelRoute = state.providerId.trim().length > 0 && state.modelId.trim().length > 0;
+  const hasChannel = state.customerChannel === 'draft' || state.telegramEnabled || state.customerChannel !== 'telegram';
   const checks = [
-    { id: 'gateway', label: 'Connected computer ready', ok: state.runtimePlacement !== 'customer_local' || hasGatewayOnlineTarget },
-    { id: 'runtime', label: 'Agent mode valid', ok: Boolean(state.runtimePlacement) && runtimeModeValid },
-    { id: 'tools', label: 'Tools policy valid', ok: state.selectedToolIds.length > 0 },
-    { id: 'memory', label: 'Memory policy valid', ok: true },
+    { id: 'runtime', label: `${selectedRuntime.label} runtime ready`, ok: Boolean(state.runtimePlacement) && runtimeModeValid },
+    { id: 'gateway', label: 'Customer computer connected', ok: state.runtimePlacement !== 'customer_local' || hasGatewayOnlineTarget },
+    { id: 'model', label: 'API model route selected', ok: hasModelRoute },
+    { id: 'instructions', label: 'Instructions present', ok: hasInstructions },
+    { id: 'channel', label: 'Customer channel selected', ok: hasChannel },
+    { id: 'tools', label: 'Action permissions reviewed', ok: true },
+    { id: 'memory', label: 'Customer memory policy reviewed', ok: true },
     { id: 'approval', label: 'Approval policy valid', ok: Boolean(state.approvalMode) },
-    { id: 'limits', label: 'Rate limits active', ok: state.dailyMessageLimit.trim().length > 0 },
+    { id: 'limits', label: 'Message limits active', ok: state.dailyMessageLimit.trim().length > 0 },
     { id: 'audit', label: 'Audit active', ok: true },
   ];
   return (
@@ -2721,6 +2755,44 @@ function AgentLaunchChecklist({
         ))}
       </ul>
     </div>
+  );
+}
+
+type LaunchReadinessItem = {
+  id: string;
+  label: string;
+  detail: string;
+  ok: boolean;
+};
+
+function LaunchReadinessChecklist({
+  items,
+}: {
+  items: LaunchReadinessItem[];
+}) {
+  const readyCount = items.filter((item) => item.ok).length;
+  return (
+    <section className="studio-actions__section studio-actions__section--compact" aria-label="Launch checklist">
+      <div className="studio-actions__section-head">
+        <div>
+          <span>Launch checklist</span>
+          <strong>{readyCount} of {items.length} checks ready</strong>
+        </div>
+      </div>
+      <div className="studio-actions__skills">
+        {items.map((item) => (
+          <article key={item.id} className={joinClassNames('studio-actions__skill', item.ok && 'studio-actions__skill--ready')}>
+            <div className="studio-actions__skill-copy">
+              <strong>{item.label}</strong>
+              <p>{item.detail}</p>
+            </div>
+            <span className={joinClassNames('studio-actions__status', item.ok ? 'studio-actions__status--ready' : 'studio-actions__status--blocked')}>
+              {item.ok ? 'Ready' : 'Needs setup'}
+            </span>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -3058,13 +3130,32 @@ function AgentActionCapabilitySections({
 function AgentIntegrationsSections({
   providerCatalog,
   connectorCards,
+  runtimeAttachments,
+  hasGatewayOnlineTarget,
+  hasCloudComputerAvailableTarget,
   workspaceId,
 }: {
   providerCatalog: ProviderCatalogSnapshot[];
   connectorCards: AgentIntegrationConnectorCard[];
+  runtimeAttachments: RuntimeAttachmentSnapshot[];
+  hasGatewayOnlineTarget: boolean;
+  hasCloudComputerAvailableTarget: boolean;
   workspaceId: string;
 }) {
   const connectedProviderCount = providerCatalog.filter((provider) => providerIsReadyForStudio(provider)).length;
+  const hasHealthySelfHostedNode = runtimeAttachments.some((node) => Boolean(node.runtimeProfileId) && node.healthy && node.ownerApproved);
+  const runtimeRows = STUDIO_RUNTIME_OPTIONS.map((option) => {
+    if (option.value === 'managed_cloud') {
+      return { option, ready: true, status: 'Default' };
+    }
+    if (option.value === 'hosted_hardware_pool') {
+      return { option, ready: hasCloudComputerAvailableTarget, status: hasCloudComputerAvailableTarget ? 'Available' : 'Setup required' };
+    }
+    if (option.value === 'customer_local') {
+      return { option, ready: hasGatewayOnlineTarget, status: hasGatewayOnlineTarget ? 'Computer online' : 'Setup required' };
+    }
+    return { option, ready: hasHealthySelfHostedNode, status: hasHealthySelfHostedNode ? 'Node healthy' : 'Setup required' };
+  });
   return (
     <div className="studio-agent-integrations">
       <section className="studio-agent-integrations__section" aria-label="Model providers">
@@ -3102,6 +3193,32 @@ function AgentIntegrationsSections({
         </div>
         <div className="studio-agent-integrations__foot">
           {connectedProviderCount > 0 ? `${connectedProviderCount} provider${connectedProviderCount === 1 ? '' : 's'} connected for Studio agents.` : 'Connect a model provider before launch.'}
+        </div>
+      </section>
+
+      <section className="studio-agent-integrations__section" aria-label="Runtime and deployment nodes">
+        <div className="studio-agent-integrations__head">
+          <div>
+            <span>Runtime and deployment</span>
+            <strong>Where Studio agents can run</strong>
+            <p>Text/API agents use Empyralis Cloud by default. Computer and customer-owned deployments require explicit setup.</p>
+          </div>
+        </div>
+        <div className="studio-agent-integrations__provider-grid">
+          {runtimeRows.map(({ option, ready, status }) => (
+            <article key={option.value} className="studio-agent-integrations__provider-card">
+              <div>
+                <strong>{option.label}</strong>
+                <span>{option.hint}</span>
+              </div>
+              <span className={joinClassNames('studio-agent-integrations__status', ready && 'studio-agent-integrations__status--ready')}>
+                {status}
+              </span>
+            </article>
+          ))}
+        </div>
+        <div className="studio-agent-integrations__foot">
+          Empyralis Cloud is the production default. Customer computers, cloud computers, and customer servers are separate deployment modes.
         </div>
       </section>
 
@@ -3938,9 +4055,9 @@ export function WorkstationDeployedAgentsPane({
       telegramEnabled: false,
       telegramConnectorId: '',
       telegramEndpointKey: '',
-      runtimePlacement: 'managed_cloud',
-      runtimeTarget: runtimeTargetForPlacement('managed_cloud'),
-      runtimeSupplierKind: runtimeSupplierForPlacement('managed_cloud'),
+      runtimePlacement: STUDIO_DEFAULT_RUNTIME_PLACEMENT,
+      runtimeTarget: runtimeTargetForPlacement(STUDIO_DEFAULT_RUNTIME_PLACEMENT),
+      runtimeSupplierKind: runtimeSupplierForPlacement(STUDIO_DEFAULT_RUNTIME_PLACEMENT),
       selfHostedRuntimeProfileId: '',
       selfHostedPrivacyAccepted: false,
       selfHostedSafetyAccepted: false,
@@ -4459,7 +4576,7 @@ export function WorkstationDeployedAgentsPane({
       ? 'Assistant inbox'
       : 'Assistant launch';
   const studioSubtitle = currentStudioSubview === 'agents'
-    ? 'Manage text agents, computer agents, and connected customer assistants.'
+    ? 'Manage customer-facing text/API agents with optional computer or self-hosted deployment modes.'
     : currentStudioSubview === 'inbox'
       ? 'Customer sessions and handoffs for assistants that are already working.'
       : 'Go-live checks and spending guardrails for customer-facing assistants.';
@@ -4505,7 +4622,7 @@ export function WorkstationDeployedAgentsPane({
         ?? readRecord(selectedAgent.metadata).runtime_placement
         ?? selectedAgent.runtime_target,
       )
-    : 'Text Agent';
+    : 'Empyralis Cloud';
   const selectedContextPresetLabel = detailConfigDraft
     ? CONTEXT_PRESET_OPTIONS.find((option) => option.id === detailConfigDraft.contextBudgetPreset)?.label ?? 'Balanced'
     : 'Balanced';
@@ -4553,6 +4670,86 @@ export function WorkstationDeployedAgentsPane({
     () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'sage_cloud_computer' && target.available),
     [bootstrap.runtime.runtimeTargets],
   );
+  const selectedAgentRuntimeOption = studioRuntimeOption(selectedAgentRuntimePlacement);
+  const selectedAgentRuntimeBlocker = useMemo(() => {
+    if (selectedAgentRuntimePlacement === 'managed_cloud') {
+      return null;
+    }
+    if (selectedAgentRuntimePlacement === 'hosted_hardware_pool' && !hasCloudComputerAvailableTarget) {
+      return 'Empyralis Cloud Computer is not enabled for this workspace.';
+    }
+    if (selectedAgentRuntimePlacement === 'customer_local' && !hasGatewayOnlineTarget) {
+      return 'Connect a customer computer before this agent can run there.';
+    }
+    if (selectedAgentRuntimePlacement === 'customer_hosted') {
+      return selectedAgentSelfHostedDeployBlocker;
+    }
+    return null;
+  }, [
+    hasCloudComputerAvailableTarget,
+    hasGatewayOnlineTarget,
+    selectedAgentRuntimePlacement,
+    selectedAgentSelfHostedDeployBlocker,
+  ]);
+  const selectedAgentLaunchReadinessItems = useMemo<LaunchReadinessItem[]>(() => {
+    const config = readRecord(selectedAgent?.config);
+    const metadata = readRecord(selectedAgent?.metadata);
+    const commercePolicy = readRecord(config.commerce_policy ?? metadata.commerce_policy);
+    const monthlyCostCapUsd = readNumber(commercePolicy.monthly_cost_cap_usd ?? metadata.monthly_cost_cap_usd);
+    const dailyMessageLimit = readNumber(
+      config.daily_message_limit
+      ?? metadata.daily_message_limit
+      ?? commercePolicy.daily_message_limit,
+    );
+    const instructionText = readString(selectedAgent?.system_prompt ?? config.system_prompt ?? metadata.system_prompt);
+    const memoryPolicy = readRecord(config.memory_policy);
+    const memoryEnabled = memoryPolicy.memory_enabled === true || metadata.memory_enabled === true;
+    return [
+      {
+        id: 'runtime',
+        label: 'Runtime',
+        detail: selectedAgentRuntimeBlocker || `${selectedAgentRuntimeOption.label} is ready for this agent.`,
+        ok: !selectedAgentRuntimeBlocker,
+      },
+      {
+        id: 'model',
+        label: 'Model provider',
+        detail: selectedAgentModelDeployBlocker || formatDeploymentModelLabel(selectedAgent, providerCatalogIndex),
+        ok: !selectedAgentModelDeployBlocker,
+      },
+      {
+        id: 'instructions',
+        label: 'Instructions',
+        detail: instructionText.trim() ? 'Behavior instructions are configured.' : 'Add instructions before a customer sees this agent.',
+        ok: instructionText.trim().length > 0,
+      },
+      {
+        id: 'channel',
+        label: 'Customer channel',
+        detail: activeChannels.length > 0 ? `${activeChannels.join(', ')} connected.` : 'Connect Telegram or another customer channel before launch.',
+        ok: activeChannels.length > 0,
+      },
+      {
+        id: 'memory',
+        label: 'Memory policy',
+        detail: memoryEnabled ? 'Customer memory is enabled.' : 'Customer memory is off; the agent will use recent conversation context only.',
+        ok: true,
+      },
+      {
+        id: 'limits',
+        label: 'Usage limits',
+        detail: monthlyCostCapUsd || dailyMessageLimit ? 'Cost or message limits are configured.' : 'Default production limits apply.',
+        ok: true,
+      },
+    ];
+  }, [
+    activeChannels,
+    providerCatalogIndex,
+    selectedAgent,
+    selectedAgentModelDeployBlocker,
+    selectedAgentRuntimeBlocker,
+    selectedAgentRuntimeOption.label,
+  ]);
 
   async function handleDeleteExternalUserData() {
     const agentId = readString(selectedAgent?.id);
@@ -4939,19 +5136,45 @@ export function WorkstationDeployedAgentsPane({
                     className="studio-panel studio-panel--readiness"
                     eyebrow="Readiness"
                     title="Launch readiness"
-                    subtitle="The live channel and go-live posture for the selected assistant."
+                    subtitle="The launch contract for this customer-facing text/API agent."
                   >
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />
                       <FormReadout label="Channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
                       <FormReadout label="Model provider" value={selectedAgentModelDeployBlocker ? 'Needs connection' : formatDeploymentModelLabel(selectedAgent, providerCatalogIndex)} />
-                      <FormReadout label="Agent mode" value={runtimePlacementLabel(readRecord(selectedAgent?.config).runtime_placement ?? readRecord(selectedAgent?.metadata).runtime_placement ?? selectedAgent?.runtime_target)} />
+                      <FormReadout label="Where it runs" value={selectedAgentRuntimeOption.label} />
                     </FormGrid>
+                    <section className="studio-actions__section studio-actions__section--compact" aria-label="Runtime posture">
+                      <div className="studio-actions__section-head">
+                        <div>
+                          <span>Where it runs</span>
+                          <strong>{selectedAgentRuntimeOption.label}</strong>
+                        </div>
+                        <DataBadge tone={selectedAgentRuntimeBlocker ? 'warning' : 'success'}>
+                          {selectedAgentRuntimeBlocker ? 'Needs setup' : selectedAgentRuntimePlacement === 'managed_cloud' ? 'Default' : 'Ready'}
+                        </DataBadge>
+                      </div>
+                      <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
+                        <FormReadout label="Runtime type" value={selectedAgentRuntimePlacement === 'managed_cloud' ? 'Text/API cloud agent' : selectedAgentRuntimeOption.label} />
+                        <FormReadout label="Computer required" value={selectedAgentRuntimePlacement === 'managed_cloud' ? 'No' : 'Yes, setup required'} />
+                        <FormReadout label="Runtime owner" value={selectedAgentRuntimeOption.supplier === 'empyralis' ? 'Empyralis' : 'Customer'} />
+                        <FormReadout label="Cost posture" value={selectedAgentRuntimeOption.costRisk} />
+                      </FormGrid>
+                      <p className="studio-actions__note">{selectedAgentRuntimeOption.runsWhere}</p>
+                    </section>
+                    <LaunchReadinessChecklist items={selectedAgentLaunchReadinessItems} />
                     {selectedAgentModelDeployBlocker ? (
                       <StateBanner
                         tone="warning"
                         title="Connect a model provider before launch"
                         detail="Open Integrations and connect OpenRouter, OpenAI, Anthropic, Google Gemini, or another API provider."
+                      />
+                    ) : null}
+                    {selectedAgentRuntimeBlocker ? (
+                      <StateBanner
+                        tone="warning"
+                        title="Runtime needs setup"
+                        detail={selectedAgentRuntimeBlocker}
                       />
                     ) : null}
                     {selectedAgentRuntimePlacement === 'customer_hosted' ? (
@@ -5268,6 +5491,9 @@ export function WorkstationDeployedAgentsPane({
                     <AgentIntegrationsSections
                       providerCatalog={providerCatalog}
                       connectorCards={overlayConnectorCards}
+                      runtimeAttachments={runtimeAttachments}
+                      hasGatewayOnlineTarget={hasGatewayOnlineTarget}
+                      hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
                       workspaceId={workspaceId}
                     />
                   </ListDetailPanel>
@@ -5979,6 +6205,9 @@ export function WorkstationDeployedAgentsPane({
                     <AgentIntegrationsSections
                       providerCatalog={providerCatalog}
                       connectorCards={overlayConnectorCards}
+                      runtimeAttachments={runtimeAttachments}
+                      hasGatewayOnlineTarget={hasGatewayOnlineTarget}
+                      hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
                       workspaceId={workspaceId}
                     />
                   </div>
@@ -6465,7 +6694,7 @@ export function WorkstationDeployedAgentsPane({
                         {STUDIO_AI_TIER_OPTIONS.find((item) => item.value === wizardState.aiTier)?.hint}
                       </div>
                     </FormField>
-                    <FormField label="Agent mode" hint="Choose how this assistant runs. Internal identifiers are hidden in this view.">
+                    <FormField label="Where it runs" hint="Studio agents start as text/API agents in Empyralis Cloud. Computer and customer-owned deployments require setup.">
                       <RuntimeModeSelector
                         value={wizardState.runtimePlacement}
                         options={STUDIO_RUNTIME_OPTIONS}

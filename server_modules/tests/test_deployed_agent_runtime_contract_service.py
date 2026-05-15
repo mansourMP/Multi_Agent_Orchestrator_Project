@@ -250,6 +250,50 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
         self.assertIn("self_host_runtime", str(error.exception))
         self.assertIn("not present", str(error.exception))
 
+    def test_validate_mode_capability_matrix_requires_explicit_owner_approval_for_customer_runtime_modes(self):
+        with self.assertRaises(ValueError) as local_error:
+            contract.validate_mode_capability_matrix(
+                studio_agent_mode="my_computer_agent",
+                runtime_placement="customer_local",
+                runtime_target="local",
+                computer_automation={
+                    "enabled": True,
+                    "runtime_class": "local_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 5,
+                    "monthly_budget_usd": 25,
+                    "requires_owner_approval": False,
+                    "max_session_runtime_seconds": 900,
+                },
+                stage="create",
+            )
+        self.assertIn("my_computer_agent requires explicit owner approval", str(local_error.exception))
+
+        with self.assertRaises(ValueError) as hosted_error:
+            contract.validate_mode_capability_matrix(
+                studio_agent_mode="self_hosted_agent",
+                runtime_placement="customer_hosted",
+                runtime_target="self_hosted",
+                computer_automation={
+                    "enabled": True,
+                    "runtime_class": "virtual_code_sandbox",
+                    "allowed_domains": ["intranet.example"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 5,
+                    "monthly_budget_usd": 25,
+                    "requires_owner_approval": False,
+                    "max_session_runtime_seconds": 900,
+                },
+                stage="create",
+                runtime_targets={
+                    "targets": [
+                        {"target_id": "self_host_runtime", "available": True, "online": True, "healthy": True},
+                    ]
+                },
+            )
+        self.assertIn("self_hosted_agent requires explicit owner approval", str(hosted_error.exception))
+
     def test_marketplace_package_cannot_force_customer_runtime_without_installer_opt_in(self):
         payload = contract.normalize_runtime_supply_contract(
             {

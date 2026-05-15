@@ -3868,9 +3868,24 @@ body[data-emp-theme='dark'] .app-chat-composer__provider-pill:focus-visible {
 }
 
 .app-chat-composer__textarea:hover,
-.app-chat-composer__textarea:focus {
+.app-chat-composer__textarea:focus,
+.app-chat-composer__textarea:focus-visible {
+  border: 0;
+  outline: 0;
   background: transparent;
   box-shadow: none;
+}
+
+:root[data-emp-theme='dark'] .app-chat-composer__textarea:hover,
+:root[data-emp-theme='dark'] .app-chat-composer__textarea:focus,
+:root[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible,
+body[data-emp-theme='dark'] .app-chat-composer__textarea:hover,
+body[data-emp-theme='dark'] .app-chat-composer__textarea:focus,
+body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .app-chat-composer__textarea::placeholder {

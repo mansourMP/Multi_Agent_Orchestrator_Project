@@ -27,14 +27,15 @@ def _wait_for_conversation_item(
     return last_payload, items[0]
 
 
-def _telegram_texts(blackbox_runtime) -> list[str]:
+def _telegram_texts(blackbox_runtime, *, after: int = 0) -> list[str]:
     calls = (
         blackbox_runtime.captured_telegram_calls(method_name="editMessageText")
         + blackbox_runtime.captured_telegram_calls(method_name="sendMessage")
     )
+    ordered_calls = sorted(calls, key=lambda call: float(call.get("perf_counter") or 0.0))
     return [
         str((call.get("payload") or {}).get("text") or "")
-        for call in calls
+        for call in ordered_calls[max(0, int(after or 0)) :]
         if isinstance(call, dict)
     ]
 
@@ -103,10 +104,15 @@ def test_studio_text_agent_launch_drill_blackbox(blackbox_runtime) -> None:
     assert run_id
     terminal_run = blackbox_runtime.wait_for_run_terminal(run_id)
     assert str(terminal_run.get("status") or "").strip().lower() == "completed"
+    delivery_before = len(_telegram_texts(blackbox_runtime))
     blackbox_runtime.pump_outbox_until(
-        lambda: any("Need launch drill help" in text for text in _telegram_texts(blackbox_runtime)),
+        lambda: any("Need launch drill help" in text for text in _telegram_texts(blackbox_runtime, after=delivery_before)),
+        tenant_id=owner["tenant_id"],
+        workspace_id=owner["workspace_id"],
+        run_id=run_id,
+        event_type="channel_run_delivery",
     )
-    assert any("Need launch drill help" in text for text in _telegram_texts(blackbox_runtime))
+    assert any("Need launch drill help" in text for text in _telegram_texts(blackbox_runtime, after=delivery_before))
 
     _, conversation = _wait_for_conversation_item(
         blackbox_runtime,
@@ -180,11 +186,16 @@ def test_public_telegram_deployed_agent_blackbox_flow(blackbox_runtime) -> None:
 
     terminal_run = blackbox_runtime.wait_for_run_terminal(run_id)
     assert str(terminal_run.get("status") or "").strip().lower() == "completed"
+    delivery_before = len(_telegram_texts(blackbox_runtime))
     blackbox_runtime.pump_outbox_until(
-        lambda: len(blackbox_runtime.captured_telegram_calls(method_name="editMessageText")) >= 1,
+        lambda: any("Need brake pads" in text for text in _telegram_texts(blackbox_runtime, after=delivery_before)),
+        tenant_id=owner["tenant_id"],
+        workspace_id=owner["workspace_id"],
+        run_id=run_id,
+        event_type="channel_run_delivery",
     )
 
-    final_text = blackbox_runtime.latest_telegram_text(method_name="editMessageText")
+    final_text = "\n".join(_telegram_texts(blackbox_runtime, after=delivery_before))
     assert "Blackbox durable reply:" in final_text
     assert "Need brake pads" in final_text
     assert "Execution Result" in final_text
@@ -232,8 +243,13 @@ def test_public_daily_quota_cta_wins_first_visible_denial(blackbox_runtime) -> N
     first_run_id = str(first.json().get("run_id") or "").strip()
     assert first_run_id
     blackbox_runtime.wait_for_run_terminal(first_run_id)
+    delivery_before = len(_telegram_texts(blackbox_runtime))
     blackbox_runtime.pump_outbox_until(
-        lambda: len(blackbox_runtime.captured_telegram_calls(method_name="editMessageText")) >= 1,
+        lambda: any("First question" in text for text in _telegram_texts(blackbox_runtime, after=delivery_before)),
+        tenant_id=owner["tenant_id"],
+        workspace_id=owner["workspace_id"],
+        run_id=first_run_id,
+        event_type="channel_run_delivery",
     )
 
     _, conversation = _wait_for_conversation_item(

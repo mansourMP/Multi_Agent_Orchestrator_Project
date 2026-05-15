@@ -2358,6 +2358,10 @@ async def list_undelivered_outbox_events(
     *,
     older_than_seconds: int = 30,
     limit: int = 200,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    event_type: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
     pool = await _read_pool(operation="list_undelivered_outbox_events")
     if pool is None:
@@ -2392,11 +2396,19 @@ async def list_undelivered_outbox_events(
             WHERE delivered_at IS NULL
               AND poisoned_at IS NULL
               AND COALESCE(next_attempt_at, created_at) <= NOW() - ($1 * INTERVAL '1 second')
+              AND ($3::text IS NULL OR tenant_id = $3)
+              AND ($4::text IS NULL OR workspace_id = $4)
+              AND ($5::text IS NULL OR run_id = $5)
+              AND ($6::text IS NULL OR event_type = $6)
             ORDER BY COALESCE(next_attempt_at, created_at) ASC, created_at ASC
             LIMIT $2
             """,
             max(0, int(older_than_seconds or 0)),
             max(1, int(limit or 0)),
+            str(tenant_id or "").strip() or None,
+            str(workspace_id or "").strip() or None,
+            str(run_id or "").strip() or None,
+            str(event_type or "").strip() or None,
         )
     except Exception as exc:
         LOGGER.warning("Postgres list_undelivered_outbox_events failed: %s", exc)
@@ -2410,6 +2422,10 @@ async def claim_due_outbox_events(
     limit: int = 200,
     claimed_by: str,
     claim_ttl_seconds: int = 30,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    event_type: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
     claimed_by_token = str(claimed_by or "").strip() or "outbox-delivery"
     pool = await _read_pool(operation="claim_due_outbox_events")
@@ -2429,6 +2445,10 @@ async def claim_due_outbox_events(
                     claim_expires_at IS NULL
                     OR claim_expires_at <= NOW()
                   )
+                  AND ($5::text IS NULL OR tenant_id = $5)
+                  AND ($6::text IS NULL OR workspace_id = $6)
+                  AND ($7::text IS NULL OR run_id = $7)
+                  AND ($8::text IS NULL OR event_type = $8)
                 ORDER BY COALESCE(next_attempt_at, created_at) ASC, created_at ASC
                 LIMIT $2
                 FOR UPDATE SKIP LOCKED
@@ -2471,6 +2491,10 @@ async def claim_due_outbox_events(
             max(1, int(limit or 0)),
             claimed_by_token,
             max(1, int(claim_ttl_seconds or 0)),
+            str(tenant_id or "").strip() or None,
+            str(workspace_id or "").strip() or None,
+            str(run_id or "").strip() or None,
+            str(event_type or "").strip() or None,
         )
     except Exception as exc:
         LOGGER.warning("Postgres claim_due_outbox_events failed: %s", exc)
@@ -3099,9 +3123,24 @@ def sync_persist_outbox_event(
     )
 
 
-def sync_list_undelivered_outbox_events(*, older_than_seconds: int = 30, limit: int = 200) -> list[Dict[str, Any]]:
+def sync_list_undelivered_outbox_events(
+    *,
+    older_than_seconds: int = 30,
+    limit: int = 200,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+) -> list[Dict[str, Any]]:
     return _run_sync(
-        lambda: list_undelivered_outbox_events(older_than_seconds=older_than_seconds, limit=limit),
+        lambda: list_undelivered_outbox_events(
+            older_than_seconds=older_than_seconds,
+            limit=limit,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            event_type=event_type,
+        ),
         operation="sync_list_undelivered_outbox_events",
         fallback=[],
         raise_on_error=_sync_raise_on_read_failure(),
@@ -3114,6 +3153,10 @@ def sync_claim_due_outbox_events(
     limit: int = 200,
     claimed_by: str,
     claim_ttl_seconds: int = 30,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    event_type: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
     return _run_sync(
         lambda: claim_due_outbox_events(
@@ -3121,6 +3164,10 @@ def sync_claim_due_outbox_events(
             limit=limit,
             claimed_by=claimed_by,
             claim_ttl_seconds=claim_ttl_seconds,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            event_type=event_type,
         ),
         operation="sync_claim_due_outbox_events",
         fallback=[],

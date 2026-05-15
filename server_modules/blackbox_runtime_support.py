@@ -726,10 +726,21 @@ class BlackboxHarness:
                 json=payload,
             )
 
-    def pump_outbox_once(self) -> Dict[str, Any]:
+    def pump_outbox_once(
+        self,
+        *,
+        tenant_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
         return self.outbox_service.deliver_due_outbox_events_once(
             older_than_seconds=0,
             limit=50,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            event_type=event_type,
             claim_due_outbox_events_fn=self.run_state_repository.sync_claim_due_outbox_events,
             mark_outbox_event_delivered_fn=self.run_state_repository.sync_mark_outbox_event_delivered,
             record_outbox_delivery_failure_fn=self.run_state_repository.sync_record_outbox_delivery_failure,
@@ -744,13 +755,22 @@ class BlackboxHarness:
         *,
         timeout_seconds: float = 15.0,
         interval_seconds: float = 0.2,
+        tenant_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        event_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         deadline = time.time() + max(1.0, float(timeout_seconds))
         last_result: Dict[str, Any] = {}
         while time.time() < deadline:
             if predicate():
                 return last_result
-            last_result = self.pump_outbox_once()
+            last_result = self.pump_outbox_once(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                event_type=event_type,
+            )
             if predicate():
                 return last_result
             time.sleep(interval_seconds)
@@ -762,6 +782,10 @@ class BlackboxHarness:
         *,
         timeout_seconds: float = 30.0,
         interval_seconds: float = 0.2,
+        tenant_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        event_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self.pump_outbox_until(
             lambda: (
@@ -770,6 +794,10 @@ class BlackboxHarness:
             ),
             timeout_seconds=timeout_seconds,
             interval_seconds=interval_seconds,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            event_type=event_type,
         )
 
     def wait_for_deployed_agent_state(

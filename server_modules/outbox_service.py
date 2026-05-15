@@ -586,6 +586,10 @@ def deliver_due_outbox_events_once(
     *,
     older_than_seconds: int = 0,
     limit: int = 200,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    event_type: Optional[str] = None,
     claim_due_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
     list_undelivered_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
     mark_outbox_event_delivered_fn: Optional[Callable[[str], Any]] = None,
@@ -596,13 +600,21 @@ def deliver_due_outbox_events_once(
     claim_ttl_seconds: int = 30,
 ) -> Dict[str, Any]:
     if claim_due_outbox_events_fn is None and callable(list_undelivered_outbox_events_fn):
-        claim_due_outbox_events_fn = lambda **kwargs: _compat_claim_items(  # noqa: E731
-            list_undelivered_outbox_events_fn(
-                older_than_seconds=kwargs.get("older_than_seconds", 0),
-                limit=kwargs.get("limit", 200),
-            ),
-            claimed_by=str(kwargs.get("claimed_by") or claimed_by or _default_outbox_claimed_by()),
-        )
+        def _compat_claim_due_outbox_events(**kwargs: Any) -> Sequence[Mapping[str, Any]]:
+            list_kwargs: dict[str, Any] = {
+                "older_than_seconds": kwargs.get("older_than_seconds", 0),
+                "limit": kwargs.get("limit", 200),
+            }
+            for key in ("tenant_id", "workspace_id", "run_id", "event_type"):
+                value = str(kwargs.get(key) or "").strip()
+                if value:
+                    list_kwargs[key] = value
+            return _compat_claim_items(
+                list_undelivered_outbox_events_fn(**list_kwargs),
+                claimed_by=str(kwargs.get("claimed_by") or claimed_by or _default_outbox_claimed_by()),
+            )
+
+        claim_due_outbox_events_fn = _compat_claim_due_outbox_events
     if (
         claim_due_outbox_events_fn is None
         or mark_outbox_event_delivered_fn is None
@@ -661,12 +673,21 @@ def deliver_due_outbox_events_once(
     failed_ids: list[str] = []
     deferred_ids: list[str] = []
     poisoned_ids: list[str] = []
-    items = claim_due_outbox_events_fn(
-        older_than_seconds=max(0, int(older_than_seconds or 0)),
-        limit=max(1, int(limit or 0)),
-        claimed_by=claimed_by_token,
-        claim_ttl_seconds=max(1, int(claim_ttl_seconds or 0)),
-    )
+    claim_kwargs: dict[str, Any] = {
+        "older_than_seconds": max(0, int(older_than_seconds or 0)),
+        "limit": max(1, int(limit or 0)),
+        "claimed_by": claimed_by_token,
+        "claim_ttl_seconds": max(1, int(claim_ttl_seconds or 0)),
+    }
+    if str(tenant_id or "").strip():
+        claim_kwargs["tenant_id"] = str(tenant_id or "").strip()
+    if str(workspace_id or "").strip():
+        claim_kwargs["workspace_id"] = str(workspace_id or "").strip()
+    if str(run_id or "").strip():
+        claim_kwargs["run_id"] = str(run_id or "").strip()
+    if str(event_type or "").strip():
+        claim_kwargs["event_type"] = str(event_type or "").strip()
+    items = claim_due_outbox_events_fn(**claim_kwargs)
     for item in items or []:
         event = _outbox_event_from_item(item)
         if event is None:

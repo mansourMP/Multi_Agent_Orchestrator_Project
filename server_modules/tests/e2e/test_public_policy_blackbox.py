@@ -48,6 +48,19 @@ def _wait_for_no_conversations(
     return last_payload
 
 
+def _telegram_texts(blackbox_runtime, *, after: int = 0) -> list[str]:
+    calls = (
+        blackbox_runtime.captured_telegram_calls(method_name="editMessageText")
+        + blackbox_runtime.captured_telegram_calls(method_name="sendMessage")
+    )
+    ordered_calls = sorted(calls, key=lambda call: float(call.get("perf_counter") or 0.0))
+    return [
+        str((call.get("payload") or {}).get("text") or "")
+        for call in ordered_calls[max(0, int(after or 0)) :]
+        if isinstance(call, dict)
+    ]
+
+
 def test_monthly_cap_auto_pause_blackbox(blackbox_runtime) -> None:
     owner = blackbox_runtime.register_owner(email_prefix="telegram-cap")
     live = blackbox_runtime.create_live_telegram_deployed_agent(
@@ -73,8 +86,13 @@ def test_monthly_cap_auto_pause_blackbox(blackbox_runtime) -> None:
     run_id = str(first.json().get("run_id") or "").strip()
     assert run_id
     blackbox_runtime.wait_for_run_terminal(run_id)
+    delivery_before = len(_telegram_texts(blackbox_runtime))
     blackbox_runtime.pump_outbox_until(
-        lambda: len(blackbox_runtime.captured_telegram_calls(method_name="editMessageText")) >= 1,
+        lambda: any("Trigger the monthly cap" in text for text in _telegram_texts(blackbox_runtime, after=delivery_before)),
+        tenant_id=owner["tenant_id"],
+        workspace_id=owner["workspace_id"],
+        run_id=run_id,
+        event_type="channel_run_delivery",
     )
 
     suspended = blackbox_runtime.wait_for_deployed_agent_state(
@@ -118,8 +136,13 @@ def test_public_privacy_delete_blackbox(blackbox_runtime) -> None:
     run_id = str(first.json().get("run_id") or "").strip()
     assert run_id
     blackbox_runtime.wait_for_run_terminal(run_id)
+    delivery_before = len(_telegram_texts(blackbox_runtime))
     blackbox_runtime.pump_outbox_until(
-        lambda: len(blackbox_runtime.captured_telegram_calls(method_name="editMessageText")) >= 1,
+        lambda: any("order number is 12345" in text for text in _telegram_texts(blackbox_runtime, after=delivery_before)),
+        tenant_id=owner["tenant_id"],
+        workspace_id=owner["workspace_id"],
+        run_id=run_id,
+        event_type="channel_run_delivery",
     )
 
     _, conversation = _wait_for_conversation_item(
@@ -176,8 +199,13 @@ def test_public_privacy_delete_blackbox(blackbox_runtime) -> None:
     second_run_id = str(second.json().get("run_id") or "").strip()
     assert second_run_id
     blackbox_runtime.wait_for_run_terminal(second_run_id)
+    delivery_before = len(_telegram_texts(blackbox_runtime))
     blackbox_runtime.pump_outbox_until(
-        lambda: len(blackbox_runtime.captured_telegram_calls(method_name="editMessageText")) >= 2,
+        lambda: any("Start fresh after delete" in text for text in _telegram_texts(blackbox_runtime, after=delivery_before)),
+        tenant_id=owner["tenant_id"],
+        workspace_id=owner["workspace_id"],
+        run_id=second_run_id,
+        event_type="channel_run_delivery",
     )
 
     _, refreshed_conversation = _wait_for_conversation_item(
@@ -218,11 +246,16 @@ def test_public_health_safety_blackbox(blackbox_runtime) -> None:
     run_id = str(response.json().get("run_id") or "").strip()
     assert run_id
     blackbox_runtime.wait_for_run_terminal(run_id)
+    delivery_before = len(_telegram_texts(blackbox_runtime))
     blackbox_runtime.pump_outbox_until(
-        lambda: len(blackbox_runtime.captured_telegram_calls(method_name="editMessageText")) >= 1,
+        lambda: bool(_telegram_texts(blackbox_runtime, after=delivery_before)),
+        tenant_id=owner["tenant_id"],
+        workspace_id=owner["workspace_id"],
+        run_id=run_id,
+        event_type="channel_run_delivery",
     )
 
-    final_text = blackbox_runtime.latest_telegram_text(method_name="editMessageText")
+    final_text = "\n".join(_telegram_texts(blackbox_runtime, after=delivery_before))
     assert "urgent medical attention" in final_text.lower()
     assert "Blackbox durable reply:" not in final_text
 

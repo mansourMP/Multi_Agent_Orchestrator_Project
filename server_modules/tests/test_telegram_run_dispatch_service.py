@@ -139,11 +139,34 @@ class TelegramRunDispatchServiceTests(unittest.TestCase):
         self.assertIn("Thinking...\nrun_id: run-1", sent_messages[0][1]["text"])
         self.assertEqual(len(emitted), 1)
         self.assertEqual(emitted[0]["channel"], "telegram")
+        self.assertEqual(emitted[0]["tenant_id"], "default")
         self.assertEqual(emitted[0]["payload"]["pending_message_id"], "pending-1")
         self.assertEqual(
             emitted[0]["payload"]["delivery"]["provider_idempotency_key"],
             "telegram:conn-1:chat-1:run-1:edit:pending-1",
         )
+
+    def test_schedule_final_delivery_uses_tenant_on_outbox_row(self) -> None:
+        emitted = []
+        service = self._make_service(emit_channel_run_delivery_event=lambda **kwargs: emitted.append(kwargs))
+
+        service.schedule_final_delivery(
+            workspace_id="ws-1",
+            connector_id="conn-1",
+            chat_id="chat-1",
+            run_id="run-1",
+            session_key="telegram:conn-1:chat-1",
+            pending_message_id="pending-1",
+            inbound_message_id="msg-1",
+            action="run",
+            trace_id="trace-1",
+            source_event_id="evt-1",
+            tenant_id="tenant-1",
+        )
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["tenant_id"], "tenant-1")
+        self.assertEqual(emitted[0]["payload"]["tenant_id"], "tenant-1")
 
     def test_deliver_final_response_edits_pending_message(self) -> None:
         service = self._make_service(include_meta=lambda: True)

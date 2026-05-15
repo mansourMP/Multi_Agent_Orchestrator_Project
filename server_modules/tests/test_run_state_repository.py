@@ -650,6 +650,49 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(items[0]["claim_expires_at"], "2026-04-07T00:00:40Z")
         self.assertIn("FOR UPDATE SKIP LOCKED", pool.fetch_calls[0][0])
 
+    async def test_claim_due_outbox_events_accepts_scope_filters(self):
+        pool = _FakePool(fetch_result=[])
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            items = await run_state_repository.claim_due_outbox_events(
+                older_than_seconds=5,
+                limit=3,
+                claimed_by="poller-1",
+                claim_ttl_seconds=45,
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                run_id="run-1",
+                event_type="channel_run_delivery",
+            )
+
+        self.assertEqual(items, [])
+        query, args = pool.fetch_calls[0]
+        self.assertIn("tenant_id = $5", query)
+        self.assertIn("workspace_id = $6", query)
+        self.assertIn("run_id = $7", query)
+        self.assertIn("event_type = $8", query)
+        self.assertEqual(args[:4], (5, 3, "poller-1", 45))
+        self.assertEqual(args[4:], ("tenant-1", "ws-1", "run-1", "channel_run_delivery"))
+
+    async def test_list_undelivered_outbox_events_accepts_scope_filters(self):
+        pool = _FakePool(fetch_result=[])
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            items = await run_state_repository.list_undelivered_outbox_events(
+                older_than_seconds=5,
+                limit=3,
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                run_id="run-1",
+                event_type="channel_run_delivery",
+            )
+
+        self.assertEqual(items, [])
+        query, args = pool.fetch_calls[0]
+        self.assertIn("tenant_id = $3", query)
+        self.assertIn("workspace_id = $4", query)
+        self.assertIn("run_id = $5", query)
+        self.assertIn("event_type = $6", query)
+        self.assertEqual(args, (5, 3, "tenant-1", "ws-1", "run-1", "channel_run_delivery"))
+
     async def test_fenced_outbox_writes_reject_wrong_claim_token(self):
         pool = _FakePool(fetchrow_result=None)
         with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):

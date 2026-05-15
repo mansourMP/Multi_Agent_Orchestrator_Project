@@ -226,7 +226,7 @@ class TelegramRunDispatchService:
         )
         self.emit_channel_run_delivery_event(
             channel="telegram",
-            tenant_id="default",
+            tenant_id=str(tenant_id or "").strip() or "default",
             workspace_id=workspace_id,
             run_id=run_id,
             connector_id=connector_id,

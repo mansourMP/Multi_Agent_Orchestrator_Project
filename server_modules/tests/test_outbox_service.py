@@ -340,6 +340,42 @@ class OutboxServiceTests(unittest.TestCase):
         self.assertEqual(marked, [("evt-1", "compat-claim:evt-1")])
         self.assertEqual(result["attempted"], 1)
 
+    def test_deliver_due_outbox_events_once_forwards_scope_to_claim(self) -> None:
+        claimed = []
+
+        result = outbox_service.deliver_due_outbox_events_once(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            run_id="run-1",
+            event_type="channel_run_delivery",
+            claim_due_outbox_events_fn=lambda **kwargs: claimed.append(dict(kwargs)) or [],
+            mark_outbox_event_delivered_fn=lambda event_id, **kwargs: True,
+            record_outbox_delivery_failure_fn=lambda event_id, **kwargs: True,
+            deliver_event_fn=lambda event: True,
+            get_outbox_delivery_status_fn=lambda: {"undelivered_count": 0, "poisoned_count": 0, "claimed_count": 0},
+        )
+
+        self.assertEqual(result["attempted"], 0)
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0]["tenant_id"], "tenant-1")
+        self.assertEqual(claimed[0]["workspace_id"], "ws-1")
+        self.assertEqual(claimed[0]["run_id"], "run-1")
+        self.assertEqual(claimed[0]["event_type"], "channel_run_delivery")
+
+    def test_deliver_due_outbox_events_once_keeps_legacy_list_fallback_kwargs_small(self) -> None:
+        listed = []
+
+        result = outbox_service.deliver_due_outbox_events_once(
+            list_undelivered_outbox_events_fn=lambda **kwargs: listed.append(dict(kwargs)) or [],
+            mark_outbox_event_delivered_fn=lambda event_id, **kwargs: True,
+            record_outbox_delivery_failure_fn=lambda event_id, **kwargs: True,
+            deliver_event_fn=lambda event: True,
+            get_outbox_delivery_status_fn=lambda: {"undelivered_count": 0, "poisoned_count": 0, "claimed_count": 0},
+        )
+
+        self.assertEqual(result["attempted"], 0)
+        self.assertEqual(listed, [{"older_than_seconds": 0, "limit": 200}])
+
     def test_deliver_outbox_event_uses_stable_ids_for_duplicate_safety(self) -> None:
         channel_events = []
         try:

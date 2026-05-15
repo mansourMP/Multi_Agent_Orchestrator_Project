@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  Coins,
   SquarePen,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -191,6 +192,10 @@ import type {
   ChatRuntimeTrustZone
 } from '@/lib/workspace/workstation-chat-pane-model';
 
+function compactCreditEstimateLabel(estimate: ComposerPreRunCostEstimate): string {
+  const normalized = estimate.estimateLabel.trim().replace(/^estimated:\s*/i, '');
+  return normalized || estimate.estimateLabel;
+}
 
 export function WorkstationChatPane() {
   const { bootstrap, routeManifest, hasCapability } = useWorkspaceBoundary();
@@ -200,6 +205,8 @@ export function WorkstationChatPane() {
   const notificationsConnectionState = useWorkstationStreamSelector((state) => state.notifications.connectionState);
   const desktop = useWorkstationDesktopBridge();
   const router = useRouter();
+  const titlebarCreditsRef = useRef<HTMLDivElement | null>(null);
+  const [titlebarCreditsOpen, setTitlebarCreditsOpen] = useState(false);
   const actor = useMemo<WorkstationSessionActor>(() => ({
     type: 'user',
     id: bootstrap.account.id,
@@ -1539,8 +1546,38 @@ export function WorkstationChatPane() {
     }),
     [billingSummary, draft, selectedExecutionPlacement, selectedModelOption],
   );
+  const titlebarCreditLabel = useMemo(
+    () => (preRunCostEstimate ? compactCreditEstimateLabel(preRunCostEstimate) : null),
+    [preRunCostEstimate],
+  );
   const showContextStrip = false;
   const showHeaderReadinessStrip = false;
+
+  useEffect(() => {
+    if (!titlebarCreditsOpen) {
+      return undefined;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (titlebarCreditsRef.current?.contains(target)) {
+        return;
+      }
+      setTitlebarCreditsOpen(false);
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [titlebarCreditsOpen]);
+
+  useEffect(() => {
+    if (!preRunCostEstimate) {
+      setTitlebarCreditsOpen(false);
+    }
+  }, [preRunCostEstimate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2324,17 +2361,50 @@ export function WorkstationChatPane() {
   return (
     <>
       {titlebarActionsHost ? createPortal(
-        <AppButton
-          type="button"
-          tone="secondary"
-          aria-label="New chat"
-          className="workstation-titlebar__action workstation-titlebar__action--compose"
-          onClick={() => {
-            void startNewThread();
-          }}
-        >
-          <SquarePen size={15} strokeWidth={1.95} aria-hidden="true" />
-        </AppButton>,
+        <>
+          {preRunCostEstimate && titlebarCreditLabel ? (
+            <div className="workstation-titlebar__credits" ref={titlebarCreditsRef}>
+              <button
+                type="button"
+                className="workstation-titlebar__credits-trigger"
+                aria-label="Show credit estimate details"
+                aria-expanded={titlebarCreditsOpen}
+                onClick={() => setTitlebarCreditsOpen((current) => !current)}
+              >
+                <Coins size={14} strokeWidth={2.05} aria-hidden="true" />
+                <span>{titlebarCreditLabel}</span>
+              </button>
+              {titlebarCreditsOpen ? (
+                <div className="workstation-titlebar__credits-popover" role="dialog" aria-label="Credit estimate">
+                  <div className="workstation-titlebar__credits-copy">
+                    <strong>{preRunCostEstimate.estimateLabel}</strong>
+                    <span>{preRunCostEstimate.detail}</span>
+                  </div>
+                  {preRunCostEstimate.warnings.length > 0 ? (
+                    <div className="workstation-titlebar__credits-warnings">
+                      {preRunCostEstimate.warnings.map((warning) => (
+                        <span key={warning} className="workstation-titlebar__credits-warning">
+                          {warning}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <AppButton
+            type="button"
+            tone="secondary"
+            aria-label="New chat"
+            className="workstation-titlebar__action workstation-titlebar__action--compose"
+            onClick={() => {
+              void startNewThread();
+            }}
+          >
+            <SquarePen size={15} strokeWidth={1.95} aria-hidden="true" />
+          </AppButton>
+        </>,
         titlebarActionsHost,
       ) : null}
 

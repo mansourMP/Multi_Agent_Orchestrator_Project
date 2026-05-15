@@ -177,6 +177,7 @@ export function ChatComposer({
   void onOpenIntegrations;
   void providerSummary;
   void contextWindowLabel;
+  void preRunCostEstimate;
 
   const submitDraft = () => {
     if (!canSend) {
@@ -265,24 +266,6 @@ export function ChatComposer({
             >
               <X size={13} strokeWidth={2} aria-hidden="true" />
             </button>
-          </div>
-        ) : null}
-
-        {preRunCostEstimate ? (
-          <div className="app-chat-composer__cost-estimate" role="status" aria-live="polite">
-            <div className="app-chat-composer__cost-estimate-copy">
-              <strong>{preRunCostEstimate.estimateLabel}</strong>
-              <span>{preRunCostEstimate.detail}</span>
-            </div>
-            {preRunCostEstimate.warnings.length > 0 ? (
-              <div className="app-chat-composer__cost-estimate-warnings">
-                {preRunCostEstimate.warnings.map((warning) => (
-                  <span key={warning} className="app-chat-composer__cost-estimate-warning">
-                    {warning}
-                  </span>
-                ))}
-              </div>
-            ) : null}
           </div>
         ) : null}
 

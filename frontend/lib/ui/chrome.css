@@ -4028,51 +4028,6 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
   outline: 0;
 }
 
-.app-chat-composer__cost-estimate {
-  display: grid;
-  gap: 6px;
-  margin: 0 18px 10px;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--border-default) 72%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--app-bg-panel) 82%, transparent);
-}
-
-.app-chat-composer__cost-estimate-copy {
-  display: grid;
-  gap: 2px;
-  color: var(--text-secondary);
-  font-size: var(--app-font-12);
-  line-height: 1.35;
-}
-
-.app-chat-composer__cost-estimate-copy strong {
-  color: var(--text-primary);
-  font-size: var(--app-font-12);
-  font-weight: var(--app-weight-semibold);
-  letter-spacing: 0;
-}
-
-.app-chat-composer__cost-estimate-warnings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.app-chat-composer__cost-estimate-warning {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 0 9px;
-  border-radius: var(--radius-full);
-  border: 1px solid color-mix(in srgb, var(--app-warning) 35%, transparent);
-  color: var(--app-warning);
-  background: color-mix(in srgb, var(--app-warning-muted) 76%, transparent);
-  font-size: 11px;
-  font-weight: var(--app-weight-medium);
-  line-height: 1;
-}
-
 .app-chat-composer__runtime {
   position: relative;
   display: inline-flex;
@@ -5342,6 +5297,92 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
   color: var(--text-primary);
 }
 
+.workstation-titlebar__credits {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.workstation-titlebar__credits-trigger {
+  max-width: 132px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 82%, transparent 18%);
+  border-radius: var(--app-radius-pill);
+  background: color-mix(in srgb, var(--app-bg-panel) 80%, transparent 20%);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+  cursor: pointer;
+}
+
+.workstation-titlebar__credits-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workstation-titlebar__credits-trigger:hover,
+.workstation-titlebar__credits-trigger:focus-visible {
+  border-color: color-mix(in srgb, var(--app-border-strong) 74%, transparent 26%);
+  background: color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-panel-elevated) 16%);
+  color: var(--text-primary);
+  outline: 0;
+}
+
+.workstation-titlebar__credits-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: var(--z-overlay);
+  width: min(320px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 76%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-panel) 92%, var(--bg-base) 8%);
+  box-shadow: 0 30px 80px -34px rgba(0, 0, 0, 0.72);
+}
+
+.workstation-titlebar__credits-copy {
+  display: grid;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: var(--app-font-12);
+  line-height: 1.35;
+}
+
+.workstation-titlebar__credits-copy strong {
+  color: var(--text-primary);
+  font-weight: var(--app-weight-semibold);
+}
+
+.workstation-titlebar__credits-warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workstation-titlebar__credits-warning {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--app-warning) 35%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--app-warning-muted) 76%, transparent);
+  color: var(--app-warning);
+  font-size: 11px;
+  font-weight: var(--app-weight-medium);
+  line-height: 1;
+}
+
 .workstation-titlebar__action::before {
   content: '';
   position: absolute;
@@ -5379,13 +5420,12 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
 }
 
 .workstation-titlebar__action--compose svg {
-  transition:
-    transform var(--transition),
-    opacity var(--transition);
+  transition: none;
 }
 
+.workstation-titlebar__action--compose:hover:not(:disabled),
 .workstation-titlebar__action--compose:hover:not(:disabled) svg {
-  transform: translateY(-1px) scale(1.04);
+  transform: none;
 }
 
 .workstation-titlebar__spacer {

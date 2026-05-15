@@ -5207,13 +5207,16 @@ export function WorkstationDeployedAgentsPane({
             <div className="app-stack-4">
                 {currentStudioSubview === 'agents' && !selectedAgent ? (
                   isAgentListPriming ? (
-                    <div className="studio-agent-detail-loading" aria-label="Loading agent profile">
-                      <SkeletonBlock height="2.75rem" />
-                      <SkeletonBlock height="8rem" />
-                      <div className="studio-agent-detail-loading__grid">
-                        <SkeletonBlock height="6rem" />
-                        <SkeletonBlock height="6rem" />
-                        <SkeletonBlock height="6rem" />
+                    <div className="studio-agent-detail-loading studio-agent-detail-loading--profile" aria-label="Loading agent profile" aria-busy="true">
+                      <div className="studio-agent-detail-loading__status" aria-hidden="true" />
+                      <div className="studio-agent-detail-loading__copy">
+                        <strong>Loading agent profile</strong>
+                        <span>Checking this workspace for agents and preparing the selected profile.</span>
+                      </div>
+                      <div className="studio-agent-detail-loading__steps" aria-hidden="true">
+                        <span>Roster</span>
+                        <span>Profile tabs</span>
+                        <span>Launch checks</span>
                       </div>
                     </div>
                   ) : (

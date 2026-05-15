@@ -18,8 +18,15 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
                     "state": "active",
                     "default_model": "gpt-4o",
                     "profile_metadata": {
-                        "cached_models": ["gpt-live-new"],
+                        "cached_models": [
+                            {
+                                "id": "gpt-live-new",
+                                "label": "GPT Live New",
+                                "context_window_tokens": 256000,
+                            }
+                        ],
                         "cached_models_synced_at": "2099-01-01T00:00:00Z",
+                        "cached_models_expires_at": "2099-01-01T01:00:00Z",
                     },
                 },
                 {
@@ -82,7 +89,11 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("privacy_posture", providers["openai"])
         self.assertIn("jurisdiction", providers["openai"])
         self.assertTrue(any(model["id"] == "gpt-live-new" for model in providers["openai"]["models"]))
+        live_model = next(model for model in providers["openai"]["models"] if model["id"] == "gpt-live-new")
+        self.assertEqual(live_model["label"], "GPT Live New")
+        self.assertEqual(live_model["context_window_tokens"], 256000)
         self.assertEqual(providers["openai"]["models_source"], "workspace_cached_models")
+        self.assertEqual(providers["openai"]["models_expires_at"], "2099-01-01T01:00:00Z")
         self.assertEqual(
             providers["openai"]["provider_scopes"],
             ["sage_personal", "workspace_api", "studio_safe"],
@@ -243,7 +254,7 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
         selection = provider_catalog_service.resolve_provider_model_selection(
             provider="anthropic",
             model="claude-sonnet-4-6",
-            cached_models=["claude-sonnet-4-6", "claude-opus-4-1"],
+            cached_models=[{"id": "claude-sonnet-4-6"}, {"id": "claude-opus-4-1"}],
         )
 
         self.assertEqual(selection, {"provider": "anthropic", "model": "claude-sonnet-4-6"})
@@ -255,7 +266,7 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "id": "openai",
                     "profile_metadata": {
-                        "cached_models": ["gpt-live-new"],
+                        "cached_models": [{"id": "gpt-live-new"}],
                     },
                 },
             ],
@@ -270,6 +281,69 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(models, ["gpt-live-new"])
+
+    async def test_openrouter_cached_models_keep_pricing_metadata(self) -> None:
+        connection_truth = {
+            "workspace_id": "ws-1",
+            "summary": {"provider_total": 1},
+            "providers": [
+                {
+                    "id": "openrouter",
+                    "label": "OpenRouter",
+                    "state": "active",
+                    "default_model": "openai/gpt-live-new",
+                    "profile_metadata": {
+                        "cached_models": [
+                            {
+                                "id": "openai/gpt-live-new",
+                                "label": "GPT Live New",
+                                "context_window_tokens": 128000,
+                                "input_cost_per_1k_usd": 0.001,
+                                "output_cost_per_1k_usd": 0.004,
+                                "supports_tools": True,
+                                "supports_json": True,
+                                "source": "openai_compatible_models_api",
+                            }
+                        ],
+                        "cached_models_synced_at": "2099-01-01T00:00:00Z",
+                    },
+                },
+            ],
+        }
+        runtime_truth = {
+            "workspace_id": "ws-1",
+            "summary": {"provider_total": 1, "active": 1, "configured": 0, "setup_required": 0, "unavailable": 0, "degraded": 0},
+            "providers": [
+                {
+                    "id": "openrouter",
+                    "label": "OpenRouter",
+                    "state": "active",
+                    "usable": True,
+                    "configured": True,
+                    "active": True,
+                    "credential_sources": ["workspace_profile"],
+                    "active_source": "workspace_profile",
+                    "identity_owner": "workspace",
+                },
+            ],
+        }
+
+        with patch(
+            "server_modules.provider_catalog_service.provider_profiles.build_workspace_provider_connection_truth",
+            return_value=connection_truth,
+        ), patch(
+            "server_modules.provider_catalog_service.provider_profiles.build_provider_runtime_truth",
+            return_value=runtime_truth,
+        ):
+            payload = await provider_catalog_service.list_workspace_provider_catalog(workspace_id="ws-1")
+
+        providers = {item["id"]: item for item in payload["providers"]}
+        model = providers["openrouter"]["models"][0]
+        self.assertEqual(model["id"], "openai/gpt-live-new")
+        self.assertEqual(model["input_cost_per_1k_usd"], 0.001)
+        self.assertEqual(model["output_cost_per_1k_usd"], 0.004)
+        self.assertTrue(model["supports_tools"])
+        self.assertTrue(model["supports_json"])
 
     def test_provider_profiles_normalize_anthropic_latest_alias_to_live_model(self) -> None:
         normalized = provider_catalog_service.provider_profiles.normalize_provider_model_id(

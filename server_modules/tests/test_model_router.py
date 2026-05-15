@@ -54,11 +54,13 @@ class ModelRouterTests(unittest.TestCase):
         self.assertIn("gpt-4o-mini", by_alias)
         self.assertIn("claude-sonnet", by_alias)
         self.assertIn("gemini-flash", by_alias)
+        self.assertIn("vertex-gemini-flash", by_alias)
         self.assertIn("vertex-gemini-pro", by_alias)
 
         self.assertEqual(by_alias["gpt-4o-mini"]["provider"], "openai")
         self.assertEqual(by_alias["claude-sonnet"]["provider"], "anthropic")
         self.assertEqual(by_alias["gemini-flash"]["provider"], "gemini")
+        self.assertEqual(by_alias["vertex-gemini-flash"]["provider"], "vertex")
         self.assertEqual(by_alias["vertex-gemini-pro"]["provider"], "vertex")
 
         self.assertTrue(by_alias["gpt-4o"]["is_global_default"])
@@ -66,7 +68,8 @@ class ModelRouterTests(unittest.TestCase):
         self.assertFalse(by_alias["claude-haiku"]["is_provider_default"])
         self.assertFalse(by_alias["claude-sonnet"]["is_provider_default"])
         self.assertTrue(by_alias["gemini-flash"]["is_provider_default"])
-        self.assertTrue(by_alias["vertex-gemini-pro"]["is_provider_default"])
+        self.assertTrue(by_alias["vertex-gemini-flash"]["is_provider_default"])
+        self.assertFalse(by_alias["vertex-gemini-pro"]["is_provider_default"])
         self.assertFalse(by_alias["gemini-flash"]["is_global_default"])
 
     def test_call_model_sync_returns_normalized_shape(self):

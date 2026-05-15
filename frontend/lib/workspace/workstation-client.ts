@@ -931,6 +931,7 @@ export type WorkstationClient = {
   upsertWorkspaceProviderCredential: (options: {
     provider: string;
     apiKey?: string | null;
+    baseUrl?: string | null;
     model?: string | null;
   }) => Promise<Record<string, unknown> | null>;
   deleteWorkspaceProviderCredential: (options: {
@@ -2695,7 +2696,7 @@ export function createWorkstationClient(
         },
         policy: WRITE_REQUEST_POLICY,
       }),
-    upsertWorkspaceProviderCredential: ({ provider, apiKey = null, model = null }) =>
+    upsertWorkspaceProviderCredential: ({ provider, apiKey = null, baseUrl = null, model = null }) =>
       requestJson<Record<string, unknown>>({
         path: paths.workspaceProviderCredentials,
         init: {
@@ -2704,6 +2705,7 @@ export function createWorkstationClient(
           body: JSON.stringify({
             provider,
             api_key: apiKey ?? undefined,
+            base_url: baseUrl ?? undefined,
             model: model ?? undefined,
           }),
         },

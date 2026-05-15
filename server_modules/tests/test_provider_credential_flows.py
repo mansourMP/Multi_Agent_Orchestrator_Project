@@ -94,6 +94,35 @@ class ProviderValidationMessageTests(unittest.TestCase):
         http_json_request_mock.assert_called_once()
 
     @patch("server_modules.provider_profiles.http_json_request")
+    def test_openai_compatible_list_model_records_keeps_provider_pricing_metadata(self, http_json_request_mock):
+        http_json_request_mock.return_value = {
+            "status": 200,
+            "json": {
+                "data": [
+                    {
+                        "id": "openai/gpt-live-new",
+                        "name": "GPT Live New",
+                        "context_length": 128000,
+                        "pricing": {"prompt": "0.000001", "completion": "0.000004"},
+                        "supported_parameters": ["tools", "response_format"],
+                    }
+                ]
+            },
+            "text": "",
+        }
+
+        records = provider_profiles.OpenAICompatibleAdapter("openrouter", "OpenRouter").list_model_records(
+            {"api_key": "sk-or-test"}
+        )
+
+        self.assertEqual(records[0]["id"], "openai/gpt-live-new")
+        self.assertEqual(records[0]["context_window_tokens"], 128000)
+        self.assertEqual(records[0]["input_cost_per_1k_usd"], 0.001)
+        self.assertEqual(records[0]["output_cost_per_1k_usd"], 0.004)
+        self.assertTrue(records[0]["supports_tools"])
+        self.assertTrue(records[0]["supports_json"])
+
+    @patch("server_modules.provider_profiles.http_json_request")
     def test_anthropic_validate_uses_models_endpoint(self, http_json_request_mock):
         http_json_request_mock.return_value = {
             "status": 200,
@@ -396,8 +425,13 @@ class WorkspaceProviderCredentialFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         request = upsert_provider_profile_mock.call_args.args[0]
-        self.assertEqual(request.metadata["cached_models"], ["claude-sonnet-4-6", "claude-opus-4-1"])
+        self.assertEqual(
+            [item["id"] for item in request.metadata["cached_models"]],
+            ["claude-sonnet-4-6", "claude-opus-4-1"],
+        )
         self.assertEqual(request.metadata["cached_models_source"], "provider_adapter")
+        self.assertIn("cached_models_expires_at", request.metadata)
+        self.assertIn("cached_models_provider_fingerprint", request.metadata)
         self.assertIsNone(request.metadata["cached_models_error"])
 
     @patch("server_modules.workspace_admin_service.connectors_core.upsert_provider_profile")
@@ -436,7 +470,99 @@ class WorkspaceProviderCredentialFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         profile_request = upsert_provider_profile_mock.call_args.args[0]
         self.assertEqual(profile_request.auth_mode, "oauth_token")
-        self.assertEqual(profile_request.metadata["cached_models"], ["gpt-5.4", "gpt-5.3-codex"])
+        self.assertEqual(
+            [item["id"] for item in profile_request.metadata["cached_models"]],
+            ["gpt-5.4", "gpt-5.3-codex"],
+        )
+
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_vault_credential", return_value={"api_key": "sk-ant-test"})
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_provider_adapter")
+    def test_cached_provider_model_metadata_reuses_fresh_cache_with_matching_fingerprint(
+        self,
+        resolve_provider_adapter_mock,
+        _resolve_vault_credential_mock,
+    ):
+        existing = {
+            "cached_models": [{"id": "claude-cached"}],
+            "cached_models_source": "provider_adapter",
+            "cached_models_synced_at": "2099-01-01T00:00:00Z",
+            "cached_models_expires_at": "2099-01-01T01:00:00Z",
+            "cached_models_error": None,
+            "cached_models_provider_fingerprint": workspace_admin_service._credential_fingerprint(
+                "anthropic",
+                {"api_key": "sk-ant-test"},
+            ),
+        }
+
+        result = workspace_admin_service._cached_provider_model_metadata(
+            "anthropic",
+            "ws-1",
+            "cred-1",
+            existing_metadata=existing,
+        )
+
+        self.assertEqual(result["cached_models"], [{"id": "claude-cached"}])
+        resolve_provider_adapter_mock.assert_not_called()
+
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_vault_credential", return_value={"api_key": "sk-ant-test"})
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_provider_adapter")
+    def test_cached_provider_model_metadata_refresh_bypasses_fresh_cache(
+        self,
+        resolve_provider_adapter_mock,
+        _resolve_vault_credential_mock,
+    ):
+        adapter = MagicMock()
+        adapter.list_model_records.return_value = [{"id": "claude-live"}]
+        resolve_provider_adapter_mock.return_value = ("anthropic", "anthropic", adapter)
+        existing = {
+            "cached_models": [{"id": "claude-cached"}],
+            "cached_models_source": "provider_adapter",
+            "cached_models_synced_at": "2099-01-01T00:00:00Z",
+            "cached_models_expires_at": "2099-01-01T01:00:00Z",
+            "cached_models_provider_fingerprint": workspace_admin_service._credential_fingerprint(
+                "anthropic",
+                {"api_key": "sk-ant-test"},
+            ),
+        }
+
+        result = workspace_admin_service._cached_provider_model_metadata(
+            "anthropic",
+            "ws-1",
+            "cred-1",
+            existing_metadata=existing,
+            force_refresh=True,
+        )
+
+        self.assertEqual([item["id"] for item in result["cached_models"]], ["claude-live"])
+        adapter.list_model_records.assert_called_once()
+
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_vault_credential", return_value={"api_key": "sk-ant-test"})
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_provider_adapter")
+    def test_cached_provider_model_metadata_preserves_old_cache_on_refresh_failure(
+        self,
+        resolve_provider_adapter_mock,
+        _resolve_vault_credential_mock,
+    ):
+        adapter = MagicMock()
+        adapter.list_model_records.side_effect = RuntimeError("provider unavailable")
+        resolve_provider_adapter_mock.return_value = ("anthropic", "anthropic", adapter)
+        existing = {
+            "cached_models": [{"id": "claude-cached"}],
+            "cached_models_source": "provider_adapter",
+            "cached_models_synced_at": "2026-01-01T00:00:00Z",
+            "cached_models_expires_at": "2026-01-01T01:00:00Z",
+        }
+
+        result = workspace_admin_service._cached_provider_model_metadata(
+            "anthropic",
+            "ws-1",
+            "cred-1",
+            existing_metadata=existing,
+            force_refresh=True,
+        )
+
+        self.assertEqual(result["cached_models"], [{"id": "claude-cached"}])
+        self.assertIn("provider unavailable", result["cached_models_error"])
 
 
 class TelegramWebhookRegistrationTests(unittest.IsolatedAsyncioTestCase):

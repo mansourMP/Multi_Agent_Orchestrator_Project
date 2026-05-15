@@ -204,8 +204,14 @@ type ProviderCatalogModelSnapshot = {
   inputCostPer1kUsd: number | null;
   outputCostPer1kUsd: number | null;
   supportsTools: boolean;
+  supportsVision: boolean;
+  supportsJson: boolean;
   supportsReasoning: boolean;
   localSelfHostedCompatible: boolean;
+  pricingKnown: boolean;
+  source: string | null;
+  fetchedAt: string | null;
+  lifecycle: string | null;
   capabilityLabels: string[];
 };
 
@@ -221,6 +227,10 @@ type ProviderCatalogSnapshot = {
   residency: string | null;
   localSelfHostedCompatible: boolean;
   capabilityLabels: string[];
+  modelsSource: string | null;
+  modelsSyncedAt: string | null;
+  modelsExpiresAt: string | null;
+  modelsError: string | null;
   models: ProviderCatalogModelSnapshot[];
 };
 
@@ -369,14 +379,17 @@ const STUDIO_AI_TIER_OPTIONS: ReadonlyArray<{
 const STUDIO_API_PROVIDER_IDS = new Set([
   'anthropic',
   'azure_openai',
-  'bedrock',
   'deepseek',
   'gemini',
+  'groq',
   'mistral',
   'ollama_cloud',
   'openai',
+  'openrouter',
   'qwen',
+  'custom_openai_compatible',
   'vertex',
+  'xai',
 ]);
 
 const STUDIO_LOCAL_PROVIDER_IDS = new Set([
@@ -1343,14 +1356,26 @@ function studioProviderRank(providerId: string): number {
       return 1;
     case 'anthropic':
       return 2;
-    case 'deepseek':
+    case 'openrouter':
       return 3;
-    case 'mistral':
+    case 'groq':
       return 4;
-    case 'qwen':
+    case 'xai':
       return 5;
-    case 'vertex':
+    case 'deepseek':
       return 6;
+    case 'mistral':
+      return 7;
+    case 'qwen':
+      return 8;
+    case 'vertex':
+      return 9;
+    case 'azure_openai':
+      return 10;
+    case 'bedrock':
+      return 11;
+    case 'custom_openai_compatible':
+      return 12;
     default:
       return 99;
   }
@@ -1394,8 +1419,14 @@ function normalizeProviderCatalog(payload: unknown): ProviderCatalogSnapshot[] {
             inputCostPer1kUsd: readNumber(model.input_cost_per_1k_usd),
             outputCostPer1kUsd: readNumber(model.output_cost_per_1k_usd),
             supportsTools: model.supports_tools === true,
+            supportsVision: model.supports_vision === true,
+            supportsJson: model.supports_json === true,
             supportsReasoning: model.supports_reasoning === true,
             localSelfHostedCompatible: model.local_self_hosted_compatible === true,
+            pricingKnown: model.pricing_known === true || readNumber(model.input_cost_per_1k_usd) !== null || readNumber(model.output_cost_per_1k_usd) !== null,
+            source: readOptionalString(model.source),
+            fetchedAt: readOptionalString(model.fetched_at),
+            lifecycle: readOptionalString(model.lifecycle),
             capabilityLabels: normalizeLabelList(model.capability_labels),
           }))
           .filter((item) => item.id)
@@ -1412,6 +1443,10 @@ function normalizeProviderCatalog(payload: unknown): ProviderCatalogSnapshot[] {
         residency: readOptionalString(provider.residency),
         localSelfHostedCompatible: provider.local_self_hosted_compatible === true,
         capabilityLabels: normalizeLabelList(provider.capability_labels),
+        modelsSource: readOptionalString(provider.models_source),
+        modelsSyncedAt: readOptionalString(provider.models_synced_at),
+        modelsExpiresAt: readOptionalString(provider.models_expires_at),
+        modelsError: readOptionalString(provider.models_error),
         models,
       } satisfies ProviderCatalogSnapshot;
     })
@@ -1723,7 +1758,7 @@ function resolveProviderModelForTier(
   catalog: ProviderCatalogSnapshot[],
 ): { providerId: string; modelId: string } {
   const catalogByProvider = providerCatalogById(catalog);
-  const providerOrder = ['gemini', 'openai', 'anthropic', 'deepseek', 'mistral', 'qwen', 'azure_openai', 'vertex', 'bedrock', 'ollama_cloud'];
+  const providerOrder = ['gemini', 'openai', 'anthropic', 'openrouter', 'groq', 'xai', 'deepseek', 'mistral', 'qwen', 'azure_openai', 'vertex', 'ollama_cloud', 'custom_openai_compatible'];
   for (const providerId of providerOrder) {
     const provider = catalogByProvider[providerId] ?? null;
     if (provider && provider.models.length > 0) {
@@ -2649,6 +2684,7 @@ function AgentAiSettingsSections({
   onSelectTier,
   onSelectProvider,
   onSelectModel,
+  onRefreshProviderModels,
   onOpenIntegrations,
 }: {
   value: DetailConfigDraft;
@@ -2657,23 +2693,58 @@ function AgentAiSettingsSections({
   onSelectTier: (nextTier: WizardState['aiTier']) => void;
   onSelectProvider: (nextProviderId: string) => void;
   onSelectModel: (nextModelId: string) => void;
+  onRefreshProviderModels?: (providerId: string) => void;
   onOpenIntegrations?: () => void;
 }) {
+  const [modelQuery, setModelQuery] = useState('');
   const selectedProvider = providerCatalog.find((provider) => provider.id === value.providerId) ?? null;
   const selectedModel = selectedProvider?.models.find((model) => model.id === value.modelId) ?? null;
   const selectedTier = STUDIO_AI_TIER_OPTIONS.find((option) => option.value === value.aiTier) ?? STUDIO_AI_TIER_OPTIONS[1];
   const providerReady = selectedProvider?.state.toLowerCase() === 'ready' || selectedProvider?.state.toLowerCase() === 'connected';
+  const activeProvider = selectedProvider ?? providerCatalog[0] ?? null;
+  const query = modelQuery.trim().toLowerCase();
+  const modelOptions = providerCatalog.flatMap((provider) => provider.models.map((model) => ({ provider, model })));
+  const filteredModelOptions = modelOptions
+    .filter(({ provider, model }) => {
+      if (!query) {
+        return true;
+      }
+      return `${provider.label} ${provider.id} ${model.label} ${model.id} ${model.capabilityLabels.join(' ')}`.toLowerCase().includes(query);
+    })
+    .sort((left, right) => {
+      const leftSelected = left.provider.id === value.providerId && left.model.id === value.modelId ? -1 : 0;
+      const rightSelected = right.provider.id === value.providerId && right.model.id === value.modelId ? -1 : 0;
+      if (leftSelected !== rightSelected) {
+        return leftSelected - rightSelected;
+      }
+      const tierDelta = modelPreferenceScore(left.model, value.aiTier) - modelPreferenceScore(right.model, value.aiTier);
+      if (tierDelta !== 0) {
+        return tierDelta;
+      }
+      return `${left.provider.label} ${left.model.label}`.localeCompare(`${right.provider.label} ${right.model.label}`);
+    });
+  const recommendedOptions = filteredModelOptions.slice(0, 6);
+  const liveModelCount = providerCatalog.reduce((total, provider) => total + provider.models.length, 0);
+  const sourceLabel = selectedProvider?.modelsSource === 'workspace_cached_models'
+    ? 'Live catalog'
+    : selectedProvider?.modelsSource === 'static_catalog'
+      ? 'Fallback catalog'
+      : humanizeToken(selectedProvider?.modelsSource, selectedProvider?.modelsSource || 'Catalog');
+  function selectProviderModel(providerId: string, modelId: string) {
+    onSelectProvider(providerId);
+    onSelectModel(modelId);
+  }
   return (
     <div className="studio-ai-settings">
       <div className="studio-ai-settings__summary" aria-label="Model setup summary">
         <div>
           <span>Model setup</span>
-          <strong>{selectedTier.label} · {selectedProvider?.label ?? 'Provider account'}</strong>
-          <p>Customers bring their own provider account. Empyralis uses that key for this agent and shows the provider usage price before launch.</p>
+          <strong>{selectedModel?.label ?? selectedTier.label} · {selectedProvider?.label ?? 'Connect provider'}</strong>
+          <p>Connect a provider in Integrations, then choose the default model this customer-facing agent should use.</p>
         </div>
         <div className="studio-ai-settings__badges" aria-label="Model setup constraints">
-          <span>Customer key</span>
-          <span>Provider pricing</span>
+          <span>{liveModelCount} models</span>
+          <span>{sourceLabel}</span>
         </div>
       </div>
 
@@ -2702,14 +2773,20 @@ function AgentAiSettingsSections({
         </div>
       </section>
 
-      <section className="studio-ai-settings__section" aria-label="Provider and model">
+      <section className="studio-ai-settings__section" aria-label="Default model">
         <div className="studio-actions__section-head">
           <div>
-            <span>Provider and model</span>
-            <strong>Model route for this agent</strong>
+            <span>Connected model provider</span>
+            <strong>Default model for this agent</strong>
           </div>
           <div className="studio-actions__section-head-actions">
-            <small>{providerCatalog.length} available</small>
+            <small>{providerCatalog.length} provider{providerCatalog.length === 1 ? '' : 's'} · {liveModelCount} model{liveModelCount === 1 ? '' : 's'}</small>
+            {activeProvider && onRefreshProviderModels ? (
+              <button type="button" className="studio-actions__link-button" onClick={() => onRefreshProviderModels(activeProvider.id)}>
+                <RefreshCw aria-hidden="true" />
+                Refresh models
+              </button>
+            ) : null}
             {onOpenIntegrations ? (
               <button type="button" className="studio-actions__link-button" onClick={onOpenIntegrations}>
                 <Plus aria-hidden="true" />
@@ -2726,50 +2803,86 @@ function AgentAiSettingsSections({
               detail={isLoadingProviderCatalog ? 'Checking workspace provider catalog.' : 'Connect a provider account before changing the model route.'}
             />
           ) : null}
-          <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-            <FormField label="Provider account" hint="Only cloud provider accounts appear here. CLI and local providers stay with Sage.">
-              <FormSelect
-                value={value.providerId}
-                onChange={(event) => onSelectProvider(event.currentTarget.value)}
-                disabled={isLoadingProviderCatalog || providerCatalog.length === 0}
+          <div className="studio-ai-settings__provider-strip" aria-label="Connected providers">
+            {providerCatalog.map((provider) => (
+              <button
+                key={provider.id}
+                type="button"
+                className={joinClassNames('studio-ai-settings__provider-pill', provider.id === value.providerId && 'studio-ai-settings__provider-pill--selected')}
+                onClick={() => {
+                  const nextModel = pickStudioModelForTier(provider, value.aiTier);
+                  selectProviderModel(provider.id, nextModel);
+                }}
               >
-                <option value="">
-                  {isLoadingProviderCatalog ? 'Loading providers...' : 'Select a provider'}
-                </option>
-                {providerCatalog.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.label}
-                  </option>
-                ))}
-              </FormSelect>
-            </FormField>
-            <FormField label="Model" hint="The available models come from the selected provider account.">
-              <FormSelect
+                <strong>{provider.label}</strong>
+                <span>{provider.models.length} model{provider.models.length === 1 ? '' : 's'}</span>
+              </button>
+            ))}
+          </div>
+          <FormField label="Search models" hint="Live models appear after the provider account is connected. Fallback models are used only when discovery is unavailable.">
+            <FormInput
+              value={modelQuery}
+              onChange={(event) => setModelQuery(event.currentTarget.value)}
+              placeholder="Search by provider, model, or capability"
+              disabled={providerCatalog.length === 0}
+            />
+          </FormField>
+          <div className="studio-ai-settings__model-grid" aria-label="Model choices">
+            {recommendedOptions.length > 0 ? recommendedOptions.map(({ provider, model }) => {
+              const selected = provider.id === value.providerId && model.id === value.modelId;
+              const tags = [
+                model.supportsReasoning ? 'Reasoning' : null,
+                model.supportsTools ? 'Tools' : null,
+                model.supportsVision ? 'Vision' : null,
+                model.supportsJson ? 'JSON' : null,
+                ...model.capabilityLabels,
+              ].filter((item): item is string => Boolean(item));
+              return (
+                <button
+                  key={`${provider.id}:${model.id}`}
+                  type="button"
+                  className={joinClassNames('studio-ai-settings__model-card', selected && 'studio-ai-settings__model-card--selected')}
+                  onClick={() => selectProviderModel(provider.id, model.id)}
+                >
+                  <span>{provider.label}</span>
+                  <strong>{model.label}</strong>
+                  <small>{formatContextWindow(model.contextWindowTokens)} · {model.pricingKnown ? `${formatUsdPer1k(model.inputCostPer1kUsd)} in / ${formatUsdPer1k(model.outputCostPer1kUsd)} out` : 'Pricing unknown'}</small>
+                  {tags.length > 0 ? (
+                    <em>{Array.from(new Set(tags)).slice(0, 4).join(' · ')}</em>
+                  ) : null}
+                </button>
+              );
+            }) : (
+              <StateBanner
+                tone="warning"
+                title="No models found"
+                detail="Refresh the provider catalog or enter a model ID manually."
+              />
+            )}
+          </div>
+          {selectedProvider ? (
+            <FormField label="Manual model ID" hint="Use this when the provider supports a model that did not appear in discovery yet.">
+              <FormInput
                 value={value.modelId}
                 onChange={(event) => onSelectModel(event.currentTarget.value)}
-                disabled={!selectedProvider || selectedProvider.models.length === 0}
-              >
-                <option value="">
-                  {selectedProvider ? 'Select a model' : 'Select a provider first'}
-                </option>
-                {(selectedProvider?.models ?? []).map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </FormSelect>
+                placeholder="provider/model-id or model-id"
+              />
             </FormField>
-          </FormGrid>
+          ) : null}
           <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
             <FormReadout label="Provider connection" value={providerReady ? 'Connected' : humanizeToken(selectedProvider?.state, isLoadingProviderCatalog ? 'Loading' : 'Setup required')} />
-            <FormReadout label="Input price" value={selectedModel ? formatUsdPer1k(selectedModel.inputCostPer1kUsd) : 'n/a'} />
-            <FormReadout label="Output price" value={selectedModel ? formatUsdPer1k(selectedModel.outputCostPer1kUsd) : 'n/a'} />
+            <FormReadout label="Input price" value={selectedModel?.pricingKnown ? formatUsdPer1k(selectedModel.inputCostPer1kUsd) : 'Pricing unknown'} />
+            <FormReadout label="Output price" value={selectedModel?.pricingKnown ? formatUsdPer1k(selectedModel.outputCostPer1kUsd) : 'Pricing unknown'} />
             <FormReadout label="Model capacity" value={formatContextWindow(selectedModel?.contextWindowTokens)} />
             <FormReadout
               label="Model capabilities"
               value={selectedModel?.capabilityLabels.length ? selectedModel.capabilityLabels.join(', ') : selectedProvider?.capabilityLabels.join(', ') || 'n/a'}
             />
+            <FormReadout label="Catalog status" value={selectedProvider?.modelsError ? 'Refresh failed' : sourceLabel} />
           </FormGrid>
+          {selectedProvider?.modelsError ? (
+            <StateBanner tone="warning" title="Model refresh failed" detail={selectedProvider.modelsError} />
+          ) : null}
         </div>
       </section>
     </div>
@@ -3164,6 +3277,25 @@ export function WorkstationDeployedAgentsPane({
     } catch (error) {
       setProviderCatalog([]);
       setErrorMessage(error instanceof Error ? error.message : 'AI model catalog is unavailable.');
+    } finally {
+      setIsLoadingProviderCatalog(false);
+    }
+  }
+
+  async function refreshProviderModels(providerId: string) {
+    const normalizedProviderId = readString(providerId);
+    if (!normalizedProviderId) {
+      return;
+    }
+    setIsLoadingProviderCatalog(true);
+    try {
+      await services.client.refreshWorkspaceProviderModels({ providerId: normalizedProviderId });
+      const payload = await services.client.listProviderCatalog();
+      const nextCatalog = normalizeProviderCatalog(payload);
+      updateStudioPaneCache(workspaceId, { providerCatalog: nextCatalog });
+      setProviderCatalog(nextCatalog);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not refresh provider models.');
     } finally {
       setIsLoadingProviderCatalog(false);
     }
@@ -4856,6 +4988,7 @@ export function WorkstationDeployedAgentsPane({
                           onSelectTier={updateDetailAiTier}
                           onSelectProvider={updateDetailProvider}
                           onSelectModel={updateDetailModel}
+                          onRefreshProviderModels={(providerId) => { void refreshProviderModels(providerId); }}
                           onOpenIntegrations={() => setOverlayTab('connectors')}
                         />
                         <div className="app-inline-actions">
@@ -5595,6 +5728,7 @@ export function WorkstationDeployedAgentsPane({
                           onSelectTier={updateDetailAiTier}
                           onSelectProvider={updateDetailProvider}
                           onSelectModel={updateDetailModel}
+                          onRefreshProviderModels={(providerId) => { void refreshProviderModels(providerId); }}
                           onOpenIntegrations={() => setOverlayTab('connectors')}
                         />
                         <div className="deployed-agents-overlay__footer">

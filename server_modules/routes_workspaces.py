@@ -157,6 +157,7 @@ class WorkspaceSageToolPolicyUpdateRequest(BaseModel):
 class WorkspaceProviderCredentialUpsertRequest(BaseModel):
     provider: str
     api_key: Optional[str] = None
+    base_url: Optional[str] = None
     model: Optional[str] = None
 
 
@@ -440,6 +441,7 @@ async def workspace_provider_credential_create(
         current_user=current_user,
         provider=body.provider,
         api_key=body.api_key,
+        base_url=body.base_url,
         model=body.model,
     )
 

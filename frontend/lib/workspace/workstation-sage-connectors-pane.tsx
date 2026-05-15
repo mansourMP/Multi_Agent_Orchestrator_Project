@@ -242,11 +242,17 @@ const FALLBACK_PROVIDER_IDS = [
   'gemini',
   'openai',
   'anthropic',
+  'openrouter',
+  'groq',
+  'xai',
   'ollama_cloud',
   'openai-codex',
   'vertex',
+  'azure_openai',
+  'bedrock',
   'mistral',
   'qwen',
+  'custom_openai_compatible',
   'ollama',
 ] as const;
 
@@ -254,12 +260,18 @@ const FALLBACK_PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
   'openai-codex': 'OpenAI Codex',
   anthropic: 'Anthropic',
+  openrouter: 'OpenRouter',
+  groq: 'Groq',
+  xai: 'xAI',
   gemini: 'Google Gemini',
   vertex: 'Google Vertex AI',
+  azure_openai: 'Azure OpenAI',
+  bedrock: 'Amazon Bedrock',
   deepseek: 'DeepSeek',
   ollama_cloud: 'Ollama Cloud',
   mistral: 'Mistral',
   qwen: 'Qwen',
+  custom_openai_compatible: 'Custom OpenAI-compatible',
   ollama: 'Ollama',
 };
 
@@ -269,10 +281,16 @@ const PROVIDER_IMAGE_BY_ID: Record<string, string> = {
   anthropic: '/integrations/anthropic.png',
   gemini: '/integrations/gemini.jpg',
   vertex: '/integrations/gemini.jpg',
+  openrouter: '/integrations/webhook.png',
+  groq: '/integrations/webhook.png',
+  xai: '/integrations/webhook.png',
+  azure_openai: '/integrations/openai.png',
+  bedrock: '/integrations/webhook.png',
   mistral: '/integrations/mistral.png',
   deepseek: '/integrations/deepseek.jpg',
   ollama_cloud: '/integrations/ollama.png',
   qwen: '/integrations/qwen.png',
+  custom_openai_compatible: '/integrations/webhook.png',
   ollama: '/integrations/ollama.png',
 };
 
@@ -775,6 +793,20 @@ function providerCredentialPlaceholder(provider: ProviderSnapshot): string {
     return '';
   }
   return 'Paste connection detail';
+}
+
+function providerNeedsBaseUrl(provider: ProviderSnapshot): boolean {
+  return provider.id === 'custom_openai_compatible' || provider.id === 'azure_openai';
+}
+
+function providerBaseUrlLabel(provider: ProviderSnapshot): string {
+  return provider.id === 'azure_openai' ? 'Azure endpoint or compatible base URL' : 'Base URL';
+}
+
+function providerBaseUrlPlaceholder(provider: ProviderSnapshot): string {
+  return provider.id === 'azure_openai'
+    ? 'https://your-resource.openai.azure.com/openai/v1'
+    : 'https://api.example.com/v1';
 }
 
 function providerNeedsGateway(providerId: string): boolean {
@@ -1467,6 +1499,7 @@ export function WorkstationSageConnectorsPane({
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => showProviders ? 'ai' : 'channels');
   const [providerDraftKeys, setProviderDraftKeys] = useState<Record<string, string>>({});
+  const [providerDraftBaseUrls, setProviderDraftBaseUrls] = useState<Record<string, string>>({});
   const [providerPickerOpen, setProviderPickerOpen] = useState(false);
   const [computerConnectOpen, setComputerConnectOpen] = useState(false);
   const [providerPickerDraftId, setProviderPickerDraftId] = useState<string | null>(null);
@@ -2071,8 +2104,13 @@ export function WorkstationSageConnectorsPane({
 
   async function handleProviderSave(record: ProviderCardRecord): Promise<void> {
     const draftApiKey = (providerDraftKeys[record.id] ?? '').trim();
+    const draftBaseUrl = (providerDraftBaseUrls[record.id] ?? '').trim();
     if (providerRequiresSecret(record.provider, record.profile) && !draftApiKey) {
       setError(`${providerCredentialLabel(record.provider, record.profile)} is required before Sage can connect this provider.`);
+      return;
+    }
+    if (providerNeedsBaseUrl(record.provider) && !draftBaseUrl) {
+      setError(`${providerBaseUrlLabel(record.provider)} is required before Sage can fetch models for this provider.`);
       return;
     }
     setBusyCardId(record.id);
@@ -2082,6 +2120,7 @@ export function WorkstationSageConnectorsPane({
       await services.client.upsertWorkspaceProviderCredential({
         provider: record.provider.id,
         apiKey: draftApiKey || null,
+        baseUrl: draftBaseUrl || null,
         model: null,
       });
       emitWorkstationProviderChanged({
@@ -2091,6 +2130,7 @@ export function WorkstationSageConnectorsPane({
       });
       await refreshAfterMutation(`${record.label} is now connected.`);
       setProviderDraftKeys((current) => ({ ...current, [record.id]: '' }));
+      setProviderDraftBaseUrls((current) => ({ ...current, [record.id]: '' }));
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'AI model connection failed.');
     } finally {
@@ -2174,8 +2214,13 @@ export function WorkstationSageConnectorsPane({
 
   async function handleProviderConnectAndSelect(record: ProviderCardRecord) {
     const draftApiKey = (providerDraftKeys[record.id] ?? '').trim();
+    const draftBaseUrl = (providerDraftBaseUrls[record.id] ?? '').trim();
     if (!draftApiKey) {
       setError(`${providerCredentialLabel(record.provider, record.profile)} is required before Sage can connect this provider.`);
+      return;
+    }
+    if (providerNeedsBaseUrl(record.provider) && !draftBaseUrl) {
+      setError(`${providerBaseUrlLabel(record.provider)} is required before Sage can fetch models for this provider.`);
       return;
     }
     setBusyCardId(record.id);
@@ -2185,6 +2230,7 @@ export function WorkstationSageConnectorsPane({
       await services.client.upsertWorkspaceProviderCredential({
         provider: record.provider.id,
         apiKey: draftApiKey,
+        baseUrl: draftBaseUrl || null,
         model: null,
       });
       emitWorkstationProviderChanged({
@@ -2194,6 +2240,7 @@ export function WorkstationSageConnectorsPane({
       });
       await loadState();
       setProviderDraftKeys((current) => ({ ...current, [record.id]: '' }));
+      setProviderDraftBaseUrls((current) => ({ ...current, [record.id]: '' }));
       await setActiveProvider(record);
       setProviderPickerDraftId(null);
       setProviderPickerOpen(false);
@@ -2721,6 +2768,22 @@ export function WorkstationSageConnectorsPane({
                   : 'Connect a computer to use Ollama.'}
               </div>
             )}
+            {providerNeedsBaseUrl(record.provider) ? (
+              <FormField label={providerBaseUrlLabel(record.provider)}>
+                <FormInput
+                  type="url"
+                  value={providerDraftBaseUrls[record.id] ?? ''}
+                  placeholder={providerBaseUrlPlaceholder(record.provider)}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  onChange={(event) => {
+                    setProviderDraftBaseUrls((current) => ({ ...current, [record.id]: event.currentTarget.value }));
+                  }}
+                />
+              </FormField>
+            ) : null}
             <div className="sage-unified-expand__actions">
               <AppButton
                 type="button"
@@ -3274,6 +3337,22 @@ export function WorkstationSageConnectorsPane({
                 }}
               />
             </FormField>
+            {providerNeedsBaseUrl(record.provider) ? (
+              <FormField label={providerBaseUrlLabel(record.provider)}>
+                <FormInput
+                  type="url"
+                  value={providerDraftBaseUrls[record.id] ?? ''}
+                  placeholder={providerBaseUrlPlaceholder(record.provider)}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  onChange={(event) => {
+                    setProviderDraftBaseUrls((current) => ({ ...current, [record.id]: event.currentTarget.value }));
+                  }}
+                />
+              </FormField>
+            ) : null}
             <div className="sage-provider-picker__inline-actions">
               <AppButton
                 type="button"

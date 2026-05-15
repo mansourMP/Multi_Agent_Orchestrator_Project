@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+import hashlib
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -91,20 +93,66 @@ def _provider_requires_secret(provider_id: str) -> bool:
     )
 
 
-def _provider_secret_payload(provider_id: str, secret_value: str) -> Dict[str, Any]:
+MODEL_CACHE_TTL_SECONDS = 3600
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso_utc(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _parse_utc(value: Any) -> Optional[datetime]:
+    token = _read_string(value)
+    if not token:
+        return None
+    try:
+        return datetime.fromisoformat(token.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _credential_fingerprint(provider_id: str, credentials: Dict[str, Any]) -> str:
+    public_payload = {
+        "provider": provider_id,
+        "auth_mode": credentials.get("auth_mode"),
+        "base_url": credentials.get("base_url"),
+        "endpoint": credentials.get("endpoint"),
+        "region": credentials.get("region") or credentials.get("aws_region"),
+        "key_tail": _mask_last4(
+            credentials.get("api_key")
+            or credentials.get("access_token")
+            or credentials.get("oauth_token")
+            or credentials.get("token")
+            or credentials.get("aws_access_key_id")
+        ),
+    }
+    serialized = json.dumps(public_payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _provider_secret_payload(provider_id: str, secret_value: str, *, base_url: Optional[str] = None) -> Dict[str, Any]:
     auth_mode = provider_profiles_service.normalize_auth_mode(provider_id)
     if not provider_profiles_service.provider_requires_credential(provider_id, auth_mode):
         return provider_profiles_service.secretless_provider_credentials(provider_id, auth_mode)
     if not secret_value:
         return {}
+    extra: Dict[str, Any] = {}
+    base_url_value = _read_string(base_url)
+    if base_url_value:
+        extra["base_url"] = base_url_value.rstrip("/")
     if auth_mode in {"api_key", "oauth_token", "access_token"}:
         return {
             auth_mode: secret_value,
             "auth_mode": auth_mode,
+            **extra,
         }
     return {
         "api_key": secret_value,
         "auth_mode": auth_mode or "api_key",
+        **extra,
     }
 
 
@@ -156,7 +204,7 @@ def _filter_openai_model_ids(model_ids: List[str]) -> List[str]:
         if not model_id:
             continue
         lowered = model_id.lower()
-        if not (lowered.startswith("gpt-") or lowered.startswith("o1") or lowered.startswith("o3")):
+        if not (lowered.startswith("gpt-") or lowered.startswith("chatgpt-") or lowered.startswith("o1") or lowered.startswith("o3") or lowered.startswith("o4")):
             continue
         if model_id in seen:
             continue
@@ -170,36 +218,91 @@ def _cached_provider_model_metadata(
     workspace_id: str,
     credential_id: Optional[str],
     credentials_payload: Optional[Dict[str, Any]] = None,
+    *,
+    existing_metadata: Optional[Dict[str, Any]] = None,
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
+    existing = _coerce_dict(existing_metadata)
     try:
         credentials: Dict[str, Any]
         if credential_id:
             credentials = provider_profiles_service.resolve_vault_credential(credential_id, workspace_id)
         else:
             credentials = dict(credentials_payload or {})
+        fingerprint = _credential_fingerprint(provider_id, credentials)
+        expires_at = _parse_utc(existing.get("cached_models_expires_at"))
+        if (
+            not force_refresh
+            and existing.get("cached_models_provider_fingerprint") == fingerprint
+            and expires_at is not None
+            and expires_at > _now_utc()
+            and isinstance(existing.get("cached_models"), list)
+        ):
+            return {
+                "cached_models": list(existing.get("cached_models") or []),
+                "cached_models_source": existing.get("cached_models_source") or "workspace_cached_models",
+                "cached_models_synced_at": existing.get("cached_models_synced_at"),
+                "cached_models_expires_at": existing.get("cached_models_expires_at"),
+                "cached_models_error": existing.get("cached_models_error"),
+                "cached_models_provider_fingerprint": fingerprint,
+            }
         _, _, adapter = provider_profiles_service.resolve_provider_adapter(provider_id, credentials)
-        model_ids = adapter.list_models(credentials)
+        model_records = adapter.list_model_records(credentials)
+        if not isinstance(model_records, list):
+            model_records = []
+        if not model_records:
+            model_records = [
+                provider_profiles_service.normalize_live_model_record(
+                    provider_id,
+                    model_id,
+                    source="provider_adapter",
+                    fetched_at=_iso_utc(_now_utc()),
+                )
+                for model_id in adapter.list_models(credentials)
+            ]
     except Exception as exc:
+        preserved_models = existing.get("cached_models")
         return {
+            **({"cached_models": preserved_models} if isinstance(preserved_models, list) else {}),
             "cached_models_error": str(exc).strip() or "Provider model sync failed.",
-            "cached_models_synced_at": datetime.utcnow().isoformat() + "Z",
-            "cached_models_source": "provider_adapter",
+            "cached_models_synced_at": existing.get("cached_models_synced_at") or _iso_utc(_now_utc()),
+            "cached_models_expires_at": existing.get("cached_models_expires_at"),
+            "cached_models_source": existing.get("cached_models_source") or "provider_adapter",
+            "cached_models_provider_fingerprint": existing.get("cached_models_provider_fingerprint"),
         }
-    filtered = _filter_openai_model_ids(model_ids) if provider_id == "openai" else [
-        _read_string(model_id) for model_id in model_ids if _read_string(model_id)
+    filtered_records = [
+        dict(record)
+        for record in model_records
+        if isinstance(record, dict) and _read_string(record.get("id"))
     ]
+    if provider_id == "openai":
+        allowed_ids = set(_filter_openai_model_ids([_read_string(record.get("id")) for record in filtered_records]))
+        filtered_records = [record for record in filtered_records if _read_string(record.get("id")) in allowed_ids]
+    seen: set[str] = set()
+    filtered: List[Dict[str, Any]] = []
+    for record in filtered_records:
+        model_id = _read_string(record.get("id"))
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        filtered.append(record)
     if not filtered:
         return {
             "cached_models": [],
             "cached_models_error": "Provider returned no models.",
-            "cached_models_synced_at": datetime.utcnow().isoformat() + "Z",
+            "cached_models_synced_at": _iso_utc(_now_utc()),
+            "cached_models_expires_at": _iso_utc(_now_utc() + timedelta(seconds=MODEL_CACHE_TTL_SECONDS)),
             "cached_models_source": "provider_adapter",
+            "cached_models_provider_fingerprint": fingerprint,
         }
+    synced_at = _now_utc()
     return {
         "cached_models": filtered,
         "cached_models_source": "openai_models_api" if provider_id == "openai" else "provider_adapter",
-        "cached_models_synced_at": datetime.utcnow().isoformat() + "Z",
+        "cached_models_synced_at": _iso_utc(synced_at),
+        "cached_models_expires_at": _iso_utc(synced_at + timedelta(seconds=MODEL_CACHE_TTL_SECONDS)),
         "cached_models_error": None,
+        "cached_models_provider_fingerprint": fingerprint,
     }
 
 
@@ -279,13 +382,14 @@ async def upsert_workspace_provider_credential(
     *,
     provider: str,
     api_key: Optional[str],
+    base_url: Optional[str] = None,
     model: Optional[str] = None,
 ) -> Dict[str, Any]:
     resolved_workspace_id = _enforce_owner_scope(current_user, workspace_id)
     provider_id = _normalize_provider_id(provider)
     key_value = _read_string(api_key)
     requires_secret = _provider_requires_secret(provider_id)
-    credential_secret_payload = _provider_secret_payload(provider_id, key_value)
+    credential_secret_payload = _provider_secret_payload(provider_id, key_value, base_url=base_url)
 
     credential_id: Optional[str] = None
     credential_payload: Optional[Dict[str, Any]] = None
@@ -331,6 +435,7 @@ async def upsert_workspace_provider_credential(
             resolved_workspace_id,
             credential_id,
             credential_secret_payload,
+            existing_metadata=_coerce_dict(current_profile.get("metadata")),
         ),
     }
 
@@ -388,6 +493,8 @@ async def refresh_workspace_provider_models(
         resolved_workspace_id,
         credential_id,
         None,
+        existing_metadata=metadata,
+        force_refresh=True,
     )
     next_metadata = {
         **metadata,

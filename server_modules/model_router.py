@@ -30,6 +30,7 @@ MODEL_ALIASES = {
     "claude-haiku": "anthropic/claude-3-haiku-20240307",
     "gemini-flash": "gemini/gemini-2.5-flash",
     "gemini-pro": "gemini/gemini-2.5-pro",
+    "vertex-gemini-flash": "vertex_ai/gemini-2.5-flash",
     "vertex-gemini-pro": "vertex_ai/gemini-1.5-pro",
 }
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
@@ -59,6 +60,12 @@ def infer_provider(model_name: Optional[str], provider: Optional[str] = None, pr
         return "vertex"
     if raw.startswith("qwen/") or raw.startswith("qwen"):
         return "qwen"
+    if raw.startswith("groq/"):
+        return "groq"
+    if raw.startswith("openrouter/"):
+        return "openrouter"
+    if raw.startswith("xai/") or raw.startswith("grok"):
+        return "xai"
     if raw.startswith("deepseek/") or raw.startswith("deepseek"):
         return "deepseek"
     if raw.startswith("mistral/") or raw.startswith("mistral"):
@@ -242,9 +249,22 @@ def _legacy_adapter_payload(messages: List[Any]) -> Tuple[str, str]:
 
 
 def _use_adapter_compat_fallback(provider: str, credentials: Optional[Dict[str, Any]]) -> bool:
-    if provider != "vertex" or not isinstance(credentials, dict):
+    if not isinstance(credentials, dict):
         return False
-    return bool(str(credentials.get("access_token") or "").strip())
+    if provider == "vertex":
+        return bool(str(credentials.get("access_token") or "").strip())
+    return provider in {
+        "azure_openai",
+        "custom_openai_compatible",
+        "deepseek",
+        "groq",
+        "mistral",
+        "ollama",
+        "ollama_cloud",
+        "openrouter",
+        "qwen",
+        "xai",
+    }
 
 
 def _legacy_adapter_call(

@@ -11,6 +11,14 @@ ANTHROPIC_MODEL_ALIASES = {
     "claude-3-7-sonnet-latest": "claude-3-7-sonnet-20250219",
 }
 
+MANUAL_MODEL_ID_PROVIDERS = {
+    "azure_openai",
+    "custom_openai_compatible",
+    "groq",
+    "openrouter",
+    "xai",
+}
+
 
 def _credential_plane_metadata(
     *,
@@ -63,7 +71,8 @@ def _cached_model_records(provider_id: str, metadata: Dict[str, Any]) -> List[Di
     items: List[Dict[str, Any]] = []
     seen: set[str] = set()
     for raw in cached:
-        model_id = str(raw or "").strip()
+        raw_record = dict(raw) if isinstance(raw, dict) else {"id": raw}
+        model_id = str(raw_record.get("id") or "").strip()
         if not model_id or model_id in seen:
             continue
         if provider_id == "deepseek" and model_id not in known_by_id:
@@ -72,10 +81,52 @@ def _cached_model_records(provider_id: str, metadata: Dict[str, Any]) -> List[Di
             continue
         seen.add(model_id)
         record = dict(known_by_id.get(model_id) or {})
+        pricing_projection = provider_profiles.pricing_registry_service.catalog_price_projection(provider_id, model_id)
+        input_cost = raw_record.get("input_cost_per_1k_usd")
+        if input_cost is None and raw_record.get("input_cost_per_million") is not None:
+            try:
+                input_cost = float(raw_record.get("input_cost_per_million") or 0.0) / 1000
+            except Exception:
+                input_cost = None
+        output_cost = raw_record.get("output_cost_per_1k_usd")
+        if output_cost is None and raw_record.get("output_cost_per_million") is not None:
+            try:
+                output_cost = float(raw_record.get("output_cost_per_million") or 0.0) / 1000
+            except Exception:
+                output_cost = None
+        merged_capabilities = [
+            str(label).strip()
+            for label in list(record.get("capability_labels") or []) + list(raw_record.get("capability_labels") or [])
+            if str(label).strip()
+        ]
+        if raw_record.get("supports_tools") and "Tools" not in merged_capabilities:
+            merged_capabilities.append("Tools")
+        if raw_record.get("supports_reasoning") and "Reasoning" not in merged_capabilities:
+            merged_capabilities.append("Reasoning")
         record["id"] = model_id
-        record["label"] = str(record.get("label") or model_id)
+        record["label"] = str(raw_record.get("label") or record.get("label") or model_id)
         record["provider"] = provider_id
-        record["source"] = "workspace_cached_models"
+        record["provider_id"] = provider_id
+        record["context_window_tokens"] = raw_record.get("context_window_tokens") or record.get("context_window_tokens")
+        record["input_cost_per_1k_usd"] = input_cost if input_cost is not None else record.get("input_cost_per_1k_usd", pricing_projection.get("input_cost_per_1k_usd"))
+        record["output_cost_per_1k_usd"] = output_cost if output_cost is not None else record.get("output_cost_per_1k_usd", pricing_projection.get("output_cost_per_1k_usd"))
+        try:
+            record["input_cost_per_million"] = float(record.get("input_cost_per_1k_usd") or 0.0) * 1000
+            record["output_cost_per_million"] = float(record.get("output_cost_per_1k_usd") or 0.0) * 1000
+        except Exception:
+            pass
+        record["pricing_known"] = bool(raw_record.get("pricing_known") or record.get("pricing_known") or pricing_projection.get("pricing_known"))
+        record["pricing_source"] = raw_record.get("pricing_source") or record.get("pricing_source") or pricing_projection.get("pricing_source")
+        record["supports_tools"] = bool(raw_record.get("supports_tools") or record.get("supports_tools"))
+        record["supports_vision"] = bool(raw_record.get("supports_vision") or record.get("supports_vision"))
+        record["supports_json"] = bool(raw_record.get("supports_json") or record.get("supports_json"))
+        record["supports_reasoning"] = bool(raw_record.get("supports_reasoning") or record.get("supports_reasoning"))
+        record["capability_labels"] = list(dict.fromkeys(merged_capabilities))
+        record["lifecycle"] = raw_record.get("lifecycle") or record.get("lifecycle")
+        record["source"] = raw_record.get("source") or "workspace_cached_models"
+        record["fetched_at"] = raw_record.get("fetched_at") or metadata.get("cached_models_synced_at")
+        if "raw" in raw_record:
+            record["raw"] = raw_record.get("raw")
         items.append(record)
     return items
 
@@ -114,7 +165,7 @@ def _normalize_model_token(provider_id: str, model_id: Any) -> str:
         return token.split("/", 1)[1]
     if provider_id == "vertex" and token.startswith("vertex_ai/"):
         return token.split("/", 1)[1]
-    if provider_id in {"qwen", "deepseek", "mistral", "ollama"} and "/" in token:
+    if provider_id in {"qwen", "deepseek", "mistral", "ollama", "ollama_cloud", "groq", "xai", "azure_openai", "custom_openai_compatible"} and "/" in token:
         provider_token, model_token = token.split("/", 1)
         if provider_profiles.normalize_provider_id(provider_token) == provider_id:
             return model_token.strip()
@@ -160,11 +211,11 @@ def resolve_provider_model_selection(
     supported_models = {str(item.get("id") or "").strip() for item in model_catalog if str(item.get("id") or "").strip()}
     if isinstance(cached_models, list) and raw_provider != "deepseek":
         supported_models.update(
-            _normalize_model_token(raw_provider, cached_model)
+            _normalize_model_token(raw_provider, cached_model.get("id") if isinstance(cached_model, dict) else cached_model)
             for cached_model in cached_models
-            if _normalize_model_token(raw_provider, cached_model)
+            if _normalize_model_token(raw_provider, cached_model.get("id") if isinstance(cached_model, dict) else cached_model)
         )
-    if normalized_model and supported_models and normalized_model not in supported_models:
+    if normalized_model and supported_models and normalized_model not in supported_models and raw_provider not in MANUAL_MODEL_ID_PROVIDERS:
         raise ValueError(f"Model '{normalized_model}' is not supported for provider '{raw_provider}'.")
 
     return {
@@ -214,6 +265,7 @@ def _provider_catalog_projection(item: Dict[str, Any]) -> Dict[str, Any]:
         "models": models,
         "models_source": "workspace_cached_models" if cached_models else "static_catalog",
         "models_synced_at": profile_metadata.get("cached_models_synced_at"),
+        "models_expires_at": profile_metadata.get("cached_models_expires_at"),
         "models_error": profile_metadata.get("cached_models_error"),
     }
 

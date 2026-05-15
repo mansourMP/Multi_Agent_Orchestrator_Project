@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import base64
+import hashlib
 import sys
 from functools import lru_cache
 from datetime import datetime, timedelta, timezone
@@ -406,9 +407,15 @@ WORKSPACE_USER_FACING_AI_PROVIDERS = {
     "anthropic",
     "gemini",
     "vertex",
+    "groq",
+    "openrouter",
+    "xai",
+    "azure_openai",
+    "bedrock",
     "qwen",
     "deepseek",
     "mistral",
+    "custom_openai_compatible",
     "ollama_cloud",
 }
 
@@ -496,6 +503,69 @@ PROVIDER_CATALOG = {
         "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
         "note": "Direct Vertex AI access token with project and region.",
     },
+    "groq": {
+        "label": "Groq",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "API Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "llama-3.3-70b-versatile",
+        "base_url": "https://api.groq.com/openai/v1",
+        "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
+        "note": "Direct Groq API key using Groq's OpenAI-compatible endpoint.",
+    },
+    "openrouter": {
+        "label": "OpenRouter",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "API Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "openai/gpt-5.2",
+        "base_url": "https://openrouter.ai/api/v1",
+        "models": ["openai/gpt-5.2", "anthropic/claude-sonnet-4", "google/gemini-2.5-flash"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
+        "note": "OpenRouter gives one API key for a broad model marketplace. Model pricing comes from OpenRouter when available.",
+    },
+    "xai": {
+        "label": "xAI",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "API Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "grok-4",
+        "base_url": "https://api.x.ai/v1",
+        "models": ["grok-4", "grok-3"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
+        "note": "Direct xAI API key using xAI's OpenAI-compatible endpoint.",
+    },
+    "azure_openai": {
+        "label": "Azure OpenAI",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "API Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "deployment-name",
+        "models": ["deployment-name"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
+        "note": "Azure OpenAI is deployment-scoped. Connect with an Azure endpoint/base URL and API key.",
+    },
+    "bedrock": {
+        "label": "Amazon Bedrock",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "AWS Access Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "models": ["anthropic.claude-3-5-sonnet-20241022-v2:0", "amazon.nova-pro-v1:0"],
+        "provider_scopes": ["sage_personal", "workspace_api"],
+        "note": "Amazon Bedrock model availability depends on AWS region and account access.",
+    },
     "qwen": {
         "label": "Qwen",
         "auth": ["api_key"],
@@ -560,6 +630,18 @@ PROVIDER_CATALOG = {
         "models": ["gpt-oss:120b", "gpt-oss:20b"],
         "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
         "note": "Direct Ollama cloud API key. This is separate from local Ollama running through the paired computer.",
+    },
+    "custom_openai_compatible": {
+        "label": "Custom OpenAI-compatible",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "API Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "",
+        "models": [],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
+        "note": "Use any OpenAI-compatible API by providing a base URL and API key.",
     },
 }
 
@@ -1141,6 +1223,119 @@ def _default_model_choice_label(model_id: str) -> str:
     return " ".join(part for part in str(model_id or "").replace("_", "-").split("-") if part).strip() or str(model_id or "")
 
 
+def _float_or_none(value: Any) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        number = int(float(value))
+    except Exception:
+        return None
+    return number if number > 0 else None
+
+
+def _model_cost_per_1k_from_raw(value: Any, *, value_is_per_token: bool = False) -> Optional[float]:
+    number = _float_or_none(value)
+    if number is None:
+        return None
+    return number * 1000 if value_is_per_token else number
+
+
+def normalize_live_model_record(
+    provider: Any,
+    raw: Any,
+    *,
+    source: str = "provider_adapter",
+    fetched_at: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    provider_id = normalize_provider_id(provider)
+    if isinstance(raw, str):
+        raw_record: Dict[str, Any] = {"id": raw}
+    elif isinstance(raw, dict):
+        raw_record = dict(raw)
+    else:
+        return None
+    model_id = str(
+        raw_record.get("id")
+        or raw_record.get("name")
+        or raw_record.get("model")
+        or ""
+    ).strip()
+    if model_id.startswith("models/"):
+        model_id = model_id.split("/", 1)[1]
+    if not model_id:
+        return None
+    pricing = raw_record.get("pricing") if isinstance(raw_record.get("pricing"), dict) else {}
+    architecture = raw_record.get("architecture") if isinstance(raw_record.get("architecture"), dict) else {}
+    supported_parameters = raw_record.get("supported_parameters") if isinstance(raw_record.get("supported_parameters"), list) else []
+    input_per_1k = (
+        _model_cost_per_1k_from_raw(raw_record.get("input_cost_per_1k_usd"))
+        if raw_record.get("input_cost_per_1k_usd") is not None
+        else _model_cost_per_1k_from_raw(raw_record.get("input_cost_per_million"), value_is_per_token=False) / 1000
+        if _float_or_none(raw_record.get("input_cost_per_million")) is not None
+        else _model_cost_per_1k_from_raw(pricing.get("prompt"), value_is_per_token=True)
+    )
+    output_per_1k = (
+        _model_cost_per_1k_from_raw(raw_record.get("output_cost_per_1k_usd"))
+        if raw_record.get("output_cost_per_1k_usd") is not None
+        else _model_cost_per_1k_from_raw(raw_record.get("output_cost_per_million"), value_is_per_token=False) / 1000
+        if _float_or_none(raw_record.get("output_cost_per_million")) is not None
+        else _model_cost_per_1k_from_raw(pricing.get("completion"), value_is_per_token=True)
+    )
+    context_window = (
+        _int_or_none(raw_record.get("context_window_tokens"))
+        or _int_or_none(raw_record.get("context_length"))
+        or _int_or_none(raw_record.get("context_window"))
+        or _int_or_none(raw_record.get("input_token_limit"))
+        or _int_or_none(raw_record.get("inputTokenLimit"))
+    )
+    supports_tools = bool(
+        raw_record.get("supports_tools")
+        or "tools" in supported_parameters
+        or "tool_choice" in supported_parameters
+    )
+    modalities = [str(item).lower() for item in raw_record.get("modalities", [])] if isinstance(raw_record.get("modalities"), list) else []
+    supports_vision = bool(
+        raw_record.get("supports_vision")
+        or "image" in str(architecture.get("modality") or "").lower()
+        or "image" in modalities
+    )
+    supports_json = bool(raw_record.get("supports_json") or "response_format" in supported_parameters)
+    supports_reasoning = bool(
+        raw_record.get("supports_reasoning")
+        or "reasoning" in supported_parameters
+        or any(token in model_id.lower() for token in ("reason", "o1", "o3", "o4", "gpt-5", "grok-4", "opus"))
+    )
+    return {
+        "id": model_id,
+        "label": str(raw_record.get("label") or raw_record.get("display_name") or raw_record.get("name") or _default_model_choice_label(model_id)),
+        "provider": provider_id,
+        "provider_id": provider_id,
+        "context_window_tokens": context_window,
+        "input_cost_per_1k_usd": input_per_1k,
+        "output_cost_per_1k_usd": output_per_1k,
+        "input_cost_per_million": input_per_1k * 1000 if input_per_1k is not None else None,
+        "output_cost_per_million": output_per_1k * 1000 if output_per_1k is not None else None,
+        "pricing_known": input_per_1k is not None or output_per_1k is not None,
+        "supports_tools": supports_tools,
+        "supports_vision": supports_vision,
+        "supports_json": supports_json,
+        "supports_reasoning": supports_reasoning,
+        "lifecycle": str(raw_record.get("lifecycle") or raw_record.get("stage") or "").strip() or None,
+        "source": source,
+        "fetched_at": fetched_at,
+        "raw": raw_record,
+    }
+
+
 def _provider_model_identifier_list(provider: Any) -> List[str]:
     provider_id = normalize_provider_id(provider)
     entry = provider_catalog_entry(provider_id)
@@ -1217,7 +1412,7 @@ def normalize_provider_model_id(
         token = token.split("/", 1)[1]
     elif provider_id == "vertex" and token.startswith("vertex_ai/"):
         token = token.split("/", 1)[1]
-    elif provider_id in {"qwen", "deepseek", "mistral", "ollama", "ollama_cloud"} and "/" in token:
+    elif provider_id in {"qwen", "deepseek", "mistral", "ollama", "ollama_cloud", "groq", "xai", "azure_openai", "custom_openai_compatible"} and "/" in token:
         provider_token, model_token = token.split("/", 1)
         if normalize_provider_id(provider_token) == provider_id:
             token = model_token.strip()
@@ -1400,6 +1595,20 @@ class ProviderAdapter:
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
         raise NotImplementedError
 
+    def list_model_records(self, credentials: Dict[str, Any]) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        for model_id in self.list_models(credentials):
+            record = normalize_live_model_record(
+                self.provider_id,
+                model_id,
+                source="provider_adapter",
+                fetched_at=fetched_at,
+            )
+            if record:
+                records.append(record)
+        return records
+
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
         raise NotImplementedError
 
@@ -1564,6 +1773,26 @@ class OpenAIAdapter(ProviderAdapter):
                     models.append(model_id)
         return sorted(set(models))
 
+    def list_model_records(self, credentials: Dict[str, Any]) -> List[Dict[str, Any]]:
+        self._ensure_direct_api_credentials(credentials)
+        res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
+        body = res.get("json", {}) or {}
+        fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        records: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for item in body.get("data", []) if isinstance(body.get("data"), list) else []:
+            record = normalize_live_model_record(
+                self.provider_id,
+                item,
+                source="openai_models_api",
+                fetched_at=fetched_at,
+            )
+            if not record or record["id"] in seen:
+                continue
+            seen.add(record["id"])
+            records.append(record)
+        return sorted(records, key=lambda item: str(item.get("id") or ""))
+
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
         from server_modules.model_router import call_model_sync
 
@@ -1638,6 +1867,27 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         entry = provider_catalog_entry(self.provider_id)
         fallback_models = [str(item).strip() for item in entry.get("models", []) if str(item).strip()]
         return fallback_models
+
+    def list_model_records(self, credentials: Dict[str, Any]) -> List[Dict[str, Any]]:
+        res = http_json_request(f"{self._base_url(credentials)}/models", headers=self._headers(credentials))
+        body = res.get("json") or {}
+        fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        records: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for item in body.get("data", []) if isinstance(body.get("data"), list) else []:
+            record = normalize_live_model_record(
+                self.provider_id,
+                item,
+                source="openai_compatible_models_api",
+                fetched_at=fetched_at,
+            )
+            if not record or record["id"] in seen:
+                continue
+            seen.add(record["id"])
+            records.append(record)
+        if records:
+            return sorted(records, key=lambda item: str(item.get("id") or ""))
+        return super().list_model_records(credentials)
 
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
         payload: Dict[str, Any] = {
@@ -1910,6 +2160,25 @@ class AnthropicAdapter(ProviderAdapter):
                     out.append(model_id)
         return sorted(set(out))
 
+    def list_model_records(self, credentials: Dict[str, Any]) -> List[Dict[str, Any]]:
+        res = _anthropic_models_request(credentials)
+        body = res.get("json") or {}
+        fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        records: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for item in body.get("data", []) if isinstance(body.get("data"), list) else []:
+            record = normalize_live_model_record(
+                self.provider_id,
+                item,
+                source="anthropic_models_api",
+                fetched_at=fetched_at,
+            )
+            if not record or record["id"] in seen:
+                continue
+            seen.add(record["id"])
+            records.append(record)
+        return sorted(records, key=lambda item: str(item.get("id") or ""))
+
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
         from server_modules.model_router import call_model_sync
 
@@ -2019,6 +2288,40 @@ class GeminiAdapter(ProviderAdapter):
             out.append(name.split("/")[-1])
         return sorted(set(out))
 
+    def list_model_records(self, credentials: Dict[str, Any]) -> List[Dict[str, Any]]:
+        auth = self._auth_params(credentials)
+        if auth["mode"] == "oauth":
+            res = http_json_request(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={
+                    "Authorization": f"Bearer {auth['access_token']}",
+                    "x-goog-user-project": auth["project_id"],
+                },
+            )
+        else:
+            res = http_json_request(f"https://generativelanguage.googleapis.com/v1beta/models?key={quote_plus(auth['api_key'])}")
+        body = res.get("json") or {}
+        fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        records: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for item in body.get("models", []) if isinstance(body.get("models"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            methods = item.get("supportedGenerationMethods", [])
+            if isinstance(methods, list) and "generateContent" not in methods:
+                continue
+            record = normalize_live_model_record(
+                self.provider_id,
+                item,
+                source="gemini_models_api",
+                fetched_at=fetched_at,
+            )
+            if not record or record["id"] in seen:
+                continue
+            seen.add(record["id"])
+            records.append(record)
+        return sorted(records, key=lambda item: str(item.get("id") or ""))
+
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
         from server_modules.model_router import call_model_sync
 
@@ -2067,6 +2370,27 @@ class VertexAdapter(ProviderAdapter):
                 out.append(name.split("/")[-1])
         return sorted(set(out))
 
+    def list_model_records(self, credentials: Dict[str, Any]) -> List[Dict[str, Any]]:
+        token, project, location = self._params(credentials)
+        url = f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models"
+        res = http_json_request(url, headers={"Authorization": f"Bearer {token}"})
+        body = res.get("json") or {}
+        fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        records: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for item in body.get("models", []) if isinstance(body.get("models"), list) else []:
+            record = normalize_live_model_record(
+                self.provider_id,
+                item,
+                source="vertex_models_api",
+                fetched_at=fetched_at,
+            )
+            if not record or record["id"] in seen:
+                continue
+            seen.add(record["id"])
+            records.append(record)
+        return sorted(records, key=lambda item: str(item.get("id") or ""))
+
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
         token, project, location = self._params(credentials)
         url = (
@@ -2106,6 +2430,76 @@ class VertexAdapter(ProviderAdapter):
         raise RuntimeError("Vertex response did not include text content.")
 
 
+class BedrockAdapter(ProviderAdapter):
+    provider_id = "bedrock"
+
+    def _client(self, credentials: Dict[str, Any]):
+        try:
+            import boto3  # type: ignore
+        except Exception as exc:
+            raise RuntimeError("Amazon Bedrock model sync requires boto3 to be installed.") from exc
+        access_key = str(credentials.get("api_key") or credentials.get("aws_access_key_id") or "").strip()
+        secret_key = str(credentials.get("aws_secret_access_key") or credentials.get("secret_key") or "").strip()
+        region = str(credentials.get("region") or credentials.get("aws_region") or "us-east-1").strip()
+        kwargs: Dict[str, Any] = {"region_name": region}
+        if access_key and secret_key:
+            kwargs["aws_access_key_id"] = access_key
+            kwargs["aws_secret_access_key"] = secret_key
+        session_token = str(credentials.get("aws_session_token") or "").strip()
+        if session_token:
+            kwargs["aws_session_token"] = session_token
+        return boto3.client("bedrock", **kwargs)
+
+    def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        models = self.list_models(credentials)
+        return {
+            "ok": True,
+            "status": 200,
+            "message": "Amazon Bedrock credential is valid.",
+            "models_preview": models[:25],
+        }
+
+    def list_models(self, credentials: Dict[str, Any]) -> List[str]:
+        response = self._client(credentials).list_foundation_models()
+        models: List[str] = []
+        for item in response.get("modelSummaries", []) if isinstance(response.get("modelSummaries"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("modelId") or "").strip()
+            if model_id:
+                models.append(model_id)
+        return sorted(set(models))
+
+    def list_model_records(self, credentials: Dict[str, Any]) -> List[Dict[str, Any]]:
+        response = self._client(credentials).list_foundation_models()
+        fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        records: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for item in response.get("modelSummaries", []) if isinstance(response.get("modelSummaries"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            raw = {
+                "id": item.get("modelId"),
+                "label": item.get("modelName") or item.get("modelId"),
+                "supports_tools": True,
+                "raw_bedrock": item,
+            }
+            record = normalize_live_model_record(
+                self.provider_id,
+                raw,
+                source="bedrock_list_foundation_models",
+                fetched_at=fetched_at,
+            )
+            if not record or record["id"] in seen:
+                continue
+            seen.add(record["id"])
+            records.append(record)
+        return sorted(records, key=lambda item: str(item.get("id") or ""))
+
+    def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
+        raise RuntimeError("Amazon Bedrock generation is not wired for Studio agents yet.")
+
+
 PROVIDER_ADAPTERS: Dict[str, ProviderAdapter] = {
     "openai": OpenAIAdapter(),
     "openai-codex": OpenAICodexAdapter(),
@@ -2113,9 +2507,15 @@ PROVIDER_ADAPTERS: Dict[str, ProviderAdapter] = {
     "claude_code_cli": ClaudeCodeCLIAdapter(),
     "gemini": GeminiAdapter(),
     "vertex": VertexAdapter(),
+    "groq": OpenAICompatibleAdapter("groq", "Groq"),
+    "openrouter": OpenAICompatibleAdapter("openrouter", "OpenRouter"),
+    "xai": OpenAICompatibleAdapter("xai", "xAI"),
+    "azure_openai": OpenAICompatibleAdapter("azure_openai", "Azure OpenAI"),
+    "bedrock": BedrockAdapter(),
     "qwen": OpenAICompatibleAdapter("qwen", "Qwen"),
     "deepseek": OpenAICompatibleAdapter("deepseek", "DeepSeek"),
     "mistral": OpenAICompatibleAdapter("mistral", "Mistral"),
+    "custom_openai_compatible": OpenAICompatibleAdapter("custom_openai_compatible", "Custom OpenAI-compatible"),
     "ollama": OpenAICompatibleAdapter("ollama", "Ollama", requires_auth=False),
     "ollama_cloud": OllamaCloudAdapter(),
 }

@@ -1943,6 +1943,7 @@ body[data-emp-theme='dark'] .app-textarea:focus {
   user-select: text;
   touch-action: manipulation;
   -webkit-touch-callout: default;
+  color-scheme: light;
 }
 
 .app-auth-shell {
@@ -2344,7 +2345,7 @@ body[data-emp-theme='dark'] .app-textarea:focus {
   -webkit-box-shadow:
     0 0 0 1000px #ffffff inset,
     inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
-  transition: background-color 9999s ease-out;
+  transition: none !important;
 }
 
 :root[data-emp-theme='light'] .app-auth-input-shell,
@@ -2391,6 +2392,32 @@ body.theme-light input.app-auth-input:-webkit-autofill:focus {
     0 0 0 1000px #ffffff inset,
     inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
   -webkit-box-shadow:
+    0 0 0 1000px #ffffff inset,
+    inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
+}
+
+:root[data-emp-theme='dark'] .app-auth-page input.app-field.app-auth-input:focus,
+body[data-emp-theme='dark'] .app-auth-page input.app-field.app-auth-input:focus,
+:root[data-emp-theme='dark'] .app-auth-page input.app-field.app-auth-input:focus-visible,
+body[data-emp-theme='dark'] .app-auth-page input.app-field.app-auth-input:focus-visible,
+:root[data-emp-theme='dark'] .app-auth-page input.app-field.app-auth-input:active,
+body[data-emp-theme='dark'] .app-auth-page input.app-field.app-auth-input:active,
+:root[data-emp-theme='dark'] .app-auth-page input.app-field.app-auth-input:-webkit-autofill:focus,
+body[data-emp-theme='dark'] .app-auth-page input.app-field.app-auth-input:-webkit-autofill:focus {
+  border-color: #202020 !important;
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  background-image: none !important;
+  color: #1e2024 !important;
+  -webkit-text-fill-color: #1e2024 !important;
+  caret-color: #202020 !important;
+  color-scheme: light !important;
+  box-shadow:
+    0 0 0 3px rgba(32, 32, 32, 0.08),
+    0 0 0 1000px #ffffff inset,
+    inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
+  -webkit-box-shadow:
+    0 0 0 3px rgba(32, 32, 32, 0.08),
     0 0 0 1000px #ffffff inset,
     inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
 }

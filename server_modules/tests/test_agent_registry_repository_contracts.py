@@ -4,6 +4,11 @@ from server_modules import agent_registry_repository
 
 
 class AgentRegistryRepositoryContractTests(unittest.TestCase):
+    def test_default_seed_does_not_publish_named_specialists(self) -> None:
+        self.assertEqual(agent_registry_repository.DEFAULT_AGENT_DEFINITIONS, [])
+        self.assertEqual(agent_registry_repository.DEFAULT_MASTER_AGENT_DEFINITION["slug"], "sage")
+        self.assertTrue(agent_registry_repository.DEFAULT_MASTER_AGENT_DEFINITION.get("visibility") == "private")
+
     def test_captain_metadata_normalization_keeps_stable_id_and_editable_display_name(self) -> None:
         metadata = agent_registry_repository.normalize_install_contract_metadata(
             install_id="ainstall_sage",

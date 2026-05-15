@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from server_modules import deployed_agent_cost_cap_service
+from server_modules import pricing_registry_service
 
 
 def _deployed_agent(
@@ -127,7 +128,10 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
         pause_mock.assert_not_awaited()
         ledger_metadata = record_mock.await_args.kwargs["metadata"]
         self.assertTrue(ledger_metadata["pricing_known"])
-        self.assertEqual(ledger_metadata["pricing_registry_version"], "2026-04-13")
+        self.assertEqual(
+            ledger_metadata["pricing_registry_version"],
+            pricing_registry_service.pricing_registry_version(),
+        )
         self.assertEqual(ledger_metadata["source_surface"], "deployed_agent_channel")
         self.assertEqual(ledger_metadata["credit_item_type"], "ai_pro_tokens")
         self.assertEqual(ledger_metadata["credit_quantity"], 2000.0)

@@ -995,6 +995,12 @@ export function pickStudioModelForTier(provider: ProviderCatalogSnapshot, tier: 
   if (provider.models.length === 0) {
     return '';
   }
+  const defaultModel = provider.defaultModel && provider.models.some((item) => item.id === provider.defaultModel)
+    ? provider.defaultModel
+    : '';
+  if (tier === 'pro' && defaultModel) {
+    return defaultModel;
+  }
   const rankedModels = [...provider.models].sort((left, right) => {
     const scoreDelta = modelPreferenceScore(left, tier) - modelPreferenceScore(right, tier);
     if (scoreDelta !== 0) {
@@ -1002,10 +1008,12 @@ export function pickStudioModelForTier(provider: ProviderCatalogSnapshot, tier: 
     }
     return left.label.localeCompare(right.label);
   });
-  const defaultModel = provider.defaultModel && provider.models.some((item) => item.id === provider.defaultModel)
-    ? provider.defaultModel
-    : '';
   return rankedModels[0]?.id || defaultModel || provider.models[0]?.id || '';
+}
+
+export function providerReadyForStudio(provider: ProviderCatalogSnapshot | null | undefined): boolean {
+  const state = readString(provider?.state).toLowerCase();
+  return state === 'ready' || state === 'connected' || state === 'active';
 }
 
 export function resolveProviderModelForTier(
@@ -1014,14 +1022,21 @@ export function resolveProviderModelForTier(
 ): { providerId: string; modelId: string } {
   const catalogByProvider = providerCatalogById(catalog);
   const providerOrder = ['gemini', 'openai', 'anthropic', 'openrouter', 'groq', 'xai', 'deepseek', 'mistral', 'qwen', 'azure_openai', 'vertex', 'ollama_cloud', 'custom_openai_compatible'];
-  for (const providerId of providerOrder) {
-    const provider = catalogByProvider[providerId] ?? null;
-    if (provider && provider.models.length > 0) {
-      return {
-        providerId: provider.id,
-        modelId: pickStudioModelForTier(provider, tier),
-      };
-    }
+  const orderedProviders = providerOrder
+    .map((providerId) => catalogByProvider[providerId] ?? null)
+    .filter((provider): provider is ProviderCatalogSnapshot => Boolean(provider) && provider.models.length > 0)
+    .sort((left, right) => {
+      const readinessDelta = Number(!providerReadyForStudio(left)) - Number(!providerReadyForStudio(right));
+      if (readinessDelta !== 0) {
+        return readinessDelta;
+      }
+      return providerOrder.indexOf(left.id) - providerOrder.indexOf(right.id);
+    });
+  for (const provider of orderedProviders) {
+    return {
+      providerId: provider.id,
+      modelId: pickStudioModelForTier(provider, tier),
+    };
   }
   const fallbackProvider = catalogByProvider.gemini ? catalogByProvider.gemini : catalog[0] ?? null;
   if (!fallbackProvider) {

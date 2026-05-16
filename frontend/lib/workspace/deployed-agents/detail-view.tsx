@@ -5,7 +5,6 @@ import { useMemo } from 'react';
 import { ListDetailPanel } from '@/lib/ui/list-detail';
 import { AppButton, AppSurfaceStat, AppSurfaceStatGrid, joinClassNames } from '@/lib/ui/primitives';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
-import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
 import { DataBadge } from '@/lib/ui/data-table';
@@ -52,6 +51,7 @@ import {
   formatTimestamp,
   selectedModelId,
   selectedProviderId,
+  listEnabledChannels,
   readBudgetCycle,
   runtimePlacementLabel,
   inferAiTierFromProviderModel,
@@ -204,6 +204,125 @@ export function AgentDetailView({
     const channels = readRecord(selectedAgent?.channels);
     return Boolean(readRecord(channels.telegram).enabled);
   }, [selectedAgent]);
+  const selectedAgentChannelLabel = useMemo(() => {
+    const channels = listEnabledChannels(selectedAgent?.channels);
+    return channels.length > 0
+      ? channels.map((channel) => humanizeToken(channel, channel)).join(', ')
+      : 'No active channels';
+  }, [selectedAgent]);
+  const selectedAgentState = readString(selectedAgent?.deployment_state).toLowerCase();
+  const selectedAgentStateLabel = humanizeToken(selectedAgent?.deployment_state, 'Draft');
+  const selectedAgentModelLabel = selectedModelId(selectedAgent) || humanizeToken(selectedProviderId(selectedAgent), 'Not pinned');
+  const selectedAgentToolCount = normalizeToolIds(
+    readRecord(readRecord(selectedAgent?.config).tool_policy).enabled_tools ??
+    readRecord(selectedAgent?.metadata).selected_tool_ids,
+  ).length;
+  const modelReady = !selectedAgentModelDeployBlocker && Boolean(selectedModelId(selectedAgent) || selectedProviderId(selectedAgent));
+  const instructionsReady = Boolean(
+    readString(readRecord(selectedAgent?.config).instructions).trim() ||
+    readString(readRecord(selectedAgent?.metadata).instructions).trim() ||
+    readString(readRecord(selectedAgent?.config).system_prompt).trim() ||
+    readString(readRecord(selectedAgent?.metadata).system_prompt).trim(),
+  );
+  const channelReady = listEnabledChannels(selectedAgent?.channels).length > 0;
+  const runtimeReady = !selectedAgentSelfHostedDeployBlocker;
+  const telegramReady = !selectedAgentNeedsTelegramReadiness || selectedTelegramReadiness?.readyForLive === true;
+  const deployBlockers = [
+    selectedAgentModelDeployBlocker,
+    selectedAgentSelfHostedDeployBlocker,
+    selectedAgentNeedsTelegramReadiness && selectedTelegramReadiness?.readyForLive !== true
+      ? selectedTelegramReadiness?.nextAction || 'Finish channel setup before launch.'
+      : null,
+  ].filter((item): item is string => Boolean(item));
+  const knowledgeReady = knowledgeSourceCount > 0;
+  const readinessItems = [
+    {
+      label: 'Model',
+      detail: modelReady ? selectedAgentModelLabel : selectedAgentModelDeployBlocker || 'Connect a model provider.',
+      ready: modelReady,
+      tab: 'ai' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Instructions',
+      detail: instructionsReady ? 'Behavior document is present.' : 'Add how this agent should answer.',
+      ready: instructionsReady,
+      tab: 'knowledge' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Knowledge',
+      detail: knowledgeReady ? `${knowledgeSourceCount} trusted source${knowledgeSourceCount === 1 ? '' : 's'}.` : 'No trusted sources connected yet.',
+      ready: knowledgeReady,
+      tab: 'knowledge' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Channel',
+      detail: channelReady ? selectedAgentChannelLabel : 'No customer channel connected.',
+      ready: channelReady && telegramReady,
+      tab: 'connectors' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Actions',
+      detail: selectedAgentToolCount > 0 ? `${selectedAgentToolCount} permission${selectedAgentToolCount === 1 ? '' : 's'} enabled.` : 'No tool permissions enabled.',
+      ready: selectedAgentToolCount > 0,
+      tab: 'tools' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Memory',
+      detail: selectedAgentMemoryEnabled ? 'Customer memory is enabled.' : 'Customer memory is off.',
+      ready: true,
+      tab: 'memory' as SpecialistOverlayTabId,
+    },
+  ];
+  const readyCount = readinessItems.filter((item) => item.ready).length;
+  const launchReady = deployBlockers.length === 0 && modelReady && instructionsReady && knowledgeReady && channelReady && runtimeReady && telegramReady;
+  const launchTitle = selectedAgentState === 'live'
+    ? 'Live and serving customers'
+    : launchReady
+      ? 'Ready to deploy'
+      : 'Launch needs attention';
+  const launchDetail = selectedAgentState === 'live'
+    ? 'This agent can receive customer traffic.'
+    : launchReady
+      ? 'Production-safe defaults are set. Test once, then deploy when ready.'
+      : deployBlockers[0] || 'Finish the required setup before customer traffic.';
+  const setupCards = [
+    {
+      label: 'Knowledge',
+      value: `${knowledgeSourceCount} source${knowledgeSourceCount === 1 ? '' : 's'}`,
+      detail: instructionsReady ? 'Instructions ready' : 'Instructions missing',
+      tab: 'knowledge' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Model',
+      value: selectedAgentModelLabel,
+      detail: modelReady ? selectedAgentModeLabel : 'Provider setup required',
+      tab: 'ai' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Channel',
+      value: selectedAgentChannelLabel,
+      detail: channelReady ? 'Customer entrypoint selected' : 'Connect before launch',
+      tab: 'connectors' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Actions',
+      value: `${selectedAgentToolCount} enabled`,
+      detail: selectedAgentToolCount > 0 ? 'Permissions reviewed' : 'No actions allowed',
+      tab: 'tools' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Memory',
+      value: selectedAgentMemoryEnabled ? 'On' : 'Off',
+      detail: selectedAgentMemoryEnabled ? selectedContextPresetLabel : 'No customer facts stored',
+      tab: 'memory' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Results',
+      value: selectedAgentMetrics?.conversationCountLabel ?? '0 conversations',
+      detail: selectedAgentMetrics?.latestActivityLabel ?? 'No recent activity',
+      tab: 'analytics' as SpecialistOverlayTabId,
+    },
+  ];
 
   if (!selectedAgent) {
     return (
@@ -492,9 +611,9 @@ export function AgentDetailView({
       {(currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && overlayTab === 'overview')) && (
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
-          eyebrow="Detail"
+          eyebrow="Overview"
           title={readString(selectedAgent.name, 'Assistant details')}
-          subtitle="Launch state, actions, memory, and cost posture for the selected assistant."
+          subtitle="Launch readiness, live health, and the next setup step for this agent."
           actions={(
             <div className="app-inline-actions app-inline-actions--tight">
               <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
@@ -505,6 +624,7 @@ export function AgentDetailView({
                 onClick={onDeploy}
                 disabled={
                   busyAgentId === selectedAgentId ||
+                  !launchReady ||
                   readString(selectedAgent.deployment_state).toLowerCase() === 'live' ||
                   (selectedAgentNeedsTelegramReadiness && isLoadingTelegramReadiness) ||
                   (selectedAgentNeedsTelegramReadiness && !selectedTelegramReadiness) ||
@@ -547,6 +667,67 @@ export function AgentDetailView({
                 <SkeletonBlock height="5rem" />
               ) : null}
               <div className="studio-agent-overview">
+                <section className="studio-agent-overview__hero" aria-label="Launch readiness">
+                  <div className="studio-agent-overview__hero-copy">
+                    <div className="studio-agent-overview__status-row">
+                      <DataBadge tone={selectedAgentState === 'live' ? 'success' : launchReady ? 'success' : 'warning'}>
+                        {selectedAgentStateLabel}
+                      </DataBadge>
+                      <DataBadge tone={launchReady ? 'success' : 'warning'}>
+                        {readyCount} of {readinessItems.length} ready
+                      </DataBadge>
+                    </div>
+                    <strong>{launchTitle}</strong>
+                    <span>{launchDetail}</span>
+                  </div>
+                  <div className="studio-agent-overview__hero-actions">
+                    <AppButton type="button" tone="secondary" onClick={() => onSelectTab('chat')}>
+                      Test chat
+                    </AppButton>
+                    {launchReady ? (
+                      <AppButton
+                        type="button"
+                        onClick={onDeploy}
+                        disabled={busyAgentId === selectedAgentId || selectedAgentState === 'live'}
+                      >
+                        Deploy
+                      </AppButton>
+                    ) : (
+                      <AppButton type="button" onClick={() => onSelectTab(readinessItems.find((item) => !item.ready)?.tab ?? 'ai')}>
+                        Fix setup
+                      </AppButton>
+                    )}
+                  </div>
+                </section>
+
+                <section className="studio-agent-overview__readiness" aria-label="Launch checklist">
+                  <div className="studio-agent-overview__section-head">
+                    <div>
+                      <span>Launch checklist</span>
+                      <strong>Production-safe defaults</strong>
+                    </div>
+                    <small>{launchReady ? 'No launch blockers' : `${readinessItems.length - readyCount} item${readinessItems.length - readyCount === 1 ? '' : 's'} need attention`}</small>
+                  </div>
+                  <div className="studio-agent-overview__check-grid">
+                    {readinessItems.map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        className={joinClassNames('studio-agent-overview__check-card', item.ready && 'studio-agent-overview__check-card--ready')}
+                        onClick={() => onSelectTab(item.tab)}
+                      >
+                        <span className="studio-agent-overview__check-mark" aria-hidden="true">
+                          {item.ready ? '✓' : '!'}
+                        </span>
+                        <span className="studio-agent-overview__check-copy">
+                          <strong>{item.label}</strong>
+                          <small>{item.detail}</small>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
                 <AppSurfaceStatGrid className="studio-agent-overview__metrics">
                   <AppSurfaceStat
                     label="Active users"
@@ -570,7 +751,7 @@ export function AgentDetailView({
                   />
                 </AppSurfaceStatGrid>
 
-                <div className="studio-agent-overview__chart">
+                <section className="studio-agent-overview__chart" aria-label="Traffic trend">
                   <div className="studio-agent-overview__chart-copy">
                     <span>Traffic trend</span>
                     <strong>{selectedAgentAnalytics ? formatCompactCount(selectedAgentAnalytics.messageVolumeMonth) : '0'} messages</strong>
@@ -580,22 +761,31 @@ export function AgentDetailView({
                     <line x1="0" y1="76" x2="100" y2="76" />
                     <polyline points={overviewTrendPoints} />
                   </svg>
-                </div>
+                </section>
 
-                <div className="studio-agent-overview__facts">
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormReadout label="State" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
-                    <FormReadout label="Mode" value={selectedAgentModeLabel} />
-                    <FormReadout label="Model" value={selectedModelId(selectedAgent) || humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
-                    <FormReadout label="Channels" value={selectedTelegramReadiness?.configuredBinding ? 'Telegram' : 'No active channels'} />
-                    <FormReadout label="Actions" value={`${normalizeToolIds(readRecord(readRecord(selectedAgent.config).tool_policy).enabled_tools ?? readRecord(selectedAgent.metadata).selected_tool_ids).length || 0} enabled`} />
-                    <FormReadout label="Memory" value={selectedAgentMemoryEnabled ? 'Enabled' : 'Disabled'} />
-                    <FormReadout label="Knowledge" value={`${knowledgeSourceCount} sources`} />
-                    <FormReadout label="Source depth" value={selectedContextPresetLabel} />
-                    <FormReadout label="Budget" value={formatUsd(selectedBudgetCycle.current_burn_usd)} />
-                    <FormReadout label="Last activity" value={selectedAgentMetrics?.latestActivityLabel ?? 'No recent activity'} />
-                  </FormGrid>
-                </div>
+                <section className="studio-agent-overview__setup" aria-label="Setup map">
+                  <div className="studio-agent-overview__section-head">
+                    <div>
+                      <span>Agent profile</span>
+                      <strong>What is configured</strong>
+                    </div>
+                    <small>{formatUsd(selectedBudgetCycle.current_burn_usd)} spent this cycle</small>
+                  </div>
+                  <div className="studio-agent-overview__setup-grid">
+                    {setupCards.map((card) => (
+                      <button
+                        key={card.label}
+                        type="button"
+                        className="studio-agent-overview__setup-card"
+                        onClick={() => onSelectTab(card.tab)}
+                      >
+                        <span>{card.label}</span>
+                        <strong>{card.value}</strong>
+                        <small>{card.detail}</small>
+                      </button>
+                    ))}
+                  </div>
+                </section>
               </div>
             </>
           )}

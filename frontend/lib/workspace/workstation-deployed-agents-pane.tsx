@@ -443,10 +443,9 @@ export function WorkstationDeployedAgentsPane({
           [agentId]: analytics,
         }));
       }
-    } catch (error) {
+    } catch {
       setSelectedAgentAnalytics(null);
       updateStudioPaneCache(workspaceId, { selectedAgentAnalytics: null });
-      setErrorMessage(error instanceof Error ? error.message : 'Deployment analytics are unavailable.');
     } finally {
       setIsLoadingAnalytics(false);
     }
@@ -462,10 +461,9 @@ export function WorkstationDeployedAgentsPane({
       const nextReadiness = normalizeTelegramReadiness(payload as DeployedAgentTelegramReadinessRecord | null);
       setSelectedTelegramReadiness(nextReadiness);
       updateStudioPaneCache(workspaceId, { selectedTelegramReadiness: nextReadiness });
-    } catch (error) {
+    } catch {
       setSelectedTelegramReadiness(null);
       updateStudioPaneCache(workspaceId, { selectedTelegramReadiness: null });
-      setErrorMessage(error instanceof Error ? error.message : 'Telegram launch readiness is unavailable.');
     } finally {
       setIsLoadingTelegramReadiness(false);
     }
@@ -498,11 +496,10 @@ export function WorkstationDeployedAgentsPane({
         }
         return readString(items[0]?.session_id) || null;
       });
-    } catch (error) {
+    } catch {
       setConversations([]);
       updateStudioPaneCache(workspaceId, { conversations: [] });
       setSelectedSessionId(null);
-      setErrorMessage(error instanceof Error ? error.message : 'Conversation inbox is unavailable.');
     } finally {
       setIsLoadingConversations(false);
     }
@@ -520,12 +517,11 @@ export function WorkstationDeployedAgentsPane({
         ...current,
         [agentId]: readItems<DeployedAgentMemoryRecord>(payload),
       }));
-    } catch (error) {
+    } catch {
       setAgentMemoryById((current) => ({
         ...current,
         [agentId]: [],
       }));
-      setErrorMessage(error instanceof Error ? error.message : 'Customer memory is unavailable.');
     } finally {
       setIsLoadingOverlayMemory(false);
     }
@@ -542,10 +538,9 @@ export function WorkstationDeployedAgentsPane({
       const nextTranscript = payload as DeployedAgentConversationDetail | null;
       setSelectedTranscript(nextTranscript);
       updateStudioPaneCache(workspaceId, { selectedTranscript: nextTranscript });
-    } catch (error) {
+    } catch {
       setSelectedTranscript(null);
       updateStudioPaneCache(workspaceId, { selectedTranscript: null });
-      setErrorMessage(error instanceof Error ? error.message : 'Transcript detail is unavailable.');
     } finally {
       setIsLoadingTranscript(false);
     }
@@ -779,6 +774,7 @@ export function WorkstationDeployedAgentsPane({
     setAgents((current) => upsertAgentRecord(current, record));
     setSelectedAgentDetail(record);
     setSelectedAgentId(recordId || null);
+    setIsWizardOpen(false);
 
     if (wizardMode === 'create') {
       setSelectedAgentAnalytics(null);
@@ -802,7 +798,6 @@ export function WorkstationDeployedAgentsPane({
       setRecentlyCreatedAgentId(null);
       setStatusMessage(`Updated ${readString(record.name, 'assistant')} settings.`);
     }
-    setIsWizardOpen(false);
   }
 
   async function handleDeploymentAction(action: 'deploy' | 'pause') {

@@ -25,6 +25,7 @@ import {
   formatContextWindow,
   pickStudioModelForTier,
   modelPreferenceScore,
+  providerReadyForStudio,
 } from './utils';
 
 export function AgentAiSettingsSections({
@@ -50,7 +51,7 @@ export function AgentAiSettingsSections({
   const selectedProvider = providerCatalog.find((provider) => provider.id === value.providerId) ?? null;
   const selectedModel = selectedProvider?.models.find((model) => model.id === value.modelId) ?? null;
   const selectedTier = STUDIO_AI_TIER_OPTIONS.find((option) => option.value === value.aiTier) ?? STUDIO_AI_TIER_OPTIONS[1];
-  const providerReady = selectedProvider?.state.toLowerCase() === 'ready' || selectedProvider?.state.toLowerCase() === 'connected';
+  const providerReady = providerReadyForStudio(selectedProvider);
   const activeProvider = selectedProvider ?? providerCatalog[0] ?? null;
   const query = modelQuery.trim().toLowerCase();
   const modelOptions = providerCatalog.flatMap((provider) => provider.models.map((model) => ({ provider, model })));

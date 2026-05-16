@@ -1,6 +1,7 @@
 'use client';
 
 import { type ClipboardEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Check, X } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
@@ -1479,6 +1480,7 @@ export function WorkstationSageConnectorsPane({
 } = {}) {
   const { bootstrap, routeManifest } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
+  const router = useRouter();
   const gridColumns = useResponsiveColumns();
   const cacheKey = bootstrap.workspace.id;
   const cachedState = sageConnectorsPaneCache.get(cacheKey) ?? null;
@@ -2414,10 +2416,7 @@ export function WorkstationSageConnectorsPane({
   }
 
   function openGatewaySurface() {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    window.location.assign(routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(workspaceId)}/gateway`);
+    router.push(routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(workspaceId)}/gateway`);
   }
 
   function openComputerConnectSheet() {
@@ -2426,9 +2425,6 @@ export function WorkstationSageConnectorsPane({
   }
 
   function openWorkspaceRoute(routeId: 'gateway' | 'channels' | 'gatewayActivity' | 'gatewayApprovals') {
-    if (typeof window === 'undefined') {
-      return;
-    }
     const fallbackPath = routeId === 'gateway'
       ? 'gateway'
       : routeId === 'channels'
@@ -2436,14 +2432,11 @@ export function WorkstationSageConnectorsPane({
         : routeId === 'gatewayActivity'
           ? 'gateway-activity'
           : 'gateway-approvals';
-    window.location.assign(routeManifest.routeIndex[routeId]?.href ?? `/w/${encodeURIComponent(workspaceId)}/${fallbackPath}`);
+    router.push(routeManifest.routeIndex[routeId]?.href ?? `/w/${encodeURIComponent(workspaceId)}/${fallbackPath}`);
   }
 
   function openBillingSettings() {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    window.location.assign(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`);
+    router.push(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`);
   }
 
   function renderProviderCard(record: ProviderCardRecord) {

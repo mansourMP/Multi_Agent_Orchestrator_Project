@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
 
 import {
@@ -103,6 +103,18 @@ import {
   normalizeStudioTemplates,
 } from './deployed-agents/utils';
 
+function useStableEvent<TArgs extends unknown[], TResult>(
+  handler: (...args: TArgs) => TResult,
+): (...args: TArgs) => TResult {
+  const handlerRef = useRef(handler);
+
+  useEffect(() => {
+    handlerRef.current = handler;
+  }, [handler]);
+
+  return useCallback((...args: TArgs) => handlerRef.current(...args), []);
+}
+
 export function WorkstationDeployedAgentsPane({
   initialSubview = 'agents',
 }: {
@@ -110,6 +122,7 @@ export function WorkstationDeployedAgentsPane({
 }) {
   const { workspaceId, bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const cachedStudioPane = studioPaneCache.get(workspaceId) ?? null;
   const [hadInitialCache] = useState(() => cachedStudioPane !== null);
@@ -1154,6 +1167,61 @@ export function WorkstationDeployedAgentsPane({
     }
   }
 
+  const handleOpenActivity = useStableEvent(() => {
+    router.push(`/w/${encodeURIComponent(workspaceId)}/activity`);
+  });
+
+  const handleOpenBilling = useStableEvent(() => {
+    router.push(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`);
+  });
+
+  const handleOpenAssistantDetail = useStableEvent((id: string) => {
+    setSelectedAgentId(id);
+    setOverlayAgentId(null);
+    setOverlayTab('overview');
+  });
+
+  const handleRefreshAgentsEvent = useStableEvent(() => {
+    void Promise.all([
+      refreshProviderCatalog(),
+      refreshAgents({ preserveSelection: true }),
+    ]);
+  });
+
+  const handleSelectAgent = useStableEvent((id: string) => {
+    setSelectedAgentId(id);
+    setOverlayAgentId(null);
+    setOverlayTab('overview');
+  });
+
+  const handleSaveDetailConfigEvent = useStableEvent(() => {
+    void saveDetailConfig();
+  });
+
+  const handleUpdateDetailConfig = useStableEvent((next: Partial<DetailConfigDraft>) => {
+    setDetailConfigDraft((current) => current ? { ...current, ...next } : current);
+  });
+
+  const handleRefreshProviderModelsEvent = useStableEvent((id: string) => {
+    void refreshProviderModels(id);
+  });
+
+  const handleDeploy = useStableEvent(() => {
+    void handleDeploymentAction('deploy');
+  });
+
+  const handlePause = useStableEvent(() => {
+    void handleDeploymentAction('pause');
+  });
+
+  const handleOpenCreateWizard = useStableEvent((templateId: string = selectedTemplateId) => {
+    openCreateWizard(templateId);
+  });
+
+  const handleDismissRecentlyCreated = useStableEvent(() => {
+    setRecentlyCreatedAgentId(null);
+  });
+
   const selectedTranscriptCustomer = readRecord(selectedTranscript?.customer);
   const selectedExternalUserId = readString(selectedTranscriptCustomer.id || readRecord(selectedConversation?.customer).id);
   const selectedExternalUserLabel = readString(
@@ -1234,22 +1302,13 @@ export function WorkstationDeployedAgentsPane({
               showAgentsIndex={showAgentsIndex}
               recentlyCreatedAgentId={recentlyCreatedAgentId}
               selectedAgent={selectedAgent}
-              onDismissRecentlyCreated={() => setRecentlyCreatedAgentId(null)}
-              onOpenActivity={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}/activity`)}
-              onOpenBilling={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`)}
-              onOpenAssistantDetail={(id) => {
-                setSelectedAgentId(id);
-                setOverlayAgentId(null);
-                setOverlayTab('overview');
-              }}
-              onOpenCreateWizard={openCreateWizard}
+              onDismissRecentlyCreated={handleDismissRecentlyCreated}
+              onOpenActivity={handleOpenActivity}
+              onOpenBilling={handleOpenBilling}
+              onOpenAssistantDetail={handleOpenAssistantDetail}
+              onOpenCreateWizard={handleOpenCreateWizard}
               currentStudioSubview={currentStudioSubview}
-              onRefreshAgents={() => {
-                void Promise.all([
-                  refreshProviderCatalog(),
-                  refreshAgents({ preserveSelection: true }),
-                ]);
-              }}
+              onRefreshAgents={handleRefreshAgentsEvent}
               studioTemplates={studioTemplates}
               agents={agents}
               agentRosterFilter={agentRosterFilter}
@@ -1257,11 +1316,7 @@ export function WorkstationDeployedAgentsPane({
               agentRosterCounts={agentRosterCounts}
               visibleAgents={visibleAgents}
               selectedAgentId={selectedAgentId}
-              onSelectAgent={(id) => {
-                setSelectedAgentId(id);
-                setOverlayAgentId(null);
-                setOverlayTab('overview');
-              }}
+              onSelectAgent={handleSelectAgent}
               agentMetricsById={agentMetricsById}
               isAgentListPriming={isAgentListPriming}
               isAgentListUnavailable={isAgentListUnavailable}
@@ -1296,12 +1351,12 @@ export function WorkstationDeployedAgentsPane({
               selectedAgent={selectedAgent}
               overlayTab={overlayTab}
               detailConfigDraft={detailConfigDraft}
-              onSaveDetailConfig={() => { void saveDetailConfig(); }}
+              onSaveDetailConfig={handleSaveDetailConfigEvent}
               isSavingDetailConfig={isSavingDetailConfig}
-              onUpdateDetailConfig={(next) => setDetailConfigDraft((current) => current ? { ...current, ...next } : current)}
+              onUpdateDetailConfig={handleUpdateDetailConfig}
               providerCatalog={providerCatalog}
               isLoadingProviderCatalog={isLoadingProviderCatalog}
-              onRefreshProviderModels={(id) => { void refreshProviderModels(id); }}
+              onRefreshProviderModels={handleRefreshProviderModelsEvent}
               workspaceId={workspaceId}
               services={services}
               bootstrap={bootstrap}
@@ -1312,8 +1367,8 @@ export function WorkstationDeployedAgentsPane({
               selectedTelegramReadiness={selectedTelegramReadiness}
               isLoadingTelegramReadiness={isLoadingTelegramReadiness}
               onOpenEditWizard={openEditWizard}
-              onDeploy={() => { void handleDeploymentAction('deploy'); }}
-              onPause={() => { void handleDeploymentAction('pause'); }}
+              onDeploy={handleDeploy}
+              onPause={handlePause}
               busyAgentId={busyAgentId}
               hasGatewayOnlineTarget={hasGatewayOnlineTarget}
               hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
@@ -1326,7 +1381,7 @@ export function WorkstationDeployedAgentsPane({
               selectedAgentModelDeployBlocker={selectedAgentModelDeployBlocker}
               selectedAgentSelfHostedDeployBlocker={selectedAgentSelfHostedDeployBlocker}
               selectedStudioTemplate={selectedStudioTemplate}
-              onOpenCreateWizard={openCreateWizard}
+              onOpenCreateWizard={handleOpenCreateWizard}
             />
           )}
 

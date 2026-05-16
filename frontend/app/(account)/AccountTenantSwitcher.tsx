@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   Activity,
   Bot,
@@ -111,14 +111,17 @@ function extractActiveRailId(pathname: string | null): RailDestinationId {
 
 export function AccountTenantSwitcher() {
   const pathname = usePathname();
+  const router = useRouter();
   const { state, actions } = useAccountShell();
   const { resolvedTheme } = useAppTheme();
   const [usageCost, setUsageCost] = useState<number | null>(null);
+  const [pendingRailId, setPendingRailId] = useState<RailDestinationId | null>(null);
   const routeWorkspaceId = resolveRouteWorkspaceId(
     state.workspaceMemberships,
     extractRouteWorkspaceId(pathname),
   );
   const activeRailId = extractActiveRailId(pathname);
+  const visibleRailId = pendingRailId ?? activeRailId;
   const activeWorkspaceId =
     routeWorkspaceId
     ?? state.selectedWorkspaceId
@@ -189,6 +192,42 @@ export function AccountTenantSwitcher() {
   }, [resolvedTheme]);
 
   useEffect(() => {
+    setPendingRailId(null);
+  }, [activeRailId, pathname]);
+
+  useEffect(() => {
+    if (!pendingRailId) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => {
+      setPendingRailId(null);
+    }, 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [pendingRailId]);
+
+  const prefetchHref = useCallback((href: string) => {
+    if (href !== '/') {
+      router.prefetch(href);
+    }
+  }, [router]);
+
+  const markNavigationPending = useCallback((destinationId: RailDestinationId, href: string) => {
+    prefetchHref(href);
+    if (href !== pathname) {
+      setPendingRailId(destinationId);
+    }
+  }, [pathname, prefetchHref]);
+
+  useEffect(() => {
+    if (!activeWorkspaceId) {
+      return;
+    }
+    for (const destination of [...PRIMARY_DESTINATIONS, ...SECONDARY_DESTINATIONS]) {
+      router.prefetch(buildWorkspaceRouteHref(activeWorkspaceId, destination.defaultRouteId));
+    }
+  }, [activeWorkspaceId, router]);
+
+  useEffect(() => {
     let cancelled = false;
 
     if (!usageClient) {
@@ -223,24 +262,33 @@ export function AccountTenantSwitcher() {
     <aside data-workstation-switcher="rail" className="account-switcher">
       <div className="account-switcher__cluster account-switcher__cluster--upper">
         <nav aria-label="Primary destinations" className="account-switcher__nav account-switcher__nav--primary">
-          {PRIMARY_DESTINATIONS.map((destination) => (
-            <Link
-              key={destination.id}
-              href={activeWorkspaceId ? buildDestinationHref(activeWorkspaceId, destination) : '/'}
-              prefetch
-              aria-current={activeRailId === destination.id ? 'page' : undefined}
-              data-workstation-destination-link={destination.dataLinkId ?? destination.id}
-              className={joinClassNames(
-                'account-switcher__link',
-                activeRailId === destination.id && 'account-switcher__link--active',
-              )}
-              aria-label={destination.label}
-              title={destination.label}
-            >
-              <destination.icon aria-hidden="true" />
-              <span className="account-switcher__link-label">{destination.label}</span>
-            </Link>
-          ))}
+          {PRIMARY_DESTINATIONS.map((destination) => {
+            const href = activeWorkspaceId ? buildDestinationHref(activeWorkspaceId, destination) : '/';
+            const isVisibleActive = visibleRailId === destination.id;
+            const isPending = pendingRailId === destination.id;
+            return (
+              <Link
+                key={destination.id}
+                href={href}
+                prefetch
+                aria-current={activeRailId === destination.id ? 'page' : undefined}
+                data-workstation-destination-link={destination.dataLinkId ?? destination.id}
+                className={joinClassNames(
+                  'account-switcher__link',
+                  isVisibleActive && 'account-switcher__link--active',
+                  isPending && 'account-switcher__link--pending',
+                )}
+                aria-label={destination.label}
+                title={destination.label}
+                onPointerEnter={() => prefetchHref(href)}
+                onFocus={() => prefetchHref(href)}
+                onClick={() => markNavigationPending(destination.id, href)}
+              >
+                <destination.icon aria-hidden="true" />
+                <span className="account-switcher__link-label">{destination.label}</span>
+              </Link>
+            );
+          })}
         </nav>
       </div>
       <div className="account-switcher__spacer" />
@@ -266,24 +314,33 @@ export function AccountTenantSwitcher() {
           <ThemeIcon aria-hidden="true" />
         </button>
         <nav aria-label="Settings destination" className="account-switcher__nav account-switcher__nav--secondary">
-          {SECONDARY_DESTINATIONS.map((destination) => (
-            <Link
-              key={destination.id}
-              href={activeWorkspaceId ? buildWorkspaceRouteHref(activeWorkspaceId, destination.defaultRouteId) : '/'}
-              prefetch
-              aria-current={activeRailId === destination.id ? 'page' : undefined}
-              data-workstation-destination-link={destination.dataLinkId ?? destination.id}
-              className={joinClassNames(
-                'account-switcher__link',
-                activeRailId === destination.id && 'account-switcher__link--active',
-              )}
-              aria-label={destination.label}
-              title={destination.label}
-            >
-              <destination.icon aria-hidden="true" />
-              <span className="account-switcher__link-label">{destination.label}</span>
-            </Link>
-          ))}
+          {SECONDARY_DESTINATIONS.map((destination) => {
+            const href = activeWorkspaceId ? buildWorkspaceRouteHref(activeWorkspaceId, destination.defaultRouteId) : '/';
+            const isVisibleActive = visibleRailId === destination.id;
+            const isPending = pendingRailId === destination.id;
+            return (
+              <Link
+                key={destination.id}
+                href={href}
+                prefetch
+                aria-current={activeRailId === destination.id ? 'page' : undefined}
+                data-workstation-destination-link={destination.dataLinkId ?? destination.id}
+                className={joinClassNames(
+                  'account-switcher__link',
+                  isVisibleActive && 'account-switcher__link--active',
+                  isPending && 'account-switcher__link--pending',
+                )}
+                aria-label={destination.label}
+                title={destination.label}
+                onPointerEnter={() => prefetchHref(href)}
+                onFocus={() => prefetchHref(href)}
+                onClick={() => markNavigationPending(destination.id, href)}
+              >
+                <destination.icon aria-hidden="true" />
+                <span className="account-switcher__link-label">{destination.label}</span>
+              </Link>
+            );
+          })}
         </nav>
         <Link
           href="/settings/account"

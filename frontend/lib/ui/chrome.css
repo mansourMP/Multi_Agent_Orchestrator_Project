@@ -5954,12 +5954,14 @@ body.theme-light .workstation-titlebar__link--active .workstation-titlebar__link
 }
 
 .account-switcher__link:hover .account-switcher__link-label,
-.account-switcher__link--active .account-switcher__link-label {
+.account-switcher__link--active .account-switcher__link-label,
+.account-switcher__link--pending .account-switcher__link-label {
   color: var(--text-primary);
 }
 
 .account-switcher__link[aria-current='page'],
-.account-switcher__link--active {
+.account-switcher__link--active,
+.account-switcher__link--pending {
   border-color: transparent !important;
   background: transparent !important;
   color: var(--text-primary);

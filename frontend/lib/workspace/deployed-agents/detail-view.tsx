@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 
 import { ListDetailPanel } from '@/lib/ui/list-detail';
 import { AnimatePresence, MotionTabPanel } from '@/lib/ui/motion';
@@ -96,7 +96,7 @@ export interface AgentDetailViewProps {
   onOpenCreateWizard: (templateId: string) => void;
 }
 
-export function AgentDetailView({
+export const AgentDetailView = memo(({
   selectedAgent,
   overlayTab,
   detailConfigDraft,
@@ -131,7 +131,7 @@ export function AgentDetailView({
   selectedAgentSelfHostedDeployBlocker,
   selectedStudioTemplate,
   onOpenCreateWizard,
-}: AgentDetailViewProps) {
+}: AgentDetailViewProps) => {
   const selectedAgentId = readString(selectedAgent?.id);
   const selectedAgentRuntimePlacement = useMemo(() => {
     const config = readRecord(selectedAgent?.config);
@@ -343,11 +343,8 @@ export function AgentDetailView({
   return (
     <div className="app-stack-4 studio-agent-detail-motion">
       <AnimatePresence mode="wait" initial={false}>
-        <MotionTabPanel
-          key={`${currentStudioSubview}:${overlayTab}:${selectedAgentId}`}
-          className="studio-agent-motion-panel"
-        >
-      {currentStudioSubview === 'agents' && overlayTab === 'chat' && (
+              {currentStudioSubview === 'agents' && overlayTab === 'chat' && (
+        <MotionTabPanel key="chat" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           eyebrow="Chat"
@@ -366,9 +363,11 @@ export function AgentDetailView({
             <EmptyPanel title="Agent is not ready yet" body="Save the agent first, then test it here." />
           )}
         </ListDetailPanel>
+        </MotionTabPanel>
       )}
 
       {currentStudioSubview === 'agents' && overlayTab === 'knowledge' && (
+        <MotionTabPanel key="knowledge" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           eyebrow="Knowledge"
@@ -481,9 +480,11 @@ export function AgentDetailView({
             ) : null}
           </div>
         </ListDetailPanel>
+        </MotionTabPanel>
       )}
 
       {currentStudioSubview === 'agents' && overlayTab === 'ai' && (
+        <MotionTabPanel key="ai" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           eyebrow="Model"
@@ -517,9 +518,11 @@ export function AgentDetailView({
             </>
           ) : null}
         </ListDetailPanel>
+        </MotionTabPanel>
       )}
 
       {currentStudioSubview === 'agents' && overlayTab === 'tools' && (
+        <MotionTabPanel key="tools" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           eyebrow="Actions"
@@ -546,9 +549,11 @@ export function AgentDetailView({
             </>
           ) : null}
         </ListDetailPanel>
+        </MotionTabPanel>
       )}
 
       {currentStudioSubview === 'agents' && overlayTab === 'memory' && (
+        <MotionTabPanel key="memory" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           eyebrow="Memory"
@@ -606,9 +611,11 @@ export function AgentDetailView({
             </>
           ) : null}
         </ListDetailPanel>
+        </MotionTabPanel>
       )}
 
       {currentStudioSubview === 'agents' && overlayTab === 'connectors' && (
+        <MotionTabPanel key="connectors" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           eyebrow="Integrations"
@@ -624,9 +631,11 @@ export function AgentDetailView({
             workspaceId={workspaceId}
           />
         </ListDetailPanel>
+        </MotionTabPanel>
       )}
 
       {currentStudioSubview === 'agents' && overlayTab === 'analytics' && (
+        <MotionTabPanel key="analytics" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           eyebrow="Results"
@@ -638,9 +647,11 @@ export function AgentDetailView({
             workspaceId={workspaceId}
           />
         </ListDetailPanel>
+        </MotionTabPanel>
       )}
 
       {(currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && overlayTab === 'overview')) && (
+        <MotionTabPanel key="overview" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           eyebrow="Command Center"
@@ -865,9 +876,11 @@ export function AgentDetailView({
             </div>
           )}
         </ListDetailPanel>
-      )}
         </MotionTabPanel>
-      </AnimatePresence>
+      )}
+        </AnimatePresence>
     </div>
   );
-}
+});
+
+AgentDetailView.displayName = 'AgentDetailView';

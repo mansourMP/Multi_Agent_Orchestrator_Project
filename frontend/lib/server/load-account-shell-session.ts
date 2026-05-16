@@ -12,7 +12,7 @@ import type { AccountShellBootstrap } from '@/lib/shell/account-shell-store';
 import { parseAccountShellPayload } from '@/lib/shell/account-shell-payload';
 
 const RETRYABLE_ACCOUNT_SHELL_STATUSES = new Set([429, 500, 502, 503, 504]);
-const ACCOUNT_SHELL_RESULT_CACHE_TTL_MS = 3_000;
+const ACCOUNT_SHELL_RESULT_CACHE_TTL_MS = 30_000;
 const ACCOUNT_SHELL_STALE_TTL_MS = 5 * 60_000;
 const accountShellResultCache = new Map<string, {
   expiresAt: number;

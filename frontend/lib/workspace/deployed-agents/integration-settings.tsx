@@ -1,5 +1,7 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
+
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import type {
   AgentIntegrationConnectorCard,
@@ -28,6 +30,7 @@ export function AgentIntegrationsSections({
   hasCloudComputerAvailableTarget: boolean;
   workspaceId: string;
 }) {
+  const router = useRouter();
   const connectedProviderCount = providerCatalog.filter((provider) => providerIsReadyForStudio(provider)).length;
   const hasHealthySelfHostedNode = runtimeAttachments.some((node) => Boolean(node.runtimeProfileId) && node.healthy && node.ownerApproved);
   const runtimeRows = STUDIO_RUNTIME_OPTIONS.map((option) => {
@@ -54,7 +57,7 @@ export function AgentIntegrationsSections({
           <AppButton
             type="button"
             tone="secondary"
-            onClick={() => window.location.assign(`/w/${encodeURIComponent(workspaceId)}/integrations`)}
+            onClick={() => router.push(`/w/${encodeURIComponent(workspaceId)}/integrations`)}
           >
             Open provider setup
           </AppButton>

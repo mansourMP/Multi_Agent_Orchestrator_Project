@@ -1,5 +1,6 @@
 'use client';
 
+import { memo, useMemo } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { ListDetailPanel } from '@/lib/ui/list-detail';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
@@ -31,6 +32,59 @@ import {
   rosterStatusTone,
   runtimePlacementLabel,
 } from './utils';
+
+const AgentRosterItem = memo(({
+  agent,
+  selected,
+  agentMetrics,
+  onSelectAgent,
+}: {
+  agent: DeployedAgentRecord;
+  selected: boolean;
+  agentMetrics: AgentOperationalMetrics | null;
+  onSelectAgent: (id: string) => void;
+}) => {
+  const agentId = readString(agent.id);
+
+  // Memoize the JSON parsing so it only happens when agent strings change
+  const channels = useMemo(() => Object.entries(readRecord(agent.channels))
+    .filter(([_, value]) => readRecord(value).enabled === true)
+    .map(([key]) => key), [agent.channels]);
+
+  const channelLabel = humanizeToken(channels[0] || 'no_channel', 'No channel');
+
+  const modeLabel = useMemo(() => runtimePlacementLabel(
+     readRecord(agent.config).runtime_placement ?? readRecord(agent.metadata).runtime_placement ?? agent.runtime_target
+  ), [agent.config, agent.metadata, agent.runtime_target]);
+
+  const stateLabel = deploymentStateLabel(agent.deployment_state);
+  const displayName = readString(agent.name, agentId);
+  const latestActivityLabel = agentMetrics?.latestActivityLabel ?? 'Syncing recent activity';
+
+  return (
+    <button
+      type="button"
+      className={joinClassNames(
+        'studio-agents-nav__agent',
+        selected && 'studio-agents-nav__agent--active',
+      )}
+      aria-selected={selected}
+      onClick={() => onSelectAgent(agentId)}
+    >
+      <span className="studio-agents-nav__copy">
+        <span className="studio-agents-nav__label">{displayName}</span>
+        <span className="studio-agents-nav__detail">
+          {modeLabel} · {channelLabel} · {latestActivityLabel}
+        </span>
+      </span>
+      <span className={joinClassNames('studio-agents-nav__status', `studio-agents-nav__status--${rosterStatusTone(agent.deployment_state)}`)}>
+        {stateLabel}
+      </span>
+    </button>
+  );
+});
+
+AgentRosterItem.displayName = 'AgentRosterItem';
 
 export interface AgentRosterSidebarProps {
   showAgentsIndex: boolean;
@@ -66,7 +120,7 @@ export interface AgentRosterSidebarProps {
   selfHostedNodeHealthLabel: (node: RuntimeAttachmentSnapshot | null) => string;
 }
 
-export function AgentRosterSidebar({
+export const AgentRosterSidebar = memo(({
   showAgentsIndex,
   recentlyCreatedAgentId,
   selectedAgent,
@@ -98,7 +152,7 @@ export function AgentRosterSidebar({
   selectedAgentSelfHostedNode,
   selectedAgentSelfHostedDeployBlocker,
   selfHostedNodeHealthLabel,
-}: AgentRosterSidebarProps) {
+}: AgentRosterSidebarProps) => {
   const primaryStudioTemplates = studioTemplates.filter((template) => PRIMARY_STUDIO_TEMPLATE_IDS.has(template.id));
   const additionalStudioTemplates = studioTemplates.filter((template) => !PRIMARY_STUDIO_TEMPLATE_IDS.has(template.id));
 
@@ -266,39 +320,14 @@ export function AgentRosterSidebar({
                   <div className="studio-agents-nav__items">
                     {visibleAgents.map((agent, index) => {
                       const agentId = readString(agent.id, `deployed-agent-${index}`);
-                      const selected = agentId === selectedAgentId;
-                      const agentMetrics = agentMetricsById[agentId] ?? null;
-                      const channels = Object.entries(readRecord(agent.channels))
-                        .filter(([_, value]) => readRecord(value).enabled === true)
-                        .map(([key]) => key);
-                      const channelLabel = humanizeToken(channels[0] || 'no_channel', 'No channel');
-                      const modeLabel = runtimePlacementLabel(
-                         readRecord(agent.config).runtime_placement ?? readRecord(agent.metadata).runtime_placement ?? agent.runtime_target
-                      );
-                      const stateLabel = deploymentStateLabel(agent.deployment_state);
-                      const displayName = readString(agent.name, agentId);
-                      const latestActivityLabel = agentMetrics?.latestActivityLabel ?? 'Syncing recent activity';
                       return (
-                        <button
+                        <AgentRosterItem
                           key={agentId}
-                          type="button"
-                          className={joinClassNames(
-                            'studio-agents-nav__agent',
-                            selected && 'studio-agents-nav__agent--active',
-                          )}
-                          aria-selected={selected}
-                          onClick={() => onSelectAgent(agentId)}
-                        >
-                          <span className="studio-agents-nav__copy">
-                            <span className="studio-agents-nav__label">{displayName}</span>
-                            <span className="studio-agents-nav__detail">
-                              {modeLabel} · {channelLabel} · {latestActivityLabel}
-                            </span>
-                          </span>
-                          <span className={joinClassNames('studio-agents-nav__status', `studio-agents-nav__status--${rosterStatusTone(agent.deployment_state)}`)}>
-                            {stateLabel}
-                          </span>
-                        </button>
+                          agent={agent}
+                          selected={agentId === selectedAgentId}
+                          agentMetrics={agentMetricsById[agentId] ?? null}
+                          onSelectAgent={onSelectAgent}
+                        />
                       );
                     })}
                   </div>
@@ -381,4 +410,6 @@ export function AgentRosterSidebar({
       ) : null}
     </div>
   );
-}
+});
+
+AgentRosterSidebar.displayName = 'AgentRosterSidebar';

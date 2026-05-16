@@ -2332,6 +2332,11 @@ body[data-emp-theme='dark'] .app-textarea:focus {
   -webkit-text-fill-color: #1e2024;
 }
 
+.app-auth-input::selection {
+  background: rgba(32, 32, 32, 0.1);
+  color: #1e2024;
+}
+
 .app-auth-input:-webkit-autofill,
 .app-auth-input:-webkit-autofill:hover,
 .app-auth-input:-webkit-autofill:focus {

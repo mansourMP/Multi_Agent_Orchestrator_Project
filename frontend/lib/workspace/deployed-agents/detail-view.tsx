@@ -377,80 +377,102 @@ export function AgentDetailView({
           )}
         >
           <div className="studio-agent-knowledge">
-            <div className="studio-agent-knowledge__block">
-              <span>Instructions</span>
-              <strong>Behavior document</strong>
-              <p>{readString(selectedAgent.system_prompt, 'No response instructions configured yet.')}</p>
-            </div>
-            <div className="studio-agent-knowledge__block">
-              <span>Role and tone</span>
-              <p>{readString(selectedAgent.persona, 'No persona configured yet.')}</p>
-            </div>
-            <div className="studio-agent-knowledge__grid">
-              <div>
-                <span>Sources</span>
-                <strong>{knowledgeSourceCount} connected</strong>
-              </div>
-              <div>
-                <span>Source depth</span>
-                <strong>{selectedContextPresetLabel}</strong>
-              </div>
-              <div>
-                <span>Retrieval test</span>
-                <strong>{knowledgeSourceCount > 0 ? 'Ready' : 'Add sources'}</strong>
-              </div>
-            </div>
-            {detailConfigDraft ? (
-              <ContextPresetControl
-                value={detailConfigDraft.contextBudgetPreset}
-                onSelect={(nextValue) => onUpdateDetailConfig({ contextBudgetPreset: nextValue })}
-              />
-            ) : null}
-            <div className="studio-agent-knowledge__sources">
+            <section className="studio-agent-knowledge__section">
               <div className="studio-agent-knowledge__section-head">
                 <div>
-                  <span>Sources</span>
-                  <strong>Files, URLs, app docs, tables, or notes</strong>
+                  <span>Instructions</span>
+                  <strong>Agent Purpose</strong>
                 </div>
-                <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
-                  Add source
-                </AppButton>
               </div>
-              {selectedKnowledgeSources.length === 0 ? (
-                <div className="deployed-agents-overlay__empty">No knowledge sources connected yet.</div>
-              ) : selectedKnowledgeSources.map((source, index) => {
-                const record = readRecord(source);
-                const label = readString(record.label ?? record.uri ?? record.id, `Knowledge source ${index + 1}`);
-                return (
-                  <div key={`${label}-${index}`} className="studio-agent-knowledge__source">
-                    <strong>{label}</strong>
-                    <span>{readString(record.kind, humanizeToken(record.type, 'Source'))}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="studio-agent-knowledge__block">
-              <span>Retrieval / Test</span>
-              <strong>Ask what the agent would use</strong>
-              <div className="studio-agent-knowledge__test">
-                <input
-                  type="text"
-                  readOnly
-                  value=""
-                  placeholder="Example: What sources would answer a refund policy question?"
-                  aria-label="Knowledge retrieval test prompt"
-                />
-                <AppButton type="button" tone="secondary" onClick={() => onSelectTab('chat')}>
-                  Test in chat
-                </AppButton>
+              <div className="studio-agent-knowledge__block">
+                <p>{readString(selectedAgent.system_prompt, 'No response instructions configured yet.')}</p>
+                <small>{readString(selectedAgent.persona, 'No persona configured yet.')}</small>
               </div>
-              <p>{knowledgeSourceCount > 0 ? `${knowledgeSourceCount} source${knowledgeSourceCount === 1 ? '' : 's'} available for private test chat.` : 'Add a source, then test whether the agent cites the right material.'}</p>
-            </div>
+            </section>
+
+            <section className="studio-agent-knowledge__section">
+              <div className="studio-agent-knowledge__section-head">
+                <div>
+                  <span>Knowledge Sources</span>
+                  <strong>Trusted Data</strong>
+                </div>
+                <div className="studio-agent-knowledge__status-pill">
+                  {knowledgeSourceCount > 0 ? 'Indexed' : 'No data'}
+                </div>
+              </div>
+
+              <div className="studio-agent-knowledge__grid">
+                <div>
+                  <span>Sources</span>
+                  <strong>{knowledgeSourceCount} connected</strong>
+                </div>
+                <div>
+                  <span>Source depth</span>
+                  <strong>{selectedContextPresetLabel}</strong>
+                </div>
+                <div>
+                  <span>Retrieval health</span>
+                  <strong className={knowledgeSourceCount > 0 ? 'text-live' : ''}>
+                    {knowledgeSourceCount > 0 ? 'Optimal' : 'Needs data'}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="studio-agent-knowledge__sources">
+                {selectedKnowledgeSources.length === 0 ? (
+                  <div className="deployed-agents-overlay__empty">No knowledge sources connected yet.</div>
+                ) : selectedKnowledgeSources.map((source, index) => {
+                  const record = readRecord(source);
+                  const label = readString(record.label ?? record.uri ?? record.id, `Knowledge source ${index + 1}`);
+                  return (
+                    <div key={`${label}-${index}`} className="studio-agent-knowledge__source">
+                      <div className="studio-agent-knowledge__source-main">
+                        <strong>{label}</strong>
+                        <span>{readString(record.kind, humanizeToken(record.type, 'Source'))}</span>
+                      </div>
+                      <DataBadge tone="success">Ready</DataBadge>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="studio-agent-knowledge__section">
+              <div className="studio-agent-knowledge__section-head">
+                <div>
+                  <span>Retrieval / Test</span>
+                  <strong>Search Test</strong>
+                </div>
+              </div>
+              <div className="studio-agent-knowledge__test-box">
+                <p>Ask a question to see which sources the agent would use to answer.</p>
+                <div className="studio-agent-knowledge__test-input">
+                  <input
+                    type="text"
+                    readOnly
+                    value=""
+                    placeholder="Example: What is the refund policy?"
+                    aria-label="Knowledge retrieval test prompt"
+                  />
+                  <AppButton type="button" tone="secondary" onClick={() => onSelectTab('chat')}>
+                    Test in chat
+                  </AppButton>
+                </div>
+                <small>{knowledgeSourceCount > 0 ? `${knowledgeSourceCount} source${knowledgeSourceCount === 1 ? '' : 's'} available for retrieval testing.` : 'Add a source to enable retrieval testing.'}</small>
+              </div>
+            </section>
+
             {detailConfigDraft ? (
-              <div className="app-inline-actions">
-                <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
-                  {isSavingDetailConfig ? 'Saving…' : 'Save'}
-                </AppButton>
+              <div className="app-stack-2">
+                <ContextPresetControl
+                  value={detailConfigDraft.contextBudgetPreset}
+                  onSelect={(nextValue) => onUpdateDetailConfig({ contextBudgetPreset: nextValue })}
+                />
+                <div className="app-inline-actions">
+                  <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
+                    {isSavingDetailConfig ? 'Saving…' : 'Save changes'}
+                  </AppButton>
+                </div>
               </div>
             ) : null}
           </div>
@@ -617,13 +639,13 @@ export function AgentDetailView({
       {(currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && overlayTab === 'overview')) && (
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
-          eyebrow="Overview"
-          title={readString(selectedAgent.name, 'Assistant details')}
-          subtitle="Launch readiness, live health, and the next setup step for this agent."
+          eyebrow="Command Center"
+          title={readString(selectedAgent.name, 'Assistant overview')}
+          subtitle="Identity, launch readiness, and live performance signals."
           actions={(
             <div className="app-inline-actions app-inline-actions--tight">
               <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
-                Edit
+                Edit profile
               </AppButton>
               <AppButton
                 type="button"
@@ -639,7 +661,7 @@ export function AgentDetailView({
                   Boolean(selectedAgentSelfHostedDeployBlocker)
                 }
               >
-                Deploy
+                Go live
               </AppButton>
               <AppButton
                 type="button"
@@ -653,147 +675,178 @@ export function AgentDetailView({
           )}
         >
           {isLoadingDetail ? (
-            <>
-              <SkeletonBlock height="3rem" />
-              <SkeletonBlock height="4rem" />
-            </>
+            <div className="app-stack-3">
+              <SkeletonBlock height="6rem" />
+              <SkeletonBlock height="12rem" />
+            </div>
           ) : (
-            <>
-              {selectedAgentNeedsTelegramReadiness && selectedTelegramReadiness ? (
-                <StateBanner
-                  tone={selectedTelegramReadiness.readyForLive ? 'success' : selectedTelegramReadiness.blockers.length > 0 ? 'warning' : 'neutral'}
-                  title={selectedTelegramReadiness.readyForLive ? 'Telegram launch ready' : 'Telegram launch not ready'}
-                  detail={selectedTelegramReadiness.nextAction ?? 'Connected app checks are in progress.'}
-                >
-                  {selectedTelegramReadiness.blockers.length > 0
-                    ? selectedTelegramReadiness.blockers.map((item) => item.message).join(' · ')
-                    : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || `${selectedTelegramReadiness.connectors.length} connected app${selectedTelegramReadiness.connectors.length === 1 ? '' : 's'} checked.`}
-                </StateBanner>
-              ) : selectedAgentNeedsTelegramReadiness && isLoadingTelegramReadiness ? (
-                <SkeletonBlock height="5rem" />
-              ) : null}
-              <div className="studio-agent-overview">
-                <section className="studio-agent-overview__hero" aria-label="Launch readiness">
-                  <div className="studio-agent-overview__hero-copy">
-                    <div className="studio-agent-overview__status-row">
-                      <DataBadge tone={selectedAgentState === 'live' ? 'success' : launchReady ? 'success' : 'warning'}>
-                        {selectedAgentStateLabel}
-                      </DataBadge>
-                      <DataBadge tone={launchReady ? 'success' : 'warning'}>
-                        {readyCount} of {readinessItems.length} ready
-                      </DataBadge>
-                    </div>
-                    <strong>{launchTitle}</strong>
-                    <span>{launchDetail}</span>
+            <div className="studio-agent-overview">
+              <section className="studio-agent-overview__readiness-hero">
+                <div className="studio-agent-overview__hero-status">
+                  <DataBadge tone={selectedAgentState === 'live' ? 'success' : launchReady ? 'success' : 'warning'}>
+                    {selectedAgentStateLabel}
+                  </DataBadge>
+                  <strong>{launchTitle}</strong>
+                  <p>{launchDetail}</p>
+                </div>
+                <div className="studio-agent-overview__hero-metrics">
+                  <div className="studio-agent-overview__hero-metric">
+                    <span>Active users</span>
+                    <strong>{selectedAgentAnalytics ? formatCompactCount(selectedAgentAnalytics.activeUsersLast30d) : '0'}</strong>
                   </div>
-                  <div className="studio-agent-overview__hero-actions">
-                    <AppButton type="button" tone="secondary" onClick={() => onSelectTab('chat')}>
-                      Test chat
-                    </AppButton>
-                    {launchReady ? (
-                      <AppButton
-                        type="button"
-                        onClick={onDeploy}
-                        disabled={busyAgentId === selectedAgentId || selectedAgentState === 'live'}
-                      >
-                        Deploy
-                      </AppButton>
-                    ) : (
-                      <AppButton type="button" onClick={() => onSelectTab(readinessItems.find((item) => !item.ready)?.tab ?? 'ai')}>
-                        Fix setup
-                      </AppButton>
-                    )}
+                  <div className="studio-agent-overview__hero-metric">
+                    <span>Resolution</span>
+                    <strong>{selectedAgentAnalytics ? `${(100 - selectedAgentAnalytics.escalationRatePercent).toFixed(0)}%` : '100%'}</strong>
+                  </div>
+                </div>
+              </section>
+
+              <div className="studio-agent-overview__grid">
+                <section className="studio-agent-overview__group">
+                  <div className="studio-agent-overview__group-head">
+                    <strong>Identity & Purpose</strong>
+                    <button type="button" onClick={() => onSelectTab('knowledge')}>View instructions</button>
+                  </div>
+                  <div className="studio-agent-overview__card">
+                    <span>Public name</span>
+                    <strong>{readString(selectedAgent.name, 'Unnamed agent')}</strong>
+                  </div>
+                  <div className="studio-agent-overview__card">
+                    <span>Avatar</span>
+                    <div className="studio-agent-overview__avatar-preview">
+                      {readString(selectedAgent.avatar) ? (
+                        <img src={selectedAgent.avatar!} alt="Avatar" />
+                      ) : (
+                        <div className="studio-agent-overview__avatar-placeholder">
+                          {readString(selectedAgent.name, 'A').charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <span>{readString(selectedAgent.avatar) ? 'Custom' : 'Default'}</span>
+                    </div>
+                  </div>
+                  <div className="studio-agent-overview__card studio-agent-overview__card--wide">
+                    <span>Job description</span>
+                    <p>{readString(selectedAgent.persona, 'No job description set.')}</p>
                   </div>
                 </section>
 
-                <section className="studio-agent-overview__readiness" aria-label="Launch checklist">
-                  <div className="studio-agent-overview__section-head">
-                    <div>
-                      <span>Launch checklist</span>
-                      <strong>Production-safe defaults</strong>
-                    </div>
-                    <small>{launchReady ? 'No launch blockers' : `${readinessItems.length - readyCount} item${readinessItems.length - readyCount === 1 ? '' : 's'} need attention`}</small>
+                <section className="studio-agent-overview__group">
+                  <div className="studio-agent-overview__group-head">
+                    <strong>Knowledge & Retrieval</strong>
+                    <button type="button" onClick={() => onSelectTab('knowledge')}>Test search</button>
                   </div>
-                  <div className="studio-agent-overview__check-grid">
-                    {readinessItems.map((item) => (
-                      <button
-                        key={item.label}
-                        type="button"
-                        className={joinClassNames('studio-agent-overview__check-card', item.ready && 'studio-agent-overview__check-card--ready')}
-                        onClick={() => onSelectTab(item.tab)}
-                      >
-                        <span className="studio-agent-overview__check-mark" aria-hidden="true">
-                          {item.ready ? '✓' : '!'}
-                        </span>
-                        <span className="studio-agent-overview__check-copy">
-                          <strong>{item.label}</strong>
-                          <small>{item.detail}</small>
-                        </span>
-                      </button>
-                    ))}
+                  <div className="studio-agent-overview__card">
+                    <span>Sources</span>
+                    <strong>{knowledgeSourceCount} connected</strong>
+                  </div>
+                  <div className="studio-agent-overview__card">
+                    <span>Retrieval health</span>
+                    <strong className={knowledgeSourceCount > 0 ? 'text-live' : ''}>
+                      {knowledgeSourceCount > 0 ? 'Optimal' : 'Needs data'}
+                    </strong>
+                  </div>
+                  <div className="studio-agent-overview__card studio-agent-overview__card--wide">
+                    <span>Status</span>
+                    <p>{knowledgeSourceCount > 0 ? 'Trusted sources are indexed and available for the agent to cite in customer replies.' : 'Agent will answer based on general instructions only.'}</p>
                   </div>
                 </section>
 
-                <AppSurfaceStatGrid className="studio-agent-overview__metrics">
-                  <AppSurfaceStat
-                    label="Active users"
-                    value={selectedAgentAnalytics ? formatCompactCount(selectedAgentAnalytics.activeUsersLast30d) : (isLoadingAnalytics ? 'Syncing' : '0')}
-                    hint="Last 30 days"
-                  />
-                  <AppSurfaceStat
-                    label="Messages"
-                    value={selectedAgentAnalytics ? formatCompactCount(selectedAgentAnalytics.messageVolumeMonth) : (isLoadingAnalytics ? 'Syncing' : '0')}
-                    hint="This month"
-                  />
-                  <AppSurfaceStat
-                    label="Customers"
-                    value={selectedAgentMetrics?.conversationCountLabel ?? '0'}
-                    hint="Open and total conversations"
-                  />
-                  <AppSurfaceStat
-                    label="Escalation rate"
-                    value={selectedAgentAnalytics ? `${selectedAgentAnalytics.escalationRatePercent.toFixed(1)}%` : '0.0%'}
-                    hint="Owner review pressure"
-                  />
-                </AppSurfaceStatGrid>
-
-                <section className="studio-agent-overview__chart" aria-label="Traffic trend">
-                  <div className="studio-agent-overview__chart-copy">
-                    <span>Traffic trend</span>
-                    <strong>{selectedAgentAnalytics ? formatCompactCount(selectedAgentAnalytics.messageVolumeMonth) : '0'} messages</strong>
-                    <small>Daily, weekly, and monthly message signal for this agent.</small>
+                <section className="studio-agent-overview__group">
+                  <div className="studio-agent-overview__group-head">
+                    <strong>Model & Route</strong>
+                    <button type="button" onClick={() => onSelectTab('ai')}>Change route</button>
                   </div>
-                  <svg className="studio-agent-overview__sparkline" viewBox="0 0 100 88" preserveAspectRatio="none" aria-hidden="true">
-                    <line x1="0" y1="76" x2="100" y2="76" />
-                    <polyline points={overviewTrendPoints} />
-                  </svg>
+                  <div className="studio-agent-overview__card">
+                    <span>Selected route</span>
+                    <strong>{selectedAgentModelLabel}</strong>
+                  </div>
+                  <div className="studio-agent-overview__card">
+                    <span>Quality tier</span>
+                    <strong>{humanizeToken(inferAiTierFromProviderModel(selectedProviderId(selectedAgent), selectedModelId(selectedAgent)), 'Balanced')}</strong>
+                  </div>
+                  <div className="studio-agent-overview__card studio-agent-overview__card--wide">
+                    <span>Runtime</span>
+                    <p>{selectedAgentModeLabel} · {modelReady ? 'Ready for production traffic.' : 'Connect a provider in Integrations.'}</p>
+                  </div>
                 </section>
 
-                <section className="studio-agent-overview__setup" aria-label="Setup map">
-                  <div className="studio-agent-overview__section-head">
-                    <div>
-                      <span>Agent profile</span>
-                      <strong>What is configured</strong>
-                    </div>
-                    <small>Budget: {formatUsd(selectedBudgetCycle.current_burn_usd)} spent this cycle</small>
+                <section className="studio-agent-overview__group">
+                  <div className="studio-agent-overview__group-head">
+                    <strong>Safety & Compliance</strong>
+                    <button type="button" onClick={onOpenEditWizard}>Adjust limits</button>
                   </div>
-                  <div className="studio-agent-overview__setup-grid">
-                    {setupCards.map((card) => (
-                      <button
-                        key={card.label}
-                        type="button"
-                        className="studio-agent-overview__setup-card"
-                        onClick={() => onSelectTab(card.tab)}
-                      >
-                        <span>{card.label}</span>
-                        <strong>{card.value}</strong>
-                        <small>{card.detail}</small>
-                      </button>
-                    ))}
+                  <div className="studio-agent-overview__card">
+                    <span>Human handoff</span>
+                    <strong>{humanizeToken(readRecord(readRecord(selectedAgent.config).escalation_policy).preset, 'Standard')}</strong>
+                  </div>
+                  <div className="studio-agent-overview__card">
+                    <span>Monthly cap</span>
+                    <strong>{formatUsd(readRecord(readRecord(selectedAgent.config).commerce_policy).monthly_cost_cap_usd)}</strong>
+                  </div>
+                  <div className="studio-agent-overview__card studio-agent-overview__card--wide">
+                    <span>Safety engine</span>
+                    <p>Guarded by Empyralis Safety. {readRecord(readRecord(selectedAgent.config).safety_policy).health_safety_enabled === true ? 'Sensitive topic filter active.' : 'Standard safety active.'}</p>
                   </div>
                 </section>
               </div>
-            </>
+
+              <section className="studio-agent-overview__integrations">
+                <div className="studio-agent-overview__section-head">
+                  <div>
+                    <span>Integrations</span>
+                    <strong>Live Channels & Connectors</strong>
+                  </div>
+                  <button type="button" className="studio-actions__link-button" onClick={() => onSelectTab('connectors')}>Manage integrations</button>
+                </div>
+                <div className="studio-agent-overview__connector-strip">
+                  {overlayConnectorCards.slice(0, 4).map((card) => (
+                    <div key={card.id} className={joinClassNames('studio-agent-overview__connector-pill', card.connected && 'studio-agent-overview__connector-pill--connected')}>
+                      <span>{card.label}</span>
+                      <strong>{card.statusLabel}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="studio-agent-overview__next-steps">
+                <div className="studio-agent-overview__section-head">
+                  <div>
+                    <span>Next steps</span>
+                    <strong>Path to production</strong>
+                  </div>
+                </div>
+                <div className="studio-agent-overview__step-list">
+                  {!launchReady ? (
+                    <div className="studio-agent-overview__step studio-agent-overview__step--todo">
+                      <div className="studio-agent-overview__step-mark">!</div>
+                      <div className="studio-agent-overview__step-copy">
+                        <strong>Complete the launch checklist</strong>
+                        <p>{launchDetail}</p>
+                        <AppButton type="button" tone="secondary" onClick={() => onSelectTab(readinessItems.find((item) => !item.ready)?.tab ?? 'ai')}>Resolve</AppButton>
+                      </div>
+                    </div>
+                  ) : selectedAgentState !== 'live' ? (
+                    <div className="studio-agent-overview__step studio-agent-overview__step--todo">
+                      <div className="studio-agent-overview__step-mark">?</div>
+                      <div className="studio-agent-overview__step-copy">
+                        <strong>Test before deploying</strong>
+                        <p>Open the private chat to verify the agent follows its instructions and cites the correct sources.</p>
+                        <AppButton type="button" tone="secondary" onClick={() => onSelectTab('chat')}>Open chat</AppButton>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="studio-agent-overview__step studio-agent-overview__step--done">
+                      <div className="studio-agent-overview__step-mark">✓</div>
+                      <div className="studio-agent-overview__step-copy">
+                        <strong>Agent is live</strong>
+                        <p>Monitor customer conversations and outcomes in the Results tab.</p>
+                        <AppButton type="button" tone="secondary" onClick={() => onSelectTab('analytics')}>View results</AppButton>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </section>
+            </div>
           )}
         </ListDetailPanel>
       )}

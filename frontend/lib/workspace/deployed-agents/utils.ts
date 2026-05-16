@@ -506,7 +506,7 @@ export function normalizeStudioTemplates(payload: unknown): StudioTemplate[] {
     return sortStudioTemplatesForBusinessFlow(STUDIO_TEMPLATES);
   }
   const seedIds = new Set(seedTemplates.map((template) => normalizeTemplateToken(template.id)));
-  const primaryFallbacks = STUDIO_TEMPLATES.filter((template) => (
+  const primarySamples = STUDIO_TEMPLATES.filter((template) => (
     PRIMARY_STUDIO_TEMPLATE_IDS.has(normalizeTemplateToken(template.id))
     && !seedIds.has(normalizeTemplateToken(template.id))
   ));
@@ -516,7 +516,7 @@ export function normalizeStudioTemplates(payload: unknown): StudioTemplate[] {
   });
   return sortStudioTemplatesForBusinessFlow([
     ...seedTemplates,
-    ...primaryFallbacks,
+    ...primarySamples,
     ...staticExtras,
   ]);
 }
@@ -1038,19 +1038,19 @@ export function resolveProviderModelForTier(
       modelId: pickStudioModelForTier(provider, tier),
     };
   }
-  const fallbackProvider = catalogByProvider.gemini ? catalogByProvider.gemini : catalog[0] ?? null;
-  if (!fallbackProvider) {
+  const sampleProvider = catalogByProvider.gemini ? catalogByProvider.gemini : catalog[0] ?? null;
+  if (!sampleProvider) {
     return {
       providerId: '',
       modelId: '',
     };
   }
-  const fallbackModel = fallbackProvider.defaultModel && fallbackProvider.models.some((item) => item.id === fallbackProvider.defaultModel)
-    ? fallbackProvider.defaultModel
-    : fallbackProvider.models[0]?.id || '';
+  const sampleModel = sampleProvider.defaultModel && sampleProvider.models.some((item) => item.id === sampleProvider.defaultModel)
+    ? sampleProvider.defaultModel
+    : sampleProvider.models[0]?.id || '';
   return {
-    providerId: fallbackProvider.id,
-    modelId: fallbackModel,
+    providerId: sampleProvider.id,
+    modelId: sampleModel,
   };
 }
 

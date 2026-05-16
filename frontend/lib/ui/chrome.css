@@ -5233,6 +5233,22 @@ body[data-emp-theme='dark'] .app-chat-composer__textarea:focus-visible {
     0 10px 20px -22px color-mix(in srgb, black 24%, transparent);
 }
 
+:root[data-emp-theme='light'] .workstation-titlebar__link--active,
+body[data-emp-theme='light'] .workstation-titlebar__link--active,
+body.theme-light .workstation-titlebar__link--active {
+  background: #202020;
+  color: #ffffff;
+  box-shadow:
+    inset 0 0 0 1px rgba(32, 32, 32, 0.18),
+    0 10px 22px -18px rgba(32, 32, 32, 0.28);
+}
+
+:root[data-emp-theme='light'] .workstation-titlebar__link--active .workstation-titlebar__link-meta,
+body[data-emp-theme='light'] .workstation-titlebar__link--active .workstation-titlebar__link-meta,
+body.theme-light .workstation-titlebar__link--active .workstation-titlebar__link-meta {
+  color: rgba(255, 255, 255, 0.72);
+}
+
 .workstation-history-tab {
   position: relative;
   display: inline-flex;

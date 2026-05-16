@@ -13,7 +13,12 @@ import { parseAccountShellPayload } from '@/lib/shell/account-shell-payload';
 
 const RETRYABLE_ACCOUNT_SHELL_STATUSES = new Set([429, 500, 502, 503, 504]);
 const ACCOUNT_SHELL_RESULT_CACHE_TTL_MS = 3_000;
-const accountShellResultCache = new Map<string, { expiresAt: number; value: LoadedAccountShellSession }>();
+const ACCOUNT_SHELL_STALE_TTL_MS = 5 * 60_000;
+const accountShellResultCache = new Map<string, {
+  expiresAt: number;
+  staleUntil: number;
+  value: AccountShellBootstrap;
+}>();
 const accountShellInFlightRequests = new Map<string, Promise<LoadedAccountShellSession>>();
 
 export type DegradedAccountShellSession = {
@@ -97,6 +102,30 @@ export function isDegradedAccountShellSession(
   return session !== null && session.account === null && session.degraded === true;
 }
 
+function isAccountShellBootstrap(session: LoadedAccountShellSession): session is AccountShellBootstrap {
+  return Boolean(
+    session
+    && !isDegradedAccountShellSession(session)
+    && session.account
+    && Array.isArray(session.workspaceMemberships),
+  );
+}
+
+function canUseStaleAccountShellSession(
+  cached: { staleUntil: number; value: AccountShellBootstrap } | undefined,
+  session: LoadedAccountShellSession,
+): cached is { staleUntil: number; value: AccountShellBootstrap } {
+  return Boolean(
+    cached
+    && cached.staleUntil > Date.now()
+    && isDegradedAccountShellSession(session)
+    && (
+      session.errorStatus === null
+      || RETRYABLE_ACCOUNT_SHELL_STATUSES.has(session.errorStatus)
+    ),
+  );
+}
+
 async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
   try {
     const requestHeaders = await headers();
@@ -124,7 +153,11 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
     }
     const existingRequest = accountShellInFlightRequests.get(inFlightKey);
     if (existingRequest) {
-      return existingRequest;
+      const resolved = await existingRequest;
+      if (canUseStaleAccountShellSession(cached, resolved)) {
+        return cached.value;
+      }
+      return resolved;
     }
     const requestPromise = fetchAccountShellSessionWithRetry({
       accountShellUrl,
@@ -134,10 +167,17 @@ async function fetchAccountShellSession(): Promise<LoadedAccountShellSession> {
     accountShellInFlightRequests.set(inFlightKey, requestPromise);
     try {
       const resolved = await requestPromise;
-      accountShellResultCache.set(inFlightKey, {
-        value: resolved,
-        expiresAt: Date.now() + ACCOUNT_SHELL_RESULT_CACHE_TTL_MS,
-      });
+      if (isAccountShellBootstrap(resolved)) {
+        const now = Date.now();
+        accountShellResultCache.set(inFlightKey, {
+          value: resolved,
+          expiresAt: now + ACCOUNT_SHELL_RESULT_CACHE_TTL_MS,
+          staleUntil: now + ACCOUNT_SHELL_STALE_TTL_MS,
+        });
+      }
+      if (canUseStaleAccountShellSession(cached, resolved)) {
+        return cached.value;
+      }
       return resolved;
     } finally {
       if (accountShellInFlightRequests.get(inFlightKey) === requestPromise) {

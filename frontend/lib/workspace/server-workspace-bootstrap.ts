@@ -24,11 +24,13 @@ export class WorkspaceBootstrapError extends Error {
 
 const TRANSIENT_BOOTSTRAP_STATUSES = new Set([429, 500, 502, 503, 504]);
 const WORKSPACE_BOOTSTRAP_CACHE_TTL_MS = 5_000;
+const WORKSPACE_BOOTSTRAP_STALE_TTL_MS = 5 * 60_000;
 const WORKSPACE_BOOTSTRAP_TIMEOUT_MS = 12_000;
 
 type WorkspaceBootstrapCacheEntry = {
   expiresAt: number;
   payload: WorkspaceBootstrapPayload;
+  staleUntil: number;
 };
 
 const workspaceBootstrapCache = new Map<string, WorkspaceBootstrapCacheEntry>();
@@ -38,6 +40,18 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function canUseStaleWorkspaceBootstrap(
+  cachedEntry: WorkspaceBootstrapCacheEntry | undefined,
+  error: unknown,
+): cachedEntry is WorkspaceBootstrapCacheEntry {
+  return Boolean(
+    cachedEntry
+    && cachedEntry.staleUntil > Date.now()
+    && error instanceof WorkspaceBootstrapError
+    && TRANSIENT_BOOTSTRAP_STATUSES.has(error.status),
+  );
 }
 
 export async function loadWorkspaceBootstrap(workspaceId: string): Promise<WorkspaceBootstrapPayload> {
@@ -75,7 +89,14 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
   }
   const existingRequest = workspaceBootstrapInFlightRequests.get(cacheKey);
   if (existingRequest) {
-    return existingRequest;
+    try {
+      return await existingRequest;
+    } catch (error) {
+      if (canUseStaleWorkspaceBootstrap(cachedEntry, error)) {
+        return cachedEntry.payload;
+      }
+      throw error;
+    }
   }
 
   const requestPromise = fetchWorkspaceBootstrapWithRetry({
@@ -87,6 +108,11 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
   workspaceBootstrapInFlightRequests.set(cacheKey, requestPromise);
   try {
     return await requestPromise;
+  } catch (error) {
+    if (canUseStaleWorkspaceBootstrap(cachedEntry, error)) {
+      return cachedEntry.payload;
+    }
+    throw error;
   } finally {
     if (workspaceBootstrapInFlightRequests.get(cacheKey) === requestPromise) {
       workspaceBootstrapInFlightRequests.delete(cacheKey);
@@ -131,6 +157,7 @@ async function fetchWorkspaceBootstrapWithRetry({
         workspaceBootstrapCache.set(cacheKey, {
           expiresAt: Date.now() + WORKSPACE_BOOTSTRAP_CACHE_TTL_MS,
           payload: parsedPayload,
+          staleUntil: Date.now() + WORKSPACE_BOOTSTRAP_STALE_TTL_MS,
         });
         return parsedPayload;
       }

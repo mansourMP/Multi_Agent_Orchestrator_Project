@@ -34,6 +34,14 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
   settings: ['settings'],
 };
 
+const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
+  'chat',
+  'runs',
+  'memory',
+  'heartbeat',
+  'artifacts',
+]);
+
 type ThreadTurnRecord = Record<string, unknown> & {
   role?: string | null;
   content?: string | null;
@@ -351,6 +359,9 @@ export function WorkstationKernelShell({
   }, [activeDestinationId, activeRouteId]);
   const workspaceLabel = bootstrap.workspace.label;
   const contextRoutes = useMemo(() => {
+    if (activeDestinationId === 'sage' && (!activeRouteId || !SAGE_TITLEBAR_NAV_ROUTE_IDS.has(activeRouteId))) {
+      return [];
+    }
     const routeIds = CONTEXT_ROUTE_IDS_BY_DESTINATION[activeDestinationId];
     return routeIds.flatMap((routeId) => {
       const route = routeManifest.routeIndex[routeId];
@@ -362,7 +373,7 @@ export function WorkstationKernelShell({
       }
       return [route];
     });
-  }, [activeDestinationId, routeManifest.routeIndex]);
+  }, [activeDestinationId, activeRouteId, routeManifest.routeIndex]);
 
   useEffect(() => {
     if (!routeManifest.routeIndex.approvals) {

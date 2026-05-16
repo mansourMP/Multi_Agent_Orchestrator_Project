@@ -25,7 +25,6 @@ export function SkeletonBlock({
         width,
         height,
         borderRadius: radius,
-        background: 'var(--app-bg-panel-elevated)',
         ...style,
       }}
     />

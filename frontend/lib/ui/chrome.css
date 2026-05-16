@@ -605,6 +605,72 @@ textarea {
   }
 }
 
+.app-skeleton-block {
+  overflow: hidden;
+  background:
+    linear-gradient(
+      105deg,
+      color-mix(in srgb, var(--app-bg-panel-elevated) 88%, var(--app-bg-page) 12%) 0%,
+      color-mix(in srgb, var(--app-bg-panel-elevated) 88%, var(--app-bg-page) 12%) 32%,
+      color-mix(in srgb, var(--app-surface-2) 72%, var(--app-bg-panel-elevated) 28%) 48%,
+      color-mix(in srgb, var(--app-bg-panel-elevated) 88%, var(--app-bg-page) 12%) 64%,
+      color-mix(in srgb, var(--app-bg-panel-elevated) 88%, var(--app-bg-page) 12%) 100%
+    );
+  background-size: 220% 100%;
+  animation: app-skeleton-sheen 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes app-skeleton-sheen {
+  0% {
+    background-position: 120% 0;
+  }
+
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-skeleton-block,
+  .studio-agent-detail-loading__status,
+  .studio-agent-overview__hero,
+  .studio-agent-overview__readiness,
+  .studio-agent-overview__setup,
+  .studio-agent-overview__check-card,
+  .studio-agent-overview__setup-card,
+  .studio-agent-metric,
+  .studio-agent-overview__chart,
+  .studio-agent-overview__facts,
+  .studio-agent-knowledge__block,
+  .studio-agent-knowledge__grid,
+  .studio-agent-knowledge__sources,
+  .studio-ai-settings__section,
+  .studio-ai-settings__model-card,
+  .studio-agent-integrations__provider-card,
+  .deployed-agent-chat__message,
+  .studio-ai-settings--loading .studio-ai-settings__refresh svg,
+  .studio-agent-overview__sparkline polyline {
+    animation: none;
+  }
+
+  .studio-agent-detail-tabs__button:hover,
+  .studio-agent-overview__check-card:hover,
+  .studio-agent-overview__setup-card:hover,
+  .studio-ai-settings__tier:hover,
+  .studio-ai-settings__provider-pill:hover,
+  .studio-ai-settings__model-card:hover,
+  .studio-agent-integrations__provider-card:hover,
+  .deployed-agent-chat__composer:focus-within,
+  .deployed-agent-chat__send:not(:disabled):hover {
+    transform: none;
+  }
+
+  .studio-agent-overview__sparkline polyline {
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+}
+
 .app-surface-list {
   display: grid;
   gap: var(--app-space-3);
@@ -6465,7 +6531,9 @@ body.theme-light .workstation-shell__topbar {
   transition:
     background-color var(--transition),
     border-color var(--transition),
-    color var(--transition);
+    color var(--transition),
+    transform var(--transition),
+    box-shadow var(--transition);
 }
 
 .studio-agent-detail-tabs__button:hover,
@@ -6474,6 +6542,21 @@ body.theme-light .workstation-shell__topbar {
   border-color: color-mix(in srgb, var(--app-border-muted) 74%, transparent);
   background: color-mix(in srgb, var(--app-surface-2) 70%, var(--app-bg-panel) 30%);
   color: var(--app-text-primary);
+}
+
+.studio-agent-detail-tabs__button:hover {
+  transform: translateY(-1px);
+}
+
+.studio-agent-detail-tabs__button--active,
+.studio-agent-detail-tabs__button[aria-selected='true'] {
+  box-shadow: 0 14px 34px -30px color-mix(in srgb, var(--app-text-primary) 42%, transparent);
+}
+
+.studio-agent-motion-panel {
+  min-width: 0;
+  display: grid;
+  gap: var(--app-space-4);
 }
 
 .studio-agent-overview,
@@ -6496,6 +6579,7 @@ body.theme-light .workstation-shell__topbar {
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 64%, transparent);
   border-radius: var(--app-radius-lg);
   background: color-mix(in srgb, var(--app-bg-panel) 88%, var(--app-bg-page) 12%);
+  animation: studio-surface-rise var(--app-motion-normal) cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .studio-agent-overview__hero {
@@ -6590,6 +6674,11 @@ body.theme-light .workstation-shell__topbar {
   color: inherit;
   cursor: pointer;
   text-align: left;
+  animation: studio-card-rise var(--app-motion-normal) cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition:
+    background-color var(--transition),
+    box-shadow var(--transition),
+    transform var(--transition);
 }
 
 .studio-agent-overview__check-card:nth-child(3n),
@@ -6614,6 +6703,8 @@ body.theme-light .workstation-shell__topbar {
 .studio-agent-overview__check-card:hover,
 .studio-agent-overview__setup-card:hover {
   background: color-mix(in srgb, var(--app-bg-panel-elevated) 62%, var(--app-accent-soft) 10%);
+  box-shadow: 0 18px 42px -36px color-mix(in srgb, var(--app-text-primary) 38%, transparent);
+  transform: translateY(-1px);
 }
 
 .studio-agent-overview__check-card:focus-visible,
@@ -6634,12 +6725,18 @@ body.theme-light .workstation-shell__topbar {
   color: var(--app-warning);
   font-size: var(--app-font-12);
   font-weight: var(--app-weight-semibold);
+  transition:
+    border-color var(--transition),
+    background-color var(--transition),
+    color var(--transition),
+    transform var(--transition);
 }
 
 .studio-agent-overview__check-card--ready .studio-agent-overview__check-mark {
   border-color: color-mix(in srgb, var(--app-success) 34%, var(--app-border-muted) 66%);
   background: color-mix(in srgb, var(--app-success-muted) 42%, transparent);
   color: var(--app-success);
+  transform: scale(1.03);
 }
 
 .studio-agent-overview__check-copy,
@@ -6677,6 +6774,31 @@ body.theme-light .workstation-shell__topbar {
   text-transform: uppercase;
 }
 
+.studio-agent-overview__check-card:nth-child(2),
+.studio-agent-overview__setup-card:nth-child(2) {
+  animation-delay: 24ms;
+}
+
+.studio-agent-overview__check-card:nth-child(3),
+.studio-agent-overview__setup-card:nth-child(3) {
+  animation-delay: 48ms;
+}
+
+.studio-agent-overview__check-card:nth-child(4),
+.studio-agent-overview__setup-card:nth-child(4) {
+  animation-delay: 72ms;
+}
+
+.studio-agent-overview__check-card:nth-child(5),
+.studio-agent-overview__setup-card:nth-child(5) {
+  animation-delay: 96ms;
+}
+
+.studio-agent-overview__check-card:nth-child(6),
+.studio-agent-overview__setup-card:nth-child(6) {
+  animation-delay: 120ms;
+}
+
 .studio-agent-metric,
 .studio-agent-overview__chart,
 .studio-agent-overview__facts,
@@ -6686,6 +6808,7 @@ body.theme-light .workstation-shell__topbar {
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 64%, transparent);
   border-radius: var(--app-radius-lg);
   background: color-mix(in srgb, var(--app-bg-panel) 88%, var(--app-bg-page) 12%);
+  animation: studio-surface-rise var(--app-motion-normal) cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .studio-agent-metric {
@@ -6755,6 +6878,9 @@ body.theme-light .workstation-shell__topbar {
   stroke: var(--app-text-primary);
   stroke-width: 2.5;
   vector-effect: non-scaling-stroke;
+  stroke-dasharray: 160;
+  stroke-dashoffset: 160;
+  animation: studio-sparkline-draw var(--app-motion-slow) cubic-bezier(0.16, 1, 0.3, 1) 90ms both;
 }
 
 .studio-agent-overview__facts,
@@ -6992,6 +7118,7 @@ body.theme-light .workstation-shell__topbar {
   border-radius: var(--app-radius-xl);
   background: color-mix(in srgb, var(--app-bg-panel) 82%, var(--app-bg-page) 18%);
   box-shadow: 0 18px 52px -48px color-mix(in srgb, black 58%, transparent);
+  animation: studio-surface-rise var(--app-motion-normal) cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .studio-ai-settings__tier-grid,
@@ -7017,12 +7144,21 @@ body.theme-light .workstation-shell__topbar {
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition:
+    border-color var(--transition),
+    background-color var(--transition),
+    box-shadow var(--transition),
+    transform var(--transition);
 }
 
 .studio-ai-settings__tier:hover,
 .studio-ai-settings__tier--selected {
   border-color: color-mix(in srgb, var(--app-border-strong) 62%, var(--app-border-muted) 38%);
   background: color-mix(in srgb, var(--app-surface-2) 74%, var(--app-bg-panel) 26%);
+}
+
+.studio-ai-settings__tier:hover {
+  transform: translateY(-1px);
 }
 
 .studio-ai-settings__tier strong {
@@ -7061,12 +7197,20 @@ body.theme-light .workstation-shell__topbar {
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition:
+    border-color var(--transition),
+    background-color var(--transition),
+    transform var(--transition);
 }
 
 .studio-ai-settings__provider-pill:hover,
 .studio-ai-settings__provider-pill--selected {
   border-color: color-mix(in srgb, var(--app-border-strong) 66%, var(--app-info) 34%);
   background: color-mix(in srgb, var(--app-surface-2) 78%, var(--app-bg-panel) 22%);
+}
+
+.studio-ai-settings__provider-pill:hover {
+  transform: translateY(-1px);
 }
 
 .studio-ai-settings__provider-pill strong {
@@ -7100,6 +7244,12 @@ body.theme-light .workstation-shell__topbar {
   font: inherit;
   text-align: left;
   cursor: pointer;
+  animation: studio-card-rise var(--app-motion-normal) cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition:
+    border-color var(--transition),
+    background-color var(--transition),
+    box-shadow var(--transition),
+    transform var(--transition);
 }
 
 .studio-ai-settings__model-card:hover,
@@ -7107,6 +7257,14 @@ body.theme-light .workstation-shell__topbar {
   border-color: color-mix(in srgb, var(--app-border-strong) 64%, var(--app-info) 36%);
   background: color-mix(in srgb, var(--app-surface-2) 74%, var(--app-bg-panel) 26%);
   box-shadow: 0 18px 42px -36px color-mix(in srgb, var(--app-info) 46%, black 54%);
+}
+
+.studio-ai-settings__model-card:hover {
+  transform: translateY(-1px);
+}
+
+.studio-ai-settings--loading .studio-ai-settings__refresh svg {
+  animation: spin 0.9s linear infinite;
 }
 
 .studio-ai-settings__model-card span {
@@ -7207,6 +7365,17 @@ body.theme-light .workstation-shell__topbar {
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 58%, transparent);
   border-radius: var(--app-radius-lg);
   background: color-mix(in srgb, var(--app-bg-page) 36%, transparent);
+  animation: studio-card-rise var(--app-motion-normal) cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition:
+    border-color var(--transition),
+    background-color var(--transition),
+    box-shadow var(--transition),
+    transform var(--transition);
+}
+
+.studio-agent-integrations__provider-card:hover {
+  box-shadow: 0 18px 42px -36px color-mix(in srgb, var(--app-text-primary) 38%, transparent);
+  transform: translateY(-1px);
 }
 
 .studio-agent-integrations__provider-card:has(.studio-agent-integrations__status--ready) {
@@ -7254,6 +7423,54 @@ body.theme-light .workstation-shell__topbar {
 
 .studio-agent-integrations__foot {
   padding: 0 var(--app-space-4) var(--app-space-4);
+}
+
+@keyframes studio-surface-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes studio-card-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes studio-sparkline-draw {
+  0% {
+    opacity: 0.42;
+    stroke-dashoffset: 160;
+  }
+
+  100% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes studio-chat-message-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .studio-actions {
@@ -14222,6 +14439,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
   width: min(100%, 46rem);
   display: grid;
   gap: var(--app-space-2);
+  animation: studio-chat-message-in var(--app-motion-normal) cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .deployed-agent-chat__message--user {
@@ -14314,6 +14532,18 @@ body.theme-light .sage-integrations-nav__bucket--active {
   border-radius: 24px;
   background: color-mix(in srgb, var(--app-bg-panel) 88%, var(--app-bg-page) 12%);
   box-shadow: var(--app-shadow-panel);
+  transition:
+    border-color var(--transition),
+    background-color var(--transition),
+    box-shadow var(--transition),
+    transform var(--transition);
+}
+
+.deployed-agent-chat__composer:focus-within {
+  border-color: color-mix(in srgb, var(--app-border-strong) 62%, var(--app-accent) 38%);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 90%, var(--app-bg-page) 10%);
+  box-shadow: 0 22px 58px -46px color-mix(in srgb, var(--app-text-primary) 48%, transparent);
+  transform: translateY(-1px);
 }
 
 .deployed-agent-chat__input,
@@ -14436,6 +14666,15 @@ body[data-emp-theme='dark'] .deployed-agent-chat__input:focus-visible {
   background: var(--app-button-bg, color-mix(in srgb, var(--app-surface-2) 84%, var(--app-bg-panel) 16%));
   color: var(--app-text-primary);
   cursor: pointer;
+  transition:
+    background-color var(--transition),
+    color var(--transition),
+    opacity var(--transition),
+    transform var(--transition);
+}
+
+.deployed-agent-chat__send:not(:disabled):hover {
+  transform: translateY(-1px);
 }
 
 .deployed-agent-chat__send svg {

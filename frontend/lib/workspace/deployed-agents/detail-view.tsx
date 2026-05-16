@@ -3,6 +3,7 @@
 import { useMemo } from 'react';
 
 import { ListDetailPanel } from '@/lib/ui/list-detail';
+import { AnimatePresence, MotionTabPanel } from '@/lib/ui/motion';
 import { AppButton, AppSurfaceStat, AppSurfaceStatGrid, joinClassNames } from '@/lib/ui/primitives';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
@@ -336,7 +337,12 @@ export function AgentDetailView({
   }
 
   return (
-    <div className="app-stack-4">
+    <div className="app-stack-4 studio-agent-detail-motion">
+      <AnimatePresence mode="wait" initial={false}>
+        <MotionTabPanel
+          key={`${currentStudioSubview}:${overlayTab}:${selectedAgentId}`}
+          className="studio-agent-motion-panel"
+        >
       {currentStudioSubview === 'agents' && overlayTab === 'chat' && (
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -742,7 +748,7 @@ export function AgentDetailView({
                   <AppSurfaceStat
                     label="Customers"
                     value={selectedAgentMetrics?.conversationCountLabel ?? '0'}
-                    hint="Total conversations"
+                    hint="Open and total conversations"
                   />
                   <AppSurfaceStat
                     label="Escalation rate"
@@ -769,7 +775,7 @@ export function AgentDetailView({
                       <span>Agent profile</span>
                       <strong>What is configured</strong>
                     </div>
-                    <small>{formatUsd(selectedBudgetCycle.current_burn_usd)} spent this cycle</small>
+                    <small>Budget: {formatUsd(selectedBudgetCycle.current_burn_usd)} spent this cycle</small>
                   </div>
                   <div className="studio-agent-overview__setup-grid">
                     {setupCards.map((card) => (
@@ -791,6 +797,8 @@ export function AgentDetailView({
           )}
         </ListDetailPanel>
       )}
+        </MotionTabPanel>
+      </AnimatePresence>
     </div>
   );
 }

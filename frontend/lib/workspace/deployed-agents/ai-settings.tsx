@@ -88,7 +88,10 @@ export function AgentAiSettingsSections({
     onSelectModel(modelId);
   }
   return (
-    <div className="studio-ai-settings">
+    <div
+      className={joinClassNames('studio-ai-settings', isLoadingProviderCatalog && 'studio-ai-settings--loading')}
+      aria-busy={isLoadingProviderCatalog}
+    >
       <div className="studio-ai-settings__summary" aria-label="Model setup summary">
         <div>
           <span>Model setup</span>
@@ -135,7 +138,11 @@ export function AgentAiSettingsSections({
           <div className="studio-actions__section-head-actions">
             <small>{providerCatalog.length} provider{providerCatalog.length === 1 ? '' : 's'} · {filteredModelOptions.length} visible model{filteredModelOptions.length === 1 ? '' : 's'}</small>
             {activeProvider && onRefreshProviderModels ? (
-              <button type="button" className="studio-actions__link-button" onClick={() => onRefreshProviderModels(activeProvider.id)}>
+              <button
+                type="button"
+                className="studio-actions__link-button studio-ai-settings__refresh"
+                onClick={() => onRefreshProviderModels(activeProvider.id)}
+              >
                 <RefreshCw aria-hidden="true" />
                 Refresh models
               </button>

@@ -226,7 +226,7 @@ export function AgentWizard({
       setIsTelegramSetupOpen(false);
       void loadTelegramReadiness(mode === 'edit' ? editAgentId : null);
     }
-  }, [open, mode, initialState, selectedAgent, editAgentId, templateId, providerCatalog]);
+  }, [open, mode, initialState, selectedAgent, editAgentId, templateId]);
 
   useEffect(() => {
     if (!open || !isTelegramSetupOpen) {

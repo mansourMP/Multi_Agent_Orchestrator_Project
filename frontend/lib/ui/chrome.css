@@ -12098,6 +12098,22 @@ body[data-emp-theme='dark'] .app-memory-document-textarea:focus {
   background: color-mix(in srgb, #242424 88%, var(--app-bg-panel) 12%);
 }
 
+:root[data-emp-theme='light'] .sage-integrations-nav__bucket:hover,
+body[data-emp-theme='light'] .sage-integrations-nav__bucket:hover,
+body.theme-light .sage-integrations-nav__bucket:hover {
+  background: color-mix(in srgb, var(--app-surface-hover) 76%, var(--app-bg-panel) 24%);
+}
+
+:root[data-emp-theme='light'] .sage-integrations-nav__bucket--active,
+body[data-emp-theme='light'] .sage-integrations-nav__bucket--active,
+body.theme-light .sage-integrations-nav__bucket--active {
+  background: #ffffff;
+  box-shadow:
+    inset 3px 0 0 #202020,
+    inset 0 -1px 0 rgba(30, 32, 36, 0.06),
+    0 10px 24px -24px rgba(30, 32, 36, 0.22);
+}
+
 .sage-integrations-nav__bucket-copy {
   min-width: 0;
   display: grid;

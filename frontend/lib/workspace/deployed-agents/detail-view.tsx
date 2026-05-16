@@ -443,25 +443,34 @@ export const AgentDetailView = memo(({
             <section className="studio-agent-knowledge__section">
               <div className="studio-agent-knowledge__section-head">
                 <div>
-                  <span>Retrieval / Test</span>
-                  <strong>Search Test</strong>
+                  <span>Search Test</span>
+                  <strong>Verify retrieval</strong>
                 </div>
               </div>
               <div className="studio-agent-knowledge__test-box">
-                <p>Ask a question to see which sources the agent would use to answer.</p>
+                <p>
+                  {knowledgeSourceCount > 0
+                    ? "Verify that the assistant correctly cites your trusted sources. This opens the private test chat."
+                    : "Add at least one trusted source to enable retrieval testing."}
+                </p>
                 <div className="studio-agent-knowledge__test-input">
                   <input
                     type="text"
                     readOnly
                     value=""
-                    placeholder="Example: What is the refund policy?"
+                    disabled={knowledgeSourceCount === 0}
+                    placeholder={knowledgeSourceCount > 0 ? "Example: What is the refund policy?" : "Add sources first..."}
                     aria-label="Knowledge retrieval test prompt"
                   />
-                  <AppButton type="button" tone="secondary" onClick={() => onSelectTab('chat')}>
+                  <AppButton
+                    type="button"
+                    tone="secondary"
+                    disabled={knowledgeSourceCount === 0}
+                    onClick={() => onSelectTab('chat')}
+                  >
                     Test in chat
                   </AppButton>
                 </div>
-                <small>{knowledgeSourceCount > 0 ? `${knowledgeSourceCount} source${knowledgeSourceCount === 1 ? '' : 's'} available for retrieval testing.` : 'Add a source to enable retrieval testing.'}</small>
               </div>
             </section>
 

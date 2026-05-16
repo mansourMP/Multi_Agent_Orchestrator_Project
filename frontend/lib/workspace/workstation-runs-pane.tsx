@@ -753,22 +753,23 @@ export function WorkstationRunsPane() {
                     onChange={(e) => { setTraceIdFilter(e.target.value.trim()); setVisibleCount(HISTORY_PAGE_SIZE); }}
                     style={{
                       padding: '4px 10px', fontSize: 12, borderRadius: 6,
-                      border: '1px solid var(--color-border, #e5e7eb)',
-                      background: 'var(--color-bg, #fff)', color: 'var(--color-fg, #111)',
+                      border: '1px solid var(--app-border-default)',
+                      background: 'var(--app-bg-panel)',
+                      color: 'var(--app-text-primary)',
                       width: 260,
                     }}
                   />
                   {traceIdFilter && (
                     <button type="button" onClick={() => setTraceIdFilter('')}
                       style={{ padding: '2px 8px', fontSize: 11, borderRadius: 4,
-                        border: '1px solid var(--color-border, #e5e7eb)',
+                        border: '1px solid var(--app-border-default)',
                         background: 'transparent', cursor: 'pointer',
-                        color: 'var(--color-muted, #6b7280)', }}>
+                        color: 'var(--app-text-tertiary)', }}>
                       Clear
                     </button>
                   )}
                   {traceIdFilter && filteredActivityItems.length === 0 && (
-                    <span style={{ fontSize: 12, color: 'var(--color-muted, #6b7280)' }}>
+                    <span style={{ fontSize: 12, color: 'var(--app-text-tertiary)' }}>
                       No events found for this trace ID
                     </span>
                   )}

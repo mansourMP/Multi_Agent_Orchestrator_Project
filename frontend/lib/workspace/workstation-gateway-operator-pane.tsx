@@ -1542,8 +1542,8 @@ export function WorkstationGatewayOperatorPane({
 
         {manualSetupVisible && pairingIntent ? (
           <FormSection
-            title="Advanced terminal setup"
-            description="Fallback setup for advanced users. Copy one command, paste it into Terminal, and press Return."
+            title="Manual terminal setup"
+            description="Use this if guided setup does not work. Copy one command, paste it into Terminal, and press Return."
             className="gateway-pairing-command-section"
           >
             <FormGrid>
@@ -1626,7 +1626,7 @@ export function WorkstationGatewayOperatorPane({
       <CommandSheet
         open={manageOpen}
         title="Manage selected computer"
-        description="Reconnect, revoke trust, or open advanced setup only when needed."
+        description="Reconnect, revoke trust, or open manual setup only when needed."
         onClose={() => setManageOpen(false)}
       >
         <div className="app-stack-3">
@@ -1700,7 +1700,7 @@ export function WorkstationGatewayOperatorPane({
                   });
               }}
             >
-              Advanced diagnostics
+              Diagnostics
             </WorkstationActionButton>
           </div>
         </div>
@@ -1709,7 +1709,7 @@ export function WorkstationGatewayOperatorPane({
       {selectedGateway && showStatusSection && advancedDiagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Connection details"
-          description="Trust, health, reconnect posture, and advanced diagnostics for the selected computer."
+          description="Trust, health, reconnect posture, and diagnostics for the selected computer."
         >
           {loadingGatewayDetail ? (
             <WorkstationSurfaceNotice tone="neutral">Refreshing local device diagnostics…</WorkstationSurfaceNotice>

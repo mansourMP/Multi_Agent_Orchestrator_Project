@@ -119,7 +119,8 @@ export function DeployedAgentTestTurnPane({
       <div ref={threadRef} className="deployed-agent-chat__thread" aria-live="polite">
         {turns.length === 0 ? (
           <div className="deployed-agent-chat__empty">
-            <span>No private test messages yet.</span>
+            <strong>Private test chat</strong>
+            <span>Test this assistant privately before going live. Your messages here will not be seen by customers.</span>
           </div>
         ) : null}
 

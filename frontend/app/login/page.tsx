@@ -179,35 +179,11 @@ function LoginPageContent() {
 
   return (
     <main className="app-auth-page">
-      <div className="app-auth-shell">
-        <section className="app-auth-hero" aria-label="Empyralis sign in overview">
-          <div className="app-auth-hero__badge">Empyralis</div>
-          <div className="app-auth-hero__copy">
-            <h1 className="app-auth-hero__title">One account. One clean control surface.</h1>
-            <p className="app-auth-hero__body">
-              Open Sage, your AI model path, connected apps, and private assistants from one serious surface without setup noise.
-            </p>
-          </div>
-          <div className="app-auth-hero__rail">
-            <div className="app-auth-hero__point">
-              <strong>Chat immediately</strong>
-              <span>Production login flows land directly in Sage.</span>
-            </div>
-            <div className="app-auth-hero__point">
-              <strong>Private by default</strong>
-              <span>Your assistants, settings, and connected apps stay under one account.</span>
-            </div>
-            <div className="app-auth-hero__point">
-              <strong>Connected when ready</strong>
-              <span>Bring in Google, messaging, and your computer only when you actually need them.</span>
-            </div>
-          </div>
-        </section>
-        <form method="post" onSubmit={handleSubmit} className="app-auth-card app-auth-card--elevated app-auth-form">
+      <div className="app-auth-shell app-auth-shell--centered">
+        <form method="post" onSubmit={handleSubmit} className="app-auth-card app-auth-form">
           <div className="app-auth-header">
-            <span className="app-auth-kicker">Welcome back</span>
-            <h2 className="app-auth-title">Log in</h2>
-            <p className="app-auth-subtitle">Use the fastest live sign-in path now, then manage everything from inside Empyralis.</p>
+            <h1 className="app-auth-title">Log in to Empyralis</h1>
+            <p className="app-auth-subtitle">Your personal control surface for autonomous work.</p>
           </div>
           <div className="app-auth-provider-stack">
             <div className="app-auth-social-stack">
@@ -221,31 +197,14 @@ function LoginPageContent() {
                 <GoogleProviderIcon className="app-auth-provider-mark" />
                 <span className="app-auth-social__content">
                   <span className="app-auth-social__title">Continue with Google</span>
-                  <span className="app-auth-social__meta">Live now · fastest launch path</span>
-                </span>
-              </AppButton>
-              <AppButton
-                type="button"
-                tone="secondary"
-                className="app-auth-social"
-                disabled
-                aria-disabled="true"
-                title="Apple sign-in is not enabled on the web app yet."
-              >
-                <AppleProviderIcon className="app-auth-provider-mark app-auth-provider-mark--apple" />
-                <span className="app-auth-social__content">
-                  <span className="app-auth-social__title">Apple</span>
-                  <span className="app-auth-social__meta">Coming soon on web</span>
                 </span>
               </AppButton>
             </div>
             {providers.google?.enabled !== true ? (
-              <p className="app-auth-provider-note">Google sign-in is unavailable in this environment right now. Use email below and finish setup from inside Sage.</p>
+              <p className="app-auth-provider-note">Google sign-in is unavailable right now. Use email below.</p>
             ) : null}
             <div className="app-auth-divider">
-              <span aria-hidden="true" />
-              <span>or continue with email</span>
-              <span aria-hidden="true" />
+              <span>or email</span>
             </div>
           </div>
           <label className="app-auth-field">
@@ -281,12 +240,12 @@ function LoginPageContent() {
             </span>
           </label>
           {error ? <AuthErrorNotice title="Couldn’t sign in" message={error} /> : null}
-          <AppButton type="submit" disabled={submitting} className="app-auth-submit">
+          <AppButton type="submit" tone="primary" disabled={submitting} className="app-auth-submit">
             <span>{submitting ? 'Signing in…' : 'Continue'}</span>
             <ArrowRight size={16} aria-hidden="true" />
           </AppButton>
           <p className="app-auth-footer">
-            Need an account? <Link href={signupHref}>Sign up</Link>
+            No account? <Link href={signupHref}>Sign up</Link>
           </p>
         </form>
       </div>

@@ -18,37 +18,37 @@ export const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   {
     id: 'overview',
     label: 'Basics',
-    description: 'Name the assistant and describe the customer job in plain language.',
+    description: 'Name the assistant and describe its job.',
   },
   {
     id: 'knowledge',
     label: 'Knowledge',
-    description: 'Add the menu, catalog, FAQ, sheet, or document this assistant should trust.',
+    description: 'Add the trusted information this assistant should use.',
   },
   {
     id: 'tools',
     label: 'Actions',
-    description: 'Choose only the simple actions this assistant needs for the job.',
+    description: 'Choose what the assistant is allowed to do.',
   },
   {
     id: 'channels',
-    label: 'Customer Channels',
-    description: 'Connect the customer inbox or bot when the assistant is ready for live traffic.',
+    label: 'Channels',
+    description: 'Connect where the assistant will talk to customers.',
   },
   {
     id: 'memory',
-    label: 'Agent Memory',
-    description: 'Decide whether this assistant remembers customers across conversations.',
+    label: 'Memory',
+    description: 'Control how the assistant remembers customers.',
   },
   {
     id: 'safety',
     label: 'Safety',
-    description: 'Set when this assistant should involve a human.',
+    description: 'Set boundaries for autonomous handling.',
   },
   {
     id: 'test',
     label: 'Review',
-    description: 'Review the simple launch checklist before creating the assistant.',
+    description: 'Final check before creating the draft.',
   },
 ];
 

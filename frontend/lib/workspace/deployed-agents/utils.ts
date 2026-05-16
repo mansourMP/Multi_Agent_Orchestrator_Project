@@ -275,7 +275,13 @@ export function formatContextWindow(value: unknown): string {
   if (amount === null || amount <= 0) {
     return 'n/a';
   }
-  return `${new Intl.NumberFormat().format(amount)} tokens`;
+  if (amount >= 1000000) {
+    return 'Maximum';
+  }
+  if (amount >= 128000) {
+    return 'Expanded';
+  }
+  return 'Standard';
 }
 
 export function deploymentStateLabel(value: unknown): string {

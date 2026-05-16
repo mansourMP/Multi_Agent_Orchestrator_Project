@@ -1,16 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { RefreshCw, Plus } from 'lucide-react';
 
 import {
   FormField,
-  FormGrid,
-  FormInput,
-  FormReadout,
+  FormSelect,
 } from '@/lib/ui/form-controls';
-import { joinClassNames } from '@/lib/ui/primitives';
-import { StateBanner } from '@/lib/ui/state-banner';
+import { AppButton, joinClassNames } from '@/lib/ui/primitives';
+import { DataBadge } from '@/lib/ui/data-table';
 import type {
   DetailConfigDraft,
   ProviderCatalogSnapshot,
@@ -21,10 +18,7 @@ import {
 } from './constants';
 import {
   humanizeToken,
-  formatUsdPer1k,
-  formatContextWindow,
   pickStudioModelForTier,
-  modelPreferenceScore,
   providerReadyForStudio,
 } from './utils';
 
@@ -47,66 +41,27 @@ export function AgentAiSettingsSections({
   onRefreshProviderModels?: (providerId: string) => void;
   onOpenIntegrations?: () => void;
 }) {
-  const [modelQuery, setModelQuery] = useState('');
   const [showModelBrowser, setShowModelBrowser] = useState(false);
+  const usesEmpyralisCredits = !value.providerId || value.providerId === 'empyralis';
   const selectedProvider = providerCatalog.find((provider) => provider.id === value.providerId) ?? null;
   const selectedModel = selectedProvider?.models.find((model) => model.id === value.modelId) ?? null;
   const selectedTier = STUDIO_AI_TIER_OPTIONS.find((option) => option.value === value.aiTier) ?? STUDIO_AI_TIER_OPTIONS[1];
-  const providerReady = providerReadyForStudio(selectedProvider);
-  const activeProvider = selectedProvider ?? providerCatalog[0] ?? null;
-  const query = modelQuery.trim().toLowerCase();
-  const modelOptions = providerCatalog.flatMap((provider) => provider.models.map((model) => ({ provider, model })));
-  const filteredModelOptions = modelOptions
-    .filter(({ provider, model }) => {
-      if (!query) {
-        return true;
-      }
-      return `${provider.label} ${provider.id} ${model.label} ${model.id} ${model.capabilityLabels.join(' ')}`.toLowerCase().includes(query);
-    })
-    .sort((left, right) => {
-      const leftSelected = left.provider.id === value.providerId && left.model.id === value.modelId ? -1 : 0;
-      const rightSelected = right.provider.id === value.providerId && right.model.id === value.modelId ? -1 : 0;
-      if (leftSelected !== rightSelected) {
-        return leftSelected - rightSelected;
-      }
-      const tierDelta = modelPreferenceScore(left.model, value.aiTier) - modelPreferenceScore(right.model, value.aiTier);
-      if (tierDelta !== 0) {
-        return tierDelta;
-      }
-      return `${left.provider.label} ${left.model.label}`.localeCompare(`${right.provider.label} ${right.model.label}`);
-    });
-  const visibleModelOptions = filteredModelOptions.slice(0, 18);
-  const liveModelCount = providerCatalog.reduce((total, provider) => total + provider.models.length, 0);
-  const liveProviderCount = providerCatalog.filter((provider) => provider.modelsSource === 'workspace_cached_models').length;
-  const catalogModeLabel = liveProviderCount > 0 ? 'Live model list' : 'Sample model list';
-  const sourceLabel = selectedProvider?.modelsSource === 'workspace_cached_models'
-    ? 'Live model list'
-    : selectedProvider?.modelsSource === 'static_catalog'
-      ? 'Sample model list'
-      : humanizeToken(selectedProvider?.modelsSource, selectedProvider?.modelsSource || 'Model list');
-  const selectedRouteLabel = providerReady
-    ? `Using ${selectedProvider?.label ?? 'connected provider'}`
-    : selectedProvider
-      ? `Connect ${selectedProvider.label} before launch`
-      : 'Connect AI before launch';
-  const selectedRouteDetail = providerReady
-    ? 'Provider setup lives in Integrations. This agent will use the selected model route at runtime.'
-    : selectedProvider
-      ? 'This is a setup preview. Connect the provider account in Integrations to use it for customers.'
-      : 'Use Empyralis credits or connect an API provider before deploying this agent.';
-  const selectedModelTags = selectedModel ? [
-    selectedModel.supportsReasoning ? 'Reasoning' : null,
-    selectedModel.supportsTools ? 'Tools' : null,
-    selectedModel.supportsVision ? 'Vision' : null,
-    selectedModel.supportsJson ? 'JSON' : null,
-    ...selectedModel.capabilityLabels,
-  ].filter((item): item is string => Boolean(item)) : [];
-  const selectedModelMeta = selectedModel
-    ? `${formatContextWindow(selectedModel.contextWindowTokens)} · ${selectedModel.pricingKnown ? `${formatUsdPer1k(selectedModel.inputCostPer1kUsd)} in / ${formatUsdPer1k(selectedModel.outputCostPer1kUsd)} out` : 'Pricing unknown'}`
-    : 'A balanced model will be selected after AI is connected.';
-  function modelListSourceLabel(source: string | null) {
-    return source === 'workspace_cached_models' ? 'live' : 'sample';
-  }
+  const providerReady = usesEmpyralisCredits || providerReadyForStudio(selectedProvider);
+  const selectedRouteLabel = usesEmpyralisCredits
+    ? 'Empyralis Credits'
+    : providerReady
+      ? selectedProvider?.label ?? 'Connected provider'
+      : selectedProvider
+        ? `Connect ${selectedProvider.label}`
+        : 'Connect AI';
+  const selectedRouteDetail = usesEmpyralisCredits
+    ? 'Use the workspace credit balance. No API key is required for this agent.'
+    : providerReady
+      ? 'Provider setup lives in Integrations. This agent will use the selected API route at runtime.'
+      : selectedProvider
+        ? 'Connect the provider account in Integrations before using it for customers.'
+        : 'Connect an API provider before using your own model route.';
+
   function selectProviderModel(providerId: string, modelId: string) {
     onSelectProvider(providerId);
     onSelectModel(modelId);
@@ -116,199 +71,149 @@ export function AgentAiSettingsSections({
       className={joinClassNames('studio-ai-settings', isLoadingProviderCatalog && 'studio-ai-settings--loading')}
       aria-busy={isLoadingProviderCatalog}
     >
-      <div className="studio-ai-settings__summary" aria-label="Model setup summary">
-        <div>
-          <span>AI route</span>
-          <strong>{selectedProvider?.label ?? 'Empyralis credits or API key'}</strong>
-          <p>Choose how this customer-facing agent gets its AI. Provider keys stay in Integrations; this tab chooses the route and answer quality.</p>
-        </div>
-        <div className="studio-ai-settings__badges" aria-label="Model setup constraints">
-          <span>{liveProviderCount > 0 ? `${liveModelCount} models available` : `${liveModelCount} sample models`}</span>
-          <span>{catalogModeLabel}</span>
-        </div>
-      </div>
-
-      <section className="studio-ai-settings__section" aria-label="AI quality tier">
-        <div className="studio-actions__section-head">
-          <div>
-            <span>Quality tier</span>
-            <strong>Choose the default answer quality</strong>
-          </div>
-          <small>{selectedTier.label}</small>
-        </div>
-        <div className="studio-ai-settings__tier-grid" role="radiogroup" aria-label="AI quality tier">
-          {STUDIO_AI_TIER_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={joinClassNames('studio-ai-settings__tier', value.aiTier === option.value && 'studio-ai-settings__tier--selected')}
-              aria-checked={value.aiTier === option.value}
-              role="radio"
-              onClick={() => onSelectTier(option.value)}
-            >
-              <strong>{option.label}</strong>
-              <span>{option.hint}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="studio-ai-settings__section" aria-label="Default model">
-        <div className="studio-actions__section-head">
-          <div>
-            <span>AI provider</span>
-            <strong>Default route for this agent</strong>
-          </div>
-          <div className="studio-actions__section-head-actions">
-            <small>{sourceLabel}</small>
-            {activeProvider && onRefreshProviderModels ? (
-              <button
-                type="button"
-                className="studio-actions__link-button studio-ai-settings__refresh"
-                onClick={() => onRefreshProviderModels(activeProvider.id)}
-              >
-                <RefreshCw aria-hidden="true" />
-                Refresh models
-              </button>
-            ) : null}
-            {onOpenIntegrations ? (
-              <button type="button" className="studio-actions__link-button" onClick={onOpenIntegrations}>
-                <Plus aria-hidden="true" />
-                Connect provider
-              </button>
-            ) : null}
-          </div>
-        </div>
-        <div className="studio-ai-settings__form">
-          {providerCatalog.length === 0 ? (
-            <StateBanner
-              tone="warning"
-              title={isLoadingProviderCatalog ? 'Loading model providers' : 'No model providers connected'}
-              detail={isLoadingProviderCatalog ? 'Checking workspace provider catalog.' : 'Connect a provider account before changing the model route.'}
-            />
-          ) : null}
-          <div className="studio-ai-settings__route-card" aria-label="Selected AI route">
-            <div className="studio-ai-settings__route-main">
-              <span>{providerReady ? 'Ready' : 'Setup needed'}</span>
+      {!showModelBrowser ? (
+        <section className="studio-ai-settings__route-card">
+          <div className="studio-ai-settings__summary">
+            <div>
+              <span>AI Route</span>
               <strong>{selectedRouteLabel}</strong>
               <p>{selectedRouteDetail}</p>
             </div>
-            <div className="studio-ai-settings__route-model">
-              <span>Model</span>
-              <strong>{selectedModel?.label ?? selectedTier.label}</strong>
-              <small>{selectedModelMeta}</small>
-              {selectedModelTags.length > 0 ? (
-                <em>{Array.from(new Set(selectedModelTags)).slice(0, 4).join(' · ')}</em>
-              ) : null}
+            <div>
+              <span>Quality tier</span>
+              <strong className="text-live">{selectedTier.label}</strong>
             </div>
-            <div className="studio-ai-settings__route-actions">
-              <button
-                type="button"
-                className="studio-actions__link-button"
-                onClick={() => setShowModelBrowser((current) => !current)}
-              >
-                {showModelBrowser ? 'Hide models' : 'Change model'}
-              </button>
-              {onOpenIntegrations ? (
-                <button type="button" className="studio-actions__link-button" onClick={onOpenIntegrations}>
-                  Connect AI
-                </button>
-              ) : null}
-            </div>
+            <AppButton type="button" tone="secondary" onClick={() => setShowModelBrowser(true)}>
+              Change route
+            </AppButton>
           </div>
-          {showModelBrowser ? (
-            <div className="studio-ai-settings__browser" aria-label="Model browser">
-              <div className="studio-ai-settings__provider-strip" aria-label="Connected providers">
-                {providerCatalog.map((provider) => (
+          <div className="studio-ai-settings__badges">
+            <DataBadge tone={providerReady ? 'success' : 'warning'}>{providerReady ? 'Ready' : 'Setup needed'}</DataBadge>
+            <DataBadge tone="neutral">{usesEmpyralisCredits ? selectedTier.label : selectedModel?.label ?? 'Model pending'}</DataBadge>
+          </div>
+        </section>
+      ) : (
+        <section className="studio-ai-settings__browser">
+          <div className="studio-actions__section-head">
+            <div>
+              <span>Choose AI Route</span>
+              <strong>How this assistant thinks</strong>
+            </div>
+            <AppButton type="button" tone="secondary" onClick={() => setShowModelBrowser(false)}>
+              Cancel
+            </AppButton>
+          </div>
+
+          <div className="studio-ai-settings__choices">
+            <button
+              type="button"
+              className={joinClassNames('studio-ai-settings__choice', usesEmpyralisCredits && 'studio-ai-settings__choice--active')}
+              aria-pressed={usesEmpyralisCredits}
+              onClick={() => selectProviderModel('', '')}
+            >
+              <div className="studio-ai-settings__choice-head">
+                <strong>Empyralis Credits</strong>
+                <DataBadge tone="success">Recommended</DataBadge>
+              </div>
+              <p>Fast and platform-managed. No API keys required. Uses your workspace credit balance.</p>
+            </button>
+
+            <button
+              type="button"
+              className={joinClassNames('studio-ai-settings__choice', value.providerId && value.providerId !== 'empyralis' && 'studio-ai-settings__choice--active')}
+              aria-pressed={Boolean(value.providerId && value.providerId !== 'empyralis')}
+              onClick={() => {
+                if (providerCatalog.length > 0) {
+                  const firstReady = providerCatalog.find((provider) => providerReadyForStudio(provider)) ?? providerCatalog[0];
+                  if (firstReady) {
+                    selectProviderModel(firstReady.id, firstReady.defaultModel || firstReady.models[0]?.id || '');
+                  }
+                } else {
+                  onOpenIntegrations?.();
+                }
+              }}
+            >
+              <div className="studio-ai-settings__choice-head">
+                <strong>Connect Your Own Provider</strong>
+              </div>
+              <p>Bring your own API keys for OpenAI, Anthropic, Gemini, or DeepSeek. Configure in Integrations.</p>
+            </button>
+          </div>
+
+          {usesEmpyralisCredits && (
+            <div className="studio-ai-settings__section">
+              <div className="studio-actions__section-head">
+                <span>Quality tier</span>
+                <strong>Choose answer quality</strong>
+              </div>
+              <div className="studio-ai-settings__tier-grid">
+                {STUDIO_AI_TIER_OPTIONS.map((option) => (
                   <button
-                    key={provider.id}
+                    key={option.value}
                     type="button"
-                    className={joinClassNames('studio-ai-settings__provider-pill', provider.id === value.providerId && 'studio-ai-settings__provider-pill--selected')}
-                    onClick={() => {
-                      const nextModel = pickStudioModelForTier(provider, value.aiTier);
-                      selectProviderModel(provider.id, nextModel);
-                    }}
+                    className={joinClassNames('studio-ai-settings__tier', value.aiTier === option.value && 'studio-ai-settings__tier--selected')}
+                    onClick={() => onSelectTier(option.value)}
                   >
-                    <strong>{provider.label}</strong>
-                    <span>{provider.models.length} model{provider.models.length === 1 ? '' : 's'} · {modelListSourceLabel(provider.modelsSource)}</span>
+                    <strong>{option.label}</strong>
+                    <span>{option.hint}</span>
                   </button>
                 ))}
               </div>
-              <FormField label="Search models" hint="Connect a provider to see the live models available to your account.">
-                <FormInput
-                  value={modelQuery}
-                  onChange={(event) => setModelQuery(event.currentTarget.value)}
-                  placeholder="Search by provider, model, or capability"
-                  disabled={providerCatalog.length === 0}
-                />
+            </div>
+          )}
+
+          {value.providerId && value.providerId !== 'empyralis' && (
+            <div className="studio-ai-settings__byok app-stack-3">
+              <FormField label="AI Provider" hint="Select the provider you have configured in Integrations.">
+                <FormSelect
+                  value={value.providerId}
+                  onChange={(event) => {
+                    const nextProviderId = event.currentTarget.value;
+                    const provider = providerCatalog.find((item) => item.id === nextProviderId);
+                    const nextModelId = provider ? pickStudioModelForTier(provider, value.aiTier) : '';
+                    selectProviderModel(nextProviderId, nextModelId);
+                  }}
+                >
+                  <option value="">Select a provider</option>
+                  {providerCatalog.map((p) => (
+                    <option key={p.id} value={p.id}>{p.label} ({humanizeToken(p.state)})</option>
+                  ))}
+                </FormSelect>
               </FormField>
-              <div className="studio-ai-settings__model-grid" aria-label="Model choices">
-                {visibleModelOptions.length > 0 ? visibleModelOptions.map(({ provider, model }) => {
-                  const selected = provider.id === value.providerId && model.id === value.modelId;
-                  const tags = [
-                    model.supportsReasoning ? 'Reasoning' : null,
-                    model.supportsTools ? 'Tools' : null,
-                    model.supportsVision ? 'Vision' : null,
-                    model.supportsJson ? 'JSON' : null,
-                    ...model.capabilityLabels,
-                  ].filter((item): item is string => Boolean(item));
-                  return (
-                    <button
-                      key={`${provider.id}:${model.id}`}
-                      type="button"
-                      className={joinClassNames('studio-ai-settings__model-card', selected && 'studio-ai-settings__model-card--selected')}
-                      onClick={() => selectProviderModel(provider.id, model.id)}
-                    >
-                      <span>{provider.label}</span>
-                      <strong>{model.label}</strong>
-                      <small>{formatContextWindow(model.contextWindowTokens)} · {model.pricingKnown ? `${formatUsdPer1k(model.inputCostPer1kUsd)} in / ${formatUsdPer1k(model.outputCostPer1kUsd)} out` : 'Pricing unknown'}</small>
-                      {tags.length > 0 ? (
-                        <em>{Array.from(new Set(tags)).slice(0, 4).join(' · ')}</em>
-                      ) : null}
-                    </button>
-                  );
-                }) : (
-                  <StateBanner
-                    tone="warning"
-                    title="No models found"
-                    detail="Refresh the provider catalog or enter a model ID manually."
-                  />
-                )}
-              </div>
-              <p className="studio-ai-settings__catalog-foot">
-                {filteredModelOptions.length > visibleModelOptions.length
-                  ? `Showing the strongest ${visibleModelOptions.length} matches. Search by provider, model, or capability to narrow the full catalog.`
-                  : liveProviderCount > 0
-                    ? 'Live models are synced from connected provider accounts.'
-                    : 'Connect OpenRouter for the broad marketplace catalog, or connect a direct provider for its live model list.'}
-              </p>
-              {selectedProvider ? (
-                <FormField label="Enter model ID manually" hint="Use this when the provider supports a model that did not appear in discovery yet.">
-                  <FormInput
+
+              {selectedProvider && (
+                <FormField label="Model" hint="Choose the specific model from this provider.">
+                  <FormSelect
                     value={value.modelId}
                     onChange={(event) => onSelectModel(event.currentTarget.value)}
-                    placeholder="provider/model-id or model-id"
-                  />
+                  >
+                    {selectedProvider.models.map(m => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </FormSelect>
                 </FormField>
-              ) : null}
+              )}
+
+              <div className="app-inline-actions">
+                {selectedProvider && onRefreshProviderModels ? (
+                  <AppButton type="button" tone="secondary" onClick={() => onRefreshProviderModels(selectedProvider.id)}>
+                    Refresh models
+                  </AppButton>
+                ) : null}
+                <p className="app-surface-field-help">
+                  To add a new provider, go to <button type="button" className="app-link-button" onClick={() => onOpenIntegrations?.()}>Integrations</button>.
+                </p>
+              </div>
             </div>
-          ) : null}
-          <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-            <FormReadout label="Provider connection" value={providerReady ? 'Connected' : humanizeToken(selectedProvider?.state, isLoadingProviderCatalog ? 'Loading' : 'Setup required')} />
-            <FormReadout label="Input price" value={selectedModel?.pricingKnown ? formatUsdPer1k(selectedModel.inputCostPer1kUsd) : 'Pricing unknown'} />
-            <FormReadout label="Output price" value={selectedModel?.pricingKnown ? formatUsdPer1k(selectedModel.outputCostPer1kUsd) : 'Pricing unknown'} />
-            <FormReadout label="Model capacity" value={formatContextWindow(selectedModel?.contextWindowTokens)} />
-            <FormReadout
-              label="Model capabilities"
-              value={selectedModel?.capabilityLabels.length ? selectedModel.capabilityLabels.join(', ') : selectedProvider?.capabilityLabels.join(', ') || 'n/a'}
-            />
-            <FormReadout label="Catalog status" value={selectedProvider?.modelsError ? 'Refresh failed' : sourceLabel} />
-          </FormGrid>
-          {selectedProvider?.modelsError ? (
-            <StateBanner tone="warning" title="Model refresh failed" detail={selectedProvider.modelsError} />
-          ) : null}
-        </div>
-      </section>
+          )}
+
+          <div className="app-inline-actions">
+            <AppButton type="button" onClick={() => setShowModelBrowser(false)}>
+              Apply route
+            </AppButton>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

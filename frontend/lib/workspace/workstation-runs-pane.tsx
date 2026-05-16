@@ -701,59 +701,12 @@ export function WorkstationRunsPane() {
         ) : activityItems.length === 0 ? (
           <EmptyPanel
             title="No activity yet"
-            body="Ask Sage for help or test one business specialist. Chat, tool runs, approvals, channel sends, gateway reconnects, provider failures, and final outcomes will appear here as proof."
+            body="When your assistants work, their actions will appear here. This includes chat history, tool runs, and channel messages."
           />
         ) : (
           <div className="app-stack-4">
-            {pilotProof ? (
-              <WorkstationSurfaceCard
-                title="Pilot proof"
-                description="Closed-pilot readiness from real WhatsApp/Telegram activity, feedback, issues, and trace IDs."
-              >
-                <div className="app-stack-3">
-                  <WorkstationSurfaceStatGrid>
-                    <WorkstationSurfaceStat label="Proof status" value={formatProofStatus(pilotProof.status)} hint={pilotProof.adsReady ? 'Ads review unlocked' : 'Keep pilot closed'} />
-                    <WorkstationSurfaceStat label="Pilot users" value={pilotProof.pilotUsers} hint={`${pilotProof.messagesHandled} messages handled`} />
-                    <WorkstationSurfaceStat label="Completed tasks" value={pilotProof.tasksCompleted} hint={`${formatPercent(pilotProof.failureRate)} failure rate`} />
-                    <WorkstationSurfaceStat label="Manual approval" value={formatPercent(pilotProof.approvalRate)} hint={pilotProof.usefulnessScore === null ? 'No usefulness score yet' : `${pilotProof.usefulnessScore}/5 usefulness`} />
-                  </WorkstationSurfaceStatGrid>
-                  <div className="app-runs-minimal-list app-runs-minimal-list--flat">
-                    <div className="app-runs-minimal-row app-runs-minimal-row--flat">
-                      <span className="app-runs-minimal-row__preview">
-                        Case study · {formatProofStatus(pilotProof.caseStudyStatus)}
-                      </span>
-                      <span className="app-runs-minimal-row__time">
-                        {pilotProof.evidenceTraceIds.length} trace IDs
-                      </span>
-                    </div>
-                    <div className="app-runs-minimal-row app-runs-minimal-row--flat">
-                      <span className="app-runs-minimal-row__preview">
-                        Investor memo · {formatProofStatus(pilotProof.investorMemoStatus)}
-                      </span>
-                      <span className="app-runs-minimal-row__time">
-                        {pilotProof.unresolvedIssueCount} open P0/P1
-                      </span>
-                    </div>
-                    <div className="app-runs-minimal-row app-runs-minimal-row--flat">
-                      <span className="app-runs-minimal-row__preview">
-                        Ads readiness · {pilotProof.adsReady ? 'Ready for copy review' : (pilotProof.adsReasons[0] || 'Blocked until proof improves')}
-                      </span>
-                      <span className="app-runs-minimal-row__time">
-                        {pilotProof.missingEvidence.length} gaps
-                      </span>
-                    </div>
-                  </div>
-                  {pilotProof.missingEvidence.length > 0 ? (
-                    <WorkstationSurfaceNotice tone="neutral">
-                      {pilotProof.missingEvidence.slice(0, 3).join(' ')}
-                    </WorkstationSurfaceNotice>
-                  ) : null}
-                </div>
-              </WorkstationSurfaceCard>
-            ) : null}
-
             <WorkstationSurfaceNotice tone="neutral">
-              Activity is the proof timeline for chat history, tool runs, approvals, channel sends, gateway reconnects, provider failures, file/shell/browser events, and final outcomes.
+              Activity is your audit trail. It records every time an assistant uses a tool, sends a message, or reaches a final outcome.
             </WorkstationSurfaceNotice>
 
             <WorkstationSurfaceStatGrid>

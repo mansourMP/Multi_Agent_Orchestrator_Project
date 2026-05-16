@@ -333,12 +333,13 @@ export function AgentLaunchChecklist({
     || hasCloudComputerAvailableTarget;
   const selectedRuntime = studioRuntimeOption(state.runtimePlacement);
   const hasInstructions = state.systemPrompt.trim().length > 0;
-  const hasModelRoute = state.providerId.trim().length > 0 && state.modelId.trim().length > 0;
+  const usesHostedCredits = state.aiTier === 'light' || state.aiTier === 'pro' || state.aiTier === 'max';
+  const hasModelRoute = usesHostedCredits || (state.providerId.trim().length > 0 && state.modelId.trim().length > 0);
   const hasChannel = state.customerChannel === 'draft' || state.telegramEnabled || state.customerChannel !== 'telegram';
   const checks = [
     { id: 'runtime', label: `${selectedRuntime.label} runtime ready`, ok: Boolean(state.runtimePlacement) && runtimeModeValid },
     { id: 'gateway', label: 'Customer computer connected', ok: state.runtimePlacement !== 'customer_local' || hasGatewayOnlineTarget },
-    { id: 'model', label: 'API model route selected', ok: hasModelRoute },
+    { id: 'model', label: 'AI route ready', ok: hasModelRoute },
     { id: 'instructions', label: 'Instructions present', ok: hasInstructions },
     { id: 'channel', label: 'Customer channel selected', ok: hasChannel },
     { id: 'tools', label: 'Action permissions reviewed', ok: true },

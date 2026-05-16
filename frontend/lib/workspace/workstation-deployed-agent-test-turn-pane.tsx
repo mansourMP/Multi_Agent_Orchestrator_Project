@@ -180,15 +180,17 @@ export function DeployedAgentTestTurnPane({
 
 function RunMeta({ result }: { result: TestTurnResult }) {
   const toolsUsed = Array.isArray(result.tools_used) ? result.tools_used : [];
-  const traceId = typeof result.trace_id === "string" ? result.trace_id : "";
   const memoryApplied = result.memory_context && Object.keys(result.memory_context).length > 0;
 
   return (
-    <div className="deployed-agent-chat__meta" aria-label="Private test result">
-      <span>{result.approval_required ? "Needs approval" : "No approval needed"}</span>
-      <span>{toolsUsed.length > 0 ? `${toolsUsed.length} tool${toolsUsed.length === 1 ? "" : "s"} used` : "No tools used"}</span>
-      <span>{memoryApplied ? "Memory checked" : "Memory off for test"}</span>
-      {traceId ? <span title={traceId}>Trace {traceId.slice(0, 8)}</span> : null}
-    </div>
+    <details className="deployed-agent-chat__meta-details">
+      <summary>System proof</summary>
+      <div className="deployed-agent-chat__meta" aria-label="Private test result">
+        <span>{result.approval_required ? "Needs approval" : "No approval needed"}</span>
+        <span>{toolsUsed.length > 0 ? `${toolsUsed.length} tool${toolsUsed.length === 1 ? "" : "s"} used` : "No tools used"}</span>
+        <span>{memoryApplied ? "Memory checked" : "Memory off for test"}</span>
+        {result.trace_id ? <span title={result.trace_id}>Trace {result.trace_id.slice(0, 8)}</span> : null}
+      </div>
+    </details>
   );
 }

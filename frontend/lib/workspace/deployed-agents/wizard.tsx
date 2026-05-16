@@ -474,8 +474,8 @@ export function AgentWizard({
       title={mode === 'create' ? 'Create agent' : 'Edit agent'}
       description={
         mode === 'create'
-          ? 'Start with a deploy-safe draft. Add knowledge, integrations, and channels after it exists.'
-          : 'Adjust the agent profile, knowledge, customer channel, and safety behavior.'
+          ? 'Start with a profile. You can add knowledge, integrations, and channels after it exists.'
+          : 'Adjust the assistant profile, knowledge, customer channel, and safety behavior.'
       }
       onClose={onClose}
       actions={(
@@ -506,7 +506,7 @@ export function AgentWizard({
               }}
               disabled={isSubmittingWizard}
             >
-              {mode === 'create' ? 'Create agent' : 'Save'}
+              {mode === 'create' ? 'Create agent' : 'Save changes'}
             </AppButton>
           )}
         </div>
@@ -525,9 +525,6 @@ export function AgentWizard({
                 disabled={isSubmittingWizard}
                 onClick={() => setWizardStepIndex(index)}
               >
-                <span className="deployed-agents-wizard__step-eyebrow">
-                  Step {index + 1}
-                </span>
                 <strong className="deployed-agents-wizard__step-title">{step.label}</strong>
               </button>
             ))}
@@ -1195,17 +1192,7 @@ export function AgentWizard({
                 <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                   <FormReadout label="AI model provider state" value={humanizeToken(selectedProviderCatalog?.state, isLoadingProviderCatalog ? 'Loading' : 'Unknown')} />
                   <FormReadout label="Privacy profile" value={selectedProviderCatalog?.privacyPosture || 'n/a'} />
-                  <FormReadout label="Jurisdiction" value={selectedProviderCatalog?.jurisdiction || 'n/a'} />
-                  <FormReadout label="Residency" value={selectedProviderCatalog?.residency || 'n/a'} />
-                  <FormReadout label="Model capacity" value={formatContextWindow(selectedProviderModelCatalog?.contextWindowTokens)} />
-                  <FormReadout
-                    label="Pricing"
-                    value={
-                      selectedProviderModelCatalog
-                        ? `${formatUsdPer1k(selectedProviderModelCatalog.inputCostPer1kUsd)} in · ${formatUsdPer1k(selectedProviderModelCatalog.outputCostPer1kUsd)} out`
-                        : 'n/a'
-                    }
-                  />
+                  <FormReadout label="Information limit" value={formatContextWindow(selectedProviderModelCatalog?.contextWindowTokens)} />
                 </FormGrid>
                 <FormReadout
                   label="Capabilities"

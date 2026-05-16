@@ -378,16 +378,16 @@ function detectGatewayPlatform(): string {
 
 const GATEWAY_SETUP_STEPS = [
   {
-    title: 'Install the computer connector',
-    description: 'The connector keeps the local engine running in the background. The terminal command below is the current launch setup path.',
+    title: 'Install the connector',
+    description: 'The connector is a small app that runs on your computer. It allows Sage to work with your local files and apps.',
   },
   {
-    title: 'Pair a computer',
-    description: 'Pairing creates one revocable device identity. The cloud never needs inbound access to that machine.',
+    title: 'Pair your machine',
+    description: 'Pairing creates a secure connection. You remain in control and can revoke access at any time.',
   },
   {
-    title: 'Grant local permissions only when needed',
-    description: 'Files, browser, screenshots, clipboard, and terminal access stay controlled by this paired device.',
+    title: 'Grant permissions',
+    description: 'Sage will ask for your OK before it touches any files, browser tabs, or your terminal.',
   },
 ] as const;
 
@@ -402,13 +402,13 @@ const GATEWAY_PERMISSION_CHECKLIST = [
 const GATEWAY_MODE_SUMMARIES = [
   {
     title: 'Default',
-    subtitle: 'Recommended',
-    description: 'Sage can use safe tools automatically. Risky actions still pause for approval before they touch a connected computer or send anything externally.',
+    subtitle: 'Safe',
+    description: 'Sage can use safe tools automatically. Risky actions always wait for your manual approval.',
   },
   {
-    title: 'Full Access',
-    subtitle: 'Selected computer only',
-    description: 'Sage can continue inside your paired computer with broad local access for the session. It is still audited, revocable, and never applies to hosted cloud computers.',
+    title: 'Broad Access',
+    subtitle: 'Autonomous',
+    description: 'Allow Sage to continue through multiple local steps without pausing. Audited and revocable.',
   },
 ] as const;
 
@@ -1588,8 +1588,8 @@ export function WorkstationGatewayOperatorPane({
           <WorkstationSurfaceNotice tone="neutral">Loading connected computers…</WorkstationSurfaceNotice>
         ) : advancedDiagnosticsVisible && gateways.length === 0 ? (
           <EmptyPanel
-            title="No computers connected yet"
-            body="Pair a computer when you want Sage to use local files, browser sessions, screenshots, clipboard, terminal, or personal channels."
+            title="No computers connected"
+            body="Connecting a computer is optional. It allows Sage to use your local files, browser, or terminal when you explicitly grant permission."
           />
         ) : advancedDiagnosticsVisible ? (
           <WorkstationSurfaceList>

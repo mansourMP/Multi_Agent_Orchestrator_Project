@@ -157,6 +157,10 @@ export function AgentDetailView({
     readRecord(selectedAgent?.metadata).memory_enabled === true;
 
   const selectedBudgetCycle = readBudgetCycle(selectedAgent);
+  const selectedBudgetBurn = selectedAgentAnalytics?.currentBurnUsd ?? readNumber(selectedBudgetCycle.current_burn_usd);
+  const selectedTopOutcome = selectedAgentAnalytics?.topOutcome
+    ?? selectedAgentAnalytics?.outcomes[0]?.[0]
+    ?? 'open';
 
   const selectedAgentModeLabel = selectedAgent
     ? runtimePlacementLabel(selectedAgentRuntimePlacement)
@@ -697,6 +701,18 @@ export function AgentDetailView({
                   <div className="studio-agent-overview__hero-metric">
                     <span>Resolution</span>
                     <strong>{selectedAgentAnalytics ? `${(100 - selectedAgentAnalytics.escalationRatePercent).toFixed(0)}%` : '100%'}</strong>
+                  </div>
+                  <div className="studio-agent-overview__hero-metric">
+                    <span>Messages</span>
+                    <strong>{selectedAgentAnalytics ? formatCompactCount(selectedAgentAnalytics.messageVolumeMonth) : '0'}</strong>
+                  </div>
+                  <div className="studio-agent-overview__hero-metric">
+                    <span>Open</span>
+                    <strong>{humanizeToken(selectedTopOutcome, 'Open')}</strong>
+                  </div>
+                  <div className="studio-agent-overview__hero-metric">
+                    <span>Budget</span>
+                    <strong>{formatUsd(selectedBudgetBurn)}</strong>
                   </div>
                 </div>
               </section>

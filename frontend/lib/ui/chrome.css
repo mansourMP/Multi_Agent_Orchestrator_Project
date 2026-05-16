@@ -7179,6 +7179,68 @@ body.theme-light .workstation-shell__topbar {
   gap: var(--app-space-4);
 }
 
+.studio-ai-settings__route-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(14rem, 0.8fr) auto;
+  gap: var(--app-space-4);
+  align-items: stretch;
+  padding: var(--app-space-4);
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 62%, transparent);
+  border-radius: var(--app-radius-lg);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--app-bg-panel-elevated) 88%, var(--app-bg-page) 12%), color-mix(in srgb, var(--app-bg-panel) 86%, var(--app-info) 14%));
+}
+
+.studio-ai-settings__route-main,
+.studio-ai-settings__route-model {
+  display: grid;
+  align-content: start;
+  gap: var(--app-space-2);
+  min-width: 0;
+}
+
+.studio-ai-settings__route-main span,
+.studio-ai-settings__route-model span {
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.studio-ai-settings__route-main strong,
+.studio-ai-settings__route-model strong {
+  color: var(--app-text-primary);
+  font-size: var(--app-font-17);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.25;
+}
+
+.studio-ai-settings__route-main p,
+.studio-ai-settings__route-model small,
+.studio-ai-settings__route-model em {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.studio-ai-settings__route-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--app-space-2);
+}
+
+.studio-ai-settings__browser {
+  display: grid;
+  gap: var(--app-space-4);
+  padding-top: var(--app-space-4);
+  border-top: 1px solid color-mix(in srgb, var(--app-border-muted) 52%, transparent);
+}
+
 .studio-ai-settings__provider-strip {
   display: flex;
   flex-wrap: wrap;
@@ -15500,6 +15562,10 @@ body[data-emp-theme='dark'] .deployed-agent-chat__input:focus-visible {
   }
 
   .studio-ai-settings__summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .studio-ai-settings__route-card {
     grid-template-columns: minmax(0, 1fr);
   }
 

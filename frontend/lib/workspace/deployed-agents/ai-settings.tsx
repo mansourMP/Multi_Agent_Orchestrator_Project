@@ -48,6 +48,7 @@ export function AgentAiSettingsSections({
   onOpenIntegrations?: () => void;
 }) {
   const [modelQuery, setModelQuery] = useState('');
+  const [showModelBrowser, setShowModelBrowser] = useState(false);
   const selectedProvider = providerCatalog.find((provider) => provider.id === value.providerId) ?? null;
   const selectedModel = selectedProvider?.models.find((model) => model.id === value.modelId) ?? null;
   const selectedTier = STUDIO_AI_TIER_OPTIONS.find((option) => option.value === value.aiTier) ?? STUDIO_AI_TIER_OPTIONS[1];
@@ -77,12 +78,35 @@ export function AgentAiSettingsSections({
   const visibleModelOptions = filteredModelOptions.slice(0, 18);
   const liveModelCount = providerCatalog.reduce((total, provider) => total + provider.models.length, 0);
   const liveProviderCount = providerCatalog.filter((provider) => provider.modelsSource === 'workspace_cached_models').length;
-  const catalogModeLabel = liveProviderCount > 0 ? 'Live catalog' : 'Fallback catalog';
+  const catalogModeLabel = liveProviderCount > 0 ? 'Live model list' : 'Sample model list';
   const sourceLabel = selectedProvider?.modelsSource === 'workspace_cached_models'
-    ? 'Live catalog'
+    ? 'Live model list'
     : selectedProvider?.modelsSource === 'static_catalog'
-      ? 'Fallback catalog'
-      : humanizeToken(selectedProvider?.modelsSource, selectedProvider?.modelsSource || 'Catalog');
+      ? 'Sample model list'
+      : humanizeToken(selectedProvider?.modelsSource, selectedProvider?.modelsSource || 'Model list');
+  const selectedRouteLabel = providerReady
+    ? `Using ${selectedProvider?.label ?? 'connected provider'}`
+    : selectedProvider
+      ? `Connect ${selectedProvider.label} before launch`
+      : 'Connect AI before launch';
+  const selectedRouteDetail = providerReady
+    ? 'Provider setup lives in Integrations. This agent will use the selected model route at runtime.'
+    : selectedProvider
+      ? 'This is a setup preview. Connect the provider account in Integrations to use it for customers.'
+      : 'Use Empyralis credits or connect an API provider before deploying this agent.';
+  const selectedModelTags = selectedModel ? [
+    selectedModel.supportsReasoning ? 'Reasoning' : null,
+    selectedModel.supportsTools ? 'Tools' : null,
+    selectedModel.supportsVision ? 'Vision' : null,
+    selectedModel.supportsJson ? 'JSON' : null,
+    ...selectedModel.capabilityLabels,
+  ].filter((item): item is string => Boolean(item)) : [];
+  const selectedModelMeta = selectedModel
+    ? `${formatContextWindow(selectedModel.contextWindowTokens)} · ${selectedModel.pricingKnown ? `${formatUsdPer1k(selectedModel.inputCostPer1kUsd)} in / ${formatUsdPer1k(selectedModel.outputCostPer1kUsd)} out` : 'Pricing unknown'}`
+    : 'A balanced model will be selected after AI is connected.';
+  function modelListSourceLabel(source: string | null) {
+    return source === 'workspace_cached_models' ? 'live' : 'sample';
+  }
   function selectProviderModel(providerId: string, modelId: string) {
     onSelectProvider(providerId);
     onSelectModel(modelId);
@@ -94,12 +118,12 @@ export function AgentAiSettingsSections({
     >
       <div className="studio-ai-settings__summary" aria-label="Model setup summary">
         <div>
-          <span>Model setup</span>
-          <strong>{selectedModel?.label ?? selectedTier.label} · {selectedProvider?.label ?? 'Connect provider'}</strong>
-          <p>Connect a provider in Integrations to fetch the live model list. The fallback catalog keeps setup usable before a key is connected.</p>
+          <span>AI route</span>
+          <strong>{selectedProvider?.label ?? 'Empyralis credits or API key'}</strong>
+          <p>Choose how this customer-facing agent gets its AI. Provider keys stay in Integrations; this tab chooses the route and answer quality.</p>
         </div>
         <div className="studio-ai-settings__badges" aria-label="Model setup constraints">
-          <span>{liveProviderCount > 0 ? `${liveModelCount} models` : `${liveModelCount} fallback models`}</span>
+          <span>{liveProviderCount > 0 ? `${liveModelCount} models available` : `${liveModelCount} sample models`}</span>
           <span>{catalogModeLabel}</span>
         </div>
       </div>
@@ -132,11 +156,11 @@ export function AgentAiSettingsSections({
       <section className="studio-ai-settings__section" aria-label="Default model">
         <div className="studio-actions__section-head">
           <div>
-            <span>Connected model provider</span>
-            <strong>Default model for this agent</strong>
+            <span>AI provider</span>
+            <strong>Default route for this agent</strong>
           </div>
           <div className="studio-actions__section-head-actions">
-            <small>{providerCatalog.length} provider{providerCatalog.length === 1 ? '' : 's'} · {filteredModelOptions.length} visible model{filteredModelOptions.length === 1 ? '' : 's'}</small>
+            <small>{sourceLabel}</small>
             {activeProvider && onRefreshProviderModels ? (
               <button
                 type="button"
@@ -163,78 +187,111 @@ export function AgentAiSettingsSections({
               detail={isLoadingProviderCatalog ? 'Checking workspace provider catalog.' : 'Connect a provider account before changing the model route.'}
             />
           ) : null}
-          <div className="studio-ai-settings__provider-strip" aria-label="Connected providers">
-            {providerCatalog.map((provider) => (
+          <div className="studio-ai-settings__route-card" aria-label="Selected AI route">
+            <div className="studio-ai-settings__route-main">
+              <span>{providerReady ? 'Ready' : 'Setup needed'}</span>
+              <strong>{selectedRouteLabel}</strong>
+              <p>{selectedRouteDetail}</p>
+            </div>
+            <div className="studio-ai-settings__route-model">
+              <span>Model</span>
+              <strong>{selectedModel?.label ?? selectedTier.label}</strong>
+              <small>{selectedModelMeta}</small>
+              {selectedModelTags.length > 0 ? (
+                <em>{Array.from(new Set(selectedModelTags)).slice(0, 4).join(' · ')}</em>
+              ) : null}
+            </div>
+            <div className="studio-ai-settings__route-actions">
               <button
-                key={provider.id}
                 type="button"
-                className={joinClassNames('studio-ai-settings__provider-pill', provider.id === value.providerId && 'studio-ai-settings__provider-pill--selected')}
-                onClick={() => {
-                  const nextModel = pickStudioModelForTier(provider, value.aiTier);
-                  selectProviderModel(provider.id, nextModel);
-                }}
+                className="studio-actions__link-button"
+                onClick={() => setShowModelBrowser((current) => !current)}
               >
-                <strong>{provider.label}</strong>
-                <span>{provider.models.length} model{provider.models.length === 1 ? '' : 's'} · {provider.modelsSource === 'workspace_cached_models' ? 'live' : 'fallback'}</span>
+                {showModelBrowser ? 'Hide models' : 'Change model'}
               </button>
-            ))}
-          </div>
-          <FormField label="Search models" hint="Live models appear after the provider account is connected. Fallback models are used only when discovery is unavailable.">
-            <FormInput
-              value={modelQuery}
-              onChange={(event) => setModelQuery(event.currentTarget.value)}
-              placeholder="Search by provider, model, or capability"
-              disabled={providerCatalog.length === 0}
-            />
-          </FormField>
-          <div className="studio-ai-settings__model-grid" aria-label="Model choices">
-            {visibleModelOptions.length > 0 ? visibleModelOptions.map(({ provider, model }) => {
-              const selected = provider.id === value.providerId && model.id === value.modelId;
-              const tags = [
-                model.supportsReasoning ? 'Reasoning' : null,
-                model.supportsTools ? 'Tools' : null,
-                model.supportsVision ? 'Vision' : null,
-                model.supportsJson ? 'JSON' : null,
-                ...model.capabilityLabels,
-              ].filter((item): item is string => Boolean(item));
-              return (
-                <button
-                  key={`${provider.id}:${model.id}`}
-                  type="button"
-                  className={joinClassNames('studio-ai-settings__model-card', selected && 'studio-ai-settings__model-card--selected')}
-                  onClick={() => selectProviderModel(provider.id, model.id)}
-                >
-                  <span>{provider.label}</span>
-                  <strong>{model.label}</strong>
-                  <small>{formatContextWindow(model.contextWindowTokens)} · {model.pricingKnown ? `${formatUsdPer1k(model.inputCostPer1kUsd)} in / ${formatUsdPer1k(model.outputCostPer1kUsd)} out` : 'Pricing unknown'}</small>
-                  {tags.length > 0 ? (
-                    <em>{Array.from(new Set(tags)).slice(0, 4).join(' · ')}</em>
-                  ) : null}
+              {onOpenIntegrations ? (
+                <button type="button" className="studio-actions__link-button" onClick={onOpenIntegrations}>
+                  Connect AI
                 </button>
-              );
-            }) : (
-              <StateBanner
-                tone="warning"
-                title="No models found"
-                detail="Refresh the provider catalog or enter a model ID manually."
-              />
-            )}
+              ) : null}
+            </div>
           </div>
-          <p className="studio-ai-settings__catalog-foot">
-            {filteredModelOptions.length > visibleModelOptions.length
-              ? `Showing the strongest ${visibleModelOptions.length} matches. Search by provider, model, or capability to narrow the full catalog.`
-              : liveProviderCount > 0
-                ? 'Live models are synced from connected provider accounts.'
-                : 'Connect OpenRouter for the broad marketplace catalog, or connect a direct provider for its live model list.'}
-          </p>
-          {selectedProvider ? (
-            <FormField label="Manual model ID" hint="Use this when the provider supports a model that did not appear in discovery yet.">
-              <FormInput
-                value={value.modelId}
-                onChange={(event) => onSelectModel(event.currentTarget.value)}
-                placeholder="provider/model-id or model-id"
-              />
-            </FormField>
+          {showModelBrowser ? (
+            <div className="studio-ai-settings__browser" aria-label="Model browser">
+              <div className="studio-ai-settings__provider-strip" aria-label="Connected providers">
+                {providerCatalog.map((provider) => (
+                  <button
+                    key={provider.id}
+                    type="button"
+                    className={joinClassNames('studio-ai-settings__provider-pill', provider.id === value.providerId && 'studio-ai-settings__provider-pill--selected')}
+                    onClick={() => {
+                      const nextModel = pickStudioModelForTier(provider, value.aiTier);
+                      selectProviderModel(provider.id, nextModel);
+                    }}
+                  >
+                    <strong>{provider.label}</strong>
+                    <span>{provider.models.length} model{provider.models.length === 1 ? '' : 's'} · {modelListSourceLabel(provider.modelsSource)}</span>
+                  </button>
+                ))}
+              </div>
+              <FormField label="Search models" hint="Connect a provider to see the live models available to your account.">
+                <FormInput
+                  value={modelQuery}
+                  onChange={(event) => setModelQuery(event.currentTarget.value)}
+                  placeholder="Search by provider, model, or capability"
+                  disabled={providerCatalog.length === 0}
+                />
+              </FormField>
+              <div className="studio-ai-settings__model-grid" aria-label="Model choices">
+                {visibleModelOptions.length > 0 ? visibleModelOptions.map(({ provider, model }) => {
+                  const selected = provider.id === value.providerId && model.id === value.modelId;
+                  const tags = [
+                    model.supportsReasoning ? 'Reasoning' : null,
+                    model.supportsTools ? 'Tools' : null,
+                    model.supportsVision ? 'Vision' : null,
+                    model.supportsJson ? 'JSON' : null,
+                    ...model.capabilityLabels,
+                  ].filter((item): item is string => Boolean(item));
+                  return (
+                    <button
+                      key={`${provider.id}:${model.id}`}
+                      type="button"
+                      className={joinClassNames('studio-ai-settings__model-card', selected && 'studio-ai-settings__model-card--selected')}
+                      onClick={() => selectProviderModel(provider.id, model.id)}
+                    >
+                      <span>{provider.label}</span>
+                      <strong>{model.label}</strong>
+                      <small>{formatContextWindow(model.contextWindowTokens)} · {model.pricingKnown ? `${formatUsdPer1k(model.inputCostPer1kUsd)} in / ${formatUsdPer1k(model.outputCostPer1kUsd)} out` : 'Pricing unknown'}</small>
+                      {tags.length > 0 ? (
+                        <em>{Array.from(new Set(tags)).slice(0, 4).join(' · ')}</em>
+                      ) : null}
+                    </button>
+                  );
+                }) : (
+                  <StateBanner
+                    tone="warning"
+                    title="No models found"
+                    detail="Refresh the provider catalog or enter a model ID manually."
+                  />
+                )}
+              </div>
+              <p className="studio-ai-settings__catalog-foot">
+                {filteredModelOptions.length > visibleModelOptions.length
+                  ? `Showing the strongest ${visibleModelOptions.length} matches. Search by provider, model, or capability to narrow the full catalog.`
+                  : liveProviderCount > 0
+                    ? 'Live models are synced from connected provider accounts.'
+                    : 'Connect OpenRouter for the broad marketplace catalog, or connect a direct provider for its live model list.'}
+              </p>
+              {selectedProvider ? (
+                <FormField label="Enter model ID manually" hint="Use this when the provider supports a model that did not appear in discovery yet.">
+                  <FormInput
+                    value={value.modelId}
+                    onChange={(event) => onSelectModel(event.currentTarget.value)}
+                    placeholder="provider/model-id or model-id"
+                  />
+                </FormField>
+              ) : null}
+            </div>
           ) : null}
           <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
             <FormReadout label="Provider connection" value={providerReady ? 'Connected' : humanizeToken(selectedProvider?.state, isLoadingProviderCatalog ? 'Loading' : 'Setup required')} />

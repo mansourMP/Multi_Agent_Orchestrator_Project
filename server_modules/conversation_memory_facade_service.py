@@ -264,9 +264,29 @@ def build_workspace_context_text(
 
 
 def delete_subject_memory(subject: ConversationMemorySubject) -> Dict[str, Any]:
+    from server_modules import memory_service
+
+    surface_kind = str(subject.surface_kind or "").strip().lower()
+    workspace_id = str(subject.workspace_id or "").strip()
+    if not workspace_id:
+        return {"deleted": False, "surface_kind": surface_kind, "reason": "missing_workspace_id"}
+
+    if surface_kind == DIRECT_CHAT_SURFACE:
+        agent_install_id = str(subject.responder_install_id or "").strip() or None
+        entries = memory_service.list_memory_entries(workspace_id, agent_install_id=agent_install_id)
+        deleted_count = 0
+        for entry in entries:
+            key = str(entry.get("key") or entry.get("id") or "").strip()
+            if key and memory_service.delete_memory(workspace_id, key, agent_install_id=agent_install_id):
+                deleted_count += 1
+        return {"deleted": deleted_count > 0, "surface_kind": surface_kind, "deleted_count": deleted_count}
+
+    if surface_kind == DURABLE_RUN_SURFACE:
+        return {"deleted": False, "surface_kind": surface_kind, "reason": "durable_run_deletion_not_yet_implemented"}
+
     return {
         "deleted": False,
-        "surface_kind": subject.surface_kind,
+        "surface_kind": surface_kind,
         "reason": "deletion_requires_surface_specific_workflow",
     }
 

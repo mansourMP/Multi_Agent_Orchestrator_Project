@@ -42,7 +42,7 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _require_active_gateway_registration(gateway_id: str) -> Dict[str, Any]:
+def _require_active_gateway_registration(gateway_id: str, *, workspace_id: str = "") -> Dict[str, Any]:
     registration = gateway_state_repository.get_gateway_registration(gateway_id)
     if not registration:
         raise ValueError("Gateway registration was not found.")
@@ -50,6 +50,14 @@ def _require_active_gateway_registration(gateway_id: str) -> Dict[str, Any]:
         raise ValueError("Gateway registration is not active.")
     if str(registration.get("device_trust_state") or "").strip().lower() == "revoked":
         raise ValueError("Gateway device trust was revoked.")
+    if workspace_id:
+        reg_ws = str(registration.get("workspace_id") or "").strip()
+        if reg_ws and reg_ws != workspace_id:
+            raise PermissionError(
+                f"Caller workspace_id {workspace_id} does not match registration workspace_id {reg_ws}."
+            )
+    if not str(registration.get("workspace_id") or "").strip():
+        raise ValueError("Gateway registration is missing workspace_id.")
     return registration
 
 
@@ -386,14 +394,15 @@ async def execute_browser_capability_via_gateway(
     timeout_seconds: int = gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    registration = _require_active_gateway_registration(gateway_id)
+    registration = _require_active_gateway_registration(gateway_id, workspace_id=workspace_id)
+    _ws = str(registration.get("workspace_id") or "").strip()
     response = await gateway_execution_service.execute_tool_via_gateway(
         gateway_id=gateway_id,
         capability_id=capability_id,
         arguments=dict(arguments or {}),
         run_id=run_id,
         trace_id=trace_id,
-        workspace_id=workspace_id,
+        workspace_id=_ws,
         timeout_seconds=timeout_seconds,
         request_id=request_id,
     )

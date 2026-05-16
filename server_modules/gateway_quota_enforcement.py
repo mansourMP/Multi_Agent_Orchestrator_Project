@@ -1,8 +1,30 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict
+
+_log = logging.getLogger(__name__)
+
+_last_restart_time: float = time.time()
+_restart_count: int = 1
+_STARTUP_QUOTA_GRACE_SECONDS: float = 60.0
+
+# Quota windows are in-memory and reset on server restart.
+# Full persistence (e.g. Redis or a control-plane table) would require:
+#  - a durable store for per-gateway per-profile counters
+#  - periodic flush (every few seconds) to balance durability vs. write pressure
+#  - reload on module import / service startup
+# Until then, operators should monitor restart events and inspect quota
+# snapshots after any deploy or crash-recovery.
+
+_log.warning(
+    "Gateway quota windows initialized in-memory (restart=%s, time=%s). "
+    "Quota counters reset on restart. Monitor gateway quota after deploys.",
+    _restart_count,
+    _last_restart_time,
+)
 
 
 GATEWAY_TOOL_EXECUTION = "gateway_tool_execution"
@@ -60,6 +82,14 @@ def evaluate_gateway_quota(*, profile: str, gateway_id: str) -> GatewayQuotaDeci
     if quota is None:
         return GatewayQuotaDecision(allowed=True, profile=profile, reason="no_quota_profile")
 
+    if time.time() - _last_restart_time < _STARTUP_QUOTA_GRACE_SECONDS:
+        _log.info(
+            "Gateway quota check within startup grace period (%.0fs remaining). profile=%s gateway_id=%s",
+            _STARTUP_QUOTA_GRACE_SECONDS - (time.time() - _last_restart_time),
+            profile,
+            gateway_id,
+        )
+
     key = f"{gateway_id}:{profile}"
     if quota.allow(key):
         return GatewayQuotaDecision(
@@ -87,3 +117,15 @@ def get_gateway_quota_snapshot(gateway_id: str) -> dict:
             "window_seconds": quota.window_seconds,
         }
     return snapshot
+
+
+def get_quota_restart_info() -> dict:
+    """Return restart metadata so operators can detect quota resets."""
+    return {
+        "last_restart_time": _last_restart_time,
+        "restart_count": _restart_count,
+        "startup_grace_seconds": _STARTUP_QUOTA_GRACE_SECONDS,
+        "in_grace_period": time.time() - _last_restart_time < _STARTUP_QUOTA_GRACE_SECONDS,
+        "quota_profiles": list(_GATEWAY_QUOTA_PROFILES.keys()),
+        "persistence": "in_memory_only",
+    }

@@ -1,7 +1,23 @@
 from __future__ import annotations
 
+import json
+import logging
+import os
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
+from threading import Lock
 from typing import Any, Callable, Dict, Optional
+
+_log = logging.getLogger(__name__)
+
+_last_restart_time: float = time.time()
+
+_EMPYRALIS_STATE_HOME = Path(
+    os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
+).expanduser()
+_KILL_SWITCH_FILE = _EMPYRALIS_STATE_HOME / "kill_switches.json"
+_KILL_SWITCH_FILE_LOCK = Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,12 +38,59 @@ _KILL_STATE: Dict[str, bool] = {}
 _RESOLVERS: list[Callable[[], Dict[str, bool]]] = []
 
 
+def _read_kill_switches_from_file() -> Dict[str, bool]:
+    try:
+        _KILL_SWITCH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if _KILL_SWITCH_FILE.exists():
+            raw = json.loads(_KILL_SWITCH_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                return {str(k): bool(v) for k, v in raw.items()}
+    except Exception:
+        _log.warning("Failed to read kill switches from %s", _KILL_SWITCH_FILE, exc_info=True)
+    return {}
+
+
+def _write_kill_switches_to_file(state: Dict[str, bool]) -> None:
+    try:
+        _KILL_SWITCH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {str(k): bool(v) for k, v in state.items() if v}
+        _KILL_SWITCH_FILE.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        _log.warning("Failed to write kill switches to %s", _KILL_SWITCH_FILE, exc_info=True)
+
+
+def _reload_kill_switches() -> None:
+    """Restore persisted kill switches into in-memory state on startup."""
+    persisted = _read_kill_switches_from_file()
+    if persisted:
+        _KILL_STATE.update(persisted)
+        _log.warning(
+            "Reloaded %d persisted kill switch(es) from %s after restart at %s: %s",
+            len(persisted),
+            _KILL_SWITCH_FILE,
+            _last_restart_time,
+            list(persisted.keys()),
+        )
+    else:
+        _log.info("No persisted kill switches found at %s. State initialized empty.", _KILL_SWITCH_FILE)
+
+
+def _file_resolver() -> Dict[str, bool]:
+    return _read_kill_switches_from_file()
+
+
 def set_kill_switch(key: str, *, active: bool = True) -> None:
     _KILL_STATE[key] = active
+    with _KILL_SWITCH_FILE_LOCK:
+        _write_kill_switches_to_file(_KILL_STATE)
+    _log.error("Kill switch SET: key=%s active=%s", key, active)
 
 
 def clear_kill_switch(key: str) -> None:
     _KILL_STATE.pop(key, None)
+    with _KILL_SWITCH_FILE_LOCK:
+        _write_kill_switches_to_file(_KILL_STATE)
+    _log.error("Kill switch CLEARED: key=%s", key)
 
 
 def is_kill_active(key: str) -> bool:
@@ -46,6 +109,15 @@ def is_kill_active(key: str) -> bool:
 def register_kill_resolver(resolver: Callable[[], Dict[str, bool]]) -> None:
     if resolver not in _RESOLVERS:
         _RESOLVERS.append(resolver)
+
+
+def get_kill_switch_restart_info() -> dict:
+    """Return restart metadata so operators can detect kill-switch state changes."""
+    return {
+        "last_restart_time": _last_restart_time,
+        "persisted_file": str(_KILL_SWITCH_FILE),
+        "active_keys": [k for k, v in _KILL_STATE.items() if v],
+    }
 
 
 def evaluate_kill_switch(
@@ -124,3 +196,7 @@ class KillSwitchBlockedError(Exception):
     def __init__(self, decision: KillSwitchDecision):
         self.decision = decision
         super().__init__(decision.detail)
+
+
+_reload_kill_switches()
+register_kill_resolver(_file_resolver)

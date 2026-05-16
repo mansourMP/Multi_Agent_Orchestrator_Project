@@ -46,6 +46,7 @@ def _account_shell_cache_key(
     user_id: str,
     identity_versions: Dict[str, Any],
     memberships: List[Dict[str, Any]],
+    tenant_id: str = "",
 ) -> str:
     membership_tokens = []
     for row in memberships:
@@ -61,6 +62,7 @@ def _account_shell_cache_key(
     return "|".join(
         [
             user_id,
+            tenant_id,
             str(identity_versions.get("membership_version") or 0),
             str(identity_versions.get("auth_version") or 0),
             str(identity_versions.get("provider_scope_version") or 0),
@@ -134,10 +136,22 @@ async def build_account_shell_payload(current_user: Optional[Dict[str, Any]]) ->
     memberships = auth_module.list_authenticated_workspace_memberships(current_user)
     identity_versions = auth_module.get_authenticated_identity_versions(current_user)
     membership_version_prefix = int(identity_versions.get("membership_version") or 1)
+
+    # Extract a tenant_id for cache-key scoping. The user record or first
+    # membership row is the best source before workspace records are fetched.
+    _raw_tenant = str(user.get("tenant_id") or "").strip()
+    if not _raw_tenant:
+        for row in memberships:
+            if isinstance(row, dict) and str(row.get("tenant_id") or "").strip():
+                _raw_tenant = str(row["tenant_id"]).strip()
+                break
+    _cache_tenant = _raw_tenant  # empty string if not available (no-op in key)
+
     cache_key = _account_shell_cache_key(
         user_id=user_id,
         identity_versions=identity_versions,
         memberships=memberships,
+        tenant_id=_cache_tenant,
     )
     cached_payload = _account_shell_cache_get(cache_key)
     if isinstance(cached_payload, dict):

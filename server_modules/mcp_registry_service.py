@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urlparse
 
 from server_modules.config_loader import config_str
+from server_modules.url_security import assert_safe_outbound_url
 
 try:
     from mcp import ClientSession
@@ -17,6 +21,7 @@ except Exception:  # pragma: no cover - optional until dependency is installed
     ClientSession = None  # type: ignore[assignment]
     streamable_http_client = None  # type: ignore[assignment]
 
+_log = logging.getLogger(__name__)
 
 McpTransport = Literal["streamable_http"]
 _STATE_HOME = Path(
@@ -34,6 +39,53 @@ _SUPPORTED_RISK_LEVELS = {"low", "medium", "high", "critical"}
 _SUPPORTED_COST_CLASSES = {"free", "standard", "metered", "external"}
 _DANGEROUS_TOKENS = {"delete", "remove", "destroy", "drop", "truncate", "reset", "shutdown"}
 _ARGUMENT_KEY_CANDIDATES = ("arguments", "args", "input", "payload")
+
+_BLOCKED_MCP_HOSTS = {
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "0.0.0.0",
+    "[::]",
+}
+
+
+def _validate_mcp_endpoint(endpoint: str) -> None:
+    """Validate an MCP server endpoint URL for safety.
+
+    Raises ValueError if the URL is unsafe or unsupported.
+    """
+    raw = str(endpoint or "").strip()
+    if not raw:
+        raise ValueError("MCP endpoint URL is required.")
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("https", "http"):
+        raise ValueError(f"MCP endpoint must use https:// (or http:// in dev). Got scheme: {scheme!r}")
+    if scheme == "http" and not os.getenv("EMPYRALIS_DEV_ALLOW_HTTP_MCP"):
+        raise ValueError("MCP endpoint must use https://. Set EMPYRALIS_DEV_ALLOW_HTTP_MCP=1 for local dev.")
+    hostname = (parsed.hostname or "").strip().lower()
+    if not hostname:
+        raise ValueError("MCP endpoint URL has no parseable hostname.")
+    if hostname in _BLOCKED_MCP_HOSTS:
+        raise ValueError(f"MCP endpoint hostname {hostname!r} is blocked.")
+    if hostname.endswith(".local") or hostname.endswith(".internal"):
+        raise ValueError(f"MCP endpoint hostname {hostname!r} uses a reserved TLD.")
+    try:
+        addr = ip_address(hostname)
+    except ValueError:
+        addr = None
+    if addr is not None and (
+        addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_private
+        or addr.is_unspecified
+        or addr.is_reserved
+    ):
+        raise ValueError(f"MCP endpoint IP address {hostname!r} is not allowed.")
+    assert_safe_outbound_url(raw)
+    if not parsed.path or parsed.path == "/":
+        _log.info("MCP endpoint %s has no explicit path; this may be intentional.", raw)
 
 
 def _utc_now_iso() -> str:
@@ -211,6 +263,7 @@ def _normalize_tool_payload(raw: Dict[str, Any], *, server_id: str) -> Dict[str,
             "audit_event_type": audit_event_type,
         },
         "enabled": bool(raw.get("enabled", True)),
+        "approved": bool(raw.get("approved", True)),
     }
 
 
@@ -402,6 +455,7 @@ def upsert_workspace_mcp_server(
     tools: Any = None,
     metadata: Any = None,
     discover_tools: bool = False,
+    auto_approve_tools: bool = False,
 ) -> Dict[str, Any]:
     normalized_workspace_id = str(workspace_id or "").strip()
     if not normalized_workspace_id:
@@ -411,6 +465,9 @@ def upsert_workspace_mcp_server(
     servers = bucket.get("servers") if isinstance(bucket.get("servers"), dict) else {}
     normalized_server_id = _normalize_server_id(server_id)
     existing = servers.get(normalized_server_id) if isinstance(servers.get(normalized_server_id), dict) else None
+
+    _validate_mcp_endpoint(str(endpoint or "").strip())
+
     payload = _normalize_server_payload(
         server_id=normalized_server_id,
         label=label,
@@ -422,12 +479,30 @@ def upsert_workspace_mcp_server(
         existing=existing,
     )
     if discover_tools:
+        existing_approvals = {
+            _normalize_tool_name(tool.get("name")): bool(tool.get("approved", True))
+            for tool in (existing.get("tools") if isinstance(existing, dict) and isinstance(existing.get("tools"), list) else [])
+            if isinstance(tool, dict) and _normalize_tool_name(tool.get("name"))
+        }
         discovered = discover_mcp_server_tools(
             transport=payload["transport"],
             endpoint=payload["endpoint"],
             server_id=payload["id"],
         )
         if discovered:
+            if auto_approve_tools:
+                for tool in discovered:
+                    tool["approved"] = True
+            else:
+                for tool in discovered:
+                    normalized_name = _normalize_tool_name(tool.get("name"))
+                    tool["approved"] = bool(existing_approvals.get(normalized_name, False))
+                _log.warning(
+                    "MCP server %s: %d tools discovered but not auto-approved. "
+                    "Use approve_mcp_tool() or auto_approve_tools=True.",
+                    payload["id"],
+                    len(discovered),
+                )
             payload["tools"] = discovered
         payload["last_synced_at"] = _utc_now_iso()
         payload["updated_at"] = payload["last_synced_at"]
@@ -436,6 +511,38 @@ def upsert_workspace_mcp_server(
     _save_workspace_bucket(normalized_workspace_id, registry, bucket)
     save_mcp_server_registry(registry)
     return payload
+
+
+def approve_mcp_tool(*, workspace_id: str, server_id: str, tool_name: str) -> Dict[str, Any]:
+    """Approve a single discovered-but-unapproved MCP tool for execution."""
+    normalized_workspace_id = str(workspace_id or "").strip()
+    normalized_server_id = _normalize_server_id(server_id)
+    normalized_tool_name = _normalize_tool_name(tool_name)
+    if not normalized_workspace_id or not normalized_server_id or not normalized_tool_name:
+        raise ValueError("workspace_id, server_id, and tool_name are required.")
+    server = get_workspace_mcp_server(normalized_workspace_id, normalized_server_id)
+    if server is None:
+        raise FileNotFoundError(f"MCP server '{server_id}' not found in workspace.")
+    tools = server.get("tools") if isinstance(server.get("tools"), list) else []
+    found = False
+    for tool in tools:
+        if _normalize_tool_name(tool.get("name")) == normalized_tool_name:
+            tool["approved"] = True
+            found = True
+            break
+    if not found:
+        raise FileNotFoundError(f"MCP tool '{tool_name}' not found on server '{server_id}'.")
+    return upsert_workspace_mcp_server(
+        workspace_id=normalized_workspace_id,
+        server_id=normalized_server_id,
+        label=server.get("label"),
+        transport=server.get("transport"),
+        endpoint=server.get("endpoint"),
+        enabled=server.get("enabled", True),
+        tools=tools,
+        metadata=server.get("metadata"),
+        discover_tools=False,
+    )
 
 
 def refresh_workspace_mcp_server_tools(*, workspace_id: str, server_id: str) -> Dict[str, Any]:
@@ -452,6 +559,7 @@ def refresh_workspace_mcp_server_tools(*, workspace_id: str, server_id: str) -> 
         tools=current.get("tools"),
         metadata=current.get("metadata"),
         discover_tools=True,
+        auto_approve_tools=False,
     )
 
 
@@ -494,6 +602,8 @@ def list_workspace_mcp_skill_entries(workspace_id: str) -> List[Dict[str, Any]]:
         server_id = str(server.get("id") or "").strip()
         for raw_tool in server.get("tools") if isinstance(server.get("tools"), list) else []:
             if not isinstance(raw_tool, dict) or not bool(raw_tool.get("enabled", True)):
+                continue
+            if not bool(raw_tool.get("approved", True)):
                 continue
             tool_name = _normalize_tool_name(raw_tool.get("name"))
             if not tool_name:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib import request as urlrequest
+
+from server_modules.skill_scanner import scan_skill_dir
+
+_log = logging.getLogger(__name__)
 
 from server_modules.installed_skills import (
     bundled_skills_root,
@@ -136,6 +141,45 @@ def _validate_manifest(payload: Dict[str, Any]) -> Dict[str, Any]:
         "source": str(payload.get("source") or "").strip()[:1000],
         "runtime": runtime,
     }
+
+
+_DANGEROUS_CODE_PATTERNS = [
+    "subprocess",
+    "os.system",
+    "eval(",
+    "exec(",
+    "__import__",
+    "socket.",
+    "requests.",
+    "urllib.",
+    "http.client",
+]
+
+
+def _scanner_flags_dangerous(findings: List[Dict[str, Any]]) -> bool:
+    for f in findings:
+        if f.get("severity") in ("critical", "high"):
+            return True
+    return False
+
+
+def _validate_manifest_against_scanner(manifest: Dict[str, Any], scan_result: Dict[str, Any]) -> List[str]:
+    """Cross-check manifest-declared permissions against scanner findings.
+
+    Returns a list of blocking reasons (empty = ok).
+    """
+    reasons: List[str] = []
+    declared_action_class = str(manifest.get("runtime", {}).get("action_class") or "").strip().lower()
+    declared_scopes = _list_from_any(manifest.get("runtime", {}).get("connector_scopes"))
+    findings = scan_result.get("findings") or []
+
+    has_dangerous = _scanner_flags_dangerous(findings)
+    if has_dangerous and declared_action_class in ("read", ""):
+        reasons.append(
+            "Manifest declares low-risk action_class but scanner found dangerous code patterns. "
+            "Review the skill and either fix the code or update the manifest to reflect actual risk."
+        )
+    return reasons
 
 
 def _legacy_manifest_from_dir(skill_dir: Path) -> Dict[str, Any]:
@@ -396,13 +440,43 @@ def get_marketplace_skill(skill_name: str) -> Dict[str, Any]:
     raise FileNotFoundError(f"Skill '{skill_name}' is not installed.")
 
 
-def install_marketplace_skill(*, source_url: Optional[str] = None, zip_path: Optional[str] = None) -> Dict[str, Any]:
+def install_marketplace_skill(*, source_url: Optional[str] = None, zip_path: Optional[str] = None, allow_unsafe: bool = False) -> Dict[str, Any]:
     install_root = workspace_skills_root()
     install_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="empyralis-skill-install-") as temp_dir_raw:
         temp_root = Path(temp_dir_raw)
         source_dir = _prepare_source_tree(source_url=source_url, zip_path=zip_path, temp_root=temp_root)
+
+        scan_result = scan_skill_dir(source_dir)
+        if scan_result.get("blocked"):
+            if not allow_unsafe:
+                _log.warning(
+                    "Skill install blocked by scanner: %s critical finding(s) in %s",
+                    scan_result.get("summary", {}).get("critical", 0),
+                    source_dir,
+                )
+                raise RuntimeError(
+                    f"Skill contains unsafe code patterns and cannot be installed. "
+                    f"Findings: {len(scan_result.get('findings') or [])} issue(s). "
+                    f"Use allow_unsafe=True to bypass this check."
+                )
+            _log.warning(
+                "Allowing install of skill with scanner block (allow_unsafe=True): %s",
+                source_dir,
+            )
+
         manifest = _manifest_from_dir(source_dir)
+        perm_reasons = _validate_manifest_against_scanner(manifest, scan_result)
+        if perm_reasons and not allow_unsafe:
+            raise RuntimeError(
+                f"Skill manifest permissions do not match scanned code behavior: {'; '.join(perm_reasons)}"
+            )
+        if perm_reasons:
+            _log.warning(
+                "Allowing install despite manifest/scanner mismatch (allow_unsafe=True): %s",
+                perm_reasons,
+            )
+
         destination = install_root / manifest["id"]
         _copy_tree(source_dir, destination)
         manifest = _normalize_skill_tree(destination)

@@ -11,7 +11,7 @@ from server_modules import (
 )
 
 
-def _require_active_gateway_registration(gateway_id: str) -> Dict[str, Any]:
+def _require_active_gateway_registration(gateway_id: str, *, workspace_id: str = "") -> Dict[str, Any]:
     registration = gateway_state_repository.get_gateway_registration(gateway_id)
     if not registration:
         raise ValueError("Gateway registration was not found.")
@@ -19,6 +19,14 @@ def _require_active_gateway_registration(gateway_id: str) -> Dict[str, Any]:
         raise ValueError("Gateway registration is not active.")
     if str(registration.get("device_trust_state") or "").strip().lower() == "revoked":
         raise ValueError("Gateway device trust was revoked.")
+    if workspace_id:
+        reg_ws = str(registration.get("workspace_id") or "").strip()
+        if reg_ws and reg_ws != workspace_id:
+            raise PermissionError(
+                f"Caller workspace_id {workspace_id} does not match registration workspace_id {reg_ws}."
+            )
+    if not str(registration.get("workspace_id") or "").strip():
+        raise ValueError("Gateway registration is missing workspace_id.")
     return registration
 
 
@@ -33,9 +41,9 @@ async def execute_tool_via_gateway(
     timeout_seconds: int = gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    registration = _require_active_gateway_registration(gateway_id)
+    registration = _require_active_gateway_registration(gateway_id, workspace_id=workspace_id)
     _gw = str(registration.get("gateway_id") or "").strip()
-    _ws = str(registration.get("workspace_id") or workspace_id).strip()
+    _ws = str(registration.get("workspace_id") or "").strip()
     _tid = str(trace_id or "").strip()
     _cap = str(capability_id or "").strip()
     gateway_transparency_service.emit_gateway_action_event(
@@ -54,7 +62,7 @@ async def execute_tool_via_gateway(
         arguments=dict(arguments or {}),
         run_id=str(run_id or "").strip(),
         trace_id=str(trace_id or "").strip(),
-        workspace_id=str(workspace_id or "").strip(),
+        workspace_id=_ws,
         timeout_seconds=timeout_seconds,
         request_id=request_id,
     )
@@ -84,9 +92,9 @@ async def execute_tool_via_gateway(
         capability_id=_cap,
     )
     return {
-        "gateway_id": str(registration.get("gateway_id") or "").strip(),
+        "gateway_id": _gw,
         "device_id": str(registration.get("device_id") or "").strip(),
-        "workspace_id": str(registration.get("workspace_id") or "").strip(),
+        "workspace_id": _ws,
         "request_id": str(response.get("request_id") or request_id or "").strip(),
         "capability_id": str(response.get("capability_id") or capability_id).strip(),
         "run_id": str(response.get("run_id") or run_id).strip(),
@@ -105,9 +113,9 @@ async def interrupt_tool_via_gateway(
     timeout_seconds: int = gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    registration = _require_active_gateway_registration(gateway_id)
+    registration = _require_active_gateway_registration(gateway_id, workspace_id=workspace_id)
     _gw = str(registration.get("gateway_id") or "").strip()
-    _ws = str(registration.get("workspace_id") or workspace_id).strip()
+    _ws = str(registration.get("workspace_id") or "").strip()
     _tid = str(trace_id or "").strip()
     gateway_transparency_service.emit_gateway_action_event(
         event_type="gateway_action_started",
@@ -123,7 +131,7 @@ async def interrupt_tool_via_gateway(
         gateway_id=str(gateway_id or "").strip(),
         run_id=str(run_id or "").strip(),
         trace_id=str(trace_id or "").strip(),
-        workspace_id=str(workspace_id or "").strip(),
+        workspace_id=_ws,
         target_request_id=str(target_request_id or "").strip() or None,
         reason=str(reason or "").strip() or None,
         timeout_seconds=timeout_seconds,

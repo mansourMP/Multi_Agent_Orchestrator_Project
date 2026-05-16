@@ -43,6 +43,7 @@ class McpRegistryServiceTests(unittest.TestCase):
                 transport="streamable_http",
                 endpoint="https://example.com/mcp",
                 discover_tools=True,
+                auto_approve_tools=True,
             )
 
         self.assertEqual(record["id"], "inventory-feed")
@@ -59,6 +60,123 @@ class McpRegistryServiceTests(unittest.TestCase):
         skills = mcp_registry_service.list_workspace_mcp_skill_entries("workspace-1")
         self.assertEqual(skills[0]["id"], "mcp:inventory-feed:lookup_stock")
         self.assertEqual(skills[0]["execution_adapter"], "mcp_tool")
+
+    def test_discovered_tools_require_explicit_approval_before_use(self) -> None:
+        with patch.object(
+            mcp_registry_service,
+            "_list_tools_streamable_http_async",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "name": "lookup_stock",
+                        "label": "Lookup Stock",
+                        "description": "Read inventory data.",
+                        "action_class": "read",
+                        "connector_scopes": ["inventory"],
+                    },
+                    {
+                        "name": "write_stock",
+                        "label": "Write Stock",
+                        "description": "Update inventory data.",
+                        "action_class": "write",
+                        "connector_scopes": ["inventory"],
+                    },
+                ]
+            ),
+        ):
+            record = mcp_registry_service.upsert_workspace_mcp_server(
+                workspace_id="workspace-1",
+                server_id="inventory-feed",
+                label="Inventory Feed",
+                transport="streamable_http",
+                endpoint="https://example.com/mcp",
+                discover_tools=True,
+            )
+
+        self.assertEqual([tool["approved"] for tool in record["tools"]], [False, False])
+        self.assertEqual(mcp_registry_service.list_workspace_mcp_skill_entries("workspace-1"), [])
+
+        approved = mcp_registry_service.approve_mcp_tool(
+            workspace_id="workspace-1",
+            server_id="inventory-feed",
+            tool_name="lookup_stock",
+        )
+
+        approval_state = {
+            tool["name"]: tool["approved"]
+            for tool in approved["tools"]
+        }
+        self.assertEqual(approval_state, {"lookup_stock": True, "write_stock": False})
+        skills = mcp_registry_service.list_workspace_mcp_skill_entries("workspace-1")
+        self.assertEqual([item["id"] for item in skills], ["mcp:inventory-feed:lookup_stock"])
+
+    def test_refresh_preserves_existing_approvals_and_hides_new_tools(self) -> None:
+        mcp_registry_service.upsert_workspace_mcp_server(
+            workspace_id="workspace-1",
+            server_id="inventory-feed",
+            label="Inventory Feed",
+            transport="streamable_http",
+            endpoint="https://example.com/mcp",
+            tools=[
+                {
+                    "name": "lookup_stock",
+                    "label": "Lookup Stock",
+                    "description": "Read inventory data.",
+                    "action_class": "read",
+                    "connector_scopes": ["inventory"],
+                    "approved": True,
+                }
+            ],
+            metadata={},
+        )
+
+        with patch.object(
+            mcp_registry_service,
+            "_list_tools_streamable_http_async",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "name": "lookup_stock",
+                        "label": "Lookup Stock",
+                        "description": "Read inventory data.",
+                        "action_class": "read",
+                        "connector_scopes": ["inventory"],
+                    },
+                    {
+                        "name": "delete_stock",
+                        "label": "Delete Stock",
+                        "description": "Delete inventory data.",
+                        "action_class": "write",
+                        "connector_scopes": ["inventory"],
+                    },
+                ]
+            ),
+        ):
+            refreshed = mcp_registry_service.refresh_workspace_mcp_server_tools(
+                workspace_id="workspace-1",
+                server_id="inventory-feed",
+            )
+
+        approval_state = {
+            tool["name"]: tool["approved"]
+            for tool in refreshed["tools"]
+        }
+        self.assertEqual(approval_state, {"lookup_stock": True, "delete_stock": False})
+        skills = mcp_registry_service.list_workspace_mcp_skill_entries("workspace-1")
+        self.assertEqual([item["id"] for item in skills], ["mcp:inventory-feed:lookup_stock"])
+
+    def test_rejects_private_or_loopback_mcp_endpoints(self) -> None:
+        for endpoint in ("https://127.0.0.1/mcp", "https://10.0.0.2/mcp", "https://localhost/mcp"):
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaises(Exception):
+                    mcp_registry_service.upsert_workspace_mcp_server(
+                        workspace_id="workspace-1",
+                        server_id="unsafe",
+                        label="Unsafe",
+                        transport="streamable_http",
+                        endpoint=endpoint,
+                        metadata={},
+                    )
 
     def test_invoke_workspace_mcp_skill_returns_tool_payload_and_arguments(self) -> None:
         mcp_registry_service.upsert_workspace_mcp_server(

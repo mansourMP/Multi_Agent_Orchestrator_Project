@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { CommandSheet } from '@/lib/ui/command-sheet';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { subscribeWorkstationApprovalResolved } from '@/lib/workspace/workstation-approval-events';
@@ -624,6 +625,40 @@ function formatHistoryDate(value: string | null): string {
   });
 }
 
+function formatAbsoluteDate(value: string | null): string {
+  if (!value) {
+    return 'Not recorded';
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  return new Date(parsed).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatArtifactSize(value: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return 'Unknown size';
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isImageProofArtifact(artifact: ActivityArtifactRecord): boolean {
+  const kind = artifact.kind.toLowerCase();
+  return kind === 'screenshot' || kind.includes('image') || artifact.contentType?.startsWith('image/') === true;
+}
+
 function buildAdminAuditLine(audit: NonNullable<ActivityProofItem['adminAudit']>): string {
   const parts: string[] = [];
   if (audit.rawProvider || audit.rawModel) {
@@ -674,6 +709,7 @@ export function WorkstationRunsPane() {
   const [activeFilter, setActiveFilter] = useState<ActivityFilterId>('all');
   const [traceIdFilter, setTraceIdFilter] = useState('');
   const [showAdminAudit, setShowAdminAudit] = useState(false);
+  const [selectedComputerProofId, setSelectedComputerProofId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
   const [isLoading, setIsLoading] = useState(() => cachedThreads === null || cachedActivity === null);
   const [error, setError] = useState<string | null>(null);
@@ -776,6 +812,18 @@ export function WorkstationRunsPane() {
   const computerProofItems = activityItems.filter((item) => item.type === 'gateway' && (item.computerProof || item.artifacts.length > 0));
   const latestComputerProofItem = computerProofItems[0] ?? null;
   const adminAuditCount = activityItems.filter((item) => item.adminAudit !== null).length;
+  const selectedComputerProofItem = useMemo(
+    () => selectedComputerProofId
+      ? activityItems.find((item) => item.id === selectedComputerProofId) ?? null
+      : null,
+    [activityItems, selectedComputerProofId],
+  );
+  const selectedProofArtifacts = selectedComputerProofItem?.artifacts ?? [];
+  const primaryProofArtifact = selectedProofArtifacts.find(isImageProofArtifact) ?? selectedProofArtifacts[0] ?? null;
+  const selectedProofTarget = selectedComputerProofItem?.computerProof?.appTitle
+    || selectedComputerProofItem?.computerProof?.currentUrl
+    || selectedComputerProofItem?.title
+    || 'Computer proof';
 
   return (
     <WorkstationSurfaceRoot surface="activity">
@@ -810,6 +858,15 @@ export function WorkstationRunsPane() {
               <WorkstationSurfaceCard
                 title="Latest computer proof"
                 description="Screen evidence from an agent-controlled computer or browser session."
+                actions={(
+                  <button
+                    type="button"
+                    className="app-button app-button--secondary"
+                    onClick={() => setSelectedComputerProofId(latestComputerProofItem.id)}
+                  >
+                    Inspect proof
+                  </button>
+                )}
               >
                 <div className="app-computer-proof-card">
                   <div className="app-computer-proof-card__copy">
@@ -885,6 +942,10 @@ export function WorkstationRunsPane() {
                         type="button"
                         className={`app-runs-minimal-row app-runs-minimal-row--flat${selectedThreadId === item.threadId ? ' app-runs-minimal-row--selected' : ''}`}
                         onClick={() => {
+                          if (item.computerProof || item.artifacts.length > 0) {
+                            setSelectedComputerProofId(item.id);
+                            return;
+                          }
                           if (!item.threadId) {
                             return;
                           }
@@ -937,6 +998,87 @@ export function WorkstationRunsPane() {
           </div>
         )}
       </main>
+      <CommandSheet
+        open={selectedComputerProofItem !== null}
+        title="Computer proof"
+        description="Inspectable evidence from the computer or browser session the agent controlled."
+        onClose={() => setSelectedComputerProofId(null)}
+        actions={primaryProofArtifact ? (
+          <button
+            type="button"
+            className="app-button app-button--secondary"
+            onClick={() => {
+              window.location.assign(services.client.artifactDownloadUrl(primaryProofArtifact.id));
+            }}
+          >
+            Download proof
+          </button>
+        ) : null}
+      >
+        {selectedComputerProofItem ? (
+          <div className="app-computer-proof-inspector">
+            <div className="app-computer-proof-inspector__preview">
+              {primaryProofArtifact && isImageProofArtifact(primaryProofArtifact) ? (
+                <img
+                  src={services.client.artifactFileUrl(primaryProofArtifact.id)}
+                  alt={primaryProofArtifact.label}
+                  loading="lazy"
+                />
+              ) : (
+                <div className="app-computer-proof-inspector__empty">
+                  <strong>No screen preview</strong>
+                  <span>The proof is recorded as artifact metadata and can still be downloaded.</span>
+                </div>
+              )}
+            </div>
+            <div className="app-computer-proof-inspector__details">
+              <div className="app-computer-proof-inspector__header">
+                <span>{selectedComputerProofItem.computerProof?.providerId || selectedComputerProofItem.source}</span>
+                <strong>{selectedProofTarget}</strong>
+                <p>{selectedComputerProofItem.computerProof?.currentUrl || selectedComputerProofItem.summary}</p>
+              </div>
+              <dl className="app-computer-proof-inspector__facts">
+                <div>
+                  <dt>Captured</dt>
+                  <dd>{formatAbsoluteDate(selectedComputerProofItem.occurredAt)}</dd>
+                </div>
+                <div>
+                  <dt>Runtime session</dt>
+                  <dd>{selectedComputerProofItem.computerProof?.runtimeSessionId || selectedComputerProofItem.sessionKey || 'Not recorded'}</dd>
+                </div>
+                <div>
+                  <dt>Trace</dt>
+                  <dd>{selectedComputerProofItem.traceId || 'Not recorded'}</dd>
+                </div>
+                <div>
+                  <dt>Source</dt>
+                  <dd>{selectedComputerProofItem.source}</dd>
+                </div>
+              </dl>
+              {selectedProofArtifacts.length > 0 ? (
+                <div className="app-computer-proof-inspector__artifacts">
+                  {selectedProofArtifacts.map((artifact) => (
+                    <button
+                      key={artifact.id}
+                      type="button"
+                      onClick={() => {
+                        window.location.assign(services.client.artifactDownloadUrl(artifact.id));
+                      }}
+                    >
+                      <span>{artifact.label}</span>
+                      <small>{artifact.contentType || artifact.kind} · {formatArtifactSize(artifact.byteSize)}</small>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <WorkstationSurfaceNotice tone="neutral">
+                  This event has computer proof metadata but no downloadable artifact yet.
+                </WorkstationSurfaceNotice>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </CommandSheet>
     </WorkstationSurfaceRoot>
   );
 }

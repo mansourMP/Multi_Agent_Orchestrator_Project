@@ -297,6 +297,8 @@ body.theme-light {
   --app-border-muted: rgba(30, 32, 36, 0.05);
   --app-border-default: #e1e4e8;
   --app-border-accent: #2f2f2f;
+  --interactive-accent: #5f6570;
+  --interactive-accent-hover: #1e2024;
 
   --app-text-primary: #1e2024;
   --app-text-secondary: #5f6570;
@@ -2030,9 +2032,9 @@ body[data-emp-theme='dark'] .app-textarea:focus {
 }
 
 .app-data-badge--accent {
-  border-color: var(--app-text-primary);
-  background: var(--app-text-primary);
-  color: var(--app-text-inverse);
+  border-color: color-mix(in srgb, var(--app-accent) 32%, transparent);
+  background: color-mix(in srgb, var(--app-accent) 8%, transparent);
+  color: var(--app-text-primary);
 }
 
 .app-auth-page {
@@ -2564,7 +2566,7 @@ body[data-emp-theme='dark'] .app-auth-input:-webkit-autofill:focus {
 .studio-ai-settings__choice--active:hover,
 .studio-ai-settings__choice--active:focus-visible {
   border-color: var(--app-accent);
-  background: var(--app-accent-soft);
+  background: color-mix(in srgb, var(--app-accent) 8%, var(--app-bg-panel));
 }
 
 .studio-ai-settings__choice-head {
@@ -2651,8 +2653,10 @@ body[data-emp-theme='dark'] .app-auth-input:-webkit-autofill:focus {
 }
 
 .studio-agent-chat .app-chat-composer:focus-within {
-  border-color: var(--app-accent);
-  box-shadow: 0 0 0 4px var(--app-accent-soft);
+  border-color: color-mix(in srgb, var(--app-accent) 24%, var(--premium-glass-border));
+  box-shadow:
+    0 20px 60px -28px rgba(30, 32, 36, 0.12),
+    0 0 0 1px color-mix(in srgb, var(--app-accent) 12%, transparent);
 }
 
 .deployed-agent-chat__meta-details {
@@ -3993,7 +3997,20 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
 }
 
 .app-chat-composer__textarea {
+  width: 100%;
+  min-height: 58px;
+  max-height: 140px;
+  padding: 10px 12px;
+  border: 0;
   border-radius: 20px;
+  background: transparent;
+  box-shadow: none;
+  resize: none;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: var(--app-weight-medium);
+  letter-spacing: -0.01em;
+  line-height: 1.45;
 }
 
 .app-chat-composer__textarea:focus,
@@ -4041,23 +4058,6 @@ body[data-emp-theme='dark'] .app-chat-composer__surface {
 .app-chat-composer__notice-link:hover,
 .app-chat-composer__notice-link:focus-visible {
   color: var(--text-secondary);
-}
-
-.app-chat-composer__textarea {
-  width: 100%;
-  min-height: 58px;
-  max-height: 140px;
-  padding: 10px 6px 10px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  resize: none;
-  color: var(--text-primary);
-  font-size: 16px;
-  font-weight: var(--app-weight-medium);
-  letter-spacing: -0.01em;
-  line-height: 1.45;
 }
 
 .app-chat-composer__toolbar {
@@ -6886,12 +6886,20 @@ body.theme-light .studio-agents-nav__agent[aria-selected='true'] {
   align-items: center;
   gap: var(--app-space-6);
   flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1024px) {
+  .studio-agent-overview__hero-metrics {
+    gap: var(--app-space-4);
+  }
 }
 
 .studio-agent-overview__hero-metric {
   display: grid;
   gap: 2px;
   text-align: right;
+  min-width: 5rem;
 }
 
 .studio-agent-overview__hero-metric span {
@@ -14098,7 +14106,8 @@ body.theme-light .sage-integrations-nav__bucket--active {
   color: var(--text-secondary);
 }
 
-.sage-unified-expand__advanced-disclosure {
+.sage-unified-expand__advanced-disclosure,
+.sage-unified-expand__config-disclosure {
   display: grid;
   gap: var(--space-sm);
   padding: var(--space-sm);
@@ -14107,7 +14116,8 @@ body.theme-light .sage-integrations-nav__bucket--active {
   background: color-mix(in srgb, var(--app-bg-panel-elevated) 62%, var(--app-bg-panel) 38%);
 }
 
-.sage-unified-expand__advanced-summary {
+.sage-unified-expand__advanced-summary,
+.sage-unified-expand__config-summary {
   color: var(--text-secondary);
   font-size: 12px;
   font-family: var(--app-font-sans);
@@ -14116,7 +14126,8 @@ body.theme-light .sage-integrations-nav__bucket--active {
   cursor: pointer;
 }
 
-.sage-unified-expand__advanced-disclosure[open] .sage-unified-expand__advanced-summary {
+.sage-unified-expand__advanced-disclosure[open] .sage-unified-expand__advanced-summary,
+.sage-unified-expand__config-disclosure[open] .sage-unified-expand__config-summary {
   margin-bottom: var(--space-xs);
 }
 
@@ -14241,7 +14252,8 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 .sage-computer-connect__state span,
-.sage-computer-connect__advanced p {
+.sage-computer-connect__advanced p,
+.sage-computer-connect__config p {
   color: var(--app-text-tertiary);
   font-size: var(--app-font-12);
   line-height: var(--line-height-normal);
@@ -14254,21 +14266,24 @@ body.theme-light .sage-integrations-nav__bucket--active {
   text-transform: capitalize;
 }
 
-.sage-computer-connect__advanced {
+.sage-computer-connect__advanced,
+.sage-computer-connect__config {
   padding: var(--app-space-3);
   border: 1px solid color-mix(in srgb, var(--app-border-subtle) 72%, transparent);
   border-radius: var(--app-radius-md);
   background: color-mix(in srgb, var(--app-bg-panel) 82%, transparent);
 }
 
-.sage-computer-connect__advanced summary {
+.sage-computer-connect__advanced summary,
+.sage-computer-connect__config summary {
   color: var(--app-text-secondary);
   font-size: var(--app-font-12);
   font-weight: var(--app-weight-semibold);
   cursor: pointer;
 }
 
-.sage-computer-connect__advanced p {
+.sage-computer-connect__advanced p,
+.sage-computer-connect__config p {
   margin: var(--app-space-2) 0 0;
 }
 

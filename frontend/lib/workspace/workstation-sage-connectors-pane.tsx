@@ -96,8 +96,8 @@ type AiProviderSummary = {
   creditsDetail: string;
   backupLabel: string;
   backupDetail: string;
-  advancedLabel: string;
-  advancedDetail: string;
+  configLabel: string;
+  configDetail: string;
 };
 
 type ConnectorCardDefinition = {
@@ -238,7 +238,7 @@ const DEFAULT_HOSTED_SAGE_AI: HostedSageAiSnapshot = {
   monthlyCreditsRemaining: 0,
 };
 
-const FALLBACK_PROVIDER_IDS = [
+const SAMPLE_PROVIDER_IDS = [
   'deepseek',
   'gemini',
   'openai',
@@ -257,7 +257,7 @@ const FALLBACK_PROVIDER_IDS = [
   'ollama',
 ] as const;
 
-const FALLBACK_PROVIDER_LABELS: Record<string, string> = {
+const SAMPLE_PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
   'openai-codex': 'OpenAI Codex',
   anthropic: 'Anthropic',
@@ -674,9 +674,9 @@ function hostedProviderDetailLabel(hostedSageAi: HostedSageAiSnapshot, hostedPro
 }
 
 function fallbackProviderCatalog(): ProviderSnapshot[] {
-  return FALLBACK_PROVIDER_IDS.map((id) => ({
+  return SAMPLE_PROVIDER_IDS.map((id) => ({
     id,
-    label: FALLBACK_PROVIDER_LABELS[id] ?? id,
+    label: SAMPLE_PROVIDER_LABELS[id] ?? id,
     state: 'unknown',
     usable: false,
     active: false,
@@ -1509,7 +1509,7 @@ export function WorkstationSageConnectorsPane({
   const [providerModelOverrides, setProviderModelOverrides] = useState<Record<string, ProviderCatalogModelRecord[]>>({});
   const [failedLogos, setFailedLogos] = useState<Set<string>>(() => new Set());
   const [busyCardId, setBusyCardId] = useState<string | null>(null);
-  const [advancedChannelId, setAdvancedChannelId] = useState<PersonalCommunicationChannel | null>(null);
+  const [configChannelId, setConfigChannelId] = useState<PersonalCommunicationChannel | null>(null);
   const [channelDrafts, setChannelDrafts] = useState<Record<PersonalCommunicationChannel, PersonalChannelDraft>>({
     telegram: defaultPersonalChannelDraft('telegram'),
     whatsapp: defaultPersonalChannelDraft('whatsapp'),
@@ -1761,9 +1761,9 @@ export function WorkstationSageConnectorsPane({
       backupLabel: backupProviderCard ? `${backupName} ${backupAvailability}` : 'No backup configured',
       backupDetail: backupProviderCard
         ? `${backupProviderCard.label} stays available as ${providerPathLabel(backupProviderCard)}.`
-        : 'Connect Gemini, OpenAI, or Anthropic when you want a fallback hosted provider.',
-      advancedLabel: 'More AI choices',
-      advancedDetail: 'Connect another AI account or use a model on Connected Computer.',
+        : 'Connect Gemini, OpenAI, or Anthropic when you want a backup hosted provider.',
+      configLabel: 'Provider configuration',
+      configDetail: 'Connect another AI account or use a model on Connected Computer.',
     };
   }, [activeProviderCard, backupProviderCard, explicitSelectedProfile, hostedProviderCard, hostedSageAi, localCompanionOnline]);
 
@@ -2826,13 +2826,13 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
-  function renderPersonalChannelAdvanced(
+  function renderPersonalChannelConfig(
     channel: PersonalCommunicationChannel,
     channelDraft: PersonalChannelDraft,
     channelBusy: boolean,
   ) {
     return (
-      <div className="sage-unified-expand__advanced app-stack-3">
+      <div className="sage-unified-expand__config app-stack-3">
         <div className="sage-unified-expand__text">
           Setup details are only for login, pairing, and controlled test messages.
         </div>
@@ -2935,7 +2935,7 @@ export function WorkstationSageConnectorsPane({
     const channel = record.channel ?? null;
     const channelDraft = channel ? channelDrafts[channel] : null;
     const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
-    const advancedOpen = channel ? advancedChannelId === channel : false;
+    const configOpen = channel ? configChannelId === channel : false;
     return (
       <MotionSlidePanel className="sage-unified-expand">
         <div className="sage-unified-expand__header">
@@ -2973,7 +2973,7 @@ export function WorkstationSageConnectorsPane({
               type="button"
               disabled={channelBusy}
               onClick={() => {
-                setAdvancedChannelId(advancedOpen ? null : channel);
+                setConfigChannelId(configOpen ? null : channel);
               }}
             >
               Setup details
@@ -3013,7 +3013,7 @@ export function WorkstationSageConnectorsPane({
             Close
           </button>
         </div>
-        {showChannelActions && channel && channelDraft && advancedOpen ? renderPersonalChannelAdvanced(channel, channelDraft, channelBusy) : null}
+        {showChannelActions && channel && channelDraft && configOpen ? renderPersonalChannelConfig(channel, channelDraft, channelBusy) : null}
       </MotionSlidePanel>
     );
   }
@@ -3022,7 +3022,7 @@ export function WorkstationSageConnectorsPane({
     const channel = record.channel ?? null;
     const channelDraft = channel ? channelDrafts[channel] : null;
     const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
-    const advancedOpen = channel ? advancedChannelId === channel : false;
+    const configOpen = channel ? configChannelId === channel : false;
     const showClose = options.showClose !== false;
     return (
       <MotionSlidePanel className="sage-unified-expand">
@@ -3047,7 +3047,7 @@ export function WorkstationSageConnectorsPane({
               type="button"
               onClick={() => {
                 if (channel) {
-                  setAdvancedChannelId(advancedOpen ? null : channel);
+                  setConfigChannelId(configOpen ? null : channel);
                   return;
                 }
                 if (record.actionTarget === 'computer') {
@@ -3090,7 +3090,7 @@ export function WorkstationSageConnectorsPane({
             </button>
           ) : null}
         </div>
-        {channel && channelDraft && advancedOpen ? renderPersonalChannelAdvanced(channel, channelDraft, channelBusy) : null}
+        {channel && channelDraft && configOpen ? renderPersonalChannelConfig(channel, channelDraft, channelBusy) : null}
       </MotionSlidePanel>
     );
   }
@@ -3160,7 +3160,7 @@ export function WorkstationSageConnectorsPane({
               <strong>{lastSeen}</strong>
             </div>
           </div>
-          <details className="sage-computer-connect__advanced">
+          <details className="sage-computer-connect__config">
             <summary>Connection details</summary>
             <p>Connection details are only for reconnecting, revoking, or debugging the selected computer. Normal users should only need the connect button.</p>
           </details>
@@ -3169,10 +3169,10 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
-  function renderConnectorAdvancedDetails(record: ConnectorCardRecord) {
+  function renderConnectorConfigDetails(record: ConnectorCardRecord) {
     return (
-      <details className="sage-unified-expand__advanced-disclosure">
-        <summary className="sage-unified-expand__advanced-summary">Connection details</summary>
+      <details className="sage-unified-expand__config-disclosure">
+        <summary className="sage-unified-expand__config-summary">Connection details</summary>
         <div className="sage-unified-expand__text">
           App actions Sage can use after you connect this integration.
         </div>
@@ -3208,7 +3208,7 @@ export function WorkstationSageConnectorsPane({
         {record.connected ? (
           <>
             <div className="sage-unified-expand__text">{record.definition.summary}</div>
-            {renderConnectorAdvancedDetails(record)}
+            {renderConnectorConfigDetails(record)}
             <div className="sage-unified-expand__toggle-row">
               <span className="sage-unified-expand__text">Memory</span>
               <button
@@ -3242,7 +3242,7 @@ export function WorkstationSageConnectorsPane({
           <>
             <div className="sage-unified-expand__text">{record.definition.summary}</div>
             <div className="sage-unified-expand__text">{record.definition.setupHint}</div>
-            {renderConnectorAdvancedDetails(record)}
+            {renderConnectorConfigDetails(record)}
             <div className="sage-unified-expand__actions">
               <button
                 type="button"

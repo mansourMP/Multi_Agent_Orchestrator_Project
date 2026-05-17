@@ -836,7 +836,7 @@ export function WorkstationGatewayOperatorPane({
   const [busyActionKey, setBusyActionKey] = useState<string | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
   const [manualSetupVisible, setManualSetupVisible] = useState(false);
-  const [advancedDiagnosticsVisible, setAdvancedDiagnosticsVisible] = useState(false);
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [channelDrafts, setChannelDrafts] = useState<Record<ChannelKind, ChannelDraft>>({
     whatsapp: defaultChannelDraft('Empyralis connected-computer test.'),
     telegram: defaultChannelDraft('Empyralis connected-computer test.'),
@@ -1453,7 +1453,7 @@ export function WorkstationGatewayOperatorPane({
           />
         </WorkstationSurfaceStatGrid>
 
-        {advancedDiagnosticsVisible ? (
+        {diagnosticsVisible ? (
           <FormSection
           title="What Sage can use on the connected computer"
           description="Capability groups from the selected computer, shown without protocol or token detail."
@@ -1512,7 +1512,7 @@ export function WorkstationGatewayOperatorPane({
           </FormSection>
         ) : null}
 
-        {advancedDiagnosticsVisible ? (
+        {diagnosticsVisible ? (
           <FormSection
           title="How this trust lane works"
           description="Default keeps risky local and external actions behind approval. Full Access only applies to the selected user-owned computer."
@@ -1584,14 +1584,14 @@ export function WorkstationGatewayOperatorPane({
           </FormSection>
         ) : null}
 
-        {advancedDiagnosticsVisible && loadingRegistrations && !registrationsTimedOut ? (
+        {diagnosticsVisible && loadingRegistrations && !registrationsTimedOut ? (
           <WorkstationSurfaceNotice tone="neutral">Loading connected computers…</WorkstationSurfaceNotice>
-        ) : advancedDiagnosticsVisible && gateways.length === 0 ? (
+        ) : diagnosticsVisible && gateways.length === 0 ? (
           <EmptyPanel
             title="No computers connected"
             body="Connecting a computer is optional. It allows Sage to use your local files, browser, or terminal when you explicitly grant permission."
           />
-        ) : advancedDiagnosticsVisible ? (
+        ) : diagnosticsVisible ? (
           <WorkstationSurfaceList>
             {gateways.map((gateway) => {
               const gatewayId = String(gateway.gateway_id ?? '').trim();
@@ -1692,7 +1692,7 @@ export function WorkstationGatewayOperatorPane({
                 setStatusMessage(null);
                 setErrorMessage(null);
                 setManageOpen(false);
-                setAdvancedDiagnosticsVisible(true);
+                setDiagnosticsVisible(true);
                 void refreshRegistrations(true)
                   .then(() => (selectedGatewayId ? refreshGatewayDetail(selectedGatewayId, false, true) : undefined))
                   .catch((error) => {
@@ -1706,7 +1706,7 @@ export function WorkstationGatewayOperatorPane({
         </div>
       </CommandSheet>
 
-      {selectedGateway && showStatusSection && advancedDiagnosticsVisible ? (
+      {selectedGateway && showStatusSection && diagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Connection details"
           description="Trust, health, reconnect posture, and diagnostics for the selected computer."
@@ -1882,7 +1882,7 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway && showChannelsSection && advancedDiagnosticsVisible ? (
+      {selectedGateway && showChannelsSection && diagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Personal Channels"
           description="Current login, linked identity, and recent activity for personal WhatsApp and Telegram on the selected computer."
@@ -2060,7 +2060,7 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway && showApprovalsSection && advancedDiagnosticsVisible ? (
+      {selectedGateway && showApprovalsSection && diagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Needs your OK requests"
           description="Resolve risky local actions without leaving the product shell."
@@ -2118,7 +2118,7 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway && showActivitySection && advancedDiagnosticsVisible ? (
+      {selectedGateway && showActivitySection && diagnosticsVisible ? (
         <WorkstationSurfaceCard
           title="Device activity"
           description="Inspect governed browser sessions and recent local browser activity without dropping into raw APIs."

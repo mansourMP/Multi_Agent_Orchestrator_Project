@@ -546,7 +546,14 @@ class WorkspaceTransportAdapter {
     if (!response.ok) {
       throw new Error(`Workspace transport request failed with status ${response.status}.`);
     }
-    return (await response.json()) as T;
+    try {
+      return (await response.json()) as T;
+    } catch (error) {
+      if (init.signal?.aborted || (error instanceof Error && /aborted/i.test(error.message))) {
+        throw error;
+      }
+      throw error;
+    }
   }
 
   snapshot() {

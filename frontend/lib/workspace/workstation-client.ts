@@ -1645,16 +1645,32 @@ function shouldRetryTurnStreamFailure(error: unknown, attempt: number): boolean 
 }
 
 function normalizeTransportFailure(error: unknown): WorkstationClientError {
+  if (error instanceof WorkstationClientError) {
+    return error;
+  }
   const baseMessage =
     error instanceof Error && error.message.trim()
       ? error.message
       : 'The workstation request failed before the server responded.';
-  const message = /timed out/i.test(baseMessage)
-    ? 'Sage took too long to respond. Please try again.'
-    : 'The request could not connect. Retry when ready.';
-  const code = /timed out/i.test(baseMessage) ? 'request_timeout' : 'transport_failure';
+
+  const isAbort = (error instanceof Error && error.name === 'AbortError') || /aborted/i.test(baseMessage);
+  const isTimeout = /timed out/i.test(baseMessage);
+
+  let message = 'The request could not connect. Retry when ready.';
+  let code = 'transport_failure';
+  let retryable = true;
+
+  if (isTimeout) {
+    message = 'Sage took too long to respond. Please try again.';
+    code = 'request_timeout';
+  } else if (isAbort) {
+    message = 'The request was cancelled.';
+    code = 'request_aborted';
+    retryable = false;
+  }
+
   return new WorkstationClientError(message, 0, null, code, {
-    retryable: true,
+    retryable,
   });
 }
 
@@ -1683,14 +1699,18 @@ function mergeJsonHeaders(headers?: HeadersInit): Headers {
 }
 
 async function readResponsePayload(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text.trim()) {
-    return null;
-  }
   try {
-    return JSON.parse(text);
-  } catch {
-    return text;
+    const text = await response.text();
+    if (!text.trim()) {
+      return null;
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  } catch (error) {
+    throw normalizeTransportFailure(error);
   }
 }
 
@@ -1729,32 +1749,22 @@ export function createWorkstationClient(
     allowStatuses = [],
     policy,
   }: WorkstationClientRequestOptions): Promise<T | null> {
-    let response: Response;
     try {
-      response = await transport.request(path, init, resolveRequestPolicy(init, policy));
+      const response = await transport.request(path, init, resolveRequestPolicy(init, policy));
+      const payload = await readResponsePayload(response);
+
+      if (!response.ok && allowStatuses.includes(response.status)) {
+        return null;
+      }
+
+      if (!response.ok) {
+        throw normalizeClientError(response.status, payload);
+      }
+
+      return payload as T;
     } catch (error) {
       throw normalizeTransportFailure(error);
     }
-    let payload: unknown = null;
-    const text = await response.text();
-
-    if (text.trim()) {
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        payload = text;
-      }
-    }
-
-    if (!response.ok && allowStatuses.includes(response.status)) {
-      return null;
-    }
-
-    if (!response.ok) {
-      throw normalizeClientError(response.status, payload);
-    }
-
-    return payload as T;
   }
 
   async function createSession({

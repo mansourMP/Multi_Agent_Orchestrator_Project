@@ -390,7 +390,16 @@ export function WorkstationDeployedAgentAnalyticsPane({
           signal: requestController.signal,
         },
       );
-      const text = await response.text();
+      let text = '';
+      try {
+        text = await response.text();
+      } catch (error) {
+        if (requestController.signal.aborted || (error instanceof Error && /aborted/i.test(error.message))) {
+          return;
+        }
+        throw error;
+      }
+
       let payload: unknown = null;
       if (text.trim()) {
         try {

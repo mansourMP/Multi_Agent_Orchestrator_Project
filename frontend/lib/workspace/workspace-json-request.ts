@@ -83,7 +83,16 @@ export async function requestWorkspaceJson<T>(
     refreshSessionOn401: true,
   });
 
-  const text = await response.text();
+  let text = '';
+  try {
+    text = await response.text();
+  } catch (error) {
+    if (init.signal?.aborted || (error instanceof Error && /aborted/i.test(error.message))) {
+      throw error;
+    }
+    throw new Error('The workspace request was interrupted while reading the response.');
+  }
+
   let payload: unknown = null;
   if (text.trim()) {
     try {

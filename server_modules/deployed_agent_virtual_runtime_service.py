@@ -272,7 +272,7 @@ async def _append_cloud_runtime_audit_event(
     run_id: Any = None,
     thread_id: Any = None,
     session_key: Any = None,
-    channel: Any = "cloud_computer",
+    channel: Any = None,
     trace_id: Any = None,
     artifacts: Optional[List[Dict[str, Any]]] = None,
     action: str,

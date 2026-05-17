@@ -40,6 +40,7 @@ const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
   'memory',
   'heartbeat',
   'artifacts',
+  'integrations',
 ]);
 
 type ThreadTurnRecord = Record<string, unknown> & {

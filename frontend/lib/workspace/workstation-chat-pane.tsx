@@ -1144,15 +1144,7 @@ export function WorkstationChatPane() {
     };
   }, [activeThreadId, bootstrap.workspace.id]);
 
-  const {
-    projectedTimelineProjection,
-    projectedTimelineCells,
-    projectedSystemCells,
-    projectedAssistantCell,
-    pinnedTimelineCells,
-    pendingApprovalCells,
-    visibleTranscriptCells,
-  } = useWorkstationTimelineProjection({
+  const projectionOptions = useMemo(() => ({
     approvals,
     threadMessages: thread.messages,
     pendingUserMessage,
@@ -1165,7 +1157,30 @@ export function WorkstationChatPane() {
     isProviderGateSystemCell,
     projectedAssistantLooksSynthetic,
     readString,
-  });
+  }), [
+    approvals,
+    thread.messages,
+    pendingUserMessage,
+    isSending,
+    liveTimelineEvents,
+    showProjectedAssistant,
+    isSyntheticTranscriptMessage,
+    canonicalIncludesMessage,
+    isProviderGateTranscriptCell,
+    isProviderGateSystemCell,
+    projectedAssistantLooksSynthetic,
+    readString,
+  ]);
+
+  const {
+    projectedTimelineProjection,
+    projectedTimelineCells,
+    projectedSystemCells,
+    projectedAssistantCell,
+    pinnedTimelineCells,
+    pendingApprovalCells,
+    visibleTranscriptCells,
+  } = useWorkstationTimelineProjection(projectionOptions);
 
   const hasConversationContent = visibleTranscriptCells.length > 0
     || Boolean(liveTrace);

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  Activity,
   Bot,
   Compass,
   LayoutGrid,
@@ -12,7 +11,6 @@ import {
   Moon,
   Settings2,
   SunMedium,
-  Waypoints,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -45,9 +43,7 @@ type RailDestination = {
 const PRIMARY_DESTINATIONS: RailDestination[] = [
   { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot, dataLinkId: 'sage' },
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
-  { id: 'gateway', label: 'Computers', defaultRouteId: 'gateway', icon: Waypoints },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
-  { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
 ];
 
 const SECONDARY_DESTINATIONS: RailDestination[] = [
@@ -260,8 +256,8 @@ export function AccountTenantSwitcher() {
 
   return (
     <aside data-workstation-switcher="rail" className="account-switcher">
-      <div className="account-switcher__cluster account-switcher__cluster--upper">
-        <nav aria-label="Primary destinations" className="account-switcher__nav account-switcher__nav--primary">
+      <nav aria-label="Primary destinations" className="account-switcher__cluster account-switcher__cluster--upper">
+        <div className="account-switcher__nav account-switcher__nav--primary">
           {PRIMARY_DESTINATIONS.map((destination) => {
             const href = activeWorkspaceId ? buildDestinationHref(activeWorkspaceId, destination) : '/';
             const isVisibleActive = visibleRailId === destination.id;
@@ -285,13 +281,11 @@ export function AccountTenantSwitcher() {
                 onClick={() => markNavigationPending(destination.id, href)}
               >
                 <destination.icon aria-hidden="true" />
-                <span className="account-switcher__link-label">{destination.label}</span>
               </Link>
             );
           })}
-        </nav>
-      </div>
-      <div className="account-switcher__spacer" />
+        </div>
+      </nav>
       <div className="account-switcher__cluster account-switcher__cluster--lower">
         {typeof usageCost === 'number' ? (
           <div
@@ -337,7 +331,6 @@ export function AccountTenantSwitcher() {
                 onClick={() => markNavigationPending(destination.id, href)}
               >
                 <destination.icon aria-hidden="true" />
-                <span className="account-switcher__link-label">{destination.label}</span>
               </Link>
             );
           })}

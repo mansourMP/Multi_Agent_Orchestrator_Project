@@ -7,6 +7,7 @@ import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { DataBadge } from '@/lib/ui/data-table';
 import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
 import { StateBanner } from '@/lib/ui/state-banner';
+import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { DeployedAgentRecord } from '@/lib/workspace/workstation-client';
 import type {
   AgentOperationalMetrics,
@@ -258,14 +259,10 @@ export const AgentRosterSidebar = memo(({
 
           <div className={joinClassNames('studio-agents-nav', agents.length === 0 && 'studio-agents-nav--empty')} aria-label="Workspace agents">
             {isAgentListPriming ? (
-              <div className="studio-agents-nav__empty">
-                <div className="studio-agents-nav__empty-copy">
-                  <strong>Loading agents</strong>
-                  <span>Checking this workspace for agents.</span>
-                </div>
-                <AppButton type="button" tone="secondary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                  Create agent
-                </AppButton>
+              <div className="studio-agents-nav__loading">
+                <SkeletonBlock height="4.5rem" />
+                <SkeletonBlock height="4.5rem" />
+                <SkeletonBlock height="4.5rem" />
               </div>
             ) : isAgentListUnavailable ? (
               <div className="studio-agents-nav__empty">

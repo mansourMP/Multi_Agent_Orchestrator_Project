@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, memo, useMemo, useState } from 'react';
 import {
   Brain,
   Check,
@@ -264,11 +264,11 @@ function compactActivityPreview(text: string): string | null {
   return null;
 }
 
-function ThinkingRow({
+const ThinkingRow = memo(({
   message,
 }: {
   message: WorkstationChatMessageRecord;
-}) {
+}) => {
   const [expanded, setExpanded] = useState(false);
   const text = String(message.metadata.thinking_text ?? message.content ?? '').trim();
   const activityLine = useMemo(
@@ -325,9 +325,9 @@ function ThinkingRow({
       ) : null}
     </article>
   );
-}
+});
 
-function SystemInlineRow({
+const SystemInlineRow = memo(({
   icon,
   primary,
   secondary,
@@ -339,7 +339,7 @@ function SystemInlineRow({
   secondary: string;
   state: 'running' | 'done' | 'error';
   dimmed: boolean;
-}) {
+}) => {
   return (
     <article className={`app-chat-system-row app-chat-system-row--${state}${dimmed ? ' app-chat-system-row--dimmed' : ''}`}>
       <span className="app-chat-system-row__icon" aria-hidden="true">{icon}</span>
@@ -347,15 +347,15 @@ function SystemInlineRow({
       <span className="app-chat-system-row__secondary">{secondary}</span>
     </article>
   );
-}
+});
 
-export function ChatMessage({
+export const ChatMessage = memo(({
   message,
 }: {
   message: WorkstationChatMessageRecord;
   resolvingApprovalId?: string | null;
   onResolveApproval?: (approvalId: string, resolution: 'approved' | 'rejected') => void;
-}) {
+}) => {
   const isUser = message.role === 'user';
   const text = message.content.trim();
   const timestamp = formatTimestamp(message.createdAt);
@@ -485,4 +485,4 @@ export function ChatMessage({
       ) : null}
     </article>
   );
-}
+});

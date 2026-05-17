@@ -1,11 +1,13 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { DataBadge } from '@/lib/ui/data-table';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { WorkstationSageHeartbeatRecord } from '@/lib/workspace/workstation-client';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
+import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import {
   WorkstationSurfaceCard,
   WorkstationSurfaceListItem,
@@ -295,7 +297,38 @@ function laneStatusText(item: ProductQueueItem): string {
   return item.status;
 }
 
+function workerLaneLabel(laneId: string): string {
+  switch (laneId) {
+    case 'main':
+      return 'Main agent';
+    case 'cron':
+      return 'Scheduled work';
+    case 'subagent':
+      return 'Worker agents';
+    case 'system':
+      return 'System';
+    default:
+      return laneId;
+  }
+}
+
+function workerLaneDescription(laneId: string): string {
+  switch (laneId) {
+    case 'main':
+      return 'Direct Sage turns and user-visible work.';
+    case 'cron':
+      return 'Recurring tasks and wakeups.';
+    case 'subagent':
+      return 'Delegated worker-agent jobs.';
+    case 'system':
+      return 'Background maintenance and platform work.';
+    default:
+      return 'Workspace work lane.';
+  }
+}
+
 export function WorkstationSageHeartbeatPane() {
+  const { bootstrap, routeManifest } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
   const [snapshot, setSnapshot] = useState<HeartbeatSnapshot | null>(null);
@@ -387,6 +420,22 @@ export function WorkstationSageHeartbeatPane() {
       : snapshot?.laneQueue.acceptingNewWork
         ? 'Ready'
         : 'Paused';
+  const activityHref = routeManifest.routeIndex.activity?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/activity`;
+  const approvalsHref = routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`;
+  const workerLaneRows = useMemo(() => {
+    if (!snapshot) {
+      return [];
+    }
+    return Object.entries(snapshot.laneQueue.lanes).map(([laneId, lane]) => ({
+      id: laneId,
+      title: workerLaneLabel(laneId),
+      description: workerLaneDescription(laneId),
+      concurrency: lane.concurrency,
+      activeCount: lane.activeCount,
+      pendingCount: lane.pendingCount,
+      items: [...lane.active, ...lane.pending].slice(0, 3),
+    }));
+  }, [snapshot]);
 
   return (
     <WorkstationSurfaceRoot surface="sage-tasks">
@@ -406,6 +455,26 @@ export function WorkstationSageHeartbeatPane() {
                 <span className="app-data-badge app-data-badge--accent">{queueStateLabel}</span>
                 <h2>Tasks</h2>
                 <p>{snapshot.recurringResponsibility || 'Sage has no recurring responsibility set.'}</p>
+                <div className="sage-work-hero__actions">
+                  <button
+                    type="button"
+                    className="app-link-button app-link-button--secondary"
+                    onClick={() => {
+                      void refresh(true).catch((loadError) => {
+                        setError(loadError instanceof Error ? loadError.message : 'Tasks are unavailable right now.');
+                        setIsLoading(false);
+                      });
+                    }}
+                  >
+                    Refresh
+                  </button>
+                  <Link href={activityHref} className="app-link-button app-link-button--secondary">
+                    Open Activity
+                  </Link>
+                  <Link href={approvalsHref} className="app-link-button app-link-button--secondary">
+                    Needs your OK
+                  </Link>
+                </div>
               </div>
               <div className="sage-work-hero__metrics" aria-label="Current task counts">
                 <div>
@@ -445,6 +514,45 @@ export function WorkstationSageHeartbeatPane() {
                 hint={snapshot.queueOverview.quietHours.label}
               />
             </WorkstationSurfaceStatGrid>
+
+            <WorkstationSurfaceCard
+              title="Worker lanes"
+              description={`Sage can run ${snapshot.laneQueue.maxTotalConcurrency} concurrent work items across the main lane, scheduled lane, worker-agent lane, and system lane.`}
+            >
+              <div className="sage-worker-lane-grid">
+                {workerLaneRows.map((lane) => (
+                  <section key={lane.id} className="sage-worker-lane-card">
+                    <header className="sage-worker-lane-card__header">
+                      <div>
+                        <h3>{lane.title}</h3>
+                        <p>{lane.description}</p>
+                      </div>
+                      <DataBadge tone={lane.activeCount > 0 ? 'success' : lane.pendingCount > 0 ? 'warning' : 'neutral'}>
+                        {lane.activeCount > 0 ? 'Live' : lane.pendingCount > 0 ? 'Waiting' : 'Idle'}
+                      </DataBadge>
+                    </header>
+                    <div className="sage-worker-lane-card__stats">
+                      <span><strong>{lane.activeCount}</strong> active</span>
+                      <span><strong>{lane.pendingCount}</strong> waiting</span>
+                      <span><strong>{lane.concurrency}</strong> max</span>
+                    </div>
+                    {lane.items.length > 0 ? (
+                      <div className="sage-worker-lane-card__items">
+                        {lane.items.map((item) => (
+                          <article key={item.id || `${lane.id}:${item.label}`} className="sage-task-row">
+                            <span className="sage-task-row__title">{item.label}</span>
+                            <span className="sage-task-row__meta">{item.status}{item.runId ? ` · ${item.runId}` : ''}</span>
+                            {item.summary ? <p>{item.summary}</p> : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="sage-worker-lane-card__empty">No active or queued work in this lane.</p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </WorkstationSurfaceCard>
 
             <WorkstationSurfaceCard
               title="Live Work Board"

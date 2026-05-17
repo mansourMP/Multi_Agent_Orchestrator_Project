@@ -9,6 +9,7 @@ import {
 } from '@/lib/ui/list-detail';
 import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
+import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type {
   DeployedAgentAnalyticsRecord,
   DeployedAgentConversationDetail,
@@ -1251,8 +1252,8 @@ export function WorkstationDeployedAgentsPane({
         {visibleGlobalErrorMessage ? (
           <PlatformNotification
             tone="danger"
-            title="Build is having trouble loading"
-            detail="Build keeps any successfully loaded assistant data visible while retrying failed requests."
+            title="Agents Studio is having trouble loading"
+            detail="Studio keeps successfully loaded agent data visible while retrying failed requests."
             onClose={() => setErrorMessage(null)}
           >
             {visibleGlobalErrorMessage}
@@ -1334,15 +1335,39 @@ export function WorkstationDeployedAgentsPane({
           )}
         >
           {currentStudioSubview === 'agents' && !selectedAgent ? (
-            <div className="studio-agent-detail-empty" aria-label="Agent detail">
-              <strong>{isAgentListUnavailable ? 'Agent list did not load' : agents.length === 0 ? 'Add your agent' : 'Select an agent'}</strong>
-              <span>
-                {isAgentListUnavailable
-                  ? 'Retry the workspace agent list.'
-                  : agents.length === 0
-                  ? 'Create the first workspace agent.'
-                  : 'Agent configuration, channels, memory, analytics, and launch state will appear here.'}
-              </span>
+            <div className="studio-agent-detail-empty" data-loading={isAgentListPriming} aria-label="Agent detail">
+              {isAgentListPriming ? (
+                <div className="studio-agent-detail-loading-body app-stack-5">
+                  <SkeletonBlock height="8rem" />
+                  <div className="studio-agent-overview__grid">
+                    <SkeletonBlock height="12rem" />
+                    <SkeletonBlock height="12rem" />
+                    <SkeletonBlock height="12rem" />
+                    <SkeletonBlock height="12rem" />
+                  </div>
+                </div>
+              ) : isAgentListUnavailable ? (
+                <>
+                  <strong>Agent list did not load</strong>
+                  <span>Retry the workspace agent list.</span>
+                  <AppButton type="button" tone="secondary" onClick={handleRefreshAgentsEvent}>
+                    Retry
+                  </AppButton>
+                </>
+              ) : agents.length === 0 ? (
+                <>
+                  <strong>Welcome to Studio</strong>
+                  <span>Create your first business assistant to see performance signals, launch readiness, and customer activity.</span>
+                  <AppButton type="button" onClick={() => handleOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+                    Create assistant
+                  </AppButton>
+                </>
+              ) : (
+                <>
+                  <strong>Select an agent</strong>
+                  <span>Configuration, channels, and performance signals will appear here.</span>
+                </>
+              )}
             </div>
           ) : null}
 

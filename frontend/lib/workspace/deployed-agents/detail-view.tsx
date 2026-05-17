@@ -47,6 +47,7 @@ import {
   rosterStatusTone,
   testRuntimeModeForPlacement,
   formatDeploymentModelLabel,
+  formatDeploymentModelSummary,
   selfHostedNodeHealthLabel,
   truncateExternalUserId,
   formatTimestamp,
@@ -57,6 +58,7 @@ import {
   runtimePlacementLabel,
   inferAiTierFromProviderModel,
   connectorConnected,
+  providerCatalogById,
 } from './utils';
 
 export interface AgentDetailViewProps {
@@ -158,9 +160,6 @@ export const AgentDetailView = memo(({
 
   const selectedBudgetCycle = readBudgetCycle(selectedAgent);
   const selectedBudgetBurn = selectedAgentAnalytics?.currentBurnUsd ?? readNumber(selectedBudgetCycle.current_burn_usd);
-  const selectedTopOutcome = selectedAgentAnalytics?.topOutcome
-    ?? selectedAgentAnalytics?.outcomes[0]?.[0]
-    ?? 'open';
 
   const selectedAgentModeLabel = selectedAgent
     ? runtimePlacementLabel(selectedAgentRuntimePlacement)
@@ -215,9 +214,18 @@ export const AgentDetailView = memo(({
       ? channels.map((channel) => humanizeToken(channel, channel)).join(', ')
       : 'No active channels';
   }, [selectedAgent]);
+  const providerCatalogIndex = useMemo(
+    () => providerCatalogById(providerCatalog),
+    [providerCatalog],
+  );
   const selectedAgentState = readString(selectedAgent?.deployment_state).toLowerCase();
   const selectedAgentStateLabel = humanizeToken(selectedAgent?.deployment_state, 'Draft');
-  const selectedAgentModelLabel = selectedModelId(selectedAgent) || humanizeToken(selectedProviderId(selectedAgent), 'Not pinned');
+  const selectedAgentProviderIdValue = selectedProviderId(selectedAgent);
+  const selectedAgentModelLabel = formatDeploymentModelLabel(selectedAgent, providerCatalogIndex);
+  const selectedAgentModelSummary = formatDeploymentModelSummary(selectedAgent, providerCatalogIndex);
+  const selectedAgentRouteLabel = selectedAgentProviderIdValue
+    ? providerCatalogIndex[selectedAgentProviderIdValue]?.label ?? humanizeToken(selectedAgentProviderIdValue, 'Custom API')
+    : 'Empyralis Credits';
   const selectedAgentToolCount = normalizeToolIds(
     readRecord(readRecord(selectedAgent?.config).tool_policy).enabled_tools ??
     readRecord(selectedAgent?.metadata).selected_tool_ids,
@@ -497,8 +505,8 @@ export const AgentDetailView = memo(({
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           eyebrow="Model"
-          title="Agent model"
-          subtitle="Choose the provider account, model, and visible usage price for this agent."
+          title="AI route"
+          subtitle="Choose whether this agent uses Empyralis credits or a connected API account."
         >
           {detailConfigDraft ? (
             <>
@@ -707,33 +715,56 @@ export const AgentDetailView = memo(({
             <div className="studio-agent-overview">
               <section className="studio-agent-overview__readiness-hero">
                 <div className="studio-agent-overview__hero-status">
-                  <DataBadge tone={selectedAgentState === 'live' ? 'success' : launchReady ? 'success' : 'warning'}>
-                    {selectedAgentStateLabel}
-                  </DataBadge>
+                  <div className="studio-agent-overview__status-line">
+                    <span className={joinClassNames('studio-agent-overview__status-dot', launchReady && 'studio-agent-overview__status-dot--ready')} />
+                    <DataBadge tone={selectedAgentState === 'live' ? 'success' : launchReady ? 'success' : 'warning'}>
+                      {selectedAgentStateLabel}
+                    </DataBadge>
+                  </div>
                   <strong>{launchTitle}</strong>
                   <p>{launchDetail}</p>
                 </div>
                 <div className="studio-agent-overview__hero-metrics">
                   <div className="studio-agent-overview__hero-metric">
-                    <span>Active users</span>
-                    <strong>{selectedAgentAnalytics ? formatCompactCount(selectedAgentAnalytics.activeUsersLast30d) : '0'}</strong>
+                    <span>Checklist</span>
+                    <strong>{readyCount}/{readinessItems.length}</strong>
                   </div>
                   <div className="studio-agent-overview__hero-metric">
-                    <span>Resolution</span>
-                    <strong>{selectedAgentAnalytics ? `${(100 - selectedAgentAnalytics.escalationRatePercent).toFixed(0)}%` : '100%'}</strong>
+                    <span>Conversations</span>
+                    <strong>{selectedAgentMetrics?.conversationCountLabel ?? '0'}</strong>
                   </div>
                   <div className="studio-agent-overview__hero-metric">
                     <span>Messages</span>
                     <strong>{selectedAgentAnalytics ? formatCompactCount(selectedAgentAnalytics.messageVolumeMonth) : '0'}</strong>
                   </div>
                   <div className="studio-agent-overview__hero-metric">
-                    <span>Open</span>
-                    <strong>{humanizeToken(selectedTopOutcome, 'Open')}</strong>
-                  </div>
-                  <div className="studio-agent-overview__hero-metric">
-                    <span>Budget</span>
+                    <span>Monthly cost</span>
                     <strong>{formatUsd(selectedBudgetBurn)}</strong>
                   </div>
+                </div>
+              </section>
+
+              <section className="studio-agent-overview__launch-checklist" aria-label="Launch checklist">
+                <div className="studio-agent-overview__section-head">
+                  <div>
+                    <span>Launch readiness</span>
+                    <strong>What must be true before customers see it</strong>
+                  </div>
+                  <small>{readyCount} of {readinessItems.length} ready</small>
+                </div>
+                <div className="studio-agent-overview__checklist-grid">
+                  {readinessItems.map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      className={joinClassNames('studio-agent-overview__checklist-card', item.ready && 'studio-agent-overview__checklist-card--ready')}
+                      onClick={() => onSelectTab(item.tab)}
+                    >
+                      <span className="studio-agent-overview__checklist-dot" />
+                      <strong>{item.label}</strong>
+                      <p>{item.detail}</p>
+                    </button>
+                  ))}
                 </div>
               </section>
 
@@ -794,15 +825,15 @@ export const AgentDetailView = memo(({
                   </div>
                   <div className="studio-agent-overview__card">
                     <span>Selected route</span>
-                    <strong>{selectedAgentModelLabel}</strong>
+                    <strong>{selectedAgentRouteLabel}</strong>
                   </div>
                   <div className="studio-agent-overview__card">
-                    <span>Quality tier</span>
-                    <strong>{humanizeToken(inferAiTierFromProviderModel(selectedProviderId(selectedAgent), selectedModelId(selectedAgent)), 'Balanced')}</strong>
+                    <span>Default model</span>
+                    <strong>{selectedAgentModelLabel}</strong>
                   </div>
                   <div className="studio-agent-overview__card studio-agent-overview__card--wide">
                     <span>Runtime</span>
-                    <p>{selectedAgentModeLabel} · {modelReady ? 'Ready for production traffic.' : 'Connect a provider in Integrations.'}</p>
+                    <p>{selectedAgentModelSummary} · {modelReady ? 'Ready for production traffic.' : 'Connect a provider in Integrations.'}</p>
                   </div>
                 </section>
 

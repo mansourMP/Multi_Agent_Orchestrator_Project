@@ -1607,6 +1607,9 @@ export function summarizeStudioErrorMessage(message: string | null): string | nu
   if (!normalized) {
     return null;
   }
+  if (normalized.toLowerCase() === 'sage cannot run that request in this workspace right now.') {
+    return 'Agents Studio cannot load that workspace data right now. Refresh, or check workspace access if it keeps happening.';
+  }
   if (
     normalized.length > 220
     || /<!doctype|<html|<script|hydration|react/i.test(normalized)

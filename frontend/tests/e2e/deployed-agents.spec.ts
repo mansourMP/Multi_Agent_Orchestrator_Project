@@ -987,7 +987,7 @@ test.describe('deployed agents surface', () => {
     await expect(surface).toContainText(/store assistant/i);
     await expect(surface).toContainText(/messages/i);
     await expect(surface).toContainText(/open/i);
-    await expect(surface).toContainText(/budget/i);
+    await expect(surface).toContainText(/monthly cost/i);
     await expect(surface).toContainText(/\$8\.00/);
     await page.getByRole('tab', { name: /results/i }).click();
     await expect(surface).toContainText(/owner intelligence/i);

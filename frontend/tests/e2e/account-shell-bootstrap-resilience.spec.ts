@@ -252,7 +252,7 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page.getByText(/remaining|Available|Not active/i).first()).toBeVisible();
     await expect(page.getByText(/^Backup$/)).toBeVisible();
     await expect(page.getByText(/Gemini (available|configurable)/i)).toBeVisible();
-    await expect(page.getByText(/^Advanced$/)).toBeVisible();
+    await expect(page.getByText(/^Provider configuration$/)).toBeVisible();
     await expect(page.getByText(/^More AI choices$/)).toBeVisible();
     await expect(page.getByText(/connect another AI account or use a model on This Computer/i)).toBeVisible();
     await expect(sectionLabels.filter({ hasText: /^Communication apps$/ })).toHaveCount(0);

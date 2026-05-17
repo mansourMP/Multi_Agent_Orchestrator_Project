@@ -47,6 +47,8 @@ export function AgentAiSettingsSections({
   const selectedModel = selectedProvider?.models.find((model) => model.id === value.modelId) ?? null;
   const selectedTier = STUDIO_AI_TIER_OPTIONS.find((option) => option.value === value.aiTier) ?? STUDIO_AI_TIER_OPTIONS[1];
   const providerReady = usesEmpyralisCredits || providerReadyForStudio(selectedProvider);
+  const readyProviders = providerCatalog.filter((provider) => providerReadyForStudio(provider));
+  const firstReadyProvider = readyProviders[0] ?? providerCatalog[0] ?? null;
   const selectedRouteLabel = usesEmpyralisCredits
     ? 'Empyralis Credits'
     : providerReady
@@ -61,6 +63,14 @@ export function AgentAiSettingsSections({
       : selectedProvider
         ? 'Connect the provider account in Integrations before using it for customers.'
         : 'Connect an API provider before using your own model route.';
+  const selectedModelLabel = usesEmpyralisCredits
+    ? `${selectedTier.label} quality`
+    : (selectedModel?.label ?? value.modelId) || 'Choose a model';
+  const selectedModelDetail = usesEmpyralisCredits
+    ? 'Empyralis manages routing, billing, and provider reliability for this agent.'
+    : providerReady
+      ? `${selectedProvider?.label ?? 'Provider'} API account. Pricing follows the provider route.`
+      : 'Provider connection is required before this route can answer customers.';
 
   function selectProviderModel(providerId: string, modelId: string) {
     onSelectProvider(providerId);
@@ -71,99 +81,100 @@ export function AgentAiSettingsSections({
       className={joinClassNames('studio-ai-settings', isLoadingProviderCatalog && 'studio-ai-settings--loading')}
       aria-busy={isLoadingProviderCatalog}
     >
-      {!showModelBrowser ? (
-        <section className="studio-ai-settings__route-card">
-          <div className="studio-ai-settings__summary">
-            <div>
-              <span>AI Route</span>
-              <strong>{selectedRouteLabel}</strong>
-              <p>{selectedRouteDetail}</p>
+      <section className="studio-ai-settings__route-overview" aria-label="AI route options">
+        <div className="studio-ai-settings__route-grid">
+          <button
+            type="button"
+            className={joinClassNames('studio-ai-settings__route-option', usesEmpyralisCredits && 'studio-ai-settings__route-option--selected')}
+            aria-pressed={usesEmpyralisCredits}
+            onClick={() => selectProviderModel('', '')}
+          >
+            <div className="studio-ai-settings__route-option-head">
+              <span>Managed route</span>
+              <DataBadge tone="success">Recommended</DataBadge>
             </div>
-            <div>
-              <span>Quality tier</span>
-              <strong className="text-live">{selectedTier.label}</strong>
+            <strong>Empyralis Credits</strong>
+            <p>Best for non-technical teams. Empyralis handles the API model route and usage accounting.</p>
+          </button>
+
+          <button
+            type="button"
+            className={joinClassNames('studio-ai-settings__route-option', !usesEmpyralisCredits && 'studio-ai-settings__route-option--selected')}
+            aria-pressed={!usesEmpyralisCredits}
+            onClick={() => {
+              if (firstReadyProvider) {
+                selectProviderModel(firstReadyProvider.id, firstReadyProvider.defaultModel || firstReadyProvider.models[0]?.id || '');
+              } else {
+                onOpenIntegrations?.();
+              }
+            }}
+          >
+            <div className="studio-ai-settings__route-option-head">
+              <span>Bring your own key</span>
+              <DataBadge tone={readyProviders.length > 0 ? 'success' : 'neutral'}>
+                {readyProviders.length > 0 ? `${readyProviders.length} ready` : 'Connect'}
+              </DataBadge>
             </div>
-            <AppButton type="button" tone="secondary" onClick={() => setShowModelBrowser(true)}>
-              Change route
+            <strong>Custom API Account</strong>
+            <p>Use OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, or another connected API provider.</p>
+          </button>
+        </div>
+
+        <div className="studio-ai-settings__quality-card">
+          <div className="studio-actions__section-head">
+            <div>
+              <span>Quality</span>
+              <strong>Default answer quality</strong>
+            </div>
+            <small>{selectedTier.label}</small>
+          </div>
+          <div className="studio-ai-settings__tier-grid studio-ai-settings__tier-grid--segmented">
+            {STUDIO_AI_TIER_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={joinClassNames('studio-ai-settings__tier', value.aiTier === option.value && 'studio-ai-settings__tier--selected')}
+                onClick={() => onSelectTier(option.value)}
+              >
+                <strong>{option.label}</strong>
+                <span>{option.hint}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <section className="studio-ai-settings__selected-card">
+          <div className="studio-ai-settings__selected-copy">
+            <span>Selected route</span>
+            <strong>{selectedRouteLabel}</strong>
+            <p>{selectedRouteDetail}</p>
+          </div>
+          <div className="studio-ai-settings__selected-copy">
+            <span>Default model</span>
+            <strong>{selectedModelLabel}</strong>
+            <p>{selectedModelDetail}</p>
+          </div>
+          <div className="studio-ai-settings__selected-actions">
+            <DataBadge tone={providerReady ? 'success' : 'warning'}>{providerReady ? 'Ready' : 'Setup needed'}</DataBadge>
+            <AppButton type="button" tone="secondary" onClick={() => setShowModelBrowser((current) => !current)}>
+              {showModelBrowser ? 'Hide model list' : 'Change model'}
             </AppButton>
           </div>
-          <div className="studio-ai-settings__badges">
-            <DataBadge tone={providerReady ? 'success' : 'warning'}>{providerReady ? 'Ready' : 'Setup needed'}</DataBadge>
-            <DataBadge tone="neutral">{usesEmpyralisCredits ? selectedTier.label : selectedModel?.label ?? 'Model pending'}</DataBadge>
-          </div>
         </section>
-      ) : (
+      </section>
+
+      {showModelBrowser ? (
         <section className="studio-ai-settings__browser">
           <div className="studio-actions__section-head">
             <div>
-              <span>Choose AI Route</span>
-              <strong>How this assistant thinks</strong>
+              <span>Model catalog</span>
+              <strong>Choose a connected API model</strong>
             </div>
-            <AppButton type="button" tone="secondary" onClick={() => setShowModelBrowser(false)}>
-              Cancel
-            </AppButton>
+            <small>{providerCatalog.length} provider{providerCatalog.length === 1 ? '' : 's'}</small>
           </div>
 
-          <div className="studio-ai-settings__choices">
-            <button
-              type="button"
-              className={joinClassNames('studio-ai-settings__choice', usesEmpyralisCredits && 'studio-ai-settings__choice--active')}
-              aria-pressed={usesEmpyralisCredits}
-              onClick={() => selectProviderModel('', '')}
-            >
-              <div className="studio-ai-settings__choice-head">
-                <strong>Empyralis Credits</strong>
-                <DataBadge tone="success">Recommended</DataBadge>
-              </div>
-              <p>Fast and platform-managed. No API keys required. Uses your workspace credit balance.</p>
-            </button>
-
-            <button
-              type="button"
-              className={joinClassNames('studio-ai-settings__choice', value.providerId && value.providerId !== 'empyralis' && 'studio-ai-settings__choice--active')}
-              aria-pressed={Boolean(value.providerId && value.providerId !== 'empyralis')}
-              onClick={() => {
-                if (providerCatalog.length > 0) {
-                  const firstReady = providerCatalog.find((provider) => providerReadyForStudio(provider)) ?? providerCatalog[0];
-                  if (firstReady) {
-                    selectProviderModel(firstReady.id, firstReady.defaultModel || firstReady.models[0]?.id || '');
-                  }
-                } else {
-                  onOpenIntegrations?.();
-                }
-              }}
-            >
-              <div className="studio-ai-settings__choice-head">
-                <strong>Connect Your Own Provider</strong>
-              </div>
-              <p>Bring your own API keys for OpenAI, Anthropic, Gemini, or DeepSeek. Configure in Integrations.</p>
-            </button>
-          </div>
-
-          {usesEmpyralisCredits && (
-            <div className="studio-ai-settings__section">
-              <div className="studio-actions__section-head">
-                <span>Quality tier</span>
-                <strong>Choose answer quality</strong>
-              </div>
-              <div className="studio-ai-settings__tier-grid">
-                {STUDIO_AI_TIER_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={joinClassNames('studio-ai-settings__tier', value.aiTier === option.value && 'studio-ai-settings__tier--selected')}
-                    onClick={() => onSelectTier(option.value)}
-                  >
-                    <strong>{option.label}</strong>
-                    <span>{option.hint}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {value.providerId && value.providerId !== 'empyralis' && (
-            <div className="studio-ai-settings__byok app-stack-3">
+          {value.providerId && value.providerId !== 'empyralis' ? (
+            <div className="studio-ai-settings__byok">
               <FormField label="AI Provider" hint="Select the provider you have configured in Integrations.">
                 <FormSelect
                   value={value.providerId}
@@ -205,15 +216,23 @@ export function AgentAiSettingsSections({
                 </p>
               </div>
             </div>
+          ) : (
+            <div className="studio-ai-settings__catalog-empty">
+              <strong>Using Empyralis Credits</strong>
+              <p>The direct model catalog is only needed when this agent uses your own API account.</p>
+              <AppButton type="button" tone="secondary" onClick={() => {
+                if (firstReadyProvider) {
+                  selectProviderModel(firstReadyProvider.id, firstReadyProvider.defaultModel || firstReadyProvider.models[0]?.id || '');
+                } else {
+                  onOpenIntegrations?.();
+                }
+              }}>
+                {firstReadyProvider ? 'Use connected provider' : 'Connect provider'}
+              </AppButton>
+            </div>
           )}
-
-          <div className="app-inline-actions">
-            <AppButton type="button" onClick={() => setShowModelBrowser(false)}>
-              Apply route
-            </AppButton>
-          </div>
         </section>
-      )}
+      ) : null}
     </div>
   );
 }

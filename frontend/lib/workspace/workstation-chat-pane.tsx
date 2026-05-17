@@ -260,6 +260,67 @@ function runtimeTrustZoneLabel(zone: ChatRuntimeTrustZone): string {
   }
 }
 
+type SageCommandComputerProofSummary = {
+  id: string;
+  title: string;
+  summary: string;
+  occurredAt: string | null;
+  traceId: string | null;
+  runtimeSessionId: string | null;
+  deployedAgentId: string | null;
+  providerId: string | null;
+  artifactCount: number;
+};
+
+function readRecordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
+}
+
+function compactIdentifier(value: string | null, fallback: string): string {
+  if (!value) {
+    return fallback;
+  }
+  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-4)}` : value;
+}
+
+function latestComputerProofSummaryFromTimeline(timelineItems: Record<string, unknown>[]): SageCommandComputerProofSummary | null {
+  for (const event of timelineItems) {
+    const payload = readObject(event.payload);
+    const metadata = readObject(event.metadata);
+    const proof = readObject(payload.computer_proof ?? payload.latest_computer_proof ?? metadata.latest_computer_proof);
+    const artifacts = readRecordList(event.artifacts);
+    const screenshot = [...artifacts].reverse().find((artifact) => {
+      const kind = readString(artifact.artifact_type ?? artifact.type ?? artifact.kind).toLowerCase();
+      const contentType = readString(artifact.content_type ?? artifact.mime_type).toLowerCase();
+      return kind === 'screenshot' || contentType.startsWith('image/');
+    });
+
+    if (!Object.keys(proof).length && !screenshot) {
+      continue;
+    }
+
+    const appTitle = readString(proof.app_title ?? screenshot?.title);
+    const currentUrl = readString(proof.current_url ?? screenshot?.url);
+    const title = appTitle || currentUrl || readString(event.title) || 'Computer screen';
+    const summary = currentUrl || readString(event.summary) || 'Runtime screen and tool evidence were recorded.';
+
+    return {
+      id: readString(event.id) || readString(proof.artifact_uri) || 'computer-proof',
+      title,
+      summary,
+      occurredAt: readString(event.created_at) || readString(event.ts) || null,
+      traceId: readString(event.trace_id) || null,
+      runtimeSessionId: readString(proof.runtime_session_id ?? event.session_key) || null,
+      deployedAgentId: readString(proof.deployed_agent_id ?? metadata.deployed_agent_id ?? payload.deployed_agent_id) || null,
+      providerId: readString(proof.provider_id) || null,
+      artifactCount: artifacts.length,
+    };
+  }
+  return null;
+}
+
 export function WorkstationChatPane() {
   const { bootstrap, routeManifest, hasCapability } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
@@ -406,6 +467,7 @@ export function WorkstationChatPane() {
     setPendingDeleteMemoryId,
   } = useChatMemoryEditorState(defaultSageMemoryDraft());
   const [billingSummary, setBillingSummary] = useState<Record<string, unknown> | null>(null);
+  const [latestComputerProof, setLatestComputerProof] = useState<SageCommandComputerProofSummary | null>(null);
   const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
@@ -702,6 +764,7 @@ export function WorkstationChatPane() {
         timelineRequest,
       ]);
       writeOverview({ nextRuns, nextApprovals });
+      setLatestComputerProof(latestComputerProofSummaryFromTimeline(timelineItems));
       if (timelineItems.length > 0) {
         writeRecentThreads(deriveRecentThreads(timelineItems, activeThreadIdRef.current));
         return;
@@ -1378,6 +1441,76 @@ export function WorkstationChatPane() {
     () => resolveRuntimeTrustZone(localRuntimeTarget, machineTrust),
     [localRuntimeTarget, machineTrust],
   );
+  const computerControlSummary = useMemo(() => {
+    if (latestComputerProof) {
+      const proofAge = formatRelativeTime(latestComputerProof.occurredAt);
+      return {
+        statValue: 'Recorded',
+        statHint: `${proofAge} in Activity`,
+        title: latestComputerProof.title,
+        body: latestComputerProof.summary,
+        pills: [
+          latestComputerProof.providerId || runtimeTrustZoneLabel(runtimeTrustZone),
+          compactIdentifier(latestComputerProof.runtimeSessionId, 'Runtime session'),
+          latestComputerProof.artifactCount > 0
+            ? `${latestComputerProof.artifactCount} proof item${latestComputerProof.artifactCount === 1 ? '' : 's'}`
+            : 'Proof metadata',
+        ],
+      };
+    }
+
+    if (runtimeTrustZone === 'user_owned_local') {
+      return {
+        statValue: localToolingOnline ? 'Ready' : 'Offline',
+        statHint: localToolingOnline ? 'paired local computer' : 'connect local runtime',
+        title: localToolingOnline ? 'Sage can use this computer' : 'Connected computer is offline',
+        body: localToolingOnline
+          ? 'Local tools, browser actions, screenshots, and terminal work can be requested with approval policy attached.'
+          : 'Local computer actions stay unavailable until the paired runtime is online.',
+        pills: [
+          runtimeTrustZoneLabel(runtimeTrustZone),
+          localDevicePlatformLabel(null, readString(localRuntimeTarget?.label)),
+          autonomyMode === 'full' ? 'Full access policy' : 'Approval policy',
+        ],
+      };
+    }
+
+    if (runtimeTrustZone === 'owned_dedicated_runtime') {
+      return {
+        statValue: 'Ready',
+        statHint: 'dedicated cloud computer',
+        title: 'Dedicated computer runtime',
+        body: 'Cloud computer work will return screenshots, artifacts, runtime session IDs, and activity proof when a run uses it.',
+        pills: [
+          runtimeTrustZoneLabel(runtimeTrustZone),
+          runtimeStatus.label,
+          autonomyMode === 'full' ? 'Full access policy' : 'Approval policy',
+        ],
+      };
+    }
+
+    return {
+      statValue: gatewayToolingOnline ? 'Ready' : 'Not active',
+      statHint: gatewayToolingOnline ? 'tools can produce proof' : 'no computer proof yet',
+      title: gatewayToolingOnline ? 'Computer tools are available' : 'No computer proof yet',
+      body: gatewayToolingOnline
+        ? 'When Sage uses a browser or computer runtime, the proof appears in Activity instead of the chat transcript.'
+        : 'Server-only replies can still work, but no screen proof exists until Sage uses a browser or computer runtime.',
+      pills: [
+        runtimeTrustZoneLabel(runtimeTrustZone),
+        runtimeStatus.label,
+        autonomyMode === 'full' ? 'Full access policy' : 'Approval policy',
+      ],
+    };
+  }, [
+    autonomyMode,
+    gatewayToolingOnline,
+    latestComputerProof,
+    localRuntimeTarget,
+    localToolingOnline,
+    runtimeStatus.label,
+    runtimeTrustZone,
+  ]);
   const composerToolGroups = useMemo<ComposerToolGroup[]>(() => {
     const localReason = localToolingOnline ? 'Available through this paired computer' : 'Requires a connected computer';
     const telegramAvailable = hasConnectedConnector(connectorCredentials, ['telegram_bot']);
@@ -3089,11 +3222,21 @@ export function WorkstationChatPane() {
           {activeSageCommandPanel === 'open_proof' ? (
             <>
               <AppSurfaceStatGrid>
-                <AppSurfaceStat label="Computer proof" value="Activity" hint="screens and runtime evidence" />
+                <AppSurfaceStat label="Computer proof" value={computerControlSummary.statValue} hint={computerControlSummary.statHint} />
                 <AppSurfaceStat label="Thread outputs" value={artifactCount} hint={artifactCount === 1 ? 'artifact in this thread' : 'artifacts in this thread'} />
                 <AppSurfaceStat label="Latest run" value={latestRun ? readString(latestRun.status) || 'unknown' : 'Idle'} hint={latestRun ? runPreviewLabel(latestRun) : 'No active run attached'} />
                 <AppSurfaceStat label="Approvals" value={approvals.length} hint="guarded actions recorded separately" />
               </AppSurfaceStatGrid>
+              <section className={`sage-command-panel__hero sage-command-panel__hero--${latestComputerProof ? 'success' : 'neutral'}`}>
+                <span className="sage-command-panel__eyebrow">Computer control</span>
+                <h3>{computerControlSummary.title}</h3>
+                <p>{computerControlSummary.body}</p>
+                <div className="sage-command-panel__pills">
+                  {computerControlSummary.pills.map((pill) => (
+                    <span key={pill}>{pill}</span>
+                  ))}
+                </div>
+              </section>
               <AppNotice tone="neutral" className="sage-command-panel__notice">
                 <strong>Proof stays outside the chat transcript</strong>
                 <span>Computer screenshots, tool artifacts, runtime sessions, approvals, and final outcomes are inspectable in Activity.</span>
@@ -3123,6 +3266,16 @@ export function WorkstationChatPane() {
                   <span>{runtimeCard.preferredPill}</span>
                   <span>{runtimeCard.localPill}</span>
                   <span>{runtimeTrustZoneLabel(runtimeTrustZone)}</span>
+                </div>
+              </section>
+              <section className={`sage-command-panel__hero sage-command-panel__hero--${latestComputerProof ? 'success' : runtimeCard.tone}`}>
+                <span className="sage-command-panel__eyebrow">Computer transparency</span>
+                <h3>{computerControlSummary.title}</h3>
+                <p>{computerControlSummary.body}</p>
+                <div className="sage-command-panel__pills">
+                  {computerControlSummary.pills.map((pill) => (
+                    <span key={pill}>{pill}</span>
+                  ))}
                 </div>
               </section>
               <div className="app-inline-actions">

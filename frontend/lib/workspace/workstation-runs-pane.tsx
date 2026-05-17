@@ -64,6 +64,7 @@ type ActivityProofItem = {
   artifacts: ActivityArtifactRecord[];
   computerProof: {
     runtimeSessionId: string | null;
+    deployedAgentId: string | null;
     providerId: string | null;
     currentUrl: string | null;
     appTitle: string | null;
@@ -180,6 +181,7 @@ function latestComputerProofFromEvent(event: Record<string, unknown>, artifacts:
   }
   return {
     runtimeSessionId: readString(proof.runtime_session_id ?? event.session_key) || null,
+    deployedAgentId: readString(proof.deployed_agent_id ?? metadata.deployed_agent_id ?? payload.deployed_agent_id) || null,
     providerId: readString(proof.provider_id) || null,
     currentUrl: readString(proof.current_url) || screenshot?.url || null,
     appTitle: readString(proof.app_title) || screenshot?.title || null,
@@ -710,6 +712,7 @@ export function WorkstationRunsPane() {
   const [traceIdFilter, setTraceIdFilter] = useState('');
   const [showAdminAudit, setShowAdminAudit] = useState(false);
   const [selectedComputerProofId, setSelectedComputerProofId] = useState<string | null>(null);
+  const [stoppingComputerProofId, setStoppingComputerProofId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
   const [isLoading, setIsLoading] = useState(() => cachedThreads === null || cachedActivity === null);
   const [error, setError] = useState<string | null>(null);
@@ -824,6 +827,36 @@ export function WorkstationRunsPane() {
     || selectedComputerProofItem?.computerProof?.currentUrl
     || selectedComputerProofItem?.title
     || 'Computer proof';
+  const selectedComputerProof = selectedComputerProofItem?.computerProof ?? null;
+  const canStopSelectedComputerProof = Boolean(
+    selectedComputerProofItem
+    && selectedComputerProof?.deployedAgentId
+    && selectedComputerProof.runtimeSessionId,
+  );
+  const isStoppingSelectedComputerProof = Boolean(
+    selectedComputerProofItem
+    && stoppingComputerProofId === selectedComputerProofItem.id,
+  );
+
+  const stopSelectedComputerProof = async () => {
+    if (!selectedComputerProofItem || !selectedComputerProof?.deployedAgentId || !selectedComputerProof.runtimeSessionId) {
+      return;
+    }
+    setStoppingComputerProofId(selectedComputerProofItem.id);
+    setError(null);
+    try {
+      await services.client.killDeployedAgentRuntimeSession({
+        deployedAgentId: selectedComputerProof.deployedAgentId,
+        sessionId: selectedComputerProof.runtimeSessionId,
+      });
+      setSelectedComputerProofId(null);
+      await refresh(false);
+    } catch (stopError) {
+      setError(stopError instanceof Error ? stopError.message : 'Computer runtime could not be stopped.');
+    } finally {
+      setStoppingComputerProofId(null);
+    }
+  };
 
   return (
     <WorkstationSurfaceRoot surface="activity">
@@ -1003,16 +1036,32 @@ export function WorkstationRunsPane() {
         title="Computer proof"
         description="Inspectable evidence from the computer or browser session the agent controlled."
         onClose={() => setSelectedComputerProofId(null)}
-        actions={primaryProofArtifact ? (
-          <button
-            type="button"
-            className="app-button app-button--secondary"
-            onClick={() => {
-              window.location.assign(services.client.artifactDownloadUrl(primaryProofArtifact.id));
-            }}
-          >
-            Download proof
-          </button>
+        actions={primaryProofArtifact || canStopSelectedComputerProof ? (
+          <>
+            {canStopSelectedComputerProof ? (
+              <button
+                type="button"
+                className="app-button app-button--danger"
+                disabled={isStoppingSelectedComputerProof}
+                onClick={() => {
+                  void stopSelectedComputerProof();
+                }}
+              >
+                {isStoppingSelectedComputerProof ? 'Stopping...' : 'Stop computer'}
+              </button>
+            ) : null}
+            {primaryProofArtifact ? (
+              <button
+                type="button"
+                className="app-button app-button--secondary"
+                onClick={() => {
+                  window.location.assign(services.client.artifactDownloadUrl(primaryProofArtifact.id));
+                }}
+              >
+                Download proof
+              </button>
+            ) : null}
+          </>
         ) : null}
       >
         {selectedComputerProofItem ? (
@@ -1045,6 +1094,10 @@ export function WorkstationRunsPane() {
                 <div>
                   <dt>Runtime session</dt>
                   <dd>{selectedComputerProofItem.computerProof?.runtimeSessionId || selectedComputerProofItem.sessionKey || 'Not recorded'}</dd>
+                </div>
+                <div>
+                  <dt>Agent</dt>
+                  <dd>{selectedComputerProofItem.computerProof?.deployedAgentId || 'Not recorded'}</dd>
                 </div>
                 <div>
                   <dt>Trace</dt>

@@ -713,6 +713,7 @@ export type WorkstationClientPaths = {
   deployedAgentDetail: (deployedAgentId: string) => string;
   deployedAgentDeploy: (deployedAgentId: string) => string;
   deployedAgentPause: (deployedAgentId: string) => string;
+  deployedAgentRuntimeKill: (deployedAgentId: string, sessionId: string) => string;
   deployedAgentTestTurn: (deployedAgentId: string) => string;
   deployedAgentAnalyticsRoster: string;
   deployedAgentAnalyticsDetail: (deployedAgentId: string) => string;
@@ -950,6 +951,10 @@ export type WorkstationClient = {
     message?: string;
     threadId?: string | null;
     sessionId?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  killDeployedAgentRuntimeSession: (options: {
+    deployedAgentId: string;
+    sessionId: string;
   }) => Promise<Record<string, unknown> | null>;
   listTraces: (filters?: WorkstationAgentTraceListFilters) => Promise<Record<string, unknown>>;
   getTraceReplay: (options: {
@@ -1345,6 +1350,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/deploy`,
     deployedAgentPause: (deployedAgentId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/pause`,
+    deployedAgentRuntimeKill: (deployedAgentId, sessionId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/runtime-sessions/${encodeURIComponent(sessionId)}/kill`,
     deployedAgentTestTurn: (deployedAgentId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/test-turn`,
     deployedAgentAnalyticsRoster:
@@ -2768,6 +2775,18 @@ export function createWorkstationClient(
             channel: 'web',
             execution_mode: 'durable',
             response_mode: 'artifact',
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    killDeployedAgentRuntimeSession: ({ deployedAgentId, sessionId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentRuntimeKill(deployedAgentId, sessionId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
           }),
         },
         policy: WRITE_REQUEST_POLICY,

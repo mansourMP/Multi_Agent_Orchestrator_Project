@@ -3,10 +3,13 @@ import unittest
 from unittest.mock import patch
 
 from server_modules.virtual_computer_runtime import (
+    DigitalOceanSSHRuntimeCommandResult,
+    DigitalOceanSSHVirtualComputerRuntime,
     InMemoryVirtualComputerRuntime,
     PROVIDER_CAPABILITY_KEYS,
     PROVIDER_ID_BROWSERBASE,
     PROVIDER_ID_DAYTONA,
+    PROVIDER_ID_DIGITALOCEAN_SSH,
     PROVIDER_ID_DOCKER_KUBERNETES,
     RUNTIME_CHOICE_VIRTUAL_BROWSER,
     RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
@@ -132,6 +135,120 @@ class VirtualComputerProviderAbstractionTests(unittest.TestCase):
         self.assertEqual(created.get("provider_id"), PROVIDER_ID_DAYTONA)
         self.assertEqual(action.get("provider_id"), PROVIDER_ID_DAYTONA)
         self.assertEqual(action.get("runtime_contract_interface"), "virtual_computer_runtime.v1")
+
+    def test_digitalocean_provider_uses_real_ssh_runtime_not_inmemory(self):
+        provider_registry = default_virtual_computer_provider_registry()
+        runtime_registry = VirtualComputerRuntimeRegistry(
+            local_runtime=InMemoryVirtualComputerRuntime(),
+            virtual_runtime=InMemoryVirtualComputerRuntime(),
+            provider_registry=provider_registry,
+        )
+
+        runtime = runtime_registry.resolve(
+            RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+            preferred_provider_id=PROVIDER_ID_DIGITALOCEAN_SSH,
+        )
+
+        self.assertIsInstance(runtime._runtime, DigitalOceanSSHVirtualComputerRuntime)
+
+    def test_digitalocean_ssh_runtime_creates_executes_and_terminates_session(self):
+        calls = []
+
+        async def runner(args, timeout_seconds):
+            calls.append((list(args), timeout_seconds))
+            command = args[-1]
+            if "docker run" in command:
+                return DigitalOceanSSHRuntimeCommandResult(returncode=0, stdout="hello from cloud\n")
+            return DigitalOceanSSHRuntimeCommandResult(returncode=0, stdout="")
+
+        runtime = DigitalOceanSSHVirtualComputerRuntime(
+            host="203.0.113.10",
+            user="root",
+            base_dir="/tmp/empyralis-test",
+            docker_image="alpine:3.20",
+            command_runner=runner,
+        )
+        created = asyncio.run(
+            runtime.create_session(
+                {
+                    "runtime_choice": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+                    "session_id": "sess-do-1",
+                    "workspace_id": "ws-1",
+                    "tenant_id": "tenant-1",
+                }
+            )
+        )
+        action = asyncio.run(
+            runtime.execute_action(
+                {
+                    "session_id": "sess-do-1",
+                    "action": "run_command",
+                    "approval_id": "appr-do-1",
+                    "risk_policy": {"red_policy": "owner_approval"},
+                    "policy_metadata": {"owner_role": "owner", "owner_is_admin": True},
+                    "action_args": {"command": "echo hello from cloud"},
+                }
+            )
+        )
+        terminated = asyncio.run(runtime.terminate_session({"session_id": "sess-do-1"}))
+
+        self.assertEqual(created.get("runtime_kind"), "digitalocean_ssh_cloud_computer")
+        self.assertEqual(action.get("status"), "completed")
+        self.assertIn("hello from cloud", (action.get("action_result") or {}).get("stdout") or "")
+        self.assertEqual(terminated.get("state"), "terminated")
+        self.assertTrue(any("mkdir -p" in call[0][-1] for call in calls))
+        self.assertTrue(any("docker run" in call[0][-1] for call in calls))
+        self.assertTrue(any("--user $(id -u):$(id -g)" in call[0][-1] for call in calls))
+        self.assertTrue(any("rm -rf" in call[0][-1] for call in calls))
+
+    def test_digitalocean_ssh_runtime_open_url_returns_screenshot_artifact(self):
+        calls = []
+
+        async def runner(args, timeout_seconds):
+            calls.append((list(args), timeout_seconds))
+            command = args[-1]
+            if "node /workspace/browser_action.mjs" in command:
+                return DigitalOceanSSHRuntimeCommandResult(
+                    returncode=0,
+                    stdout='{"title":"Example Domain","text":"Example text","screenshot":"/workspace/artifacts/artifact_test.png"}\n',
+                )
+            return DigitalOceanSSHRuntimeCommandResult(returncode=0, stdout="")
+
+        runtime = DigitalOceanSSHVirtualComputerRuntime(
+            host="203.0.113.10",
+            user="root",
+            base_dir="/tmp/empyralis-test",
+            browser_image="mcr.microsoft.com/playwright:v1.55.0-noble",
+            command_runner=runner,
+        )
+        asyncio.run(
+            runtime.create_session(
+                {
+                    "runtime_choice": RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+                    "session_id": "sess-do-browser-1",
+                    "workspace_id": "ws-1",
+                    "tenant_id": "tenant-1",
+                }
+            )
+        )
+        action = asyncio.run(
+            runtime.execute_action(
+                {
+                    "session_id": "sess-do-browser-1",
+                    "action": "open_url",
+                    "action_args": {"url": "https://example.com"},
+                }
+            )
+        )
+
+        artifact = action.get("artifact") or {}
+        self.assertEqual(action.get("status"), "completed")
+        self.assertEqual((action.get("action_result") or {}).get("title"), "Example Domain")
+        self.assertEqual(artifact.get("artifact_type"), "screenshot")
+        self.assertEqual(artifact.get("url"), "https://example.com")
+        self.assertTrue(any("browser_action.mjs" in call[0][-1] for call in calls))
+        self.assertTrue(any("--user $(id -u):$(id -g)" in call[0][-1] for call in calls))
+        self.assertTrue(any("npm_config_cache=/tmp/.npm" in call[0][-1] for call in calls))
 
     def test_self_hosted_provider_cannot_fallback_to_in_memory_runtime(self):
         provider_registry = default_virtual_computer_provider_registry()

@@ -39,6 +39,17 @@ type ThreadListItem = {
 
 type ActivityProofType = 'chat' | 'tool' | 'approval' | 'channel' | 'gateway' | 'provider' | 'file' | 'outcome';
 
+type ActivityArtifactRecord = {
+  id: string;
+  kind: string;
+  label: string;
+  uri: string | null;
+  contentType: string | null;
+  byteSize: number | null;
+  url: string | null;
+  title: string | null;
+};
+
 type ActivityProofItem = {
   id: string;
   type: ActivityProofType;
@@ -48,6 +59,15 @@ type ActivityProofItem = {
   source: string;
   threadId: string | null;
   traceId: string | null;
+  sessionKey: string | null;
+  artifacts: ActivityArtifactRecord[];
+  computerProof: {
+    runtimeSessionId: string | null;
+    providerId: string | null;
+    currentUrl: string | null;
+    appTitle: string | null;
+    artifactUri: string | null;
+  } | null;
   adminAudit: {
     rawProvider: string | null;
     rawModel: string | null;
@@ -122,6 +142,48 @@ function readList(value: unknown): unknown[] {
 
 function readStringList(value: unknown): string[] {
   return readList(value).map((item) => readString(item)).filter(Boolean);
+}
+
+function normalizeActivityArtifacts(value: unknown): ActivityArtifactRecord[] {
+  return readList(value)
+    .flatMap((item, index) => {
+      const artifact = readRecord(item);
+      const id = readString(artifact.artifact_id ?? artifact.id, `artifact-${index}`);
+      if (!id) {
+        return [];
+      }
+      const contentType = readString(artifact.content_type ?? artifact.mime_type) || null;
+      const kind = readString(artifact.artifact_type ?? artifact.type ?? artifact.kind)
+        || (contentType?.startsWith('image/') ? 'screenshot' : 'artifact');
+      return [{
+        id,
+        kind,
+        label: readString(artifact.label ?? artifact.file_name ?? artifact.title, kind === 'screenshot' ? 'Screenshot proof' : 'Artifact'),
+        uri: readString(artifact.uri ?? artifact.uri_or_path ?? artifact.path) || null,
+        contentType,
+        byteSize: Number.isFinite(Number(artifact.byte_size)) ? Math.max(0, Number(artifact.byte_size)) : null,
+        url: readString(artifact.url) || null,
+        title: readString(artifact.title) || null,
+      }];
+    });
+}
+
+function latestComputerProofFromEvent(event: Record<string, unknown>, artifacts: ActivityArtifactRecord[]) {
+  const payload = readRecord(event.payload);
+  const metadata = readRecord(event.metadata);
+  const proof = readRecord(payload.computer_proof ?? payload.latest_computer_proof ?? metadata.latest_computer_proof);
+  const screenshot = [...artifacts].reverse().find((artifact) =>
+    artifact.kind.toLowerCase() === 'screenshot' || artifact.contentType?.startsWith('image/'));
+  if (!Object.keys(proof).length && !screenshot) {
+    return null;
+  }
+  return {
+    runtimeSessionId: readString(proof.runtime_session_id ?? event.session_key) || null,
+    providerId: readString(proof.provider_id) || null,
+    currentUrl: readString(proof.current_url) || screenshot?.url || null,
+    appTitle: readString(proof.app_title) || screenshot?.title || null,
+    artifactUri: readString(proof.artifact_uri) || screenshot?.uri || null,
+  };
 }
 
 function activeThreadStorageKey(workspaceId: string): string {
@@ -220,6 +282,7 @@ function eventProofType(event: Record<string, unknown>): ActivityProofType {
   const channel = readString(event.channel).toLowerCase();
   const status = readString(event.status).toLowerCase();
   const text = `${eventClass} ${action} ${channel} ${readString(event.title)} ${readString(event.summary)}`.toLowerCase();
+  const artifacts = normalizeActivityArtifacts(event.artifacts);
 
   if (eventClass.includes('approval') || eventClass.includes('blocked') || action.includes('approval')) {
     return 'approval';
@@ -227,7 +290,10 @@ function eventProofType(event: Record<string, unknown>): ActivityProofType {
   if (channel || /telegram|whatsapp|gmail|email|signal|slack|discord/.test(text)) {
     return 'channel';
   }
-  if (/gateway|reconnect|pairing|device|companion/.test(text)) {
+  if (
+    /gateway|reconnect|pairing|device|companion|cloud computer|computer proof|cloud_runtime|virtual computer|runtime_session/.test(text)
+    || artifacts.some((artifact) => artifact.kind.toLowerCase() === 'screenshot')
+  ) {
     return 'gateway';
   }
   if (/provider|model|deepseek|gemini|openai|anthropic|ollama|quota|credit/.test(text)) {
@@ -281,12 +347,21 @@ function eventSummary(type: ActivityProofType, event: Record<string, unknown>): 
   };
   const summary = compactHumanText(event.summary, fallbackByType[type]);
   const status = readString(event.status).replace(/_/g, ' ');
+  const artifacts = normalizeActivityArtifacts(event.artifacts);
+  const computerProof = latestComputerProofFromEvent(event, artifacts);
+  if (type === 'gateway' && computerProof) {
+    const target = computerProof.appTitle || computerProof.currentUrl || 'Computer screen';
+    const proofLabel = artifacts.length > 0 ? `${artifacts.length} proof item${artifacts.length === 1 ? '' : 's'}` : 'proof recorded';
+    return `${target} · ${proofLabel}${status ? ` · ${status}` : ''}`;
+  }
   return status ? `${summary} · ${status}` : summary;
 }
 
 function proofItemsFromActivity(payload: unknown): ActivityProofItem[] {
   return normalizeRecordItems(payload).map((event, index) => {
     const type = eventProofType(event);
+    const artifacts = normalizeActivityArtifacts(event.artifacts);
+    const computerProof = latestComputerProofFromEvent(event, artifacts);
     const visibleProof = readRecord(event.visible_activity);
     const proofSummary = buildVisibleActivitySummary(visibleProof);
     const adminAudit = normalizeAdminAudit(readRecord(event.admin_audit));
@@ -299,6 +374,9 @@ function proofItemsFromActivity(payload: unknown): ActivityProofItem[] {
       source: 'Activity',
       threadId: readString(event.thread_id) || null,
       traceId: readString(event.trace_id) || readString(adminAudit?.ledgerItemIds?.[0]) || null,
+      sessionKey: readString(event.session_key) || null,
+      artifacts,
+      computerProof,
       adminAudit,
     };
   });
@@ -313,7 +391,10 @@ function proofItemsFromThreads(threads: ThreadRecord[]): ActivityProofItem[] {
     occurredAt: thread.occurredAt,
     source: 'Chat',
     threadId: thread.id,
-      traceId: null,
+    traceId: null,
+    sessionKey: null,
+    artifacts: [],
+    computerProof: null,
     adminAudit: null,
   }));
 }
@@ -333,6 +414,9 @@ function proofItemsFromRuns(payload: unknown): ActivityProofItem[] {
       source: 'Run',
       threadId: readString(run.thread_id) || null,
       traceId: readString(run.trace_id) || null,
+      sessionKey: null,
+      artifacts: [],
+      computerProof: null,
       adminAudit,
     };
   });
@@ -351,6 +435,9 @@ function proofItemsFromApprovals(payload: unknown): ActivityProofItem[] {
       source: 'Approval',
       threadId: readString(approval.thread_id) || null,
       traceId: readString(approval.trace_id) || null,
+      sessionKey: null,
+      artifacts: [],
+      computerProof: null,
       adminAudit: null,
     };
   });
@@ -686,6 +773,8 @@ export function WorkstationRunsPane() {
   const approvalCount = activityItems.filter((item) => item.type === 'approval').length;
   const channelCount = activityItems.filter((item) => item.type === 'channel').length;
   const providerCount = activityItems.filter((item) => item.type === 'provider').length;
+  const computerProofItems = activityItems.filter((item) => item.type === 'gateway' && (item.computerProof || item.artifacts.length > 0));
+  const latestComputerProofItem = computerProofItems[0] ?? null;
   const adminAuditCount = activityItems.filter((item) => item.adminAudit !== null).length;
 
   return (
@@ -713,8 +802,33 @@ export function WorkstationRunsPane() {
               <WorkstationSurfaceStat label="Proof events" value={activityItems.length} hint="Human summaries only" />
               <WorkstationSurfaceStat label="Chat history" value={threads.length} hint="Conversation entries included" />
               <WorkstationSurfaceStat label="Approvals" value={approvalCount} hint="Needs your OK and decisions" />
+              <WorkstationSurfaceStat label="Computer proofs" value={computerProofItems.length} hint="screen and runtime evidence" />
               <WorkstationSurfaceStat label="Channels/providers" value={channelCount + providerCount} hint="External sends and AI state" />
             </WorkstationSurfaceStatGrid>
+
+            {latestComputerProofItem ? (
+              <WorkstationSurfaceCard
+                title="Latest computer proof"
+                description="Screen evidence from an agent-controlled computer or browser session."
+              >
+                <div className="app-computer-proof-card">
+                  <div className="app-computer-proof-card__copy">
+                    <span>{latestComputerProofItem.computerProof?.providerId || latestComputerProofItem.source}</span>
+                    <strong>{latestComputerProofItem.computerProof?.appTitle || latestComputerProofItem.title}</strong>
+                    <p>{latestComputerProofItem.computerProof?.currentUrl || latestComputerProofItem.summary}</p>
+                  </div>
+                  <div className="app-computer-proof-card__meta">
+                    <span>{formatHistoryDate(latestComputerProofItem.occurredAt)}</span>
+                    {latestComputerProofItem.computerProof?.runtimeSessionId ? (
+                      <span>{latestComputerProofItem.computerProof.runtimeSessionId}</span>
+                    ) : null}
+                    {latestComputerProofItem.artifacts.map((artifact) => (
+                      <span key={artifact.id}>{artifact.label}</span>
+                    ))}
+                  </div>
+                </div>
+              </WorkstationSurfaceCard>
+            ) : null}
 
             <WorkstationSurfaceCard
               title="What happened?"
@@ -745,31 +859,20 @@ export function WorkstationRunsPane() {
                     </button>
                   ) : null}
                 </div>
-                <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div className="app-runs-minimal-search">
                   <input
                     type="text"
                     placeholder="Search by trace ID"
                     value={traceIdFilter}
                     onChange={(e) => { setTraceIdFilter(e.target.value.trim()); setVisibleCount(HISTORY_PAGE_SIZE); }}
-                    style={{
-                      padding: '4px 10px', fontSize: 12, borderRadius: 6,
-                      border: '1px solid var(--app-border-default)',
-                      background: 'var(--app-bg-panel)',
-                      color: 'var(--app-text-primary)',
-                      width: 260,
-                    }}
                   />
                   {traceIdFilter && (
-                    <button type="button" onClick={() => setTraceIdFilter('')}
-                      style={{ padding: '2px 8px', fontSize: 11, borderRadius: 4,
-                        border: '1px solid var(--app-border-default)',
-                        background: 'transparent', cursor: 'pointer',
-                        color: 'var(--app-text-tertiary)', }}>
+                    <button type="button" onClick={() => setTraceIdFilter('')}>
                       Clear
                     </button>
                   )}
                   {traceIdFilter && filteredActivityItems.length === 0 && (
-                    <span style={{ fontSize: 12, color: 'var(--app-text-tertiary)' }}>
+                    <span>
                       No events found for this trace ID
                     </span>
                   )}
@@ -793,6 +896,14 @@ export function WorkstationRunsPane() {
                         <span className="app-runs-minimal-row__preview" title={`${item.title}: ${item.summary}`}>
                           {item.title} · {item.summary}
                         </span>
+                        {item.artifacts.length > 0 ? (
+                          <span className="app-runs-minimal-row__proofs" aria-label="Attached proof">
+                            {item.artifacts.slice(0, 2).map((artifact) => (
+                              <span key={artifact.id}>{artifact.label}</span>
+                            ))}
+                            {item.artifacts.length > 2 ? <span>+{item.artifacts.length - 2}</span> : null}
+                          </span>
+                        ) : null}
                         {showAdminAudit && item.adminAudit ? (
                           <span
                             className="app-runs-minimal-row__time"

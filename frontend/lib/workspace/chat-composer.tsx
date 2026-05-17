@@ -1,16 +1,13 @@
 'use client';
 
 import type { FormEvent, KeyboardEvent } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
-  Check,
-  ChevronDown,
   ChevronRight,
+  Plus,
   Square,
-  Wrench,
   X,
-  Zap,
 } from 'lucide-react';
 
 import { AppButton, AppSelect, joinClassNames } from '@/lib/ui/primitives';
@@ -45,6 +42,15 @@ export type ComposerPreRunCostEstimate = {
   estimateLabel: string;
   detail: string;
   warnings: string[];
+};
+
+export type ComposerSlashCommand = {
+  id: string;
+  slash: `/${string}`;
+  title: string;
+  description: string;
+  category?: string;
+  keywords?: readonly string[];
 };
 
 function isComposerOptionGroup(option: ComposerModelOption): option is ComposerOptionGroup {
@@ -118,6 +124,8 @@ export function ChatComposer({
   smallModelWarning = null,
   onDismissSmallModelWarning,
   preRunCostEstimate = null,
+  slashCommands = [],
+  onSlashCommandSelect,
 }: {
   draft: string;
   onDraftChange: (nextDraft: string) => void;
@@ -155,29 +163,68 @@ export function ChatComposer({
   smallModelWarning?: string | null;
   onDismissSmallModelWarning?: () => void;
   preRunCostEstimate?: ComposerPreRunCostEstimate | null;
+  slashCommands?: readonly ComposerSlashCommand[];
+  onSlashCommandSelect?: (command: ComposerSlashCommand) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const runtimePickerRef = useRef<HTMLDivElement | null>(null);
-  const toolsPickerRef = useRef<HTMLDivElement | null>(null);
-  const [runtimePickerOpen, setRuntimePickerOpen] = useState(false);
-  const [toolPaletteOpen, setToolPaletteOpen] = useState(false);
+  const actionLauncherRef = useRef<HTMLDivElement | null>(null);
+  const commandPaletteRef = useRef<HTMLDivElement | null>(null);
+  const [actionPaletteOpen, setActionPaletteOpen] = useState(false);
+  const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const hasDraft = draft.trim().length > 0;
   const canSend = !busy && !sendDisabled && hasDraft;
   const canStop = busy && typeof onStop === 'function';
   const showSendButton = busy || hasDraft;
-  const selectedModelLabel = composerOptionLabel(modelOptions, model);
-  const selectedReasoningOption = reasoningOptions.find((option) => option.value === reasoningEffort);
-  const compactSelectedModelLabel = compactModelLabel(selectedModelLabel, model || 'Auto route');
-  const reasoningLabel = selectedReasoningOption?.label ?? reasoningEffort;
-  const runtimePillLabel = [compactSelectedModelLabel, reasoningLabel].filter(Boolean).join(' · ');
-  const availableToolCount = toolGroups.reduce(
-    (total, group) => total + group.items.filter((item) => item.enabled).length,
-    0,
-  );
-  void onOpenIntegrations;
-  void providerSummary;
+  void model;
+  void modelOptions;
+  void onModelChange;
+  void reasoningEffort;
+  void reasoningOptions;
+  void onReasoningEffortChange;
+  void runtimeStatusLabel;
+  void runtimeStatusTone;
+  void toolGroups;
   void contextWindowLabel;
   void preRunCostEstimate;
+
+  const commandQuery = useMemo(() => {
+    if (!draft.startsWith('/') || draft.includes('\n')) {
+      return null;
+    }
+    const normalized = draft.slice(1).trimStart();
+    if (!normalized) {
+      return '';
+    }
+    if (/\s/.test(normalized)) {
+      return null;
+    }
+    return normalized.toLowerCase();
+  }, [draft]);
+  const showAllSlashCommands = actionPaletteOpen && typeof onSlashCommandSelect === 'function';
+  const filteredSlashCommands = useMemo(() => {
+    if (commandQuery === null && !showAllSlashCommands) {
+      return [];
+    }
+    if (!commandQuery) {
+      return [...slashCommands];
+    }
+    return slashCommands.filter((command) => {
+      const haystack = [
+        command.slash,
+        command.title,
+        command.description,
+        ...(command.keywords ?? []),
+      ].join(' ').toLowerCase();
+      return haystack.includes(commandQuery);
+    });
+  }, [commandQuery, showAllSlashCommands, slashCommands]);
+  const commandPaletteVisible = (
+    actionPaletteOpen
+    || (!commandPaletteDismissed && commandQuery !== null)
+  )
+    && filteredSlashCommands.length > 0
+    && typeof onSlashCommandSelect === 'function';
 
   const submitDraft = () => {
     if (!canSend) {
@@ -206,7 +253,18 @@ export function ChatComposer({
   }, []);
 
   useEffect(() => {
-    if (!runtimePickerOpen && !toolPaletteOpen) {
+    setSelectedCommandIndex(0);
+  }, [actionPaletteOpen, commandQuery]);
+
+  useEffect(() => {
+    if (selectedCommandIndex < filteredSlashCommands.length) {
+      return;
+    }
+    setSelectedCommandIndex(Math.max(0, filteredSlashCommands.length - 1));
+  }, [filteredSlashCommands.length, selectedCommandIndex]);
+
+  useEffect(() => {
+    if (!actionPaletteOpen && !commandPaletteVisible) {
       return undefined;
     }
     const handlePointerDown = (event: PointerEvent) => {
@@ -214,19 +272,66 @@ export function ChatComposer({
       if (!(target instanceof Node)) {
         return;
       }
-      if (runtimePickerRef.current?.contains(target) || toolsPickerRef.current?.contains(target)) {
+      if (
+        actionLauncherRef.current?.contains(target)
+        || commandPaletteRef.current?.contains(target)
+      ) {
         return;
       }
-      setRuntimePickerOpen(false);
-      setToolPaletteOpen(false);
+      setActionPaletteOpen(false);
+      setCommandPaletteDismissed(true);
     };
     window.addEventListener('pointerdown', handlePointerDown);
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
     };
-  }, [runtimePickerOpen, toolPaletteOpen]);
+  }, [actionPaletteOpen, commandPaletteVisible]);
+
+  const selectSlashCommand = (command: ComposerSlashCommand) => {
+    setCommandPaletteDismissed(true);
+    setActionPaletteOpen(false);
+    onSlashCommandSelect?.(command);
+  };
+
+  const handleDraftChange = (nextDraft: string) => {
+    if (!nextDraft.startsWith('/')) {
+      setCommandPaletteDismissed(true);
+      setActionPaletteOpen(false);
+    } else {
+      setCommandPaletteDismissed(false);
+    }
+    onDraftChange(nextDraft);
+  };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (commandPaletteVisible) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSelectedCommandIndex((current) => (current + 1) % filteredSlashCommands.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSelectedCommandIndex((current) => (
+          current === 0 ? filteredSlashCommands.length - 1 : current - 1
+        ));
+        return;
+      }
+      if (event.key === 'Tab' || event.key === 'Enter') {
+        const selectedCommand = filteredSlashCommands[selectedCommandIndex];
+        if (selectedCommand) {
+          event.preventDefault();
+          selectSlashCommand(selectedCommand);
+          return;
+        }
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setActionPaletteOpen(false);
+        setCommandPaletteDismissed(true);
+        return;
+      }
+    }
     if (event.key !== 'Enter') {
       if (event.key === 'Escape' && canStop) {
         event.preventDefault();
@@ -247,7 +352,7 @@ export function ChatComposer({
         <textarea
           ref={textareaRef}
           value={draft}
-          onChange={(event) => onDraftChange(event.currentTarget.value)}
+          onChange={(event) => handleDraftChange(event.currentTarget.value)}
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder={placeholder}
@@ -271,172 +376,93 @@ export function ChatComposer({
 
         <div className="app-chat-composer__toolbar">
           <div className="app-chat-composer__toolbar-left">
-            <div className="app-chat-composer__runtime" ref={runtimePickerRef}>
+            <div className="app-chat-composer__actions" ref={actionLauncherRef}>
               <button
                 type="button"
                 className={joinClassNames(
-                  'app-chat-composer__provider-pill',
+                  'app-chat-composer__action-trigger',
                   providerGateVisible && 'app-chat-composer__provider-pill--warning',
                 )}
                 onClick={() => {
-                  setToolPaletteOpen(false);
-                  setRuntimePickerOpen((current) => !current);
+                  setCommandPaletteDismissed(false);
+                  setActionPaletteOpen((current) => !current);
                 }}
-                aria-expanded={runtimePickerOpen}
-                aria-label="Change model and reasoning"
-                title={runtimePillLabel}
+                aria-expanded={commandPaletteVisible}
+                aria-label={providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Open actions'}
               >
-                <Zap size={13} strokeWidth={2.15} aria-hidden="true" />
-                <span>{runtimePillLabel}</span>
-                <ChevronDown size={13} strokeWidth={2} aria-hidden="true" />
+                <Plus size={15} strokeWidth={2.1} aria-hidden="true" />
+                <span>{providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Actions'}</span>
               </button>
 
-              {runtimePickerOpen ? (
-                <div className="app-chat-composer__runtime-popover" role="dialog" aria-label="Model and reasoning">
-                  <div className="app-chat-composer__runtime-section">
-                    <div className="app-chat-composer__runtime-section-title">Intelligence</div>
-                    {reasoningOptions.map((option) => (
+              {commandPaletteVisible ? (
+                <div
+                  ref={commandPaletteRef}
+                  className="app-chat-composer__command-palette"
+                  role="dialog"
+                  aria-label="Sage actions"
+                >
+                  {providerGateVisible && providerSummary && typeof onOpenIntegrations === 'function' ? (
+                    <button
+                      type="button"
+                      className="app-chat-composer__command-setup"
+                      onClick={() => {
+                        setActionPaletteOpen(false);
+                        setCommandPaletteDismissed(true);
+                        onOpenIntegrations();
+                      }}
+                    >
+                      <span className="app-chat-composer__command-copy">
+                        <span className="app-chat-composer__command-title-row">
+                          <strong>{providerSummary.actionLabel ?? 'Set up Sage'}</strong>
+                        </span>
+                        <span>{providerSummary.label}</span>
+                      </span>
+                      <span className="app-chat-composer__command-shortcut">Open</span>
+                      <ChevronRight
+                        className="app-chat-composer__command-chevron"
+                        size={16}
+                        strokeWidth={1.9}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  ) : null}
+                  <div className="app-chat-composer__command-head">
+                    <span>Ask Sage to...</span>
+                    <span>{commandQuery !== null ? 'Type to filter' : 'Choose a quick action'}</span>
+                  </div>
+                  <div className="app-chat-composer__command-list" role="listbox" aria-label="Available Sage actions">
+                    {filteredSlashCommands.map((command, index) => (
                       <button
-                        key={option.value}
+                        key={command.id}
                         type="button"
-                        onClick={() => {
-                          onReasoningEffortChange(option.value);
-                          setRuntimePickerOpen(false);
-                        }}
-                        disabled={controlsDisabled || busy || option.disabled}
                         className={joinClassNames(
-                          'app-chat-composer__runtime-menu-row',
-                          reasoningEffort === option.value && 'app-chat-composer__runtime-menu-row--active',
+                          'app-chat-composer__command-item',
+                          index === selectedCommandIndex && 'app-chat-composer__command-item--active',
                         )}
+                        onMouseEnter={() => setSelectedCommandIndex(index)}
+                        onClick={() => selectSlashCommand(command)}
+                        role="option"
+                        aria-selected={index === selectedCommandIndex}
                       >
-                        <span>{option.label}</span>
-                        {reasoningEffort === option.value ? <Check size={18} strokeWidth={2.1} aria-hidden="true" /> : null}
+                        <span className="app-chat-composer__command-copy">
+                          <span className="app-chat-composer__command-title-row">
+                            <strong>{command.title}</strong>
+                            {command.category ? (
+                              <span className="app-chat-composer__command-category">{command.category}</span>
+                            ) : null}
+                          </span>
+                          <span>{command.description}</span>
+                        </span>
+                        <span className="app-chat-composer__command-shortcut">{command.slash}</span>
+                        <ChevronRight
+                          className="app-chat-composer__command-chevron"
+                          size={16}
+                          strokeWidth={1.9}
+                          aria-hidden="true"
+                        />
                       </button>
                     ))}
                   </div>
-
-                  <div className="app-chat-composer__runtime-divider" />
-
-                  <div className="app-chat-composer__runtime-section">
-                    <div className="app-chat-composer__runtime-section-title">Model</div>
-                    {modelOptions.map((optionGroupOrItem, index) => {
-                      if (isComposerOptionGroup(optionGroupOrItem)) {
-                        return (
-                          <div key={`group:${optionGroupOrItem.label}:${index}`}>
-                            <div className="app-chat-composer__runtime-section-title">{optionGroupOrItem.label}</div>
-                            {optionGroupOrItem.options.map((option) => (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onClick={() => {
-                                  onModelChange(option.value);
-                                  setRuntimePickerOpen(false);
-                                }}
-                                disabled={controlsDisabled || busy || option.disabled}
-                                className={joinClassNames(
-                                  'app-chat-composer__runtime-menu-row',
-                                  model === option.value && 'app-chat-composer__runtime-menu-row--active',
-                                )}
-                              >
-                                <span>{compactModelLabel(option.label, option.value)}</span>
-                                {model === option.value ? (
-                                  <Check size={18} strokeWidth={2.1} aria-hidden="true" />
-                                ) : (
-                                  <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
-                                )}
-                              </button>
-                            ))}
-                          </div>
-                        );
-                      }
-                      return (
-                        <button
-                          key={optionGroupOrItem.value}
-                          type="button"
-                          onClick={() => {
-                            onModelChange(optionGroupOrItem.value);
-                            setRuntimePickerOpen(false);
-                          }}
-                          disabled={controlsDisabled || busy || optionGroupOrItem.disabled}
-                          className={joinClassNames(
-                            'app-chat-composer__runtime-menu-row',
-                            model === optionGroupOrItem.value && 'app-chat-composer__runtime-menu-row--active',
-                          )}
-                        >
-                          <span>{compactModelLabel(optionGroupOrItem.label, optionGroupOrItem.value)}</span>
-                          {model === optionGroupOrItem.value ? (
-                            <Check size={18} strokeWidth={2.1} aria-hidden="true" />
-                          ) : (
-                            <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <div
-              className={joinClassNames(
-                'app-chat-composer__status-pill',
-                runtimeStatusTone === 'warning' && 'app-chat-composer__status-pill--warning',
-                runtimeStatusTone === 'success' && 'app-chat-composer__status-pill--success',
-              )}
-            >
-              <span className="app-chat-composer__status-dot" aria-hidden="true" />
-              <span>{runtimeStatusLabel}</span>
-            </div>
-
-            <div className="app-chat-composer__toolbar-divider" />
-
-            <div className="app-chat-composer__tools" ref={toolsPickerRef}>
-              <button
-                type="button"
-                className="app-chat-composer__tool-trigger"
-                aria-expanded={toolPaletteOpen}
-                aria-label="Open tools palette"
-                onClick={() => {
-                  setRuntimePickerOpen(false);
-                  setToolPaletteOpen((current) => !current);
-                }}
-              >
-                <Wrench size={15} strokeWidth={2} aria-hidden="true" />
-                <span>Tools</span>
-                <span className="app-chat-composer__tool-count">{availableToolCount}</span>
-              </button>
-
-              {toolPaletteOpen ? (
-                <div className="app-chat-composer__tools-popover" role="dialog" aria-label="Tools palette">
-                  {toolGroups.map((group) => (
-                    <section key={group.id} className="app-chat-composer__tools-section">
-                      <div className="app-chat-composer__tools-section-title">{group.label}</div>
-                      <div className="app-chat-composer__tools-list">
-                        {group.items.map((item) => (
-                          <div
-                            key={item.id}
-                            className={joinClassNames(
-                              'app-chat-composer__tools-row',
-                              !item.enabled && 'app-chat-composer__tools-row--disabled',
-                            )}
-                          >
-                            <div className="app-chat-composer__tools-copy">
-                              <strong>{item.label}</strong>
-                              {item.detail ? <span>{item.detail}</span> : null}
-                            </div>
-                            <span
-                              className={joinClassNames(
-                                'app-chat-composer__tools-badge',
-                                item.enabled && 'app-chat-composer__tools-badge--enabled',
-                              )}
-                            >
-                              {item.enabled ? 'Available' : 'Unavailable'}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                  ))}
                 </div>
               ) : null}
             </div>

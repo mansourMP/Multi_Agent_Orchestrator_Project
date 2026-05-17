@@ -13,12 +13,25 @@ import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { AppButton, AppNotice, AppShinyText } from '@/lib/ui/primitives';
+import { AppSurfaceStat, AppSurfaceStatGrid } from '@/lib/ui/primitives';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
 import {
   ChatComposer,
   type ComposerPreRunCostEstimate,
+  type ComposerSlashCommand,
   type ComposerToolGroup,
 } from '@/lib/workspace/chat-composer';
+import {
+  buildSageSkillCommandMacros,
+  expandSageSkillSlashCommand,
+  SAGE_COMMAND_CATALOG,
+  SAGE_WORKSPACE_COMMAND_CATALOG,
+  type SageCommandActionKind,
+  type SageCommandMetadata,
+  type SageSkillCommandMacro,
+  type SageWorkspaceCommandMetadata,
+  resolveSageCommandBySlash,
+} from '@/lib/workspace/sage-command-catalog';
 import type {
   WorkstationChatArtifactReference,
   WorkstationChatMessageRecord,
@@ -197,6 +210,52 @@ function compactCreditEstimateLabel(estimate: ComposerPreRunCostEstimate): strin
   return normalized || estimate.estimateLabel;
 }
 
+function sageCommandSheetTitle(command: SageCommandActionKind | null): string {
+  switch (command) {
+    case 'open_status':
+      return "What's Sage doing?";
+    case 'open_usage':
+      return 'Credits and usage';
+    case 'open_tools':
+      return 'What Sage can use';
+    case 'open_runtime':
+      return 'AI setup';
+    case 'run_doctor':
+      return 'Check setup';
+    default:
+      return 'Sage action';
+  }
+}
+
+function sageCommandSheetDescription(command: SageCommandActionKind | null): string {
+  switch (command) {
+    case 'open_status':
+      return 'Current health, readiness, approvals, and run state.';
+    case 'open_usage':
+      return 'Credits, estimated cost, and recent conversation usage.';
+    case 'open_tools':
+      return 'Connected tools, apps, and callable capabilities Sage can use.';
+    case 'open_runtime':
+      return 'Which AI path Sage will use and where to manage it.';
+    case 'run_doctor':
+      return 'Connectivity checks for model, browser, tools, and gateway readiness.';
+    default:
+      return 'Quick control without sending a chat message.';
+  }
+}
+
+function runtimeTrustZoneLabel(zone: ChatRuntimeTrustZone): string {
+  switch (zone) {
+    case 'owned_dedicated_runtime':
+      return 'Dedicated runtime';
+    case 'user_owned_local':
+      return 'User-owned computer';
+    case 'shared_cloud':
+    default:
+      return 'Shared cloud';
+  }
+}
+
 export function WorkstationChatPane() {
   const { bootstrap, routeManifest, hasCapability } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
@@ -207,6 +266,9 @@ export function WorkstationChatPane() {
   const router = useRouter();
   const titlebarCreditsRef = useRef<HTMLDivElement | null>(null);
   const [titlebarCreditsOpen, setTitlebarCreditsOpen] = useState(false);
+  const [activeSageCommandPanel, setActiveSageCommandPanel] = useState<SageCommandActionKind | null>(null);
+  const [workspaceCommandPaletteOpen, setWorkspaceCommandPaletteOpen] = useState(false);
+  const [skillSlashCommandMacros, setSkillSlashCommandMacros] = useState<SageSkillCommandMacro[]>([]);
   const actor = useMemo<WorkstationSessionActor>(() => ({
     type: 'user',
     id: bootstrap.account.id,
@@ -451,6 +513,13 @@ export function WorkstationChatPane() {
       return await services.client.getBillingSummary();
     }).catch(() => null);
     setBillingSummary(payload && typeof payload === 'object' ? payload : null);
+  }, [services.client, services.queryClient]);
+
+  const refreshSkillCommands = useCallback(async () => {
+    const payload = await services.queryClient.run('chat:skill-commands', async () => {
+      return await services.client.listSageSkills();
+    }).catch(() => null);
+    setSkillSlashCommandMacros(buildSageSkillCommandMacros(payload));
   }, [services.client, services.queryClient]);
 
   const persistSelectedModelPreference = useCallback(async (nextModelId: string) => {
@@ -784,6 +853,24 @@ export function WorkstationChatPane() {
       window.removeEventListener('keydown', handleApprovalShortcut);
     };
   }, [approvals, resolvingApprovalId]);
+
+  useEffect(() => {
+    const handleCommandShortcut = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || isTextEditingTarget(event.target)) {
+        return;
+      }
+      const isCommandK = event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey);
+      if (!isCommandK) {
+        return;
+      }
+      event.preventDefault();
+      setWorkspaceCommandPaletteOpen((current) => !current);
+    };
+    window.addEventListener('keydown', handleCommandShortcut);
+    return () => {
+      window.removeEventListener('keydown', handleCommandShortcut);
+    };
+  }, []);
 
   const openCreateMemory = (categoryId?: string) => {
     setMemoryDraft({
@@ -1340,6 +1427,40 @@ export function WorkstationChatPane() {
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
   );
+  const sageSlashCommands = useMemo<ComposerSlashCommand[]>(
+    () => [
+      ...SAGE_COMMAND_CATALOG.map((command) => ({
+        id: command.id,
+        slash: command.slash,
+        title: command.title,
+        description: command.description,
+        category: 'Sage',
+        keywords: command.keywords,
+      })),
+      ...skillSlashCommandMacros.map((command) => ({
+        id: command.id,
+        slash: command.slash,
+        title: command.title,
+        description: command.description,
+        category: 'Workflow',
+        keywords: command.keywords,
+      })),
+    ],
+    [skillSlashCommandMacros],
+  );
+  const workspaceCommandItems = useMemo(
+    () => SAGE_WORKSPACE_COMMAND_CATALOG.flatMap((command) => {
+      const route = routeManifest.routeIndex[command.routeId];
+      if (!route) {
+        return [];
+      }
+      return [{
+        ...command,
+        href: route.href,
+      }];
+    }),
+    [routeManifest.routeIndex],
+  );
   const gatewayHref = useMemo(
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
@@ -1437,6 +1558,34 @@ export function WorkstationChatPane() {
     : latestRun
       ? readString(latestRun.status) || 'unknown'
       : 'Idle';
+  const handleSlashCommandSelect = useCallback((composerCommand: ComposerSlashCommand) => {
+    const skillCommand = skillSlashCommandMacros.find((item) => item.id === composerCommand.id) ?? null;
+    if (skillCommand) {
+      setActiveSageCommandPanel(null);
+      setDraft(skillCommand.draftValue);
+      return;
+    }
+    const command = SAGE_COMMAND_CATALOG.find((item) => item.id === composerCommand.id) as SageCommandMetadata | undefined;
+    if (!command) {
+      return;
+    }
+    setDraft('');
+    setActiveSageCommandPanel(command.actionKind);
+    if (command.actionKind === 'run_doctor') {
+      void refreshBrowserGatewayReadiness();
+    }
+  }, [refreshBrowserGatewayReadiness, setDraft, skillSlashCommandMacros]);
+  const handleWorkspaceCommandSelect = useCallback((command: SageWorkspaceCommandMetadata) => {
+    setWorkspaceCommandPaletteOpen(false);
+    if (command.routeId === 'approvals') {
+      setIsApprovalsSheetOpen(true);
+      return;
+    }
+    const href = routeManifest.routeIndex[command.routeId]?.href ?? null;
+    if (href) {
+      router.push(href);
+    }
+  }, [routeManifest.routeIndex, router, setIsApprovalsSheetOpen]);
   const memoryMeta = assistantTurnCount > 0
     ? `${assistantTurnCount} Sage repl${assistantTurnCount === 1 ? 'y' : 'ies'} retained`
     : 'The first turn will establish memory';
@@ -1537,19 +1686,75 @@ export function WorkstationChatPane() {
     }
     return pills;
   }, [browserGatewayDoctor, localToolingOnline, selectedProviderContext.providerLabel]);
+  const hostedCreditState = useMemo(
+    () => normalizeHostedCreditStateForChat(billingSummary),
+    [billingSummary],
+  );
   const preRunCostEstimate = useMemo<ComposerPreRunCostEstimate | null>(
     () => buildPreRunCostEstimate({
       selectedModelOption,
       selectedExecutionPlacement,
       draft,
-      hostedCreditState: normalizeHostedCreditStateForChat(billingSummary),
+      hostedCreditState,
     }),
-    [billingSummary, draft, selectedExecutionPlacement, selectedModelOption],
+    [draft, hostedCreditState, selectedExecutionPlacement, selectedModelOption],
   );
   const titlebarCreditLabel = useMemo(
     () => (preRunCostEstimate ? compactCreditEstimateLabel(preRunCostEstimate) : null),
     [preRunCostEstimate],
   );
+  const commandToolTotals = useMemo(() => {
+    let total = 0;
+    let enabled = 0;
+    for (const group of composerToolGroups) {
+      for (const item of group.items) {
+        total += 1;
+        if (item.enabled) {
+          enabled += 1;
+        }
+      }
+    }
+    return { enabled, total };
+  }, [composerToolGroups]);
+  const commandDoctorRows = useMemo(() => {
+    const browserRecord = readObject(browserGatewayDoctor?.browser);
+    const providersRecord = readObject(browserGatewayDoctor?.providers);
+    const quotaRecord = readObject(browserGatewayDoctor?.quota);
+    return [
+      {
+        label: 'Gateway',
+        value: gatewayReadinessOnline ? 'Healthy' : readString(browserGatewayDoctor?.status) || 'Not connected',
+        tone: gatewayReadinessOnline ? 'success' : 'warning',
+      },
+      {
+        label: 'Browser',
+        value: readString(browserRecord.status) || (gatewayToolingOnline ? 'Ready' : 'Not connected'),
+        tone: gatewayToolingOnline ? 'success' : 'warning',
+      },
+      {
+        label: 'Model route',
+        value: activeProviderSummary.connected ? activeProviderSummary.label : 'Setup needed',
+        tone: activeProviderSummary.connected ? 'success' : 'warning',
+      },
+      {
+        label: 'Provider probe',
+        value: readString(providersRecord.status) || (activeProviderSummary.connected ? 'Ready' : 'No probe yet'),
+        tone: activeProviderSummary.connected ? 'success' : 'neutral',
+      },
+      {
+        label: 'Quota',
+        value: readString(quotaRecord.status) || (hostedCreditState.monthlyCreditCap > 0 ? 'Tracked' : 'Not tracked'),
+        tone: hostedCreditState.monthlyCreditCap > 0 ? 'success' : 'neutral',
+      },
+    ];
+  }, [
+    activeProviderSummary.connected,
+    activeProviderSummary.label,
+    browserGatewayDoctor,
+    gatewayReadinessOnline,
+    gatewayToolingOnline,
+    hostedCreditState.monthlyCreditCap,
+  ]);
   const showContextStrip = false;
   const showHeaderReadinessStrip = false;
 
@@ -1591,10 +1796,11 @@ export function WorkstationChatPane() {
     void refreshToolingState().catch(() => undefined);
     void refreshBrowserGatewayReadiness().catch(() => undefined);
     void refreshBillingSummary().catch(() => undefined);
+    void refreshSkillCommands().catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
+  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshSkillCommands, refreshToolingState]);
 
   useEffect(() => subscribeWorkstationProviderChanged((detail) => {
     if (detail.workspaceId !== bootstrap.workspace.id) {
@@ -1604,7 +1810,8 @@ export function WorkstationChatPane() {
     void refreshToolingState();
     void refreshBrowserGatewayReadiness();
     void refreshBillingSummary();
-  }), [bootstrap.workspace.id, refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
+    void refreshSkillCommands();
+  }), [bootstrap.workspace.id, refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshSkillCommands, refreshToolingState]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -1615,6 +1822,7 @@ export function WorkstationChatPane() {
       void refreshToolingState();
       void refreshBrowserGatewayReadiness();
       void refreshBillingSummary();
+      void refreshSkillCommands();
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -1622,6 +1830,7 @@ export function WorkstationChatPane() {
         void refreshToolingState();
         void refreshBrowserGatewayReadiness();
         void refreshBillingSummary();
+        void refreshSkillCommands();
       }
     };
     window.addEventListener('focus', handleFocus);
@@ -1630,7 +1839,7 @@ export function WorkstationChatPane() {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
+  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshSkillCommands, refreshToolingState]);
 
   useEffect(() => {
     if (isPersistingModelSelection) {
@@ -1789,6 +1998,20 @@ export function WorkstationChatPane() {
     if (!outboundMessage || isSending || submitInFlightRef.current) {
       return;
     }
+    const sessionCommand = resolveSageCommandBySlash(outboundMessage);
+    if (sessionCommand) {
+      setDraft('');
+      setActiveSageCommandPanel(sessionCommand.actionKind);
+      if (sessionCommand.actionKind === 'run_doctor') {
+        void refreshBrowserGatewayReadiness();
+      }
+      return;
+    }
+    const {
+      displayMessage,
+      submittedMessage,
+      matchedMacro,
+    } = expandSageSkillSlashCommand(outboundMessage, skillSlashCommandMacros);
     submitInFlightRef.current = true;
     const resolvedProviderId = readString(selectedProviderContext.providerId) || null;
     const resolvedModelId = readString(selectedProviderContext.modelId)
@@ -1828,7 +2051,7 @@ export function WorkstationChatPane() {
         });
       }
     };
-    const pendingMessage = createPendingUserMessage(outboundMessage, requestedThreadId, clientRequestId);
+    const pendingMessage = createPendingUserMessage(displayMessage, requestedThreadId, clientRequestId);
     const streamAbortHandle: WorkstationTurnStreamAbortHandle = {
       signal: new AbortController().signal,
       abort: () => undefined,
@@ -1851,7 +2074,7 @@ export function WorkstationChatPane() {
     setLiveTimelineEvents([
       {
         type: 'user',
-        payload: { content: outboundMessage },
+        payload: { content: displayMessage },
       },
       {
         type: 'step',
@@ -1906,10 +2129,13 @@ export function WorkstationChatPane() {
         actor,
         sessionId: String(session.session_id),
         threadId: requestedThreadId,
-        message: outboundMessage,
+        message: displayMessage,
         channel: 'web',
         metadata: {
           source: 'workstation_chat_pane',
+          slash_command: matchedMacro?.slash ?? undefined,
+          slash_command_skill_id: matchedMacro?.skillId ?? undefined,
+          slash_command_skill_name: matchedMacro?.skillName ?? undefined,
         },
         clientRequestId,
       });
@@ -2027,7 +2253,7 @@ export function WorkstationChatPane() {
       const { response, session: streamedSession } = await services.client.submitTurnStreamWithSessionRetry({
         actor,
         threadId: requestedThreadId,
-        message: outboundMessage,
+        message: submittedMessage,
         channel: 'web',
         source: 'workstation_chat_pane',
         runtimeTarget: localRuntimeTargetId || 'cloud',
@@ -2691,6 +2917,8 @@ export function WorkstationChatPane() {
           void sendMessage();
         }}
         onStop={stopStreamingResponse}
+        slashCommands={sageSlashCommands}
+        onSlashCommandSelect={handleSlashCommandSelect}
         onOpenIntegrations={() => {
           router.push(integrationsHref);
         }}
@@ -2738,6 +2966,197 @@ export function WorkstationChatPane() {
         showAutonomySelector={localCompanionConnected}
         autonomyFallbackLabel="Offline"
       />
+
+      <CommandSheet
+        open={workspaceCommandPaletteOpen}
+        title="Go to"
+        description="Workspace navigation and surfaces. Agent commands stay in the chat composer with /."
+        onClose={() => {
+          setWorkspaceCommandPaletteOpen(false);
+        }}
+        actions={(
+          <AppButton
+            type="button"
+            tone="secondary"
+            onClick={() => {
+              setWorkspaceCommandPaletteOpen(false);
+            }}
+          >
+            Close
+          </AppButton>
+        )}
+      >
+        <div className="sage-workspace-command-palette">
+          {workspaceCommandItems.map((command) => (
+            <button
+              key={command.id}
+              type="button"
+              className="sage-workspace-command-palette__item"
+              disabled={!command.href && command.routeId !== 'approvals'}
+              onClick={() => {
+                handleWorkspaceCommandSelect(command);
+              }}
+            >
+              <span>
+                <strong>{command.title}</strong>
+                <small>{command.description}</small>
+              </span>
+              <span className="sage-workspace-command-palette__hint">Open</span>
+            </button>
+          ))}
+        </div>
+      </CommandSheet>
+
+      <CommandSheet
+        open={activeSageCommandPanel !== null}
+        title={sageCommandSheetTitle(activeSageCommandPanel)}
+        description={sageCommandSheetDescription(activeSageCommandPanel)}
+        onClose={() => {
+          setActiveSageCommandPanel(null);
+        }}
+        actions={(
+          <AppButton
+            type="button"
+            tone="secondary"
+            onClick={() => {
+              setActiveSageCommandPanel(null);
+            }}
+          >
+            Done
+          </AppButton>
+        )}
+      >
+        <div className="sage-command-panel">
+          {activeSageCommandPanel === 'open_status' ? (
+            <>
+              <AppSurfaceStatGrid>
+                <AppSurfaceStat label="Model route" value={activeProviderSummary.connected ? 'Ready' : 'Setup'} hint={activeProviderSummary.label} />
+                <AppSurfaceStat label="Runtime" value={runtimeStatus.label} hint={runtimeCard.meta} />
+                <AppSurfaceStat label="Approvals" value={approvals.length} hint={approvals.length === 1 ? 'request waiting' : 'requests waiting'} />
+                <AppSurfaceStat label="Latest run" value={latestRun ? readString(latestRun.status) || 'unknown' : 'Idle'} hint={latestRun ? runPreviewLabel(latestRun) : 'No active run attached'} />
+              </AppSurfaceStatGrid>
+              <AppNotice tone={readinessPills.length > 0 ? 'warning' : 'success'} className="sage-command-panel__notice">
+                <strong>{readinessPills.length > 0 ? 'Sage needs attention' : 'Sage is ready'}</strong>
+                <span>
+                  {readinessPills.length > 0
+                    ? readinessPills.map((pill) => pill.label).join(' · ')
+                    : 'Model, runtime, and approval state are not blocking the next turn.'}
+                </span>
+              </AppNotice>
+            </>
+          ) : null}
+
+          {activeSageCommandPanel === 'open_usage' ? (
+            <>
+              <AppSurfaceStatGrid>
+                <AppSurfaceStat label="Credits used" value={Math.round(hostedCreditState.monthlyCreditsUsed)} hint="this month" />
+                <AppSurfaceStat label="Credits left" value={Math.round(hostedCreditState.monthlyCreditsRemaining)} hint={hostedCreditState.monthlyCreditCap > 0 ? `${Math.round(hostedCreditState.monthlyCreditCap)} monthly cap` : 'no hosted cap loaded'} />
+                <AppSurfaceStat label="This draft" value={preRunCostEstimate ? compactCreditEstimateLabel(preRunCostEstimate) : '~0 credits'} hint={preRunCostEstimate?.detail ?? 'No hosted credit estimate yet'} />
+                <AppSurfaceStat label="Conversation" value={assistantTurnCount} hint={assistantTurnCount === 1 ? 'assistant reply retained' : 'assistant replies retained'} />
+              </AppSurfaceStatGrid>
+              {preRunCostEstimate?.warnings.length ? (
+                <AppNotice tone="warning" className="sage-command-panel__notice">
+                  <strong>Cost warnings</strong>
+                  <span>{preRunCostEstimate.warnings.join(' · ')}</span>
+                </AppNotice>
+              ) : null}
+            </>
+          ) : null}
+
+          {activeSageCommandPanel === 'open_runtime' ? (
+            <>
+              <section className={`sage-command-panel__hero sage-command-panel__hero--${runtimeCard.tone}`}>
+                <span className="sage-command-panel__eyebrow">Runtime boundary</span>
+                <h3>{runtimeCard.title}</h3>
+                <p>{runtimeCard.body}</p>
+                <div className="sage-command-panel__pills">
+                  <span>{runtimeCard.preferredPill}</span>
+                  <span>{runtimeCard.localPill}</span>
+                  <span>{runtimeTrustZoneLabel(runtimeTrustZone)}</span>
+                </div>
+              </section>
+              <div className="app-inline-actions">
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    setActiveSageCommandPanel(null);
+                    router.push(integrationsHref);
+                  }}
+                >
+                  Manage runtime
+                </AppButton>
+              </div>
+            </>
+          ) : null}
+
+          {activeSageCommandPanel === 'open_tools' ? (
+            <>
+              <AppSurfaceStatGrid>
+                <AppSurfaceStat label="Enabled tools" value={`${commandToolTotals.enabled}/${commandToolTotals.total}`} hint="available from current policies" />
+                <AppSurfaceStat label="Computer" value={localToolingOnline ? 'Online' : 'Offline'} hint={localToolingOnline ? 'local tools can be requested' : 'computer tools require connection'} />
+                <AppSurfaceStat label="Browser" value={gatewayToolingOnline ? 'Ready' : 'Not ready'} hint="used for signed-in or private pages" />
+                <AppSurfaceStat label="Policy" value={autonomyMode === 'full' ? 'Full access' : 'Approval'} hint="guarded actions still pause for confirmation" />
+              </AppSurfaceStatGrid>
+              <div className="sage-command-panel__tool-groups">
+                {composerToolGroups.map((group) => (
+                  <section key={group.id} className="sage-command-panel__tool-group">
+                    <h3>{group.label}</h3>
+                    <div className="sage-command-panel__tool-list">
+                      {group.items.map((item) => (
+                        <div key={item.id} className="sage-command-panel__tool-row">
+                          <span className={`sage-command-panel__dot${item.enabled ? ' sage-command-panel__dot--success' : ''}`} aria-hidden="true" />
+                          <span>
+                            <strong>{item.label}</strong>
+                            <small>{item.detail}</small>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          {activeSageCommandPanel === 'run_doctor' ? (
+            <>
+              <div className="sage-command-panel__doctor">
+                {commandDoctorRows.map((row) => (
+                  <div key={row.label} className="sage-command-panel__doctor-row">
+                    <span className={`sage-command-panel__dot sage-command-panel__dot--${row.tone}`} aria-hidden="true" />
+                    <span>
+                      <strong>{row.label}</strong>
+                      <small>{row.value}</small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="app-inline-actions">
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    void refreshBrowserGatewayReadiness();
+                  }}
+                >
+                  Refresh checks
+                </AppButton>
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    setActiveSageCommandPanel(null);
+                    router.push(integrationsHref);
+                  }}
+                >
+                  Open Integrations
+                </AppButton>
+              </div>
+            </>
+          ) : null}
+        </div>
+      </CommandSheet>
 
       <CommandSheet
         open={isApprovalsSheetOpen}

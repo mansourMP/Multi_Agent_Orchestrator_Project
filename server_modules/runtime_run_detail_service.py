@@ -254,6 +254,20 @@ def limited_result_data_view(result_data: Any) -> Optional[dict]:
     }
 
 
+def _latest_computer_proof(source: dict[str, Any], metadata: dict[str, Any]) -> Optional[dict[str, Any]]:
+    result_data = source.get("result_data") if isinstance(source.get("result_data"), dict) else {}
+    for candidate in (
+        metadata.get("latest_computer_proof"),
+        result_data.get("computer_proof"),
+        result_data.get("latest_computer_proof"),
+        source.get("computer_proof"),
+        source.get("latest_computer_proof"),
+    ):
+        if isinstance(candidate, dict) and candidate:
+            return dict(candidate)
+    return None
+
+
 def _route_payload(source: dict[str, Any]) -> dict[str, Any]:
     return {
         "requested": source.get("execution_target_requested"),
@@ -447,6 +461,7 @@ def build_archived_run_detail_response(
     limited_node_states_view_fn: Callable[[Any], Any],
 ) -> dict[str, Any]:
     machine_interrupt = _machine_interrupt_payload(snapshot, metadata)
+    computer_proof = _latest_computer_proof(snapshot, metadata)
     response = {
         "run_id": run_id,
         "engine": snapshot.get("engine", "orion"),
@@ -495,6 +510,8 @@ def build_archived_run_detail_response(
         "pending_confirmation": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
         "pending_approval": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
         "browser_checkpoint": snapshot.get("browser_checkpoint") if include_sensitive else None,
+        "computer_proof": computer_proof,
+        "latest_computer_proof": computer_proof,
         "dag": snapshot.get("dag") if include_sensitive else None,
         "context": safe_context,
         "execution_target_requested": snapshot.get("execution_target_requested"),
@@ -548,6 +565,7 @@ def build_live_run_detail_response(
 ) -> dict[str, Any]:
     pending_confirmation = get_pending_confirmation_fn(run) or None
     machine_interrupt = _machine_interrupt_payload(run, metadata)
+    computer_proof = _latest_computer_proof(run, metadata)
     response = {
         "run_id": run_id,
         "engine": run.get("engine", "orion"),
@@ -598,6 +616,8 @@ def build_live_run_detail_response(
         "pending_confirmation": pending_confirmation,
         "pending_approval": pending_confirmation,
         "browser_checkpoint": run.get("browser_checkpoint") if include_sensitive and isinstance(run.get("browser_checkpoint"), dict) else None,
+        "computer_proof": computer_proof,
+        "latest_computer_proof": computer_proof,
         "dag": run.get("dag") if include_sensitive else None,
         "context": safe_context,
         "execution_target_requested": metadata.get("execution_target_requested"),

@@ -1,4 +1,6 @@
+import base64
 import asyncio
+import shlex
 import unittest
 from unittest.mock import patch
 
@@ -150,6 +152,11 @@ class VirtualComputerProviderAbstractionTests(unittest.TestCase):
         )
 
         self.assertIsInstance(runtime._runtime, DigitalOceanSSHVirtualComputerRuntime)
+        browser_runtime = runtime_registry.resolve(
+            RUNTIME_CHOICE_VIRTUAL_BROWSER,
+            preferred_provider_id=PROVIDER_ID_DIGITALOCEAN_SSH,
+        )
+        self.assertIsInstance(browser_runtime._runtime, DigitalOceanSSHVirtualComputerRuntime)
 
     def test_digitalocean_ssh_runtime_creates_executes_and_terminates_session(self):
         calls = []
@@ -249,6 +256,86 @@ class VirtualComputerProviderAbstractionTests(unittest.TestCase):
         self.assertTrue(any("browser_action.mjs" in call[0][-1] for call in calls))
         self.assertTrue(any("--user $(id -u):$(id -g)" in call[0][-1] for call in calls))
         self.assertTrue(any("npm_config_cache=/tmp/.npm" in call[0][-1] for call in calls))
+
+    def test_digitalocean_ssh_runtime_recovers_artifacts_from_remote_manifest(self):
+        remote_files = {}
+        screenshot_bytes = b"fake-png"
+
+        async def runner(args, timeout_seconds):
+            command = args[-1]
+            if "node /workspace/browser_action.mjs" in command:
+                return DigitalOceanSSHRuntimeCommandResult(
+                    returncode=0,
+                    stdout='{"title":"Example Domain","text":"Example text","screenshot":"/workspace/artifacts/artifact_test.png"}\n',
+                )
+            if command.startswith("sha256sum -- "):
+                return DigitalOceanSSHRuntimeCommandResult(returncode=0, stdout="abc123  screenshot.png\n")
+            tokens = shlex.split(command)
+            if "printf" in tokens and ">" in tokens:
+                remote_files[tokens[tokens.index(">") + 1]] = tokens[tokens.index("printf") + 2]
+                return DigitalOceanSSHRuntimeCommandResult(returncode=0, stdout="")
+            if tokens[:1] == ["cat"]:
+                path = tokens[1]
+                return DigitalOceanSSHRuntimeCommandResult(returncode=0, stdout=remote_files[path])
+            if tokens[:4] == ["base64", "-w", "0", "--"]:
+                return DigitalOceanSSHRuntimeCommandResult(
+                    returncode=0,
+                    stdout=base64.b64encode(screenshot_bytes).decode("ascii"),
+                )
+            return DigitalOceanSSHRuntimeCommandResult(returncode=0, stdout="")
+
+        runtime = DigitalOceanSSHVirtualComputerRuntime(
+            host="203.0.113.10",
+            user="root",
+            base_dir="/tmp/empyralis-test",
+            command_runner=runner,
+        )
+        asyncio.run(
+            runtime.create_session(
+                {
+                    "runtime_choice": RUNTIME_CHOICE_VIRTUAL_BROWSER,
+                    "session_id": "sess-do-recover-1",
+                    "workspace_id": "ws-1",
+                    "tenant_id": "tenant-1",
+                }
+            )
+        )
+        action = asyncio.run(
+            runtime.execute_action(
+                {
+                    "session_id": "sess-do-recover-1",
+                    "action": "open_url",
+                    "action_args": {"url": "https://example.com"},
+                }
+            )
+        )
+        artifact_id = (action.get("artifact") or {}).get("artifact_id")
+
+        fresh_runtime = DigitalOceanSSHVirtualComputerRuntime(
+            host="203.0.113.10",
+            user="root",
+            base_dir="/tmp/empyralis-test",
+            command_runner=runner,
+        )
+        collected = asyncio.run(
+            fresh_runtime.collect_artifact(
+                {
+                    "session_id": "sess-do-recover-1",
+                    "artifact_id": artifact_id,
+                    "include_content_base64": True,
+                }
+            )
+        )
+
+        self.assertEqual((collected.get("artifact") or {}).get("artifact_id"), artifact_id)
+        self.assertEqual(
+            base64.b64decode((collected.get("artifact") or {}).get("content_base64")),
+            screenshot_bytes,
+        )
+        self.assertEqual(
+            ((collected.get("streaming_ui") or {}).get("current_context") or {}).get("url"),
+            "https://example.com",
+        )
 
     def test_self_hosted_provider_cannot_fallback_to_in_memory_runtime(self):
         provider_registry = default_virtual_computer_provider_registry()

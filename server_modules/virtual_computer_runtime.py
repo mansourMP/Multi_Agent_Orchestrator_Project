@@ -4340,7 +4340,93 @@ class DigitalOceanSSHVirtualComputerRuntime:
             raise RuntimeError("DigitalOcean SSH runtime requires session_id.")
         return safe
 
+    def _session_manifest(self, session: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "session_id": _token(session.get("session_id")),
+            "state": _token(session.get("state")) or RUNTIME_STATE_RUNNING,
+            "workspace_id": _token(session.get("workspace_id")) or "default",
+            "tenant_id": _token(session.get("tenant_id")) or "",
+            "agent_id": _token(session.get("agent_id")) or None,
+            "runtime_choice": _token(session.get("runtime_choice")) or RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+            "provider_id": PROVIDER_ID_DIGITALOCEAN_SSH,
+            "session_dir": _token(session.get("session_dir")),
+            "created_at_epoch": float(session.get("created_at_epoch") or time.time()),
+            "current_url": _token(session.get("current_url")) or None,
+            "app_title": _token(session.get("app_title")) or None,
+            "artifacts": [dict(item) for item in list(session.get("artifacts") or []) if isinstance(item, dict)],
+            "ui_action_timeline": [
+                dict(item) for item in list(session.get("ui_action_timeline") or []) if isinstance(item, dict)
+            ],
+            "network_browser_policy": dict(session.get("network_browser_policy") or {}),
+            "enterprise_controls": dict(session.get("enterprise_controls") or {}),
+        }
+
+    async def _persist_session(self, session: Dict[str, Any]) -> None:
+        session_dir = _token(session.get("session_dir"))
+        if not session_dir:
+            return
+        manifest = self._session_manifest(session)
+        command = f"printf %s {shlex.quote(json.dumps(manifest, sort_keys=True))} > {shlex.quote(session_dir)}/session.json"
+        result = await self._run_remote(command, timeout_seconds=20)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"DigitalOcean SSH runtime failed to persist session: {result.stderr.strip() or result.stdout.strip()}"
+            )
+
+    async def _load_remote_session(self, session_id: Any) -> Dict[str, Any]:
+        token = _token(session_id)
+        session_dir = self._session_dir(token)
+        result = await self._run_remote(f"cat {shlex.quote(session_dir)}/session.json", timeout_seconds=20)
+        if result.returncode != 0:
+            raise RuntimeError("DigitalOcean SSH runtime session was not found.")
+        try:
+            manifest = json.loads(result.stdout)
+        except Exception as exc:
+            raise RuntimeError("DigitalOcean SSH runtime session manifest is unreadable.") from exc
+        if not isinstance(manifest, dict):
+            raise RuntimeError("DigitalOcean SSH runtime session manifest is invalid.")
+        session = {
+            "session_id": _token(manifest.get("session_id")) or token,
+            "state": _token(manifest.get("state")) or RUNTIME_STATE_RUNNING,
+            "workspace_id": _token(manifest.get("workspace_id")) or "default",
+            "tenant_id": _token(manifest.get("tenant_id")) or "",
+            "agent_id": _token(manifest.get("agent_id")) or None,
+            "runtime_choice": _token(manifest.get("runtime_choice")) or RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+            "session_dir": _token(manifest.get("session_dir")) or session_dir,
+            "created_at_epoch": float(manifest.get("created_at_epoch") or time.time()),
+            "current_url": _token(manifest.get("current_url")) or None,
+            "app_title": _token(manifest.get("app_title")) or None,
+            "artifacts": [dict(item) for item in list(manifest.get("artifacts") or []) if isinstance(item, dict)],
+            "ui_action_timeline": [
+                dict(item) for item in list(manifest.get("ui_action_timeline") or []) if isinstance(item, dict)
+            ],
+            "network_browser_policy": (
+                dict(manifest.get("network_browser_policy"))
+                if isinstance(manifest.get("network_browser_policy"), dict)
+                else _build_network_browser_security_policy({})
+            ),
+            "enterprise_controls": (
+                dict(manifest.get("enterprise_controls"))
+                if isinstance(manifest.get("enterprise_controls"), dict)
+                else _normalize_enterprise_controls({})
+            ),
+        }
+        self._sessions[_token(session.get("session_id"))] = session
+        return session
+
+    async def _require_session(self, session_id: Any) -> Dict[str, Any]:
+        token = _token(session_id)
+        if not token:
+            raise RuntimeError("DigitalOcean SSH runtime requires session_id.")
+        session = self._sessions.get(token)
+        if session is not None:
+            return session
+        return await self._load_remote_session(token)
+
     def _base_response(self, session: Dict[str, Any], *, status: str) -> Dict[str, Any]:
+        artifacts = [dict(item) for item in list(session.get("artifacts") or []) if isinstance(item, dict)]
+        timeline = [dict(item) for item in list(session.get("ui_action_timeline") or []) if isinstance(item, dict)]
+        live_screenshot = artifacts[-1] if artifacts else None
         return {
             "runtime_contract_interface": RUNTIME_INTERFACE_ID,
             "runtime_kind": "digitalocean_ssh_cloud_computer",
@@ -4352,13 +4438,25 @@ class DigitalOceanSSHVirtualComputerRuntime:
             "provider_id": PROVIDER_ID_DIGITALOCEAN_SSH,
             "remote_host": self.host,
             "session_dir": _token(session.get("session_dir")),
-            "artifacts": list(session.get("artifacts") or []),
+            "artifacts": artifacts,
             "session_controls": {
                 "can_pause": False,
                 "can_resume": False,
                 "can_terminate": True,
                 "manual_terminate_action": "terminate_session",
             },
+            "streaming_ui": _streaming_ui_payload(
+                state=_token(session.get("state")) or RUNTIME_STATE_RUNNING,
+                current_url=session.get("current_url"),
+                app_title=session.get("app_title"),
+                live_screenshot=live_screenshot,
+                action_timeline=timeline,
+                artifacts=artifacts,
+                can_pause=False,
+                can_resume=False,
+                can_terminate=True,
+                can_take_over=False,
+            ),
         }
 
     async def create_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -4367,53 +4465,53 @@ class DigitalOceanSSHVirtualComputerRuntime:
         workspace_id = _token(body.get("workspace_id")) or "default"
         tenant_id = _token(body.get("tenant_id")) or workspace_id
         session_dir = self._session_dir(session_id)
-        metadata = {
-            "session_id": session_id,
-            "workspace_id": workspace_id,
-            "tenant_id": tenant_id,
-            "agent_id": _token(body.get("agent_id")) or None,
-            "runtime_choice": _token(body.get("runtime_choice")) or RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
-            "provider_id": PROVIDER_ID_DIGITALOCEAN_SSH,
-            "created_at_epoch": time.time(),
-        }
-        command = " && ".join(
-            [
-                f"mkdir -p {shlex.quote(session_dir)}/artifacts",
-                f"chmod 700 {shlex.quote(session_dir)}",
-                f"printf %s {shlex.quote(json.dumps(metadata, sort_keys=True))} > {shlex.quote(session_dir)}/session.json",
-            ]
-        )
-        result = await self._run_remote(command, timeout_seconds=20)
-        if result.returncode != 0:
-            raise RuntimeError(f"DigitalOcean SSH runtime failed to create session: {result.stderr.strip() or result.stdout.strip()}")
+        created_at_epoch = time.time()
         session = {
             "session_id": session_id,
             "state": RUNTIME_STATE_RUNNING,
             "workspace_id": workspace_id,
             "tenant_id": tenant_id,
             "session_dir": session_dir,
-            "artifacts": [],
+            "agent_id": _token(body.get("agent_id")) or None,
+            "runtime_choice": _token(body.get("runtime_choice")) or RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+            "provider_id": PROVIDER_ID_DIGITALOCEAN_SSH,
             "network_browser_policy": _build_network_browser_security_policy(body),
             "enterprise_controls": _normalize_enterprise_controls(body),
-            "created_at_epoch": metadata["created_at_epoch"],
+            "artifacts": [],
+            "ui_action_timeline": [],
+            "current_url": None,
+            "app_title": None,
+            "created_at_epoch": created_at_epoch,
         }
+        command = " && ".join(
+            [
+                f"mkdir -p {shlex.quote(session_dir)}/artifacts",
+                f"chmod 700 {shlex.quote(session_dir)}",
+                f"printf %s {shlex.quote(json.dumps(self._session_manifest(session), sort_keys=True))} > {shlex.quote(session_dir)}/session.json",
+            ]
+        )
+        result = await self._run_remote(command, timeout_seconds=20)
+        if result.returncode != 0:
+            raise RuntimeError(f"DigitalOcean SSH runtime failed to create session: {result.stderr.strip() or result.stdout.strip()}")
         self._sessions[session_id] = session
         return self._base_response(session, status="started")
 
     async def resume_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self._session(payload.get("session_id"))
+        session = await self._require_session(payload.get("session_id"))
         if _token(session.get("state")) == RUNTIME_STATE_TERMINATED:
             raise RuntimeError("DigitalOcean SSH runtime session is terminated.")
         session["state"] = RUNTIME_STATE_RUNNING
+        await self._persist_session(session)
         return self._base_response(session, status="resumed")
 
     async def pause_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self._session(payload.get("session_id"))
+        session = await self._require_session(payload.get("session_id"))
         session["state"] = RUNTIME_STATE_PAUSED
+        await self._persist_session(session)
         return self._base_response(session, status="paused")
 
     async def terminate_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self._session(payload.get("session_id"))
+        session = await self._require_session(payload.get("session_id"))
         session_dir = _token(session.get("session_dir"))
         result = await self._run_remote(f"rm -rf -- {shlex.quote(session_dir)}", timeout_seconds=20)
         if result.returncode != 0:
@@ -4438,10 +4536,11 @@ class DigitalOceanSSHVirtualComputerRuntime:
         if result.returncode != 0:
             raise RuntimeError(f"DigitalOcean SSH runtime failed to terminate session: {result.stderr.strip() or result.stdout.strip()}")
         session["state"] = RUNTIME_STATE_TERMINATED
+        self._sessions.pop(_token(session.get("session_id")), None)
         return self._base_response(session, status="terminated")
 
     async def execute_action(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self._session(payload.get("session_id"))
+        session = await self._require_session(payload.get("session_id"))
         if _token(session.get("state")) == RUNTIME_STATE_TERMINATED:
             raise RuntimeError("DigitalOcean SSH runtime session is terminated.")
         action, action_args, wrapped_external = _validate_computer_use_action_payload(
@@ -4455,6 +4554,49 @@ class DigitalOceanSSHVirtualComputerRuntime:
             payload=dict(payload or {}),
         )
         session_dir = _token(session.get("session_dir"))
+        timeline = session.setdefault("ui_action_timeline", [])
+        _append_timeline_event(
+            timeline,
+            event_type="action",
+            action=action,
+            status="executing",
+            risk_class=str(action_policy.get("risk_class") or ""),
+        )
+        if action == ACTION_SCREENSHOT:
+            artifacts = [dict(item) for item in list(session.get("artifacts") or []) if isinstance(item, dict)]
+            artifact = next(
+                (
+                    item
+                    for item in reversed(artifacts)
+                    if _token(item.get("artifact_type") or item.get("type")).lower() == ARTIFACT_TYPE_SCREENSHOT
+                ),
+                None,
+            )
+            if artifact is None:
+                raise RuntimeError("DigitalOcean SSH runtime does not have a screenshot artifact yet.")
+            _append_timeline_event(
+                timeline,
+                event_type="stream",
+                action=action,
+                status="streaming",
+                risk_class=str(action_policy.get("risk_class") or ""),
+                details={"artifact_id": _token(artifact.get("artifact_id"))},
+            )
+            await self._persist_session(session)
+            response = self._base_response(session, status="streaming")
+            response.update(
+                {
+                    "artifact": artifact,
+                    "action_result": {
+                        "action": action,
+                        "artifact": artifact,
+                        "policy": action_policy,
+                    },
+                    "action_policy": action_policy,
+                    "wrapped_external_content": wrapped_external,
+                }
+            )
+            return response
         if action == ACTION_RUN_COMMAND:
             command = str(action_args.get("command") or "")
             docker_command = " ".join(
@@ -4480,6 +4622,15 @@ class DigitalOceanSSHVirtualComputerRuntime:
             )
             result = await self._run_remote(docker_command, timeout_seconds=int(payload.get("timeout_seconds") or 60))
             status = "completed" if result.returncode == 0 else "failed"
+            _append_timeline_event(
+                timeline,
+                event_type="action",
+                action=action,
+                status=status,
+                risk_class=str(action_policy.get("risk_class") or ""),
+                details={"returncode": int(result.returncode)},
+            )
+            await self._persist_session(session)
             response = self._base_response(session, status=status)
             response.update(
                 {
@@ -4561,11 +4712,41 @@ class DigitalOceanSSHVirtualComputerRuntime:
             artifact = {
                 "artifact_id": artifact_id,
                 "artifact_type": ARTIFACT_TYPE_SCREENSHOT,
+                "type": ARTIFACT_TYPE_SCREENSHOT,
                 "path": screenshot_path,
+                "remote_path": screenshot_path,
+                "file_name": f"{artifact_id}.png",
+                "content_type": "image/png",
                 "url": url,
                 "title": _token(browser_result.get("title")) or None,
+                "created_at_epoch": time.time(),
+                "proof_envelope": {
+                    "provider_id": PROVIDER_ID_DIGITALOCEAN_SSH,
+                    "runtime_kind": "digitalocean_ssh_cloud_computer",
+                    "runtime_session_id": _token(session.get("session_id")),
+                    "remote_host": self.host,
+                    "action": action,
+                    "url": url,
+                },
             }
+            sha_result = await self._run_remote(f"sha256sum -- {shlex.quote(screenshot_path)}", timeout_seconds=20)
+            if sha_result.returncode == 0:
+                digest = _token(sha_result.stdout.split()[0] if sha_result.stdout.split() else "")
+                if digest:
+                    artifact["sha256"] = digest
+                    artifact["proof_envelope"]["sha256"] = digest
             session.setdefault("artifacts", []).append(artifact)
+            session["current_url"] = url
+            session["app_title"] = _token(browser_result.get("title")) or None
+            _append_timeline_event(
+                timeline,
+                event_type="artifact",
+                action=action,
+                status="captured",
+                risk_class=str(action_policy.get("risk_class") or ""),
+                details={"artifact_id": artifact_id, "artifact_type": ARTIFACT_TYPE_SCREENSHOT, "url": url},
+            )
+            await self._persist_session(session)
             response = self._base_response(session, status="completed")
             response.update(
                 {
@@ -4582,18 +4763,47 @@ class DigitalOceanSSHVirtualComputerRuntime:
         raise RuntimeError(f"DigitalOcean SSH runtime does not support action '{action}'.")
 
     async def stream_screenshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        raise RuntimeError("DigitalOcean SSH runtime screenshot streaming is not available until a browser provider is configured.")
+        session = await self._require_session(payload.get("session_id"))
+        artifacts = [dict(item) for item in list(session.get("artifacts") or []) if isinstance(item, dict)]
+        artifact = next(
+            (
+                item
+                for item in reversed(artifacts)
+                if _token(item.get("artifact_type") or item.get("type")).lower() == ARTIFACT_TYPE_SCREENSHOT
+            ),
+            None,
+        )
+        if artifact is None:
+            raise RuntimeError("DigitalOcean SSH runtime does not have a screenshot artifact yet.")
+        response = self._base_response(session, status="streaming")
+        response.update({"artifact": artifact, "action_result": {"action": ACTION_SCREENSHOT, "artifact": artifact}})
+        return response
 
     async def collect_artifact(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self._session(payload.get("session_id"))
+        session = await self._require_session(payload.get("session_id"))
         artifact_id = _token(payload.get("artifact_id"))
         artifact = next((item for item in list(session.get("artifacts") or []) if _token(item.get("artifact_id")) == artifact_id), None)
         if artifact is None:
             raise RuntimeError("DigitalOcean SSH runtime artifact was not found.")
-        return {**self._base_response(session, status="collected"), "artifact": dict(artifact)}
+        collected = dict(artifact)
+        if bool(payload.get("include_content_base64")):
+            remote_path = _token(collected.get("remote_path") or collected.get("path"))
+            if not remote_path:
+                raise RuntimeError("DigitalOcean SSH runtime artifact is missing a remote path.")
+            content_result = await self._run_remote(f"base64 -w 0 -- {shlex.quote(remote_path)}", timeout_seconds=30)
+            if content_result.returncode != 0:
+                raise RuntimeError(
+                    f"DigitalOcean SSH runtime failed to collect artifact bytes: {content_result.stderr.strip() or content_result.stdout.strip()}"
+                )
+            collected["content_base64"] = content_result.stdout.strip()
+            collected.setdefault("content_type", "image/png" if _token(collected.get("artifact_type") or collected.get("type")) == ARTIFACT_TYPE_SCREENSHOT else "application/octet-stream")
+            collected.setdefault("file_name", f"{artifact_id}.png")
+            if not collected.get("byte_size"):
+                collected["byte_size"] = max(0, int(len(collected["content_base64"]) * 3 / 4))
+        return {**self._base_response(session, status="collected"), "artifact": collected}
 
     async def snapshot_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self._session(payload.get("session_id"))
+        session = await self._require_session(payload.get("session_id"))
         return {
             **self._base_response(session, status="snapshotted"),
             "snapshot": {
@@ -4797,7 +5007,11 @@ def default_virtual_computer_provider_registry() -> VirtualComputerProviderRegis
                     provider_id=PROVIDER_ID_DIGITALOCEAN_SSH,
                     label="DigitalOcean SSH Cloud Computer",
                     provider_kind="ssh_docker_cloud_computer_provider",
-                    runtime_choices=[RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX, RUNTIME_CHOICE_VIRTUAL_DESKTOP],
+                    runtime_choices=[
+                        RUNTIME_CHOICE_VIRTUAL_BROWSER,
+                        RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX,
+                        RUNTIME_CHOICE_VIRTUAL_DESKTOP,
+                    ],
                     capabilities={
                         "browser": True,
                         "shell": True,

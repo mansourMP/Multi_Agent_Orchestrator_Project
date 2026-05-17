@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 from server_modules import (
     activity_ledger_service,
+    artifact_service,
     control_plane_repository,
     deployed_agent_config_schema,
     deployed_agent_runtime_contract_service,
@@ -266,6 +269,12 @@ async def _append_cloud_runtime_audit_event(
     deployed_agent: Dict[str, Any],
     tenant_id: Any,
     workspace_id: Any,
+    run_id: Any = None,
+    thread_id: Any = None,
+    session_key: Any = None,
+    channel: Any = "cloud_computer",
+    trace_id: Any = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
     action: str,
     title: str,
     summary: str,
@@ -303,6 +312,11 @@ async def _append_cloud_runtime_audit_event(
         actor_type="deployed_agent",
         actor_id=deployed_agent_id,
         install_id=_text(deployed_agent.get("backing_install_id")) or None,
+        run_id=_text(run_id) or None,
+        thread_id=_text(thread_id) or None,
+        session_key=_text(session_key) or None,
+        channel=_text(channel).lower() or None,
+        trace_id=_text(trace_id) or None,
         event_class=event_class,
         detail_level="audit_reference",
         action=action,
@@ -310,6 +324,7 @@ async def _append_cloud_runtime_audit_event(
         summary=summary,
         status=status,
         review_required=bool(review_required),
+        artifacts=list(artifacts or []),
         payload=_coerce_dict(payload),
         metadata=event_metadata,
     )
@@ -458,6 +473,44 @@ async def _assert_my_computer_runtime_gate(
     return attachments[0]
 
 
+def _known_virtual_runtime_provider_ids() -> set[str]:
+    return {
+        virtual_computer_runtime.PROVIDER_ID_BROWSERBASE,
+        virtual_computer_runtime.PROVIDER_ID_E2B,
+        virtual_computer_runtime.PROVIDER_ID_DAYTONA,
+        virtual_computer_runtime.PROVIDER_ID_AWS_WORKSPACES,
+        virtual_computer_runtime.PROVIDER_ID_AZURE_VIRTUAL_DESKTOP,
+        virtual_computer_runtime.PROVIDER_ID_DOCKER_KUBERNETES,
+        virtual_computer_runtime.PROVIDER_ID_DIGITALOCEAN_SSH,
+    }
+
+
+def _runtime_provider_id_for_config(config: Any) -> Optional[str]:
+    supply = _coerce_dict(getattr(config, "runtime_supply", {}))
+    binding = _coerce_dict(supply.get("provider_binding"))
+    known = {_text(item).lower() for item in _known_virtual_runtime_provider_ids()}
+    for key in (
+        "runtime_provider_id",
+        "runtime_provider",
+        "virtual_runtime_provider",
+        "virtual_computer_provider",
+        "cloud_computer_provider",
+        "computer_runtime_provider",
+        "internal_runtime_provider",
+    ):
+        candidate = _text(binding.get(key) or supply.get(key)).lower()
+        if candidate and candidate in known:
+            return candidate
+    internal_provider = _text(binding.get("internal_provider")).lower()
+    if internal_provider in known:
+        return internal_provider
+    for env_key in ("EMPYRALIS_DEFAULT_CLOUD_COMPUTER_PROVIDER", "EMPYRALIS_DEFAULT_VIRTUAL_COMPUTER_PROVIDER"):
+        candidate = _text(os.environ.get(env_key)).lower()
+        if candidate and candidate in known:
+            return candidate
+    return None
+
+
 def build_deployed_agent_virtual_runtime_payload(
     deployed_agent: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -588,7 +641,7 @@ def build_deployed_agent_virtual_runtime_payload(
     }
     payload = {
         "runtime_choice": runtime_choice,
-        "runtime_provider_id": _text(_coerce_dict(config.runtime_supply.get("provider_binding")).get("internal_provider")) or None,
+        "runtime_provider_id": _runtime_provider_id_for_config(config),
         "computer_automation": automation.model_dump(exclude_none=True),
         "cost_quota": cost_quota,
         "runtime_quota": runtime_quota,
@@ -668,6 +721,152 @@ def _cloud_runtime_result_text(
         if artifacts:
             return json.dumps({"artifacts": artifacts, "action_result": response.get("action_result")}, ensure_ascii=False)
     return json.dumps(response, ensure_ascii=False)
+
+
+def _runtime_artifact_type(artifact: Dict[str, Any]) -> str:
+    return _text(artifact.get("artifact_type") or artifact.get("type") or artifact.get("kind")).lower()
+
+
+def _runtime_artifacts_from_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    artifacts: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in [response.get("artifact"), *list(response.get("artifacts") or [])]:
+        if not isinstance(candidate, dict):
+            continue
+        artifact_id = _text(candidate.get("artifact_id")) or f"artifact_{len(artifacts)}"
+        if artifact_id in seen:
+            continue
+        seen.add(artifact_id)
+        artifacts.append(dict(candidate))
+    return artifacts
+
+
+def _without_inline_artifact_content(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    safe = dict(artifact or {})
+    safe.pop("content_base64", None)
+    safe.pop("content", None)
+    safe.pop("bytes", None)
+    return safe
+
+
+async def _canonicalize_cloud_runtime_artifacts(
+    *,
+    runtime: Any,
+    deployed_agent: Dict[str, Any],
+    response: Dict[str, Any],
+    runtime_session_id: str,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    runtime_action: str,
+) -> List[Dict[str, Any]]:
+    canonical_artifacts: List[Dict[str, Any]] = []
+    for artifact in _runtime_artifacts_from_response(response):
+        artifact_id = _text(artifact.get("artifact_id"))
+        artifact_type = _runtime_artifact_type(artifact)
+        canonical = _without_inline_artifact_content(artifact)
+        if artifact_id and artifact_type == "screenshot":
+            try:
+                collected = await runtime.collect_artifact(
+                    {
+                        "session_id": runtime_session_id,
+                        "browser_session_id": runtime_session_id,
+                        "artifact_id": artifact_id,
+                        "include_content_base64": True,
+                    }
+                )
+                collected_artifact = _coerce_dict(collected.get("artifact"))
+                content_base64 = _text(collected_artifact.get("content_base64"))
+                if content_base64:
+                    content = base64.b64decode(content_base64, validate=True)
+                    file_name = (
+                        _text(collected_artifact.get("file_name"))
+                        or _text(canonical.get("file_name"))
+                        or f"{artifact_id}.png"
+                    )
+                    content_type = (
+                        _text(collected_artifact.get("content_type"))
+                        or _text(canonical.get("content_type"))
+                        or "image/png"
+                    )
+                    metadata = {
+                        "source": "cloud_computer_runtime",
+                        "runtime_session_id": runtime_session_id,
+                        "runtime_action": runtime_action,
+                        "provider_id": _text(response.get("provider_id") or canonical.get("provider_id")) or None,
+                        "runtime_kind": _text(response.get("runtime_kind")) or None,
+                        "remote_path": _text(collected_artifact.get("remote_path") or collected_artifact.get("path") or canonical.get("remote_path") or canonical.get("path")) or None,
+                        "url": _text(collected_artifact.get("url") or canonical.get("url")) or None,
+                        "title": _text(collected_artifact.get("title") or canonical.get("title")) or None,
+                        "proof_envelope": _coerce_dict(
+                            collected_artifact.get("proof_envelope") or canonical.get("proof_envelope")
+                        ),
+                    }
+                    record = artifact_service.store_artifact_bytes(
+                        content,
+                        run_id=run_id,
+                        kind="screenshot",
+                        tenant_id=tenant_id,
+                        workspace_id=workspace_id,
+                        agent_install_id=_text(deployed_agent.get("backing_install_id")) or None,
+                        file_name=file_name,
+                        label=file_name,
+                        content_type=content_type,
+                        artifact_id=artifact_id,
+                        metadata=metadata,
+                    )
+                    canonical_payload = record.as_payload()
+                    proof_envelope = {
+                        **_coerce_dict(canonical.get("proof_envelope")),
+                        "canonical_artifact_id": canonical_payload.get("artifact_id"),
+                        "uri": canonical_payload.get("uri"),
+                        "byte_size": canonical_payload.get("byte_size"),
+                    }
+                    canonical = {
+                        **canonical,
+                        **canonical_payload,
+                        "artifact_type": artifact_type,
+                        "type": artifact_type,
+                        "remote_path": metadata.get("remote_path"),
+                        "url": metadata.get("url"),
+                        "title": metadata.get("title"),
+                        "proof_envelope": proof_envelope,
+                    }
+            except Exception as exc:
+                canonical["canonicalization_error"] = _text(exc) or "artifact canonicalization failed"
+        canonical_artifacts.append(_without_inline_artifact_content(canonical))
+    return canonical_artifacts
+
+
+def _latest_cloud_computer_proof(
+    *,
+    response: Dict[str, Any],
+    runtime_session_id: str,
+    artifacts: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    latest = next(
+        (item for item in reversed(list(artifacts or [])) if _runtime_artifact_type(item) == "screenshot"),
+        None,
+    )
+    if not isinstance(latest, dict):
+        return None
+    streaming_ui = _coerce_dict(response.get("streaming_ui"))
+    current_context = _coerce_dict(streaming_ui.get("current_context"))
+    return {
+        "runtime_session_id": runtime_session_id,
+        "provider_id": _text(response.get("provider_id") or latest.get("provider_id")) or None,
+        "runtime_kind": _text(response.get("runtime_kind")) or None,
+        "state": _text(response.get("state")) or None,
+        "status": _text(response.get("status")) or None,
+        "current_url": _text(latest.get("url") or current_context.get("url") or streaming_ui.get("current_url")) or None,
+        "app_title": _text(latest.get("title") or current_context.get("app_title") or streaming_ui.get("app_title")) or None,
+        "artifact_id": _text(latest.get("artifact_id")) or None,
+        "artifact_uri": _text(latest.get("uri") or latest.get("uri_or_path")) or None,
+        "content_type": _text(latest.get("content_type") or latest.get("mime_type")) or None,
+        "byte_size": latest.get("byte_size") if isinstance(latest.get("byte_size"), int) else None,
+        "captured_at_epoch": latest.get("created_at_epoch"),
+        "proof_envelope": _coerce_dict(latest.get("proof_envelope")),
+    }
 
 
 def _bound_runtime_metadata_from_session_ctx(session_ctx: Any) -> Dict[str, Any]:
@@ -1355,6 +1554,7 @@ async def execute_bound_cloud_runtime_tool_call(
     tenant_id = _text(metadata.get("tenant_id"))
     resolved_workspace_id = _text(workspace_id) or _text(metadata.get("workspace_id"))
     resolved_thread_id = _text(thread_id) or _text(metadata.get("thread_id"))
+    resolved_run_id = _text(metadata.get("run_id")) or runtime_session_id
     if not deployed_agent_id:
         raise RuntimeError("Cloud Computer tool execution is missing deployed_agent_id.")
     if not runtime_session_id:
@@ -1380,6 +1580,9 @@ async def execute_bound_cloud_runtime_tool_call(
             deployed_agent=deployed_agent,
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
+            run_id=resolved_run_id,
+            thread_id=resolved_thread_id or runtime_session_id,
+            session_key=runtime_session_id,
             action="deployed_agent_cloud_runtime_policy_override_rejected",
             title="Cloud Computer policy override rejected",
             summary="Raw tool-call payload attempted to override backend Cloud Computer policy.",
@@ -1409,7 +1612,7 @@ async def execute_bound_cloud_runtime_tool_call(
             "tenant_id": tenant_id,
             "workspace_id": resolved_workspace_id,
             "agent_id": deployed_agent_id,
-            "run_id": _text(metadata.get("run_id")) or runtime_session_id,
+            "run_id": resolved_run_id,
             "thread_id": resolved_thread_id or runtime_session_id,
             "session_id": runtime_session_id,
             "browser_session_id": runtime_session_id,
@@ -1436,6 +1639,9 @@ async def execute_bound_cloud_runtime_tool_call(
             deployed_agent=deployed_agent,
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
+            run_id=resolved_run_id,
+            thread_id=resolved_thread_id or runtime_session_id,
+            session_key=runtime_session_id,
             action="deployed_agent_cloud_runtime_action_denied",
             title="Cloud Computer action denied",
             summary="Cloud Computer runtime denied an action before execution.",
@@ -1467,6 +1673,9 @@ async def execute_bound_cloud_runtime_tool_call(
                 deployed_agent=deployed_agent,
                 tenant_id=tenant_id,
                 workspace_id=resolved_workspace_id,
+                run_id=resolved_run_id,
+                thread_id=resolved_thread_id or runtime_session_id,
+                session_key=runtime_session_id,
                 action="deployed_agent_cloud_runtime_kill_state_rejected",
                 title="Cloud Computer kill-state rejected action",
                 summary="Cloud Computer runtime rejected an action because the deployed agent is paused, suspended, archived, or emergency-stopped.",
@@ -1481,13 +1690,57 @@ async def execute_bound_cloud_runtime_tool_call(
                 metadata={"runtime_session_binding": _RUNTIME_BINDING_CLOUD},
             )
         raise
+    canonical_artifacts = await _canonicalize_cloud_runtime_artifacts(
+        runtime=runtime,
+        deployed_agent=deployed_agent,
+        response=response,
+        runtime_session_id=runtime_session_id,
+        run_id=resolved_run_id,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        runtime_action=runtime_action,
+    )
+    if canonical_artifacts:
+        response["artifacts"] = canonical_artifacts
+        artifact_id = _text(_coerce_dict(response.get("artifact")).get("artifact_id"))
+        if artifact_id:
+            replacement = next(
+                (item for item in canonical_artifacts if _text(item.get("artifact_id")) == artifact_id),
+                None,
+            )
+            if isinstance(replacement, dict):
+                response["artifact"] = replacement
+    computer_proof = _latest_cloud_computer_proof(
+        response=response,
+        runtime_session_id=runtime_session_id,
+        artifacts=canonical_artifacts,
+    )
+    if computer_proof:
+        response["computer_proof"] = computer_proof
+        await session_service.extend_session(
+            runtime_session_id,
+            metadata_updates={
+                "latest_computer_proof": computer_proof,
+                "runtime_provider_id": _text(response.get("provider_id") or payload.get("runtime_provider_id")) or None,
+                "runtime_kind": _text(response.get("runtime_kind")) or None,
+                "runtime_session_binding": _RUNTIME_BINDING_CLOUD,
+            },
+        )
     await _append_cloud_runtime_audit_event(
         deployed_agent=deployed_agent,
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,
+        run_id=resolved_run_id,
+        thread_id=resolved_thread_id or runtime_session_id,
+        session_key=runtime_session_id,
+        artifacts=canonical_artifacts,
         action="deployed_agent_cloud_runtime_action_admitted",
         title="Cloud Computer action admitted",
-        summary="Cloud Computer runtime admitted and executed an action.",
+        summary=(
+            "Cloud Computer runtime admitted and executed an action with screenshot proof."
+            if canonical_artifacts
+            else "Cloud Computer runtime admitted and executed an action."
+        ),
         status="success",
         payload={
             "runtime_session_id": runtime_session_id,
@@ -1495,6 +1748,7 @@ async def execute_bound_cloud_runtime_tool_call(
             "runtime_action_args": dict(runtime_action_args),
             "connector_id": _text(connector_id).lower() or None,
             "action_id": _text(action_id).lower() or None,
+            "computer_proof": computer_proof,
         },
         metadata={"runtime_session_binding": _RUNTIME_BINDING_CLOUD},
     )

@@ -4,6 +4,7 @@ import type { WorkstationSageSkillRecord } from '@/lib/workspace/workstation-cli
 
 export type SageCommandActionKind =
   | 'open_status'
+  | 'open_proof'
   | 'open_usage'
   | 'open_tools'
   | 'open_runtime'
@@ -53,6 +54,14 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     description: 'Open credits, estimated cost, and recent usage signals.',
     actionKind: 'open_usage',
     keywords: ['quota', 'cost', 'billing', 'trace', 'stats'],
+  },
+  {
+    id: 'proof',
+    slash: '/proof',
+    title: 'Show proof',
+    description: 'Open session evidence, computer proofs, artifacts, and audit trail.',
+    actionKind: 'open_proof',
+    keywords: ['activity', 'evidence', 'computer', 'browser', 'audit', 'trace', 'artifact'],
   },
   {
     id: 'tools',

@@ -214,6 +214,8 @@ function sageCommandSheetTitle(command: SageCommandActionKind | null): string {
   switch (command) {
     case 'open_status':
       return "What's Sage doing?";
+    case 'open_proof':
+      return 'Show proof';
     case 'open_usage':
       return 'Credits and usage';
     case 'open_tools':
@@ -231,6 +233,8 @@ function sageCommandSheetDescription(command: SageCommandActionKind | null): str
   switch (command) {
     case 'open_status':
       return 'Current health, readiness, approvals, and run state.';
+    case 'open_proof':
+      return 'Session evidence, computer proofs, artifacts, and audit trail.';
     case 'open_usage':
       return 'Credits, estimated cost, and recent conversation usage.';
     case 'open_tools':
@@ -1441,6 +1445,10 @@ export function WorkstationChatPane() {
   const integrationsHref = useMemo(
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
+  );
+  const activityHref = useMemo(
+    () => routeManifest.routeIndex.activity?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/activity`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.activity],
   );
   const sageSlashCommands = useMemo<ComposerSlashCommand[]>(
     () => [
@@ -3078,6 +3086,33 @@ export function WorkstationChatPane() {
             </>
           ) : null}
 
+          {activeSageCommandPanel === 'open_proof' ? (
+            <>
+              <AppSurfaceStatGrid>
+                <AppSurfaceStat label="Computer proof" value="Activity" hint="screens and runtime evidence" />
+                <AppSurfaceStat label="Thread outputs" value={artifactCount} hint={artifactCount === 1 ? 'artifact in this thread' : 'artifacts in this thread'} />
+                <AppSurfaceStat label="Latest run" value={latestRun ? readString(latestRun.status) || 'unknown' : 'Idle'} hint={latestRun ? runPreviewLabel(latestRun) : 'No active run attached'} />
+                <AppSurfaceStat label="Approvals" value={approvals.length} hint="guarded actions recorded separately" />
+              </AppSurfaceStatGrid>
+              <AppNotice tone="neutral" className="sage-command-panel__notice">
+                <strong>Proof stays outside the chat transcript</strong>
+                <span>Computer screenshots, tool artifacts, runtime sessions, approvals, and final outcomes are inspectable in Activity.</span>
+              </AppNotice>
+              <div className="app-inline-actions">
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    setActiveSageCommandPanel(null);
+                    router.push(activityHref);
+                  }}
+                >
+                  Open Activity proof
+                </AppButton>
+              </div>
+            </>
+          ) : null}
+
           {activeSageCommandPanel === 'open_runtime' ? (
             <>
               <section className={`sage-command-panel__hero sage-command-panel__hero--${runtimeCard.tone}`}>
@@ -3100,6 +3135,16 @@ export function WorkstationChatPane() {
                   }}
                 >
                   Manage runtime
+                </AppButton>
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    setActiveSageCommandPanel(null);
+                    router.push(activityHref);
+                  }}
+                >
+                  Open Activity proof
                 </AppButton>
               </div>
             </>

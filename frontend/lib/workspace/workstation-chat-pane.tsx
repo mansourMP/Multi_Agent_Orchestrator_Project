@@ -1465,7 +1465,7 @@ export function WorkstationChatPane() {
         slash: command.slash,
         title: command.title,
         description: command.description,
-        category: 'Workflow',
+        category: 'Custom',
         keywords: command.keywords,
       })),
     ],

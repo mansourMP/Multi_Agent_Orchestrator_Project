@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
   ChevronRight,
+  Command,
   Plus,
   Square,
   X,
@@ -388,10 +389,14 @@ export function ChatComposer({
                   setActionPaletteOpen((current) => !current);
                 }}
                 aria-expanded={commandPaletteVisible}
-                aria-label={providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Open actions'}
+                aria-label={providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Open Sage commands'}
               >
-                <Plus size={15} strokeWidth={2.1} aria-hidden="true" />
-                <span>{providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Actions'}</span>
+                {providerGateVisible ? (
+                  <Plus size={15} strokeWidth={2.1} aria-hidden="true" />
+                ) : (
+                  <Command size={15} strokeWidth={2.1} aria-hidden="true" />
+                )}
+                <span>{providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Commands'}</span>
               </button>
 
               {commandPaletteVisible ? (
@@ -427,8 +432,8 @@ export function ChatComposer({
                     </button>
                   ) : null}
                   <div className="app-chat-composer__command-head">
-                    <span>Ask Sage to...</span>
-                    <span>{commandQuery !== null ? 'Type to filter' : 'Choose a quick action'}</span>
+                    <span>Sage commands</span>
+                    <span>{commandQuery !== null ? 'Type to filter' : 'Built-in and custom controls'}</span>
                   </div>
                   <div className="app-chat-composer__command-list" role="listbox" aria-label="Available Sage actions">
                     {filteredSlashCommands.map((command, index) => (

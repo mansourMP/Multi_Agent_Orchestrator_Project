@@ -27,7 +27,7 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'runs', 'memory', 'integrations'],
+  sage: ['chat', 'runs', 'memory', 'integrations', 'approvals'],
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
@@ -41,6 +41,7 @@ const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
   'heartbeat',
   'artifacts',
   'integrations',
+  'approvals',
 ]);
 
 type ThreadTurnRecord = Record<string, unknown> & {

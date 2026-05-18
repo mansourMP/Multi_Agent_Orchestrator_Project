@@ -212,7 +212,7 @@ export function WorkstationApprovalsPane() {
     <WorkstationSurfaceRoot surface="approvals">
       <WorkstationSurfaceCard
         title="Approvals"
-        description="Single-purpose queue for decisions Sage cannot make without you."
+        description="Sage pauses here only for actions that can change something important outside the chat."
         actions={(
           <WorkstationActionButton
             type="button"
@@ -232,7 +232,7 @@ export function WorkstationApprovalsPane() {
           <WorkstationSurfaceStat
             label="Pending approvals"
             value={String(pendingCount)}
-            hint="Needs explicit decision to continue"
+            hint="Risky actions waiting for your decision"
           />
           <WorkstationSurfaceStat
             label="Total approvals"
@@ -250,7 +250,7 @@ export function WorkstationApprovalsPane() {
         ) : items.length === 0 ? (
           <EmptyPanel
             title="No approval requests waiting"
-            body="When Sage needs your permission, the request will appear here with clear approve and reject actions."
+            body="Safe computer context runs normally. Sends, purchases, destructive changes, account changes, and sensitive controls pause here with approve and reject actions."
           />
         ) : (
           <div className="app-stack-3">

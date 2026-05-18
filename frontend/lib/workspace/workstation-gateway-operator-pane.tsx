@@ -96,11 +96,29 @@ type GatewayBrowserSessionRecord = Record<string, unknown> & {
   session_profile?: string | null;
   current_url?: string | null;
   resume_supported?: boolean | null;
+  manual_takeover?: boolean | null;
+  reviewed_approval_required?: boolean | null;
+  reviewed_approved?: boolean | null;
+  last_activity_at?: string | null;
   metadata?: Record<string, unknown> | null;
 };
 
 type GatewayBrowserSessionsPayload = Record<string, unknown> & {
   items?: GatewayBrowserSessionRecord[];
+};
+
+type GatewayEventRecord = Record<string, unknown> & {
+  gateway_id?: string | null;
+  session_id?: string | null;
+  direction?: string | null;
+  frame_kind?: string | null;
+  message_type?: string | null;
+  payload?: Record<string, unknown> | null;
+  created_at?: string | null;
+};
+
+type GatewayEventsPayload = Record<string, unknown> & {
+  items?: GatewayEventRecord[];
 };
 
 type WorkspaceRuntimeSessionRecord = Record<string, unknown> & {
@@ -120,6 +138,13 @@ type WorkspaceRuntimeSessionRecord = Record<string, unknown> & {
   runtime_profile_id?: string | null;
   runtime_node_id?: string | null;
   gateway_id?: string | null;
+  owner_email?: string | null;
+  owner_user_id?: string | null;
+  runtime_lane?: string | null;
+  permission_mode?: string | null;
+  approval_mode?: string | null;
+  approval_reviewer?: string | null;
+  interactive_approvals?: boolean | null;
 };
 
 type WorkspaceRuntimeSessionsPayload = Record<string, unknown> & {
@@ -229,6 +254,139 @@ function runtimeBindingLabel(value: unknown): string {
     default:
       return humanizeToken(value, 'Computer session');
   }
+}
+
+function gatewayEventItems(payload: GatewayEventsPayload | null): GatewayEventRecord[] {
+  return Array.isArray(payload?.items)
+    ? payload.items.filter((item): item is GatewayEventRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function eventTimestamp(event: GatewayEventRecord | null): number {
+  if (!event) {
+    return 0;
+  }
+  const parsed = Date.parse(readString(event.created_at, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function newestGatewayEvent(events: GatewayEventRecord[], predicate?: (event: GatewayEventRecord) => boolean): GatewayEventRecord | null {
+  const filtered = predicate ? events.filter(predicate) : events;
+  return filtered.reduce<GatewayEventRecord | null>((latest, event) => {
+    if (!latest || eventTimestamp(event) >= eventTimestamp(latest)) {
+      return event;
+    }
+    return latest;
+  }, null);
+}
+
+function gatewayEventSearchText(event: GatewayEventRecord): string {
+  const payload = readRecord(event.payload);
+  return [
+    event.message_type,
+    event.frame_kind,
+    payload.action,
+    payload.capability_id,
+    payload.tool_name,
+    payload.status,
+    payload.summary,
+    payload.title,
+    payload.current_url,
+    payload.artifact_id,
+    payload.artifact_ids,
+    payload.screenshot_id,
+  ].map((value) => String(value ?? '').toLowerCase()).join(' ');
+}
+
+function isProofGatewayEvent(event: GatewayEventRecord): boolean {
+  const text = gatewayEventSearchText(event);
+  return ['proof', 'screenshot', 'artifact', 'browser', 'screen', 'capture'].some((token) => text.includes(token));
+}
+
+function isActionGatewayEvent(event: GatewayEventRecord): boolean {
+  const text = gatewayEventSearchText(event);
+  if (text.includes('heartbeat')) {
+    return false;
+  }
+  return ['tool', 'browser', 'channel', 'approval', 'execute', 'takeover', 'resume', 'interrupt', 'risk'].some((token) => text.includes(token));
+}
+
+function summarizeGatewayEvent(event: GatewayEventRecord | null, fallback: string): string {
+  if (!event) {
+    return fallback;
+  }
+  const payload = readRecord(event.payload);
+  const detail = readString(
+    payload.summary
+      ?? payload.title
+      ?? payload.note
+      ?? payload.action
+      ?? payload.capability_id
+      ?? payload.tool_name
+      ?? payload.current_url
+      ?? payload.status,
+    '',
+  );
+  const label = detail || humanizeToken(event.message_type, 'Gateway event');
+  return `${label} · ${formatRelativeTimestamp(event.created_at)}`;
+}
+
+function runtimeSessionOwnerLabel(session: WorkspaceRuntimeSessionRecord): string {
+  return readString(
+    session.owner_email
+      ?? session.owner_user_id
+      ?? session.actor
+      ?? session.user_id
+      ?? session.workspace_id,
+    'Workspace owner',
+  );
+}
+
+function runtimeSessionLaneLabel(session: WorkspaceRuntimeSessionRecord): string {
+  const explicitLane = readString(session.runtime_lane, '');
+  if (explicitLane) {
+    return humanizeToken(explicitLane);
+  }
+  const parts = [
+    runtimeBindingLabel(session.runtime_binding),
+    humanizeToken(session.runtime_choice, ''),
+    readString(session.runtime_provider_id, ''),
+  ].filter(Boolean);
+  return parts.join(' · ') || 'Computer runtime';
+}
+
+function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord, pendingCount = 0): string {
+  const explicitMode = readString(session.permission_mode ?? session.approval_mode, '');
+  if (explicitMode) {
+    return humanizeToken(explicitMode);
+  }
+  if (pendingCount > 0) {
+    return 'Needs your OK';
+  }
+  if (session.interactive_approvals === false) {
+    return 'Autopilot inside runtime';
+  }
+  if (readString(session.approval_reviewer, '')) {
+    return `Reviewed by ${humanizeToken(session.approval_reviewer)}`;
+  }
+  switch (String(session.runtime_binding ?? '').trim().toLowerCase()) {
+    case 'my_computer_agent':
+      return 'Ask first for device access';
+    case 'cloud_computer_agent':
+      return 'Autopilot capable';
+    default:
+      return 'Policy guarded';
+  }
+}
+
+function browserTakeoverStatus(session: GatewayBrowserSessionRecord): string {
+  if (session.manual_takeover) {
+    return 'Takeover active';
+  }
+  if (session.reviewed_approval_required && !session.reviewed_approved) {
+    return 'Waiting for approval';
+  }
+  return Boolean(session.resume_supported ?? true) ? 'Resume ready' : 'Resume unavailable';
 }
 
 function formatTimestamp(value: unknown): string {
@@ -866,6 +1024,7 @@ export function WorkstationGatewayOperatorPane({
   const [telegram, setTelegram] = useState<PersonalChannelViewPayload | null>(null);
   const [approvals, setApprovals] = useState<GatewayApprovalsPayload | null>(null);
   const [browserSessions, setBrowserSessions] = useState<GatewayBrowserSessionsPayload | null>(null);
+  const [gatewayEvents, setGatewayEvents] = useState<GatewayEventsPayload | null>(null);
   const [activeRuntimeSessions, setActiveRuntimeSessions] = useState<WorkspaceRuntimeSessionRecord[]>([]);
   const [pairingDraft, setPairingDraft] = useState<PairingDraft>({
     displayName: 'My device',
@@ -913,6 +1072,21 @@ export function WorkstationGatewayOperatorPane({
   const browserItems = useMemo(
     () => sortBrowserSessions(Array.isArray(browserSessions?.items) ? browserSessions?.items : []),
     [browserSessions],
+  );
+
+  const gatewayEventList = useMemo(
+    () => gatewayEventItems(gatewayEvents),
+    [gatewayEvents],
+  );
+
+  const latestGatewayProof = useMemo(
+    () => newestGatewayEvent(gatewayEventList, isProofGatewayEvent),
+    [gatewayEventList],
+  );
+
+  const latestGatewayAction = useMemo(
+    () => newestGatewayEvent(gatewayEventList, isActionGatewayEvent),
+    [gatewayEventList],
   );
 
   const activeRuntimeItems = useMemo(
@@ -1023,6 +1197,7 @@ export function WorkstationGatewayOperatorPane({
       setTelegram(null);
       setApprovals(null);
       setBrowserSessions(null);
+      setGatewayEvents(null);
       return;
     }
     if (showLoading) {
@@ -1036,6 +1211,7 @@ export function WorkstationGatewayOperatorPane({
       nextTelegram,
       nextApprovals,
       nextBrowserSessions,
+      nextGatewayEvents,
     ] = await Promise.all([
       requestOptionalPayload<PersonalChannelViewPayload>(
         `/api/personal-channels/whatsapp/gateways/${encodeURIComponent(gatewayId)}`,
@@ -1049,12 +1225,16 @@ export function WorkstationGatewayOperatorPane({
       requestOptionalPayload<GatewayBrowserSessionsPayload>(
         `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/browser/sessions`,
       ),
+      requestOptionalPayload<GatewayEventsPayload>(
+        `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/events?limit=500`,
+      ),
     ]);
     setDoctor(nextDoctor);
     setWhatsapp(nextWhatsapp);
     setTelegram(nextTelegram);
     setApprovals(nextApprovals);
     setBrowserSessions(nextBrowserSessions);
+    setGatewayEvents(nextGatewayEvents);
     setErrorMessage(null);
     setLoadingGatewayDetail(false);
   }
@@ -1098,6 +1278,7 @@ export function WorkstationGatewayOperatorPane({
       setTelegram(null);
       setApprovals(null);
       setBrowserSessions(null);
+      setGatewayEvents(null);
       return;
     }
     let cancelled = false;
@@ -1221,6 +1402,7 @@ export function WorkstationGatewayOperatorPane({
       setTelegram(null);
       setApprovals(null);
       setBrowserSessions(null);
+      setGatewayEvents(null);
       await refreshRegistrations(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not revoke the selected computer.');
@@ -1438,6 +1620,28 @@ export function WorkstationGatewayOperatorPane({
   const quotaStatus = summarizeDoctorFacet(doctor?.quota);
   const approvalsPendingCount = Number(approvals?.pending_count ?? 0);
   const browserSessionCount = browserItems.length;
+  const latestProofSummary = summarizeGatewayEvent(latestGatewayProof, 'No proof reported yet');
+  const latestActionSummary = summarizeGatewayEvent(latestGatewayAction, 'No action reported yet');
+  const selectedRuntimeSession = activeRuntimeItems.find((session) => {
+    const sessionGatewayId = readString(session.gateway_id, '');
+    return sessionGatewayId && sessionGatewayId === readString(selectedGatewayId, '');
+  }) ?? activeRuntimeItems[0] ?? null;
+  const selectedRuntimeOwner = selectedRuntimeSession
+    ? runtimeSessionOwnerLabel(selectedRuntimeSession)
+    : 'Workspace owner';
+  const selectedRuntimeLane = selectedRuntimeSession
+    ? runtimeSessionLaneLabel(selectedRuntimeSession)
+    : runtimeBindingLabel(selectedGateway ? 'my_computer_agent' : '');
+  const selectedApprovalMode = selectedRuntimeSession
+    ? runtimeSessionApprovalModeLabel(selectedRuntimeSession, approvalsPendingCount)
+    : approvalsPendingCount > 0
+      ? 'Needs your OK'
+      : selectedGateway
+        ? 'Ask first for device access'
+        : 'No active computer session';
+  const selectedTakeoverStatus = browserItems[0]
+    ? browserTakeoverStatus(browserItems[0])
+    : 'No browser session';
   const whatsappRecentCount = Array.isArray(whatsapp?.recent_messages) ? whatsapp.recent_messages.length : 0;
   const telegramRecentCount = Array.isArray(telegram?.recent_messages) ? telegram.recent_messages.length : 0;
   const specialistItems = Array.isArray(readRecord(doctor?.specialists).items)
@@ -1816,11 +2020,17 @@ export function WorkstationGatewayOperatorPane({
 
           <FormGrid>
             <FormReadout label="Computer" value={readString(selectedGateway.display_name, 'Selected computer')} />
+            <FormReadout label="Owner" value={selectedRuntimeOwner} />
             <FormReadout label="State" value={<DataBadge tone={myComputerStatus.tone}>{myComputerStatus.label}</DataBadge>} />
+            <FormReadout label="Runtime lane" value={selectedRuntimeLane} />
+            <FormReadout label="Approval mode" value={selectedApprovalMode} />
             <FormReadout label="Platform" value={humanizeToken(selectedGateway.platform, 'Unknown')} />
             <FormReadout label="Trust state" value={trustSummary.trustLabel} />
             <FormReadout label="Last connected" value={trustSummary.lastConnectedLabel} />
             <FormReadout label="Last seen" value={trustSummary.lastSeenLabel} />
+            <FormReadout label="Last proof" value={latestProofSummary} />
+            <FormReadout label="Last action" value={latestActionSummary} />
+            <FormReadout label="Stop/takeover status" value={selectedTakeoverStatus} />
             <FormReadout label="Health" value={<DataBadge tone={doctorStatusDisplay.tone}>{doctorStatusDisplay.label}</DataBadge>} />
             <FormReadout label="Browser readiness" value={<DataBadge tone={statusTone(readRecord(doctor?.browser).status)}>{browserLaneStatus.status}</DataBadge>} />
             <FormReadout label="AI model reachability" value={<DataBadge tone={statusTone(readRecord(doctor?.providers).status)}>{providerStatus.status}</DataBadge>} />
@@ -2233,17 +2443,23 @@ export function WorkstationGatewayOperatorPane({
                 const sessionId = readString(session.session_id, '');
                 const deployedAgentId = readString(session.deployed_agent_id, '');
                 const runtimeSessionId = readString(session.runtime_session_id, sessionId);
+                const ownerLabel = runtimeSessionOwnerLabel(session);
+                const laneLabel = runtimeSessionLaneLabel(session);
+                const approvalModeLabel = runtimeSessionApprovalModeLabel(session, approvalsPendingCount);
                 const stopKey = `runtime:${sessionId}:stop`;
                 return (
                   <WorkstationSurfaceListItem
                     key={sessionId || runtimeSessionId}
-                    title={runtimeBindingLabel(session.runtime_binding)}
-                    subtitle={`${runtimeSessionId} · ${humanizeToken(session.channel, 'Web')}`}
-                    description={`Created ${formatRelativeTimestamp(session.created_at)} · expires ${formatRelativeTimestamp(session.expires_at)}${readString(session.gateway_id, '') ? ` · gateway ${readString(session.gateway_id, '')}` : ''}`}
+                    title={laneLabel}
+                    subtitle={`${ownerLabel} · ${approvalModeLabel} · ${humanizeToken(session.channel, 'Web')}`}
+                    description={`Session ${runtimeSessionId} · proof ${latestProofSummary} · action ${latestActionSummary} · created ${formatRelativeTimestamp(session.created_at)} · expires ${formatRelativeTimestamp(session.expires_at)}${readString(session.gateway_id, '') ? ` · gateway ${readString(session.gateway_id, '')}` : ''}`}
                     actions={(
                       <div className="app-inline-actions app-inline-actions--tight">
                         <DataBadge tone={statusTone(session.status)}>
                           {humanizeToken(session.status, 'Active')}
+                        </DataBadge>
+                        <DataBadge tone={approvalModeLabel === 'Needs your OK' ? 'warning' : 'neutral'}>
+                          {approvalModeLabel}
                         </DataBadge>
                         {session.runtime_provider_id ? (
                           <DataBadge tone="neutral">
@@ -2285,13 +2501,17 @@ export function WorkstationGatewayOperatorPane({
               {browserItems.map((session) => {
                 const browserSessionId = String(session.browser_session_id ?? '').trim();
                 const sessionMode = humanizeToken((session.metadata || {}).browser_session_mode, 'Managed profile');
+                const takeoverStatus = browserTakeoverStatus(session);
                 const resumeSupported = Boolean(session.resume_supported ?? true);
+                const approvalState = session.reviewed_approval_required
+                  ? (session.reviewed_approved ? 'Approved control' : 'Approval required')
+                  : 'Policy governed';
                 return (
                   <WorkstationSurfaceListItem
                     key={browserSessionId}
                     title={readString(session.session_profile, browserSessionId)}
-                    subtitle={`${sessionMode} · ${resumeSupported ? 'Resume ready' : 'Resume unavailable'} · ${browserSessionId}`}
-                    description={readString(session.current_url, 'No active URL reported yet.')}
+                    subtitle={`${sessionMode} · ${takeoverStatus} · ${approvalState} · ${browserSessionId}`}
+                    description={`${readString(session.current_url, 'No active URL reported yet.')} · last proof ${latestProofSummary} · last action ${latestActionSummary}`}
                     actions={(
                       <div className="app-inline-actions app-inline-actions--tight">
                         <DataBadge tone={statusTone(session.status)}>

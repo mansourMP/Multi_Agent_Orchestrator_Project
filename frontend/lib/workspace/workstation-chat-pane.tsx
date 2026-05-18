@@ -1619,8 +1619,8 @@ export function WorkstationChatPane() {
     [routeManifest.routeIndex],
   );
   const gatewayHref = useMemo(
-    () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
-    [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
+    () => routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/gateway`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.gateway],
   );
   const settingsHref = useMemo(
     () => routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/settings`,
@@ -3292,10 +3292,10 @@ export function WorkstationChatPane() {
                   tone="secondary"
                   onClick={() => {
                     setActiveSageCommandPanel(null);
-                    router.push(integrationsHref);
+                    router.push(gatewayHref);
                   }}
                 >
-                  Manage runtime
+                  Open Computers
                 </AppButton>
                 <AppButton
                   type="button"

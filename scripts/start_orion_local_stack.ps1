@@ -18,10 +18,10 @@ $FrontendHost = if ($env:FRONTEND_HOST) { $env:FRONTEND_HOST } else { "127.0.0.1
 $FrontendPort = if ($env:FRONTEND_PORT) { [int]$env:FRONTEND_PORT } else { 3000 }
 
 $StartRuntime = if ($env:START_RUNTIME) { [int]$env:START_RUNTIME } else { 1 }
-$StartBackend = if ($env:START_BACKEND) { [int]$env:START_BACKEND } else { 1 }
+$StartBackend = if ($env:START_BACKEND) { [int]$env:START_BACKEND } else { 0 }
 $StartFrontend = if ($env:START_FRONTEND) { [int]$env:START_FRONTEND } else { 1 }
 $StartWorker = if ($env:START_WORKER) { [int]$env:START_WORKER } else { 1 }
-$BackendMode = if ($env:BACKEND_MODE) { $env:BACKEND_MODE } else { "auto" }
+$BackendMode = if ($env:BACKEND_MODE) { $env:BACKEND_MODE } else { "skip" }
 
 $TelegramAutopilotEnabled = if ($env:EMPYRALIS_TELEGRAM_AUTOPILOT_ENABLED) { $env:EMPYRALIS_TELEGRAM_AUTOPILOT_ENABLED } elseif ($env:ORION_TELEGRAM_AUTOPILOT_ENABLED) { $env:ORION_TELEGRAM_AUTOPILOT_ENABLED } else { "1" }
 $TelegramAutopilotProfile = if ($env:EMPYRALIS_TELEGRAM_AUTOPILOT_PROFILE) { $env:EMPYRALIS_TELEGRAM_AUTOPILOT_PROFILE } elseif ($env:ORION_TELEGRAM_AUTOPILOT_PROFILE) { $env:ORION_TELEGRAM_AUTOPILOT_PROFILE } else { "assistant" }
@@ -227,25 +227,10 @@ if ($StartBackend -ne 1) {
   $backendEffectiveMode = "skip"
 }
 if ($StartBackend -eq 1) {
-  if ($backendEffectiveMode -eq "auto") {
-    if (Test-Path (Join-Path $RootDir "backend/dist/main.js")) {
-      $backendEffectiveMode = "dist"
-    } else {
-      $backendEffectiveMode = "dev"
-    }
-  }
-  Write-Host "Starting backend on 127.0.0.1:$BackendPort (mode=$backendEffectiveMode) ..."
-  if ($backendEffectiveMode -eq "dist") {
-    $node = Get-CommandPath "node"
-    if (-not $node) { throw "Node.js was not found in PATH." }
-    Start-TrackedProcess -Name "backend" -FilePath $node -Args @("--enable-source-maps", "dist/main.js") -WorkingDir (Join-Path $RootDir "backend") -LogPath $backendLog | Out-Null
-  } else {
-    $npm = Get-CommandPath "npm"
-    if (-not $npm) { throw "npm was not found in PATH." }
-    Start-TrackedProcess -Name "backend" -FilePath $npm -Args @("run", "start:dev") -WorkingDir (Join-Path $RootDir "backend") -LogPath $backendLog | Out-Null
-  }
+  $backendEffectiveMode = "skip"
+  throw "Legacy backend/ sidecar is not an active launch target; use the Python Empyralis runtime on $runtimeUrl."
 } else {
-  Write-Host "Skipping backend startup (START_BACKEND=0)."
+  Write-Host "Skipping legacy backend startup (START_BACKEND=0)."
 }
 
 if ($StartFrontend -eq 1) {
@@ -300,7 +285,7 @@ if ($StartFrontend -eq 1) {
 Write-Host ""
 Write-Host "Empyralis local stack is up."
 Write-Host "Runtime:  $runtimeUrl"
-Write-Host "Backend:  $backendUrl"
+Write-Host "Legacy backend: removed from the active launch path"
 Write-Host "Frontend: $frontendUrl"
 Write-Host "Modes:    runtime=$StartRuntime backend=$backendEffectiveMode frontend=$StartFrontend worker=$StartWorker telegram_autopilot=$TelegramAutopilotEnabled whatsapp_autopilot=$WhatsappAutopilotEnabled"
 Write-Host "Telegram: profile=$TelegramAutopilotProfile"
@@ -324,7 +309,6 @@ Write-Host "  curl -s -H `"X-API-Key: $cleanRuntimeKey`" `"$runtimeUrl/channels/
 Write-Host ""
 Write-Host "Logs:"
 Write-Host "  Get-Content -Path `"$runtimeLog`" -Tail 100 -Wait"
-Write-Host "  Get-Content -Path `"$backendLog`" -Tail 100 -Wait"
 Write-Host "  Get-Content -Path `"$frontendLog`" -Tail 100 -Wait"
 Write-Host "  Get-Content -Path `"$workerLog`" -Tail 100 -Wait"
 Write-Host ""

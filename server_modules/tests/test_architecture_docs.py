@@ -250,7 +250,8 @@ def test_gateway_architecture_doc_freezes_local_gateway_boundary() -> None:
     assert "`empyralis-gateway`" in text
     assert "`empyralis-supervisor`" in text
     assert "cloud control plane" in text.lower()
-    assert "Legacy `bridge/` Is Not The Future Architecture" in text
+    assert "Legacy Socket.IO Bridge Is Removed" in text
+    assert "canonical gateway plus supervisor boundary" in text
     assert "No Second Auth Plane" in text
     assert "local_companion" in text
     assert "Phase 0 does **not** do any of the following:" in text

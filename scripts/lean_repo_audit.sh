@@ -9,14 +9,14 @@ echo "root: ${ROOT_DIR}"
 echo
 
 echo "-- Top-level directory sizes --"
-du -sh .orion-stack .orion archive reference bridge scripts docs backend frontend python_engine 2>/dev/null | sort -h || true
+du -sh .orion-stack .orion archive reference scripts docs frontend python_engine 2>/dev/null | sort -h || true
 echo
 
 echo "-- Active source files by line count (excluding reference/archive/generated) --"
 find . \
   \( -type d \( \
       -name node_modules -o -name .git -o -name .next -o -name venv -o -name .venv -o \
-      -path "./reference" -o -path "./archive" -o -path "./.orion-stack" -o -path "./screenshots" -o -path "./backend/dist" \
+      -path "./reference" -o -path "./archive" -o -path "./.orion-stack" -o -path "./screenshots" \
     \) -prune \) -o \
   \( -type f \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.sh' \) -print0 \) \
   | xargs -0 wc -l | sort -nr | sed -n '1,60p'
@@ -26,7 +26,7 @@ echo "-- Active source files >= 800 lines --"
 find . \
   \( -type d \( \
       -name node_modules -o -name .git -o -name .next -o -name venv -o -name .venv -o \
-      -path "./reference" -o -path "./archive" -o -path "./.orion-stack" -o -path "./screenshots" -o -path "./backend/dist" \
+      -path "./reference" -o -path "./archive" -o -path "./.orion-stack" -o -path "./screenshots" \
     \) -prune \) -o \
   \( -type f \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.sh' \) -print0 \) \
   | xargs -0 wc -l | awk '$1>=800 {print $1 " " $2}' | sort -nr || true

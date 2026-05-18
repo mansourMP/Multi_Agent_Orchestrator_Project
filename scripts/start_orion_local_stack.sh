@@ -29,7 +29,7 @@ ORION_PORT="${ORION_PORT:-8001}"
 BACKEND_PORT="${BACKEND_PORT:-4000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
-BACKEND_MODE="${BACKEND_MODE:-skip}" # auto|dist|dev|skip (legacy Nest sidecar is off-path by default)
+BACKEND_MODE="${BACKEND_MODE:-skip}" # legacy Nest sidecar is removed from the active launch path
 START_RUNTIME="${START_RUNTIME:-1}"   # 1|0
 START_BACKEND="${START_BACKEND:-0}"   # 1|0 (legacy Nest sidecar only; not part of the default launch path)
 START_FRONTEND="${START_FRONTEND:-1}" # 1|0
@@ -112,21 +112,6 @@ configured_runtime_worker_count() {
   echo "1"
 }
 
-default_control_plane_database_url() {
-  printf "file:%s" "${ROOT_DIR}/backend/prisma/dev.db"
-}
-
-control_plane_database_url() {
-  local raw="${DATABASE_URL:-}"
-  local trimmed
-  trimmed="$(printf "%s" "${raw}" | tr -d '[:space:]')"
-  if [[ -n "${trimmed}" && "${trimmed}" == file:* ]]; then
-    printf "%s" "${trimmed}"
-    return
-  fi
-  default_control_plane_database_url
-}
-
 runtime_database_url() {
   local prefer_postgres="${ORION_LOCAL_RUNTIME_USE_POSTGRES:-0}"
   prefer_postgres="$(printf "%s" "${prefer_postgres}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
@@ -141,15 +126,7 @@ runtime_database_url() {
     printf "%s" "${trimmed}"
     return
   fi
-  if [[ -f "${ROOT_DIR}/backend/.env" ]]; then
-    local env_line
-    env_line="$(grep -E '^DATABASE_URL=' "${ROOT_DIR}/backend/.env" | tail -1 || true)"
-    if [[ -n "${env_line}" ]]; then
-      printf "%s" "${env_line#DATABASE_URL=}"
-      return
-    fi
-  fi
-  default_control_plane_database_url
+  printf ""
 }
 
 EXISTING_RUNTIME_KEY="$(load_existing_runtime_key)"
@@ -672,52 +649,8 @@ start_runtime() {
 }
 
 start_backend() {
-  local mode="${BACKEND_MODE}"
-  if [[ "${mode}" == "auto" ]]; then
-    if [[ -f "${ROOT_DIR}/backend/dist/main.js" ]]; then
-      mode="dist"
-    else
-      mode="dev"
-    fi
-  fi
-
-  BACKEND_EFFECTIVE_MODE="${mode}"
-
-  if [[ "${mode}" == "skip" ]]; then
-    echo "Skipping legacy control-plane backend startup (BACKEND_MODE=skip)."
-    return 0
-  fi
-
-  echo "Starting legacy control-plane backend on 127.0.0.1:${BACKEND_PORT} (mode=${mode}) ..."
-  (
-    if [[ "${mode}" == "dist" ]]; then
-      command -v node >/dev/null 2>&1 || bootstrap_node_toolchain_path || fail_service_startup "backend" "node is not on PATH"
-    else
-      command -v npm >/dev/null 2>&1 || bootstrap_node_toolchain_path || fail_service_startup "backend" "npm is not on PATH"
-    fi
-    export ORION_API_KEY="${RUNTIME_KEY}"
-    export RUNTIME_KEY="${RUNTIME_KEY}"
-    export ORION_API_URL="${ORION_API_URL}"
-    export PORT="${BACKEND_PORT}"
-    export DATABASE_URL="$(control_plane_database_url)"
-    export BACKEND_PUBLIC_ORIGIN="${BACKEND_URL}"
-    export FRONTEND_AUTH_ORIGIN="http://${FRONTEND_HOST}:${FRONTEND_PORT}"
-    export FRONTEND_ORIGINS="http://${FRONTEND_HOST}:${FRONTEND_PORT},http://localhost:${FRONTEND_PORT}"
-    export JWT_SECRET="${JWT_SECRET_VALUE}"
-    export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
-    if [[ "${mode}" == "dist" ]]; then
-      if [[ -f "${ROOT_DIR}/backend/dist/main.js" ]]; then
-        spawn_detached "${PID_DIR}/backend.pid" "${LOG_DIR}/backend.log" "${ROOT_DIR}/backend" \
-          node --enable-source-maps dist/main.js >/dev/null
-      else
-        spawn_detached "${PID_DIR}/backend.pid" "${LOG_DIR}/backend.log" "${ROOT_DIR}/backend" \
-          npm run start:prod >/dev/null
-      fi
-    else
-      spawn_detached "${PID_DIR}/backend.pid" "${LOG_DIR}/backend.log" "${ROOT_DIR}/backend" \
-        npm run start:dev >/dev/null
-    fi
-  )
+  BACKEND_EFFECTIVE_MODE="skip"
+  fail_service_startup "backend" "legacy backend/ sidecar is not an active launch target; use the Python Empyralis runtime on ${ORION_URL}"
 }
 
 start_frontend() {
@@ -878,28 +811,7 @@ fi
 if [[ "${START_BACKEND}" == "1" ]]; then
   start_backend
   if ! wait_http_ok "${BACKEND_HEALTH_URL}" 80 0.4; then
-    echo "Backend did not become ready (mode=${BACKEND_EFFECTIVE_MODE}). Check: ${LOG_DIR}/backend.log"
-    if [[ "${BACKEND_MODE}" == "auto" && "${BACKEND_EFFECTIVE_MODE}" == "dev" && -f "${ROOT_DIR}/backend/dist/main.js" ]]; then
-      echo "Auto fallback: retrying backend in dist mode..."
-      if [[ -f "${PID_DIR}/backend.pid" ]]; then
-        old_backend_pid="$(cat "${PID_DIR}/backend.pid" 2>/dev/null || true)"
-        if [[ -n "${old_backend_pid}" ]]; then
-          kill "${old_backend_pid}" 2>/dev/null || true
-          sleep 0.4
-          kill -9 "${old_backend_pid}" 2>/dev/null || true
-        fi
-      fi
-      BACKEND_EFFECTIVE_MODE="dist"
-      (
-        spawn_detached "${PID_DIR}/backend.pid" "${LOG_DIR}/backend.log" "${ROOT_DIR}/backend" \
-          node --enable-source-maps dist/main.js >/dev/null
-      )
-      if ! wait_http_ok "${BACKEND_HEALTH_URL}" 80 0.4; then
-        fail_service_startup "backend" "fallback dist mode did not become ready"
-      fi
-    else
-      fail_service_startup "backend" "health endpoint did not become ready"
-    fi
+    fail_service_startup "backend" "health endpoint did not become ready"
   fi
   record_pid_from_port "backend" "${BACKEND_PORT}"
 else
@@ -934,8 +846,7 @@ echo "Empyralis local stack is up."
 echo "Runtime:  ${ORION_API_URL}"
 echo "Frontend: http://${FRONTEND_HOST}:${FRONTEND_PORT}"
 if [[ "${BACKEND_EFFECTIVE_MODE:-skip}" == "skip" ]]; then
-  echo "Legacy backend: disabled by default (broken Nest sidecar is off the active launch path)"
-  echo "Legacy backend opt-in: START_BACKEND=1 BACKEND_MODE=auto bash scripts/start_orion_local_stack.sh"
+  echo "Legacy backend: removed from the active launch path"
 else
   echo "Legacy backend: http://127.0.0.1:${BACKEND_PORT} (mode=${BACKEND_EFFECTIVE_MODE})"
 fi

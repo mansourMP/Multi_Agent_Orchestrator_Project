@@ -11,8 +11,8 @@ test('default local stack launch skips the legacy Nest backend sidecar', () => {
   assert.match(startScript, /BACKEND_PORT="\$\{BACKEND_PORT:-4000\}"/);
   assert.match(startScript, /BACKEND_MODE="\$\{BACKEND_MODE:-skip\}"/);
   assert.match(startScript, /START_BACKEND="\$\{START_BACKEND:-0\}"/);
-  assert.match(startScript, /Legacy backend: disabled by default/);
-  assert.match(startScript, /START_BACKEND=1 BACKEND_MODE=auto/);
+  assert.match(startScript, /Legacy backend: removed from the active launch path/);
+  assert.match(startScript, /legacy backend\/ sidecar is not an active launch target/);
 });
 
 test('status script labels the backend as legacy optional', () => {

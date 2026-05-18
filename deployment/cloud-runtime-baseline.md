@@ -191,7 +191,7 @@ The supported desktop target is a repo-local checkout launched through the Tauri
 Target shape:
 
 - runtime sidecar from bundled `empyralis-backend` binary when available, otherwise repo-local `dist/empyralis-backend*`
-- backend sidecar from `backend/dist/main.js`
+- no legacy Nest backend sidecar; `/backend` is outside the supported desktop target
 - frontend sidecar from `frontend/.next` served by the repo-local Next CLI
 - local worker bootstrapped against the same runtime sidecar
 
@@ -200,14 +200,14 @@ Required prerequisites for the supported desktop target:
 - repo checkout present
 - `frontend/node_modules/next` installed
 - `frontend/.next` built
-- `backend/dist/main.js` built
+- no legacy Nest build artifact required
 - desktop launched from the repo through the existing desktop scripts
 
 Unsupported desktop shapes:
 
 - packaged desktop app without repo-local frontend/backend build artifacts
 - host `uvicorn` / host `python -m uvicorn` fallback
-- backend `npm run start:dev` fallback
+- legacy backend `npm run start:dev` fallback
 - frontend `next dev` fallback
 
 ## Unsupported legacy surface

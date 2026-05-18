@@ -101,10 +101,11 @@ Studio channels are cloud/business connector products.
 They may eventually converge on lower run-engine contracts, but they must not
 share the same ingress/auth/session architecture.
 
-### 5. Legacy `bridge/` Is Not The Future Architecture
+### 5. Legacy Socket.IO Bridge Is Removed
 
-`/Users/mansur/Multi_Agent_Orchestrator_Project/bridge` is a legacy Socket.IO
-bridge and must not be extended into the canonical gateway.
+The old Conductor-era Socket.IO execution bridge has been removed. Do not
+recreate it or route new local execution through a second bridge runtime; use
+the canonical gateway plus supervisor boundary instead.
 
 ### 6. No Second Auth Plane
 

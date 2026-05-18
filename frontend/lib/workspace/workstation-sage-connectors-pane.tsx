@@ -2874,7 +2874,8 @@ export function WorkstationSageConnectorsPane({
                     handleProviderKeyPaste(record.id, event);
                   }}
                   onChange={(event) => {
-                    setProviderDraftKeys((current) => ({ ...current, [record.id]: event.currentTarget.value }));
+                    const value = event.currentTarget.value;
+                    setProviderDraftKeys((current) => ({ ...current, [record.id]: value }));
                   }}
                 />
               </FormField>
@@ -2896,7 +2897,8 @@ export function WorkstationSageConnectorsPane({
                   autoCorrect="off"
                   spellCheck={false}
                   onChange={(event) => {
-                    setProviderDraftBaseUrls((current) => ({ ...current, [record.id]: event.currentTarget.value }));
+                    const value = event.currentTarget.value;
+                    setProviderDraftBaseUrls((current) => ({ ...current, [record.id]: value }));
                   }}
                 />
               </FormField>
@@ -3450,7 +3452,8 @@ export function WorkstationSageConnectorsPane({
                   handleProviderKeyPaste(record.id, event);
                 }}
                 onChange={(event) => {
-                  setProviderDraftKeys((current) => ({ ...current, [record.id]: event.currentTarget.value }));
+                  const value = event.currentTarget.value;
+                  setProviderDraftKeys((current) => ({ ...current, [record.id]: value }));
                 }}
               />
             </FormField>
@@ -3465,7 +3468,8 @@ export function WorkstationSageConnectorsPane({
                   autoCorrect="off"
                   spellCheck={false}
                   onChange={(event) => {
-                    setProviderDraftBaseUrls((current) => ({ ...current, [record.id]: event.currentTarget.value }));
+                    const value = event.currentTarget.value;
+                    setProviderDraftBaseUrls((current) => ({ ...current, [record.id]: value }));
                   }}
                 />
               </FormField>
@@ -3751,7 +3755,8 @@ export function WorkstationSageConnectorsPane({
                   autoCorrect="off"
                   spellCheck={false}
                   onChange={(event) => {
-                    setMcpServerDraft((current) => ({ ...current, serverId: event.currentTarget.value }));
+                    const serverId = event.currentTarget.value;
+                    setMcpServerDraft((current) => ({ ...current, serverId }));
                   }}
                 />
               </FormField>
@@ -3760,7 +3765,8 @@ export function WorkstationSageConnectorsPane({
                   value={mcpServerDraft.label}
                   placeholder="Inventory Feed"
                   onChange={(event) => {
-                    setMcpServerDraft((current) => ({ ...current, label: event.currentTarget.value }));
+                    const label = event.currentTarget.value;
+                    setMcpServerDraft((current) => ({ ...current, label }));
                   }}
                 />
               </FormField>
@@ -3773,7 +3779,8 @@ export function WorkstationSageConnectorsPane({
                   autoCorrect="off"
                   spellCheck={false}
                   onChange={(event) => {
-                    setMcpServerDraft((current) => ({ ...current, endpoint: event.currentTarget.value }));
+                    const endpoint = event.currentTarget.value;
+                    setMcpServerDraft((current) => ({ ...current, endpoint }));
                   }}
                 />
               </FormField>

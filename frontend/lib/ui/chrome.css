@@ -7055,7 +7055,7 @@ body.theme-light .workstation-shell__topbar {
 }
 
 .studio-agents-workbench .workstation-split-workbench__main {
-  padding: 0 var(--app-space-8) var(--app-space-8);
+  padding: var(--app-space-6) var(--app-space-8) var(--app-space-8);
   gap: 0;
   overflow: hidden;
 }

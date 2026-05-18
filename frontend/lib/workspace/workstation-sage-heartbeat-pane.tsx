@@ -635,7 +635,6 @@ export function WorkstationSageHeartbeatPane() {
 }
 
 export function WorkstationSageWorkCenterPane() {
-  const { bootstrap, routeManifest } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
   const [snapshot, setSnapshot] = useState<HeartbeatSnapshot | null>(null);
@@ -685,14 +684,11 @@ export function WorkstationSageWorkCenterPane() {
     };
   }, [services.client, streamState.activity.version]);
 
-  const activityHref = routeManifest.routeIndex.activity?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/activity`;
-  const approvalsHref = routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`;
-  const integrationsHref = routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`;
   const liveCount = snapshot?.queueOverview.runningNowCount ?? 0;
   const queuedCount = snapshot?.queueOverview.queuedCount ?? 0;
-  const approvalCount = snapshot?.queueOverview.blockedOnApprovalCount ?? 0;
   const scheduledCount = snapshot?.exactJobs.length ?? 0;
-  const totalVisibleWork = liveCount + queuedCount + approvalCount + scheduledCount;
+  const doneCount = snapshot?.queueOverview.lanes.done.length ?? 0;
+  const totalVisibleWork = liveCount + queuedCount + scheduledCount + doneCount;
   const queueStateLabel = snapshot?.laneQueue.draining
     ? 'Draining'
     : snapshot?.queueOverview.quietHours.active
@@ -708,7 +704,6 @@ export function WorkstationSageWorkCenterPane() {
       { id: 'now', title: 'Now', empty: 'Nothing is running right now.' },
       { id: 'waiting', title: 'Waiting', empty: 'No queued work is waiting.' },
       { id: 'scheduled', title: 'Scheduled', empty: 'No recurring work is scheduled yet.' },
-      { id: 'needs_ok', title: 'Approvals', empty: 'No actions are blocked on approval.' },
       { id: 'done', title: 'Done', empty: 'No recent governed work yet.' },
     ];
     return laneCopy.map(({ id, title, empty }) => {
@@ -744,7 +739,7 @@ export function WorkstationSageWorkCenterPane() {
               <div className="sage-work-hero__copy">
                 <span className="app-data-badge app-data-badge--accent">{queueStateLabel}</span>
                 <h2>Work</h2>
-                <p>Automated tasks, approvals, and proof for the main Sage agent.</p>
+                <p>Automated tasks and scheduled work for the main Sage agent.</p>
                 <div className="sage-work-hero__actions">
                   <button
                     type="button"
@@ -758,15 +753,6 @@ export function WorkstationSageWorkCenterPane() {
                   >
                     Refresh
                   </button>
-                  <Link href={approvalsHref} className="app-link-button app-link-button--secondary">
-                    Approvals
-                  </Link>
-                  <Link href={activityHref} className="app-link-button app-link-button--secondary">
-                    Activity
-                  </Link>
-                  <Link href={integrationsHref} className="app-link-button app-link-button--secondary">
-                    Integrations
-                  </Link>
                 </div>
               </div>
               <div className="sage-work-hero__metrics" aria-label="Current work counts">
@@ -779,8 +765,8 @@ export function WorkstationSageWorkCenterPane() {
                   <span>Live</span>
                 </div>
                 <div>
-                  <strong>{approvalCount}</strong>
-                  <span>Needs OK</span>
+                  <strong>{scheduledCount}</strong>
+                  <span>Scheduled</span>
                 </div>
               </div>
             </section>
@@ -794,7 +780,7 @@ export function WorkstationSageWorkCenterPane() {
               <WorkstationSurfaceStat
                 label="Waiting"
                 value={snapshot.queueOverview.queuedCount}
-                hint={`${snapshot.queueOverview.blockedOnApprovalCount} need your OK`}
+                hint="Queued task work"
               />
               <WorkstationSurfaceStat
                 label="Scheduled"
@@ -811,7 +797,7 @@ export function WorkstationSageWorkCenterPane() {
             <WorkstationSurfaceCard
               title="Live Work Board"
               description={snapshot.laneQueue.acceptingNewWork
-                ? 'Current work, waiting work, approvals, scheduled items, and recent completions.'
+                ? 'Current work, waiting work, scheduled items, and recent completions.'
                 : 'Queue is paused.'}
             >
               <div className="sage-task-lane-grid">

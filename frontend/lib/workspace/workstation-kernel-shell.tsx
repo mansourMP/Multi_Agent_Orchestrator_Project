@@ -83,20 +83,6 @@ const MOBILE_DESTINATION_NAV: readonly {
   { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
 ];
 
-function readPendingApprovalCount(payload: unknown): number {
-  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-  const explicit = Number(record.pending_count);
-  if (Number.isFinite(explicit) && explicit > 0) {
-    return explicit;
-  }
-  const items = Array.isArray(record.items) ? record.items : [];
-  return items.filter((item) => {
-    const approval = item && typeof item === 'object' ? item as Record<string, unknown> : {};
-    const status = String(approval.status ?? '').trim().toLowerCase();
-    return status === 'pending' || status === 'waiting' || status === 'needs_approval';
-  }).length;
-}
-
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
@@ -348,13 +334,11 @@ export function WorkstationKernelShell({
   const { bootstrap, routeManifest, workspaceId } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const activityVersion = useWorkstationActivityVersion();
-  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [computerStatus, setComputerStatus] = useState<ComputerConnectionStatus>({
     connectedCount: 0,
     onlineCount: 0,
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const approvalRefreshTimerRef = useRef<number | null>(null);
 
   const activeRouteId = useMemo(
     () => resolveRouteIdFromHref(workspaceId, pathname),
@@ -400,42 +384,6 @@ export function WorkstationKernelShell({
       return [route];
     });
   }, [activeDestinationId, activeRouteId, routeManifest.routeIndex]);
-
-  useEffect(() => {
-    if (!routeManifest.routeIndex.approvals) {
-      if (approvalRefreshTimerRef.current !== null) {
-        window.clearTimeout(approvalRefreshTimerRef.current);
-        approvalRefreshTimerRef.current = null;
-      }
-      setPendingApprovalCount(0);
-      return;
-    }
-    let cancelled = false;
-    if (approvalRefreshTimerRef.current !== null) {
-      window.clearTimeout(approvalRefreshTimerRef.current);
-    }
-    approvalRefreshTimerRef.current = window.setTimeout(() => {
-      approvalRefreshTimerRef.current = null;
-      services.client.listApprovals({ limit: 24 })
-        .then((payload) => {
-          if (!cancelled) {
-            setPendingApprovalCount(readPendingApprovalCount(payload));
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setPendingApprovalCount(0);
-          }
-        });
-    }, activityVersion === 0 ? 0 : 750);
-    return () => {
-      cancelled = true;
-      if (approvalRefreshTimerRef.current !== null) {
-        window.clearTimeout(approvalRefreshTimerRef.current);
-        approvalRefreshTimerRef.current = null;
-      }
-    };
-  }, [activityVersion, routeManifest.routeIndex.approvals, services.client, workspaceId]);
 
   useEffect(() => {
     if (!routeManifest.routeIndex.gateway) {
@@ -554,14 +502,6 @@ export function WorkstationKernelShell({
                     </span>
                   </Link>
                 ) : null}
-                {pendingApprovalCount > 0 && routeManifest.routeIndex.approvals ? (
-                  <Link
-                    href={routeManifest.routeIndex.approvals.href}
-                    className="workstation-titlebar__link workstation-titlebar__link--active"
-                  >
-                    Approval needed · {pendingApprovalCount}
-                  </Link>
-                ) : null}
               </>
             )}
             navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
@@ -584,9 +524,6 @@ export function WorkstationKernelShell({
                   )}
                 >
                   <span>{route.id === 'heartbeat' ? 'Work' : route.label}</span>
-                  {route.id === 'heartbeat' && pendingApprovalCount > 0 ? (
-                    <span className="workstation-titlebar__link-badge">{pendingApprovalCount}</span>
-                  ) : null}
                 </Link>
               )
             )) : null}

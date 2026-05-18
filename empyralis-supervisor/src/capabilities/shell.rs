@@ -10,8 +10,8 @@ struct ShellArguments {
 }
 
 pub fn execute(arguments: &Value, context: &ExecutionContext) -> Result<Value> {
-    let args: ShellArguments = serde_json::from_value(arguments.clone())
-        .context("invalid shell.execute arguments")?;
+    let args: ShellArguments =
+        serde_json::from_value(arguments.clone()).context("invalid shell.execute arguments")?;
     let command = args.command.trim();
     if command.is_empty() {
         bail!("command is required");
@@ -40,7 +40,10 @@ pub fn execute(arguments: &Value, context: &ExecutionContext) -> Result<Value> {
         bail!(
             "{}",
             if stderr.is_empty() {
-                format!("command failed with exit code {}", output.status.code().unwrap_or(1))
+                format!(
+                    "command failed with exit code {}",
+                    output.status.code().unwrap_or(1)
+                )
             } else {
                 stderr
             }
@@ -74,9 +77,9 @@ fn safe_shell_command(command: &str) -> bool {
         None => return false,
     };
     let blocked_commands = [
-        "rm", "mv", "cp", "chmod", "chown", "mkdir", "touch", "tee", "echo", "python",
-        "python3", "node", "bash", "zsh", "sh", "kill", "xargs", "perl", "ruby", "git",
-        "curl", "wget", "scp", "rsync",
+        "rm", "mv", "cp", "chmod", "chown", "mkdir", "touch", "tee", "echo", "python", "python3",
+        "node", "bash", "zsh", "sh", "kill", "xargs", "perl", "ruby", "git", "curl", "wget", "scp",
+        "rsync",
     ];
     if blocked_commands.contains(&first) {
         return false;

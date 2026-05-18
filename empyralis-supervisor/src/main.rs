@@ -3,6 +3,7 @@ mod execution;
 
 use std::collections::HashMap;
 use std::env;
+use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -29,6 +30,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 const VERSION: &str = "0.1.0";
 const AUDIT_DB_FILENAME: &str = "empyralis_audit.db";
+const AUDIT_DB_ENV: &str = "EMPYRALIS_SUPERVISOR_AUDIT_DB";
 
 #[derive(Clone)]
 struct AppState {
@@ -101,7 +103,7 @@ async fn main() -> Result<()> {
 
     let secret = env::var("EMPYRALIS_SUPERVISOR_SECRET")
         .expect("EMPYRALIS_SUPERVISOR_SECRET is required to start empyralis-supervisor");
-    let audit_db_path = PathBuf::from(AUDIT_DB_FILENAME);
+    let audit_db_path = default_audit_db_path();
     initialize_audit_db(&audit_db_path)?;
 
     let state = AppState {
@@ -353,7 +355,38 @@ fn cancel_active_executions(
     matching.len()
 }
 
+fn default_state_home() -> PathBuf {
+    if let Ok(raw) = env::var("EMPYRALIS_STATE_HOME") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    if let Ok(home) = env::var("HOME") {
+        let trimmed = home.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed).join(".empyralis").join("state");
+        }
+    }
+    PathBuf::from(".empyralis").join("state")
+}
+
+fn default_audit_db_path() -> PathBuf {
+    if let Ok(raw) = env::var(AUDIT_DB_ENV) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    default_state_home()
+        .join("supervisor")
+        .join(AUDIT_DB_FILENAME)
+}
+
 fn initialize_audit_db(path: &PathBuf) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).context("failed to create audit db directory")?;
+    }
     let connection = Connection::open(path).context("failed to open audit db")?;
     connection.execute(
         "CREATE TABLE IF NOT EXISTS audit_log (

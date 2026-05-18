@@ -16,12 +16,7 @@ struct FilesystemArguments {
 pub fn read_write(arguments: &Value) -> Result<Value> {
     let args: FilesystemArguments = serde_json::from_value(arguments.clone())
         .context("invalid filesystem.read_write arguments")?;
-    let mode = args
-        .mode
-        .as_deref()
-        .unwrap_or("read")
-        .trim()
-        .to_lowercase();
+    let mode = args.mode.as_deref().unwrap_or("read").trim().to_lowercase();
     let target = resolve_path(&args.path)?;
     let display_path = target.to_string_lossy().to_string();
 
@@ -65,8 +60,9 @@ pub fn read_write(arguments: &Value) -> Result<Value> {
             }
             let content = args.content.unwrap_or_default();
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create parent directory for: {display_path}"))?;
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create parent directory for: {display_path}")
+                })?;
             }
             fs::write(&target, content.as_bytes())
                 .with_context(|| format!("failed to write file: {display_path}"))?;
@@ -79,11 +75,13 @@ pub fn read_write(arguments: &Value) -> Result<Value> {
         "append" => {
             let content = args.content.unwrap_or_default();
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create parent directory for: {display_path}"))?;
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create parent directory for: {display_path}")
+                })?;
             }
             let mut existing = if target.exists() {
-                fs::read(&target).with_context(|| format!("failed to read file for append: {display_path}"))?
+                fs::read(&target)
+                    .with_context(|| format!("failed to read file for append: {display_path}"))?
             } else {
                 Vec::new()
             };

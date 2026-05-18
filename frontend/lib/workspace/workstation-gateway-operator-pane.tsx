@@ -103,6 +103,29 @@ type GatewayBrowserSessionsPayload = Record<string, unknown> & {
   items?: GatewayBrowserSessionRecord[];
 };
 
+type WorkspaceRuntimeSessionRecord = Record<string, unknown> & {
+  session_id?: string | null;
+  thread_id?: string | null;
+  status?: string | null;
+  channel?: string | null;
+  created_at?: string | null;
+  expires_at?: string | null;
+  deployed_agent_id?: string | null;
+  runtime_session_id?: string | null;
+  runtime_binding?: string | null;
+  runtime_choice?: string | null;
+  runtime_provider_id?: string | null;
+  runtime_provider_kind?: string | null;
+  runtime_attachment_id?: string | null;
+  runtime_profile_id?: string | null;
+  runtime_node_id?: string | null;
+  gateway_id?: string | null;
+};
+
+type WorkspaceRuntimeSessionsPayload = Record<string, unknown> & {
+  items?: WorkspaceRuntimeSessionRecord[];
+};
+
 type PairingDraft = {
   displayName: string;
   platform: string;
@@ -176,6 +199,13 @@ function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function normalizeWorkspaceRuntimeSessions(payload: unknown): WorkspaceRuntimeSessionRecord[] {
+  const record = readRecord(payload);
+  return Array.isArray(record.items)
+    ? record.items.filter((item): item is WorkspaceRuntimeSessionRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
 function humanizeToken(value: unknown, fallback = 'Unknown'): string {
   const token = String(value ?? '').trim();
   if (!token) {
@@ -186,6 +216,19 @@ function humanizeToken(value: unknown, fallback = 'Unknown'): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+function runtimeBindingLabel(value: unknown): string {
+  switch (String(value ?? '').trim().toLowerCase()) {
+    case 'cloud_computer_agent':
+      return 'Cloud computer';
+    case 'my_computer_agent':
+      return 'My computer';
+    case 'self_hosted_agent':
+      return 'Self-hosted computer';
+    default:
+      return humanizeToken(value, 'Computer session');
+  }
 }
 
 function formatTimestamp(value: unknown): string {
@@ -823,6 +866,7 @@ export function WorkstationGatewayOperatorPane({
   const [telegram, setTelegram] = useState<PersonalChannelViewPayload | null>(null);
   const [approvals, setApprovals] = useState<GatewayApprovalsPayload | null>(null);
   const [browserSessions, setBrowserSessions] = useState<GatewayBrowserSessionsPayload | null>(null);
+  const [activeRuntimeSessions, setActiveRuntimeSessions] = useState<WorkspaceRuntimeSessionRecord[]>([]);
   const [pairingDraft, setPairingDraft] = useState<PairingDraft>({
     displayName: 'My device',
     platform: 'macos',
@@ -869,6 +913,13 @@ export function WorkstationGatewayOperatorPane({
   const browserItems = useMemo(
     () => sortBrowserSessions(Array.isArray(browserSessions?.items) ? browserSessions?.items : []),
     [browserSessions],
+  );
+
+  const activeRuntimeItems = useMemo(
+    () => [...activeRuntimeSessions].sort((left, right) =>
+      readString(right.created_at, '').localeCompare(readString(left.created_at, '')),
+    ),
+    [activeRuntimeSessions],
   );
 
   useEffect(() => {
@@ -960,6 +1011,11 @@ export function WorkstationGatewayOperatorPane({
     });
   }
 
+  async function refreshRuntimeSessions(): Promise<void> {
+    const payload = await services.client.listWorkspaceRuntimeSessions({ limit: 100 }) as WorkspaceRuntimeSessionsPayload;
+    setActiveRuntimeSessions(normalizeWorkspaceRuntimeSessions(payload));
+  }
+
   async function refreshGatewayDetail(gatewayId: string, showLoading = false, forceProviderProbe = false): Promise<void> {
     if (!gatewayId) {
       setDoctor(null);
@@ -1005,7 +1061,10 @@ export function WorkstationGatewayOperatorPane({
 
   useEffect(() => {
     let cancelled = false;
-    void refreshRegistrations(true).catch((error) => {
+    void Promise.all([
+      refreshRegistrations(true),
+      refreshRuntimeSessions(),
+    ]).catch((error) => {
       if (cancelled) {
         return;
       }
@@ -1014,6 +1073,21 @@ export function WorkstationGatewayOperatorPane({
     });
     return () => {
       cancelled = true;
+    };
+  }, [workspaceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const intervalId = window.setInterval(() => {
+      void refreshRuntimeSessions().catch((error) => {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : 'Computer runtime sessions are unavailable right now.');
+        }
+      });
+    }, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
     };
   }, [workspaceId]);
 
@@ -1327,6 +1401,30 @@ export function WorkstationGatewayOperatorPane({
     }
   }
 
+  async function handleStopRuntimeSession(session: WorkspaceRuntimeSessionRecord) {
+    const sessionId = readString(session.session_id, '');
+    const deployedAgentId = readString(session.deployed_agent_id, '');
+    if (!sessionId || !deployedAgentId) {
+      setErrorMessage('This runtime session cannot be stopped because it is missing its deployed agent binding.');
+      return;
+    }
+    const actionKey = `runtime:${sessionId}:stop`;
+    setBusyActionKey(actionKey);
+    setErrorMessage(null);
+    try {
+      await services.client.killDeployedAgentRuntimeSession({
+        deployedAgentId,
+        sessionId,
+      });
+      setStatusMessage('Computer runtime session stopped.');
+      await refreshRuntimeSessions();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not stop the computer runtime session.');
+    } finally {
+      setBusyActionKey(null);
+    }
+  }
+
   const doctorChecks = Array.isArray(doctor?.checks)
     ? doctor.checks.filter((item): item is GatewayDoctorCheckRecord => Boolean(item) && typeof item === 'object')
     : [];
@@ -1384,6 +1482,7 @@ export function WorkstationGatewayOperatorPane({
   const showChannelsSection = initialSection === 'all' || initialSection === 'channels';
   const showApprovalsSection = initialSection === 'all' || initialSection === 'approvals';
   const showActivitySection = initialSection === 'all' || initialSection === 'activity';
+  const expandedDetailVisible = diagnosticsVisible || initialSection !== 'all';
   const pairingDeviceLabel = pairingDraft.platform === 'macos'
     ? 'Mac'
     : pairingDraft.platform === 'windows'
@@ -1453,7 +1552,7 @@ export function WorkstationGatewayOperatorPane({
           />
         </WorkstationSurfaceStatGrid>
 
-        {diagnosticsVisible ? (
+        {expandedDetailVisible ? (
           <FormSection
           title="What Sage can use on the connected computer"
           description="Capability groups from the selected computer, shown without protocol or token detail."
@@ -1512,7 +1611,7 @@ export function WorkstationGatewayOperatorPane({
           </FormSection>
         ) : null}
 
-        {diagnosticsVisible ? (
+        {expandedDetailVisible ? (
           <FormSection
           title="How this trust lane works"
           description="Default keeps risky local and external actions behind approval. Full Access only applies to the selected user-owned computer."
@@ -1584,14 +1683,14 @@ export function WorkstationGatewayOperatorPane({
           </FormSection>
         ) : null}
 
-        {diagnosticsVisible && loadingRegistrations && !registrationsTimedOut ? (
+        {expandedDetailVisible && loadingRegistrations && !registrationsTimedOut ? (
           <WorkstationSurfaceNotice tone="neutral">Loading connected computers…</WorkstationSurfaceNotice>
-        ) : diagnosticsVisible && gateways.length === 0 ? (
+        ) : expandedDetailVisible && gateways.length === 0 ? (
           <EmptyPanel
             title="No computers connected"
             body="Connecting a computer is optional. It allows Sage to use your local files, browser, or terminal when you explicitly grant permission."
           />
-        ) : diagnosticsVisible ? (
+        ) : expandedDetailVisible ? (
           <WorkstationSurfaceList>
             {gateways.map((gateway) => {
               const gatewayId = String(gateway.gateway_id ?? '').trim();
@@ -1706,7 +1805,7 @@ export function WorkstationGatewayOperatorPane({
         </div>
       </CommandSheet>
 
-      {selectedGateway && showStatusSection && diagnosticsVisible ? (
+      {selectedGateway && showStatusSection && expandedDetailVisible ? (
         <WorkstationSurfaceCard
           title="Connection details"
           description="Trust, health, reconnect posture, and diagnostics for the selected computer."
@@ -1882,7 +1981,7 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway && showChannelsSection && diagnosticsVisible ? (
+      {selectedGateway && showChannelsSection && expandedDetailVisible ? (
         <WorkstationSurfaceCard
           title="Personal Channels"
           description="Current login, linked identity, and recent activity for personal WhatsApp and Telegram on the selected computer."
@@ -2060,7 +2159,7 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway && showApprovalsSection && diagnosticsVisible ? (
+      {selectedGateway && showApprovalsSection && expandedDetailVisible ? (
         <WorkstationSurfaceCard
           title="Needs your OK requests"
           description="Resolve risky local actions without leaving the product shell."
@@ -2118,7 +2217,60 @@ export function WorkstationGatewayOperatorPane({
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway && showActivitySection && diagnosticsVisible ? (
+      {showActivitySection && expandedDetailVisible ? (
+        <WorkstationSurfaceCard
+          title="Active computer sessions"
+          description="Live cloud, local, and self-hosted computer sessions currently bound to this workspace."
+        >
+          {activeRuntimeItems.length === 0 ? (
+            <EmptyPanel
+              title="No active computer sessions"
+              body="When an agent has its own computer or attaches to a paired device, the live session appears here before proof events arrive."
+            />
+          ) : (
+            <WorkstationSurfaceList>
+              {activeRuntimeItems.map((session) => {
+                const sessionId = readString(session.session_id, '');
+                const deployedAgentId = readString(session.deployed_agent_id, '');
+                const runtimeSessionId = readString(session.runtime_session_id, sessionId);
+                const stopKey = `runtime:${sessionId}:stop`;
+                return (
+                  <WorkstationSurfaceListItem
+                    key={sessionId || runtimeSessionId}
+                    title={runtimeBindingLabel(session.runtime_binding)}
+                    subtitle={`${runtimeSessionId} · ${humanizeToken(session.channel, 'Web')}`}
+                    description={`Created ${formatRelativeTimestamp(session.created_at)} · expires ${formatRelativeTimestamp(session.expires_at)}${readString(session.gateway_id, '') ? ` · gateway ${readString(session.gateway_id, '')}` : ''}`}
+                    actions={(
+                      <div className="app-inline-actions app-inline-actions--tight">
+                        <DataBadge tone={statusTone(session.status)}>
+                          {humanizeToken(session.status, 'Active')}
+                        </DataBadge>
+                        {session.runtime_provider_id ? (
+                          <DataBadge tone="neutral">
+                            {readString(session.runtime_provider_id)}
+                          </DataBadge>
+                        ) : null}
+                        <WorkstationActionButton
+                          type="button"
+                          tone="danger"
+                          disabled={Boolean(busyActionKey) || !sessionId || !deployedAgentId}
+                          onClick={() => {
+                            void handleStopRuntimeSession(session);
+                          }}
+                        >
+                          {busyActionKey === stopKey ? 'Stopping…' : 'Stop'}
+                        </WorkstationActionButton>
+                      </div>
+                    )}
+                  />
+                );
+              })}
+            </WorkstationSurfaceList>
+          )}
+        </WorkstationSurfaceCard>
+      ) : null}
+
+      {selectedGateway && showActivitySection && expandedDetailVisible ? (
         <WorkstationSurfaceCard
           title="Device activity"
           description="Inspect governed browser sessions and recent local browser activity without dropping into raw APIs."

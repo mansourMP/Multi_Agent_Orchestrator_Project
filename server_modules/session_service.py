@@ -482,6 +482,48 @@ async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def list_workspace_runtime_sessions(
+    workspace_id: str,
+    *,
+    limit: int = 50,
+    active_only: bool = True,
+) -> list[Dict[str, Any]]:
+    resolved_workspace_id = str(workspace_id or "").strip()
+    if not resolved_workspace_id:
+        return []
+    safe_limit = max(1, min(200, int(limit or 50)))
+    pool = await _ensure_runtime_sessions_table()
+    if pool is None:
+        LOGGER.warning("Authoritative runtime_sessions store unavailable; workspace session list refused.")
+        return []
+    where_clause = "workspace_id = $1"
+    if active_only:
+        where_clause += " AND expires_at > NOW()"
+    try:
+        rows = await pool.fetch(
+            f"""
+            SELECT session_id, workspace_id, tenant_id, channel, actor, created_at, expires_at, metadata
+            FROM runtime_sessions
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            resolved_workspace_id,
+            safe_limit,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_workspace_runtime_sessions failed for %s: %s", resolved_workspace_id, exc)
+        return []
+    records: list[Dict[str, Any]] = []
+    for row in rows or []:
+        record = _session_from_pg(row)
+        if not isinstance(record, dict):
+            continue
+        record["status"] = "expired" if _is_expired(record) else "active"
+        records.append(record)
+    return records
+
+
 async def get_session_scoped(
     session_id: str,
     *,

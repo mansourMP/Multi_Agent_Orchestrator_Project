@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from server_modules import auth as auth_module
 from server_modules import control_plane_repository
+from server_modules import session_service
 from server_modules import workspace_admin_service
 from server_modules.transparency_settings_service import (
     TransparencySettings,
@@ -27,6 +28,11 @@ VALID_SHELL_PROFILES = {
     "personal_shell",
     "document_workstation_shell",
     "operations_admin_shell",
+}
+COMPUTER_RUNTIME_BINDINGS = {
+    "cloud_computer_agent",
+    "my_computer_agent",
+    "self_hosted_agent",
 }
 
 
@@ -296,6 +302,50 @@ async def workspace_channel_operations(
         current_user=current_user,
         workspace_id=workspace_id,
     )
+
+
+@router.get("/workspaces/{workspace_id}/runtime-sessions")
+async def workspace_runtime_sessions(
+    workspace_id: str,
+    limit: int = 50,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="viewer",
+    )
+    records = await session_service.list_workspace_runtime_sessions(
+        resolved_workspace_id,
+        limit=limit,
+        active_only=True,
+    )
+    items = []
+    for record in records:
+        metadata = _coerce_dict(record.get("metadata"))
+        runtime_binding = str(metadata.get("runtime_session_binding") or "").strip().lower()
+        if runtime_binding not in COMPUTER_RUNTIME_BINDINGS:
+            continue
+        items.append({
+            "session_id": str(record.get("session_id") or "").strip(),
+            "thread_id": str(metadata.get("thread_id") or record.get("session_id") or "").strip(),
+            "channel": str(record.get("channel") or "web").strip() or "web",
+            "status": str(record.get("status") or "active").strip() or "active",
+            "created_at": str(record.get("created_at") or "").strip(),
+            "expires_at": str(record.get("expires_at") or "").strip(),
+            "actor": _coerce_dict(record.get("actor")),
+            "deployed_agent_id": str(metadata.get("deployed_agent_id") or "").strip() or None,
+            "runtime_session_id": str(metadata.get("runtime_session_id") or record.get("session_id") or "").strip(),
+            "runtime_binding": runtime_binding,
+            "runtime_choice": str(metadata.get("runtime_choice") or "").strip() or None,
+            "runtime_provider_id": str(metadata.get("runtime_provider_id") or "").strip() or None,
+            "runtime_provider_kind": str(metadata.get("runtime_provider_kind") or "").strip() or None,
+            "runtime_attachment_id": str(metadata.get("runtime_attachment_id") or "").strip() or None,
+            "runtime_profile_id": str(metadata.get("runtime_profile_id") or "").strip() or None,
+            "runtime_node_id": str(metadata.get("runtime_node_id") or "").strip() or None,
+            "gateway_id": str(metadata.get("gateway_id") or "").strip() or None,
+        })
+    return {"items": items}
 
 
 @router.get("/workspaces/{workspace_id}/routing")

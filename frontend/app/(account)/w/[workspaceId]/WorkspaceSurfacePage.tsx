@@ -9,7 +9,7 @@ import { WorkstationApprovalsPane } from '@/lib/workspace/workstation-approvals-
 import { WorkstationArtifactsPane } from '@/lib/workspace/workstation-artifacts-pane';
 import { WorkstationChatPane } from '@/lib/workspace/workstation-chat-pane';
 import { WorkstationDeployedAgentsPane } from '@/lib/workspace/workstation-deployed-agents-pane';
-import { WorkstationSageHeartbeatPane } from '@/lib/workspace/workstation-sage-heartbeat-pane';
+import { WorkstationSageWorkCenterPane } from '@/lib/workspace/workstation-sage-heartbeat-pane';
 import { MarketplacePane } from '@/lib/marketplace/marketplace-pane';
 import { WorkstationNotificationsPane } from '@/lib/workspace/workstation-notifications-pane';
 import { WorkstationRunsPane } from '@/lib/workspace/workstation-runs-pane';
@@ -68,7 +68,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   heartbeat: {
     destinationId: 'sage',
-    render: () => <WorkstationSageHeartbeatPane />,
+    render: () => <WorkstationSageWorkCenterPane />,
   },
   skills: {
     destinationId: 'sage',

@@ -633,3 +633,249 @@ export function WorkstationSageHeartbeatPane() {
     </WorkstationSurfaceRoot>
   );
 }
+
+export function WorkstationSageWorkCenterPane() {
+  const { bootstrap, routeManifest } = useWorkspaceBoundary();
+  const services = useWorkspaceServices();
+  const streamState = useWorkstationStreamState();
+  const [snapshot, setSnapshot] = useState<HeartbeatSnapshot | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const activityRefreshTimerRef = useRef<number | null>(null);
+
+  const refresh = async (showLoading = false) => {
+    if (showLoading) {
+      setIsLoading(true);
+    }
+    setError(null);
+    const payload = await services.client.getSageHeartbeat();
+    setSnapshot(normalizeHeartbeatSnapshot(payload));
+    setIsLoading(false);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void refresh(true).catch((loadError) => {
+      if (!cancelled) {
+        setError(loadError instanceof Error ? loadError.message : 'Work center is unavailable right now.');
+        setIsLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [services.client]);
+
+  useEffect(() => {
+    if (streamState.activity.version === 0) {
+      return;
+    }
+    if (activityRefreshTimerRef.current !== null) {
+      window.clearTimeout(activityRefreshTimerRef.current);
+    }
+    activityRefreshTimerRef.current = window.setTimeout(() => {
+      activityRefreshTimerRef.current = null;
+      void refresh(false).catch(() => {});
+    }, 750);
+    return () => {
+      if (activityRefreshTimerRef.current !== null) {
+        window.clearTimeout(activityRefreshTimerRef.current);
+        activityRefreshTimerRef.current = null;
+      }
+    };
+  }, [services.client, streamState.activity.version]);
+
+  const activityHref = routeManifest.routeIndex.activity?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/activity`;
+  const approvalsHref = routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`;
+  const integrationsHref = routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`;
+  const liveCount = snapshot?.queueOverview.runningNowCount ?? 0;
+  const queuedCount = snapshot?.queueOverview.queuedCount ?? 0;
+  const approvalCount = snapshot?.queueOverview.blockedOnApprovalCount ?? 0;
+  const scheduledCount = snapshot?.exactJobs.length ?? 0;
+  const totalVisibleWork = liveCount + queuedCount + approvalCount + scheduledCount;
+  const queueStateLabel = snapshot?.laneQueue.draining
+    ? 'Draining'
+    : snapshot?.queueOverview.quietHours.active
+      ? 'Quiet hours'
+      : snapshot?.laneQueue.acceptingNewWork
+        ? 'Ready'
+        : 'Paused';
+  const queueSummaryRows = useMemo(() => {
+    if (!snapshot) {
+      return [];
+    }
+    const laneCopy: Array<{ id: ProductLaneId; title: string; empty: string }> = [
+      { id: 'now', title: 'Now', empty: 'Nothing is running right now.' },
+      { id: 'waiting', title: 'Waiting', empty: 'No queued work is waiting.' },
+      { id: 'scheduled', title: 'Scheduled', empty: 'No recurring work is scheduled yet.' },
+      { id: 'needs_ok', title: 'Approvals', empty: 'No actions are blocked on approval.' },
+      { id: 'done', title: 'Done', empty: 'No recent governed work yet.' },
+    ];
+    return laneCopy.map(({ id, title, empty }) => {
+      const items = snapshot.queueOverview.lanes[id] ?? [];
+      const preview = items.slice(0, 3).map((item) => {
+        const detail = item.summary || item.statusLabel || (item.runId ? `Run ${item.runId}` : '');
+        return detail ? `${item.label} — ${detail}` : item.label;
+      });
+      return {
+        id,
+        title,
+        count: items.length,
+        subtitle: items.length === 1 ? '1 work item' : `${items.length} work items`,
+        description: preview.length > 0 ? preview.join(' · ') : empty,
+      };
+    });
+  }, [snapshot]);
+
+  return (
+    <WorkstationSurfaceRoot surface="sage-work-center">
+      <main className="sage-work-board">
+        {error ? <WorkstationSurfaceNotice tone="warning">{error}</WorkstationSurfaceNotice> : null}
+
+        {isLoading || !snapshot ? (
+          <div className="app-stack-3">
+            <SkeletonBlock height="7rem" />
+            <SkeletonBlock height="10rem" />
+            <SkeletonBlock height="14rem" />
+          </div>
+        ) : (
+          <>
+            <section className="sage-work-hero" aria-label="Work center overview">
+              <div className="sage-work-hero__copy">
+                <span className="app-data-badge app-data-badge--accent">{queueStateLabel}</span>
+                <h2>Work</h2>
+                <p>Automated tasks, approvals, and proof for the main Sage agent.</p>
+                <div className="sage-work-hero__actions">
+                  <button
+                    type="button"
+                    className="app-link-button app-link-button--secondary"
+                    onClick={() => {
+                      void refresh(true).catch((loadError) => {
+                        setError(loadError instanceof Error ? loadError.message : 'Work center is unavailable right now.');
+                        setIsLoading(false);
+                      });
+                    }}
+                  >
+                    Refresh
+                  </button>
+                  <Link href={approvalsHref} className="app-link-button app-link-button--secondary">
+                    Approvals
+                  </Link>
+                  <Link href={activityHref} className="app-link-button app-link-button--secondary">
+                    Activity
+                  </Link>
+                  <Link href={integrationsHref} className="app-link-button app-link-button--secondary">
+                    Integrations
+                  </Link>
+                </div>
+              </div>
+              <div className="sage-work-hero__metrics" aria-label="Current work counts">
+                <div>
+                  <strong>{totalVisibleWork}</strong>
+                  <span>Total</span>
+                </div>
+                <div>
+                  <strong>{liveCount}</strong>
+                  <span>Live</span>
+                </div>
+                <div>
+                  <strong>{approvalCount}</strong>
+                  <span>Needs OK</span>
+                </div>
+              </div>
+            </section>
+
+            <WorkstationSurfaceStatGrid>
+              <WorkstationSurfaceStat
+                label="Running now"
+                value={snapshot.queueOverview.runningNowCount}
+                hint={snapshot.queueOverview.lanes.now[0]?.label || 'Nothing active right now.'}
+              />
+              <WorkstationSurfaceStat
+                label="Waiting"
+                value={snapshot.queueOverview.queuedCount}
+                hint={`${snapshot.queueOverview.blockedOnApprovalCount} need your OK`}
+              />
+              <WorkstationSurfaceStat
+                label="Scheduled"
+                value={snapshot.exactJobs.length}
+                hint={snapshot.nextAction ? `Next: ${snapshot.nextAction.name}` : 'No recurring work scheduled yet.'}
+              />
+              <WorkstationSurfaceStat
+                label="Next action"
+                value={snapshot.nextAction ? formatTimestamp(snapshot.nextAction.nextRunAt) : 'None'}
+                hint={snapshot.queueOverview.quietHours.label}
+              />
+            </WorkstationSurfaceStatGrid>
+
+            <WorkstationSurfaceCard
+              title="Live Work Board"
+              description={snapshot.laneQueue.acceptingNewWork
+                ? 'Current work, waiting work, approvals, scheduled items, and recent completions.'
+                : 'Queue is paused.'}
+            >
+              <div className="sage-task-lane-grid">
+                {queueSummaryRows.map((row) => {
+                  const laneItems = snapshot.queueOverview.lanes[row.id] ?? [];
+                  return (
+                    <section key={row.id} className="sage-task-lane" aria-label={row.title}>
+                      <header className="sage-task-lane__header">
+                        <div>
+                          <h3>{row.title}</h3>
+                          <p>{row.subtitle}</p>
+                        </div>
+                        <DataBadge tone={laneTone(row.id)}>{row.count}</DataBadge>
+                      </header>
+                      {laneItems.length > 0 ? (
+                        <div className="sage-task-lane__items">
+                          {laneItems.slice(0, 4).map((item) => (
+                            <article key={item.id} className="sage-task-row">
+                              <span className="sage-task-row__title">{item.label}</span>
+                              <span className="sage-task-row__meta">{laneStatusText(item)}</span>
+                              {item.summary ? <p>{item.summary}</p> : null}
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="sage-task-lane__empty">{row.description}</p>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
+            </WorkstationSurfaceCard>
+
+            <WorkstationSurfaceCard
+              title="Upcoming automated tasks"
+              description={`${snapshot.queueOverview.quietHours.label}. Plan tier ${snapshot.planTier}.`}
+            >
+              <div className="sage-schedule-grid">
+                <section className="sage-schedule-primary">
+                  <span className="app-meta-label">Next</span>
+                  <strong>{snapshot.nextAction ? snapshot.nextAction.name : 'Nothing scheduled'}</strong>
+                  <p>{snapshot.nextAction ? formatTimestamp(snapshot.nextAction.nextRunAt) : 'No next run scheduled'}</p>
+                </section>
+                <div className="sage-schedule-list">
+                  {snapshot.exactJobs.length > 0 ? (
+                    snapshot.exactJobs.slice(0, 6).map((item) => (
+                      <WorkstationSurfaceListItem
+                        key={item.id || `${item.name}-${item.nextRunAt ?? 'none'}`}
+                        title={item.name}
+                        subtitle={formatTimestamp(item.nextRunAt)}
+                        description={`${item.scheduleKind} · ${item.wakeMode} · ${item.delivery}${item.pendingHeartbeat ? ' · waiting for heartbeat' : ''}`}
+                      />
+                    ))
+                  ) : (
+                    <WorkstationSurfaceNotice tone="neutral">
+                      No reminders or recurring schedules are active yet.
+                    </WorkstationSurfaceNotice>
+                  )}
+                </div>
+              </div>
+            </WorkstationSurfaceCard>
+          </>
+        )}
+      </main>
+    </WorkstationSurfaceRoot>
+  );
+}

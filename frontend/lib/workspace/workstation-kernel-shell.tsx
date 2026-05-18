@@ -2,7 +2,7 @@
 
 import type { PropsWithChildren } from 'react';
 import Link from 'next/link';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 
 import { Activity, Bot, Compass, LayoutGrid, Menu, Monitor, Plus, Waypoints } from 'lucide-react';
@@ -27,7 +27,7 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'runs', 'memory', 'artifacts'],
+  sage: ['chat', 'runs', 'memory', 'heartbeat', 'artifacts'],
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
@@ -43,13 +43,6 @@ const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
   'integrations',
   'approvals',
   'activity',
-]);
-
-const SAGE_WORK_ROUTE_IDS = new Set<WorkspaceRouteId>([
-  'heartbeat',
-  'approvals',
-  'activity',
-  'integrations',
 ]);
 
 type ThreadTurnRecord = Record<string, unknown> & {
@@ -348,130 +341,6 @@ function MainAgentHistoryPopover({
   );
 }
 
-function MainAgentWorkPopover({
-  activeRouteId,
-  pendingApprovalCount,
-  routes,
-}: {
-  activeRouteId: WorkspaceRouteId | null;
-  pendingApprovalCount: number;
-  routes: Partial<Record<WorkspaceRouteId, { href: string; label: string }>>;
-}) {
-  const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-  const [open, setOpen] = useState(false);
-  const isActive = activeRouteId !== null && SAGE_WORK_ROUTE_IDS.has(activeRouteId);
-  const items = [
-    {
-      id: 'heartbeat' as const,
-      eyebrow: 'Automations',
-      label: 'Tasks',
-      description: 'Scheduled work, follow-ups, and recurring runs.',
-      badge: null,
-    },
-    {
-      id: 'approvals' as const,
-      eyebrow: 'Human review',
-      label: 'Approvals',
-      description: 'Actions waiting for a decision before Sage continues.',
-      badge: pendingApprovalCount > 0 ? String(pendingApprovalCount) : null,
-    },
-    {
-      id: 'activity' as const,
-      eyebrow: 'Proof',
-      label: 'Activity',
-      description: 'Run history, traces, artifacts, and computer proof.',
-      badge: null,
-    },
-    {
-      id: 'integrations' as const,
-      eyebrow: 'Connected tools',
-      label: 'Integrations',
-      description: 'Apps, channels, models, and tool servers Sage can use.',
-      badge: null,
-    },
-  ];
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (buttonRef.current?.contains(target) || popoverRef.current?.contains(target)) {
-        return;
-      }
-      setOpen(false);
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-    };
-  }, [open]);
-
-  return (
-    <div className="workstation-work-tab">
-      <button
-        ref={buttonRef}
-        type="button"
-        className={joinClassNames(
-          'workstation-titlebar__link',
-          (open || isActive) && 'workstation-titlebar__link--active',
-        )}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span>Work</span>
-        {pendingApprovalCount > 0 ? (
-          <span className="workstation-titlebar__link-badge">{pendingApprovalCount}</span>
-        ) : null}
-      </button>
-      {open ? (
-        <div
-          ref={popoverRef}
-          className="workstation-work-popover"
-          role="dialog"
-          aria-label="Sage work"
-        >
-          <div className="workstation-work-popover__header">
-            <strong>Work center</strong>
-            <span>Tasks, approvals, and proof in one place.</span>
-          </div>
-          <div className="workstation-work-popover__list">
-            {items.map((item) => {
-              const route = routes[item.id];
-              if (!route) {
-                return null;
-              }
-              return (
-                <Link
-                  key={item.id}
-                  href={route.href}
-                  className={joinClassNames(
-                    'workstation-work-popover__row',
-                    activeRouteId === item.id && 'workstation-work-popover__row--active',
-                  )}
-                  onClick={() => setOpen(false)}
-                >
-                  <span className="workstation-work-popover__row-main">
-                    <span className="workstation-work-popover__eyebrow">{item.eyebrow}</span>
-                    <span className="workstation-work-popover__title">{item.label}</span>
-                    <span className="workstation-work-popover__description">{item.description}</span>
-                  </span>
-                  {item.badge ? (
-                    <span className="workstation-work-popover__badge">{item.badge}</span>
-                  ) : null}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 export function WorkstationKernelShell({
   children,
 }: PropsWithChildren) {
@@ -704,27 +573,21 @@ export function WorkstationKernelShell({
                   workspaceId={workspaceId}
                 />
               ) : (
-                <Fragment key={route.id}>
-                  <Link
-                    href={route.href}
-                    prefetch
-                    aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
-                    className={joinClassNames(
-                      'workstation-titlebar__link',
-                      isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
-                    )}
-                  >
-                    <span>{route.label}</span>
-                  </Link>
-                  {route.id === 'memory' ? (
-                    <MainAgentWorkPopover
-                      key="work"
-                      activeRouteId={activeRouteId}
-                      pendingApprovalCount={pendingApprovalCount}
-                      routes={routeManifest.routeIndex}
-                    />
+                <Link
+                  key={route.id}
+                  href={route.href}
+                  prefetch
+                  aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
+                  className={joinClassNames(
+                    'workstation-titlebar__link',
+                    isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
+                  )}
+                >
+                  <span>{route.id === 'heartbeat' ? 'Work' : route.label}</span>
+                  {route.id === 'heartbeat' && pendingApprovalCount > 0 ? (
+                    <span className="workstation-titlebar__link-badge">{pendingApprovalCount}</span>
                   ) : null}
-                </Fragment>
+                </Link>
               )
             )) : null}
           />

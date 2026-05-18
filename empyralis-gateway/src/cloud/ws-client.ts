@@ -434,7 +434,6 @@ export class GatewayWsClient {
         socket.close();
         reject(new Error(`WebSocket connection timed out for ${url}`));
       }, 10_000);
-      timeout.unref?.();
       socket.onopen = () => {
         clearTimeout(timeout);
         resolve(socket);
@@ -456,13 +455,27 @@ export class GatewayWsClient {
         resolve();
         return;
       }
+      let resolved = false;
+      const finish = () => {
+        if (resolved) {
+          return;
+        }
+        resolved = true;
+        clearInterval(closePoll);
+        resolve();
+      };
+      const closePoll = setInterval(() => {
+        if (!this.socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+          finish();
+        }
+      }, 1_000);
       const previousOnClose = socket.onclose;
       socket.onclose = (event) => {
         if (!previousOnClose) {
-          resolve();
+          finish();
           return;
         }
-        void Promise.resolve(previousOnClose.call(socket, event)).finally(resolve);
+        void Promise.resolve(previousOnClose.call(socket, event)).finally(finish);
       };
     });
   }
@@ -579,7 +592,6 @@ export class GatewayWsClient {
         reject(error);
         void this.handleRequestTimeout(requestId, replayable, persistedOutbox, error);
       }, this.requestTimeoutMsFor(messageType, timeoutMs));
-      timeout.unref?.();
       this.pendingResponses.set(requestId, {
         messageType,
         replayable,

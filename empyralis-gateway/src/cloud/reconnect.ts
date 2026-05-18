@@ -102,7 +102,6 @@ export function classifyCloseCode(code: number, context?: CloseCodeContext): Clo
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
+    setTimeout(resolve, ms);
   });
 }

@@ -45,7 +45,6 @@ export class HeartbeatLoop {
               timeoutHandle = setTimeout(() => {
                 reject(new Error(`Gateway heartbeat timed out after ${timeoutMs}ms.`));
               }, timeoutMs);
-              timeoutHandle.unref?.();
             }),
           ]);
         } finally {
@@ -70,7 +69,6 @@ export class HeartbeatLoop {
           this.timer = setTimeout(() => {
             void tick();
           }, intervalMs);
-          this.timer.unref?.();
         }
       }
     };
@@ -78,7 +76,6 @@ export class HeartbeatLoop {
     this.timer = setTimeout(() => {
       void tick();
     }, intervalMs);
-    this.timer.unref?.();
   }
 
   stop(): void {

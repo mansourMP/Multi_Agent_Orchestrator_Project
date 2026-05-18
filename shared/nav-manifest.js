@@ -111,7 +111,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'approvals',
-    label: 'Needs your OK',
+    label: 'Approvals',
     segment: 'approvals',
     destinationId: 'sage',
     requiredCapabilities: ['approvals_enabled'],
@@ -122,7 +122,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/approvals',
       screenName: 'approvals',
       groupId: 'sage',
-      tabLabel: 'Needs your OK',
+      tabLabel: 'Approvals',
       includeInBottomTabs: false,
     },
   },
@@ -296,7 +296,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'gatewayApprovals',
-    label: 'Needs your OK',
+    label: 'Approvals',
     segment: 'gateway-approvals',
     destinationId: 'gateway',
     web: {

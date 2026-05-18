@@ -169,7 +169,7 @@ type ChannelDraft = {
 type ChannelKind = 'whatsapp' | 'telegram';
 
 type GatewayOperatorSection = 'all' | 'status' | 'channels' | 'approvals' | 'activity';
-type MyComputerStatusLabel = 'Not connected' | 'Pairing' | 'Online' | 'Reconnecting' | 'Needs your OK' | 'Offline' | 'Revoked';
+type MyComputerStatusLabel = 'Not connected' | 'Pairing' | 'Online' | 'Reconnecting' | 'Needs approval' | 'Offline' | 'Revoked';
 type CapabilitySurfaceItem = {
   id: 'files' | 'shell' | 'browser' | 'screenshots' | 'clipboard' | 'telegram' | 'whatsapp' | 'ollama';
   label: string;
@@ -361,7 +361,7 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
     return humanizeToken(explicitMode);
   }
   if (pendingCount > 0) {
-    return 'Needs your OK';
+    return 'Needs approval';
   }
   if (session.interactive_approvals === false) {
     return 'Autopilot inside runtime';
@@ -808,9 +808,9 @@ function summarizeMyComputerStatus(params: {
   if (approvalsPendingCount > 0) {
     return {
       id: 'needs_approval',
-      label: 'Needs your OK',
+      label: 'Needs approval',
       tone: 'warning',
-      detail: 'Sage is waiting for approval before continuing local actions.',
+      detail: 'Sage is waiting for an explicit approval before continuing local actions.',
       primaryAction: {
         label: 'Approve action',
         tone: 'primary',
@@ -1635,7 +1635,7 @@ export function WorkstationGatewayOperatorPane({
   const selectedApprovalMode = selectedRuntimeSession
     ? runtimeSessionApprovalModeLabel(selectedRuntimeSession, approvalsPendingCount)
     : approvalsPendingCount > 0
-      ? 'Needs your OK'
+      ? 'Needs approval'
       : selectedGateway
         ? 'Ask first for device access'
         : 'No active computer session';
@@ -1687,6 +1687,7 @@ export function WorkstationGatewayOperatorPane({
   const showApprovalsSection = initialSection === 'all' || initialSection === 'approvals';
   const showActivitySection = initialSection === 'all' || initialSection === 'activity';
   const expandedDetailVisible = diagnosticsVisible || initialSection !== 'all';
+  const diagnosticsSectionVisible = diagnosticsVisible || initialSection === 'status';
   const pairingDeviceLabel = pairingDraft.platform === 'macos'
     ? 'Mac'
     : pairingDraft.platform === 'windows'
@@ -1756,7 +1757,7 @@ export function WorkstationGatewayOperatorPane({
           />
         </WorkstationSurfaceStatGrid>
 
-        {expandedDetailVisible ? (
+        {diagnosticsSectionVisible ? (
           <FormSection
           title="What Sage can use on the connected computer"
           description="Capability groups from the selected computer, shown without protocol or token detail."
@@ -1815,7 +1816,7 @@ export function WorkstationGatewayOperatorPane({
           </FormSection>
         ) : null}
 
-        {expandedDetailVisible ? (
+        {diagnosticsSectionVisible ? (
           <FormSection
           title="How this trust lane works"
           description="Default keeps risky local and external actions behind approval. Full Access only applies to the selected user-owned computer."
@@ -1887,14 +1888,14 @@ export function WorkstationGatewayOperatorPane({
           </FormSection>
         ) : null}
 
-        {expandedDetailVisible && loadingRegistrations && !registrationsTimedOut ? (
+        {diagnosticsSectionVisible && loadingRegistrations && !registrationsTimedOut ? (
           <WorkstationSurfaceNotice tone="neutral">Loading connected computers…</WorkstationSurfaceNotice>
-        ) : expandedDetailVisible && gateways.length === 0 ? (
+        ) : diagnosticsSectionVisible && gateways.length === 0 ? (
           <EmptyPanel
             title="No computers connected"
             body="Connecting a computer is optional. It allows Sage to use your local files, browser, or terminal when you explicitly grant permission."
           />
-        ) : expandedDetailVisible ? (
+        ) : diagnosticsSectionVisible ? (
           <WorkstationSurfaceList>
             {gateways.map((gateway) => {
               const gatewayId = String(gateway.gateway_id ?? '').trim();
@@ -1925,6 +1926,54 @@ export function WorkstationGatewayOperatorPane({
           </WorkstationSurfaceList>
         ) : null}
       </WorkstationSurfaceCard>
+
+      {!expandedDetailVisible ? (
+        <WorkstationSurfaceCard
+          title="Agent computer map"
+          description="A quick view of which agent surfaces can use a connected computer."
+        >
+          <WorkstationSurfaceList>
+            <WorkstationSurfaceListItem
+              title="Sage"
+              subtitle="Main agent"
+              description={
+                selectedGateway
+                  ? `${trustSummary.deviceLabel} · ${myComputerStatus.detail}`
+                  : 'No local computer is connected to the main agent.'
+              }
+              actions={(
+                <DataBadge tone={myComputerStatus.tone}>
+                  {myComputerStatus.label}
+                </DataBadge>
+              )}
+            />
+            <WorkstationSurfaceListItem
+              title="Agent Studio"
+              subtitle={`${activeRuntimeItems.length} active computer session${activeRuntimeItems.length === 1 ? '' : 's'}`}
+              description={
+                activeRuntimeItems.length > 0
+                  ? 'Studio agents with live local, cloud, or self-hosted computer sessions appear in Activity.'
+                  : 'Studio agents are not attached to a live computer session right now.'
+              }
+              actions={(
+                <DataBadge tone={activeRuntimeItems.length > 0 ? 'success' : 'neutral'}>
+                  {activeRuntimeItems.length > 0 ? 'Active' : 'None'}
+                </DataBadge>
+              )}
+            />
+            <WorkstationSurfaceListItem
+              title="Approvals"
+              subtitle={`${approvalsPendingCount} waiting`}
+              description="Risky local actions pause here instead of failing silently."
+              actions={(
+                <DataBadge tone={approvalsPendingCount > 0 ? 'warning' : 'success'}>
+                  {approvalsPendingCount > 0 ? 'Approval needed' : 'Clear'}
+                </DataBadge>
+              )}
+            />
+          </WorkstationSurfaceList>
+        </WorkstationSurfaceCard>
+      ) : null}
 
       <CommandSheet
         open={manageOpen}
@@ -2034,7 +2083,7 @@ export function WorkstationGatewayOperatorPane({
             <FormReadout label="Health" value={<DataBadge tone={doctorStatusDisplay.tone}>{doctorStatusDisplay.label}</DataBadge>} />
             <FormReadout label="Browser readiness" value={<DataBadge tone={statusTone(readRecord(doctor?.browser).status)}>{browserLaneStatus.status}</DataBadge>} />
             <FormReadout label="AI model reachability" value={<DataBadge tone={statusTone(readRecord(doctor?.providers).status)}>{providerStatus.status}</DataBadge>} />
-            <FormReadout label="Needs your OK waiting" value={String(approvalsPendingCount)} />
+            <FormReadout label="Approvals waiting" value={String(approvalsPendingCount)} />
           </FormGrid>
 
           <FormSection
@@ -2371,7 +2420,7 @@ export function WorkstationGatewayOperatorPane({
 
       {selectedGateway && showApprovalsSection && expandedDetailVisible ? (
         <WorkstationSurfaceCard
-          title="Needs your OK requests"
+          title="Approval requests"
           description="Resolve risky local actions without leaving the product shell."
         >
           {pendingApprovals.length === 0 ? (
@@ -2391,7 +2440,7 @@ export function WorkstationGatewayOperatorPane({
                     key={approvalId}
                     title={humanizeToken(approval.capability_id, 'Local permission request')}
                     subtitle={`${approvalId} · Run ${readString(approval.run_id, 'unlinked')}`}
-                    description={readString(approval.note, 'Needs your OK before Sage can continue on the paired device.')}
+                    description={readString(approval.note, 'Approval is required before Sage can continue on the paired device.')}
                     actions={(
                       <div className="app-inline-actions app-inline-actions--tight">
                         <DataBadge tone={statusTone(approval.status)}>
@@ -2458,7 +2507,7 @@ export function WorkstationGatewayOperatorPane({
                         <DataBadge tone={statusTone(session.status)}>
                           {humanizeToken(session.status, 'Active')}
                         </DataBadge>
-                        <DataBadge tone={approvalModeLabel === 'Needs your OK' ? 'warning' : 'neutral'}>
+                        <DataBadge tone={approvalModeLabel === 'Needs approval' ? 'warning' : 'neutral'}>
                           {approvalModeLabel}
                         </DataBadge>
                         {session.runtime_provider_id ? (

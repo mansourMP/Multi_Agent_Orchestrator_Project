@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 
-import { Activity, Bot, Compass, LayoutGrid, Menu, Plus, Waypoints } from 'lucide-react';
+import { Activity, Bot, Compass, LayoutGrid, Menu, Monitor, Plus, Waypoints } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
@@ -27,7 +27,7 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'runs', 'memory', 'integrations', 'heartbeat', 'artifacts'],
+  sage: ['chat', 'runs', 'memory', 'integrations'],
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
@@ -63,6 +63,11 @@ type ChatHistoryItem = {
   occurredAt: string | null;
 };
 
+type ComputerConnectionStatus = {
+  connectedCount: number;
+  onlineCount: number;
+};
+
 const MOBILE_DESTINATION_NAV: readonly {
   id: 'chat' | 'studio' | 'gateway' | 'marketplace' | 'activity';
   label: string;
@@ -92,6 +97,20 @@ function readPendingApprovalCount(payload: unknown): number {
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function readComputerConnectionStatus(payload: unknown): ComputerConnectionStatus {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const items = rawItems.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object');
+  const onlineCount = items.filter((item) => {
+    const status = readString(item.connection_status ?? item.status).toLowerCase();
+    return status === 'online' || status === 'connected' || status === 'attached' || status === 'healthy';
+  }).length;
+  return {
+    connectedCount: items.length,
+    onlineCount,
+  };
 }
 
 function normalizeThreadItems(payload: unknown): ThreadRecord[] {
@@ -328,6 +347,10 @@ export function WorkstationKernelShell({
   const services = useWorkspaceServices();
   const activityVersion = useWorkstationActivityVersion();
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [computerStatus, setComputerStatus] = useState<ComputerConnectionStatus>({
+    connectedCount: 0,
+    onlineCount: 0,
+  });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const approvalRefreshTimerRef = useRef<number | null>(null);
 
@@ -412,6 +435,47 @@ export function WorkstationKernelShell({
     };
   }, [activityVersion, routeManifest.routeIndex.approvals, services.client, workspaceId]);
 
+  useEffect(() => {
+    if (!routeManifest.routeIndex.gateway) {
+      setComputerStatus({ connectedCount: 0, onlineCount: 0 });
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      controller.abort();
+    }, 8_000);
+    fetch(`/api/gateway/registrations?workspace_id=${encodeURIComponent(workspaceId)}`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Gateway registrations failed with status ${response.status}`);
+        }
+        return response.json() as Promise<unknown>;
+      })
+      .then((payload) => {
+        if (!cancelled) {
+          setComputerStatus(readComputerConnectionStatus(payload));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setComputerStatus({ connectedCount: 0, onlineCount: 0 });
+        }
+      })
+      .finally(() => {
+        window.clearTimeout(timeout);
+      });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [activityVersion, routeManifest.routeIndex.gateway, workspaceId]);
+
   const surfaceHomeHref = useMemo(() => {
     if (activeDestinationId === 'sage') {
       return routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`;
@@ -467,14 +531,37 @@ export function WorkstationKernelShell({
                 <Menu size={20} />
               </button>
             )}
-            actions={pendingApprovalCount > 0 && routeManifest.routeIndex.heartbeat ? (
-              <Link
-                href={routeManifest.routeIndex.heartbeat.href}
-                className="workstation-titlebar__link workstation-titlebar__link--active"
-              >
-                Needs your OK · {pendingApprovalCount}
-              </Link>
-            ) : null}
+            actions={(
+              <>
+                {routeManifest.routeIndex.gateway ? (
+                  <Link
+                    href={routeManifest.routeIndex.gateway.href}
+                    className={joinClassNames(
+                      'workstation-titlebar__link',
+                      computerStatus.onlineCount > 0 && 'workstation-titlebar__link--active',
+                    )}
+                    title={
+                      computerStatus.connectedCount > 0
+                        ? `${computerStatus.onlineCount} of ${computerStatus.connectedCount} connected computers online`
+                        : 'No computer connected'
+                    }
+                  >
+                    <Monitor size={16} aria-hidden="true" />
+                    <span>
+                      {computerStatus.onlineCount > 0 ? 'Computer online' : 'Computer offline'}
+                    </span>
+                  </Link>
+                ) : null}
+                {pendingApprovalCount > 0 && routeManifest.routeIndex.approvals ? (
+                  <Link
+                    href={routeManifest.routeIndex.approvals.href}
+                    className="workstation-titlebar__link workstation-titlebar__link--active"
+                  >
+                    Approval needed · {pendingApprovalCount}
+                  </Link>
+                ) : null}
+              </>
+            )}
             navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
               route.id === 'runs' ? (
                 <MainAgentHistoryPopover

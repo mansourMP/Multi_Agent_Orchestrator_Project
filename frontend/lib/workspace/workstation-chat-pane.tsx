@@ -1603,8 +1603,8 @@ export function WorkstationChatPane() {
     [bootstrap.workspace.id, routeManifest.routeIndex.approvals],
   );
   const sageSlashCommands = useMemo<ComposerSlashCommand[]>(
-    () => [
-      ...SAGE_COMMAND_CATALOG.map((command) => ({
+    () => (
+      SAGE_COMMAND_CATALOG.map((command) => ({
         id: command.id,
         slash: command.slash,
         title: command.title,
@@ -1612,18 +1612,9 @@ export function WorkstationChatPane() {
         category: 'Sage',
         keywords: command.keywords,
         icon: command.icon,
-      })),
-      ...skillSlashCommandMacros.map((command) => ({
-        id: command.id,
-        slash: command.slash,
-        title: command.title,
-        description: command.description,
-        category: 'Custom',
-        keywords: command.keywords,
-        icon: command.icon,
-      })),
-    ],
-    [skillSlashCommandMacros],
+      }))
+    ),
+    [],
   );
   const workspaceCommandItems = useMemo(
     () => SAGE_WORKSPACE_COMMAND_CATALOG.flatMap((command) => {
@@ -1750,12 +1741,6 @@ export function WorkstationChatPane() {
       ? readString(latestRun.status) || 'unknown'
       : 'Idle';
   const handleSlashCommandSelect = useCallback((composerCommand: ComposerSlashCommand) => {
-    const skillCommand = skillSlashCommandMacros.find((item) => item.id === composerCommand.id) ?? null;
-    if (skillCommand) {
-      setActiveSageCommandPanel(null);
-      setDraft(skillCommand.draftValue);
-      return;
-    }
     const command = SAGE_COMMAND_CATALOG.find((item) => item.id === composerCommand.id) as SageCommandMetadata | undefined;
     if (!command) {
       return;
@@ -1765,7 +1750,7 @@ export function WorkstationChatPane() {
     if (command.actionKind === 'run_doctor') {
       void refreshBrowserGatewayReadiness();
     }
-  }, [refreshBrowserGatewayReadiness, setDraft, skillSlashCommandMacros]);
+  }, [refreshBrowserGatewayReadiness, setDraft]);
   const handleWorkspaceCommandSelect = useCallback((command: SageWorkspaceCommandMetadata) => {
     setWorkspaceCommandPaletteOpen(false);
     if (command.routeId === 'approvals') {

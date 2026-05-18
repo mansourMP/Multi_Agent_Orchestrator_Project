@@ -584,31 +584,6 @@ export function ChatComposer({
                   role="dialog"
                   aria-label="Sage actions"
                 >
-                  {providerGateVisible && providerSummary && typeof onOpenIntegrations === 'function' ? (
-                    <button
-                      type="button"
-                      className="app-chat-composer__command-setup"
-                      onClick={() => {
-                        setActionPaletteOpen(false);
-                        setCommandPaletteDismissed(true);
-                        onOpenIntegrations();
-                      }}
-                    >
-                      <Plus size={16} strokeWidth={2.1} aria-hidden="true" />
-                      <span className="app-chat-composer__command-copy">
-                        <span className="app-chat-composer__command-title-row">
-                          <strong>{providerSummary.actionLabel ?? 'Set up Sage'}</strong>
-                          <span>{providerSummary.label}</span>
-                        </span>
-                      </span>
-                      <ChevronRight
-                        className="app-chat-composer__command-chevron"
-                        size={16}
-                        strokeWidth={1.9}
-                        aria-hidden="true"
-                      />
-                    </button>
-                  ) : null}
                   <div className="app-chat-composer__command-list" role="listbox" aria-label="Available Sage actions">
                     {filteredSlashCommands.map((command, index) => (
                       <button

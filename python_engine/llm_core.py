@@ -24,6 +24,11 @@ from dotenv import load_dotenv
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
+try:
+    from state_paths import default_cognitive_db_path
+except ImportError:  # pragma: no cover - package import path
+    from python_engine.state_paths import default_cognitive_db_path
+
 # Load environment variables
 load_dotenv()
 
@@ -298,9 +303,11 @@ def direct_provider_completion(
     raise RuntimeError(f"Unsupported provider '{provider}'.")
 
 # --- DATABASE INITIALIZATION ---
-def init_llm_database(db_path: str = "agency_memory.db"):
-    """Initialize the llm_calls table in agency_memory.db"""
-    conn = sqlite3.connect(db_path)
+def init_llm_database(db_path: Optional[str] = None):
+    """Initialize the llm_calls table in the cognitive state database."""
+    resolved_db_path = db_path or default_cognitive_db_path()
+    os.makedirs(os.path.dirname(resolved_db_path) or ".", exist_ok=True)
+    conn = sqlite3.connect(resolved_db_path)
     c = conn.cursor()
     
     # LLM calls tracking table
@@ -339,7 +346,7 @@ def init_llm_database(db_path: str = "agency_memory.db"):
     
     conn.commit()
     conn.close()
-    log(f"Database initialized: {db_path}")
+    log(f"Database initialized: {resolved_db_path}")
 
 # --- JSON EXTRACTION FALLBACK ---
 def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -410,7 +417,7 @@ def call_model(
     execution_id: Optional[str] = None,
     niche_id: Optional[str] = None,
     role: Optional[str] = None,
-    db_path: str = "agency_memory.db"
+    db_path: Optional[str] = None
 ) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
     """
     Call LLM with comprehensive error handling and logging.
@@ -428,6 +435,7 @@ def call_model(
     Returns:
         Tuple of (success: bool, response: dict|None, error: str|None)
     """
+    resolved_db_path = db_path or default_cognitive_db_path()
     start_time = time.time()
     resolved_model = resolve_model(model_id)
     
@@ -495,7 +503,8 @@ def call_model(
     
     # Log to database
     try:
-        conn = sqlite3.connect(db_path)
+        os.makedirs(os.path.dirname(resolved_db_path) or ".", exist_ok=True)
+        conn = sqlite3.connect(resolved_db_path)
         c = conn.cursor()
         c.execute('''INSERT INTO llm_calls 
                      (execution_id, niche_id, role, model_id, resolved_model, 

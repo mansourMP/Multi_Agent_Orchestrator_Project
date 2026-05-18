@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from pathlib import Path
 from typing import Any, Optional
 
 try:
     import asyncpg
 except Exception:  # pragma: no cover - optional dependency at import time
     asyncpg = None
+
+from server_modules.state_paths import runtime_state_db_path
 
 
 LOGGER = logging.getLogger(__name__)
@@ -18,8 +19,6 @@ _POOLS_BY_LOOP: dict[int, tuple[Any, Any, str]] = {}
 _POOL_INIT_LOCKS_BY_LOOP: dict[int, Any] = {}
 _POOL_INIT_FAILED = False
 _MISSING_DSN_LOGGED = False
-_ENV_DSN_LOADED = False
-_LOCAL_ENV_TOKENS = {"dev", "development", "local", "test", "testing"}
 _DURABLE_ENV_TOKENS = {"beta", "preview", "stage", "staging", "prod", "production"}
 
 
@@ -33,13 +32,6 @@ def _resolved_environment() -> str:
 
 def _truthy_env(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _allow_database_url_backfill() -> bool:
-    environment = _resolved_environment()
-    return _truthy_env(os.getenv("ORION_LOCAL_RUNTIME_USE_POSTGRES")) and (
-        not environment or environment in _LOCAL_ENV_TOKENS
-    )
 
 
 def durable_runtime_required() -> bool:
@@ -87,35 +79,7 @@ def _pool_unavailable_message(*, operation: str, reason: str) -> str:
     return "Postgres unavailable — local runtime remains memory/SQLite only"
 
 
-def _load_database_url_from_backend_env() -> None:
-    global _ENV_DSN_LOADED
-    if _ENV_DSN_LOADED or str(os.getenv("DATABASE_URL") or "").strip():
-        _ENV_DSN_LOADED = True
-        return
-    if not _allow_database_url_backfill():
-        _ENV_DSN_LOADED = True
-        return
-    try:
-        root = Path(__file__).resolve().parents[1]
-        env_path = root / "backend" / ".env"
-        if not env_path.exists():
-            _ENV_DSN_LOADED = True
-            return
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            token = line.strip()
-            if not token or token.startswith("#") or "=" not in token:
-                continue
-            key, value = token.split("=", 1)
-            if key.strip() == "DATABASE_URL" and value.strip():
-                os.environ.setdefault("DATABASE_URL", value.strip())
-                break
-    except Exception as exc:
-        LOGGER.warning("Failed to inspect backend .env for DATABASE_URL backfill: %s", exc)
-    _ENV_DSN_LOADED = True
-
-
 def configured_database_url() -> str:
-    _load_database_url_from_backend_env()
     return str(os.getenv("DATABASE_URL") or "").strip()
 
 
@@ -132,9 +96,8 @@ def configured_postgres_pool_max_size() -> int:
 def sqlite_health_status() -> str:
     if durable_runtime_required():
         return "fallback_blocked"
-    raw = str(os.getenv("ORION_RUNTIME_STATE_DB") or ".orion_runtime_state.db").strip()
     try:
-        path = Path(raw).expanduser().resolve()
+        path = runtime_state_db_path().resolve()
         return "active" if path.exists() else "inactive"
     except Exception:
         return "inactive"

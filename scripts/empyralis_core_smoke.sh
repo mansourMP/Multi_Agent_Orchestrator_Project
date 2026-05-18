@@ -16,7 +16,8 @@ TMP_DIR="$(mktemp -d)"
 FAILURES=0
 PASSES=0
 BROWSER_SESSION_SERVER_PID=""
-VALIDATION_REPORT_DIR="${ROOT_DIR}/.orion-validation"
+STATE_HOME="${EMPYRALIS_STATE_HOME:-$HOME/.empyralis/state}"
+VALIDATION_REPORT_DIR="${ORION_VALIDATION_REPORT_DIR:-${STATE_HOME}/validation}"
 VALIDATION_REPORT_FILE="${VALIDATION_REPORT_DIR}/latest_core_smoke.json"
 VALIDATION_CHECKS_FILE="${TMP_DIR}/checks.tsv"
 ORCHESTRATOR_ATTEMPTS="${EMPYRALIS_SMOKE_ORCHESTRATOR_ATTEMPTS:-360}"
@@ -184,11 +185,7 @@ read_run_history_snapshot() {
   local state_home="${EMPYRALIS_STATE_HOME:-$HOME/.empyralis/state}"
   local runtime_db="${ORION_RUNTIME_STATE_DB:-}"
   if [[ -z "${runtime_db}" ]]; then
-    if [[ -f "$ROOT_DIR/.orion_runtime_state.db" && ! -f "${state_home}/runtime/state.db" ]]; then
-      runtime_db="$ROOT_DIR/.orion_runtime_state.db"
-    else
-      runtime_db="${state_home}/runtime/state.db"
-    fi
+    runtime_db="${state_home}/runtime/state.db"
   fi
   python3 - "${runtime_db}" "$run_id" "$out_file" <<'PY'
 import sqlite3, sys

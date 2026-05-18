@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
+from server_modules.state_paths import cognitive_db_path
+
 
 class AutopilotCommonSupportService:
     def __init__(
@@ -22,7 +24,7 @@ class AutopilotCommonSupportService:
         if db_override:
             db_path = db_override
         else:
-            db_path = str(self.project_root / "python_engine" / "agency_memory.db")
+            db_path = str(cognitive_db_path(self.env_get))
         return {"niche_id": niche_id, "db_path": db_path}
 
     def cognitive_module(self):

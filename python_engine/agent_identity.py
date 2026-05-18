@@ -21,6 +21,11 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple, List
 
+try:
+    from state_paths import default_cognitive_db_path
+except ImportError:  # pragma: no cover - package import path
+    from python_engine.state_paths import default_cognitive_db_path
+
 # Try to import cryptography library
 try:
     from cryptography.hazmat.primitives import serialization
@@ -51,9 +56,10 @@ class AgentIdentity:
     Each agent has a unique Ed25519 keypair for signing high-value actions.
     """
     
-    def __init__(self, niche_id: str, db_path: str = "agency_memory.db"):
+    def __init__(self, niche_id: str, db_path: Optional[str] = None):
         self.niche_id = niche_id
-        self.db_path = db_path
+        self.db_path = db_path or default_cognitive_db_path()
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self.private_key: Optional[Ed25519PrivateKey] = None
         self.public_key: Optional[Ed25519PublicKey] = None
         self.public_key_hex: Optional[str] = None
@@ -293,9 +299,10 @@ class SafetyGuard:
         "DELETE": {"max": 1, "window_minutes": 30},
     }
     
-    def __init__(self, db_path: str = "agency_memory.db", 
+    def __init__(self, db_path: Optional[str] = None,
                  custom_limits: Optional[Dict] = None):
-        self.db_path = db_path
+        self.db_path = db_path or default_cognitive_db_path()
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self.limits = {**self.DEFAULT_LIMITS, **(custom_limits or {})}
         self._init_tables()
     
@@ -510,8 +517,9 @@ class GlobalKnowledge:
     Enables network effects where insights from one niche inform others.
     """
     
-    def __init__(self, db_path: str = "agency_memory.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or default_cognitive_db_path()
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._init_tables()
     
     def _init_tables(self):
@@ -667,7 +675,7 @@ if __name__ == "__main__":
     parser.add_argument("--niche", "-n", help="Niche ID")
     parser.add_argument("--content", "-c", help="Content to sign")
     parser.add_argument("--action-type", "-t", help="Action type (PUBLISH, SPEND, etc.)")
-    parser.add_argument("--db", default="agency_memory.db", help="Database path")
+    parser.add_argument("--db", default=default_cognitive_db_path(), help="Database path")
     
     args = parser.parse_args()
     

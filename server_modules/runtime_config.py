@@ -305,24 +305,14 @@ def _resolve_state_file(env_name: str, default_relative: str, legacy_filename: O
     explicit = config_str(env_name, "")
     if explicit is not None and explicit.strip():
         return Path(explicit.strip()).expanduser()
-    preferred = (EMPYRALIS_STATE_HOME / default_relative).expanduser()
-    if legacy_filename:
-        legacy_path = Path(legacy_filename)
-        if legacy_path.exists() and not preferred.exists():
-            return legacy_path
-    return preferred
+    return (EMPYRALIS_STATE_HOME / default_relative).expanduser()
 
 
 def _resolve_state_dir(env_name: str, default_relative: str, legacy_dirname: Optional[str] = None) -> Path:
     explicit = config_str(env_name, "")
     if explicit is not None and explicit.strip():
         return Path(explicit.strip()).expanduser()
-    preferred = (EMPYRALIS_STATE_HOME / default_relative).expanduser()
-    if legacy_dirname:
-        legacy_path = Path(legacy_dirname)
-        if legacy_path.exists() and not preferred.exists():
-            return legacy_path
-    return preferred
+    return (EMPYRALIS_STATE_HOME / default_relative).expanduser()
 
 
 from server_modules.runtime_models import (
@@ -489,45 +479,43 @@ ORION_RETRY_BACKOFF_SECONDS = config_float("ORION_RETRY_BACKOFF_SECONDS", 1.5)
 ORION_MAX_EVENT_BUFFER = config_int("ORION_MAX_EVENT_BUFFER", 2000)
 ORION_HISTORY_LIMIT = config_int("ORION_HISTORY_LIMIT", 800)
 ORION_DIRECT_CHAT_SESSION_MANAGER = config_bool("ORION_DIRECT_CHAT_SESSION_MANAGER", False)
-ORION_HISTORY_FILE = _resolve_state_file("ORION_HISTORY_FILE", "runtime/run_history.json", ".orion_run_history.json")
-ORION_RUNTIME_STATE_DB = _resolve_state_file("ORION_RUNTIME_STATE_DB", "runtime/state.db", ".orion_runtime_state.db")
+ORION_HISTORY_FILE = _resolve_state_file("ORION_HISTORY_FILE", "runtime/run_history.json")
+ORION_RUNTIME_STATE_DB = _resolve_state_file("ORION_RUNTIME_STATE_DB", "runtime/state.db")
 ORION_CHANNEL_EVENTS_LIMIT = config_int("ORION_CHANNEL_EVENTS_LIMIT", 2000)
 ORION_CHANNEL_SESSIONS_LIMIT = config_int("ORION_CHANNEL_SESSIONS_LIMIT", 80)
-ORION_CHANNEL_EVENTS_FILE = _resolve_state_file("ORION_CHANNEL_EVENTS_FILE", "channels/events.json", ".orion_channel_events.json")
+ORION_CHANNEL_EVENTS_FILE = _resolve_state_file("ORION_CHANNEL_EVENTS_FILE", "channels/events.json")
 ORION_CHANNEL_DEAD_LETTER_FILE = _resolve_state_file(
     "ORION_CHANNEL_DEAD_LETTER_FILE",
     "channels/dead_letters.json",
-    ".orion_channel_dead_letters.json",
 )
 ORION_CHANNEL_DEAD_LETTER_LIMIT = config_int("ORION_CHANNEL_DEAD_LETTER_LIMIT", 500)
-ORION_APPROVAL_AUDIT_FILE = _resolve_state_file("ORION_APPROVAL_AUDIT_FILE", "approvals/audit.json", ".orion_approval_audit.json")
+ORION_APPROVAL_AUDIT_FILE = _resolve_state_file("ORION_APPROVAL_AUDIT_FILE", "approvals/audit.json")
 ORION_APPROVAL_AUDIT_LIMIT = config_int("ORION_APPROVAL_AUDIT_LIMIT", 2000)
-ORION_SCHEDULES_FILE = _resolve_state_file("ORION_SCHEDULES_FILE", "automations/weekly_schedules.json", ".orion_weekly_schedules.json")
-ORION_WEBHOOK_TRIGGERS_FILE = _resolve_state_file("ORION_WEBHOOK_TRIGGERS_FILE", "automations/webhooks.json", ".orion_webhooks.json")
-ORION_SETUP_SESSIONS_FILE = _resolve_state_file("ORION_SETUP_SESSIONS_FILE", "setup/sessions.json", ".orion_setup_sessions.json")
+ORION_SCHEDULES_FILE = _resolve_state_file("ORION_SCHEDULES_FILE", "automations/weekly_schedules.json")
+ORION_WEBHOOK_TRIGGERS_FILE = _resolve_state_file("ORION_WEBHOOK_TRIGGERS_FILE", "automations/webhooks.json")
+ORION_SETUP_SESSIONS_FILE = _resolve_state_file("ORION_SETUP_SESSIONS_FILE", "setup/sessions.json")
 ORION_SETUP_SESSION_TTL_SECONDS = config_int("ORION_SETUP_SESSION_TTL_SECONDS", 1800)
 ORION_PROVIDER_PROFILES_FILE = _resolve_state_file(
     "ORION_PROVIDER_PROFILES_FILE",
     "providers/profiles.json",
-    ".orion_provider_profiles.json",
 )
-ORION_RUNTIME_SKILLS_FILE = _resolve_state_file("ORION_RUNTIME_SKILLS_FILE", "runtime/skills.json", ".orion_runtime_skills.json")
-ORION_TOOL_STATE_FILE = _resolve_state_file("ORION_TOOL_STATE_FILE", "runtime/tools_state.json", ".orion_tool_state.json")
-ORION_APP_REGISTRY_FILE = _resolve_state_file("ORION_APP_REGISTRY_FILE", "apps/registry.json", ".orion_app_registry.json")
-ORION_PROFILE_ROOT = _resolve_state_dir("ORION_PROFILE_ROOT", "profiles", ".orion_profiles")
-ORION_PROFILE_DEFAULT_FILE = _resolve_state_file("ORION_PROFILE_DEFAULT_FILE", "profiles/default.json", ".orion_default_profile.json")
-ORION_VALIDATION_REPORT_DIR = _resolve_state_dir("ORION_VALIDATION_REPORT_DIR", "validation", ".orion-validation")
+ORION_RUNTIME_SKILLS_FILE = _resolve_state_file("ORION_RUNTIME_SKILLS_FILE", "runtime/skills.json")
+ORION_TOOL_STATE_FILE = _resolve_state_file("ORION_TOOL_STATE_FILE", "runtime/tools_state.json")
+ORION_APP_REGISTRY_FILE = _resolve_state_file("ORION_APP_REGISTRY_FILE", "apps/registry.json")
+ORION_PROFILE_ROOT = _resolve_state_dir("ORION_PROFILE_ROOT", "profiles")
+ORION_PROFILE_DEFAULT_FILE = _resolve_state_file("ORION_PROFILE_DEFAULT_FILE", "profiles/default.json")
+ORION_VALIDATION_REPORT_DIR = _resolve_state_dir("ORION_VALIDATION_REPORT_DIR", "validation")
 ORION_VALIDATION_LATEST_FILE = Path(
     config_str("ORION_VALIDATION_LATEST_FILE", str(ORION_VALIDATION_REPORT_DIR / "latest_core_smoke.json"))
 )
-ORION_DOCTOR_REPORT_FILE = _resolve_state_file("ORION_DOCTOR_REPORT_FILE", "diagnostics/doctor_latest.json", ".orion_doctor_latest.json")
-ORION_DOCTOR_HISTORY_FILE = _resolve_state_file("ORION_DOCTOR_HISTORY_FILE", "diagnostics/doctor_history.json", ".orion_doctor_history.json")
+ORION_DOCTOR_REPORT_FILE = _resolve_state_file("ORION_DOCTOR_REPORT_FILE", "diagnostics/doctor_latest.json")
+ORION_DOCTOR_HISTORY_FILE = _resolve_state_file("ORION_DOCTOR_HISTORY_FILE", "diagnostics/doctor_history.json")
 ORION_DOCTOR_HISTORY_LIMIT = config_int("ORION_DOCTOR_HISTORY_LIMIT", 120)
 ORION_PROFILE_COOLDOWN_AUTH_SECONDS = config_int("ORION_PROFILE_COOLDOWN_AUTH_SECONDS", 600)
 ORION_PROFILE_COOLDOWN_RATE_LIMIT_SECONDS = config_int("ORION_PROFILE_COOLDOWN_RATE_LIMIT_SECONDS", 120)
 ORION_PROFILE_COOLDOWN_TRANSIENT_SECONDS = config_int("ORION_PROFILE_COOLDOWN_TRANSIENT_SECONDS", 60)
 ORION_APPROVAL_TTL_SECONDS = config_int("ORION_APPROVAL_TTL_SECONDS", 180)
-ORION_IDEMPOTENCY_FILE = _resolve_state_file("ORION_IDEMPOTENCY_FILE", "runtime/idempotency.json", ".orion_idempotency_log.json")
+ORION_IDEMPOTENCY_FILE = _resolve_state_file("ORION_IDEMPOTENCY_FILE", "runtime/idempotency.json")
 ORION_IDEMPOTENCY_TTL_SECONDS = config_int("ORION_IDEMPOTENCY_TTL_SECONDS", 86400)
 ORION_SCHEDULER_ENABLED = config_bool("ORION_SCHEDULER_ENABLED", True)
 ORION_SCHEDULER_POLL_SECONDS = config_int("ORION_SCHEDULER_POLL_SECONDS", 20)
@@ -614,7 +602,6 @@ ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET = (
 ORION_TELEGRAM_AUTOPILOT_STATE_FILE = _resolve_state_file(
     "ORION_TELEGRAM_AUTOPILOT_STATE_FILE",
     "channels/telegram/autopilot_state.json",
-    ".orion_telegram_autopilot_state.json",
 )
 ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS = config_int("ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS", 1400)
 ORION_WHATSAPP_AUTOPILOT_ENABLED = config_bool("ORION_WHATSAPP_AUTOPILOT_ENABLED", True)
@@ -641,7 +628,6 @@ ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS = config_int("ORION_WHATSAPP_AUTOPILOT_
 ORION_WHATSAPP_AUTOPILOT_STATE_FILE = _resolve_state_file(
     "ORION_WHATSAPP_AUTOPILOT_STATE_FILE",
     "channels/whatsapp/autopilot_state.json",
-    ".orion_whatsapp_autopilot_state.json",
 )
 ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET = config_str("ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET", "").strip()
 OPENAI_API_URL = config_str("OPENAI_API_URL", "https://api.openai.com/v1/models")
@@ -692,7 +678,6 @@ DEFAULT_LOCAL_COMPANION_ALLOW_PREFIXES = default_local_companion_allow_prefixes(
 VAULT_FILE = _resolve_state_file(
     "CREDENTIAL_VAULT_FILE",
     "vault/credentials.json",
-    ".orion_credentials_vault.json",
 )
 
 
@@ -719,7 +704,6 @@ def agent_machine_inherited_owner_user_id(owner_user_id: Optional[str] = None) -
 VAULT_KEY_FILE = _resolve_state_file(
     "CREDENTIAL_VAULT_KEY_FILE",
     "vault/key",
-    ".orion_vault_key",
 )
 VAULT_KEY_ENV = config_value("CREDENTIAL_VAULT_KEY")
 ORION_VAULT_CIPHER_PREFIX = config_str("ORION_VAULT_CIPHER_PREFIX", "orion.v2:")
@@ -752,16 +736,16 @@ ORION_MEMORY_RETENTION_DAYS_DEFAULT = max(
 ORION_MEMORY_DB_PATH = (
     config_str(
         "ORION_MEMORY_DB_PATH",
-        str(Path(__file__).resolve().parent / "python_engine" / "agency_memory.db"),
+        str(EMPYRALIS_STATE_HOME / "memory" / "agency_memory.db"),
     ).strip()
-    or str(Path(__file__).resolve().parent / "python_engine" / "agency_memory.db")
+    or str(EMPYRALIS_STATE_HOME / "memory" / "agency_memory.db")
 )
 ORION_MEMORY_LANCEDB_URI = (
     config_str(
         "ORION_MEMORY_LANCEDB_URI",
-        str(Path(__file__).resolve().parent / "python_engine" / "data" / "lancedb"),
+        str(EMPYRALIS_STATE_HOME / "memory" / "lancedb"),
     ).strip()
-    or str(Path(__file__).resolve().parent / "python_engine" / "data" / "lancedb")
+    or str(EMPYRALIS_STATE_HOME / "memory" / "lancedb")
 )
 
 CONNECTOR_CATALOG = {

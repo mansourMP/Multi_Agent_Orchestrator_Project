@@ -7,7 +7,12 @@ import sqlite3
 import argparse
 import uuid
 import time
-from typing import Any, List
+from typing import Any, List, Optional
+
+try:
+    from state_paths import default_cognitive_db_path
+except ImportError:  # pragma: no cover - package import path
+    from python_engine.state_paths import default_cognitive_db_path
 
 # Import LLM Core
 try:
@@ -71,24 +76,24 @@ def output_result(ok, step, data, error=None):
 
 # --- AGENCY CORE ---
 class AgencyLogic:
-    def __init__(self, niche_config, db_path='agency_memory.db', execution_id=None):
+    def __init__(self, niche_config, db_path: Optional[str] = None, execution_id=None):
         self.config = niche_config
-        self.db_path = db_path
+        self.db_path = db_path or default_cognitive_db_path()
         self.execution_id = execution_id or f"exec-{uuid.uuid4().hex[:8]}"
         self._init_memory()
         
         # Initialize Memory Manager
         if MEMORY_AVAILABLE:
-            self.memory = MemoryManager(sqlite_path=db_path)
+            self.memory = MemoryManager(sqlite_path=self.db_path)
             log(f"Unified World Model (Memory) initialized for niche: {niche_config.get('id')}")
         else:
             self.memory = None
 
         # Initialize AC-OS Identity System
         if IDENTITY_AVAILABLE:
-            self.identity = AgentIdentity(niche_config.get('id', 'default'), db_path)
-            self.safety_guard = SafetyGuard(db_path)
-            self.global_knowledge = GlobalKnowledge(db_path)
+            self.identity = AgentIdentity(niche_config.get('id', 'default'), self.db_path)
+            self.safety_guard = SafetyGuard(self.db_path)
+            self.global_knowledge = GlobalKnowledge(self.db_path)
             log(f"AC-OS Identity initialized for niche: {niche_config.get('id')}")
         else:
             self.identity = None

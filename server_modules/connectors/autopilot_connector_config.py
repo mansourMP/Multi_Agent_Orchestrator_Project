@@ -99,30 +99,19 @@ def _resolve_state_file(env_name: str, default_relative: str, legacy_filename: O
     explicit = os.getenv(env_name)
     if explicit is not None and explicit.strip():
         return Path(explicit.strip()).expanduser()
-    preferred = (EMPYRALIS_STATE_HOME / default_relative).expanduser()
-    if legacy_filename:
-        legacy_path = Path(legacy_filename)
-        if legacy_path.exists() and not preferred.exists():
-            return legacy_path
-    return preferred
+    return (EMPYRALIS_STATE_HOME / default_relative).expanduser()
 
 
 def _resolve_state_dir(env_name: str, default_relative: str, legacy_dirname: Optional[str] = None) -> Path:
     explicit = os.getenv(env_name)
     if explicit is not None and explicit.strip():
         return Path(explicit.strip()).expanduser()
-    preferred = (EMPYRALIS_STATE_HOME / default_relative).expanduser()
-    if legacy_dirname:
-        legacy_path = Path(legacy_dirname)
-        if legacy_path.exists() and not preferred.exists():
-            return legacy_path
-    return preferred
+    return (EMPYRALIS_STATE_HOME / default_relative).expanduser()
 
 
 ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE = _resolve_state_file(
     "ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE",
     "channels/telegram/camera_setup_state.json",
-    ".orion_telegram_camera_setup_state.json",
 )
 
 ORION_TELEGRAM_SPACE_STATUS_ENABLED = os.getenv("ORION_TELEGRAM_SPACE_STATUS_ENABLED", "0") == "1"
@@ -135,7 +124,6 @@ ORION_TELEGRAM_MEDIA_ENABLED = os.getenv("ORION_TELEGRAM_MEDIA_ENABLED", "1") ==
 ORION_TELEGRAM_MEDIA_DIR = _resolve_state_dir(
     "ORION_TELEGRAM_MEDIA_DIR",
     "channels/telegram/media",
-    ".orion-media/telegram",
 )
 ORION_TELEGRAM_MEDIA_MAX_ITEMS = max(1, int(os.getenv("ORION_TELEGRAM_MEDIA_MAX_ITEMS", "4") or 4))
 ORION_TELEGRAM_MEDIA_MAX_BYTES = max(1024 * 128, int(os.getenv("ORION_TELEGRAM_MEDIA_MAX_BYTES", str(10 * 1024 * 1024)) or str(10 * 1024 * 1024)))
@@ -143,7 +131,6 @@ ORION_TELEGRAM_MEDIA_INCLUDE_IN_GOAL = os.getenv("ORION_TELEGRAM_MEDIA_INCLUDE_I
 ORION_CHANNEL_DEAD_LETTER_FILE = _resolve_state_file(
     "ORION_CHANNEL_DEAD_LETTER_FILE",
     "channels/dead_letters.json",
-    ".orion_channel_dead_letters.json",
 )
 ORION_CHANNEL_DEAD_LETTER_LIMIT = max(50, int(os.getenv("ORION_CHANNEL_DEAD_LETTER_LIMIT", "500") or 500))
 _CHANNEL_DEAD_LETTER_LOCK = threading.Lock()
@@ -151,23 +138,19 @@ ORION_LOCAL_LEASE_SECONDS = max(10, int(os.getenv("ORION_LOCAL_LEASE_SECONDS", "
 ORION_TELEGRAM_AUTOPILOT_STATE_FILE = _resolve_state_file(
     "ORION_TELEGRAM_AUTOPILOT_STATE_FILE",
     "channels/telegram/autopilot_state.json",
-    ".orion_telegram_autopilot_state.json",
 )
 ORION_TELEGRAM_PROFILE_STATE_FILE = _resolve_state_file(
     "ORION_TELEGRAM_PROFILE_STATE_FILE",
     "channels/telegram/chat_profiles.json",
-    ".orion_telegram_chat_profiles.json",
 )
 ORION_TELEGRAM_ONBOARDING_ENABLED = os.getenv("ORION_TELEGRAM_ONBOARDING_ENABLED", "1") == "1"
 ORION_TELEGRAM_ONBOARDING_STATE_FILE = _resolve_state_file(
     "ORION_TELEGRAM_ONBOARDING_STATE_FILE",
     "channels/telegram/chat_onboarding.json",
-    ".orion_telegram_chat_onboarding.json",
 )
 ORION_WHATSAPP_AUTOPILOT_STATE_FILE = _resolve_state_file(
     "ORION_WHATSAPP_AUTOPILOT_STATE_FILE",
     "channels/whatsapp/autopilot_state.json",
-    ".orion_whatsapp_autopilot_state.json",
 )
 
 _TELEGRAM_QUICK_GOAL_TEMPLATES: Dict[str, str] = {

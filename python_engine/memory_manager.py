@@ -18,6 +18,11 @@ import math
 from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
 
+try:
+    from state_paths import default_cognitive_db_path, default_lancedb_uri
+except ImportError:  # pragma: no cover - package import path
+    from python_engine.state_paths import default_cognitive_db_path, default_lancedb_uri
+
 # Import LLM Core for embeddings
 try:
     from llm_core import get_embedding, log
@@ -37,8 +42,8 @@ class MemoryBackend(ABC):
 
 # --- LANCEDB BACKEND (Primary) ---
 class LanceDBBackend(MemoryBackend):
-    def __init__(self, uri: str = "data/lancedb", table_name: str = "world_model"):
-        self.uri = uri
+    def __init__(self, uri: Optional[str] = None, table_name: str = "world_model"):
+        self.uri = uri or default_lancedb_uri()
         self.table_name = table_name
         self.db = None
         self.table = None
@@ -47,10 +52,10 @@ class LanceDBBackend(MemoryBackend):
         try:
             import lancedb
             import pandas as pd
-            os.makedirs(uri, exist_ok=True)
-            self.db = lancedb.connect(uri)
+            os.makedirs(self.uri, exist_ok=True)
+            self.db = lancedb.connect(self.uri)
             self._initialized = True
-            log(f"LanceDB connected at {uri}")
+            log(f"LanceDB connected at {self.uri}")
         except ImportError:
             log("LanceDB not installed. Falling back to SQLite.")
         except Exception as e:
@@ -126,9 +131,10 @@ class LanceDBBackend(MemoryBackend):
 
 # --- SQLITE BACKEND (Fallback) ---
 class SQLiteBackend(MemoryBackend):
-    def __init__(self, db_path: str = "agency_memory.db"):
-        self.db_path = db_path
-        conn = sqlite3.connect(db_path)
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or default_cognitive_db_path()
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+        conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS fallback_memory (
             id TEXT PRIMARY KEY,
@@ -219,7 +225,7 @@ class SQLiteBackend(MemoryBackend):
 
 # --- MEMORY MANAGER ---
 class MemoryManager:
-    def __init__(self, lancedb_uri: str = "data/lancedb", sqlite_path: str = "agency_memory.db"):
+    def __init__(self, lancedb_uri: Optional[str] = None, sqlite_path: Optional[str] = None):
         self.lancedb = LanceDBBackend(lancedb_uri)
         self.sqlite = SQLiteBackend(sqlite_path)
 

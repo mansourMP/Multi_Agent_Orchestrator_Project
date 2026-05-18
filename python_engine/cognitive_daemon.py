@@ -21,6 +21,11 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+try:
+    from state_paths import default_cognitive_db_path
+except ImportError:  # pragma: no cover - package import path
+    from python_engine.state_paths import default_cognitive_db_path
+
 
 def _normalize_brand_command_alias(text: str) -> str:
     return re.sub(r"^/empyralis\b", "/orion", str(text or "").strip(), flags=re.IGNORECASE)
@@ -187,6 +192,7 @@ def log(message: str) -> None:
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
@@ -5047,7 +5053,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--niche-id", required=True)
-    common.add_argument("--db-path", default="agency_memory.db")
+    common.add_argument("--db-path", default=default_cognitive_db_path())
 
     p_start = sub.add_parser("start", parents=[common])
     p_start.add_argument("--poll-seconds", type=float, default=2.0)

@@ -1409,10 +1409,11 @@ def _cognitive_objective_runtime() -> Tuple[str, str, str, str]:
     python_bin = root / "python_engine" / ".venv" / "bin" / "python"
     python_exec = str(python_bin) if python_bin.exists() else sys.executable
     niche_id = str(os.getenv("ORION_COGNITIVE_NICHE_ID", "astronomy")).strip() or "astronomy"
+    state_home = Path(os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))).expanduser()
     db_path = str(
         os.getenv(
             "ORION_COGNITIVE_DB_PATH",
-            str(root / "python_engine" / "agency_memory.db"),
+            str(state_home / "memory" / "agency_memory.db"),
         )
     ).strip()
     return python_exec, str(daemon), niche_id, db_path

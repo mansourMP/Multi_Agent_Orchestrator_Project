@@ -9,6 +9,7 @@ from server_modules import run_state_repository
 from server_modules import runtime_run_approval_service
 from server_modules.auth import enforce_workspace_access
 from server_modules.runs_output import _compact_event_text, _json_safe
+from server_modules.state_paths import cognitive_db_path
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -253,7 +254,7 @@ def _cognitive_defaults() -> Dict[str, str]:
     if db_override:
         db_path = db_override
     else:
-        db_path = str(Path(__file__).resolve().parent / "python_engine" / "agency_memory.db")
+        db_path = str(cognitive_db_path())
     return {"niche_id": niche_id, "db_path": db_path}
 
 

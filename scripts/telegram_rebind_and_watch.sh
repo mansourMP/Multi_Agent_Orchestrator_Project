@@ -237,11 +237,7 @@ if [[ -n "${NEW_ID}" ]]; then
   STATE_HOME="${EMPYRALIS_STATE_HOME:-$HOME/.empyralis/state}"
   VAULT_FILE="${CREDENTIAL_VAULT_FILE:-}"
   if [[ -z "${VAULT_FILE}" ]]; then
-    if [[ -f ".orion_credentials_vault.json" && ! -f "${STATE_HOME}/vault/credentials.json" ]]; then
-      VAULT_FILE=".orion_credentials_vault.json"
-    else
-      VAULT_FILE="${STATE_HOME}/vault/credentials.json"
-    fi
+    VAULT_FILE="${STATE_HOME}/vault/credentials.json"
   fi
   python3 - "${NEW_ID}" "${VAULT_FILE}" <<'PY'
 import json, sys, pathlib, time
@@ -282,11 +278,7 @@ bash scripts/stop_empyralis_local_stack.sh >/dev/null 2>&1 || true
 STATE_HOME="${EMPYRALIS_STATE_HOME:-$HOME/.empyralis/state}"
 AUTOPILOT_STATE_FILE="${ORION_TELEGRAM_AUTOPILOT_STATE_FILE:-}"
 if [[ -z "${AUTOPILOT_STATE_FILE}" ]]; then
-  if [[ -f ".orion_telegram_autopilot_state.json" && ! -f "${STATE_HOME}/channels/telegram/autopilot_state.json" ]]; then
-    AUTOPILOT_STATE_FILE=".orion_telegram_autopilot_state.json"
-  else
-    AUTOPILOT_STATE_FILE="${STATE_HOME}/channels/telegram/autopilot_state.json"
-  fi
+  AUTOPILOT_STATE_FILE="${STATE_HOME}/channels/telegram/autopilot_state.json"
 fi
 rm -f "${AUTOPILOT_STATE_FILE}"
 

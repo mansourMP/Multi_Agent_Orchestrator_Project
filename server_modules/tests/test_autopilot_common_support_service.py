@@ -13,11 +13,12 @@ class AutopilotCommonSupportServiceTests(unittest.TestCase):
             import_cognitive_module=overrides.pop("import_cognitive_module", lambda: object()),
         )
 
-    def test_cognitive_defaults_uses_override_or_project_root(self) -> None:
-        service = self._make_service(env_map={"ORION_COGNITIVE_NICHE_ID": "biology"})
+    def test_cognitive_defaults_uses_override_or_state_home(self) -> None:
+        state_home = "/tmp/empyralis-state"
+        service = self._make_service(env_map={"ORION_COGNITIVE_NICHE_ID": "biology", "EMPYRALIS_STATE_HOME": state_home})
         defaults = service.cognitive_defaults()
         self.assertEqual(defaults["niche_id"], "biology")
-        self.assertTrue(defaults["db_path"].endswith("python_engine/agency_memory.db"))
+        self.assertEqual(defaults["db_path"], f"{state_home}/memory/agency_memory.db")
 
         override = self._make_service(env_map={"ORION_COGNITIVE_DB_PATH": "/tmp/custom.db"})
         self.assertEqual(override.cognitive_defaults()["db_path"], "/tmp/custom.db")

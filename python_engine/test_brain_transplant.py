@@ -12,6 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from llm_core import call_cheap, call_smart, call_json
+from state_paths import default_cognitive_db_path
 
 def test_1_simple_call():
     """Test basic LLM call"""
@@ -205,7 +206,7 @@ if __name__ == "__main__":
         
         # Show database stats
         import sqlite3
-        conn = sqlite3.connect("agency_memory.db")
+        conn = sqlite3.connect(default_cognitive_db_path())
         c = conn.cursor()
         c.execute("SELECT COUNT(*) FROM llm_calls")
         call_count = c.fetchone()[0]

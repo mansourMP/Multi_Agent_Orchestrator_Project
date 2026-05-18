@@ -17,6 +17,7 @@ from server_modules.runtime_state_store import (
     init_runtime_state_db,
     upsert_runtime_session,
 )
+from server_modules.state_paths import runtime_state_db_path
 
 
 LOGGER = logging.getLogger(__name__)
@@ -78,8 +79,7 @@ def _coerce_timestamptz(value: Any) -> Optional[datetime]:
 
 
 def _normalized_runtime_state_db_path() -> Path:
-    raw = str(os.getenv("ORION_RUNTIME_STATE_DB") or ".orion_runtime_state.db").strip()
-    return Path(raw).expanduser().resolve()
+    return runtime_state_db_path().resolve()
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:

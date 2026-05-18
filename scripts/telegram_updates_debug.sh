@@ -11,18 +11,10 @@ STATE_HOME="${EMPYRALIS_STATE_HOME:-$HOME/.empyralis/state}"
 VAULT_FILE="${CREDENTIAL_VAULT_FILE:-}"
 VAULT_KEY_FILE="${CREDENTIAL_VAULT_KEY_FILE:-}"
 if [[ -z "${VAULT_FILE}" ]]; then
-  if [[ -f ".orion_credentials_vault.json" && ! -f "${STATE_HOME}/vault/credentials.json" ]]; then
-    VAULT_FILE=".orion_credentials_vault.json"
-  else
-    VAULT_FILE="${STATE_HOME}/vault/credentials.json"
-  fi
+  VAULT_FILE="${STATE_HOME}/vault/credentials.json"
 fi
 if [[ -z "${VAULT_KEY_FILE}" ]]; then
-  if [[ -f ".orion_vault_key" && ! -f "${STATE_HOME}/vault/key" ]]; then
-    VAULT_KEY_FILE=".orion_vault_key"
-  else
-    VAULT_KEY_FILE="${STATE_HOME}/vault/key"
-  fi
+  VAULT_KEY_FILE="${STATE_HOME}/vault/key"
 fi
 
 if [[ ! -f "${VAULT_FILE}" ]]; then

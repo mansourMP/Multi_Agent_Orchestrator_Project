@@ -80,11 +80,11 @@ async def test_internal_health_endpoint_returns_full_payload():
     mock_health.assert_awaited_once()
 
 
-def test_sqlite_health_status_reflects_runtime_state_file_presence(tmp_path: Path):
+def test_sqlite_health_status_reflects_runtime_state_file_presence(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "runtime.db"
-    with patch("server_modules.db.os.getenv", side_effect=lambda key, default=None: str(db_path) if key == "ORION_RUNTIME_STATE_DB" else default):
-        from server_modules import db as runtime_db
+    monkeypatch.setenv("ORION_RUNTIME_STATE_DB", str(db_path))
+    from server_modules import db as runtime_db
 
-        assert runtime_db.sqlite_health_status() == "inactive"
-        db_path.touch()
-        assert runtime_db.sqlite_health_status() == "active"
+    assert runtime_db.sqlite_health_status() == "inactive"
+    db_path.touch()
+    assert runtime_db.sqlite_health_status() == "active"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import threading
 import time
 import uuid
@@ -22,6 +21,7 @@ from server_modules.session_manager.actor_queue import SessionActorQueue
 from server_modules.session_manager.observability import build_session_manager_snapshot
 from server_modules.session_manager.runtime_cache import RuntimeHandleCache
 from server_modules.session_manager.types import SessionRuntimeHandle
+from server_modules.state_paths import runtime_state_db_path
 
 
 TurnExecutor = Callable[..., Iterator[Dict[str, Any]]]
@@ -541,7 +541,7 @@ class EmpyralisSessionManager:
 
 def get_default_session_manager(*, db_path: Optional[Path] = None) -> EmpyralisSessionManager:
     global _DEFAULT_MANAGER
-    resolved_db_path = Path(db_path or os.getenv("ORION_RUNTIME_STATE_DB", ".orion_runtime_state.db")).expanduser().resolve()
+    resolved_db_path = Path(db_path).expanduser().resolve() if db_path else runtime_state_db_path().resolve()
     with _DEFAULT_MANAGER_LOCK:
         if _DEFAULT_MANAGER is None or _DEFAULT_MANAGER.db_path != resolved_db_path:
             _DEFAULT_MANAGER = EmpyralisSessionManager(db_path=resolved_db_path)

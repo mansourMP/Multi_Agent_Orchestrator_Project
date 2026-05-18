@@ -272,7 +272,8 @@ cmd_cognitive() {
   fi
 
   local default_niche="${ORION_COGNITIVE_NICHE_ID:-astronomy}"
-  local default_db="${ORION_COGNITIVE_DB_PATH:-${PYTHON_ENGINE_DIR}/agency_memory.db}"
+  local state_home="${EMPYRALIS_STATE_HOME:-$HOME/.empyralis/state}"
+  local default_db="${ORION_COGNITIVE_DB_PATH:-${state_home}/memory/agency_memory.db}"
 
   case "${sub}" in
     start|run|status|stop|enqueue|event|digest|digests|approvals|approve|reject|skills|skill-decay|objective-add|objective-list|objective-get|objective-pause|objective-resume|objective-complete|objective-tick|objective-tail|objective-lessons|objective-dispatch|objective-simulate|objective-autotune)

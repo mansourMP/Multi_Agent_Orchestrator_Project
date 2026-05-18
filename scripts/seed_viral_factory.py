@@ -3,8 +3,18 @@ import json
 import uuid
 import datetime
 import os
+from pathlib import Path
 
-DB_PATH = "backend/prisma/dev.db"
+STATE_HOME = Path(
+    os.getenv("EMPYRALIS_STATE_HOME")
+    or os.getenv("ORION_STATE_HOME")
+    or (Path.home() / ".empyralis" / "state")
+).expanduser()
+DB_PATH = (
+    os.getenv("EMPYRALIS_VIRAL_FACTORY_DB_PATH")
+    or os.getenv("ORION_VIRAL_FACTORY_DB_PATH")
+    or str(STATE_HOME / "viral_factory.db")
+)
 
 # The Gold Standard Wiring
 WORKFLOW_PAYLOAD = {

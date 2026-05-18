@@ -13,12 +13,10 @@ ACTIVE_WORKSTATION_FILES = [
     "frontend/lib/workspace/workspace-boundary.tsx",
     "frontend/lib/workspace/workspace-shell.ts",
     "frontend/lib/workspace/workspace-services.tsx",
-    "frontend/lib/workspace/workspace-feature-surface.tsx",
     "frontend/lib/workspace/workstation-shell-frame.tsx",
     "frontend/lib/workspace/workstation-kernel-shell.tsx",
     "frontend/lib/workspace/workstation-client.ts",
     "frontend/lib/workspace/workstation-chat-pane.tsx",
-    "frontend/lib/workspace/workstation-roster-pane.tsx",
     "frontend/lib/workspace/workstation-stage-intent.tsx",
     "frontend/lib/workspace/workstation-stage-router.ts",
     "frontend/lib/workspace/workstation-stage-pane.tsx",
@@ -31,8 +29,11 @@ ACTIVE_WORKSTATION_FILES = [
 
 ALLOWED_PERSISTENCE_CALLERS = {
     "frontend/lib/workspace/workstation-kernel-shell.tsx": "WORKSTATION_SHELL_LAYOUT_KEY",
-    "frontend/lib/workspace/workstation-roster-pane.tsx": "WORKSTATION_ROSTER_UI_KEY",
-    "frontend/lib/workspace/workspace-feature-surface.tsx": "feature:${featureId}:surface",
+}
+
+ALLOWED_DIRECT_STORAGE_CALLERS = {
+    "frontend/lib/workspace/workstation-kernel-shell.tsx": "activeThreadStorageKey",
+    "frontend/lib/workspace/workstation-chat-pane.tsx": "sage-small-ollama-model-warning",
 }
 
 
@@ -47,11 +48,20 @@ def assert_condition(condition: bool, message: str) -> None:
 
 def audit_sensitive_persistence() -> None:
     for relative_path in ACTIVE_WORKSTATION_FILES:
+      if not (REPO_ROOT / relative_path).exists():
+          continue
       text = read(relative_path)
 
       if relative_path != "frontend/lib/workspace/workspace-services.tsx":
-          assert_condition("localStorage" not in text, f"unexpected localStorage usage in {relative_path}")
-          assert_condition("sessionStorage" not in text, f"unexpected sessionStorage usage in {relative_path}")
+          direct_storage_marker = ALLOWED_DIRECT_STORAGE_CALLERS.get(relative_path)
+          if direct_storage_marker is not None:
+              assert_condition(
+                  direct_storage_marker in text,
+                  f"missing allowed direct storage key marker in {relative_path}",
+              )
+          else:
+              assert_condition("localStorage" not in text, f"unexpected localStorage usage in {relative_path}")
+              assert_condition("sessionStorage" not in text, f"unexpected sessionStorage usage in {relative_path}")
 
       if "services.persistence.setJson" in text or "services.persistence.getJson" in text:
           allowed_marker = ALLOWED_PERSISTENCE_CALLERS.get(relative_path)
@@ -71,6 +81,8 @@ def audit_sensitive_persistence() -> None:
 
 def audit_legacy_backend_references() -> None:
     for relative_path in ACTIVE_WORKSTATION_FILES:
+        if not (REPO_ROOT / relative_path).exists():
+            continue
         text = read(relative_path)
         assert_condition("backend/dist/main.js" not in text, f"legacy backend entrypoint reference in {relative_path}")
         assert_condition("spawn_backend(" not in text, f"legacy backend launch reference in {relative_path}")

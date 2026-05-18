@@ -185,20 +185,6 @@ def _deep_merge(base: Dict[str, Any], overrides: Optional[Dict[str, Any]]) -> Di
     return merged
 
 
-def _backend_database_url() -> str:
-    env_path = Path(__file__).resolve().parents[1] / "backend" / ".env"
-    if not env_path.exists():
-        return ""
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        token = line.strip()
-        if not token or token.startswith("#") or "=" not in token:
-            continue
-        key, value = token.split("=", 1)
-        if key.strip() == "DATABASE_URL" and value.strip():
-            return value.strip()
-    return ""
-
-
 def default_telegram_api_response(call: Dict[str, Any], transport_state: Dict[str, Any]) -> Any:
     method_name = str(call.get("method_name") or "").strip()
     transport_state["next_message_id"] = int(transport_state.get("next_message_id") or 1000) + 1
@@ -1082,9 +1068,6 @@ def _apply_common_runtime_environment(
     monkeypatch.setenv("EMPYRALIS_STATE_HOME", str(state_home))
     monkeypatch.delenv("EMPYRALIS_JWT_SECRET_FILE", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    resolved_database_url = _backend_database_url()
-    if resolved_database_url:
-        monkeypatch.setenv("DATABASE_URL", resolved_database_url)
     monkeypatch.setenv("ORION_ENV", "test")
     monkeypatch.setenv("ORION_JWT_SECRET", "blackbox-jwt-secret")
     monkeypatch.setenv("EMPYRALIS_SECRETS_BROKER_SECRET", "blackbox-secrets-broker-secret")

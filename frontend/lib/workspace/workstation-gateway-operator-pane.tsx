@@ -371,7 +371,7 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
   }
   switch (String(session.runtime_binding ?? '').trim().toLowerCase()) {
     case 'my_computer_agent':
-      return 'Ask first for device access';
+      return 'Device access';
     case 'cloud_computer_agent':
       return 'Autopilot capable';
     default:
@@ -588,7 +588,7 @@ const GATEWAY_SETUP_STEPS = [
   },
   {
     title: 'Grant permissions',
-    description: 'Sage will ask for your OK before it touches any files, browser tabs, or your terminal.',
+    description: 'Pairing enables ordinary local context by default. Risky side effects still pause for approval.',
   },
 ] as const;
 
@@ -604,12 +604,12 @@ const GATEWAY_MODE_SUMMARIES = [
   {
     title: 'Default',
     subtitle: 'Safe',
-    description: 'Sage can use safe tools automatically. Risky actions always wait for your manual approval.',
+    description: 'Sage can use ordinary local context automatically. Risky actions always wait for approval.',
   },
   {
-    title: 'Broad Access',
+    title: 'Device access',
     subtitle: 'Autonomous',
-    description: 'Allow Sage to continue through multiple local steps without pausing. Audited and revocable.',
+    description: 'Lets Sage continue through bounded local steps while destructive, external, and security actions remain gated.',
   },
 ] as const;
 
@@ -778,7 +778,7 @@ function summarizeMyComputerStatus(params: {
       id: 'not_connected',
       label: 'Not connected',
       tone: 'neutral',
-      detail: 'Connect a computer when Sage needs trusted local access.',
+      detail: 'Connect a computer when Sage needs local files, browser, screenshots, or app context.',
       primaryAction: {
         label: 'Connect a computer',
         tone: 'primary',
@@ -843,7 +843,7 @@ function summarizeMyComputerStatus(params: {
       id: 'online',
       label: 'Online',
       tone: 'success',
-      detail: 'Sage can use the selected computer now.',
+      detail: 'Local access is on by default for ordinary Sage tasks.',
       primaryAction: {
         label: 'Revoke access',
         tone: 'danger',
@@ -1637,7 +1637,7 @@ export function WorkstationGatewayOperatorPane({
     : approvalsPendingCount > 0
       ? 'Needs approval'
       : selectedGateway
-        ? 'Ask first for device access'
+        ? 'Device access'
         : 'No active computer session';
   const selectedTakeoverStatus = browserItems[0]
     ? browserTakeoverStatus(browserItems[0])
@@ -1687,7 +1687,7 @@ export function WorkstationGatewayOperatorPane({
   const showApprovalsSection = initialSection === 'all' || initialSection === 'approvals';
   const showActivitySection = initialSection === 'all' || initialSection === 'activity';
   const expandedDetailVisible = diagnosticsVisible || initialSection !== 'all';
-  const diagnosticsSectionVisible = diagnosticsVisible || initialSection === 'status';
+  const diagnosticsSectionVisible = diagnosticsVisible;
   const pairingDeviceLabel = pairingDraft.platform === 'macos'
     ? 'Mac'
     : pairingDraft.platform === 'windows'
@@ -1753,7 +1753,7 @@ export function WorkstationGatewayOperatorPane({
           <WorkstationSurfaceStat
             label="Trust"
             value={trustSummary.trustLabel}
-            hint="Revocable device trust for local work"
+            hint="One revocable trust decision for local work; not a per-tool checklist"
           />
         </WorkstationSurfaceStatGrid>
 
@@ -1819,7 +1819,7 @@ export function WorkstationGatewayOperatorPane({
         {diagnosticsSectionVisible ? (
           <FormSection
           title="How this trust lane works"
-          description="Default keeps risky local and external actions behind approval. Full Access only applies to the selected user-owned computer."
+          description="Connected computers are useful by default. Approval is reserved for risky local and external actions."
         >
           <WorkstationSurfaceList>
             {GATEWAY_MODE_SUMMARIES.map((mode) => (
@@ -1930,7 +1930,7 @@ export function WorkstationGatewayOperatorPane({
       {!expandedDetailVisible ? (
         <WorkstationSurfaceCard
           title="Agent computer map"
-          description="A quick view of which agent surfaces can use a connected computer."
+          description="Connected computers give agent surfaces one default local access layer; approvals are reserved for risky actions."
         >
           <WorkstationSurfaceList>
             <WorkstationSurfaceListItem
@@ -1938,7 +1938,7 @@ export function WorkstationGatewayOperatorPane({
               subtitle="Main agent"
               description={
                 selectedGateway
-                  ? `${trustSummary.deviceLabel} · ${myComputerStatus.detail}`
+                  ? `${trustSummary.deviceLabel} · ${myComputerStatus.detail} Destructive changes, external sends, payments, account changes, and raw terminal commands still pause.`
                   : 'No local computer is connected to the main agent.'
               }
               actions={(

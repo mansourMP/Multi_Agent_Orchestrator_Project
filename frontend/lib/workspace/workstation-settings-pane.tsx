@@ -65,7 +65,7 @@ const SETTINGS_SECTIONS: Array<{
     label: 'Privacy & Safety',
     eyebrow: 'Trust',
     title: 'Privacy & Safety',
-    description: 'Needs your OK, memory, and computer trust.',
+    description: 'Approvals, memory, and computer trust.',
   },
   {
     id: 'transparency',
@@ -654,7 +654,7 @@ export function WorkstationSettingsPane() {
                   value={localCompanionTarget?.online ? 'Connected' : localCompanionTarget ? 'Available but offline' : 'Not detected'}
                 />
                 <FormReadout
-                  label="Needs your OK mode"
+                  label="Approval mode"
                   value={preferredRuntimeTarget?.approvalMode ? humanizeToken(preferredRuntimeTarget.approvalMode) : 'Auto-run'}
                 />
               </FormGrid>
@@ -684,7 +684,7 @@ export function WorkstationSettingsPane() {
               <div className="settings-detail-grid">
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">Needs your OK actions</strong>
+                    <strong className="settings-detail-card__title">Approval-gated actions</strong>
                   </div>
                   <p className="settings-detail-card__body">
                     Sage pauses for review before destructive file changes, external sends, purchases, and dangerous shell commands.

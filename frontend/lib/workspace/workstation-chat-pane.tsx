@@ -1720,7 +1720,7 @@ export function WorkstationChatPane() {
     ? `${artifactCount} attached output${artifactCount === 1 ? '' : 's'} in this thread`
     : 'No app updates yet';
   const nextStepTitle = approvals.length > 0
-    ? 'Needs your OK is waiting'
+    ? 'Approval is waiting'
     : latestRun
       ? 'Task is in progress'
       : 'Sage is ready for the next turn';
@@ -2616,7 +2616,7 @@ export function WorkstationChatPane() {
           : hasPendingApprovals
             ? responseExecutionTarget === 'local_companion'
               ? 'Sage is waiting for approval before using the connected computer.'
-              : 'Needs your OK is waiting.'
+              : 'Approval is waiting.'
             : needsUserIntervention && !hasProviderFailure && !connectorSetupInterventionOnly
               ? 'Sage needs your input before it can continue.'
               : null,
@@ -3381,8 +3381,8 @@ export function WorkstationChatPane() {
 
       <CommandSheet
         open={isApprovalsSheetOpen}
-        title="Needs your OK"
-        description="Review pending requests that need your OK for this conversation."
+        title="Approvals"
+        description="Review pending requests for this conversation."
         onClose={() => {
           setIsApprovalsSheetOpen(false);
         }}

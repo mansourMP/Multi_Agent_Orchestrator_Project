@@ -124,7 +124,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
   },
   {
     id: 'approvals',
-    title: 'Needs your OK',
+    title: 'Approvals',
     description: 'Open pending approval requests awaiting user confirmation.',
     routeId: 'approvals',
     icon: CircleAlert,

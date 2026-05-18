@@ -432,7 +432,7 @@ function proofItemsFromApprovals(payload: unknown): ActivityProofItem[] {
     return {
       id: `approval-${id}`,
       type: 'approval',
-      title: 'Needs your OK',
+      title: 'Approval needed',
       summary: compactHumanText(summary, 'A request is waiting for approval.'),
       occurredAt: readString(approval.created_at) || readString(approval.updated_at) || null,
       source: 'Approval',
@@ -882,7 +882,7 @@ export function WorkstationRunsPane() {
             <WorkstationSurfaceStatGrid>
               <WorkstationSurfaceStat label="Proof events" value={activityItems.length} hint="Human summaries only" />
               <WorkstationSurfaceStat label="Chat history" value={threads.length} hint="Conversation entries included" />
-              <WorkstationSurfaceStat label="Approvals" value={approvalCount} hint="Needs your OK and decisions" />
+              <WorkstationSurfaceStat label="Approvals" value={approvalCount} hint="Pending requests and decisions" />
               <WorkstationSurfaceStat label="Computer proofs" value={computerProofItems.length} hint="screen and runtime evidence" />
               <WorkstationSurfaceStat label="Channels/providers" value={channelCount + providerCount} hint="External sends and AI state" />
             </WorkstationSurfaceStatGrid>

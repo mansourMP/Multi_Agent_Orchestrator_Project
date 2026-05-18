@@ -2381,7 +2381,7 @@ export function browserReadinessPill(
   if (attachApprovalRequiredCount > 0) {
     return {
       id: 'browser-approval',
-      label: 'Browser: Needs your OK',
+      label: 'Browser approval',
       tone: 'warning',
       target: 'integrations',
     };

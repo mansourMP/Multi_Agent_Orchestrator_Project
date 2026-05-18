@@ -185,7 +185,7 @@ function statusPrimaryLabel(label: string): string {
     return 'Done';
   }
   if (normalized.includes('approval')) {
-    return 'Needs your OK';
+    return 'Approval needed';
   }
   return humanizeToken(label) || 'Done';
 }
@@ -414,7 +414,7 @@ export function ApprovalCell({
         <ShieldCheck size={14} strokeWidth={1.9} />
       </span>
       <div className="app-chat-approval-cell__copy">
-        <span className="app-chat-system-row__primary">Needs your OK</span>
+        <span className="app-chat-system-row__primary">Approval needed</span>
         <span className="app-chat-system-row__secondary">
           {compactSystemDetail(
             cell.prompt,

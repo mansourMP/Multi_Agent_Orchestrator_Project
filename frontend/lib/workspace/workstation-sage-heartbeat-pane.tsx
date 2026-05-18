@@ -390,7 +390,7 @@ export function WorkstationSageHeartbeatPane() {
       { id: 'now', title: 'Now', empty: 'Nothing is running right now.' },
       { id: 'waiting', title: 'Waiting', empty: 'No queued work is waiting.' },
       { id: 'scheduled', title: 'Scheduled', empty: 'No recurring work is scheduled yet.' },
-      { id: 'needs_ok', title: 'Needs your OK', empty: 'No actions are blocked on approval.' },
+      { id: 'needs_ok', title: 'Approvals', empty: 'No actions are blocked on approval.' },
       { id: 'done', title: 'Done', empty: 'No recent governed work yet.' },
     ];
     return laneCopy.map(({ id, title, empty }) => {
@@ -472,7 +472,7 @@ export function WorkstationSageHeartbeatPane() {
                     Open Activity
                   </Link>
                   <Link href={approvalsHref} className="app-link-button app-link-button--secondary">
-                    Needs your OK
+                    Approvals
                   </Link>
                 </div>
               </div>

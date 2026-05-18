@@ -1221,10 +1221,10 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
   const attachStatus = readString(browserAttachRecord.status).toLowerCase();
   if (attachApprovalRequiredCount > 0) {
     return {
-      statusLabel: 'Needs your OK',
+      statusLabel: 'Approval needed',
       statusTone: 'warning',
       detail: 'Your browser is waiting for approval.',
-      summary: 'Sage needs your OK before using signed-in browser pages on Connected Computer.',
+      summary: 'Sage needs approval before using signed-in browser pages on Connected Computer.',
       nextStep: 'Open computer setup to review browser approvals.',
     };
   }

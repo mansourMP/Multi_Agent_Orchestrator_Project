@@ -10,7 +10,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "types": ["node"],
-    "typeRoots": ["../bridge/node_modules/@types"],
     "lib": ["ES2022", "DOM"]
   },
   "include": ["src/**/*.ts"]

@@ -697,6 +697,7 @@ export type WorkstationClientPaths = {
   providersCatalog: string;
   providerModels: (providerId: string, profileId?: string | null) => string;
   workspaceProviderModelsRefresh: (providerId: string) => string;
+  workspaceTransparencySettings: string;
   providerProfiles: (provider?: string | null) => string;
   providerProfilesRoot: string;
   credentialsVault: string;
@@ -915,6 +916,8 @@ export type WorkstationClient = {
   listProviderCatalog: () => Promise<Record<string, unknown>>;
   listProviderModels: (options: { providerId: string; profileId?: string | null }) => Promise<Record<string, unknown>>;
   refreshWorkspaceProviderModels: (options: { providerId: string }) => Promise<Record<string, unknown> | null>;
+  getWorkspaceTransparencySettings: () => Promise<Record<string, unknown>>;
+  updateWorkspaceTransparencySettings: (options: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
   listProviderProfiles: (options?: { provider?: string | null }) => Promise<Record<string, unknown>>;
   listVaultCredentials: () => Promise<Record<string, unknown>>;
   listConnectorsVault: () => Promise<Record<string, unknown>>;
@@ -1313,6 +1316,7 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/providers/${encodeURIComponent(providerId)}/models${buildQueryString({ workspace_id: workspaceId, profile_id: profileId })}`,
     workspaceProviderModelsRefresh: (providerId: string) =>
       `/api/workspaces/${encodeURIComponent(workspaceId)}/providers/${encodeURIComponent(providerId)}/models/refresh`,
+    workspaceTransparencySettings: `/api/workspaces/${encodeURIComponent(workspaceId)}/transparency-settings`,
     providerProfiles: (provider = null) =>
       `/api/providers/profiles${buildQueryString({ workspace_id: workspaceId, provider })}`,
     providerProfilesRoot: '/api/providers/profiles',
@@ -2664,6 +2668,21 @@ export function createWorkstationClient(
         init: {
           method: 'POST',
           headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    getWorkspaceTransparencySettings: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceTransparencySettings,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    updateWorkspaceTransparencySettings: (options) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceTransparencySettings,
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify(options),
         },
         policy: WRITE_REQUEST_POLICY,
       }),

@@ -8,6 +8,11 @@ from pydantic import BaseModel
 from server_modules import auth as auth_module
 from server_modules import control_plane_repository
 from server_modules import workspace_admin_service
+from server_modules.transparency_settings_service import (
+    TransparencySettings,
+    get_transparency_settings,
+    put_transparency_settings,
+)
 from server_modules.workspace_channel_operations_service import (
     build_workspace_channel_operations,
 )
@@ -169,6 +174,18 @@ class WorkspaceRoutingUpdateRequest(BaseModel):
     admin_defaults: Optional[Dict[str, Any]] = None
 
 
+class WorkspaceTransparencySettingsUpdateRequest(BaseModel):
+    default_mode: Optional[str] = None
+    sage_mode: Optional[str] = None
+    studio_test_mode: Optional[str] = None
+    customer_mode: Optional[str] = None
+    show_trace_ids: Optional[bool] = None
+    show_tool_names: Optional[bool] = None
+    show_memory_usage: Optional[bool] = None
+    show_policy_blocks: Optional[bool] = None
+    show_sources: Optional[bool] = None
+
+
 @router.get("/workspaces")
 async def list_workspaces(
     current_user=Depends(get_current_user),
@@ -290,6 +307,49 @@ async def workspace_routing(
         workspace_id=workspace_id,
         current_user=current_user,
     )
+
+
+@router.get("/workspaces/{workspace_id}/transparency-settings")
+async def workspace_transparency_settings(
+    workspace_id: str,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="viewer",
+    )
+    return get_transparency_settings(resolved_workspace_id).to_dict()
+
+
+@router.patch("/workspaces/{workspace_id}/transparency-settings")
+async def workspace_transparency_settings_update(
+    workspace_id: str,
+    body: WorkspaceTransparencySettingsUpdateRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+    )
+    current = get_transparency_settings(resolved_workspace_id).to_dict()
+    updates = (
+        body.model_dump(exclude_none=True)
+        if hasattr(body, "model_dump")
+        else body.dict(exclude_none=True)
+    )
+    next_settings = TransparencySettings.from_dict({
+        **current,
+        **updates,
+        "workspace_id": resolved_workspace_id,
+    })
+    try:
+        return put_transparency_settings(next_settings).to_dict()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.patch("/workspaces/{workspace_id}/routing")

@@ -271,19 +271,83 @@ const VISIBILITY_MODES = [
   { value: 'enterprise', label: 'Admin' },
 ] as const;
 
-function TransparencyModeSelect({ label, value }: { label: string; value: string }) {
+type VisibilityMode = typeof VISIBILITY_MODES[number]['value'];
+
+type TransparencySettingsPayload = {
+  workspace_id: string;
+  default_mode: VisibilityMode;
+  sage_mode: VisibilityMode;
+  studio_test_mode: VisibilityMode;
+  customer_mode: 'off' | 'minimal';
+  show_trace_ids: boolean;
+  show_tool_names: boolean;
+  show_memory_usage: boolean;
+  show_policy_blocks: boolean;
+  show_sources: boolean;
+};
+
+const DEFAULT_TRANSPARENCY_SETTINGS: TransparencySettingsPayload = {
+  workspace_id: '',
+  default_mode: 'standard',
+  sage_mode: 'standard',
+  studio_test_mode: 'full',
+  customer_mode: 'minimal',
+  show_trace_ids: true,
+  show_tool_names: true,
+  show_memory_usage: false,
+  show_policy_blocks: true,
+  show_sources: true,
+};
+
+function normalizeVisibilityMode(value: unknown, fallback: VisibilityMode): VisibilityMode {
+  const token = readString(value).toLowerCase();
+  return VISIBILITY_MODES.some((mode) => mode.value === token) ? token as VisibilityMode : fallback;
+}
+
+function normalizeTransparencySettings(payload: unknown): TransparencySettingsPayload {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const customerMode = normalizeVisibilityMode(record.customer_mode, DEFAULT_TRANSPARENCY_SETTINGS.customer_mode);
+  return {
+    workspace_id: readString(record.workspace_id),
+    default_mode: normalizeVisibilityMode(record.default_mode, DEFAULT_TRANSPARENCY_SETTINGS.default_mode),
+    sage_mode: normalizeVisibilityMode(record.sage_mode, DEFAULT_TRANSPARENCY_SETTINGS.sage_mode),
+    studio_test_mode: normalizeVisibilityMode(record.studio_test_mode, DEFAULT_TRANSPARENCY_SETTINGS.studio_test_mode),
+    customer_mode: customerMode === 'off' ? 'off' : 'minimal',
+    show_trace_ids: record.show_trace_ids !== false,
+    show_tool_names: record.show_tool_names !== false,
+    show_memory_usage: record.show_memory_usage === true,
+    show_policy_blocks: record.show_policy_blocks !== false,
+    show_sources: record.show_sources !== false,
+  };
+}
+
+function TransparencyModeSelect({
+  label,
+  value,
+  allowedModes = VISIBILITY_MODES.map((mode) => mode.value),
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  value: VisibilityMode;
+  allowedModes?: readonly VisibilityMode[];
+  disabled?: boolean;
+  onChange: (value: VisibilityMode) => void;
+}) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <span style={{ fontSize: 12, color: 'var(--color-muted, #6b7280)' }}>{label}</span>
       <select
-        defaultValue="standard"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(normalizeVisibilityMode(event.target.value, value))}
         style={{
           padding: '4px 8px', fontSize: 13, borderRadius: 6,
           border: '1px solid var(--color-border, #e5e7eb)',
           background: 'var(--color-bg, #fff)', color: 'var(--color-fg, #111)',
         }}
       >
-        {VISIBILITY_MODES.map(({ value: v, label: l }) => (
+        {VISIBILITY_MODES.filter((mode) => allowedModes.includes(mode.value)).map(({ value: v, label: l }) => (
           <option key={v} value={v}>{l}</option>
         ))}
       </select>
@@ -303,6 +367,10 @@ export function WorkstationSettingsPane() {
   const [billingSummary, setBillingSummary] = useState<BillingSummaryPayload | null>(null);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRecord[]>([]);
+  const [transparencySettings, setTransparencySettings] = useState<TransparencySettingsPayload>(DEFAULT_TRANSPARENCY_SETTINGS);
+  const [transparencyStatus, setTransparencyStatus] = useState<string | null>(null);
+  const [transparencyError, setTransparencyError] = useState<string | null>(null);
+  const [savingTransparencyKey, setSavingTransparencyKey] = useState<string | null>(null);
   const [authProviders, setAuthProviders] = useState<AuthProviderOptions>({
     email: { enabled: true },
     google: { enabled: false },
@@ -327,13 +395,14 @@ export function WorkstationSettingsPane() {
       services.client.getBillingSummary(),
       services.client.listProviderCatalog(),
       services.client.listProviderProfiles(),
+      services.client.getWorkspaceTransparencySettings(),
       listAuthProviders(),
     ]).then((results) => {
       if (cancelled) {
         return;
       }
 
-      const [profileResult, billingResult, catalogResult, profilesResult, authProvidersResult] = results;
+      const [profileResult, billingResult, catalogResult, profilesResult, transparencyResult, authProvidersResult] = results;
 
       if (profileResult.status === 'fulfilled') {
         setAccountProfile((profileResult.value ?? null) as AccountProfilePayload | null);
@@ -346,6 +415,9 @@ export function WorkstationSettingsPane() {
       }
       if (profilesResult.status === 'fulfilled') {
         setProviderProfiles(normalizeProfileRecords(profilesResult.value));
+      }
+      if (transparencyResult.status === 'fulfilled') {
+        setTransparencySettings(normalizeTransparencySettings(transparencyResult.value));
       }
       if (authProvidersResult.status === 'fulfilled') {
         setAuthProviders({
@@ -412,6 +484,33 @@ export function WorkstationSettingsPane() {
     } catch {
       setAccountDetailsError('Logout could not finish. Try again when ready.');
       setLogoutPending(false);
+    }
+  }
+
+  async function saveTransparencySettingsPatch(
+    key: keyof TransparencySettingsPayload,
+    value: TransparencySettingsPayload[keyof TransparencySettingsPayload],
+  ) {
+    const previousSettings = transparencySettings;
+    const nextSettings = {
+      ...transparencySettings,
+      [key]: value,
+    };
+    setTransparencySettings(nextSettings);
+    setSavingTransparencyKey(String(key));
+    setTransparencyStatus(null);
+    setTransparencyError(null);
+    try {
+      const payload = await services.client.updateWorkspaceTransparencySettings({
+        [key]: value,
+      });
+      setTransparencySettings(normalizeTransparencySettings(payload));
+      setTransparencyStatus('Transparency settings saved.');
+    } catch (error) {
+      setTransparencySettings(previousSettings);
+      setTransparencyError(error instanceof Error ? error.message : 'Transparency settings could not be saved.');
+    } finally {
+      setSavingTransparencyKey(null);
     }
   }
 
@@ -637,6 +736,8 @@ export function WorkstationSettingsPane() {
           {selectedSection === 'transparency' ? (
             <section className="app-settings-main__body">
               <div className="settings-cards">
+                {transparencyStatus ? <AppNotice tone="success">{transparencyStatus}</AppNotice> : null}
+                {transparencyError ? <AppNotice tone="warning">{transparencyError}</AppNotice> : null}
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
                     <strong className="settings-detail-card__title">Visibility mode</strong>
@@ -647,11 +748,19 @@ export function WorkstationSettingsPane() {
                   </p>
                   <FormGrid>
                     {[
-                      { key: 'sage_mode', label: 'Sage (chat)', stored: 'sageMode' },
-                      { key: 'studio_test_mode', label: 'Studio test', stored: 'studioTestMode' },
-                      { key: 'default_mode', label: 'Default', stored: 'defaultMode' },
-                    ].map(({ label, stored }) => (
-                      <TransparencyModeSelect key={stored} label={label} value={stored} />
+                      { key: 'sage_mode' as const, label: 'Sage (chat)' },
+                      { key: 'studio_test_mode' as const, label: 'Studio test' },
+                      { key: 'default_mode' as const, label: 'Default' },
+                    ].map(({ key, label }) => (
+                      <TransparencyModeSelect
+                        key={key}
+                        label={label}
+                        value={transparencySettings[key]}
+                        disabled={savingTransparencyKey !== null}
+                        onChange={(nextMode) => {
+                          void saveTransparencySettingsPatch(key, nextMode);
+                        }}
+                      />
                     ))}
                   </FormGrid>
                 </article>
@@ -665,8 +774,12 @@ export function WorkstationSettingsPane() {
                     They never see internal memory, policy details, or tool arguments.
                   </p>
                   <select
-                    value="minimal"
-                    onChange={() => {}}
+                    value={transparencySettings.customer_mode}
+                    disabled={savingTransparencyKey !== null}
+                    onChange={(event) => {
+                      const nextMode = event.target.value === 'off' ? 'off' : 'minimal';
+                      void saveTransparencySettingsPatch('customer_mode', nextMode);
+                    }}
                     style={{
                       padding: '4px 8px', fontSize: 13, borderRadius: 6,
                       border: '1px solid var(--color-border, #e5e7eb)',
@@ -687,13 +800,21 @@ export function WorkstationSettingsPane() {
                   </p>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {[
-                      { key: 'traceIds', label: 'Show trace IDs' },
-                      { key: 'toolNames', label: 'Show tool names' },
-                      { key: 'policyBlocks', label: 'Show policy blocks' },
-                      { key: 'sources', label: 'Show sources' },
+                      { key: 'show_trace_ids' as const, label: 'Show trace IDs' },
+                      { key: 'show_tool_names' as const, label: 'Show tool names' },
+                      { key: 'show_memory_usage' as const, label: 'Show memory category usage' },
+                      { key: 'show_policy_blocks' as const, label: 'Show policy blocks' },
+                      { key: 'show_sources' as const, label: 'Show sources' },
                     ].map(({ key, label }) => (
                       <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
-                        <input type="checkbox" defaultChecked={true} disabled />
+                        <input
+                          type="checkbox"
+                          checked={Boolean(transparencySettings[key])}
+                          disabled={savingTransparencyKey !== null}
+                          onChange={(event) => {
+                            void saveTransparencySettingsPatch(key, event.target.checked);
+                          }}
+                        />
                         <span>{label}</span>
                       </label>
                     ))}
@@ -701,8 +822,7 @@ export function WorkstationSettingsPane() {
                 </article>
 
                 <p style={{ fontSize: 11, color: 'var(--color-muted-faint, #9ca3af)', marginTop: 12 }}>
-                  Transparency settings are stored per-workspace. Settings persist for the session duration.
-                  Full persistence across restarts will be available in a future update.
+                  Transparency settings are stored per-workspace. Customer-facing agents stay capped to Quiet or Basic.
                 </p>
               </div>
             </section>

@@ -107,12 +107,12 @@ export type SendFailureNotice = {
   retryDraft?: string | null;
   actions?: {
     label: string;
-    target: 'gateway' | 'integrations';
+    target: 'gateway' | 'integrations' | 'approvals';
   }[];
 };
 
 export type ChatMachineTrust = 'personal' | 'agent';
-export type ChatAutonomyMode = 'approval' | 'full';
+export type ChatAutonomyMode = 'default' | 'auto_review' | 'autopilot';
 export type ChatReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type ChatModelOption = {
@@ -345,7 +345,7 @@ export function useChatMemoryProfileState(options: MemoryProfileStateOptions) {
 export function useChatProviderModelState(disconnectedOption: ChatModelOption) {
   const [selectedExecutionPlacement] = useState<'local'>('local');
   const [machineTrust, setMachineTrust] = useState<ChatMachineTrust>('personal');
-  const [autonomyMode, setAutonomyMode] = useState<ChatAutonomyMode>('approval');
+  const [autonomyMode, setAutonomyMode] = useState<ChatAutonomyMode>('default');
   const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([disconnectedOption]);
   const [selectedModel, setSelectedModel] = useState<string>('default');
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);

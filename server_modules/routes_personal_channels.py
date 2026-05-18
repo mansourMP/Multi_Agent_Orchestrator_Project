@@ -67,6 +67,26 @@ def _personal_channel_governance_metadata(action: str, channel_key: str) -> dict
     }
 
 
+def _channel_approval_instruction(approval: dict, channel_key: str) -> dict:
+    approval_id = str((approval or {}).get("approval_id") or "").strip()
+    expires_at = str((approval or {}).get("expires_at") or "").strip()
+    instruction = (
+        f"Reply approve {approval_id} or deny {approval_id}."
+        if approval_id
+        else "Open Empyralis to approve or deny this action."
+    )
+    if expires_at:
+        instruction = f"{instruction} Expires at {expires_at}."
+    return {
+        "channel_key": str(channel_key or "").strip(),
+        "approval_code": approval_id,
+        "approve_text": f"approve {approval_id}" if approval_id else "",
+        "deny_text": f"deny {approval_id}" if approval_id else "",
+        "instruction": instruction,
+        "expires_at": expires_at or None,
+    }
+
+
 def _require_accessible_gateway_registration(
     gateway_id: str,
     current_user,
@@ -172,6 +192,7 @@ async def _request_personal_channel_send_approval(
             "gateway_id": gateway_id,
             "channel_key": channel_key,
             "approval": approval,
+            "channel_approval": _channel_approval_instruction(approval, channel_key),
         },
     )
 

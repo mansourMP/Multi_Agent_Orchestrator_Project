@@ -918,6 +918,9 @@ class GatewayRoutesTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["status"], "approval_required")
         self.assertEqual(payload["approval"]["approval_id"], "approval-wa-1")
+        self.assertEqual(payload["channel_approval"]["approve_text"], "approve approval-wa-1")
+        self.assertEqual(payload["channel_approval"]["deny_text"], "deny approval-wa-1")
+        self.assertIn("Reply approve approval-wa-1 or deny approval-wa-1", payload["channel_approval"]["instruction"])
         send_message_mock.assert_not_awaited()
         self.assertEqual(approval_mock.await_args.kwargs["capability_id"], "channel.whatsapp.personal.send")
         self.assertEqual(approval_mock.await_args.kwargs["arguments"]["text"], "hello from sage")
@@ -961,7 +964,10 @@ class GatewayRoutesTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.json()["status"], "approval_required")
+        payload = response.json()
+        self.assertEqual(payload["status"], "approval_required")
+        self.assertEqual(payload["channel_approval"]["approve_text"], "approve approval-tg-1")
+        self.assertEqual(payload["channel_approval"]["deny_text"], "deny approval-tg-1")
         send_message_mock.assert_not_awaited()
         self.assertEqual(approval_mock.await_args.kwargs["capability_id"], "channel.telegram.personal.send")
 

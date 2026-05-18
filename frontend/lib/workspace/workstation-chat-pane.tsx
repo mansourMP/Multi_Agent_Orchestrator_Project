@@ -147,6 +147,9 @@ import {
   summarizeThreadForHistory,
   readExecutionTarget,
   resolveRuntimeTrustZone,
+  buildChatPermissionPolicyContext,
+  chatPermissionModeDetail,
+  chatPermissionModeLabel,
   EMPYRALIS_TIER_SET,
   USER_OWNED_SECTION_LABELS,
   isProviderEligibleForModelSelector,
@@ -1441,6 +1444,18 @@ export function WorkstationChatPane() {
     () => resolveRuntimeTrustZone(localRuntimeTarget, machineTrust),
     [localRuntimeTarget, machineTrust],
   );
+  const permissionPolicyContext = useMemo(
+    () => buildChatPermissionPolicyContext({
+      mode: autonomyMode,
+      runtimeTrustZone,
+      machineTrust,
+    }),
+    [autonomyMode, machineTrust, runtimeTrustZone],
+  );
+  const permissionPolicyLabel = useMemo(
+    () => chatPermissionModeLabel(autonomyMode, runtimeTrustZone),
+    [autonomyMode, runtimeTrustZone],
+  );
   const computerControlSummary = useMemo(() => {
     if (latestComputerProof) {
       const proofAge = formatRelativeTime(latestComputerProof.occurredAt);
@@ -1470,7 +1485,7 @@ export function WorkstationChatPane() {
         pills: [
           runtimeTrustZoneLabel(runtimeTrustZone),
           localDevicePlatformLabel(null, readString(localRuntimeTarget?.label)),
-          autonomyMode === 'full' ? 'Full access policy' : 'Approval policy',
+          permissionPolicyLabel,
         ],
       };
     }
@@ -1484,7 +1499,7 @@ export function WorkstationChatPane() {
         pills: [
           runtimeTrustZoneLabel(runtimeTrustZone),
           runtimeStatus.label,
-          autonomyMode === 'full' ? 'Full access policy' : 'Approval policy',
+          permissionPolicyLabel,
         ],
       };
     }
@@ -1499,15 +1514,15 @@ export function WorkstationChatPane() {
       pills: [
         runtimeTrustZoneLabel(runtimeTrustZone),
         runtimeStatus.label,
-        autonomyMode === 'full' ? 'Full access policy' : 'Approval policy',
+        permissionPolicyLabel,
       ],
     };
   }, [
-    autonomyMode,
     gatewayToolingOnline,
     latestComputerProof,
     localRuntimeTarget,
     localToolingOnline,
+    permissionPolicyLabel,
     runtimeStatus.label,
     runtimeTrustZone,
   ]);
@@ -1583,6 +1598,10 @@ export function WorkstationChatPane() {
     () => routeManifest.routeIndex.activity?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/activity`,
     [bootstrap.workspace.id, routeManifest.routeIndex.activity],
   );
+  const approvalsHref = useMemo(
+    () => routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.approvals],
+  );
   const sageSlashCommands = useMemo<ComposerSlashCommand[]>(
     () => [
       ...SAGE_COMMAND_CATALOG.map((command) => ({
@@ -1623,6 +1642,10 @@ export function WorkstationChatPane() {
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
   );
+  const settingsHref = useMemo(
+    () => routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/settings`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.settings],
+  );
   const runTargetOptions = useMemo(
     () => [
       {
@@ -1634,13 +1657,23 @@ export function WorkstationChatPane() {
   );
   const autonomyOptions = useMemo(
     () => [
-      { value: 'approval', label: 'Ask first' },
       {
-        value: 'full',
-        label: 'Full access',
+        value: 'default',
+        label: 'Default',
+        detail: chatPermissionModeDetail('default', runtimeTrustZone),
+      },
+      {
+        value: 'auto_review',
+        label: 'Auto-review',
+        detail: chatPermissionModeDetail('auto_review', runtimeTrustZone),
+      },
+      {
+        value: 'autopilot',
+        label: chatPermissionModeLabel('autopilot', runtimeTrustZone),
+        detail: chatPermissionModeDetail('autopilot', runtimeTrustZone),
       },
     ],
-    [],
+    [runtimeTrustZone],
   );
   const composerModelOptions = useMemo(
     () => {
@@ -2421,22 +2454,7 @@ export function WorkstationChatPane() {
         existingSession: session,
         clientRequestId,
         abortHandle: streamAbortHandle,
-        policyContext: {
-          session_mode: autonomyMode === 'full' ? 'agent' : 'copilot',
-          trust_mode: autonomyMode === 'full' ? 'auto' : 'guarded',
-          approval_ui: 'card',
-          interactive_approvals: autonomyMode !== 'full',
-          machine_trust_declaration: machineTrust,
-          runtime_trust_zone: runtimeTrustZone,
-          elevated_mode: autonomyMode === 'full' ? 'full' : 'ask',
-          elevated: {
-            mode: autonomyMode === 'full' ? 'full' : 'ask',
-            runtime_trust_zone: runtimeTrustZone,
-            reason: autonomyMode === 'full'
-              ? 'chat_full_access_requested'
-              : 'chat_default_mode',
-          },
-        },
+        policyContext: permissionPolicyContext,
         onEvent: (event) => {
           if (activeTurnRequestIdRef.current !== clientRequestId || streamAbortRequestedRef.current) {
             return;
@@ -2688,7 +2706,11 @@ export function WorkstationChatPane() {
           || normalizedRawMessage.includes('selected for chat')
           || normalizedRawMessage.includes('not available');
         const localComputerNeedsAttention = isLocalCompanionGateMessage(rawMessage) || normalizedRawMessage.includes('gateway offline');
-        const authNeedsAttention = normalizedError?.status === 401 || normalizedError?.status === 403;
+        const approvalNeedsAttention = normalizedRawMessage.includes('requires owner approval')
+          || normalizedRawMessage.includes('approval-required')
+          || normalizedRawMessage.includes('approval required')
+          || normalizedRawMessage.includes('interactive approvals are disabled');
+        const authNeedsAttention = !approvalNeedsAttention && (normalizedError?.status === 401 || normalizedError?.status === 403);
         const rateLimitFailure = normalizedError?.status === 429 || /rate.?limit|capacity/i.test(normalizedRawMessage);
         const timeoutFailure = /timed out|too long to respond|request timeout/i.test(normalizedRawMessage);
         const transportFailure = /failed to fetch|could not connect|network error|transport failure|connection/i.test(normalizedRawMessage);
@@ -2698,17 +2720,19 @@ export function WorkstationChatPane() {
           ? 'Connected computer is needed for this request. Connect a computer and try again.'
           : providerNeedsAttention
             ? 'The selected AI path is not ready. Use Empyralis credits, connect your own AI account, connect a computer, or choose another model in Integrations.'
-            : authNeedsAttention
-              ? 'Your session needs attention before Sage can continue. Refresh the page or sign in again.'
-              : rateLimitFailure
-                ? 'Sage is temporarily at capacity. Try again in a moment or switch AI model.'
-                : timeoutFailure
-                  ? 'Sage took too long to respond. Try again or switch AI model.'
-                  : transportFailure
-                    ? 'The request could not reach the server. Check your connection and try again.'
-                    : serverFailure
-                      ? 'Sage hit a temporary server issue before it could reply. Try again in a moment.'
-                      : "Sage couldn't complete that turn. Try again or choose another AI model in Integrations.";
+            : approvalNeedsAttention
+              ? 'Sage needs approval before using that capability. Review the pending request instead of retrying blindly.'
+              : authNeedsAttention
+                ? 'Your session needs attention before Sage can continue. Refresh the page or sign in again.'
+                : rateLimitFailure
+                  ? 'Sage is temporarily at capacity. Try again in a moment or switch AI model.'
+                  : timeoutFailure
+                    ? 'Sage took too long to respond. Try again or switch AI model.'
+                    : transportFailure
+                      ? 'The request could not reach the server. Check your connection and try again.'
+                      : serverFailure
+                        ? 'Sage hit a temporary server issue before it could reply. Try again in a moment.'
+                        : "Sage couldn't complete that turn. Try again or choose another AI model in Integrations.";
         const providerNotice = providerNeedsAttention
           ? providerFailureNoticeForProvider(selectedProviderRecord, noticeMessage)
           : null;
@@ -2719,9 +2743,11 @@ export function WorkstationChatPane() {
             : true,
           actions: localComputerNeedsAttention
             ? [{ label: 'Open Integrations', target: 'integrations' }]
-            : authNeedsAttention
-              ? undefined
-              : providerNotice?.actions,
+            : approvalNeedsAttention
+              ? [{ label: 'Review approvals', target: 'approvals' }]
+              : authNeedsAttention
+                ? undefined
+                : providerNotice?.actions,
           retryDraft: outboundMessage,
         });
       }
@@ -2999,7 +3025,13 @@ export function WorkstationChatPane() {
                     tone="secondary"
                     onClick={() => {
                       setSendFailureNotice(null);
-                      router.push(action.target === 'gateway' ? gatewayHref : integrationsHref);
+                      router.push(
+                        action.target === 'gateway'
+                          ? gatewayHref
+                          : action.target === 'approvals'
+                            ? approvalsHref
+                            : integrationsHref,
+                      );
                     }}
                   >
                     {action.label}
@@ -3080,13 +3112,16 @@ export function WorkstationChatPane() {
         onOpenIntegrations={() => {
           router.push(integrationsHref);
         }}
+        onOpenPermissionsAdvanced={() => {
+          router.push(`${settingsHref}?section=privacy`);
+        }}
         runTarget={selectedExecutionPlacement}
         runTargetOptions={runTargetOptions}
         onRunTargetChange={() => {}}
         autonomyMode={autonomyMode}
         autonomyOptions={autonomyOptions}
         onAutonomyModeChange={(nextValue) => {
-          if (nextValue === 'approval' || nextValue === 'full') {
+          if (nextValue === 'default' || nextValue === 'auto_review' || nextValue === 'autopilot') {
             setAutonomyMode(nextValue);
           }
         }}
@@ -3319,7 +3354,7 @@ export function WorkstationChatPane() {
                 <AppSurfaceStat label="Enabled tools" value={`${commandToolTotals.enabled}/${commandToolTotals.total}`} hint="available from current policies" />
                 <AppSurfaceStat label="Computer" value={localToolingOnline ? 'Online' : 'Offline'} hint={localToolingOnline ? 'local tools can be requested' : 'computer tools require connection'} />
                 <AppSurfaceStat label="Browser" value={gatewayToolingOnline ? 'Ready' : 'Not ready'} hint="used for signed-in or private pages" />
-                <AppSurfaceStat label="Policy" value={autonomyMode === 'full' ? 'Full access' : 'Approval'} hint="guarded actions still pause for confirmation" />
+                <AppSurfaceStat label="Policy" value={permissionPolicyLabel} hint="red-line actions still pause for confirmation" />
               </AppSurfaceStatGrid>
               <div className="sage-command-panel__tool-groups">
                 {composerToolGroups.map((group) => (

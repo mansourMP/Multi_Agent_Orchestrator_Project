@@ -753,6 +753,52 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(normalized["elevated_mode"], "full")
         self.assertFalse(normalized["interactive_approvals"])
 
+    def test_normalize_turn_policy_context_auto_review_keeps_policy_reviewer_and_approvals(self):
+        with patch("server_modules.runtime_config.agent_machine_full_trust_enabled", return_value=True):
+            normalized = normalize_turn_policy_context(
+                {
+                    "session_mode": "agent",
+                    "trust_mode": "sensitive_guard",
+                    "permission_mode": "auto_review",
+                    "approval_reviewer": "policy",
+                    "interactive_approvals": True,
+                    "execution_target": "cloud",
+                    "runtime_trust_zone": "shared_cloud",
+                },
+                current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                workspace_id="workspace-1",
+                session_id="thread-1",
+            )
+
+        self.assertEqual(normalized["session_mode"], "agent")
+        self.assertEqual(normalized["permission_mode"], "auto_review")
+        self.assertEqual(normalized["approval_reviewer"], "policy")
+        self.assertEqual(normalized["trust_mode"], "sensitive_guard")
+        self.assertTrue(normalized["interactive_approvals"])
+
+    def test_normalize_turn_policy_context_autopilot_on_personal_machine_keeps_approvals(self):
+        with patch("server_modules.runtime_config.agent_machine_full_trust_enabled", return_value=True):
+            normalized = normalize_turn_policy_context(
+                {
+                    "session_mode": "agent",
+                    "trust_mode": "auto",
+                    "permission_mode": "autopilot",
+                    "interactive_approvals": False,
+                    "execution_target": "local_companion",
+                    "runtime_trust_zone": "user_owned_local",
+                    "elevated_mode": "full",
+                },
+                current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                workspace_id="workspace-1",
+                session_id="thread-1",
+            )
+
+        self.assertEqual(normalized["session_mode"], "agent")
+        self.assertEqual(normalized["permission_mode"], "device_access")
+        self.assertEqual(normalized["runtime_trust_zone"], "user_owned_local")
+        self.assertEqual(normalized["trust_mode"], "sensitive_guard")
+        self.assertTrue(normalized["interactive_approvals"])
+
     def test_normalize_turn_policy_context_downgrades_owner_when_full_trust_is_disabled(self):
         with patch("server_modules.runtime_config.agent_machine_full_trust_enabled", return_value=False), self.assertLogs("server_modules.agent_turn", level="WARNING") as captured:
             normalized = normalize_turn_policy_context(

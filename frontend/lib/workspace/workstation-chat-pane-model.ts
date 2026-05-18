@@ -23,6 +23,7 @@ import type {
   CanonicalChatThreadState,
   CanonicalRunSummary,
   ChatMachineTrust,
+  ChatAutonomyMode,
   ChatModelOption,
   ChatReasoningEffort,
   GatewayReadinessDoctorPayload,
@@ -62,6 +63,25 @@ export type GatewayReadinessRegistration = Record<string, unknown> & {
 };
 
 export type ChatRuntimeTrustZone = 'shared_cloud' | 'user_owned_local' | 'owned_dedicated_runtime';
+export type EffectiveChatPermissionMode = ChatAutonomyMode | 'device_access';
+
+export type ChatPermissionPolicyContext = {
+  session_mode: 'copilot' | 'agent';
+  trust_mode: 'auto' | 'guarded' | 'sensitive_guard';
+  approval_ui: 'card';
+  interactive_approvals: boolean;
+  machine_trust_declaration: ChatMachineTrust;
+  runtime_trust_zone: ChatRuntimeTrustZone;
+  runtime_lane: 'managed_cloud' | 'personal_gateway' | 'dedicated_computer';
+  permission_mode: EffectiveChatPermissionMode;
+  approval_reviewer?: 'human' | 'policy';
+  elevated_mode: 'ask' | 'full';
+  elevated: {
+    mode: 'ask' | 'full';
+    runtime_trust_zone: ChatRuntimeTrustZone;
+    reason: string;
+  };
+};
 
 export const VALID_REASONING_LEVELS: ChatReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -942,6 +962,146 @@ export function resolveRuntimeTrustZone(
     return 'owned_dedicated_runtime';
   }
   return 'user_owned_local';
+}
+
+export function effectiveChatPermissionMode(
+  mode: ChatAutonomyMode,
+  runtimeTrustZone: ChatRuntimeTrustZone,
+): EffectiveChatPermissionMode {
+  if (mode === 'autopilot' && runtimeTrustZone === 'user_owned_local') {
+    return 'device_access';
+  }
+  return mode;
+}
+
+export function chatPermissionModeLabel(
+  mode: ChatAutonomyMode,
+  runtimeTrustZone: ChatRuntimeTrustZone,
+): string {
+  const effectiveMode = effectiveChatPermissionMode(mode, runtimeTrustZone);
+  if (effectiveMode === 'auto_review') {
+    return 'Auto-review';
+  }
+  if (effectiveMode === 'autopilot') {
+    return 'Autopilot';
+  }
+  if (effectiveMode === 'device_access') {
+    return 'Device access';
+  }
+  return 'Default';
+}
+
+export function chatPermissionModeDetail(
+  mode: ChatAutonomyMode,
+  runtimeTrustZone: ChatRuntimeTrustZone,
+): string {
+  const effectiveMode = effectiveChatPermissionMode(mode, runtimeTrustZone);
+  if (effectiveMode === 'auto_review') {
+    return 'Safe actions continue; risky actions are checked by policy before asking you.';
+  }
+  if (effectiveMode === 'autopilot') {
+    return 'Runs autonomously inside an isolated Empyralis computer with activity proof.';
+  }
+  if (effectiveMode === 'device_access') {
+    return 'Uses your computer with red-line approvals still enabled.';
+  }
+  return runtimeTrustZone === 'user_owned_local'
+    ? 'Asks before sensitive actions on your computer.'
+    : 'Asks before sensitive actions in the cloud runtime.';
+}
+
+export function buildChatPermissionPolicyContext({
+  mode,
+  runtimeTrustZone,
+  machineTrust,
+}: {
+  mode: ChatAutonomyMode;
+  runtimeTrustZone: ChatRuntimeTrustZone;
+  machineTrust: ChatMachineTrust;
+}): ChatPermissionPolicyContext {
+  const effectiveMode = effectiveChatPermissionMode(mode, runtimeTrustZone);
+  const runtimeLane = runtimeTrustZone === 'user_owned_local'
+    ? 'personal_gateway'
+    : runtimeTrustZone === 'owned_dedicated_runtime'
+      ? 'dedicated_computer'
+      : 'managed_cloud';
+
+  if (effectiveMode === 'auto_review') {
+    return {
+      session_mode: 'agent',
+      trust_mode: 'sensitive_guard',
+      approval_ui: 'card',
+      interactive_approvals: true,
+      machine_trust_declaration: machineTrust,
+      runtime_trust_zone: runtimeTrustZone,
+      runtime_lane: runtimeLane,
+      permission_mode: effectiveMode,
+      approval_reviewer: 'policy',
+      elevated_mode: 'ask',
+      elevated: {
+        mode: 'ask',
+        runtime_trust_zone: runtimeTrustZone,
+        reason: 'chat_auto_review_requested',
+      },
+    };
+  }
+
+  if (effectiveMode === 'autopilot') {
+    return {
+      session_mode: 'agent',
+      trust_mode: 'auto',
+      approval_ui: 'card',
+      interactive_approvals: false,
+      machine_trust_declaration: machineTrust,
+      runtime_trust_zone: runtimeTrustZone,
+      runtime_lane: runtimeLane,
+      permission_mode: effectiveMode,
+      elevated_mode: 'full',
+      elevated: {
+        mode: 'full',
+        runtime_trust_zone: runtimeTrustZone,
+        reason: 'chat_autopilot_isolated_runtime_requested',
+      },
+    };
+  }
+
+  if (effectiveMode === 'device_access') {
+    return {
+      session_mode: 'agent',
+      trust_mode: 'sensitive_guard',
+      approval_ui: 'card',
+      interactive_approvals: true,
+      machine_trust_declaration: machineTrust,
+      runtime_trust_zone: runtimeTrustZone,
+      runtime_lane: runtimeLane,
+      permission_mode: effectiveMode,
+      approval_reviewer: 'human',
+      elevated_mode: 'ask',
+      elevated: {
+        mode: 'ask',
+        runtime_trust_zone: runtimeTrustZone,
+        reason: 'chat_device_access_requested',
+      },
+    };
+  }
+
+  return {
+    session_mode: 'copilot',
+    trust_mode: 'guarded',
+    approval_ui: 'card',
+    interactive_approvals: true,
+    machine_trust_declaration: machineTrust,
+    runtime_trust_zone: runtimeTrustZone,
+    runtime_lane: runtimeLane,
+    permission_mode: 'default',
+    approval_reviewer: 'human',
+    elevated_mode: 'ask',
+    elevated: {
+      mode: 'ask',
+      runtime_trust_zone: runtimeTrustZone,
+      reason: 'chat_default_mode',
+    },
+  };
 }
 
 export function readProviderScopes(provider: ProviderCatalogRecord): string[] {

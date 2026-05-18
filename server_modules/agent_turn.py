@@ -415,15 +415,17 @@ def normalize_turn_policy_context(
             },
         )
 
-    requested_trust_mode = str(normalized.get("trust_mode") or "").strip().lower()
-    if effective_session_mode == "agent":
-        effective_trust_mode = "auto"
-    elif requested_trust_mode == "auto":
-        effective_trust_mode = "guarded"
-    else:
-        effective_trust_mode = requested_trust_mode or None
-
     from server_modules import runtime_policy as runtime_policy_module
+
+    raw_requested_trust_mode = str(normalized.get("trust_mode") or "").strip().lower()
+    requested_trust_mode = (
+        runtime_policy_module.normalize_trust_mode(raw_requested_trust_mode)
+        if raw_requested_trust_mode
+        else ""
+    )
+    requested_permission_mode = str(normalized.get("permission_mode") or "").strip().lower()
+    if requested_permission_mode not in {"default", "auto_review", "autopilot", "device_access"}:
+        requested_permission_mode = ""
 
     requested_execution_target = str(normalized.get("execution_target") or "").strip()
     normalized_target = runtime_policy_module.normalize_execution_target(requested_execution_target)
@@ -447,6 +449,34 @@ def normalize_turn_policy_context(
                 None,
                 target=normalized_target,
             )
+
+    if requested_permission_mode == "autopilot" and (
+        normalized_runtime_trust_zone == runtime_policy_module.RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL
+    ):
+        requested_permission_mode = "device_access"
+        normalized["permission_mode"] = requested_permission_mode
+    elif requested_permission_mode:
+        normalized["permission_mode"] = requested_permission_mode
+
+    if effective_session_mode == "agent":
+        if requested_permission_mode == "auto_review":
+            effective_trust_mode = (
+                requested_trust_mode
+                if requested_trust_mode in {"guarded", "strict", "cost_guard", "sensitive_guard"}
+                else "sensitive_guard"
+            )
+        elif requested_permission_mode == "device_access":
+            effective_trust_mode = (
+                requested_trust_mode
+                if requested_trust_mode in {"guarded", "strict", "cost_guard", "sensitive_guard"}
+                else "sensitive_guard"
+            )
+        else:
+            effective_trust_mode = "auto"
+    elif requested_trust_mode == "auto":
+        effective_trust_mode = "guarded"
+    else:
+        effective_trust_mode = requested_trust_mode or None
 
     raw_elevated = normalized.get("elevated")
     elevated_mode = runtime_policy_module.normalize_elevated_mode(
@@ -472,7 +502,17 @@ def normalize_turn_policy_context(
     normalized["requested_session_mode"] = requested_session_mode
     normalized["session_mode"] = effective_session_mode
     normalized["effective_session_mode"] = effective_session_mode
-    normalized["interactive_approvals"] = effective_session_mode != "agent"
+    requested_interactive_approvals = normalized.get("interactive_approvals")
+    if effective_session_mode != "agent":
+        normalized["interactive_approvals"] = True
+    elif normalized_runtime_trust_zone == runtime_policy_module.RUNTIME_TRUST_ZONE_USER_OWNED_LOCAL:
+        normalized["interactive_approvals"] = True
+    elif requested_permission_mode == "auto_review":
+        normalized["interactive_approvals"] = True
+    elif isinstance(requested_interactive_approvals, bool):
+        normalized["interactive_approvals"] = bool(requested_interactive_approvals)
+    else:
+        normalized["interactive_approvals"] = False
     normalized["approval_ui"] = str(normalized.get("approval_ui") or "card").strip() or "card"
     if effective_trust_mode:
         normalized["trust_mode"] = effective_trust_mode

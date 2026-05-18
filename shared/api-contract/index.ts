@@ -106,6 +106,9 @@ export type AgentTurnPolicyContext = {
   session_mode?: 'copilot' | 'agent';
   approval_ui?: 'card';
   interactive_approvals?: boolean;
+  approval_reviewer?: 'human' | 'policy';
+  runtime_lane?: 'managed_cloud' | 'personal_gateway' | 'dedicated_computer' | string;
+  permission_mode?: 'default' | 'auto_review' | 'autopilot' | 'device_access';
   runtime_trust_zone?: 'shared_cloud' | 'user_owned_local' | 'owned_dedicated_runtime';
   elevated_mode?: 'off' | 'ask' | 'full';
   elevated?: {

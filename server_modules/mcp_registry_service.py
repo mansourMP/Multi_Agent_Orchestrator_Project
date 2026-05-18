@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime, timezone
 from ipaddress import ip_address
 from pathlib import Path
@@ -263,7 +264,7 @@ def _normalize_tool_payload(raw: Dict[str, Any], *, server_id: str) -> Dict[str,
             "audit_event_type": audit_event_type,
         },
         "enabled": bool(raw.get("enabled", True)),
-        "approved": bool(raw.get("approved", True)),
+        "approved": bool(raw.get("approved", False)),
     }
 
 
@@ -317,6 +318,30 @@ def _mcp_result_payload(result: Any) -> Any:
     return {}
 
 
+def _run_async_from_sync(coro_factory: Any) -> Any:
+    try:
+        return asyncio.run(coro_factory())
+    except RuntimeError as exc:
+        if "asyncio.run() cannot be called from a running event loop" not in str(exc):
+            raise
+
+    result: Dict[str, Any] = {}
+    failure: Dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro_factory())
+        except BaseException as err:  # pragma: no cover
+            failure["error"] = err
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in failure:
+        raise failure["error"]
+    return result.get("value")
+
+
 async def _list_tools_streamable_http_async(
     *,
     endpoint: str,
@@ -342,8 +367,8 @@ def discover_mcp_server_tools(
 ) -> List[Dict[str, Any]]:
     if transport != "streamable_http":
         raise RuntimeError(f"Unsupported MCP transport '{transport}'.")
-    tools = asyncio.run(
-        _list_tools_streamable_http_async(
+    tools = _run_async_from_sync(
+        lambda: _list_tools_streamable_http_async(
             endpoint=endpoint,
             client_session_cls=client_session_cls,
             streamable_http_client_fn=streamable_http_client_fn,
@@ -455,7 +480,6 @@ def upsert_workspace_mcp_server(
     tools: Any = None,
     metadata: Any = None,
     discover_tools: bool = False,
-    auto_approve_tools: bool = False,
 ) -> Dict[str, Any]:
     normalized_workspace_id = str(workspace_id or "").strip()
     if not normalized_workspace_id:
@@ -490,19 +514,77 @@ def upsert_workspace_mcp_server(
             server_id=payload["id"],
         )
         if discovered:
-            if auto_approve_tools:
-                for tool in discovered:
-                    tool["approved"] = True
-            else:
-                for tool in discovered:
-                    normalized_name = _normalize_tool_name(tool.get("name"))
-                    tool["approved"] = bool(existing_approvals.get(normalized_name, False))
-                _log.warning(
-                    "MCP server %s: %d tools discovered but not auto-approved. "
-                    "Use approve_mcp_tool() or auto_approve_tools=True.",
-                    payload["id"],
-                    len(discovered),
-                )
+            for tool in discovered:
+                normalized_name = _normalize_tool_name(tool.get("name"))
+                tool["approved"] = bool(existing_approvals.get(normalized_name, False))
+            _log.warning(
+                "MCP server %s: %d tools discovered but not auto-approved. Use approve_mcp_tool().",
+                payload["id"],
+                len(discovered),
+            )
+            payload["tools"] = discovered
+        payload["last_synced_at"] = _utc_now_iso()
+        payload["updated_at"] = payload["last_synced_at"]
+    servers[payload["id"]] = payload
+    bucket["servers"] = servers
+    _save_workspace_bucket(normalized_workspace_id, registry, bucket)
+    save_mcp_server_registry(registry)
+    return payload
+
+
+async def upsert_workspace_mcp_server_async(
+    *,
+    workspace_id: str,
+    server_id: str,
+    label: Any,
+    transport: Any,
+    endpoint: Any,
+    enabled: Any = True,
+    tools: Any = None,
+    metadata: Any = None,
+    discover_tools: bool = False,
+) -> Dict[str, Any]:
+    normalized_workspace_id = str(workspace_id or "").strip()
+    if not normalized_workspace_id:
+        raise ValueError("workspace_id is required.")
+    registry = load_mcp_server_registry()
+    bucket = _workspace_bucket(normalized_workspace_id, registry)
+    servers = bucket.get("servers") if isinstance(bucket.get("servers"), dict) else {}
+    normalized_server_id = _normalize_server_id(server_id)
+    existing = servers.get(normalized_server_id) if isinstance(servers.get(normalized_server_id), dict) else None
+
+    _validate_mcp_endpoint(str(endpoint or "").strip())
+
+    payload = _normalize_server_payload(
+        server_id=normalized_server_id,
+        label=label,
+        transport=transport,
+        endpoint=endpoint,
+        enabled=enabled,
+        tools=tools,
+        metadata=metadata,
+        existing=existing,
+    )
+    if discover_tools:
+        existing_approvals = {
+            _normalize_tool_name(tool.get("name")): bool(tool.get("approved", True))
+            for tool in (existing.get("tools") if isinstance(existing, dict) and isinstance(existing.get("tools"), list) else [])
+            if isinstance(tool, dict) and _normalize_tool_name(tool.get("name"))
+        }
+        discovered = await discover_mcp_server_tools_async(
+            transport=payload["transport"],
+            endpoint=payload["endpoint"],
+            server_id=payload["id"],
+        )
+        if discovered:
+            for tool in discovered:
+                normalized_name = _normalize_tool_name(tool.get("name"))
+                tool["approved"] = bool(existing_approvals.get(normalized_name, False))
+            _log.warning(
+                "MCP server %s: %d tools discovered but not auto-approved. Use approve_mcp_tool().",
+                payload["id"],
+                len(discovered),
+            )
             payload["tools"] = discovered
         payload["last_synced_at"] = _utc_now_iso()
         payload["updated_at"] = payload["last_synced_at"]
@@ -559,7 +641,23 @@ def refresh_workspace_mcp_server_tools(*, workspace_id: str, server_id: str) -> 
         tools=current.get("tools"),
         metadata=current.get("metadata"),
         discover_tools=True,
-        auto_approve_tools=False,
+    )
+
+
+async def refresh_workspace_mcp_server_tools_async(*, workspace_id: str, server_id: str) -> Dict[str, Any]:
+    current = get_workspace_mcp_server(workspace_id, server_id)
+    if current is None:
+        raise FileNotFoundError(f"MCP server '{server_id}' is not registered for this workspace.")
+    return await upsert_workspace_mcp_server_async(
+        workspace_id=workspace_id,
+        server_id=server_id,
+        label=current.get("label"),
+        transport=current.get("transport"),
+        endpoint=current.get("endpoint"),
+        enabled=current.get("enabled", True),
+        tools=current.get("tools"),
+        metadata=current.get("metadata"),
+        discover_tools=True,
     )
 
 
@@ -645,6 +743,12 @@ def _tool_from_server(server: Dict[str, Any], tool_name: str) -> Optional[Dict[s
         if _normalize_tool_name(raw_tool.get("name")) == tool_name:
             return dict(raw_tool)
     return None
+
+
+def _assert_tool_approved_for_execution(tool_payload: Dict[str, Any], *, server_id: str, tool_name: str) -> None:
+    if bool(tool_payload.get("approved", False)):
+        return
+    raise PermissionError(f"MCP tool '{tool_name}' on server '{server_id}' is not approved for execution.")
 
 
 def _parse_goal_arguments(goal: str, tool_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -737,6 +841,11 @@ def invoke_workspace_mcp_skill(
     tool_payload = _tool_from_server(server, parsed["tool_name"])
     if tool_payload is None or not bool(tool_payload.get("enabled", True)):
         raise FileNotFoundError(f"MCP tool '{parsed['tool_name']}' is not available on server '{parsed['server_id']}'.")
+    _assert_tool_approved_for_execution(
+        tool_payload,
+        server_id=parsed["server_id"],
+        tool_name=parsed["tool_name"],
+    )
     arguments = _parse_goal_arguments(goal, tool_payload)
     result = asyncio.run(
         _call_streamable_http_tool_async(
@@ -800,6 +909,11 @@ async def invoke_workspace_mcp_skill_async(
     tool_payload = _tool_from_server(server, parsed["tool_name"])
     if tool_payload is None or not bool(tool_payload.get("enabled", True)):
         raise FileNotFoundError(f"MCP tool '{parsed['tool_name']}' is not available on server '{parsed['server_id']}'.")
+    _assert_tool_approved_for_execution(
+        tool_payload,
+        server_id=parsed["server_id"],
+        tool_name=parsed["tool_name"],
+    )
     arguments = _parse_goal_arguments(goal, tool_payload)
     result = await _call_streamable_http_tool_async(
         endpoint=str(server.get("endpoint") or "").strip(),

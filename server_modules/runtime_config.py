@@ -468,6 +468,19 @@ if ORION_DEV_INSECURE_NO_AUTH:
         )
     ORION_AUTH_REQUIRED = False
     print("[WARN] ORION_DEV_INSECURE_NO_AUTH=1 set; runtime API auth is disabled for this process.")
+
+
+def _assert_http_mcp_dev_override_safe_for_environment() -> None:
+    if not str(os.getenv("EMPYRALIS_DEV_ALLOW_HTTP_MCP") or "").strip():
+        return
+    resolved_env = _resolved_environment()
+    if resolved_env in {"staging", "production", "prod"}:
+        raise RuntimeError(
+            "EMPYRALIS_DEV_ALLOW_HTTP_MCP is allowed only for local MCP development. Refusing to start in staging/production."
+        )
+
+
+_assert_http_mcp_dev_override_safe_for_environment()
 ORION_ENABLE_LEGACY_LOCAL_ROUTES = config_bool("ORION_ENABLE_LEGACY_LOCAL_ROUTES", False)
 ORION_ALLOW_SYSTEM_PROXY = config_bool("ORION_ALLOW_SYSTEM_PROXY", False)
 ORION_RUN_TIMEOUT_SECONDS = config_int("ORION_RUN_TIMEOUT_SECONDS", 300)
@@ -643,9 +656,21 @@ ORION_AUTH_MODE = (config_str("ORION_AUTH_MODE", "codex").strip().lower() or "co
 ORION_DISABLE_OPENAI_API_KEY = config_bool("ORION_DISABLE_OPENAI_API_KEY", True)
 ORION_SINGLE_AGENT_MODE = _compat_env("EMPYRALIS_SINGLE_AGENT_MODE", "ORION_SINGLE_AGENT_MODE", "0") == "1"
 ORION_SINGLE_AGENT_ROLE = "orchestrator"
-AGENT_MACHINE_MODE = config_str("AGENT_MACHINE_MODE", "personal").strip().lower() or "personal"
-if AGENT_MACHINE_MODE not in {"personal", "agent"}:
-    AGENT_MACHINE_MODE = "personal"
+
+
+def _resolve_agent_machine_mode(raw_mode: Any) -> str:
+    mode = str(raw_mode or "personal").strip().lower() or "personal"
+    if mode not in {"personal", "agent"}:
+        return "personal"
+    if mode == "agent" and _resolved_environment() in {"staging", "production", "prod"}:
+        raise RuntimeError(
+            "AGENT_MACHINE_MODE=agent is not allowed in staging/production because it bypasses "
+            "owner approval gates. Use AGENT_MACHINE_MODE=personal and explicit approvals."
+        )
+    return mode
+
+
+AGENT_MACHINE_MODE = _resolve_agent_machine_mode(config_str("AGENT_MACHINE_MODE", "personal"))
 AGENT_MACHINE_OWNER = config_str("AGENT_MACHINE_OWNER", "").strip()
 CODEX_AUTH_FILE = Path(
     config_str("CODEX_AUTH_FILE", str(Path.home() / ".codex" / "auth.json"))

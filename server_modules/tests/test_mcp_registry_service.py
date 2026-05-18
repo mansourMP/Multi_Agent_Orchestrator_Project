@@ -43,11 +43,11 @@ class McpRegistryServiceTests(unittest.TestCase):
                 transport="streamable_http",
                 endpoint="https://example.com/mcp",
                 discover_tools=True,
-                auto_approve_tools=True,
             )
 
         self.assertEqual(record["id"], "inventory-feed")
         self.assertEqual(record["tools"][0]["name"], "lookup_stock")
+        self.assertFalse(record["tools"][0]["approved"])
         self.assertEqual(record["tools"][0]["risk_level"], "low")
         self.assertEqual(record["tools"][0]["cost_class"], "standard")
         self.assertEqual(record["tools"][0]["permission_manifest"]["action_class"], "read")
@@ -57,6 +57,11 @@ class McpRegistryServiceTests(unittest.TestCase):
         self.assertEqual(servers[0]["tool_count"], 1)
         self.assertEqual(servers[0]["skill_ids"], ["mcp:inventory-feed:lookup_stock"])
 
+        mcp_registry_service.approve_mcp_tool(
+            workspace_id="workspace-1",
+            server_id="inventory-feed",
+            tool_name="lookup_stock",
+        )
         skills = mcp_registry_service.list_workspace_mcp_skill_entries("workspace-1")
         self.assertEqual(skills[0]["id"], "mcp:inventory-feed:lookup_stock")
         self.assertEqual(skills[0]["execution_adapter"], "mcp_tool")
@@ -109,6 +114,28 @@ class McpRegistryServiceTests(unittest.TestCase):
         self.assertEqual(approval_state, {"lookup_stock": True, "write_stock": False})
         skills = mcp_registry_service.list_workspace_mcp_skill_entries("workspace-1")
         self.assertEqual([item["id"] for item in skills], ["mcp:inventory-feed:lookup_stock"])
+
+    def test_manual_tools_default_to_unapproved(self) -> None:
+        record = mcp_registry_service.upsert_workspace_mcp_server(
+            workspace_id="workspace-1",
+            server_id="inventory-feed",
+            label="Inventory Feed",
+            transport="streamable_http",
+            endpoint="https://example.com/mcp",
+            tools=[
+                {
+                    "name": "lookup_stock",
+                    "label": "Lookup Stock",
+                    "description": "Read inventory data.",
+                    "action_class": "read",
+                    "connector_scopes": ["inventory"],
+                }
+            ],
+            metadata={},
+        )
+
+        self.assertEqual(record["tools"][0]["approved"], False)
+        self.assertEqual(mcp_registry_service.list_workspace_mcp_skill_entries("workspace-1"), [])
 
     def test_refresh_preserves_existing_approvals_and_hides_new_tools(self) -> None:
         mcp_registry_service.upsert_workspace_mcp_server(
@@ -197,6 +224,7 @@ class McpRegistryServiceTests(unittest.TestCase):
                     },
                     "action_class": "read",
                     "connector_scopes": ["inventory"],
+                    "approved": True,
                 }
             ],
             metadata={},
@@ -218,6 +246,46 @@ class McpRegistryServiceTests(unittest.TestCase):
         self.assertEqual(result["reply"], "SKU-1 is in stock.")
         self.assertEqual(result["mcp"]["arguments"], {"sku": "SKU-1"})
         self.assertEqual(result["mcp"]["server_id"], "inventory-feed")
+
+    def test_invoke_workspace_mcp_skill_rejects_unapproved_direct_skill_id(self) -> None:
+        mcp_registry_service.upsert_workspace_mcp_server(
+            workspace_id="workspace-1",
+            server_id="inventory-feed",
+            label="Inventory Feed",
+            transport="streamable_http",
+            endpoint="https://example.com/mcp",
+            tools=[
+                {
+                    "name": "lookup_stock",
+                    "label": "Lookup Stock",
+                    "description": "Read inventory data.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"sku": {"type": "string"}},
+                        "required": ["sku"],
+                    },
+                    "action_class": "read",
+                    "connector_scopes": ["inventory"],
+                    "approved": False,
+                }
+            ],
+            metadata={},
+        )
+
+        with patch.object(
+            mcp_registry_service,
+            "_call_streamable_http_tool_async",
+            new=AsyncMock(return_value={"reply": "should not be called"}),
+        ) as call_mock:
+            with self.assertRaises(PermissionError):
+                mcp_registry_service.invoke_workspace_mcp_skill(
+                    workspace_id="workspace-1",
+                    skill_id="mcp:inventory-feed:lookup_stock",
+                    goal='{"sku":"SKU-1"}',
+                    agent_label="Sage",
+                )
+
+        call_mock.assert_not_awaited()
 
     def test_upsert_exposes_trust_metadata_for_execute_tools(self) -> None:
         record = mcp_registry_service.upsert_workspace_mcp_server(

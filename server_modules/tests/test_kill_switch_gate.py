@@ -11,6 +11,7 @@ from server_modules.kill_switch_gate import (
     evaluate_kill_switch,
     assert_not_killed,
     GLOBAL_KILL_KEY,
+    WORKSPACE_KILL_PREFIX,
     AGENT_KILL_PREFIX,
     GATEWAY_KILL_PREFIX,
 )
@@ -19,6 +20,7 @@ from server_modules.kill_switch_gate import (
 class KillSwitchGateTests(unittest.TestCase):
     def setUp(self):
         clear_kill_switch(GLOBAL_KILL_KEY)
+        clear_kill_switch(f"{WORKSPACE_KILL_PREFIX}ws1")
         clear_kill_switch(f"{AGENT_KILL_PREFIX}a1")
         clear_kill_switch(f"{GATEWAY_KILL_PREFIX}gw1")
 
@@ -51,6 +53,13 @@ class KillSwitchGateTests(unittest.TestCase):
         self.assertTrue(decision.blocked)
         self.assertEqual(decision.reason, "agent_kill_active")
         self.assertEqual(decision.scope, "agent")
+
+    def test_evaluate_blocks_when_workspace_kill_active(self):
+        set_kill_switch(f"{WORKSPACE_KILL_PREFIX}ws1")
+        decision = evaluate_kill_switch(workspace_id="ws1", agent_id="a1")
+        self.assertTrue(decision.blocked)
+        self.assertEqual(decision.reason, "workspace_kill_active")
+        self.assertEqual(decision.scope, "workspace")
 
     def test_agent_kill_does_not_block_other_agents(self):
         set_kill_switch(f"{AGENT_KILL_PREFIX}a1")

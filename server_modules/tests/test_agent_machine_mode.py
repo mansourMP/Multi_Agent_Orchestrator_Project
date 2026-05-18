@@ -67,6 +67,15 @@ class AgentMachineModeTests(unittest.TestCase):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
                 self.assertFalse(runtime_config.agent_machine_full_trust_enabled("user-123"))
 
+    def test_agent_machine_mode_is_not_allowed_in_production(self):
+        with patch.dict("os.environ", {"ORION_ENV": "production"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "AGENT_MACHINE_MODE=agent is not allowed"):
+                runtime_config._resolve_agent_machine_mode("agent")
+
+    def test_agent_machine_mode_is_allowed_for_local_development_only(self):
+        with patch.dict("os.environ", {"ORION_ENV": "local"}, clear=True):
+            self.assertEqual(runtime_config._resolve_agent_machine_mode("agent"), "agent")
+
     def test_agent_machine_inherited_owner_user_id_only_falls_back_in_agent_mode(self):
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):

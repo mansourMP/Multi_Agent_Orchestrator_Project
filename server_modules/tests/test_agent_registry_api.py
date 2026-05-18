@@ -69,6 +69,7 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertIn(("GET", "/agent-registry/mcp/servers/{server_id}"), app.routes)
             self.assertIn(("PUT", "/agent-registry/mcp/servers/{server_id}"), app.routes)
             self.assertIn(("POST", "/agent-registry/mcp/servers/{server_id}/refresh"), app.routes)
+            self.assertIn(("POST", "/agent-registry/mcp/servers/{server_id}/tools/approve"), app.routes)
             self.assertIn(("DELETE", "/agent-registry/mcp/servers/{server_id}"), app.routes)
             self.assertIn(("GET", "/agent-registry/chat-context"), app.routes)
             self.assertIn(("GET", "/agent-registry/runtime-targets"), app.routes)
@@ -178,10 +179,10 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             route = app.routes[("PUT", "/agent-registry/mcp/servers/{server_id}")]
 
             with (
-                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1") as access_mock,
                 patch(
-                    "server_modules.agent_registry_api.mcp_registry_service.upsert_workspace_mcp_server",
-                    return_value={"id": "inventory-feed", "label": "Inventory Feed"},
+                    "server_modules.agent_registry_api.mcp_registry_service.upsert_workspace_mcp_server_async",
+                    new=AsyncMock(return_value={"id": "inventory-feed", "label": "Inventory Feed"}),
                 ) as upsert_mock,
                 patch(
                     "server_modules.agent_registry_api.mcp_registry_service.list_workspace_mcp_servers",
@@ -205,6 +206,7 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                             workspace_id="workspace-1",
                             label="Inventory Feed",
                             endpoint="https://example.com/mcp",
+                            tools=[{"name": "lookup_stock", "approved": True}],
                             discover_tools=True,
                         ),
                         current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
@@ -214,8 +216,62 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertTrue(result["advanced_only"])
             self.assertEqual(result["id"], "inventory-feed")
             self.assertEqual(result["skill_ids"], ["mcp:inventory-feed:lookup_stock"])
+            self.assertEqual(access_mock.call_args.kwargs["minimum_role"], "owner")
             self.assertEqual(upsert_mock.call_args.kwargs["workspace_id"], "workspace-1")
             self.assertTrue(upsert_mock.call_args.kwargs["discover_tools"])
+            self.assertNotIn("approved", upsert_mock.call_args.kwargs["tools"][0])
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_approve_mcp_server_tool_requires_owner_role(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("POST", "/agent-registry/mcp/servers/{server_id}/tools/approve")]
+
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1") as access_mock,
+                patch(
+                    "server_modules.agent_registry_api.mcp_registry_service.approve_mcp_tool",
+                    return_value={"id": "inventory-feed", "tools": [{"name": "lookup_stock", "approved": True}]},
+                ) as approve_mock,
+                patch(
+                    "server_modules.agent_registry_api.mcp_registry_service.list_workspace_mcp_servers",
+                    return_value=[
+                        {
+                            "id": "inventory-feed",
+                            "label": "Inventory Feed",
+                            "transport": "streamable_http",
+                            "endpoint": "https://example.com/mcp",
+                            "enabled": True,
+                            "tool_count": 1,
+                            "skill_ids": ["mcp:inventory-feed:lookup_stock"],
+                        }
+                    ],
+                ),
+            ):
+                result = asyncio.run(
+                    route(
+                        "inventory-feed",
+                        agent_registry_api.McpToolApproveRequest(
+                            workspace_id="workspace-1",
+                            tool_name="lookup_stock",
+                        ),
+                        current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                    )
+                )
+
+            self.assertEqual(result["id"], "inventory-feed")
+            self.assertEqual(access_mock.call_args.kwargs["minimum_role"], "owner")
+            approve_mock.assert_called_once()
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)

@@ -930,7 +930,7 @@ async def resolve_gateway_registration_approval(
     registration, _resolved_workspace_id = _accessible_gateway_registration(
         gateway_id,
         current_user,
-        minimum_role="member",
+        minimum_role="owner",
     )
     _enforce_gateway_safety_gates(
         gateway_id=gateway_id,

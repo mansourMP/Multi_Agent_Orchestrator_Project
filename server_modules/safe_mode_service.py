@@ -8,6 +8,9 @@ from typing import Any, Dict, List
 
 from server_modules import control_plane_repository
 
+# Cross-reference: kill_switch_gate is still the lightweight top-level
+# emergency gate for gateway/personal-channel dispatch. This service owns the
+# richer scoped safe-mode, incident-control, and durable kill-switch model.
 
 _UNSAFE_PREFIXES = ("computer_control", "browser_automation")
 _UNSAFE_EXACT = {"shell.execute"}

@@ -143,6 +143,15 @@ class AuthHardeningTests(unittest.TestCase):
         ):
             runtime_common.config._assert_auth_secrets_safe_for_environment()
 
+    def test_runtime_config_rejects_http_mcp_dev_override_in_production(self):
+        with patch.dict(os.environ, {"ORION_ENV": "production", "EMPYRALIS_DEV_ALLOW_HTTP_MCP": "1"}, clear=True):
+            with self.assertRaises(RuntimeError):
+                runtime_common.config._assert_http_mcp_dev_override_safe_for_environment()
+
+    def test_runtime_config_allows_http_mcp_dev_override_locally(self):
+        with patch.dict(os.environ, {"ORION_ENV": "local", "EMPYRALIS_DEV_ALLOW_HTTP_MCP": "1"}, clear=True):
+            runtime_common.config._assert_http_mcp_dev_override_safe_for_environment()
+
     def test_require_member_api_key_accepts_local_dev_member_identity(self):
         request = _request()
         with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "0"}, clear=False):

@@ -57,6 +57,17 @@ def _coerce_list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+def _strip_mcp_tool_approval_flags(tools: Any) -> list[Dict[str, Any]]:
+    sanitized: list[Dict[str, Any]] = []
+    for tool in _coerce_list(tools):
+        if not isinstance(tool, dict):
+            continue
+        payload = dict(tool)
+        payload.pop("approved", None)
+        sanitized.append(payload)
+    return sanitized
+
+
 def _normalize_install_contract_metadata(
     *,
     install_id: Optional[str],
@@ -921,18 +932,17 @@ def register_agent_registry_routes(app) -> None:
         resolved_workspace_id = enforce_workspace_access(
             current_user,
             _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
-            minimum_role="member",
+            minimum_role="owner",
         )
         try:
-            await asyncio.to_thread(
-                mcp_registry_service.upsert_workspace_mcp_server,
+            await mcp_registry_service.upsert_workspace_mcp_server_async(
                 workspace_id=resolved_workspace_id,
                 server_id=server_id,
                 label=body.label,
                 transport=body.transport,
                 endpoint=body.endpoint,
                 enabled=body.enabled,
-                tools=_coerce_list(body.tools),
+                tools=_strip_mcp_tool_approval_flags(body.tools),
                 metadata=_coerce_dict(body.metadata),
                 discover_tools=bool(body.discover_tools),
             )
@@ -960,11 +970,10 @@ def register_agent_registry_routes(app) -> None:
         resolved_workspace_id = enforce_workspace_access(
             current_user,
             _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
-            minimum_role="member",
+            minimum_role="owner",
         )
         try:
-            await asyncio.to_thread(
-                mcp_registry_service.refresh_workspace_mcp_server_tools,
+            await mcp_registry_service.refresh_workspace_mcp_server_tools_async(
                 workspace_id=resolved_workspace_id,
                 server_id=server_id,
             )
@@ -992,7 +1001,7 @@ def register_agent_registry_routes(app) -> None:
         resolved_workspace_id = enforce_workspace_access(
             current_user,
             _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
-            minimum_role="member",
+            minimum_role="owner",
         )
         try:
             record = mcp_registry_service.approve_mcp_tool(

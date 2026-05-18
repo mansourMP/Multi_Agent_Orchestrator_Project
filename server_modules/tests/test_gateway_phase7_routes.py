@@ -87,6 +87,24 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
             },
         }
 
+    @staticmethod
+    def _member_user():
+        return {
+            "auth_type": "bearer",
+            "role": "member",
+            "is_admin": False,
+            "user_id": "member-1",
+            "workspace_roles": {"default": "member"},
+            "workspace_access": {
+                "default": {
+                    "workspace_id": "default",
+                    "tenant_id": "default",
+                    "role": "member",
+                    "tenant_role": "member",
+                }
+            },
+        }
+
     def _register_gateway(self) -> dict:
         pairing_response = self.client.post(
             "/api/gateway/pairings/intents",
@@ -704,6 +722,34 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
         self.assertEqual(payload["status"], "approval_required")
         self.assertEqual(payload["risk_decision"]["decision"], "approval_required")
         self.assertEqual(payload["risk_decision"]["capability"], "terminal.command")
+        execute_mock.assert_not_awaited()
+
+    def test_gateway_approval_resolution_requires_owner_role(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        approval_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/tools/execute",
+            json={
+                "capability_id": "computer_control.click",
+                "arguments": {"url": "https://example.com/dashboard", "x": 10, "y": 20},
+                "run_id": "run-member-approval",
+                "trace_id": "trace-member-approval",
+                "request_id": "req-member-approval",
+            },
+        )
+        self.assertEqual(approval_response.status_code, 202)
+        approval_id = approval_response.json()["approval"]["approval_id"]
+
+        self.app.dependency_overrides[routes_gateway.require_api_key] = lambda: self._member_user()
+        execute_mock = AsyncMock(return_value={"status": "completed", "result": {"clicked": True}})
+        with patch("server_modules.routes_gateway.gateway_execution_service.execute_tool_via_gateway", execute_mock):
+            resolve_response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/approvals/{approval_id}/resolve",
+                json={"decision": "approved", "note": "Member should not be able to approve."},
+            )
+
+        self.assertEqual(resolve_response.status_code, 403)
+        self.assertEqual(resolve_response.json()["detail"], "Owner role required for workspace 'default'.")
         execute_mock.assert_not_awaited()
 
     def test_approval_memory_reuses_only_matching_narrow_gateway_scope(self) -> None:

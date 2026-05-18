@@ -19,6 +19,10 @@ _EMPYRALIS_STATE_HOME = Path(
 _KILL_SWITCH_FILE = _EMPYRALIS_STATE_HOME / "kill_switches.json"
 _KILL_SWITCH_FILE_LOCK = Lock()
 
+# Cross-reference: safe_mode_service owns the richer scoped incident-control
+# model; this module remains the top-level emergency gate used by gateway and
+# personal-channel paths before work is dispatched.
+
 
 @dataclass(frozen=True, slots=True)
 class KillSwitchDecision:
@@ -30,6 +34,7 @@ class KillSwitchDecision:
 
 
 GLOBAL_KILL_KEY = "global_pilot"
+WORKSPACE_KILL_PREFIX = "workspace:"
 AGENT_KILL_PREFIX = "agent:"
 GATEWAY_KILL_PREFIX = "gateway:"
 
@@ -133,6 +138,15 @@ def evaluate_kill_switch(
             reason="global_kill_active",
             scope="global",
             detail="The platform is in emergency stop mode. All operations are blocked.",
+            trace_id=trace_id,
+        )
+
+    if workspace_id and is_kill_active(f"{WORKSPACE_KILL_PREFIX}{workspace_id}"):
+        return KillSwitchDecision(
+            blocked=True,
+            reason="workspace_kill_active",
+            scope="workspace",
+            detail=f"Workspace {workspace_id} has been stopped.",
             trace_id=trace_id,
         )
 

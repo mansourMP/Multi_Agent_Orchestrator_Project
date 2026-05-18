@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { WorkstationActivityPane } from '@/lib/workspace/workstation-activity-pane';
+import { WorkstationApprovalsPane } from '@/lib/workspace/workstation-approvals-pane';
 import { WorkstationArtifactsPane } from '@/lib/workspace/workstation-artifacts-pane';
 import { WorkstationChatPane } from '@/lib/workspace/workstation-chat-pane';
 import { WorkstationDeployedAgentsPane } from '@/lib/workspace/workstation-deployed-agents-pane';
@@ -17,6 +18,7 @@ import { WorkstationSageProfilePane } from '@/lib/workspace/workstation-sage-pro
 import { WorkstationSettingsPane } from '@/lib/workspace/workstation-settings-pane';
 import { WorkstationStudioIntegrationsPane } from '@/lib/workspace/workstation-studio-integrations-pane';
 import { WorkstationInvestorDemoPane } from '@/lib/workspace/workstation-investor-demo-pane';
+import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gateway-operator-pane';
 import { WorkstationSurfaceViewport } from '@/lib/workspace/workstation-shell-frame';
 import { resolveRouteIdFromHref, type WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
 import {
@@ -50,7 +52,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   approvals: {
     destinationId: 'sage',
-    render: () => <WorkstationSageHeartbeatPane />,
+    render: () => <WorkstationApprovalsPane />,
   },
   artifacts: {
     destinationId: 'sage',
@@ -86,7 +88,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   gateway: {
     destinationId: 'gateway',
-    render: () => <WorkstationSageConnectorsPane />,
+    render: () => <WorkstationGatewayOperatorPane />,
   },
   channels: {
     destinationId: 'sage',
@@ -106,11 +108,11 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   gatewayApprovals: {
     destinationId: 'gateway',
-    render: () => <WorkstationSageHeartbeatPane />,
+    render: () => <WorkstationGatewayOperatorPane initialSection="approvals" />,
   },
   gatewayActivity: {
     destinationId: 'gateway',
-    render: () => <WorkstationRunsPane />,
+    render: () => <WorkstationGatewayOperatorPane initialSection="activity" />,
   },
   settings: {
     destinationId: 'settings',

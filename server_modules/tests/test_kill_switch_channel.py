@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from server_modules import safe_mode_service
 from server_modules.kill_switch_gate import (
     KillSwitchBlockedError,
     set_kill_switch,
@@ -16,11 +17,18 @@ from server_modules.kill_switch_gate import (
 
 class KillSwitchChannelTests(unittest.TestCase):
     def setUp(self):
+        safe_mode_service.reset_state_for_tests()
         clear_kill_switch(GLOBAL_KILL_KEY)
         clear_kill_switch(f"{AGENT_KILL_PREFIX}a1")
         clear_kill_switch(f"{GATEWAY_KILL_PREFIX}gw1")
         clear_kill_switch(f"{GATEWAY_KILL_PREFIX}gw-test")
         clear_kill_switch(f"{GATEWAY_KILL_PREFIX}gw-channel-test")
+        clear_kill_switch(f"{GATEWAY_KILL_PREFIX}gw-dispatch")
+        clear_kill_switch(f"{GATEWAY_KILL_PREFIX}gw-channel")
+        clear_kill_switch(f"{GATEWAY_KILL_PREFIX}gw-specific")
+
+    def tearDown(self):
+        safe_mode_service.reset_state_for_tests()
 
     def test_kill_switch_active_blocks_channel_outbound(self):
         """When kill switch is active, channel outbound should raise KillSwitchBlockedError."""
@@ -109,6 +117,50 @@ class KillSwitchChannelTests(unittest.TestCase):
             assert_not_killed(gateway_id="gw-specific")
         # Another gateway should not be blocked
         assert_not_killed(gateway_id="gw-other")
+
+    def test_safe_mode_machine_kill_blocks_gateway_and_personal_channel_gate(self):
+        safe_mode_service.set_kill_switch(
+            scope="machine",
+            enabled=True,
+            machine_id="gw-safe-machine",
+            reason="machine incident",
+        )
+
+        with self.assertRaises(KillSwitchBlockedError) as ctx:
+            assert_not_killed(gateway_id="gw-safe-machine")
+
+        self.assertEqual(ctx.exception.decision.reason, "safe_mode_machine_kill_active")
+        self.assertEqual(ctx.exception.decision.scope, "machine")
+        self.assertIn("machine incident", ctx.exception.decision.detail)
+
+    def test_safe_mode_workspace_kill_blocks_gateway_route_gate(self):
+        safe_mode_service.set_kill_switch(
+            scope="workspace",
+            enabled=True,
+            workspace_id="ws-killed",
+            reason="workspace incident",
+        )
+
+        with self.assertRaises(KillSwitchBlockedError) as ctx:
+            assert_not_killed(workspace_id="ws-killed", gateway_id="gw-workspace")
+
+        self.assertEqual(ctx.exception.decision.reason, "safe_mode_workspace_kill_active")
+        self.assertEqual(ctx.exception.decision.scope, "workspace")
+
+    def test_safe_mode_agent_kill_blocks_top_level_gate_when_agent_bound(self):
+        safe_mode_service.set_kill_switch(
+            scope="agent",
+            enabled=True,
+            workspace_id="ws-agent",
+            agent_install_id="agent-1",
+            reason="agent incident",
+        )
+
+        with self.assertRaises(KillSwitchBlockedError) as ctx:
+            assert_not_killed(workspace_id="ws-agent", agent_id="agent-1", gateway_id="gw-agent")
+
+        self.assertEqual(ctx.exception.decision.reason, "safe_mode_agent_kill_active")
+        self.assertEqual(ctx.exception.decision.scope, "agent")
 
 
 if __name__ == "__main__":

@@ -1343,6 +1343,111 @@ def rotate_connector_access(
     return result
 
 
+def resolve_operator_control_report(
+    *,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
+    agent_install_id: str | None = None,
+    machine_id: str | None = None,
+    gateway_id: str | None = None,
+    channel_key: str | None = None,
+    endpoint_key: str | None = None,
+    capability_id: str | None = None,
+    connector_id: str | None = None,
+    credential_id: str | None = None,
+    trace_id: str = "",
+) -> Dict[str, Any]:
+    """Return the combined operator view across both policy systems."""
+    machine_token = _normalize_token(machine_id or gateway_id)
+    try:
+        from server_modules import kill_switch_gate
+
+        top_level_decision = kill_switch_gate.evaluate_kill_switch(
+            tenant_id=tenant_id or "",
+            workspace_id=workspace_id or "",
+            agent_id=str(agent_install_id or "").strip(),
+            gateway_id=machine_token,
+            trace_id=trace_id,
+        )
+        top_level_gate = {
+            "blocked": bool(top_level_decision.blocked),
+            "reason": top_level_decision.reason,
+            "scope": top_level_decision.scope,
+            "detail": top_level_decision.detail,
+            "trace_id": top_level_decision.trace_id,
+            "restart": kill_switch_gate.get_kill_switch_restart_info(),
+        }
+    except Exception:
+        top_level_gate = {
+            "blocked": False,
+            "reason": "",
+            "scope": "",
+            "detail": "",
+            "trace_id": trace_id,
+            "restart": {},
+        }
+
+    report: Dict[str, Any] = {
+        "top_level_emergency_gate": top_level_gate,
+        "safe_mode_service": {
+            "machine_policy": resolve_machine_policy_status(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                machine_id=machine_token or None,
+                capability_ids=[capability_id] if capability_id else None,
+            ),
+            "workspace_incident": resolve_workspace_incident_state(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+            ),
+        },
+    }
+    if agent_install_id:
+        report["safe_mode_service"]["agent"] = resolve_agent_disable_state(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            agent_install_id=agent_install_id,
+        )
+    if channel_key:
+        report["safe_mode_service"]["channel"] = {
+            "kill_switch": resolve_channel_disable_state(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                channel_key=channel_key,
+                endpoint_key=endpoint_key,
+            ),
+            "incident": resolve_channel_incident_state(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                channel_key=channel_key,
+                endpoint_key=endpoint_key,
+            ),
+        }
+    if capability_id:
+        report["safe_mode_service"]["capability"] = resolve_capability_disable_state(
+            capability_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            machine_id=machine_token or None,
+        )
+    if connector_id:
+        report["safe_mode_service"]["connector"] = {
+            "kill_switch": resolve_connector_disable_state(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                connector_id=connector_id,
+                credential_id=credential_id,
+            ),
+            "incident": resolve_connector_incident_state(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                connector_id=connector_id,
+                credential_id=credential_id,
+            ),
+        }
+    return report
+
+
 def state_snapshot() -> Dict[str, Any]:
     with _LOCK:
         durable_cache = {

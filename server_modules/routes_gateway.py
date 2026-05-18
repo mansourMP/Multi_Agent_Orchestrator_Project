@@ -73,6 +73,7 @@ def _enforce_gateway_safety_gates(
     """
     try:
         assert_not_killed(
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             gateway_id=gateway_id,
             agent_id=agent_id,

@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from server_modules import personal_channels_service, kill_switch_gate
+from server_modules import personal_channels_service, kill_switch_gate, safe_mode_service
 
 
 class PersonalChannelKillSwitchTests(unittest.TestCase):
     def setUp(self):
+        safe_mode_service.reset_state_for_tests()
         kill_switch_gate.clear_kill_switch(kill_switch_gate.GLOBAL_KILL_KEY)
         for gw in ("gw-kill-inbound", "gw-kill-wa", "gw-kill-tg",
                    "gw-kill-send-wa", "gw-kill-send-tg", "gw-kill-test",
@@ -17,6 +18,9 @@ class PersonalChannelKillSwitchTests(unittest.TestCase):
             kill_switch_gate.clear_kill_switch(
                 f"{kill_switch_gate.GATEWAY_KILL_PREFIX}{gw}"
             )
+
+    def tearDown(self):
+        safe_mode_service.reset_state_for_tests()
 
     def _set_gateway_kill(self, gateway_id: str) -> None:
         kill_switch_gate.set_kill_switch(
@@ -37,6 +41,23 @@ class PersonalChannelKillSwitchTests(unittest.TestCase):
                     payload={"channel_key": "whatsapp_personal"},
                 )
             )
+
+    def test_safe_mode_machine_kill_blocks_handle_gateway_channel_inbound(self):
+        safe_mode_service.set_kill_switch(
+            scope="machine",
+            enabled=True,
+            machine_id="gw-safe-mode-inbound",
+            reason="machine incident",
+        )
+        with self.assertRaises(kill_switch_gate.KillSwitchBlockedError) as ctx:
+            asyncio.run(
+                personal_channels_service.handle_gateway_channel_inbound(
+                    gateway_id="gw-safe-mode-inbound",
+                    registration={},
+                    payload={"channel_key": "whatsapp_personal"},
+                )
+            )
+        self.assertEqual(ctx.exception.decision.reason, "safe_mode_machine_kill_active")
 
     # ------------------------------------------------------------------
     # _handle_whatsapp_gateway_channel_inbound (async)

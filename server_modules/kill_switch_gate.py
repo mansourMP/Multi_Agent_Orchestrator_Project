@@ -127,6 +127,7 @@ def get_kill_switch_restart_info() -> dict:
 
 def evaluate_kill_switch(
     *,
+    tenant_id: str = "",
     workspace_id: str = "",
     agent_id: str = "",
     gateway_id: str = "",
@@ -168,17 +169,29 @@ def evaluate_kill_switch(
             trace_id=trace_id,
         )
 
+    safe_mode_decision = _evaluate_safe_mode_emergency_kill(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        gateway_id=gateway_id,
+        trace_id=trace_id,
+    )
+    if safe_mode_decision.blocked:
+        return safe_mode_decision
+
     return KillSwitchDecision(blocked=False, reason="", scope="", trace_id=trace_id)
 
 
 def assert_not_killed(
     *,
+    tenant_id: str = "",
     workspace_id: str = "",
     agent_id: str = "",
     gateway_id: str = "",
     trace_id: str = "",
 ) -> None:
     decision = evaluate_kill_switch(
+        tenant_id=tenant_id,
         workspace_id=workspace_id,
         agent_id=agent_id,
         gateway_id=gateway_id,
@@ -204,6 +217,74 @@ def assert_not_killed(
         except Exception:
             pass
         raise KillSwitchBlockedError(decision)
+
+
+def _evaluate_safe_mode_emergency_kill(
+    *,
+    tenant_id: str = "",
+    workspace_id: str = "",
+    agent_id: str = "",
+    gateway_id: str = "",
+    trace_id: str = "",
+) -> KillSwitchDecision:
+    """Bridge the top-level emergency gate to richer safe-mode controls.
+
+    File-backed keys in this module remain the fastest emergency stop. The
+    richer incident-control source lives in safe_mode_service, so this bridge
+    lets gateway and personal-channel dispatch paths see workspace, agent, and
+    machine kill switches set through the operator/security APIs.
+    """
+    try:
+        from server_modules import safe_mode_service
+    except Exception:
+        return KillSwitchDecision(blocked=False, reason="", scope="", trace_id=trace_id)
+
+    try:
+        machine_policy = safe_mode_service.resolve_machine_policy_status(
+            tenant_id=tenant_id or None,
+            workspace_id=workspace_id or None,
+            machine_id=gateway_id or None,
+        )
+    except Exception:
+        machine_policy = {}
+    kill_state = machine_policy.get("kill_switch") if isinstance(machine_policy, dict) else {}
+    if isinstance(kill_state, dict) and bool(kill_state.get("active")):
+        scope = str(kill_state.get("scope") or "workspace").strip() or "workspace"
+        reason = str(kill_state.get("reason") or "").strip()
+        target = {
+            "global": "The platform is in emergency stop mode.",
+            "tenant": f"Tenant {tenant_id} has been stopped.",
+            "workspace": f"Workspace {workspace_id} has been stopped.",
+            "machine": f"Gateway {gateway_id} has been stopped.",
+            "capability": "A required gateway capability has been stopped.",
+        }.get(scope, "This operation has been stopped.")
+        return KillSwitchDecision(
+            blocked=True,
+            reason=f"safe_mode_{scope}_kill_active",
+            scope=scope,
+            detail=reason or target,
+            trace_id=trace_id,
+        )
+
+    if workspace_id and agent_id:
+        try:
+            agent_state = safe_mode_service.resolve_agent_disable_state(
+                tenant_id=tenant_id or None,
+                workspace_id=workspace_id,
+                agent_install_id=agent_id,
+            )
+        except Exception:
+            agent_state = {}
+        if isinstance(agent_state, dict) and bool(agent_state.get("active")):
+            return KillSwitchDecision(
+                blocked=True,
+                reason="safe_mode_agent_kill_active",
+                scope="agent",
+                detail=str(agent_state.get("reason") or f"Agent {agent_id} has been stopped."),
+                trace_id=trace_id,
+            )
+
+    return KillSwitchDecision(blocked=False, reason="", scope="", trace_id=trace_id)
 
 
 class KillSwitchBlockedError(Exception):

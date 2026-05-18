@@ -57,6 +57,32 @@ class SafeModeServiceTests(unittest.TestCase):
         self.assertTrue(safe_mode_service.is_connector_disabled(workspace_id="ws-1", connector_id="email", credential_id="cred-1"))
         self.assertFalse(safe_mode_service.is_connector_disabled(workspace_id="ws-1", connector_id="email", credential_id="cred-2"))
 
+    def test_operator_control_report_combines_top_level_and_scoped_controls(self) -> None:
+        safe_mode_service.set_kill_switch(scope="machine", enabled=True, machine_id="gw-1", reason="machine incident")
+        safe_mode_service.set_kill_switch(scope="agent", enabled=True, workspace_id="ws-1", agent_install_id="install-1", reason="agent incident")
+        safe_mode_service.set_kill_switch(scope="channel", enabled=True, workspace_id="ws-1", channel_key="telegram", endpoint_key="@bot", reason="channel incident")
+        safe_mode_service.set_kill_switch(scope="capability", enabled=True, capability_id="computer_control.click", reason="capability incident")
+        safe_mode_service.set_incident_control(scope="workspace", mode="drain", workspace_id="ws-1", reason="workspace drain")
+
+        report = safe_mode_service.resolve_operator_control_report(
+            workspace_id="ws-1",
+            agent_install_id="install-1",
+            gateway_id="gw-1",
+            channel_key="telegram",
+            endpoint_key="@bot",
+            capability_id="computer_control.click",
+            trace_id="trace-1",
+        )
+
+        self.assertTrue(report["top_level_emergency_gate"]["blocked"])
+        self.assertEqual(report["top_level_emergency_gate"]["scope"], "machine")
+        self.assertEqual(report["top_level_emergency_gate"]["trace_id"], "trace-1")
+        self.assertTrue(report["safe_mode_service"]["machine_policy"]["kill_switch"]["active"])
+        self.assertTrue(report["safe_mode_service"]["agent"]["active"])
+        self.assertTrue(report["safe_mode_service"]["channel"]["kill_switch"]["active"])
+        self.assertTrue(report["safe_mode_service"]["capability"]["disabled"])
+        self.assertEqual(report["safe_mode_service"]["workspace_incident"]["mode"], "drain")
+
     def test_revoke_and_rotate_connector_access_record_rotation_metadata(self) -> None:
         revoked = safe_mode_service.revoke_connector_access(
             workspace_id="ws-1",

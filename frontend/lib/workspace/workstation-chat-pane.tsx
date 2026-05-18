@@ -1592,6 +1592,7 @@ export function WorkstationChatPane() {
         description: command.description,
         category: 'Sage',
         keywords: command.keywords,
+        icon: command.icon,
       })),
       ...skillSlashCommandMacros.map((command) => ({
         id: command.id,
@@ -1600,6 +1601,7 @@ export function WorkstationChatPane() {
         description: command.description,
         category: 'Custom',
         keywords: command.keywords,
+        icon: command.icon,
       })),
     ],
     [skillSlashCommandMacros],
@@ -1632,7 +1634,7 @@ export function WorkstationChatPane() {
   );
   const autonomyOptions = useMemo(
     () => [
-      { value: 'approval', label: 'Default' },
+      { value: 'approval', label: 'Ask first' },
       {
         value: 'full',
         label: 'Full access',
@@ -3098,6 +3100,14 @@ export function WorkstationChatPane() {
           if (selectedModelOption.reasoningLevels.includes(nextValue as ChatReasoningEffort)) {
             setReasoningEffort(nextValue as ChatReasoningEffort);
           }
+        }}
+        onVoiceTranscribe={async (audio) => {
+          const payload = await services.client.transcribeSpeech(audio);
+          const transcript = typeof payload.transcript === 'string' ? payload.transcript.trim() : '';
+          if (!transcript) {
+            throw new Error('No speech detected.');
+          }
+          return transcript;
         }}
         contextWindowLabel={contextWindowLabel}
         busy={isSending}

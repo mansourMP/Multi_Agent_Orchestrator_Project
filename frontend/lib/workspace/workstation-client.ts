@@ -703,6 +703,7 @@ export type WorkstationClientPaths = {
   workspaceProviderModelsRefresh: (providerId: string) => string;
   workspaceTransparencySettings: string;
   workspaceRuntimeSessions: (limit?: number) => string;
+  speechToText: string;
   providerProfiles: (provider?: string | null) => string;
   providerProfilesRoot: string;
   credentialsVault: string;
@@ -981,6 +982,7 @@ export type WorkstationClient = {
     deployedAgentId: string;
     limit?: number;
   }) => Promise<Record<string, unknown>>;
+  transcribeSpeech: (audio: Blob) => Promise<Record<string, unknown>>;
   listTraces: (filters?: WorkstationAgentTraceListFilters) => Promise<Record<string, unknown>>;
   getTraceReplay: (options: {
     traceId: string;
@@ -1348,6 +1350,7 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     workspaceTransparencySettings: `/api/workspaces/${encodeURIComponent(workspaceId)}/transparency-settings`,
     workspaceRuntimeSessions: (limit = 50) =>
       `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-sessions${buildQueryString({ limit })}`,
+    speechToText: '/api/stt',
     providerProfiles: (provider = null) =>
       `/api/providers/profiles${buildQueryString({ workspace_id: workspaceId, provider })}`,
     providerProfilesRoot: '/api/providers/profiles',
@@ -2909,6 +2912,19 @@ export function createWorkstationClient(
       requestJson<Record<string, unknown>>({
         path: paths.deployedAgentAuditExport(deployedAgentId, limit),
         policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    transcribeSpeech: (audio) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.speechToText,
+        init: {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': audio.type || 'audio/webm',
+          },
+          body: audio,
+        },
+        policy: WRITE_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     listTraces: (filters = {}) =>
       requestJson<Record<string, unknown>>({

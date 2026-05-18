@@ -4,11 +4,15 @@ import type { FormEvent, KeyboardEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
+  Brain,
   ChevronRight,
-  Command,
+  Mic,
+  MicOff,
   Plus,
+  ShieldCheck,
   Square,
   X,
+  type LucideIcon,
 } from 'lucide-react';
 
 import { AppButton, AppSelect, joinClassNames } from '@/lib/ui/primitives';
@@ -52,6 +56,7 @@ export type ComposerSlashCommand = {
   description: string;
   category?: string;
   keywords?: readonly string[];
+  icon: LucideIcon;
 };
 
 function isComposerOptionGroup(option: ComposerModelOption): option is ComposerOptionGroup {
@@ -127,6 +132,7 @@ export function ChatComposer({
   preRunCostEstimate = null,
   slashCommands = [],
   onSlashCommandSelect,
+  onVoiceTranscribe,
 }: {
   draft: string;
   onDraftChange: (nextDraft: string) => void;
@@ -166,28 +172,36 @@ export function ChatComposer({
   preRunCostEstimate?: ComposerPreRunCostEstimate | null;
   slashCommands?: readonly ComposerSlashCommand[];
   onSlashCommandSelect?: (command: ComposerSlashCommand) => void;
+  onVoiceTranscribe?: (audio: Blob) => Promise<string>;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const actionLauncherRef = useRef<HTMLDivElement | null>(null);
   const commandPaletteRef = useRef<HTMLDivElement | null>(null);
+  const modelPanelRef = useRef<HTMLDivElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const draftRef = useRef(draft);
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false);
+  const [modelPanelOpen, setModelPanelOpen] = useState(false);
+  const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const hasDraft = draft.trim().length > 0;
   const canSend = !busy && !sendDisabled && hasDraft;
   const canStop = busy && typeof onStop === 'function';
   const showSendButton = busy || hasDraft;
-  void model;
-  void modelOptions;
-  void onModelChange;
-  void reasoningEffort;
-  void reasoningOptions;
-  void onReasoningEffortChange;
   void runtimeStatusLabel;
   void runtimeStatusTone;
   void toolGroups;
-  void contextWindowLabel;
-  void preRunCostEstimate;
+  const selectedModelLabel = compactModelLabel(composerOptionLabel(modelOptions, model), model || 'Model');
+  const selectedReasoningLabel = composerOptionLabel(reasoningOptions, reasoningEffort) || reasoningEffort || 'Auto';
+  const permissionLabel = composerOptionLabel(autonomyOptions, autonomyMode) || (showAutonomySelector ? 'Ask first' : autonomyFallbackLabel);
+  const voiceSupported = typeof onVoiceTranscribe === 'function'
+    && typeof window !== 'undefined'
+    && typeof navigator !== 'undefined'
+    && Boolean(navigator.mediaDevices?.getUserMedia)
+    && typeof MediaRecorder !== 'undefined';
 
   const commandQuery = useMemo(() => {
     if (!draft.startsWith('/') || draft.includes('\n')) {
@@ -202,9 +216,8 @@ export function ChatComposer({
     }
     return normalized.toLowerCase();
   }, [draft]);
-  const showAllSlashCommands = actionPaletteOpen && typeof onSlashCommandSelect === 'function';
   const filteredSlashCommands = useMemo(() => {
-    if (commandQuery === null && !showAllSlashCommands) {
+    if (commandQuery === null) {
       return [];
     }
     if (!commandQuery) {
@@ -219,13 +232,12 @@ export function ChatComposer({
       ].join(' ').toLowerCase();
       return haystack.includes(commandQuery);
     });
-  }, [commandQuery, showAllSlashCommands, slashCommands]);
-  const commandPaletteVisible = (
-    actionPaletteOpen
-    || (!commandPaletteDismissed && commandQuery !== null)
-  )
+  }, [commandQuery, slashCommands]);
+  const commandPaletteVisible = !commandPaletteDismissed
+    && commandQuery !== null
     && filteredSlashCommands.length > 0
     && typeof onSlashCommandSelect === 'function';
+  const actionMenuVisible = actionPaletteOpen && typeof onOpenIntegrations === 'function';
 
   const submitDraft = () => {
     if (!canSend) {
@@ -238,6 +250,10 @@ export function ChatComposer({
     event.preventDefault();
     submitDraft();
   };
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -265,7 +281,7 @@ export function ChatComposer({
   }, [filteredSlashCommands.length, selectedCommandIndex]);
 
   useEffect(() => {
-    if (!actionPaletteOpen && !commandPaletteVisible) {
+    if (!actionPaletteOpen && !commandPaletteVisible && !modelPanelOpen) {
       return undefined;
     }
     const handlePointerDown = (event: PointerEvent) => {
@@ -276,17 +292,19 @@ export function ChatComposer({
       if (
         actionLauncherRef.current?.contains(target)
         || commandPaletteRef.current?.contains(target)
+        || modelPanelRef.current?.contains(target)
       ) {
         return;
       }
       setActionPaletteOpen(false);
+      setModelPanelOpen(false);
       setCommandPaletteDismissed(true);
     };
     window.addEventListener('pointerdown', handlePointerDown);
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
     };
-  }, [actionPaletteOpen, commandPaletteVisible]);
+  }, [actionPaletteOpen, commandPaletteVisible, modelPanelOpen]);
 
   const selectSlashCommand = (command: ComposerSlashCommand) => {
     setCommandPaletteDismissed(true);
@@ -294,11 +312,86 @@ export function ChatComposer({
     onSlashCommandSelect?.(command);
   };
 
+  const stopVoiceRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') {
+      return;
+    }
+    recorder.stop();
+  };
+
+  const startVoiceRecording = async () => {
+    if (!voiceSupported) {
+      setVoiceNotice('Voice is unavailable in this browser.');
+      return;
+    }
+    setVoiceNotice(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      recordedChunksRef.current = [];
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const audio = new Blob(recordedChunksRef.current, {
+          type: recorder.mimeType || 'audio/webm',
+        });
+        recordedChunksRef.current = [];
+        mediaRecorderRef.current = null;
+        if (!audio.size || !onVoiceTranscribe) {
+          setVoiceState('idle');
+          return;
+        }
+        setVoiceState('transcribing');
+        void onVoiceTranscribe(audio)
+          .then((transcript) => {
+            const cleanTranscript = transcript.trim();
+            if (!cleanTranscript) {
+              setVoiceNotice('No speech detected.');
+              return;
+            }
+            const currentDraft = draftRef.current.trim();
+            onDraftChange(currentDraft ? `${currentDraft}\n${cleanTranscript}` : cleanTranscript);
+            setVoiceNotice('Voice added. Press send when ready.');
+          })
+          .catch((error) => {
+            setVoiceNotice(error instanceof Error ? error.message : 'Voice could not be transcribed.');
+          })
+          .finally(() => {
+            setVoiceState('idle');
+          });
+      };
+      recorder.start();
+      setVoiceState('recording');
+    } catch {
+      setVoiceNotice('Microphone access was blocked.');
+      setVoiceState('idle');
+    }
+  };
+
+  const handleVoiceButton = () => {
+    if (voiceState === 'recording') {
+      stopVoiceRecording();
+      return;
+    }
+    if (voiceState === 'transcribing' || busy) {
+      return;
+    }
+    void startVoiceRecording();
+  };
+
   const handleDraftChange = (nextDraft: string) => {
     if (!nextDraft.startsWith('/')) {
       setCommandPaletteDismissed(true);
       setActionPaletteOpen(false);
     } else {
+      setActionPaletteOpen(false);
+      setModelPanelOpen(false);
       setCommandPaletteDismissed(false);
     }
     onDraftChange(nextDraft);
@@ -375,6 +468,20 @@ export function ChatComposer({
           </div>
         ) : null}
 
+        {voiceNotice ? (
+          <div className="app-chat-composer__small-model-warning" role="status">
+            <span>{voiceNotice}</span>
+            <button
+              type="button"
+              className="app-chat-composer__small-model-warning-dismiss"
+              aria-label="Dismiss voice notice"
+              onClick={() => setVoiceNotice(null)}
+            >
+              <X size={13} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+
         <div className="app-chat-composer__toolbar">
           <div className="app-chat-composer__toolbar-left">
             <div className="app-chat-composer__actions" ref={actionLauncherRef}>
@@ -382,22 +489,78 @@ export function ChatComposer({
                 type="button"
                 className={joinClassNames(
                   'app-chat-composer__action-trigger',
+                  'app-chat-composer__icon-trigger',
                   providerGateVisible && 'app-chat-composer__provider-pill--warning',
                 )}
                 onClick={() => {
-                  setCommandPaletteDismissed(false);
+                  setCommandPaletteDismissed(true);
+                  setModelPanelOpen(false);
                   setActionPaletteOpen((current) => !current);
                 }}
-                aria-expanded={commandPaletteVisible}
-                aria-label={providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Open Sage commands'}
+                aria-expanded={actionMenuVisible}
+                aria-label={providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Add or connect'}
               >
-                {providerGateVisible ? (
-                  <Plus size={15} strokeWidth={2.1} aria-hidden="true" />
-                ) : (
-                  <Command size={15} strokeWidth={2.1} aria-hidden="true" />
-                )}
-                <span>{providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Commands'}</span>
+                <Plus size={18} strokeWidth={2.1} aria-hidden="true" />
               </button>
+
+              {actionMenuVisible ? (
+                <div
+                  className="app-chat-composer__action-menu"
+                  role="dialog"
+                  aria-label="Add context"
+                >
+                  {providerGateVisible && providerSummary && typeof onOpenIntegrations === 'function' ? (
+                    <button
+                      type="button"
+                      className="app-chat-composer__command-setup"
+                      onClick={() => {
+                        setActionPaletteOpen(false);
+                        onOpenIntegrations();
+                      }}
+                    >
+                      <Plus size={16} strokeWidth={2.1} aria-hidden="true" />
+                      <span className="app-chat-composer__command-copy">
+                        <span className="app-chat-composer__command-title-row">
+                          <strong>{providerSummary.actionLabel ?? 'Set up Sage'}</strong>
+                          <span>{providerSummary.label}</span>
+                        </span>
+                      </span>
+                      <ChevronRight
+                        className="app-chat-composer__command-chevron"
+                        size={16}
+                        strokeWidth={1.9}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  ) : null}
+                  {typeof onOpenIntegrations === 'function' ? (
+                    <button
+                      type="button"
+                      className="app-chat-composer__command-item"
+                      onClick={() => {
+                        setActionPaletteOpen(false);
+                        onOpenIntegrations();
+                      }}
+                    >
+                      <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
+                      <span className="app-chat-composer__command-copy">
+                        <span className="app-chat-composer__command-title-row">
+                          <strong>Add files, apps, or tools</strong>
+                          <span className="app-chat-composer__command-description">
+                            Connect sources and capabilities.
+                          </span>
+                        </span>
+                      </span>
+                      <ChevronRight
+                        className="app-chat-composer__command-chevron"
+                        size={16}
+                        strokeWidth={1.9}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
 
               {commandPaletteVisible ? (
                 <div
@@ -416,13 +579,13 @@ export function ChatComposer({
                         onOpenIntegrations();
                       }}
                     >
+                      <Plus size={16} strokeWidth={2.1} aria-hidden="true" />
                       <span className="app-chat-composer__command-copy">
                         <span className="app-chat-composer__command-title-row">
                           <strong>{providerSummary.actionLabel ?? 'Set up Sage'}</strong>
+                          <span>{providerSummary.label}</span>
                         </span>
-                        <span>{providerSummary.label}</span>
                       </span>
-                      <span className="app-chat-composer__command-shortcut">Open</span>
                       <ChevronRight
                         className="app-chat-composer__command-chevron"
                         size={16}
@@ -431,10 +594,6 @@ export function ChatComposer({
                       />
                     </button>
                   ) : null}
-                  <div className="app-chat-composer__command-head">
-                    <span>Sage commands</span>
-                    <span>{commandQuery !== null ? 'Type to filter' : 'Built-in and custom controls'}</span>
-                  </div>
                   <div className="app-chat-composer__command-list" role="listbox" aria-label="Available Sage actions">
                     {filteredSlashCommands.map((command, index) => (
                       <button
@@ -449,29 +608,142 @@ export function ChatComposer({
                         role="option"
                         aria-selected={index === selectedCommandIndex}
                       >
+                        <command.icon size={16} strokeWidth={1.9} aria-hidden="true" />
                         <span className="app-chat-composer__command-copy">
                           <span className="app-chat-composer__command-title-row">
                             <strong>{command.title}</strong>
-                            {command.category ? (
-                              <span className="app-chat-composer__command-category">{command.category}</span>
-                            ) : null}
+                            <span className="app-chat-composer__command-description">{command.description}</span>
                           </span>
-                          <span>{command.description}</span>
                         </span>
                         <span className="app-chat-composer__command-shortcut">{command.slash}</span>
-                        <ChevronRight
-                          className="app-chat-composer__command-chevron"
-                          size={16}
-                          strokeWidth={1.9}
-                          aria-hidden="true"
-                        />
                       </button>
                     ))}
                   </div>
                 </div>
               ) : null}
             </div>
+
+            {showAutonomySelector ? (
+              <AppSelect
+                aria-label="Permissions"
+                value={autonomyMode}
+                onChange={(event) => {
+                  onAutonomyModeChange(event.currentTarget.value);
+                }}
+                disabled={controlsDisabled || busy}
+                className={`app-chat-composer__token-select app-chat-composer__token-select--autonomy${autonomyMode === 'full' ? ' app-chat-composer__token-select--warning' : ''}`}
+              >
+                {autonomyOptions.map((option) => (
+                  <option key={option.value} value={option.value} disabled={option.disabled}>
+                    {option.label}
+                  </option>
+                ))}
+              </AppSelect>
+            ) : (
+              <span className="app-chat-composer__token app-chat-composer__token--static">
+                <ShieldCheck size={15} strokeWidth={2} aria-hidden="true" />
+                {permissionLabel}
+              </span>
+            )}
+
+            <div className="app-chat-composer__model" ref={modelPanelRef}>
+              <button
+                type="button"
+                className="app-chat-composer__provider-pill"
+                disabled={controlsDisabled || busy}
+                aria-expanded={modelPanelOpen}
+                aria-label="Choose model and reasoning"
+                onClick={() => {
+                  setActionPaletteOpen(false);
+                  setCommandPaletteDismissed(true);
+                  setModelPanelOpen((current) => !current);
+                }}
+              >
+                <Brain size={15} strokeWidth={2} aria-hidden="true" />
+                <span>{selectedModelLabel}</span>
+                <span className="app-chat-composer__provider-pill-meta">{selectedReasoningLabel}</span>
+              </button>
+              {modelPanelOpen ? (
+                <div className="app-chat-composer__model-popover" role="dialog" aria-label="Model settings">
+                  <label className="app-chat-composer__model-field">
+                    <span>Model</span>
+                    <AppSelect
+                      aria-label="Model"
+                      value={model}
+                      onChange={(event) => {
+                        onModelChange(event.currentTarget.value);
+                      }}
+                      disabled={controlsDisabled || busy}
+                      className="app-chat-composer__model-select"
+                    >
+                      {modelOptions.map((option) => (
+                        isComposerOptionGroup(option) ? (
+                          <optgroup key={option.label} label={option.label}>
+                            {option.options.map((nested) => (
+                              <option key={nested.value} value={nested.value} disabled={nested.disabled}>
+                                {nested.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ) : (
+                          <option key={option.value} value={option.value} disabled={option.disabled}>
+                            {option.label}
+                          </option>
+                        )
+                      ))}
+                    </AppSelect>
+                  </label>
+                  <label className="app-chat-composer__model-field">
+                    <span>Reasoning</span>
+                    <AppSelect
+                      aria-label="Reasoning"
+                      value={reasoningEffort}
+                      onChange={(event) => {
+                        onReasoningEffortChange(event.currentTarget.value);
+                      }}
+                      disabled={controlsDisabled || busy || reasoningOptions.length <= 1}
+                      className="app-chat-composer__model-select"
+                    >
+                      {reasoningOptions.map((option) => (
+                        <option key={option.value} value={option.value} disabled={option.disabled}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </AppSelect>
+                  </label>
+                  {contextWindowLabel ? (
+                    <div className="app-chat-composer__model-readout">
+                      <span>Context</span>
+                      <strong>{contextWindowLabel}</strong>
+                    </div>
+                  ) : null}
+                  {preRunCostEstimate ? (
+                    <div className="app-chat-composer__model-readout">
+                      <span>Estimate</span>
+                      <strong>{preRunCostEstimate.estimateLabel}</strong>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
+
+          <button
+            type="button"
+            className={joinClassNames(
+              'app-chat-composer__voice',
+              voiceState === 'recording' && 'app-chat-composer__voice--recording',
+            )}
+            disabled={busy || voiceState === 'transcribing'}
+            aria-label={voiceState === 'recording' ? 'Stop voice recording' : 'Record voice'}
+            onClick={handleVoiceButton}
+          >
+            {voiceState === 'recording' ? (
+              <MicOff size={17} strokeWidth={2.1} aria-hidden="true" />
+            ) : (
+              <Mic size={17} strokeWidth={2.1} aria-hidden="true" />
+            )}
+          </button>
 
           <AppButton
             type={busy ? 'button' : 'submit'}

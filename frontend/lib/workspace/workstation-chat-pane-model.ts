@@ -1335,7 +1335,7 @@ export function modelOptionDisplayLabel(
 
   if (option.id === 'default') {
     const parts = ['Auto route'];
-    if (providerLabel) {
+    if (providerLabel && providerLabel.toLowerCase() !== 'auto route') {
       parts.push(providerLabel);
     }
     if (routeSuffix) {

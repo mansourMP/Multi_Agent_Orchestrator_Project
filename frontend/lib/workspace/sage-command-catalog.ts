@@ -1,3 +1,21 @@
+import {
+  Activity,
+  AppWindow,
+  CircleAlert,
+  Coins,
+  Cpu,
+  FileSearch,
+  LayoutGrid,
+  LifeBuoy,
+  Plus,
+  Puzzle,
+  Settings,
+  SquareActivity,
+  Table,
+  Zap,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
 import type { WorkspaceRouteId } from '../../../shared/nav-manifest';
 
 import type { WorkstationSageSkillRecord } from '@/lib/workspace/workstation-client';
@@ -16,6 +34,7 @@ export type SageCommandMetadata = {
   title: string;
   description: string;
   actionKind: SageCommandActionKind;
+  icon: LucideIcon;
   keywords?: string[];
 };
 
@@ -24,6 +43,7 @@ export type SageWorkspaceCommandMetadata = {
   title: string;
   description: string;
   routeId: WorkspaceRouteId;
+  icon: LucideIcon;
   keywords?: string[];
 };
 
@@ -35,6 +55,7 @@ export type SageSkillCommandMacro = {
   skillId: string;
   skillName: string;
   draftValue: string;
+  icon: LucideIcon;
   keywords: string[];
 };
 
@@ -45,6 +66,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     title: "What's Sage doing?",
     description: 'Show Sage health, readiness, and the latest run summary.',
     actionKind: 'open_status',
+    icon: Activity,
     keywords: ['system', 'health', 'ready', 'state', 'ready state'],
   },
   {
@@ -53,6 +75,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     title: 'Credits and usage',
     description: 'Open credits, estimated cost, and recent usage signals.',
     actionKind: 'open_usage',
+    icon: Coins,
     keywords: ['quota', 'cost', 'billing', 'trace', 'stats'],
   },
   {
@@ -61,6 +84,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     title: 'Show proof',
     description: 'Open session evidence, computer proofs, artifacts, and audit trail.',
     actionKind: 'open_proof',
+    icon: Table,
     keywords: ['activity', 'evidence', 'computer', 'browser', 'audit', 'trace', 'artifact'],
   },
   {
@@ -69,6 +93,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     title: 'What Sage can use',
     description: 'Show connected tools, apps, and callable capabilities.',
     actionKind: 'open_tools',
+    icon: Puzzle,
     keywords: ['integrations', 'tooling', 'actions', 'capabilities'],
   },
   {
@@ -77,6 +102,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     title: 'AI setup',
     description: 'Check which AI path Sage will use and where to manage it.',
     actionKind: 'open_runtime',
+    icon: Cpu,
     keywords: ['target', 'provider', 'local', 'cloud', 'deployment'],
   },
   {
@@ -85,6 +111,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     title: 'Check setup',
     description: 'Run a Sage readiness and connectivity check.',
     actionKind: 'run_doctor',
+    icon: LifeBuoy,
     keywords: ['health check', 'diagnostic', 'connectivity', 'connectors', 'gateway'],
   },
 ];
@@ -95,6 +122,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     title: 'Installed skills',
     description: 'Open the skill catalog and inspect installed AI extensions.',
     routeId: 'skills',
+    icon: Puzzle,
     keywords: ['extensions', 'skills', 'install', 'tool server', 'playbook'],
   },
   {
@@ -102,6 +130,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     title: 'Sage tasks',
     description: 'Open scheduled actions and pending automation tasks.',
     routeId: 'heartbeat',
+    icon: SquareActivity,
     keywords: ['heartbeat', 'tasks', 'scheduler', 'next action', 'automation'],
   },
   {
@@ -109,6 +138,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     title: 'Memory',
     description: 'Open memory surfaces for facts, corrections, and preferences.',
     routeId: 'memory',
+    icon: Table,
     keywords: ['context', 'facts', 'profile', 'knowledge', 'preference'],
   },
   {
@@ -116,6 +146,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     title: 'Needs your OK',
     description: 'Open pending approval requests awaiting user confirmation.',
     routeId: 'approvals',
+    icon: CircleAlert,
     keywords: ['review', 'approve', 'pending', 'guarded action', 'ok'],
   },
   {
@@ -123,6 +154,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     title: 'Integrations',
     description: 'Open integrated services and third-party app connections.',
     routeId: 'integrations',
+    icon: LayoutGrid,
     keywords: ['connect', 'apps', 'providers', 'channels', 'services'],
   },
   {
@@ -130,6 +162,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     title: 'Activity',
     description: 'Open run and event activity for recent work in this workspace.',
     routeId: 'activity',
+    icon: Activity,
     keywords: ['events', 'audit', 'timeline', 'history', 'runs'],
   },
 ];
@@ -221,6 +254,7 @@ export function buildSageSkillCommandMacros(payload: unknown): SageSkillCommandM
         skillId,
         skillName,
         draftValue: `${slash} `,
+        icon: Zap,
         keywords,
       });
     }

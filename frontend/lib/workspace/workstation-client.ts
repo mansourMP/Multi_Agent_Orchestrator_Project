@@ -693,6 +693,10 @@ export type WorkstationClientPaths = {
   agentInstalls: string;
   runtimeAttachments: string;
   runtimeTargets: string;
+  mcpServers: string;
+  mcpServer: (serverId: string) => string;
+  mcpServerRefresh: (serverId: string) => string;
+  mcpToolApprove: (serverId: string) => string;
   providers: string;
   providersCatalog: string;
   providerModels: (providerId: string, profileId?: string | null) => string;
@@ -912,6 +916,17 @@ export type WorkstationClient = {
   listAgentInstalls: () => Promise<Record<string, unknown>>;
   listRuntimeAttachments: () => Promise<Record<string, unknown>>;
   listRuntimeTargets: () => Promise<Record<string, unknown>>;
+  listMcpServers: () => Promise<Record<string, unknown>>;
+  saveMcpServer: (options: {
+    serverId: string;
+    label?: string | null;
+    endpoint: string;
+    enabled?: boolean;
+    discoverTools?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  refreshMcpServer: (options: { serverId: string }) => Promise<Record<string, unknown> | null>;
+  approveMcpTool: (options: { serverId: string; toolName: string }) => Promise<Record<string, unknown> | null>;
+  deleteMcpServer: (options: { serverId: string }) => Promise<Record<string, unknown> | null>;
   listProviders: () => Promise<Record<string, unknown>>;
   listProviderCatalog: () => Promise<Record<string, unknown>>;
   listProviderModels: (options: { providerId: string; profileId?: string | null }) => Promise<Record<string, unknown>>;
@@ -1310,6 +1325,13 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     agentInstalls: `/agent-registry/installs${buildQueryString({ workspace_id: workspaceId })}`,
     runtimeAttachments: `/agent-registry/runtime-attachments${buildQueryString({ workspace_id: workspaceId })}`,
     runtimeTargets: `/agent-registry/runtime-targets${buildQueryString({ workspace_id: workspaceId })}`,
+    mcpServers: `/agent-registry/mcp/servers${buildQueryString({ workspace_id: workspaceId })}`,
+    mcpServer: (serverId: string) =>
+      `/agent-registry/mcp/servers/${encodeURIComponent(serverId)}`,
+    mcpServerRefresh: (serverId: string) =>
+      `/agent-registry/mcp/servers/${encodeURIComponent(serverId)}/refresh`,
+    mcpToolApprove: (serverId: string) =>
+      `/agent-registry/mcp/servers/${encodeURIComponent(serverId)}/tools/approve`,
     providers: `/api/providers${buildQueryString({ workspace_id: workspaceId })}`,
     providersCatalog: `/api/providers/catalog${buildQueryString({ workspace_id: workspaceId })}`,
     providerModels: (providerId: string, profileId: string | null = null) =>
@@ -2647,6 +2669,60 @@ export function createWorkstationClient(
         path: paths.runtimeTargets,
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    listMcpServers: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.mcpServers,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    saveMcpServer: ({ serverId, label = null, endpoint, enabled = true, discoverTools = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.mcpServer(serverId),
+        init: {
+          method: 'PUT',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            label: label ?? undefined,
+            endpoint,
+            transport: 'streamable_http',
+            enabled,
+            discover_tools: discoverTools,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    refreshMcpServer: ({ serverId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.mcpServerRefresh(serverId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({ workspace_id: scope.workspaceId }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    approveMcpTool: ({ serverId, toolName }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.mcpToolApprove(serverId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            tool_name: toolName,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    deleteMcpServer: ({ serverId }) =>
+      requestJson<Record<string, unknown>>({
+        path: `${paths.mcpServer(serverId)}${buildQueryString({ workspace_id: scope.workspaceId })}`,
+        init: {
+          method: 'DELETE',
+          headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     listProviders: () =>
       requestJson<Record<string, unknown>>({
         path: paths.providers,

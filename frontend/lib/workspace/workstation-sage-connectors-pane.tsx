@@ -182,6 +182,33 @@ type PersonalChannelDraft = {
   text: string;
 };
 
+type McpToolRecord = Record<string, unknown> & {
+  name?: string | null;
+  label?: string | null;
+  description?: string | null;
+  action_class?: string | null;
+  risk_level?: string | null;
+  requires_approval?: boolean | null;
+  approved?: boolean | null;
+  enabled?: boolean | null;
+};
+
+type McpServerRecord = Record<string, unknown> & {
+  id?: string | null;
+  label?: string | null;
+  endpoint?: string | null;
+  enabled?: boolean | null;
+  tool_count?: number | null;
+  tools?: McpToolRecord[];
+  last_synced_at?: string | null;
+};
+
+type McpServerDraft = {
+  serverId: string;
+  label: string;
+  endpoint: string;
+};
+
 type ExternalIntegrationCardRecord = {
   id: string;
   label: string;
@@ -219,6 +246,7 @@ type SageConnectorsPaneCache = {
   whatsappPersonal: PersonalChannelViewPayload | null;
   telegramPersonal: PersonalChannelViewPayload | null;
   hostedSageAi: HostedSageAiSnapshot;
+  mcpServers: McpServerRecord[];
 };
 
 const sageConnectorsPaneCache = new Map<string, SageConnectorsPaneCache>();
@@ -236,6 +264,12 @@ const DEFAULT_HOSTED_SAGE_AI: HostedSageAiSnapshot = {
   monthlyCreditCap: 0,
   monthlyCreditsUsed: 0,
   monthlyCreditsRemaining: 0,
+};
+
+const DEFAULT_MCP_SERVER_DRAFT: McpServerDraft = {
+  serverId: '',
+  label: '',
+  endpoint: '',
 };
 
 const SAMPLE_PROVIDER_IDS = [
@@ -712,6 +746,13 @@ function normalizeVaultCredentials(payload: unknown): VaultCredentialRecord[] {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   return Array.isArray(record.items)
     ? record.items.filter((item): item is VaultCredentialRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function normalizeMcpServers(payload: unknown): McpServerRecord[] {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  return Array.isArray(record.items)
+    ? record.items.filter((item): item is McpServerRecord => Boolean(item) && typeof item === 'object')
     : [];
 }
 
@@ -1495,6 +1536,7 @@ export function WorkstationSageConnectorsPane({
   const [whatsappPersonal, setWhatsappPersonal] = useState<PersonalChannelViewPayload | null>(() => cachedState?.whatsappPersonal ?? null);
   const [telegramPersonal, setTelegramPersonal] = useState<PersonalChannelViewPayload | null>(() => cachedState?.telegramPersonal ?? null);
   const [hostedSageAi, setHostedSageAi] = useState<HostedSageAiSnapshot>(() => cachedState?.hostedSageAi ?? DEFAULT_HOSTED_SAGE_AI);
+  const [mcpServers, setMcpServers] = useState<McpServerRecord[]>(() => cachedState?.mcpServers ?? []);
   const [isLoading, setIsLoading] = useState(() => cachedState === null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -1509,6 +1551,7 @@ export function WorkstationSageConnectorsPane({
   const [providerModelOverrides, setProviderModelOverrides] = useState<Record<string, ProviderCatalogModelRecord[]>>({});
   const [failedLogos, setFailedLogos] = useState<Set<string>>(() => new Set());
   const [busyCardId, setBusyCardId] = useState<string | null>(null);
+  const [mcpServerDraft, setMcpServerDraft] = useState<McpServerDraft>(DEFAULT_MCP_SERVER_DRAFT);
   const [configChannelId, setConfigChannelId] = useState<PersonalCommunicationChannel | null>(null);
   const [channelDrafts, setChannelDrafts] = useState<Record<PersonalCommunicationChannel, PersonalChannelDraft>>({
     telegram: defaultPersonalChannelDraft('telegram'),
@@ -1516,11 +1559,12 @@ export function WorkstationSageConnectorsPane({
   });
 
   const loadState = useCallback(async () => {
-    const [catalogResult, profileResult, credentialResult, connectorResult, gatewayResult] = await Promise.allSettled([
+    const [catalogResult, profileResult, credentialResult, connectorResult, mcpResult, gatewayResult] = await Promise.allSettled([
       services.client.listProviderCatalog(),
       services.client.listProviderProfiles(),
       services.client.listVaultCredentials(),
       services.client.listConnectorsVault(),
+      services.client.listMcpServers(),
       (async () => {
         const registrationsPayload = await services.client.requestJson<Record<string, unknown>>({
           path: `/api/gateway/registrations?workspace_id=${encodeURIComponent(workspaceId)}`,
@@ -1586,6 +1630,7 @@ export function WorkstationSageConnectorsPane({
       whatsappPersonal: gatewayPayload.whatsappPersonal,
       telegramPersonal: gatewayPayload.telegramPersonal,
       hostedSageAi: normalizeHostedSageAi(catalogPayload),
+      mcpServers: mcpResult.status === 'fulfilled' ? normalizeMcpServers(mcpResult.value) : [],
     };
     sageConnectorsPaneCache.set(cacheKey, nextState);
     setProviders(nextState.providers);
@@ -1598,6 +1643,7 @@ export function WorkstationSageConnectorsPane({
     setWhatsappPersonal(nextState.whatsappPersonal);
     setTelegramPersonal(nextState.telegramPersonal);
     setHostedSageAi(nextState.hostedSageAi);
+    setMcpServers(nextState.mcpServers);
 
     if (catalogResult.status === 'rejected') {
       throw catalogResult.reason;
@@ -2045,8 +2091,8 @@ export function WorkstationSageConnectorsPane({
       label: 'Developer tools',
       description: 'Custom tool connections.',
       detail: 'Tool servers, custom APIs, and webhooks.',
-      countLabel: 'Custom',
-      statusTone: 'neutral',
+      countLabel: mcpServers.length > 0 ? `${mcpServers.length}` : 'Custom',
+      statusTone: mcpServers.some((server) => server.enabled !== false) ? 'connected' : 'neutral',
     });
     return groups;
   }, [
@@ -2056,6 +2102,7 @@ export function WorkstationSageConnectorsPane({
     channelCards,
     knowledgeCards,
     localCompanionOnline,
+    mcpServers,
     providerCards,
     showPersonalSurface,
     showProviders,
@@ -2094,6 +2141,83 @@ export function WorkstationSageConnectorsPane({
     await loadState();
     setStatus(successMessage);
     setError(null);
+  }
+
+  async function handleMcpServerSave() {
+    const serverId = readString(mcpServerDraft.serverId);
+    const endpoint = readString(mcpServerDraft.endpoint);
+    if (!serverId || !endpoint) {
+      setError('MCP server needs an ID and endpoint.');
+      return;
+    }
+    setBusyCardId('mcp:save');
+    try {
+      await services.client.saveMcpServer({
+        serverId,
+        label: readString(mcpServerDraft.label) || serverId,
+        endpoint,
+        discoverTools: true,
+      });
+      setMcpServerDraft(DEFAULT_MCP_SERVER_DRAFT);
+      await refreshAfterMutation('MCP server saved. Review and approve discovered tools before Sage can use them.');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'MCP server could not be saved.');
+    } finally {
+      setBusyCardId(null);
+    }
+  }
+
+  async function handleMcpServerRefresh(server: McpServerRecord) {
+    const serverId = readString(server.id);
+    if (!serverId) {
+      return;
+    }
+    setBusyCardId(`mcp:${serverId}:refresh`);
+    try {
+      await services.client.refreshMcpServer({ serverId });
+      await refreshAfterMutation('MCP tools refreshed. New tools stay hidden until approved.');
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : 'MCP server could not refresh.');
+    } finally {
+      setBusyCardId(null);
+    }
+  }
+
+  async function handleMcpToolApprove(server: McpServerRecord, tool: McpToolRecord) {
+    const serverId = readString(server.id);
+    const toolName = readString(tool.name);
+    if (!serverId || !toolName) {
+      return;
+    }
+    setBusyCardId(`mcp:${serverId}:${toolName}:approve`);
+    try {
+      await services.client.approveMcpTool({ serverId, toolName });
+      await refreshAfterMutation(`${readString(tool.label, toolName)} approved for Sage.`);
+    } catch (approveError) {
+      setError(approveError instanceof Error ? approveError.message : 'MCP tool could not be approved.');
+    } finally {
+      setBusyCardId(null);
+    }
+  }
+
+  async function handleMcpServerDelete(server: McpServerRecord) {
+    const serverId = readString(server.id);
+    if (!serverId) {
+      return;
+    }
+    const confirmed = window.confirm(`Remove MCP server ${readString(server.label, serverId)} from this workspace?`);
+    if (!confirmed) {
+      return;
+    }
+    setBusyCardId(`mcp:${serverId}:delete`);
+    try {
+      await services.client.deleteMcpServer({ serverId });
+      await refreshAfterMutation('MCP server removed.');
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'MCP server could not be removed.');
+    } finally {
+      setBusyCardId(null);
+    }
   }
 
   function markLogoFailed(id: string) {
@@ -3613,8 +3737,147 @@ export function WorkstationSageConnectorsPane({
             <p className="sage-unified-section__description">Custom APIs, tool servers, and webhooks stay separate from everyday app connections.</p>
             <div className="sage-integrations-detail-card">
               <strong>MCP servers, custom APIs, and webhooks</strong>
-              <span>Use this lane for developer-owned integrations that should not be mixed with everyday apps and channels.</span>
+              <span>Use this lane for developer-owned integrations that should not be mixed with everyday apps and channels. MCP tools stay unavailable until reviewed here.</span>
             </div>
+            <div className="sage-unified-expand">
+              <div className="sage-unified-expand__header">
+                <strong className="sage-unified-expand__title">Add MCP server</strong>
+              </div>
+              <FormField label="Server ID">
+                <FormInput
+                  value={mcpServerDraft.serverId}
+                  placeholder="inventory-feed"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  onChange={(event) => {
+                    setMcpServerDraft((current) => ({ ...current, serverId: event.currentTarget.value }));
+                  }}
+                />
+              </FormField>
+              <FormField label="Label">
+                <FormInput
+                  value={mcpServerDraft.label}
+                  placeholder="Inventory Feed"
+                  onChange={(event) => {
+                    setMcpServerDraft((current) => ({ ...current, label: event.currentTarget.value }));
+                  }}
+                />
+              </FormField>
+              <FormField label="Endpoint">
+                <FormInput
+                  type="url"
+                  value={mcpServerDraft.endpoint}
+                  placeholder="https://example.com/mcp"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  onChange={(event) => {
+                    setMcpServerDraft((current) => ({ ...current, endpoint: event.currentTarget.value }));
+                  }}
+                />
+              </FormField>
+              <div className="sage-unified-expand__actions">
+                <AppButton
+                  type="button"
+                  disabled={busyCardId === 'mcp:save'}
+                  onClick={() => {
+                    void handleMcpServerSave();
+                  }}
+                >
+                  {busyCardId === 'mcp:save' ? 'Saving...' : 'Save and discover tools'}
+                </AppButton>
+              </div>
+            </div>
+            {mcpServers.length > 0 ? (
+              <div className="sage-ai-provider-sections">
+                {mcpServers.map((server) => {
+                  const serverId = readString(server.id);
+                  const serverTools = Array.isArray(server.tools) ? server.tools : [];
+                  return (
+                    <section key={serverId || readString(server.endpoint)} className="sage-ai-provider-section">
+                      <div className="sage-ai-provider-section__header">
+                        <strong>{readString(server.label, serverId || 'MCP server')}</strong>
+                        <span>{server.enabled === false ? 'Disabled' : `${serverTools.length} tool${serverTools.length === 1 ? '' : 's'}`}</span>
+                      </div>
+                      <div className="sage-integrations-detail-card">
+                        <strong>{readString(server.endpoint, 'No endpoint recorded')}</strong>
+                        <span>
+                          {server.last_synced_at ? `Last synced ${readString(server.last_synced_at)}` : 'Refresh to discover current tools.'}
+                        </span>
+                        <div className="sage-unified-expand__actions">
+                          <AppButton
+                            type="button"
+                            tone="secondary"
+                            disabled={busyCardId === `mcp:${serverId}:refresh`}
+                            onClick={() => {
+                              void handleMcpServerRefresh(server);
+                            }}
+                          >
+                            {busyCardId === `mcp:${serverId}:refresh` ? 'Refreshing...' : 'Refresh tools'}
+                          </AppButton>
+                          <AppButton
+                            type="button"
+                            tone="ghost"
+                            disabled={busyCardId === `mcp:${serverId}:delete`}
+                            onClick={() => {
+                              void handleMcpServerDelete(server);
+                            }}
+                          >
+                            {busyCardId === `mcp:${serverId}:delete` ? 'Removing...' : 'Remove'}
+                          </AppButton>
+                        </div>
+                      </div>
+                      {serverTools.length > 0 ? (
+                        <div className="sage-unified-grid sage-unified-grid--4">
+                          {serverTools.map((tool) => {
+                            const toolName = readString(tool.name);
+                            const approved = tool.approved !== false;
+                            const approveKey = `mcp:${serverId}:${toolName}:approve`;
+                            return (
+                              <article key={toolName || readString(tool.label)} className="sage-unified-card">
+                                <span className="sage-unified-card__label">{readString(tool.label, toolName || 'MCP tool')}</span>
+                                <span className="sage-unified-card__detail">
+                                  {readString(tool.description, 'No description provided.')}
+                                </span>
+                                <span className={joinClassNames('sage-unified-card__status', approved && 'sage-unified-card__status--connected')}>
+                                  {approved ? 'Approved' : 'Needs review'}
+                                </span>
+                                <span className="sage-unified-card__detail">
+                                  {[readString(tool.action_class, 'read'), readString(tool.risk_level, 'low'), tool.requires_approval ? 'needs approval' : 'policy bound'].join(' · ')}
+                                </span>
+                                {!approved ? (
+                                  <AppButton
+                                    type="button"
+                                    tone="secondary"
+                                    disabled={busyCardId === approveKey}
+                                    onClick={() => {
+                                      void handleMcpToolApprove(server, tool);
+                                    }}
+                                  >
+                                    {busyCardId === approveKey ? 'Approving...' : 'Approve tool'}
+                                  </AppButton>
+                                ) : null}
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="sage-integrations-detail-card">
+                          <strong>No tools discovered yet</strong>
+                          <span>Refresh the server or check its MCP endpoint.</span>
+                        </div>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="sage-integrations-detail-card">
+                <strong>No MCP servers connected</strong>
+                <span>Add a server to make custom tools visible for approval.</span>
+              </div>
+            )}
           </section>
         );
     }

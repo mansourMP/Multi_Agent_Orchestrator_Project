@@ -94,6 +94,7 @@ export interface AgentRosterSidebarProps {
   onDismissRecentlyCreated: () => void;
   onOpenActivity: () => void;
   onOpenBilling: () => void;
+  onExportAudit: (agentId: string) => void;
   onOpenAssistantDetail: (id: string) => void;
   onOpenCreateWizard: (templateId: string) => void;
   currentStudioSubview: 'agents' | 'inbox' | 'deploy';
@@ -105,6 +106,7 @@ export interface AgentRosterSidebarProps {
   agentRosterCounts: Record<AgentRosterFilterId, number>;
   visibleAgents: DeployedAgentRecord[];
   selectedAgentId: string | null;
+  busyAuditExportAgentId: string | null;
   onSelectAgent: (id: string) => void;
   agentMetricsById: Record<string, AgentOperationalMetrics>;
   isAgentListPriming: boolean;
@@ -128,6 +130,7 @@ export const AgentRosterSidebar = memo(({
   onDismissRecentlyCreated,
   onOpenActivity,
   onOpenBilling,
+  onExportAudit,
   onOpenAssistantDetail,
   onOpenCreateWizard,
   currentStudioSubview,
@@ -139,6 +142,7 @@ export const AgentRosterSidebar = memo(({
   agentRosterCounts,
   visibleAgents,
   selectedAgentId,
+  busyAuditExportAgentId,
   onSelectAgent,
   agentMetricsById,
   isAgentListPriming,
@@ -341,6 +345,16 @@ export const AgentRosterSidebar = memo(({
           eyebrow="Readiness"
           title="Launch readiness"
           subtitle="The launch contract for this customer-facing text/API agent."
+          actions={selectedAgent ? (
+            <AppButton
+              type="button"
+              tone="secondary"
+              disabled={busyAuditExportAgentId === readString(selectedAgent.id, '')}
+              onClick={() => onExportAudit(readString(selectedAgent.id, ''))}
+            >
+              {busyAuditExportAgentId === readString(selectedAgent.id, '') ? 'Exporting audit…' : 'Export audit'}
+            </AppButton>
+          ) : undefined}
         >
           <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
             <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />

@@ -720,6 +720,7 @@ export type WorkstationClientPaths = {
   deployedAgentDeploy: (deployedAgentId: string) => string;
   deployedAgentPause: (deployedAgentId: string) => string;
   deployedAgentRuntimeKill: (deployedAgentId: string, sessionId: string) => string;
+  deployedAgentAuditExport: (deployedAgentId: string, limit?: number) => string;
   deployedAgentTestTurn: (deployedAgentId: string) => string;
   deployedAgentAnalyticsRoster: string;
   deployedAgentAnalyticsDetail: (deployedAgentId: string) => string;
@@ -976,6 +977,10 @@ export type WorkstationClient = {
     sessionId: string;
   }) => Promise<Record<string, unknown> | null>;
   listWorkspaceRuntimeSessions: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  exportDeployedAgentAudit: (options: {
+    deployedAgentId: string;
+    limit?: number;
+  }) => Promise<Record<string, unknown>>;
   listTraces: (filters?: WorkstationAgentTraceListFilters) => Promise<Record<string, unknown>>;
   getTraceReplay: (options: {
     traceId: string;
@@ -1382,6 +1387,11 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/pause`,
     deployedAgentRuntimeKill: (deployedAgentId, sessionId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/runtime-sessions/${encodeURIComponent(sessionId)}/kill`,
+    deployedAgentAuditExport: (deployedAgentId, limit = 500) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/audit-export${buildQueryString({
+        workspace_id: workspaceId,
+        limit,
+      })}`,
     deployedAgentTestTurn: (deployedAgentId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/test-turn`,
     deployedAgentAnalyticsRoster:
@@ -2893,6 +2903,11 @@ export function createWorkstationClient(
     listWorkspaceRuntimeSessions: ({ limit = 50 } = {}) =>
       requestJson<Record<string, unknown>>({
         path: paths.workspaceRuntimeSessions(limit),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    exportDeployedAgentAudit: ({ deployedAgentId, limit = 500 }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentAuditExport(deployedAgentId, limit),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     listTraces: (filters = {}) =>

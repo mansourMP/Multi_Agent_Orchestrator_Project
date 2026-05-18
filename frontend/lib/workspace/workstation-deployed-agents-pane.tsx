@@ -162,6 +162,7 @@ export function WorkstationDeployedAgentsPane({
   const [detailConfigDraft, setDetailConfigDraft] = useState<DetailConfigDraft | null>(null);
   const [isSavingDetailConfig, setIsSavingDetailConfig] = useState(false);
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
+  const [busyAuditExportAgentId, setBusyAuditExportAgentId] = useState<string | null>(null);
   const [busyExternalUserId, setBusyExternalUserId] = useState<string | null>(null);
   const [recentlyCreatedAgentId, setRecentlyCreatedAgentId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -1176,6 +1177,43 @@ export function WorkstationDeployedAgentsPane({
     router.push(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`);
   });
 
+  const handleExportAudit = useStableEvent(async (agentId: string) => {
+    const cleanAgentId = readString(agentId, '');
+    if (!cleanAgentId) {
+      setErrorMessage('Select an assistant before exporting its audit log.');
+      return;
+    }
+    setBusyAuditExportAgentId(cleanAgentId);
+    setErrorMessage(null);
+    try {
+      const payload = await services.client.exportDeployedAgentAudit({
+        deployedAgentId: cleanAgentId,
+        limit: 500,
+      });
+      const agentLabel = readString(
+        selectedAgent?.id === cleanAgentId ? selectedAgent?.name : agents.find((item) => readString(item.id, '') === cleanAgentId)?.name,
+        cleanAgentId,
+      )
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || cleanAgentId;
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${agentLabel}-audit.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+      setStatusMessage('Audit export downloaded.');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Audit export could not be downloaded.');
+    } finally {
+      setBusyAuditExportAgentId(null);
+    }
+  });
+
   const handleOpenAssistantDetail = useStableEvent((id: string) => {
     setSelectedAgentId(id);
     setOverlayAgentId(null);
@@ -1306,6 +1344,7 @@ export function WorkstationDeployedAgentsPane({
               onDismissRecentlyCreated={handleDismissRecentlyCreated}
               onOpenActivity={handleOpenActivity}
               onOpenBilling={handleOpenBilling}
+              onExportAudit={handleExportAudit}
               onOpenAssistantDetail={handleOpenAssistantDetail}
               onOpenCreateWizard={handleOpenCreateWizard}
               currentStudioSubview={currentStudioSubview}
@@ -1317,6 +1356,7 @@ export function WorkstationDeployedAgentsPane({
               agentRosterCounts={agentRosterCounts}
               visibleAgents={visibleAgents}
               selectedAgentId={selectedAgentId}
+              busyAuditExportAgentId={busyAuditExportAgentId}
               onSelectAgent={handleSelectAgent}
               agentMetricsById={agentMetricsById}
               isAgentListPriming={isAgentListPriming}

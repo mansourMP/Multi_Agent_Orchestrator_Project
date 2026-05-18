@@ -22,13 +22,10 @@ import {
   type ComposerToolGroup,
 } from '@/lib/workspace/chat-composer';
 import {
-  buildSageSkillCommandMacros,
-  expandSageSkillSlashCommand,
   SAGE_COMMAND_CATALOG,
   SAGE_WORKSPACE_COMMAND_CATALOG,
   type SageCommandActionKind,
   type SageCommandMetadata,
-  type SageSkillCommandMacro,
   type SageWorkspaceCommandMetadata,
   resolveSageCommandBySlash,
 } from '@/lib/workspace/sage-command-catalog';
@@ -336,7 +333,6 @@ export function WorkstationChatPane() {
   const [titlebarCreditsOpen, setTitlebarCreditsOpen] = useState(false);
   const [activeSageCommandPanel, setActiveSageCommandPanel] = useState<SageCommandActionKind | null>(null);
   const [workspaceCommandPaletteOpen, setWorkspaceCommandPaletteOpen] = useState(false);
-  const [skillSlashCommandMacros, setSkillSlashCommandMacros] = useState<SageSkillCommandMacro[]>([]);
   const actor = useMemo<WorkstationSessionActor>(() => ({
     type: 'user',
     id: bootstrap.account.id,
@@ -582,13 +578,6 @@ export function WorkstationChatPane() {
       return await services.client.getBillingSummary();
     }).catch(() => null);
     setBillingSummary(payload && typeof payload === 'object' ? payload : null);
-  }, [services.client, services.queryClient]);
-
-  const refreshSkillCommands = useCallback(async () => {
-    const payload = await services.queryClient.run('chat:skill-commands', async () => {
-      return await services.client.listSageSkills();
-    }).catch(() => null);
-    setSkillSlashCommandMacros(buildSageSkillCommandMacros(payload));
   }, [services.client, services.queryClient]);
 
   const persistSelectedModelPreference = useCallback(async (nextModelId: string) => {
@@ -1972,11 +1961,10 @@ export function WorkstationChatPane() {
     void refreshToolingState().catch(() => undefined);
     void refreshBrowserGatewayReadiness().catch(() => undefined);
     void refreshBillingSummary().catch(() => undefined);
-    void refreshSkillCommands().catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshSkillCommands, refreshToolingState]);
+  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
 
   useEffect(() => subscribeWorkstationProviderChanged((detail) => {
     if (detail.workspaceId !== bootstrap.workspace.id) {
@@ -1986,8 +1974,7 @@ export function WorkstationChatPane() {
     void refreshToolingState();
     void refreshBrowserGatewayReadiness();
     void refreshBillingSummary();
-    void refreshSkillCommands();
-  }), [bootstrap.workspace.id, refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshSkillCommands, refreshToolingState]);
+  }), [bootstrap.workspace.id, refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -1998,7 +1985,6 @@ export function WorkstationChatPane() {
       void refreshToolingState();
       void refreshBrowserGatewayReadiness();
       void refreshBillingSummary();
-      void refreshSkillCommands();
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -2006,7 +1992,6 @@ export function WorkstationChatPane() {
         void refreshToolingState();
         void refreshBrowserGatewayReadiness();
         void refreshBillingSummary();
-        void refreshSkillCommands();
       }
     };
     window.addEventListener('focus', handleFocus);
@@ -2015,7 +2000,7 @@ export function WorkstationChatPane() {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshSkillCommands, refreshToolingState]);
+  }, [refreshBillingSummary, refreshBrowserGatewayReadiness, refreshProviderCatalog, refreshToolingState]);
 
   useEffect(() => {
     if (isPersistingModelSelection) {
@@ -2183,11 +2168,7 @@ export function WorkstationChatPane() {
       }
       return;
     }
-    const {
-      displayMessage,
-      submittedMessage,
-      matchedMacro,
-    } = expandSageSkillSlashCommand(outboundMessage, skillSlashCommandMacros);
+    const displayMessage = outboundMessage;
     submitInFlightRef.current = true;
     const resolvedProviderId = readString(selectedProviderContext.providerId) || null;
     const resolvedModelId = readString(selectedProviderContext.modelId)
@@ -2309,9 +2290,6 @@ export function WorkstationChatPane() {
         channel: 'web',
         metadata: {
           source: 'workstation_chat_pane',
-          slash_command: matchedMacro?.slash ?? undefined,
-          slash_command_skill_id: matchedMacro?.skillId ?? undefined,
-          slash_command_skill_name: matchedMacro?.skillName ?? undefined,
         },
         clientRequestId,
       });
@@ -2429,7 +2407,7 @@ export function WorkstationChatPane() {
       const { response, session: streamedSession } = await services.client.submitTurnStreamWithSessionRetry({
         actor,
         threadId: requestedThreadId,
-        message: submittedMessage,
+        message: displayMessage,
         channel: 'web',
         source: 'workstation_chat_pane',
         runtimeTarget: localRuntimeTargetId || 'cloud',

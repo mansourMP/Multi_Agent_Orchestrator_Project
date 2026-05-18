@@ -8,13 +8,10 @@ import {
   Puzzle,
   SquareActivity,
   Table,
-  Zap,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import type { WorkspaceRouteId } from '../../../shared/nav-manifest';
-
-import type { WorkstationSageSkillRecord } from '@/lib/workspace/workstation-client';
 
 export type SageCommandActionKind =
   | 'open_status'
@@ -41,18 +38,6 @@ export type SageWorkspaceCommandMetadata = {
   routeId: WorkspaceRouteId;
   icon: LucideIcon;
   keywords?: string[];
-};
-
-export type SageSkillCommandMacro = {
-  id: string;
-  slash: `/${string}`;
-  title: string;
-  description: string;
-  skillId: string;
-  skillName: string;
-  draftValue: string;
-  icon: LucideIcon;
-  keywords: string[];
 };
 
 export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
@@ -181,130 +166,4 @@ export function resolveSageCommandBySlash(slash: string): SageCommandMetadata | 
 
 export function resolveSageCommandById(id: string): SageCommandMetadata | null {
   return SAGE_COMMAND_CATALOG.find((command) => command.id === id.trim().toLowerCase()) ?? null;
-}
-
-function readString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function readStringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.flatMap((item) => {
-        const token = readString(item);
-        return token ? [token] : [];
-      })
-    : [];
-}
-
-function normalizeSlashToken(value: unknown): `/${string}` | null {
-  const normalized = readString(value).toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  const token = normalized.startsWith('/') ? normalized : `/${normalized}`;
-  if (/\s/.test(token)) {
-    return null;
-  }
-  return token as `/${string}`;
-}
-
-export function buildSageSkillCommandMacros(payload: unknown): SageSkillCommandMacro[] {
-  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-  const items = Array.isArray(record.items) ? record.items : [];
-  const macros: SageSkillCommandMacro[] = [];
-  const seen = new Set<string>(SAGE_COMMAND_CATALOG.map((command) => command.slash));
-
-  for (const item of items) {
-    if (!item || typeof item !== 'object') {
-      continue;
-    }
-    const skill = item as WorkstationSageSkillRecord;
-    if (readString(skill.status).toLowerCase() !== 'ready') {
-      continue;
-    }
-    const skillId = readString(skill.id) || 'skill';
-    const skillName = readString(skill.name) || 'Skill';
-    const description =
-      readString(skill.what_it_does)
-      || readString(skill.description)
-      || `${skillName} capability`;
-    const keywords = [
-      skillName,
-      description,
-      ...readStringList(skill.tools),
-      ...readStringList(skill.supported_os),
-      ...readStringList(skill.allowed_runtime_modes),
-    ];
-
-    for (const token of readStringList(skill.slash_commands)) {
-      const slash = normalizeSlashToken(token);
-      if (!slash || seen.has(slash)) {
-        continue;
-      }
-      seen.add(slash);
-      macros.push({
-        id: `skill:${skillId}:${slash.slice(1)}`,
-        slash,
-        title: skillName,
-        description,
-        skillId,
-        skillName,
-        draftValue: `${slash} `,
-        icon: Zap,
-        keywords,
-      });
-    }
-  }
-
-  return macros.sort((left, right) => left.title.localeCompare(right.title) || left.slash.localeCompare(right.slash));
-}
-
-export function expandSageSkillSlashCommand(
-  message: string,
-  macros: readonly SageSkillCommandMacro[],
-): {
-  displayMessage: string;
-  submittedMessage: string;
-  matchedMacro: SageSkillCommandMacro | null;
-} {
-  const displayMessage = message.trim();
-  if (!displayMessage.startsWith('/')) {
-    return {
-      displayMessage,
-      submittedMessage: displayMessage,
-      matchedMacro: null,
-    };
-  }
-
-  const [rawSlash = '', ...rest] = displayMessage.split(/\s+/);
-  const slash = normalizeSlashToken(rawSlash);
-  if (!slash) {
-    return {
-      displayMessage,
-      submittedMessage: displayMessage,
-      matchedMacro: null,
-    };
-  }
-
-  const matchedMacro = macros.find((macro) => macro.slash === slash) ?? null;
-  if (!matchedMacro) {
-    return {
-      displayMessage,
-      submittedMessage: displayMessage,
-      matchedMacro: null,
-    };
-  }
-
-  const request = rest.join(' ').trim() || 'Help me with this capability.';
-  const submittedMessage = [
-    `The user invoked the \`${matchedMacro.slash}\` command for the "${matchedMacro.skillName}" skill.`,
-    `Skill summary: ${matchedMacro.description}`,
-    `User request: ${request}`,
-  ].join('\n');
-
-  return {
-    displayMessage,
-    submittedMessage,
-    matchedMacro,
-  };
 }

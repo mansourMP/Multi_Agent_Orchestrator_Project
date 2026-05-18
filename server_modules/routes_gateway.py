@@ -121,51 +121,6 @@ def _enforce_gateway_safety_gates(
             )
 
 
-def _block_disabled_interactive_approval(
-    *,
-    gateway_id: str,
-    capability_id: str,
-    workspace_id: str,
-    tenant_id: str,
-    reason: str = "interactive_approvals_disabled",
-) -> None:
-    try:
-        security_audit_service.emit_security_audit_event(
-            action="gateway.approval_blocked",
-            status="blocked",
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            detail=f"Approval-required gateway action blocked for capability {capability_id}: {reason}",
-            metadata={
-                "gateway_id": gateway_id,
-                "capability_id": capability_id,
-                "reason": reason,
-            },
-        )
-    except Exception as exc:
-        LOGGER.warning("Failed to emit gateway approval blocked audit for %s: %s", gateway_id, exc)
-    try:
-        gateway_state_repository.record_gateway_event(
-            gateway_id=gateway_id,
-            session_id=None,
-            direction="server",
-            frame_kind="audit",
-            message_type="gateway.approval_blocked",
-            payload={
-                "workspace_id": workspace_id,
-                "capability_id": capability_id,
-                "reason": reason,
-                "status": "blocked",
-            },
-        )
-    except Exception as exc:
-        LOGGER.warning("Failed to record gateway approval blocked event for %s: %s", gateway_id, exc)
-    raise HTTPException(
-        status_code=403,
-        detail="Gateway action requires owner approval, but interactive approvals are disabled.",
-    )
-
-
 def _audit_approval_bypass(
     *,
     gateway_id: str,
@@ -188,6 +143,37 @@ def _audit_approval_bypass(
         )
     except Exception as exc:
         LOGGER.warning("Failed to emit gateway approval bypass audit for %s: %s", gateway_id, exc)
+
+
+async def _gateway_approval_required_response(
+    *,
+    registration: Dict[str, Any],
+    gateway_id: str,
+    capability_id: str,
+    arguments: Dict[str, Any],
+    run_id: str,
+    trace_id: str,
+    request_id: Optional[str],
+    risk_decision,
+) -> JSONResponse:
+    approval = await gateway_approval_service.request_gateway_tool_approval(
+        registration=registration,
+        capability_id=capability_id,
+        arguments=arguments,
+        run_id=run_id,
+        trace_id=trace_id,
+        request_id=str(request_id or "").strip() or None,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "status": "approval_required",
+            "gateway_id": gateway_id,
+            "approval": approval,
+            "normalized_approval": approval.get("normalized_approval"),
+            "risk_decision": risk_decision.as_dict(),
+        },
+    )
 
 
 def _gateway_policy_from_registration(registration: Dict[str, Any]):
@@ -819,15 +805,7 @@ async def execute_gateway_tool(
         )
     risk_requires_approval = risk_decision.decision == DECISION_APPROVAL_REQUIRED and remembered_approval_rule is None
     requires_owner_approval = requires_owner_approval and remembered_approval_rule is None
-    if not body.interactive_approvals and (requires_owner_approval or risk_requires_approval):
-        _block_disabled_interactive_approval(
-            gateway_id=gateway_id,
-            capability_id=body.capability_id,
-            workspace_id=resolved_workspace_id,
-            tenant_id=tenant_id,
-        )
-
-    if not body.interactive_approvals:
+    if not body.interactive_approvals and not (requires_owner_approval or risk_requires_approval):
         _audit_approval_bypass(
             gateway_id=gateway_id,
             capability_id=body.capability_id,
@@ -835,23 +813,16 @@ async def execute_gateway_tool(
             tenant_id=tenant_id,
         )
 
-    if body.interactive_approvals and (requires_owner_approval or risk_requires_approval):
-        approval = await gateway_approval_service.request_gateway_tool_approval(
+    if requires_owner_approval or risk_requires_approval:
+        return await _gateway_approval_required_response(
             registration=registration,
+            gateway_id=gateway_id,
             capability_id=body.capability_id,
             arguments=body.arguments,
             run_id=body.run_id,
             trace_id=str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id,
             request_id=str(body.request_id or "").strip() or None,
-        )
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={
-                "status": "approval_required",
-                "gateway_id": gateway_id,
-                "approval": approval,
-                "risk_decision": risk_decision.as_dict(),
-            },
+            risk_decision=risk_decision,
         )
     try:
         return await gateway_execution_service.execute_tool_via_gateway(
@@ -1087,36 +1058,19 @@ async def start_gateway_browser_session(
             reason="Local gateway browser runtime is offline; cloud browser fallback prepared.",
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
-    if not body.interactive_approvals and (
+    if (
         browser_start_requires_approval
         or risk_requires_approval
     ):
-        _block_disabled_interactive_approval(
-            gateway_id=gateway_id,
-            capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
-            workspace_id=resolved_workspace_id,
-            tenant_id=tenant_id,
-        )
-    if body.interactive_approvals and (
-        browser_start_requires_approval
-        or risk_requires_approval
-    ):
-        approval = await gateway_approval_service.request_gateway_tool_approval(
+        return await _gateway_approval_required_response(
             registration=registration,
+            gateway_id=gateway_id,
             capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
             arguments=arguments,
             run_id=body.run_id,
             trace_id=trace_id,
             request_id=str(body.request_id or "").strip() or None,
-        )
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={
-                "status": "approval_required",
-                "gateway_id": gateway_id,
-                "approval": approval,
-                "risk_decision": risk_decision.as_dict(),
-            },
+            risk_decision=risk_decision,
         )
     try:
         response = await gateway_browser_service.execute_browser_capability_via_gateway(
@@ -1251,36 +1205,19 @@ async def execute_gateway_browser_action(
             checkpoint=browser_session.get("checkpoint") if isinstance(browser_session.get("checkpoint"), dict) else {},
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
-    if not body.interactive_approvals and (
+    if (
         browser_action_requires_approval
         or risk_requires_approval
     ):
-        _block_disabled_interactive_approval(
-            gateway_id=gateway_id,
-            capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
-            workspace_id=resolved_workspace_id,
-            tenant_id=tenant_id,
-        )
-    if body.interactive_approvals and (
-        browser_action_requires_approval
-        or risk_requires_approval
-    ):
-        approval = await gateway_approval_service.request_gateway_tool_approval(
+        return await _gateway_approval_required_response(
             registration=registration,
+            gateway_id=gateway_id,
             capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
             arguments=arguments,
             run_id=body.run_id,
             trace_id=trace_id,
             request_id=str(body.request_id or "").strip() or None,
-        )
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={
-                "status": "approval_required",
-                "gateway_id": gateway_id,
-                "approval": approval,
-                "risk_decision": risk_decision.as_dict(),
-            },
+            risk_decision=risk_decision,
         )
     try:
         response = await gateway_browser_service.execute_browser_capability_via_gateway(

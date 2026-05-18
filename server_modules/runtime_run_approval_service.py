@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 from fastapi import HTTPException
+from server_modules import approval_contracts
 from server_modules import agent_trace_service
 from server_modules import browser_approval_service
 from server_modules.direct_tool_config_service import run_async_tool_call
@@ -237,6 +238,13 @@ def _approval_request_payload_from_run(run_id: str, run: dict[str, Any], pending
     return payload
 
 
+def _attach_normalized_runtime_approval(item: dict[str, Any]) -> dict[str, Any]:
+    return approval_contracts.attach_normalized_approval(
+        item,
+        approval_contracts.normalize_runtime_approval(item),
+    )
+
+
 def _ensure_durable_approval_request(run_id: str, snapshot_run: dict[str, Any], pending: dict[str, Any]) -> dict[str, Any]:
     approval_id = str(pending.get("approval_id") or "").strip()
     correlation_id = str(pending.get("correlation_id") or approval_id).strip() or approval_id
@@ -392,7 +400,7 @@ def list_pending_approvals_payload(
         prompt = str(approval.get("prompt") or "Approval required.").strip()
         browser_summary = browser_approval_service.browser_approval_summary(metadata)
         items.append(
-            {
+            _attach_normalized_runtime_approval({
                 "approval_id": approval_id,
                 "run_id": run_id,
                 "workspace_id": approval_workspace_id,
@@ -431,7 +439,7 @@ def list_pending_approvals_payload(
                 "metadata": metadata,
                 "email_preview": email_preview,
                 "browser": browser_summary,
-            }
+            })
         )
         seen_approval_ids.add(approval_id)
 
@@ -467,7 +475,7 @@ def list_pending_approvals_payload(
         prompt = str(approval.get("prompt") or "Approval required.").strip()
         browser_summary = browser_approval_service.browser_approval_summary(metadata)
         items.append(
-            {
+            _attach_normalized_runtime_approval({
                 "approval_id": approval_id,
                 "run_id": run_id,
                 "workspace_id": approval_workspace_id,
@@ -499,7 +507,7 @@ def list_pending_approvals_payload(
                 "metadata": metadata,
                 "email_preview": email_preview,
                 "browser": browser_summary,
-            }
+            })
         )
         seen_approval_ids.add(approval_id)
 

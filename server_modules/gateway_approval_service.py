@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from server_modules import (
+    approval_contracts,
     gateway_activity_service,
     gateway_execution_service,
     gateway_state_repository,
@@ -58,7 +59,13 @@ def capability_requires_owner_approval(capability_id: str) -> bool:
 
 
 def get_gateway_tool_approval(approval_id: str) -> Optional[Dict[str, Any]]:
-    return gateway_state_repository.get_gateway_action_approval(approval_id)
+    approval = gateway_state_repository.get_gateway_action_approval(approval_id)
+    if not isinstance(approval, dict):
+        return None
+    return approval_contracts.attach_normalized_approval(
+        approval,
+        approval_contracts.normalize_gateway_approval(approval),
+    )
 
 
 def list_gateway_tool_approvals(
@@ -67,11 +74,17 @@ def list_gateway_tool_approvals(
     status: Optional[str] = None,
     limit: int = 50,
 ) -> Dict[str, Any]:
-    items = gateway_state_repository.list_gateway_action_approvals(
-        gateway_id=gateway_id,
-        status=status,
-        limit=limit,
-    )
+    items = [
+        approval_contracts.attach_normalized_approval(
+            item,
+            approval_contracts.normalize_gateway_approval(item),
+        )
+        for item in gateway_state_repository.list_gateway_action_approvals(
+            gateway_id=gateway_id,
+            status=status,
+            limit=limit,
+        )
+    ]
     pending_count = len([item for item in items if str(item.get("status") or "").strip() == "pending"])
     retryable_count = len(
         [
@@ -115,6 +128,10 @@ async def request_gateway_tool_approval(
             "trace_id": str(trace_id or "").strip() or None,
             "request_id": str(request_id or "").strip() or None,
         },
+    )
+    approval = approval_contracts.attach_normalized_approval(
+        approval,
+        approval_contracts.normalize_gateway_approval(approval),
     )
     # record_gateway_event already sanitizes internally
     gateway_state_repository.record_gateway_event(

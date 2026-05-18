@@ -67,6 +67,7 @@ class AutopilotApprovalServiceTests(unittest.TestCase):
         text = service.approvals_text(service.approvals_list(limit=5, workspace_id="ws-1"), prefix="/ops")
         self.assertIn("Pending approvals:", text)
         self.assertIn("/ops approve", text)
+        self.assertIn("/ops deny", text)
 
     def test_notify_pending_approvals_sends_only_new_items(self):
         service = self._make_service()

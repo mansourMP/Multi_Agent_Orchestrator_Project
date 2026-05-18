@@ -516,7 +516,7 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
         execute_mock.assert_awaited_once()
         fallback_mock.assert_not_awaited()
 
-    def test_risky_browser_action_with_interactive_approvals_disabled_is_blocked(self) -> None:
+    def test_risky_browser_action_with_interactive_approvals_disabled_returns_pending_approval(self) -> None:
         registration_payload = self._register_gateway()
         gateway = registration_payload["gateway"]
         gateway_id = gateway["gateway_id"]
@@ -554,22 +554,19 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(response.status_code, 403)
-        self.assertIn("requires owner approval", response.json()["detail"])
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["status"], "approval_required")
+        self.assertEqual(payload["normalized_approval"]["channel"], "web")
+        self.assertEqual(payload["normalized_approval"]["action"], "browser.session.action")
         execute_mock.assert_not_awaited()
         audit_actions = [call.kwargs["action"] for call in audit_mock.call_args_list]
-        self.assertIn("gateway.approval_blocked", audit_actions)
-        blocked_call = next(
-            call
-            for call in audit_mock.call_args_list
-            if call.kwargs["action"] == "gateway.approval_blocked"
-        )
-        self.assertEqual(blocked_call.kwargs["status"], "blocked")
+        self.assertNotIn("gateway.approval_blocked", audit_actions)
         events_payload = self.client.get(f"/api/gateway/registrations/{gateway_id}/events")
         event_types = [item["message_type"] for item in events_payload.json()["items"]]
-        self.assertIn("gateway.approval_blocked", event_types)
+        self.assertIn("gateway.approval.requested", event_types)
 
-    def test_review_required_browser_session_with_interactive_approvals_disabled_is_blocked(self) -> None:
+    def test_review_required_browser_session_with_interactive_approvals_disabled_returns_pending_approval(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
         execute_mock = AsyncMock(return_value={"status": "completed"})
@@ -589,8 +586,11 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(response.status_code, 403)
-        self.assertIn("requires owner approval", response.json()["detail"])
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["status"], "approval_required")
+        self.assertEqual(payload["normalized_approval"]["channel"], "web")
+        self.assertEqual(payload["normalized_approval"]["action"], "browser.session.start")
         execute_mock.assert_not_awaited()
 
     def test_gateway_browser_attach_mode_reports_attach_required_and_attached_states(self) -> None:

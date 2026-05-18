@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from server_modules import approval_contracts
 from server_modules import workspace_context
 
 APPROVAL_TOKEN_PREFIX = "sap_"
@@ -68,8 +69,10 @@ class SageApprovalRecord:
         return False
 
     def as_dict(self) -> dict:
-        return {
+        payload = {
             "approval_token": self.approval_token,
+            "approval_id": self.approval_token,
+            "id": self.approval_token,
             "workspace_id": self.workspace_id,
             "tenant_id": self.tenant_id,
             "trace_id": self.trace_id,
@@ -84,6 +87,10 @@ class SageApprovalRecord:
             "resolution_reason": self.resolution_reason,
             "resolution_actor": self.resolution_actor,
         }
+        return approval_contracts.attach_normalized_approval(
+            payload,
+            approval_contracts.normalize_sage_approval(payload),
+        )
 
 
 def _state_file(workspace_id: str) -> Path:
@@ -313,13 +320,20 @@ def list_pending_approvals(*, workspace_id: str) -> list[dict]:
         if not isinstance(raw, dict):
             continue
         if raw.get("status") == "pending":
-            pending.append({
+            item = {
                 "approval_token": _coerce_text(raw.get("approval_token")),
+                "approval_id": _coerce_text(raw.get("approval_token")),
+                "id": _coerce_text(raw.get("approval_token")),
                 "action": _coerce_text(raw.get("action")),
                 "description": _coerce_text(raw.get("description")),
+                "prompt": _coerce_text(raw.get("description")),
                 "status": _coerce_text(raw.get("status")),
                 "created_at": _coerce_text(raw.get("created_at")),
                 "expires_at": _coerce_text(raw.get("expires_at")),
                 "trace_id": _coerce_text(raw.get("trace_id")),
-            })
+            }
+            pending.append(approval_contracts.attach_normalized_approval(
+                item,
+                approval_contracts.normalize_sage_approval(item),
+            ))
     return pending

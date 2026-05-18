@@ -23,6 +23,7 @@ import {
 type ApprovalRecord = Record<string, unknown> & {
   approval_id?: string | null;
   id?: string | null;
+  code?: string | null;
   run_id?: string | null;
   status?: string | null;
   prompt?: string | null;
@@ -59,6 +60,13 @@ function approvalTone(value: unknown): 'neutral' | 'success' | 'warning' | 'dang
 function isPendingApproval(status: unknown): boolean {
   const normalized = String(status ?? '').trim().toLowerCase();
   return normalized === 'requested' || normalized === 'pending';
+}
+
+function approvalCode(item: ApprovalRecord): string {
+  const normalized = item.normalized_approval && typeof item.normalized_approval === 'object'
+    ? item.normalized_approval as Record<string, unknown>
+    : {};
+  return readString(item.code ?? normalized.code, '') || readString(item.approval_id ?? item.id ?? normalized.approval_id ?? normalized.id, '');
 }
 
 function sortApprovals(items: ApprovalRecord[]): ApprovalRecord[] {
@@ -248,6 +256,7 @@ export function WorkstationApprovalsPane() {
           <div className="app-stack-3">
             {items.map((item, index) => {
               const approvalId = String(item.approval_id ?? item.id ?? '').trim() || `approval-${index}`;
+              const code = approvalCode(item);
               const selected = approvalId === selectedApprovalId;
               const resolving = resolvingApprovalId === approvalId;
               return (
@@ -262,7 +271,7 @@ export function WorkstationApprovalsPane() {
                   >
                     {readString(item.prompt, 'Needs your OK request')}
                   </button>
-                  <span className="app-card-button__subtitle">{approvalId}</span>
+                  <span className="app-card-button__subtitle">{code ? `Code ${code}` : approvalId}</span>
                   <span className="app-card-button__meta">Run: {readString(item.run_id, 'Awaiting run linkage')}</span>
                   <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
                     <DataBadge tone={approvalTone(item.status)}>{readString(item.status, 'pending')}</DataBadge>
@@ -314,6 +323,10 @@ export function WorkstationApprovalsPane() {
             <div className="app-meta-item">
               <span className="app-meta-label">Status</span>
               <span className="app-meta-value app-meta-value--secondary">{readString(selectedApproval.status, 'pending')}</span>
+            </div>
+            <div className="app-meta-item">
+              <span className="app-meta-label">Code</span>
+              <span className="app-meta-value app-meta-value--mono">{approvalCode(selectedApproval) || 'Unavailable'}</span>
             </div>
             <div className="app-meta-item">
               <span className="app-meta-label">Run id</span>

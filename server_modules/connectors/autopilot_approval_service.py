@@ -183,7 +183,7 @@ class AutopilotApprovalService:
                 )
             else:
                 lines.append(f"- {short_id} risk={risk}{objective_text} {summary}".rstrip())
-        lines.append(f"Use {effective_prefix} approve <event_id> or {effective_prefix} reject <event_id> <reason>")
+        lines.append(f"Use {effective_prefix} approve <event_id> or {effective_prefix} deny <event_id> <reason>")
         return "\n".join(lines)
 
     def approval_result_text(self, payload: Dict[str, Any], approved: bool) -> str:

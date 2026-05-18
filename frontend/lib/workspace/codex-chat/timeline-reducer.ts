@@ -470,11 +470,16 @@ function applyCodexEvent(
         actions: ['allow_once', 'allow_session', 'deny'],
         status: 'waiting',
         createdAt: nowIso(),
+        metadata: event.metadata,
       }),
       (current) => ({
         ...current,
         prompt: event.prompt || current.prompt,
         status: 'waiting',
+        metadata: {
+          ...(current.metadata ?? {}),
+          ...(event.metadata ?? {}),
+        },
       }),
     );
     return { activeCell: cell, streamStatus: 'streaming' };

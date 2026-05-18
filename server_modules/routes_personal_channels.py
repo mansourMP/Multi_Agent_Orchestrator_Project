@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from server_modules.auth import enforce_workspace_access
 from server_modules.runtime_common import require_api_key
 from server_modules import (
+    approval_contracts,
     channel_lane_contract_service,
     gateway_approval_service,
     gateway_state_repository,
@@ -68,23 +69,15 @@ def _personal_channel_governance_metadata(action: str, channel_key: str) -> dict
 
 
 def _channel_approval_instruction(approval: dict, channel_key: str) -> dict:
-    approval_id = str((approval or {}).get("approval_id") or "").strip()
-    expires_at = str((approval or {}).get("expires_at") or "").strip()
-    instruction = (
-        f"Reply approve {approval_id} or deny {approval_id}."
-        if approval_id
-        else "Open Empyralis to approve or deny this action."
-    )
-    if expires_at:
-        instruction = f"{instruction} Expires at {expires_at}."
-    return {
-        "channel_key": str(channel_key or "").strip(),
-        "approval_code": approval_id,
-        "approve_text": f"approve {approval_id}" if approval_id else "",
-        "deny_text": f"deny {approval_id}" if approval_id else "",
-        "instruction": instruction,
-        "expires_at": expires_at or None,
-    }
+    normalized = (approval or {}).get("normalized_approval")
+    if not isinstance(normalized, dict):
+        normalized = approval_contracts.normalize_gateway_approval(approval, channel=channel_key)
+    else:
+        normalized = {
+            **normalized,
+            "channel": str(channel_key or "").strip() or normalized.get("channel") or "channel",
+        }
+    return approval_contracts.channel_approval_instruction(normalized, channel_key=channel_key)
 
 
 def _require_accessible_gateway_registration(
@@ -192,6 +185,7 @@ async def _request_personal_channel_send_approval(
             "gateway_id": gateway_id,
             "channel_key": channel_key,
             "approval": approval,
+            "normalized_approval": approval.get("normalized_approval"),
             "channel_approval": _channel_approval_instruction(approval, channel_key),
         },
     )

@@ -438,10 +438,23 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   }
 
   if (eventType.includes('approval')) {
+    const normalizedApproval = data.normalized_approval && typeof data.normalized_approval === 'object'
+      ? data.normalized_approval as Record<string, unknown>
+      : {};
+    const approvalId = data.approval_id || data.id || normalizedApproval.approval_id || normalizedApproval.id || payload.item_id;
     return [{
       type: 'approval_request',
-      id: eventId('approval', data.approval_id || data.id || payload.item_id, fallbackIndex),
-      prompt: readString(data.prompt) || readString(data.message) || 'Approval required',
+      id: eventId('approval', approvalId, fallbackIndex),
+      prompt: readString(data.prompt)
+        || readString(data.message)
+        || readString(normalizedApproval.action)
+        || 'Approval required',
+      metadata: {
+        ...data,
+        ...normalizedApproval,
+        approval_id: readString(data.approval_id) || readString(normalizedApproval.approval_id) || readString(normalizedApproval.id),
+        code: readString(data.code) || readString(normalizedApproval.code),
+      },
     }];
   }
 

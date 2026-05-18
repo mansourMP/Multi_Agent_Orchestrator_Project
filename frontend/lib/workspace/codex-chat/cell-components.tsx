@@ -399,6 +399,9 @@ export function ApprovalCell({
     : typeof cell.metadata?.id === 'string'
       ? cell.metadata.id
       : cell.id;
+  const approvalCode = typeof cell.metadata?.code === 'string' && cell.metadata.code.trim()
+    ? cell.metadata.code.trim()
+    : approvalId;
   const resolving = Boolean(resolvingApprovalId && resolvingApprovalId === approvalId);
   const canResolve = Boolean(approvalId && onResolveApproval && cell.status === 'waiting');
   return (
@@ -417,6 +420,7 @@ export function ApprovalCell({
             cell.prompt,
             cell.status === 'waiting' ? 'Choose 1 allow once, 2 allow session, or 3 deny' : cell.status === 'done' ? 'Done' : 'Failed',
           )}
+          {approvalCode ? ` · Code ${approvalCode}` : ''}
         </span>
       </div>
       {canResolve ? (

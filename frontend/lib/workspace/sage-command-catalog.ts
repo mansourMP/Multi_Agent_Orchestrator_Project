@@ -1,15 +1,11 @@
 import {
   Activity,
-  AppWindow,
   CircleAlert,
   Coins,
   Cpu,
-  FileSearch,
   LayoutGrid,
   LifeBuoy,
-  Plus,
   Puzzle,
-  Settings,
   SquareActivity,
   Table,
   Zap,
@@ -63,11 +59,11 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
   {
     id: 'status',
     slash: '/status',
-    title: "What's Sage doing?",
-    description: 'Show Sage health, readiness, and the latest run summary.',
+    title: 'Status',
+    description: 'Show Sage health, readiness, and connectivity.',
     actionKind: 'open_status',
     icon: Activity,
-    keywords: ['system', 'health', 'ready', 'state', 'ready state'],
+    keywords: ['system', 'health', 'ready'],
   },
   {
     id: 'usage',
@@ -76,7 +72,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     description: 'Open credits, estimated cost, and recent usage signals.',
     actionKind: 'open_usage',
     icon: Coins,
-    keywords: ['quota', 'cost', 'billing', 'trace', 'stats'],
+    keywords: ['quota', 'cost', 'billing', 'stats'],
   },
   {
     id: 'proof',
@@ -85,7 +81,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     description: 'Open session evidence, computer proofs, artifacts, and audit trail.',
     actionKind: 'open_proof',
     icon: Table,
-    keywords: ['activity', 'evidence', 'computer', 'browser', 'audit', 'trace', 'artifact'],
+    keywords: ['activity', 'evidence', 'computer', 'browser', 'audit', 'artifact'],
   },
   {
     id: 'tools',

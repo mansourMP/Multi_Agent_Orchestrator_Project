@@ -93,10 +93,10 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       hiddenFromNavigation: true,
     },
     mobile: {
-      screen: '/(tabs)/home/index',
-      screenName: 'home/index',
+      screen: '/(tabs)/inbox/index',
+      screenName: 'inbox/index',
       groupId: 'sage',
-      tabLabel: 'Home',
+      tabLabel: 'History',
       includeInBottomTabs: false,
     },
   },
@@ -287,11 +287,11 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     destinationId: 'gateway',
     web: {},
     mobile: {
-      screen: '/(tabs)/home/index',
-      screenName: 'home/index',
+      screen: '/gateway',
+      screenName: 'gateway',
       groupId: 'gateway',
       tabLabel: 'Computers',
-      includeInBottomTabs: true,
+      includeInBottomTabs: false,
     },
   },
   {
@@ -381,7 +381,7 @@ export function resolveWorkspaceRouteIdFromSegment(segment) {
   return WORKSPACE_ROUTE_SEGMENT_INDEX[normalizedSegment] ?? null;
 }
 
-const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER = ['chat', 'studio', 'gateway', 'marketplace', 'settings'];
+const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER = ['chat', 'studio', 'marketplace', 'notifications', 'settings'];
 const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER_INDEX = WORKSPACE_MOBILE_BOTTOM_TAB_ORDER.reduce(
   (accumulator, routeId, index) => {
     accumulator[routeId] = index;

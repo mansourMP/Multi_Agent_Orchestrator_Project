@@ -18562,3 +18562,43 @@ body.theme-light .sage-integrations-nav__bucket--active {
   border-color: color-mix(in srgb, var(--app-warning) 52%, transparent);
   color: var(--app-warning);
 }
+
+.marketplace-workbench {
+  grid-template-columns: minmax(760px, 1fr) minmax(300px, 360px) !important;
+}
+
+.marketplace-pane__grid {
+  grid-template-columns: repeat(3, minmax(190px, 1fr)) !important;
+}
+
+.marketplace-pane__card {
+  min-width: 0;
+  min-height: 16rem;
+  aspect-ratio: auto !important;
+}
+
+.marketplace-pane__detail-hero {
+  grid-template-columns: 72px minmax(0, 1fr);
+  max-width: 100%;
+  padding: 0 0 var(--app-space-4);
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+@media (max-width: 1040px) {
+  .marketplace-workbench {
+    grid-template-columns: minmax(560px, 1fr) minmax(260px, 300px) !important;
+  }
+
+  .marketplace-pane__grid {
+    grid-template-columns: repeat(2, minmax(200px, 1fr)) !important;
+  }
+}
+
+@media (max-width: 860px) {
+  .marketplace-workbench,
+  .marketplace-pane__grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

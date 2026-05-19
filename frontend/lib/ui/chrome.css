@@ -6708,6 +6708,14 @@ textarea.app-field.app-chat-composer__textarea:focus-visible {
   stroke-width: 1.9;
 }
 
+.account-switcher__link::before,
+.account-switcher__link::after {
+  content: none !important;
+  display: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
 .account-switcher__link:hover {
   border-color: transparent;
   background: transparent;
@@ -6769,24 +6777,6 @@ body[data-emp-theme='dark'] .account-switcher__link--active,
 :root[data-emp-theme='dark'] .account-switcher__link[aria-current='page'],
 body[data-emp-theme='dark'] .account-switcher__link[aria-current='page'] {
   color: var(--text-primary);
-}
-
-:root[data-emp-theme='dark'] .account-switcher__link--active::before,
-body[data-emp-theme='dark'] .account-switcher__link--active::before,
-:root[data-emp-theme='dark'] .account-switcher__link[aria-current='page']::before,
-body[data-emp-theme='dark'] .account-switcher__link[aria-current='page']::before {
-  content: none !important;
-  display: none !important;
-  background: transparent !important;
-}
-
-:root[data-emp-theme='dark'] .account-switcher__link::before,
-:root[data-emp-theme='dark'] .account-switcher__link::after,
-body[data-emp-theme='dark'] .account-switcher__link::before,
-body[data-emp-theme='dark'] .account-switcher__link::after {
-  content: none !important;
-  display: none !important;
-  background: transparent !important;
 }
 
 .app-empty-panel {

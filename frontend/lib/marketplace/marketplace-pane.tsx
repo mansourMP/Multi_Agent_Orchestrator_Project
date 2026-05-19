@@ -1093,8 +1093,7 @@ export function MarketplacePane() {
   return (
     <WorkstationSurfaceRoot surface="marketplace">
       <section className="marketplace-pane" aria-label="Discover">
-        <div className="marketplace-pane__layout">
-          <div className="marketplace-pane__catalog-scroll" aria-label="Discover catalog">
+        <div className="marketplace-pane__catalog-scroll" aria-label="Discover catalog">
             <div className="marketplace-pane__catalog-stack">
               <div className="marketplace-pane__catalog-head">
                 <div className="marketplace-pane__catalog-title-group">
@@ -1779,7 +1778,6 @@ export function MarketplacePane() {
               ) : null}
             </div>
           </aside>
-        </div>
       </section>
     </WorkstationSurfaceRoot>
   );

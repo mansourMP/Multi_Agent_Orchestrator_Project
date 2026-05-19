@@ -16784,10 +16784,12 @@ body.theme-light .sage-integrations-nav__bucket--active {
 
 .marketplace-pane {
   display: grid;
-  gap: var(--app-space-4);
+  grid-template-columns: minmax(760px, 1fr) minmax(300px, 360px);
+  gap: 0;
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  background: var(--app-bg-page);
 }
 
 .marketplace-pane__layout {
@@ -17993,6 +17995,10 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 @media (max-width: 1180px) {
+  .marketplace-pane {
+    grid-template-columns: minmax(640px, 1fr) minmax(280px, 320px);
+  }
+
   .marketplace-pane__layout {
     grid-template-columns: minmax(640px, 1fr) minmax(280px, 320px);
   }
@@ -18008,6 +18014,10 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 @media (max-width: 1040px) {
+  .marketplace-pane {
+    grid-template-columns: minmax(560px, 1fr) minmax(260px, 300px);
+  }
+
   .marketplace-pane__layout {
     grid-template-columns: minmax(560px, 1fr) minmax(260px, 300px);
   }
@@ -18026,6 +18036,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
   .marketplace-pane {
     height: auto;
     overflow: visible;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .marketplace-pane__layout {
@@ -18621,6 +18632,10 @@ body.theme-light .sage-integrations-nav__bucket--active {
   grid-template-columns: minmax(760px, 1fr) minmax(300px, 360px) !important;
 }
 
+.marketplace-pane {
+  grid-template-columns: minmax(760px, 1fr) minmax(300px, 360px) !important;
+}
+
 .marketplace-pane__layout {
   grid-template-columns: minmax(760px, 1fr) minmax(300px, 360px) !important;
 }
@@ -18645,6 +18660,10 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 @media (max-width: 1040px) {
+  .marketplace-pane {
+    grid-template-columns: minmax(560px, 1fr) minmax(260px, 300px) !important;
+  }
+
   .marketplace-pane__layout {
     grid-template-columns: minmax(560px, 1fr) minmax(260px, 300px) !important;
   }
@@ -18659,6 +18678,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 @media (max-width: 860px) {
+  .marketplace-pane,
   .marketplace-pane__layout,
   .marketplace-workbench,
   .marketplace-pane__grid {

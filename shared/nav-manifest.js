@@ -88,7 +88,6 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     label: 'Approvals',
     segment: 'approvals',
     destinationId: 'sage',
-    requiredCapabilities: ['approvals_enabled'],
     web: {
       hiddenFromNavigation: true,
     },

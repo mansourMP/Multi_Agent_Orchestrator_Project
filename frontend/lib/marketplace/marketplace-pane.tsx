@@ -24,7 +24,6 @@ import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { MarketplacePackageRecord } from '@/lib/workspace/workstation-client';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
-import { WorkstationSplitWorkbench } from '@/lib/workspace/workstation-split-workbench';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
 const KIND_FILTERS = ['all', 'agent_template', 'app', 'bundle'] as const;
@@ -1094,10 +1093,8 @@ export function MarketplacePane() {
   return (
     <WorkstationSurfaceRoot surface="marketplace">
       <section className="marketplace-pane" aria-label="Discover">
-        <WorkstationSplitWorkbench
-          ariaLabel="Discover"
-          className="marketplace-workbench"
-          sidebar={(
+        <div className="marketplace-pane__layout">
+          <div className="marketplace-pane__catalog-scroll" aria-label="Discover catalog">
             <div className="marketplace-pane__catalog-stack">
               <div className="marketplace-pane__catalog-head">
                 <div className="marketplace-pane__catalog-title-group">
@@ -1214,8 +1211,8 @@ export function MarketplacePane() {
               )}
             </div>
             </div>
-          )}
-        >
+          </div>
+          <aside className="marketplace-pane__detail-scroll" aria-label="Discover item details">
             <div className="marketplace-pane__secondary-stack">
               <div className="marketplace-pane__detail-panel">
                 {selectedPackage && selectedDetails ? (
@@ -1781,7 +1778,8 @@ export function MarketplacePane() {
               </ListDetailPanel>
               ) : null}
             </div>
-        </WorkstationSplitWorkbench>
+          </aside>
+        </div>
       </section>
     </WorkstationSurfaceRoot>
   );

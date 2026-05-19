@@ -58,7 +58,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
     destinationId: 'sage',
     render: () => <WorkstationRunsPane />,
   },
-  heartbeat: {
+  tasks: {
     destinationId: 'sage',
     render: () => <WorkstationSageWorkCenterPane />,
   },

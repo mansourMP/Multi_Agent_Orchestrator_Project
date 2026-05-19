@@ -4,7 +4,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'heartbeat', 'artifacts', 'activity', 'approvals', 'notifications'],
+    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'tasks', 'artifacts', 'activity', 'approvals', 'notifications'],
     direct: true,
   },
   {
@@ -140,9 +140,10 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     web: {},
   },
   {
-    id: 'heartbeat',
+    id: 'tasks',
     label: 'Work',
     segment: 'tasks',
+    legacySegments: ['heartbeat'],
     destinationId: 'sage',
     web: {},
   },
@@ -337,10 +338,6 @@ export function resolveWorkspaceRouteIdFromSegment(segment) {
 
   if (!normalizedSegment) {
     return null;
-  }
-
-  if (normalizedSegment === 'heartbeat') {
-    return 'heartbeat';
   }
 
   return WORKSPACE_ROUTE_SEGMENT_INDEX[normalizedSegment] ?? null;

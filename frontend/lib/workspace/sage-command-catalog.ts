@@ -110,7 +110,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     id: 'tasks',
     title: 'Sage tasks',
     description: 'Open scheduled actions and pending automation tasks.',
-    routeId: 'heartbeat',
+    routeId: 'tasks',
     icon: SquareActivity,
     keywords: ['heartbeat', 'tasks', 'scheduler', 'next action', 'automation'],
   },

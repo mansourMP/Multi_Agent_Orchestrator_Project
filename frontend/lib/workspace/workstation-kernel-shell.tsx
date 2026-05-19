@@ -27,7 +27,7 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'memory', 'heartbeat', 'artifacts'],
+  sage: ['chat', 'memory', 'tasks', 'artifacts'],
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
@@ -37,7 +37,7 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
 const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
   'chat',
     'memory',
-  'heartbeat',
+  'tasks',
   'artifacts',
   'integrations',
   'approvals',

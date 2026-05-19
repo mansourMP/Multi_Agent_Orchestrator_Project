@@ -27,7 +27,7 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'runs', 'memory', 'heartbeat', 'artifacts'],
+  sage: ['chat', 'memory', 'heartbeat', 'artifacts'],
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
@@ -36,8 +36,7 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
 
 const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
   'chat',
-  'runs',
-  'memory',
+    'memory',
   'heartbeat',
   'artifacts',
   'integrations',
@@ -502,7 +501,7 @@ export function WorkstationKernelShell({
               </>
             )}
             navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
-              route.id === 'runs' ? (
+              route.id === 'activity' ? (
                 <MainAgentHistoryPopover
                   key={route.id}
                   chatHref={routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`}

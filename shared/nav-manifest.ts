@@ -14,7 +14,6 @@ export type WorkspaceRouteId =
   | 'chat'
   | 'memory'
   | 'profile'
-  | 'runs'
   | 'approvals'
   | 'artifacts'
   | 'notifications'

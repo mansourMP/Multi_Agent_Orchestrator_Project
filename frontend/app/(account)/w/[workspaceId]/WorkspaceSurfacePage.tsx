@@ -14,7 +14,6 @@ import { MarketplacePane } from '@/lib/marketplace/marketplace-pane';
 import { WorkstationNotificationsPane } from '@/lib/workspace/workstation-notifications-pane';
 import { WorkstationRunsPane } from '@/lib/workspace/workstation-runs-pane';
 import { WorkstationSageConnectorsPane } from '@/lib/workspace/workstation-sage-connectors-pane';
-import { WorkstationSageProfilePane } from '@/lib/workspace/workstation-sage-profile-pane';
 import { WorkstationSettingsPane } from '@/lib/workspace/workstation-settings-pane';
 import { WorkstationStudioIntegrationsPane } from '@/lib/workspace/workstation-studio-integrations-pane';
 import { WorkstationInvestorDemoPane } from '@/lib/workspace/workstation-investor-demo-pane';

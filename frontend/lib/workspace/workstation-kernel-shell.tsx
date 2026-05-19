@@ -378,9 +378,6 @@ export function WorkstationKernelShell({
       if (!route) {
         return [];
       }
-      if (route.id === 'chat') {
-        return [{ ...route, label: 'Chat' as const }];
-      }
       return [route];
     });
   }, [activeDestinationId, activeRouteId, routeManifest.routeIndex]);
@@ -523,7 +520,7 @@ export function WorkstationKernelShell({
                     isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
                   )}
                 >
-                  <span>{route.id === 'heartbeat' ? 'Work' : route.label}</span>
+                  <span>{route.label}</span>
                 </Link>
               )
             )) : null}

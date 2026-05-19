@@ -167,7 +167,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'heartbeat',
-    label: 'Tasks',
+    label: 'Work',
     segment: 'tasks',
     destinationId: 'sage',
     web: {},

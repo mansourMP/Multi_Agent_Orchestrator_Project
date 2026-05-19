@@ -27,7 +27,7 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'runs', 'memory', 'heartbeat', 'artifacts'],
+  sage: ['chat', 'activity', 'memory', 'tasks', 'artifacts'],
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
@@ -36,9 +36,8 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
 
 const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
   'chat',
-  'runs',
   'memory',
-  'heartbeat',
+  'tasks',
   'artifacts',
   'integrations',
   'approvals',
@@ -378,9 +377,6 @@ export function WorkstationKernelShell({
       if (!route) {
         return [];
       }
-      if (route.id === 'chat') {
-        return [{ ...route, label: 'Chat' as const }];
-      }
       return [route];
     });
   }, [activeDestinationId, activeRouteId, routeManifest.routeIndex]);
@@ -505,7 +501,7 @@ export function WorkstationKernelShell({
               </>
             )}
             navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
-              route.id === 'runs' ? (
+              route.id === 'activity' ? (
                 <MainAgentHistoryPopover
                   key={route.id}
                   chatHref={routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`}
@@ -523,7 +519,7 @@ export function WorkstationKernelShell({
                     isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
                   )}
                 >
-                  <span>{route.id === 'heartbeat' ? 'Work' : route.label}</span>
+                  <span>{route.label}</span>
                 </Link>
               )
             )) : null}

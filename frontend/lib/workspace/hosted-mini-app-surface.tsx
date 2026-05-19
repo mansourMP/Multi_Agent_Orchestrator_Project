@@ -387,7 +387,7 @@ export function HostedMiniAppSurface({
         <div className={styles.linkRow}>
           <Link
             className={styles.linkSecondary}
-            href={`/w/${encodeURIComponent(workspaceId)}/applications`}
+            href={`/w/${encodeURIComponent(workspaceId)}/deploy`}
           >
             Back
           </Link>

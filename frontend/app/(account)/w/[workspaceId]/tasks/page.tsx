@@ -6,5 +6,5 @@ type PageProps = {
 
 export default async function WorkspaceTasksPage({ params }: PageProps) {
   const { workspaceId } = await params;
-  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="heartbeat" />;
+  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="tasks" />;
 }

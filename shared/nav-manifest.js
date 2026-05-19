@@ -4,7 +4,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'runs', 'memory', 'integrations', 'channels', 'heartbeat', 'artifacts', 'activity', 'profile', 'approvals', 'skills', 'notifications'],
+    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'tasks', 'artifacts', 'activity', 'approvals', 'notifications'],
     direct: true,
   },
   {
@@ -84,37 +84,10 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     web: {},
   },
   {
-    id: 'runs',
-    label: 'History',
-    segment: 'runs',
-    legacySegments: ['work', 'history'],
-    destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
-    mobile: {
-      screen: '/(tabs)/inbox/index',
-      screenName: 'inbox/index',
-      groupId: 'sage',
-      tabLabel: 'History',
-      includeInBottomTabs: false,
-    },
-  },
-  {
-    id: 'profile',
-    label: 'Profile',
-    segment: 'profile',
-    destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
-  },
-  {
     id: 'approvals',
     label: 'Approvals',
     segment: 'approvals',
     destinationId: 'sage',
-    requiredCapabilities: ['approvals_enabled'],
     web: {
       hiddenFromNavigation: true,
     },
@@ -166,20 +139,12 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     web: {},
   },
   {
-    id: 'heartbeat',
-    label: 'Tasks',
+    id: 'tasks',
+    label: 'Work',
     segment: 'tasks',
+    legacySegments: ['heartbeat'],
     destinationId: 'sage',
     web: {},
-  },
-  {
-    id: 'skills',
-    label: 'Skills',
-    segment: 'skills',
-    destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
   },
   {
     id: 'integrations',
@@ -372,10 +337,6 @@ export function resolveWorkspaceRouteIdFromSegment(segment) {
 
   if (!normalizedSegment) {
     return null;
-  }
-
-  if (normalizedSegment === 'heartbeat') {
-    return 'heartbeat';
   }
 
   return WORKSPACE_ROUTE_SEGMENT_INDEX[normalizedSegment] ?? null;

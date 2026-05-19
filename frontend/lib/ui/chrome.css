@@ -25,26 +25,26 @@ body[data-emp-theme='dark'] {
   --app-bg-shell: #151515;
   --app-bg-panel: #181818;
   --app-bg-panel-elevated: #202020;
-  --app-bg-overlay: #202020;
+  --app-bg-overlay: #262626;
   --app-bg-raised: var(--app-bg-panel-elevated);
 
   --app-border-subtle: rgba(240, 240, 240, 0.1);
   --app-border-strong: #343434;
   --app-border-muted: rgba(240, 240, 240, 0.07);
-  --app-border-default: #2a2a2a;
-  --app-border-accent: #3a3a3a;
+  --app-border-default: #343434;
+  --app-border-accent: #2f2f2f;
 
   --app-text-primary: #f0f0f0;
   --app-text-secondary: #a4a4a4;
   --app-text-tertiary: rgba(164, 164, 164, 0.72);
-  --app-text-inverse: #1a1a1a;
+  --app-text-inverse: #111111;
 
   --app-accent: #2f2f2f;
   --app-accent-primary: #2f2f2f;
   --app-accent-strong: #3a3a3a;
   --app-accent-muted: rgba(58, 58, 58, 0.3);
   --app-accent-soft: rgba(58, 58, 58, 0.18);
-  --app-accent-text: #ffffff;
+  --app-accent-text: #f0f0f0;
 
   --app-success: #4ec598;
   --app-success-muted: rgba(78, 197, 152, 0.18);
@@ -268,14 +268,6 @@ body[data-emp-theme='dark'] .workstation-shell__topbar {
   backdrop-filter: blur(24px);
 }
 
-:root[data-emp-theme='dark'] .app-chat-composer__surface,
-body[data-emp-theme='dark'] .app-chat-composer__surface {
-  border-color: rgba(255, 255, 255, 0.12) !important;
-  background: rgba(255, 255, 255, 0.04) !important;
-  box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.5) !important;
-  backdrop-filter: blur(32px) !important;
-}
-
 .app-chat-composer__textarea {
   width: 100%;
   min-height: 58px;
@@ -304,44 +296,44 @@ body[data-emp-theme='light'],
 body.theme-light {
   color-scheme: light;
 
-  --app-bg-page: #f5f6f7;
-  --app-surface-1: #ffffff;
-  --app-surface-2: #f7f8fa;
-  --app-surface-hover: #eef1f4;
-  --app-surface-inset: #f1f3f5;
+  --app-bg-page: #F3F7F8;
+  --app-surface-1: #FBFCFC;
+  --app-surface-2: #EDF3F4;
+  --app-surface-hover: #EDF3F4;
+  --app-surface-inset: #E9EFF1;
 
-  --app-bg-app: #f5f6f7;
-  --app-bg-canvas: #f5f6f7;
-  --app-bg-shell: #f7f8fa;
-  --app-bg-panel: #ffffff;
-  --app-bg-panel-elevated: #fafbfc;
-  --app-bg-overlay: #ffffff;
+  --app-bg-app: #F3F7F8;
+  --app-bg-canvas: #F3F7F8;
+  --app-bg-shell: #E9EFF1;
+  --app-bg-panel: #FBFCFC;
+  --app-bg-panel-elevated: #EDF3F4;
+  --app-bg-overlay: #EDF3F4;
 
-  --app-border-subtle: rgba(30, 32, 36, 0.08);
-  --app-border-strong: #d7dce3;
-  --app-border-muted: rgba(30, 32, 36, 0.05);
-  --app-border-default: #e1e4e8;
-  --app-border-accent: #2f2f2f;
-  --interactive-accent: #5f6570;
-  --interactive-accent-hover: #1e2024;
+  --app-border-subtle: rgba(16, 31, 37, 0.1);
+  --app-border-strong: #CAD8DC;
+  --app-border-muted: rgba(16, 31, 37, 0.07);
+  --app-border-default: #CAD8DC;
+  --app-border-accent: #202020;
+  --interactive-accent: #60737C;
+  --interactive-accent-hover: #122026;
 
-  --app-text-primary: #1e2024;
-  --app-text-secondary: #5f6570;
-  --app-text-tertiary: rgba(30, 32, 36, 0.56);
-  --app-text-inverse: #ffffff;
+  --app-text-primary: #122026;
+  --app-text-secondary: #60737C;
+  --app-text-tertiary: rgba(96, 115, 124, 0.72);
+  --app-text-inverse: #FBFCFC;
 
   --app-accent: #202020;
   --app-accent-primary: #202020;
-  --app-accent-strong: #2f2f2f;
+  --app-accent-strong: #2F2F2F;
   --app-accent-muted: rgba(32, 32, 32, 0.12);
   --app-accent-soft: rgba(32, 32, 32, 0.08);
-  --app-accent-text: #ffffff;
+  --app-accent-text: #FBFCFC;
 
-  --app-success: #218e68;
+  --app-success: #218E68;
   --app-success-muted: rgba(33, 142, 104, 0.12);
-  --app-warning: #b77a1f;
+  --app-warning: #B77A1F;
   --app-warning-muted: rgba(183, 122, 31, 0.12);
-  --app-danger: #c25656;
+  --app-danger: #C25656;
   --app-danger-muted: rgba(194, 86, 86, 0.12);
 
   --app-shadow-subtle: 0 4px 12px -10px rgba(0, 0, 0, 0.06);
@@ -349,15 +341,22 @@ body.theme-light {
   --app-shadow-focus: 0 0 0 2px rgba(32, 32, 32, 0.14);
 
   /* Premium UI Direction A Tokens */
-  --premium-shell-bg: #f7f9fb;
+  --premium-shell-bg: #E9EFF1;
   --premium-glass-bg: rgba(255, 255, 255, 0.72);
-  --premium-glass-border: rgba(30, 32, 36, 0.08);
-  --premium-glass-shadow: 0 12px 40px -12px rgba(30, 32, 36, 0.08);
+  --premium-glass-border: rgba(16, 31, 37, 0.08);
+  --premium-glass-shadow: 0 12px 40px -12px rgba(16, 31, 37, 0.08);
   --premium-glass-hover: rgba(255, 255, 255, 0.82);
   --premium-graphite-bg: linear-gradient(180deg, #626262 0%, #2f2f2f 100%);
   --premium-graphite-text: #ffffff;
   --premium-card-bg: rgba(255, 255, 255, 0.64);
-  --premium-card-border: rgba(30, 32, 36, 0.06);
+  --premium-card-border: rgba(16, 31, 37, 0.06);
+}
+
+:root[data-emp-theme='light'] .app-shell-frame__sidebar,
+body[data-emp-theme='light'] .app-shell-frame__sidebar,
+body.theme-light .app-shell-frame__sidebar {
+  background: color-mix(in srgb, var(--premium-shell-bg) 92%, #000 2%);
+  backdrop-filter: blur(16px);
 }
 
 :root[data-emp-theme='dark'] {
@@ -2181,7 +2180,27 @@ body[data-emp-theme='dark'] .app-textarea:focus {
   touch-action: manipulation;
   -webkit-touch-callout: default;
   color: var(--app-text-primary);
-  color-scheme: light;
+}
+
+:root[data-emp-theme='dark'] .app-auth-page,
+body[data-emp-theme='dark'] .app-auth-page {
+  --app-bg-panel: rgba(20, 22, 26, 0.82);
+  --app-bg-panel-elevated: rgba(32, 34, 38, 0.94);
+  --app-border-default: #2a2c30;
+  --app-border-strong: #3a3c40;
+  --app-text-primary: #f0f0f0;
+  --app-text-secondary: #a4a4a4;
+  --app-text-tertiary: #848484;
+  --app-accent: #f0f0f0;
+  --app-accent-strong: #ffffff;
+  --app-accent-soft: rgba(255, 255, 255, 0.12);
+  --premium-shell-bg: #0a0c10;
+  --premium-glass-bg: rgba(24, 26, 30, 0.68);
+  --premium-glass-border: rgba(240, 240, 240, 0.1);
+  --premium-glass-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.5);
+  --premium-graphite-bg: linear-gradient(180deg, #f0f0f0 0%, #d1d1d1 100%);
+  --premium-graphite-text: #111111;
+  color-scheme: dark;
 }
 
 .app-auth-card {
@@ -2543,7 +2562,6 @@ body[data-emp-theme='dark'] .app-textarea:focus {
   position: relative;
   display: flex;
   align-items: center;
-  color-scheme: light;
 }
 
 .app-auth-input-shell__icon {
@@ -4131,13 +4149,6 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
 .app-chat-composer__textarea:focus-visible {
   box-shadow: none !important;
   outline: none !important;
-}
-
-:root[data-emp-theme='dark'] .app-chat-composer__surface,
-body[data-emp-theme='dark'] .app-chat-composer__surface {
-  border-color: var(--premium-glass-border) !important;
-  background: var(--premium-glass-bg) !important;
-  box-shadow: var(--premium-glass-shadow) !important;
 }
 
 .app-chat-composer__header {
@@ -5832,8 +5843,10 @@ textarea.app-field.app-chat-composer__textarea:focus-visible {
   inset: 0 auto 0 0;
   z-index: var(--z-sidebar);
   padding: 0;
-  border-right: 0;
+  border-right: 1px solid var(--app-border-subtle);
   background: var(--premium-shell-bg);
+  box-shadow: var(--app-shadow-panel);
+  transition: background-color var(--transition), border-color var(--transition), box-shadow var(--transition);
 }
 
 .app-shell-frame__kernel {
@@ -6686,6 +6699,14 @@ textarea.app-field.app-chat-composer__textarea:focus-visible {
   width: 100%;
 }
 
+.account-switcher__link::before,
+.account-switcher__link::after {
+  content: none !important;
+  display: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
 .account-switcher__link {
   position: relative;
   width: var(--app-rail-control-size);
@@ -6695,11 +6716,12 @@ textarea.app-field.app-chat-composer__textarea:focus-visible {
   justify-content: center;
   color: var(--app-text-secondary);
   text-decoration: none;
-  border: 1px solid transparent;
+  border: 1px solid transparent !important;
   border-radius: var(--app-rail-radius);
-  background: transparent;
+  background: transparent !important;
   cursor: pointer;
   transition: all var(--transition);
+  box-shadow: none !important;
 }
 
 .account-switcher__link > svg {
@@ -6708,12 +6730,10 @@ textarea.app-field.app-chat-composer__textarea:focus-visible {
   stroke-width: 1.9;
 }
 
-.account-switcher__link::before,
-.account-switcher__link::after {
-  content: none !important;
-  display: none !important;
-  background: transparent !important;
-  box-shadow: none !important;
+.account-switcher__link--active > svg,
+.account-switcher__link[aria-current='page'] > svg {
+  color: var(--app-text-primary);
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--app-text-primary) 12%, transparent));
 }
 
 .account-switcher__link:hover {
@@ -6761,10 +6781,8 @@ textarea.app-field.app-chat-composer__textarea:focus-visible {
 
 :root[data-emp-theme='dark'] .app-shell-frame__sidebar,
 body[data-emp-theme='dark'] .app-shell-frame__sidebar {
-  border-color: rgba(255, 255, 255, 0.04);
-  background: color-mix(in srgb, var(--premium-shell-bg) 88%, #000 12%);
-  backdrop-filter: blur(16px);
-  box-shadow: none;
+  background: color-mix(in srgb, var(--premium-shell-bg) 94%, #fff 6%);
+  backdrop-filter: blur(24px);
 }
 
 :root[data-emp-theme='dark'] .account-switcher__link:hover,
@@ -6864,8 +6882,8 @@ body[data-emp-theme='dark'] .account-switcher__link[aria-current='page'] {
 :root[data-emp-theme='light'] .workstation-shell__topbar,
 body[data-emp-theme='light'] .workstation-shell__topbar,
 body.theme-light .workstation-shell__topbar {
-  background: rgba(255, 255, 255, 0.75);
-  box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.12), 0 1px 0 0 rgba(0, 0, 0, 0.05);
+  background: color-mix(in srgb, var(--premium-shell-bg) 75%, rgba(255, 255, 255, 0.4));
+  box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.08), 0 1px 0 0 rgba(0, 0, 0, 0.04);
 }
 
 .workstation-shell__body {
@@ -13276,7 +13294,7 @@ body[data-emp-theme='dark'] .app-memory-document-nav .settings-nav__item[aria-se
   border: 0;
   border-radius: var(--app-radius-pill);
   background: transparent;
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--app-text-secondary);
   font-size: var(--app-font-12);
   font-weight: var(--app-weight-semibold);
   cursor: pointer;
@@ -13285,14 +13303,14 @@ body[data-emp-theme='dark'] .app-memory-document-nav .settings-nav__item[aria-se
 
 .app-memory-document-mode__button:hover,
 .app-memory-document-mode__button:focus-visible {
-  color: rgba(255, 255, 255, 0.86);
+  color: var(--app-text-primary);
   outline: none;
 }
 
 .app-memory-document-mode__button--active {
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background: var(--app-accent-soft);
+  color: var(--app-text-primary);
+  box-shadow: inset 0 0 0 1px var(--app-border-accent);
 }
 
 .app-memory-document-edit {

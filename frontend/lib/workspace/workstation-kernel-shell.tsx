@@ -537,9 +537,11 @@ export function WorkstationKernelShell({
         title={workspaceLabel}
         className="workstation-mobile-sidebar"
       >
-        <div className="workstation-mobile-sidebar__content">
-          <AccountTenantSwitcher />
-        </div>
+        {isSidebarOpen && (
+          <div className="workstation-mobile-sidebar__content">
+            <AccountTenantSwitcher />
+          </div>
+        )}
       </AppDrawer>
 
       <div className="workstation-shell__body" data-workstation-main-pane="content-body">

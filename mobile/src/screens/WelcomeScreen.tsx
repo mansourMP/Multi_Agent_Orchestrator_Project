@@ -55,7 +55,7 @@ export default function WelcomeScreen() {
                 justifyContent: "center",
               }}
             >
-              <Text style={{ color: "#FFFFFF", fontSize: 15, fontFamily: "DMSans_700Bold" }}>
+              <Text style={{ color: theme.colors.accentText, fontSize: 15, fontFamily: "DMSans_700Bold" }}>
                 Set up Sage
               </Text>
             </MotionPressable>

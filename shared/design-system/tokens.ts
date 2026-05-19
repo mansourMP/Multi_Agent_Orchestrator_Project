@@ -147,11 +147,12 @@ export const DESIGN_SYSTEM_MOTION = {
 
 export const DESIGN_SYSTEM_ELEVATION = {
   web: {
-    subtle: '0 1px 2px rgba(10, 10, 10, 0.04)',
-    panel: '0 1px 2px rgba(10, 10, 10, 0.04), 0 0 0 1px rgba(10, 10, 10, 0.02)',
-    focus: '0 0 0 2px rgba(10, 10, 10, 0.12)',
-    darkPanel: 'inset 0 0 0 1px rgba(255, 255, 255, 0.02)',
-    darkFocus: '0 0 0 2px rgba(255, 255, 255, 0.18)',
+    subtle: '0 4px 12px -10px rgba(0, 0, 0, 0.06)',
+    panel: '0 16px 40px -28px rgba(32, 32, 32, 0.12), 0 0 0 1px rgba(32, 32, 32, 0.03)',
+    focus: '0 0 0 2px rgba(32, 32, 32, 0.14)',
+    darkSubtle: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 8px 20px -20px rgba(4, 10, 13, 0.66)',
+    darkPanel: 'inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 26px 60px -38px rgba(2, 8, 10, 0.84)',
+    darkFocus: '0 0 0 2px rgba(255, 255, 255, 0.14)',
   },
   mobile: {
     panel: {
@@ -272,7 +273,7 @@ export const DESIGN_SYSTEM_COLOR_MODES = {
       base: DESIGN_SYSTEM_BRAND_COLORS.dark.primary,
       strong: DESIGN_SYSTEM_BRAND_COLORS.dark.highlight,
       muted: DESIGN_SYSTEM_BRAND_COLORS.dark.primaryMuted,
-      text: DESIGN_SYSTEM_BRAND_COLORS.dark.app,
+      text: DESIGN_SYSTEM_BRAND_COLORS.dark.text,
     },
     status: {
       success: DESIGN_SYSTEM_BRAND_COLORS.dark.success,
@@ -305,7 +306,7 @@ export const DESIGN_SYSTEM_COLOR_MODES = {
       base: DESIGN_SYSTEM_BRAND_COLORS.dark.primary,
       strong: DESIGN_SYSTEM_BRAND_COLORS.dark.highlight,
       muted: DESIGN_SYSTEM_BRAND_COLORS.dark.primaryMuted,
-      text: DESIGN_SYSTEM_BRAND_COLORS.dark.app,
+      text: DESIGN_SYSTEM_BRAND_COLORS.dark.text,
     },
     status: {
       success: DESIGN_SYSTEM_BRAND_COLORS.dark.success,
@@ -415,6 +416,9 @@ export const DESIGN_SYSTEM_WEB_CSS_VARIABLES = {
     '--app-warning-muted': DESIGN_SYSTEM_COLOR_MODES.light.status.warningMuted,
     '--app-danger': DESIGN_SYSTEM_COLOR_MODES.light.status.danger,
     '--app-danger-muted': DESIGN_SYSTEM_COLOR_MODES.light.status.dangerMuted,
+    '--app-shadow-subtle': DESIGN_SYSTEM_ELEVATION.web.subtle,
+    '--app-shadow-panel': DESIGN_SYSTEM_ELEVATION.web.panel,
+    '--app-shadow-focus': DESIGN_SYSTEM_ELEVATION.web.focus,
   },
   dark: {
     '--app-bg-page': DESIGN_SYSTEM_COLOR_MODES.dark.background.page,
@@ -449,7 +453,7 @@ export const DESIGN_SYSTEM_WEB_CSS_VARIABLES = {
     '--app-warning-muted': DESIGN_SYSTEM_COLOR_MODES.dark.status.warningMuted,
     '--app-danger': DESIGN_SYSTEM_COLOR_MODES.dark.status.danger,
     '--app-danger-muted': DESIGN_SYSTEM_COLOR_MODES.dark.status.dangerMuted,
-    '--app-shadow-subtle': 'none',
+    '--app-shadow-subtle': DESIGN_SYSTEM_ELEVATION.web.darkSubtle,
     '--app-shadow-panel': DESIGN_SYSTEM_ELEVATION.web.darkPanel,
     '--app-shadow-focus': DESIGN_SYSTEM_ELEVATION.web.darkFocus,
   },

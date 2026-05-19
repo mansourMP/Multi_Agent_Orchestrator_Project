@@ -27,7 +27,7 @@ export const ActionButton: React.FC<ActionButtonProps> = ({
   const theme = useAppTheme();
   const palette =
     variant === 'primary'
-      ? { background: theme.colors.accent, border: theme.colors.accent, text: '#FFFFFF' }
+      ? { background: theme.colors.accent, border: theme.colors.accent, text: theme.colors.accentText }
       : variant === 'danger'
         ? { background: theme.colors.errorMuted, border: 'rgba(194, 65, 59, 0.16)', text: theme.colors.error }
         : { background: theme.colors.card, border: theme.colors.border, text: theme.colors.text };

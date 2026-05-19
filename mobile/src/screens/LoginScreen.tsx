@@ -355,7 +355,7 @@ export default function LoginScreen() {
               opacity: savingProvider !== null ? 0.72 : 1,
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 15, fontFamily: "DMSans_700Bold" }}>
+            <Text style={{ color: theme.colors.accentText, fontSize: 15, fontFamily: "DMSans_700Bold" }}>
               {savingProvider === "password" ? "Signing in..." : "Sign in"}
             </Text>
           </TouchableOpacity>
@@ -373,7 +373,7 @@ export default function LoginScreen() {
                 style={{
                   height: 50,
                   borderRadius: 18,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: theme.colors.card,
                   borderWidth: 1,
                   borderColor: theme.colors.border,
                   alignItems: "center",
@@ -381,7 +381,7 @@ export default function LoginScreen() {
                   opacity: (savingProvider !== null || !request) ? 0.72 : 1,
                 }}
               >
-                <Text style={{ color: "#000000", fontSize: 15, fontFamily: "DMSans_700Bold" }}>
+                <Text style={{ color: theme.colors.text, fontSize: 15, fontFamily: "DMSans_700Bold" }}>
                   {savingProvider === "google" ? "Signing in..." : "Sign in with Google"}
                 </Text>
               </TouchableOpacity>

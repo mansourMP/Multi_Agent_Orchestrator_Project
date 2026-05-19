@@ -1,12 +1,15 @@
-import { lightColors, radii, spacing, typography } from './tokens';
+import { useColorScheme } from 'react-native';
+import { lightColors, darkColors, radii, spacing, typography } from './tokens';
 
 export function useAppTheme() {
-  const colors = lightColors;
+  const colorScheme = useColorScheme();
+  const isDark = colorScheme === 'dark';
+  const colors = isDark ? darkColors : lightColors;
 
   return {
-    isDark: false,
-    mode: 'light' as const,
-    blurIntensity: 40,
+    isDark,
+    mode: isDark ? 'dark' as const : 'light' as const,
+    blurIntensity: isDark ? 60 : 40,
     radii,
     spacing,
     typography,
@@ -19,7 +22,8 @@ export function useAppTheme() {
       textSecondary: colors.textMuted,
       textMuted: colors.textMuted,
       accent: colors.primary,
-      overlay: 'rgba(255,255,255,0.85)',
+      accentText: isDark ? colors.text : colors.panel,
+      overlay: isDark ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.85)',
       cardHover: colors.panelMuted,
       indicator: colors.border,
       iconMuted: colors.textMuted,

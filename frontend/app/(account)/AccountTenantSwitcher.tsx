@@ -177,18 +177,6 @@ export function AccountTenantSwitcher() {
   }, [activeTenantId, activeWorkspaceId]);
 
   useEffect(() => {
-    const root = document.documentElement;
-    const body = document.body;
-    const isLightTheme = resolvedTheme === 'light';
-
-    root.setAttribute(APP_THEME_ATTRIBUTE, resolvedTheme);
-    root.style.colorScheme = resolvedTheme;
-    body.setAttribute(APP_THEME_ATTRIBUTE, resolvedTheme);
-    body.style.colorScheme = resolvedTheme;
-    body.classList.toggle('theme-light', isLightTheme);
-  }, [resolvedTheme]);
-
-  useEffect(() => {
     setPendingRailId(null);
   }, [activeRailId, pathname]);
 
@@ -256,7 +244,7 @@ export function AccountTenantSwitcher() {
   }, [usageClient]);
 
   return (
-    <aside data-workstation-switcher="rail" className="account-switcher">
+    <div data-workstation-switcher="rail" className="account-switcher">
       <nav aria-label="Primary destinations" className="account-switcher__cluster account-switcher__cluster--upper">
         <div className="account-switcher__nav account-switcher__nav--primary">
           {PRIMARY_DESTINATIONS.map((destination) => {
@@ -346,6 +334,6 @@ export function AccountTenantSwitcher() {
           {accountInitial}
         </Link>
       </div>
-    </aside>
+    </div>
   );
 }

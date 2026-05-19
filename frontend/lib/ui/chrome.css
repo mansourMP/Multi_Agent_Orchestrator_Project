@@ -16791,8 +16791,8 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 .marketplace-workbench {
-  --workstation-split-sidebar-width: minmax(720px, 1fr);
-  grid-template-columns: minmax(720px, 1fr) minmax(320px, 430px) !important;
+  --workstation-split-sidebar-width: 760px;
+  grid-template-columns: minmax(760px, 1fr) minmax(300px, 360px) !important;
   background: var(--app-bg-page);
 }
 
@@ -16806,7 +16806,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 .marketplace-workbench .workstation-split-workbench__main {
-  padding: var(--app-space-6) var(--app-space-6) var(--app-space-8);
+  padding: var(--app-space-6) var(--app-space-5) var(--app-space-8);
   gap: var(--app-space-4);
 }
 
@@ -16973,7 +16973,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
 
 .marketplace-pane__grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(190px, 1fr));
   gap: var(--app-space-3);
 }
 
@@ -17422,16 +17422,20 @@ body.theme-light .sage-integrations-nav__bucket--active {
 
 .marketplace-pane__detail-hero {
   display: grid;
-  grid-template-columns: 90px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--app-space-4);
   align-items: center;
-  padding-bottom: 16px;
+  padding: 0 0 var(--app-space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   border-bottom: 1px solid color-mix(in srgb, var(--app-border-muted) 66%, transparent);
+  box-shadow: none;
 }
 
 .marketplace-pane__detail-icon {
-  width: 86px;
-  height: 86px;
+  width: 72px;
+  height: 72px;
 }
 
 .marketplace-pane__detail-hero-copy {
@@ -17442,7 +17446,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
 .marketplace-pane__detail-hero-title {
   color: var(--text-primary);
   font-family: var(--app-font-heading);
-  font-size: 24px;
+  font-size: var(--app-font-22);
   font-weight: var(--font-weight-bold);
   letter-spacing: 0;
   line-height: 1.08;
@@ -17962,15 +17966,27 @@ body.theme-light .sage-integrations-nav__bucket--active {
 
 @media (max-width: 1180px) {
   .marketplace-workbench {
-    grid-template-columns: minmax(520px, 1fr) minmax(300px, 380px) !important;
+    --workstation-split-sidebar-width: 640px;
+    grid-template-columns: minmax(640px, 1fr) minmax(280px, 320px) !important;
   }
 
   .marketplace-pane__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(170px, 1fr));
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 1040px) {
+  .marketplace-workbench {
+    --workstation-split-sidebar-width: 560px;
+    grid-template-columns: minmax(560px, 1fr) minmax(260px, 300px) !important;
+  }
+
+  .marketplace-pane__grid {
+    grid-template-columns: repeat(2, minmax(200px, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
   .marketplace-pane {
     height: auto;
     overflow: visible;

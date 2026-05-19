@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  Activity,
   Bot,
   Compass,
   LayoutGrid,
@@ -42,6 +43,7 @@ type RailDestination = {
 
 const PRIMARY_DESTINATIONS: RailDestination[] = [
   { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot, dataLinkId: 'sage' },
+  { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
   { id: 'gateway', label: 'Computers', defaultRouteId: 'gateway', icon: Monitor },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },

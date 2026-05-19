@@ -17971,3 +17971,14 @@ body.theme-light .sage-integrations-nav__bucket--active {
   width: 100%;
   margin-top: var(--app-space-2);
 }
+
+.deployed-agent-chat__turn-wrapper {
+  display: grid;
+  gap: var(--app-space-2);
+  width: 100%;
+}
+
+.deployed-agent-chat__meta span.deployed-agent-chat__badge--alert {
+  border-color: color-mix(in srgb, var(--app-warning) 52%, transparent);
+  color: var(--app-warning);
+}

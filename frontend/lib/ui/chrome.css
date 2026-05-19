@@ -16981,8 +16981,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: var(--app-space-3);
-  min-height: 13.5rem;
-  aspect-ratio: 1 / 1;
+  min-height: 16rem;
   padding: var(--app-space-4);
   border-radius: var(--app-radius-xl);
   background: var(--app-bg-panel);
@@ -18028,7 +18027,6 @@ body.theme-light .sage-integrations-nav__bucket--active {
   }
 
   .marketplace-pane__card {
-    aspect-ratio: auto;
     min-height: 240px;
   }
 

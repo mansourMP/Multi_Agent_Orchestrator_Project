@@ -19,7 +19,6 @@ export type WorkspaceRouteId =
   | 'notifications'
   | 'activity'
   | 'heartbeat'
-  | 'skills'
   | 'integrations'
   | 'studioIntegrations'
   | 'studio'

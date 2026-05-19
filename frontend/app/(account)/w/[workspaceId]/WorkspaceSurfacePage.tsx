@@ -66,10 +66,6 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
     destinationId: 'sage',
     render: () => <WorkstationSageWorkCenterPane />,
   },
-  skills: {
-    destinationId: 'sage',
-    render: () => <WorkstationSageConnectorsPane />,
-  },
   integrations: {
     destinationId: 'sage',
     render: () => <WorkstationSageConnectorsPane />,

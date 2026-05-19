@@ -102,7 +102,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     id: 'skills',
     title: 'Installed skills',
     description: 'Open the skill catalog and inspect installed AI extensions.',
-    routeId: 'skills',
+    routeId: 'integrations',
     icon: Puzzle,
     keywords: ['extensions', 'skills', 'install', 'tool server', 'playbook'],
   },

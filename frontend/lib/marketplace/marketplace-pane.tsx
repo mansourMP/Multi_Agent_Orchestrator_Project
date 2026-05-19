@@ -1,18 +1,33 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  BookOpen,
+  Bot,
+  Car,
+  Check,
+  DollarSign,
+  type LucideIcon,
+  MessageSquare,
+  PackageCheck,
+  Target,
+  Utensils,
+  Users,
+  Wrench,
+} from 'lucide-react';
 
 import { EmptyPanel } from '@/lib/ui/empty-panel';
-import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
+import { ListDetailPanel } from '@/lib/ui/list-detail';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { MarketplacePackageRecord } from '@/lib/workspace/workstation-client';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
+import { WorkstationSplitWorkbench } from '@/lib/workspace/workstation-split-workbench';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
-const KIND_FILTERS = ['all', 'agent_template', 'app', 'connector', 'skill', 'mini_app', 'provider'] as const;
+const KIND_FILTERS = ['all', 'agent_template', 'app', 'bundle'] as const;
 const COMPOSER_KINDS = ['app', 'provider'] as const;
 const VERIFICATION_OPTIONS = ['unverified', 'partner', 'verified'] as const;
 const REVIEW_OPTIONS = ['pending', 'approved', 'restricted'] as const;
@@ -23,15 +38,32 @@ const MONETIZATION_OPTIONS = ['free', 'metered', 'subscription', 'revenue_share'
 type KindFilter = typeof KIND_FILTERS[number];
 type ComposerKind = typeof COMPOSER_KINDS[number];
 
-const KIND_FILTER_LABELS: Record<KindFilter, string> = {
-  all: 'All',
-  agent_template: 'Agent templates',
-  app: 'Apps',
-  connector: 'Connectors',
-  skill: 'Skills',
-  mini_app: 'Mini-apps',
-  provider: 'AI model configs',
-};
+function isVisibleMarketplaceKind(kind: string): boolean {
+  const normalized = kind.trim().toLowerCase();
+  return normalized === 'agent_template' || normalized === 'app' || normalized === 'mini_app' || normalized === 'bundle';
+}
+
+function marketplaceKindMatchesFilter(kind: string, filter: KindFilter): boolean {
+  const normalized = kind.trim().toLowerCase();
+  if (filter === 'all') {
+    return isVisibleMarketplaceKind(normalized);
+  }
+  if (filter === 'app') {
+    return normalized === 'app' || normalized === 'mini_app';
+  }
+  if (filter === 'bundle') {
+    return normalized === 'bundle';
+  }
+  return normalized === filter;
+}
+
+function marketplaceApiKindForFilter(filter: KindFilter): string | null {
+  return filter === 'agent_template' ? 'agent_template' : null;
+}
+
+function normalizeMarketplaceKindFilter(value: string | null): KindFilter {
+  return KIND_FILTERS.some((filter) => filter === value) ? value as KindFilter : 'all';
+}
 
 type BaseComposerDraft = {
   label: string;
@@ -201,13 +233,16 @@ function humanizeToken(value: string): string {
 function packageKindLabel(kind: string): string {
   const normalized = kind.trim().toLowerCase();
   if (normalized === 'provider') {
-    return 'AI model config';
+    return 'Model';
   }
   if (normalized === 'mini_app') {
     return 'Mini-app';
   }
   if (normalized === 'agent_template') {
     return 'Agent template';
+  }
+  if (normalized === 'skill') {
+    return 'Tool';
   }
   return humanizeToken(normalized || 'package');
 }
@@ -285,18 +320,6 @@ function parseProviderModelLines(value: string, defaultModel: string): Record<st
   return fallbackModel ? [{ id: fallbackModel, label: humanizeToken(fallbackModel) }] : [];
 }
 
-function formatTimestamp(value: unknown): string {
-  const token = readString(value);
-  if (!token) {
-    return 'Not recorded';
-  }
-  const date = new Date(token);
-  if (Number.isNaN(date.getTime())) {
-    return token;
-  }
-  return date.toLocaleString();
-}
-
 function buildMarketplaceCardView(item: MarketplacePackageRecord, index: number): MarketplaceCardView {
   const runtimeTruth = readRecord(item.runtime_truth);
   const publisher = readRecord(item.publisher);
@@ -362,11 +385,11 @@ function marketplacePrimaryActionLabel(card: MarketplaceCardView): string {
     return 'Preview only';
   }
   if (!card.installed && !card.installEligible) {
-    return 'Needs review';
+    return 'Blocked';
   }
   if (card.installed) {
     if (card.kind === 'agent_template') {
-      return 'Open in Build';
+      return 'Open in Studio';
     }
     if (card.kind === 'app' || card.kind === 'mini_app') {
       return 'Open app';
@@ -374,95 +397,364 @@ function marketplacePrimaryActionLabel(card: MarketplaceCardView): string {
     return 'Open setup';
   }
   if (card.kind === 'agent_template') {
-    return 'Install template';
+    return 'Use template';
   }
-  if (card.kind === 'connector') {
-    return 'Install connector';
+  if (card.kind === 'mini_app' || card.kind === 'app') {
+    return 'Install app';
   }
-  if (card.kind === 'skill') {
-    return 'Install skill';
-  }
-  if (card.kind === 'mini_app') {
-    return 'Install mini-app';
-  }
-  return card.kind === 'app' ? 'Install app' : 'Add AI model';
+  return 'Install';
 }
 
 function marketplaceInstallTargetLabel(kind: string): string {
   switch (kind) {
     case 'agent_template':
-      return 'Appears in Build as a governed template';
+      return 'Creates a draft agent in Studio.';
     case 'connector':
-      return 'Appears in Integrations after install';
+      return 'Opens setup in Integrations.';
     case 'skill':
-      return 'Appears in Skills after install';
+      return 'Becomes a callable tool for Sage and eligible agents.';
     case 'mini_app':
-      return 'Opens as a governed mini-app after install';
+      return 'Installs as a workspace mini-app.';
     case 'app':
-      return 'Opens in Discover after install';
+      return 'Installs as a workspace app.';
     case 'provider':
-      return 'Appears in AI Models after install';
+      return 'Adds model options for Sage and Studio.';
     default:
-      return 'Adds a governed workspace package';
+      return 'Adds a workspace capability.';
   }
 }
 
 function marketplaceBillingPilotLabel(billing: Record<string, unknown>, monetizationKind: string): string {
-  const status = readString(billing.billing_status, 'metadata_only');
   const paymentProcessingLive = readBoolean(billing.payment_processing_live);
-  const monetizationLabel = humanizeToken(monetizationKind || readString(billing.monetization_kind, 'free'));
-  if (!paymentProcessingLive || status === 'metadata_only') {
-    return `${monetizationLabel}; metadata only`;
+  const monetization = monetizationKind || readString(billing.monetization_kind, 'free');
+  const monetizationLabel = humanizeToken(monetization);
+  if (monetization === 'free') {
+    return paymentProcessingLive ? 'Free' : 'Free; no live billing';
+  }
+  if (monetization === 'metered') {
+    return paymentProcessingLive ? 'Usage-based' : 'Usage-based; not charging yet';
+  }
+  if (monetization === 'subscription') {
+    return paymentProcessingLive ? 'Subscription' : 'Subscription metadata only';
+  }
+  if (monetization === 'revenue_share') {
+    return paymentProcessingLive ? 'Revenue share' : 'Revenue-share metadata only';
   }
   return monetizationLabel;
 }
 
-function summarizeInstallReadiness(
-  card: MarketplaceCardView,
-  details: {
-    permissionList: string[];
-    providerAuthModes: string[];
-    appBridgeContracts: [string, unknown][];
-    packagePayload: Record<string, unknown>;
-    runtimeTruth: Record<string, unknown>;
-    item: MarketplacePackageRecord;
-  },
-): string[] {
-  const lines: string[] = [];
+type MarketplaceSelectedDetails = {
+  item: MarketplacePackageRecord;
+  publisher: Record<string, unknown>;
+  onboarding: Record<string, unknown>;
+  billing: Record<string, unknown>;
+  analytics: Record<string, unknown>;
+  runtimeTruth: Record<string, unknown>;
+  install: Record<string, unknown>;
+  packagePayload: Record<string, unknown>;
+  accountingHook: Record<string, unknown>;
+  permissionList: string[];
+  allowedOrigins: string[];
+  providerAuthModes: string[];
+  providerCapabilities: string[];
+  appBridgeContracts: [string, unknown][];
+  providerModels: Record<string, unknown>[];
+};
+
+type MarketplaceDetailSection = {
+  title: string;
+  body?: string;
+  icon: LucideIcon;
+  items?: string[];
+};
+
+function buildMarketplaceSelectedDetails(item: MarketplacePackageRecord): MarketplaceSelectedDetails {
+  const publisher = readRecord(item.publisher);
+  const onboarding = readRecord(item.onboarding);
+  const billing = readRecord(item.billing);
+  const runtimeTruth = readRecord(item.runtime_truth);
+  const analytics = readRecord(item.analytics);
+  const install = readRecord(item.install);
+  const packagePayload = readRecord(item.package);
+  const accountingHook = readRecord(billing.accounting_hook);
+  return {
+    item,
+    publisher,
+    onboarding,
+    billing,
+    runtimeTruth,
+    analytics,
+    install,
+    packagePayload,
+    accountingHook,
+    permissionList: readStringList(packagePayload.permissions),
+    allowedOrigins: readStringList(packagePayload.allowed_origins),
+    providerAuthModes: readStringList(packagePayload.auth_modes),
+    providerCapabilities: readStringList(packagePayload.capability_labels),
+    appBridgeContracts: Object.entries(readRecord(packagePayload.bridge_contracts)).filter(([, value]) => Array.isArray(value)),
+    providerModels: Array.isArray(packagePayload.models)
+      ? packagePayload.models.filter((model): model is Record<string, unknown> => Boolean(model) && typeof model === 'object')
+      : [],
+  };
+}
+
+function nonEmptyRecord(value: unknown): Record<string, unknown> | null {
+  const record = readRecord(value);
+  return Object.keys(record).length > 0 ? record : null;
+}
+
+function marketplacePackageSpecificPayload(card: MarketplaceCardView, details: MarketplaceSelectedDetails): Record<string, unknown> {
+  if (card.kind === 'agent_template') {
+    return nonEmptyRecord(details.packagePayload.agent_template) ?? details.packagePayload;
+  }
+  if (card.kind === 'mini_app' || card.kind === 'app') {
+    return nonEmptyRecord(details.packagePayload.app) ?? details.packagePayload;
+  }
+  if (card.kind === 'connector') {
+    return nonEmptyRecord(details.packagePayload.connector) ?? details.packagePayload;
+  }
+  if (card.kind === 'skill') {
+    return nonEmptyRecord(details.packagePayload.skill) ?? details.packagePayload;
+  }
+  if (card.kind === 'provider') {
+    return nonEmptyRecord(details.packagePayload.provider) ?? details.packagePayload;
+  }
+  return details.packagePayload;
+}
+
+function marketplaceBlockerLabel(blocker: string): string {
+  switch (blocker) {
+    case 'preview_only':
+      return 'Preview only; installation is not enabled yet.';
+    case 'review_not_approved':
+      return 'Waiting for marketplace review.';
+    case 'verification_required':
+      return 'Publisher verification is required.';
+    case 'policy_restricted':
+      return 'Restricted by marketplace policy.';
+    case 'manual_approval_required':
+      return 'Owner approval is required before install.';
+    case 'excessive_permissions_requested':
+      return 'Requests too much access for automatic install.';
+    case 'excessive_domain_scope':
+      return 'Requests a broad domain scope.';
+    case 'unsafe_local_runtime_permission_combo':
+      return 'Requests unsafe local-computer permissions.';
+    case 'owner_resource_boundary_violation':
+      return 'Requests owner resources that require review.';
+    default:
+      return humanizeToken(blocker);
+  }
+}
+
+function marketplaceSetupSummary(card: MarketplaceCardView, details: MarketplaceSelectedDetails): string {
+  const specificPayload = marketplacePackageSpecificPayload(card, details);
   if (card.previewOnly) {
-    lines.push('Preview only; not installable in the pilot');
+    return 'Preview only. You can inspect it, but installation is disabled.';
   }
-  lines.push(card.approvalRequired ? 'Needs your OK before install' : 'No install approval required');
-  lines.push(`Billing: ${marketplaceBillingPilotLabel(readRecord(details.item.billing), card.monetizationKind)}`);
-  lines.push(marketplaceInstallTargetLabel(card.kind));
+  if (!card.installed && !card.installEligible && card.installBlockers.length > 0) {
+    return marketplaceBlockerLabel(card.installBlockers[0]);
+  }
+  if (card.kind === 'agent_template') {
+    const requiredConnectors = readStringList(specificPayload.required_connectors);
+    const checklist = readStringList(specificPayload.launch_checklist);
+    if (requiredConnectors.length) {
+      return `Connect ${requiredConnectors.slice(0, 3).join(', ')} before launch.`;
+    }
+    if (checklist.length) {
+      return checklist[0];
+    }
+    return 'Customize the draft before launch.';
+  }
+  if (card.kind === 'connector') {
+    const authModes = readStringList(specificPayload.auth_modes);
+    return authModes.length ? `Connect with ${authModes.map(humanizeToken).join(' or ')}.` : 'Connect the account in Integrations.';
+  }
+  if (card.kind === 'skill') {
+    const permissions = readStringList(specificPayload.permissions);
+    return permissions.length ? `Requires ${permissions.slice(0, 3).map(humanizeToken).join(', ')}.` : 'No extra tool permissions declared.';
+  }
+  if (card.kind === 'provider') {
+    const authModes = details.providerAuthModes.length ? details.providerAuthModes : ['api_key'];
+    return `Add credentials with ${authModes.map(humanizeToken).join(' or ')}.`;
+  }
   if (card.kind === 'app' || card.kind === 'mini_app') {
-    if (details.permissionList.length > 0) {
-      lines.push(`Uses ${details.permissionList.slice(0, 3).map(humanizeToken).join(', ')}`);
-    } else {
-      lines.push('No extra app permissions declared');
+    if (details.permissionList.length) {
+      return `Uses ${details.permissionList.slice(0, 3).map(humanizeToken).join(', ')}.`;
     }
-    if (details.appBridgeContracts.length > 0) {
-      lines.push('Can talk to Sage through a governed app bridge');
-    }
-  } else if (card.kind === 'provider') {
-    const authModes = details.providerAuthModes.length > 0 ? details.providerAuthModes : ['api_key'];
-    lines.push(`Sign-in uses ${authModes.map(humanizeToken).join(' or ')}`);
-    const defaultModel = readString(details.packagePayload.default_model);
-    if (defaultModel) {
-      lines.push(`Default AI model: ${defaultModel}`);
-    }
-  } else if (card.kind === 'agent_template') {
-    const requiredConnectors = readStringList(details.packagePayload.required_connectors);
-    lines.push(requiredConnectors.length ? `Setup needs ${requiredConnectors.slice(0, 3).join(', ')}` : 'Template can be customized before launch');
-  } else if (card.kind === 'connector') {
-    const authModes = readStringList(details.packagePayload.auth_modes);
-    lines.push(authModes.length ? `Auth: ${authModes.map(humanizeToken).join(' or ')}` : 'Connector declares no auth modes');
-  } else if (card.kind === 'skill') {
-    const permissions = readStringList(details.packagePayload.permissions);
-    lines.push(permissions.length ? `Skill permissions: ${permissions.slice(0, 3).map(humanizeToken).join(', ')}` : 'Skill declares no permissions');
+    return 'No extra app permissions declared.';
   }
-  lines.push(`Lifecycle: ${marketplaceLifecycleLabel(details.item, details.packagePayload, details.runtimeTruth)}`);
-  return lines;
+  return 'Review setup before enabling.';
+}
+
+function marketplaceIconForCard(card: MarketplaceCardView): LucideIcon {
+  const name = card.name.toLowerCase();
+  const category = card.category.toLowerCase();
+  if (name.includes('restaurant') || name.includes('order') || category.includes('food')) {
+    return Utensils;
+  }
+  if (name.includes('auto') || name.includes('car') || name.includes('parts')) {
+    return Car;
+  }
+  if (name.includes('flashcard') || name.includes('study') || name.includes('faq') || name.includes('docs')) {
+    return BookOpen;
+  }
+  if (name.includes('support') || name.includes('chat') || name.includes('message')) {
+    return MessageSquare;
+  }
+  if (card.kind === 'agent_template') {
+    return Bot;
+  }
+  return PackageCheck;
+}
+
+function marketplaceCardBadges(card: MarketplaceCardView, details: MarketplaceSelectedDetails): string[] {
+  const specificPayload = marketplacePackageSpecificPayload(card, details);
+  const requiredConnectors = readStringList(specificPayload.required_connectors);
+  const setupToken = card.previewOnly
+    ? 'Preview'
+    : requiredConnectors.length
+      ? `Setup needed: ${humanizeToken(requiredConnectors[0])}`
+      : card.healthState === 'setup_required'
+        ? 'Setup required'
+        : 'Ready to enable';
+  const trustToken = [
+    humanizeToken(card.verificationStatus),
+    card.approvalRequired ? 'Approval required' : 'No manual approval',
+  ].filter(Boolean).join(' · ');
+  const costToken = marketplaceBillingPilotLabel(details.billing, card.monetizationKind).replace('; no live billing', '');
+  return [setupToken, trustToken, `Cost: ${costToken}`];
+}
+
+function marketplaceWhatAddsSummary(card: MarketplaceCardView, details: MarketplaceSelectedDetails): string {
+  if (card.kind === 'agent_template') {
+    const proof = readAgentTemplateProofDetails(details.packagePayload);
+    return proof.does === 'Business behavior is defined in this template contract.' ? card.description : proof.does;
+  }
+  if (card.kind === 'connector') {
+    const actions = readStringList(details.packagePayload.actions);
+    return actions.length
+      ? `Connects ${card.name} so Sage or agents can use ${actions.slice(0, 3).map(humanizeToken).join(', ')}.`
+      : `Connects ${card.name} to this workspace.`;
+  }
+  if (card.kind === 'skill') {
+    const contracts = Object.keys(readRecord(details.packagePayload.tool_contracts));
+    return contracts.length
+      ? `Adds ${contracts.slice(0, 3).map(humanizeToken).join(', ')} tool capability.`
+      : `Adds ${card.name} as a callable tool.`;
+  }
+  if (card.kind === 'provider') {
+    const defaultModel = readString(details.packagePayload.default_model);
+    return defaultModel ? `Adds ${defaultModel} and related models as routing options.` : 'Adds a model provider for Sage and Studio.';
+  }
+  if (card.kind === 'app' || card.kind === 'mini_app') {
+    return card.description;
+  }
+  return card.description;
+}
+
+function marketplaceDestinationSummary(card: MarketplaceCardView, details: MarketplaceSelectedDetails): string {
+  const base = marketplaceInstallTargetLabel(card.kind);
+  if (card.installed && readString(details.install.open_href || details.runtimeTruth.open_href)) {
+    return `${base} This item is already installed.`;
+  }
+  return base;
+}
+
+function marketplaceCreatedItems(card: MarketplaceCardView, details: MarketplaceSelectedDetails): string[] {
+  const specificPayload = marketplacePackageSpecificPayload(card, details);
+  if (card.kind === 'agent_template') {
+    const checklist = readStringList(specificPayload.launch_checklist);
+    const connector = readStringList(specificPayload.required_connectors)[0];
+    return [
+      `${card.name} handler and private test conversation`,
+      checklist.length ? `Setup checklist for ${connector ? humanizeToken(connector) : 'launch'}` : 'Studio draft agent',
+      'Workspace-visible activity and cost tracking',
+    ];
+  }
+  if (card.kind === 'mini_app' || card.kind === 'app') {
+    return [
+      `${card.name} app entry in this workspace`,
+      details.permissionList.length ? `${humanizeToken(details.permissionList[0])} permission request` : 'Workspace install record',
+    ];
+  }
+  return [marketplaceInstallTargetLabel(card.kind)];
+}
+
+function marketplaceSetupItems(card: MarketplaceCardView, details: MarketplaceSelectedDetails): string[] {
+  const specificPayload = marketplacePackageSpecificPayload(card, details);
+  if (card.previewOnly || (!card.installed && !card.installEligible && card.installBlockers.length > 0)) {
+    return card.installBlockers.length
+      ? card.installBlockers.map(marketplaceBlockerLabel)
+      : ['Preview only; installation is not enabled yet.'];
+  }
+  if (card.kind === 'agent_template') {
+    const checklist = readStringList(specificPayload.launch_checklist);
+    const connectors = readStringList(specificPayload.required_connectors).map((connector) => `Connect ${humanizeToken(connector)}`);
+    return [...connectors, ...checklist].filter(Boolean).slice(0, 4);
+  }
+  if (card.kind === 'app' || card.kind === 'mini_app') {
+    return details.permissionList.length
+      ? details.permissionList.slice(0, 4).map((permission) => `Allow ${humanizeToken(permission)}`)
+      : ['No extra app setup declared.'];
+  }
+  return [marketplaceSetupSummary(card, details)];
+}
+
+function marketplaceCostSummary(card: MarketplaceCardView, details: MarketplaceSelectedDetails): string {
+  const label = marketplaceBillingPilotLabel(details.billing, card.monetizationKind);
+  if (card.monetizationKind === 'free') {
+    return 'Free. Uses credits for messages and actions.';
+  }
+  return label;
+}
+
+function marketplaceDetailSections(card: MarketplaceCardView, details: MarketplaceSelectedDetails): MarketplaceDetailSection[] {
+  return [
+    {
+      title: 'What it does',
+      body: marketplaceWhatAddsSummary(card, details),
+      icon: Target,
+    },
+    {
+      title: 'Where it goes',
+      items: marketplaceCreatedItems(card, details),
+      icon: PackageCheck,
+    },
+    {
+      title: 'Setup needed',
+      items: marketplaceSetupItems(card, details),
+      icon: Wrench,
+    },
+    {
+      title: 'Trust and safety',
+      body: card.kind === 'agent_template'
+        ? 'Creates a governed Studio draft. Workspace access and launch approvals stay controlled by your workspace settings.'
+        : 'Install access, permissions, and approvals stay governed by your workspace settings.',
+      icon: Users,
+    },
+    {
+      title: 'Cost',
+      body: marketplaceCostSummary(card, details),
+      icon: DollarSign,
+    },
+  ];
+}
+
+function marketplaceTrustTokens(card: MarketplaceCardView): string[] {
+  const tokens = [
+    humanizeToken(card.verificationStatus),
+    humanizeToken(card.reviewState),
+    humanizeToken(card.healthState),
+    `Policy: ${humanizeToken(card.policyPosture)}`,
+  ];
+  if (card.approvalRequired) {
+    tokens.push('Requires approval');
+  }
+  if (card.previewOnly) {
+    tokens.push('Preview');
+  }
+  return tokens;
 }
 
 type AgentTemplateProofSnapshot = {
@@ -475,7 +767,8 @@ type AgentTemplateProofSnapshot = {
 };
 
 function readAgentTemplateProofDetails(packagePayload: Record<string, unknown>): AgentTemplateProofSnapshot {
-  const envelope = readRecord(packagePayload.context_envelope);
+  const agentTemplatePayload = nonEmptyRecord(packagePayload.agent_template) ?? packagePayload;
+  const envelope = readRecord(agentTemplatePayload.context_envelope);
   const proofContract = readRecord(envelope.proof_agent_seed_contract);
   const channels = Array.isArray(proofContract.channels)
     ? proofContract.channels
@@ -492,18 +785,18 @@ function readAgentTemplateProofDetails(packagePayload: Record<string, unknown>):
   const monetizationHint = readRecord(proofContract.monetization_hint);
   const runtimeTierRecommendation = readRecord(proofContract.runtime_tier_recommendation);
   const approvalPolicy = readRecord(proofContract.approval_policy);
-  const fallbackMoneyModel = readString(monetizationHint.kind, readString(packagePayload.specialist_kind, 'service'));
+  const fallbackMoneyModel = readString(monetizationHint.kind, readString(agentTemplatePayload.specialist_kind, 'service'));
   const fallbackOffer = readString(monetizationHint.suggested_offer);
   const moneyModel = fallbackOffer || (fallbackMoneyModel ? humanizeToken(fallbackMoneyModel) : 'Revenue model pending');
-  const runtimeTierToken = readString(runtimeTierRecommendation.tier, readString(packagePayload.runtime_tier, 'hosted_secure'));
+  const runtimeTierToken = readString(runtimeTierRecommendation.tier, readString(agentTemplatePayload.runtime_tier, 'hosted_secure'));
   const runtimeTier = runtimeTierToken ? humanizeToken(runtimeTierToken) : 'Hosted secure';
   const safetyPolicy = readString(approvalPolicy.default_mode)
     ? `${humanizeToken(readString(approvalPolicy.default_mode))} (${readStringList(approvalPolicy.owner_approval_required_for).length} owner approvals)`
     : 'Owner approval policy defined in template';
   return {
     does: readString(proofContract.description, readString(packagePayload.description, 'Business behavior is defined in this template contract.')),
-    channels: channels.length ? channels : readStringList(packagePayload.required_connectors),
-    dataNeeds: dataNeeds.length ? dataNeeds : readStringList(packagePayload.required_connectors),
+    channels: channels.length ? channels : readStringList(agentTemplatePayload.required_connectors),
+    dataNeeds: dataNeeds.length ? dataNeeds : readStringList(agentTemplatePayload.required_connectors),
     moneyModel,
     runtimeTier,
     safetyPolicy,
@@ -562,9 +855,11 @@ function MarketplaceField({
 
 export function MarketplacePane() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const services = useWorkspaceServices();
   const { hasCapability } = useWorkspaceBoundary();
-  const [kindFilter, setKindFilter] = useState<KindFilter>('all');
+  const requestedKindFilter = normalizeMarketplaceKindFilter(searchParams.get('category'));
+  const [kindFilter, setKindFilter] = useState<KindFilter>(requestedKindFilter);
   const [items, setItems] = useState<MarketplacePackageRecord[]>([]);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -580,6 +875,10 @@ export function MarketplacePane() {
   const canPublishPackages = hasCapability('workspace_admin_enabled');
   const activeRequestControllerRef = useRef<AbortController | null>(null);
 
+  useEffect(() => {
+    setKindFilter((current) => (current === requestedKindFilter ? current : requestedKindFilter));
+  }, [requestedKindFilter]);
+
   const loadMarketplacePackages = useCallback(async (requestedKind: KindFilter) => {
     setLoading(true);
     setError(null);
@@ -588,7 +887,7 @@ export function MarketplacePane() {
     activeRequestControllerRef.current = requestController;
     try {
       const payload = await services.client.listMarketplacePackages({
-        kind: requestedKind === 'all' ? null : requestedKind,
+        kind: marketplaceApiKindForFilter(requestedKind),
       });
       if (requestController.signal.aborted || activeRequestControllerRef.current !== requestController) {
         return [];
@@ -600,7 +899,7 @@ export function MarketplacePane() {
       if (requestController.signal.aborted || activeRequestControllerRef.current !== requestController) {
         return [];
       }
-      setError(loadError instanceof Error ? loadError.message : 'Marketplace packages could not be loaded.');
+      setError(loadError instanceof Error ? loadError.message : 'Marketplace items could not be loaded.');
       setItems([]);
       return [];
     } finally {
@@ -628,11 +927,12 @@ export function MarketplacePane() {
       }
       return;
     }
-    const hasSelected = items.some((item) => readString(item.package_id) === selectedPackageId);
+    const visibleItems = items.filter((item) => marketplaceKindMatchesFilter(readString(item.kind), kindFilter));
+    const hasSelected = visibleItems.some((item) => readString(item.package_id) === selectedPackageId);
     if (!hasSelected) {
-      setSelectedPackageId(readString(items[0]?.package_id) || null);
+      setSelectedPackageId(readString(visibleItems[0]?.package_id) || null);
     }
-  }, [items, selectedPackageId]);
+  }, [items, kindFilter, selectedPackageId]);
 
   async function handleInstall(packageId: string) {
     setInstallingPackageId(packageId);
@@ -647,7 +947,7 @@ export function MarketplacePane() {
         router.push(openHref);
       }
     } catch (installError) {
-      setError(installError instanceof Error ? installError.message : 'Package install failed.');
+      setError(installError instanceof Error ? installError.message : 'Install failed.');
     } finally {
       setInstallingPackageId(null);
     }
@@ -758,12 +1058,7 @@ export function MarketplacePane() {
       };
       const response = await services.client.registerMarketplaceProvider(payload);
       const packageId = readString(response?.package_id);
-      if (kindFilter !== 'all' && kindFilter !== 'provider') {
-        setKindFilter('provider');
-        await loadMarketplacePackages('provider');
-      } else {
-        await loadMarketplacePackages(kindFilter);
-      }
+      await loadMarketplacePackages(kindFilter);
       setSelectedPackageId(packageId || null);
       setComposerStatus('Governed provider package registered. Install it into workspace integrations when you are ready.');
       setProviderDraft(DEFAULT_PROVIDER_DRAFT);
@@ -774,7 +1069,10 @@ export function MarketplacePane() {
     }
   }
 
-  const displayedItems = useMemo(() => items, [items]);
+  const displayedItems = useMemo(
+    () => items.filter((item) => marketplaceKindMatchesFilter(readString(item.kind), kindFilter)),
+    [items, kindFilter],
+  );
 
   const renderedCards = useMemo(
     () => displayedItems.map((item, index) => buildMarketplaceCardView(item, index)),
@@ -790,71 +1088,26 @@ export function MarketplacePane() {
     if (!selectedPackage) {
       return null;
     }
-    const item = selectedPackage.item;
-    const publisher = readRecord(item.publisher);
-    const onboarding = readRecord(item.onboarding);
-    const billing = readRecord(item.billing);
-    const runtimeTruth = readRecord(item.runtime_truth);
-    const analytics = readRecord(item.analytics);
-    const install = readRecord(item.install);
-    const packagePayload = readRecord(item.package);
-    const accountingHook = readRecord(billing.accounting_hook);
-    return {
-      item,
-      publisher,
-      onboarding,
-      billing,
-      runtimeTruth,
-      analytics,
-      install,
-      packagePayload,
-      accountingHook,
-      permissionList: readStringList(packagePayload.permissions),
-      allowedOrigins: readStringList(packagePayload.allowed_origins),
-      providerAuthModes: readStringList(packagePayload.auth_modes),
-      providerCapabilities: readStringList(packagePayload.capability_labels),
-      appBridgeContracts: Object.entries(readRecord(packagePayload.bridge_contracts)).filter(([, value]) => Array.isArray(value)),
-      providerModels: Array.isArray(packagePayload.models)
-        ? packagePayload.models.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-        : [],
-    };
+    return buildMarketplaceSelectedDetails(selectedPackage.item);
   }, [selectedPackage]);
 
   return (
     <WorkstationSurfaceRoot surface="marketplace">
-      <ListDetailShell
-        className="marketplace-pane"
-        title="Discover"
-        subtitle="Install governed templates, tools, providers, connectors, and mini-apps. Build stays for private specialists that work behind Sage."
-      >
-        <ListDetailColumns
-          primary={(
-            <ListDetailPanel
-              className="marketplace-pane__browse-panel"
-              title="Install governed packages"
-              subtitle="Discover is a curated distribution surface with trust details up front. Build is where you create and manage private specialists."
-            >
-              <div className="marketplace-pane__filters">
-                <div className="marketplace-pane__filter-row">
-                  {KIND_FILTERS.map((filter) => (
-                    <button
-                      key={filter}
-                      type="button"
-                      className={joinClassNames(
-                        'marketplace-pane__filter-pill',
-                        kindFilter === filter && 'marketplace-pane__filter-pill--active',
-                      )}
-                      onClick={() => setKindFilter(filter)}
-                    >
-                      {KIND_FILTER_LABELS[filter]}
-                    </button>
-                  ))}
+      <section className="marketplace-pane" aria-label="Discover">
+        <WorkstationSplitWorkbench
+          ariaLabel="Discover"
+          className="marketplace-workbench"
+          sidebar={(
+            <div className="marketplace-pane__catalog-stack">
+              <div className="marketplace-pane__catalog-head">
+                <div className="marketplace-pane__catalog-title-group">
+                  <h1 className="marketplace-pane__catalog-title">Discover</h1>
+                  <p className="marketplace-pane__catalog-subtitle">
+                    Browse ready-made templates, apps, and rooms for this workspace.
+                  </p>
                 </div>
-                <p className="marketplace-pane__panel-copy">
-                  Every package shows trust, access, billing, and runtime details before you install it.
-                </p>
               </div>
-
+            <div className="marketplace-pane__browse-panel">
               {error && !loading ? (
                 <div className="marketplace-pane__error">
                   <div className="marketplace-pane__error-copy">
@@ -871,14 +1124,18 @@ export function MarketplacePane() {
                 <MarketplaceSkeleton />
               ) : renderedCards.length === 0 ? (
                 <EmptyPanel
-                  title="No packages are available yet."
-                  body="Discover installs governed templates, tools, providers, connectors, and mini-apps. Build creates private specialists."
+                  title={kindFilter === 'bundle' ? 'No bundles are available yet.' : 'No catalog items are available yet.'}
+                  body={kindFilter === 'bundle'
+                    ? 'Bundles will combine templates, app surfaces, setup steps, and required access into one installable room.'
+                    : 'Discover will show templates and apps that can be added to this workspace.'}
                 />
               ) : (
                 <div className="marketplace-pane__grid">
                   {renderedCards.map((card) => {
                     const installing = installingPackageId === card.id;
                     const primaryLabel = marketplacePrimaryActionLabel(card);
+                    const cardDetails = buildMarketplaceSelectedDetails(card.item);
+                    const PackageIcon = marketplaceIconForCard(card);
                     return (
                       <article
                         key={card.id}
@@ -896,81 +1153,41 @@ export function MarketplacePane() {
                         role="button"
                         tabIndex={0}
                       >
-                        <div className="marketplace-pane__card-copy">
-                          <div className="marketplace-pane__meta-row">
-                            <span className={joinClassNames('marketplace-pane__kind-pill', `marketplace-pane__kind-pill--${card.kind}`)}>
-                              {packageKindLabel(card.kind)}
-                            </span>
-                            <span className="marketplace-pane__category-pill">{card.category}</span>
+                        <div className="marketplace-pane__card-main">
+                          <div className="marketplace-pane__package-icon" aria-hidden="true">
+                            <PackageIcon />
                           </div>
-                          <strong className="marketplace-pane__card-title">{card.name}</strong>
-                          <p className="marketplace-pane__card-description">{card.description}</p>
-                          <p className="marketplace-pane__publisher">Publisher: {card.publisherLabel}</p>
-                          <div className="marketplace-pane__status-row">
-                            <span className={joinClassNames('marketplace-pane__status-badge', `marketplace-pane__status-badge--${card.verificationStatus}`)}>
-                              {humanizeToken(card.verificationStatus)}
-                            </span>
-                            <span className={joinClassNames('marketplace-pane__status-badge', `marketplace-pane__status-badge--${card.reviewState}`)}>
-                              {humanizeToken(card.reviewState)}
-                            </span>
-                            <span className={joinClassNames('marketplace-pane__status-badge', `marketplace-pane__status-badge--${card.healthState}`)}>
-                              {humanizeToken(card.healthState)}
-                            </span>
-                            {card.previewOnly ? (
-                              <span className="marketplace-pane__status-badge marketplace-pane__status-badge--preview">
-                                Preview
+                          <div className="marketplace-pane__card-copy">
+                            <div className="marketplace-pane__card-eyebrow-row">
+                              <span className={joinClassNames('marketplace-pane__kind-pill', `marketplace-pane__kind-pill--${card.kind}`)}>
+                                {packageKindLabel(card.kind)}
                               </span>
-                            ) : null}
-                          </div>
-                          <div className="marketplace-pane__stats-row">
-                            <span className="marketplace-pane__stat-token">
-                              Policy: {humanizeToken(card.policyPosture)}
-                            </span>
-                            <span className="marketplace-pane__stat-token">
-                              Billing: {marketplaceBillingPilotLabel(readRecord(card.item.billing), card.monetizationKind)}
-                            </span>
-                            <span className="marketplace-pane__stat-token">
-                              Surface: {humanizeToken(card.runtimeSurface)}
-                            </span>
-                            {card.approvalRequired ? (
-                              <span className="marketplace-pane__stat-token">Approval required</span>
-                            ) : null}
-                            {card.installCount !== null ? (
-                              <span className="marketplace-pane__stat-token">
-                                Installs: {card.installCount}
-                              </span>
-                            ) : null}
-                            {card.runtimeEventCount !== null ? (
-                              <span className="marketplace-pane__stat-token">
-                                Runtime events: {card.runtimeEventCount}
-                              </span>
-                            ) : null}
+                              {card.installed ? (
+                                <span className="marketplace-pane__status-badge marketplace-pane__status-badge--installed">
+                                  Installed
+                                </span>
+                              ) : card.previewOnly ? (
+                                <span className="marketplace-pane__status-badge marketplace-pane__status-badge--preview">
+                                  Preview
+                                </span>
+                              ) : null}
+                            </div>
+                            <strong className="marketplace-pane__card-title">{card.name}</strong>
+                            <p className="marketplace-pane__card-description">{card.description}</p>
                           </div>
                         </div>
+                        <div className="marketplace-pane__card-badges">
+                          {marketplaceCardBadges(card, cardDetails).map((token) => (
+                            <span key={token} className="marketplace-pane__catalog-badge">
+                              {token}
+                            </span>
+                          ))}
+                        </div>
                         <div className="marketplace-pane__card-actions">
-                          {card.docsHref ? (
-                            <a
-                              href={card.docsHref}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="marketplace-pane__secondary-link"
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              View docs
-                            </a>
-                          ) : (
-                            <button
-                              type="button"
-                              className="marketplace-pane__secondary-link marketplace-pane__secondary-link--disabled"
-                              disabled
-                            >
-                              View docs
-                            </button>
-                          )}
                           <button
                             type="button"
                             className={joinClassNames(
-                              'marketplace-pane__link-button',
+                              'marketplace-pane__link-button marketplace-pane__link-button--catalog',
                               card.installed && 'marketplace-pane__link-button--installed',
                               card.previewOnly && 'marketplace-pane__link-button--preview',
                             )}
@@ -995,27 +1212,28 @@ export function MarketplacePane() {
                   })}
                 </div>
               )}
-            </ListDetailPanel>
+            </div>
+            </div>
           )}
-          secondary={(
+        >
             <div className="marketplace-pane__secondary-stack">
-              <ListDetailPanel
-                className="marketplace-pane__detail-panel"
-                eyebrow={selectedPackage ? packageKindLabel(selectedPackage.kind) : 'Details'}
-                title={selectedPackage?.name || 'Select an app or model'}
-                subtitle={selectedPackage ? selectedPackage.description : 'Choose a package to review trust, access, and install details.'}
-              >
+              <div className="marketplace-pane__detail-panel">
                 {selectedPackage && selectedDetails ? (
                   <div className="marketplace-pane__detail-stack">
+                    {(() => {
+                      const DetailIcon = marketplaceIconForCard(selectedPackage);
+                      const detailSections = marketplaceDetailSections(selectedPackage, selectedDetails);
+                      return (
+                        <>
                     <div className="marketplace-pane__detail-hero">
+                      <div className="marketplace-pane__detail-icon" aria-hidden="true">
+                        <DetailIcon />
+                      </div>
                       <div className="marketplace-pane__detail-hero-copy">
-                        <div className="marketplace-pane__meta-row">
+                        <strong className="marketplace-pane__detail-hero-title">{selectedPackage.name}</strong>
+                        <div className="marketplace-pane__detail-kind-row">
                           <span className={joinClassNames('marketplace-pane__kind-pill', `marketplace-pane__kind-pill--${selectedPackage.kind}`)}>
                             {packageKindLabel(selectedPackage.kind)}
-                          </span>
-                          <span className="marketplace-pane__category-pill">{selectedPackage.category}</span>
-                          <span className="marketplace-pane__status-badge marketplace-pane__status-badge--approved">
-                            {marketplaceLifecycleLabel(selectedDetails.item, selectedDetails.packagePayload, selectedDetails.runtimeTruth)}
                           </span>
                           {selectedPackage.previewOnly ? (
                             <span className="marketplace-pane__status-badge marketplace-pane__status-badge--preview">
@@ -1025,46 +1243,46 @@ export function MarketplacePane() {
                             <span className="marketplace-pane__status-badge marketplace-pane__status-badge--installed">
                               Installed
                             </span>
-                          ) : null}
+                          ) : (
+                            <span className="marketplace-pane__status-badge marketplace-pane__status-badge--approved">
+                              {marketplaceLifecycleLabel(selectedDetails.item, selectedDetails.packagePayload, selectedDetails.runtimeTruth)}
+                            </span>
+                          )}
                         </div>
-                        <strong className="marketplace-pane__detail-hero-title">{selectedPackage.name}</strong>
-                        <p className="marketplace-pane__detail-hero-publisher">
-                          {`Published by ${readString(selectedDetails.publisher.label, selectedPackage.publisherLabel)}`}
-                        </p>
-                      </div>
-                      <div className="marketplace-pane__detail-hero-badges">
-                        <span className={joinClassNames('marketplace-pane__status-badge', `marketplace-pane__status-badge--${selectedPackage.verificationStatus}`)}>
-                          {humanizeToken(selectedPackage.verificationStatus)}
-                        </span>
-                        <span className={joinClassNames('marketplace-pane__status-badge', `marketplace-pane__status-badge--${selectedPackage.reviewState}`)}>
-                          {humanizeToken(selectedPackage.reviewState)}
-                        </span>
-                        <span className={joinClassNames('marketplace-pane__status-badge', `marketplace-pane__status-badge--${selectedPackage.healthState}`)}>
-                          {humanizeToken(selectedPackage.healthState)}
-                        </span>
-                        <span className="marketplace-pane__stat-token">
-                          {`Policy: ${humanizeToken(selectedPackage.policyPosture)}`}
-                        </span>
-                        <span className="marketplace-pane__stat-token">
-                          {`Billing: ${marketplaceBillingPilotLabel(readRecord(selectedPackage.item.billing), selectedPackage.monetizationKind)}`}
-                        </span>
-                        {selectedPackage.approvalRequired ? (
-                          <span className="marketplace-pane__stat-token">Approval required</span>
-                        ) : null}
+                        <p className="marketplace-pane__detail-description">{selectedPackage.description}</p>
                       </div>
                     </div>
 
-                    <div className="marketplace-pane__detail-actions">
-                      {selectedPackage.docsHref ? (
-                        <a
-                          href={selectedPackage.docsHref}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="marketplace-pane__secondary-link"
-                        >
-                          Publisher docs
-                        </a>
-                      ) : null}
+                    <div className="marketplace-pane__detail-section-list">
+                      {detailSections.map((section) => {
+                        const SectionIcon = section.icon;
+                        return (
+                          <section key={section.title} className="marketplace-pane__detail-section">
+                            <div className="marketplace-pane__detail-section-icon" aria-hidden="true">
+                              <SectionIcon />
+                            </div>
+                            <div className="marketplace-pane__detail-section-copy">
+                              <strong className="marketplace-pane__detail-title">{section.title}</strong>
+                              {section.body ? (
+                                <p className="marketplace-pane__panel-copy">{section.body}</p>
+                              ) : null}
+                              {section.items?.length ? (
+                                <div className="marketplace-pane__detail-checklist">
+                                  {section.items.map((item) => (
+                                    <div key={item} className="marketplace-pane__detail-checklist-item">
+                                      <Check aria-hidden="true" />
+                                      <span>{item}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          </section>
+                        );
+                      })}
+                    </div>
+
+                    <div className="marketplace-pane__detail-footer">
                       <button
                         type="button"
                         className={joinClassNames(
@@ -1085,361 +1303,32 @@ export function MarketplacePane() {
                         }}
                       >
                         {installingPackageId === selectedPackage.id
-                          ? 'Installing…'
+                          ? 'Installing...'
                           : marketplacePrimaryActionLabel(selectedPackage)}
                       </button>
-                    </div>
-
-                    <div className="marketplace-pane__detail-group">
-                      <strong className="marketplace-pane__detail-title">Before you install</strong>
-                      <p className="marketplace-pane__panel-copy">
-                        Discover adds governed packages to this workspace. Build stays for private specialists you create yourself and keep behind Sage.
-                      </p>
-                      <div className="marketplace-pane__token-row">
-                        {summarizeInstallReadiness(selectedPackage, selectedDetails).map((token) => (
-                          <span key={token} className="marketplace-pane__stat-token">{token}</span>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="marketplace-pane__detail-group">
-                      <strong className="marketplace-pane__detail-title">Trust and runtime truth</strong>
-                      <div className="marketplace-pane__detail-grid">
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Verification</span>
-                          <span className="marketplace-pane__detail-value">{humanizeToken(selectedPackage.verificationStatus)}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Review</span>
-                          <span className="marketplace-pane__detail-value">{humanizeToken(selectedPackage.reviewState)}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Health</span>
-                          <span className="marketplace-pane__detail-value">{humanizeToken(selectedPackage.healthState)}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Policy</span>
-                          <span className="marketplace-pane__detail-value">{humanizeToken(selectedPackage.policyPosture)}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Install target</span>
-                          <span className="marketplace-pane__detail-value">{humanizeToken(readString(selectedPackage.item.install_target, 'distribution'))}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Runtime surface</span>
-                          <span className="marketplace-pane__detail-value">{humanizeToken(readString(selectedDetails.runtimeTruth.surface, 'distribution'))}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="marketplace-pane__detail-group">
-                      <strong className="marketplace-pane__detail-title">Version and lifecycle</strong>
-                      <div className="marketplace-pane__detail-grid">
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Lifecycle</span>
-                          <span className="marketplace-pane__detail-value">
-                            {marketplaceLifecycleLabel(selectedDetails.item, selectedDetails.packagePayload, selectedDetails.runtimeTruth)}
-                          </span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Version</span>
-                          <span className="marketplace-pane__detail-value">
-                            {readString(selectedDetails.packagePayload.version, readString(selectedDetails.packagePayload.default_model, 'Not provided'))}
-                          </span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Release channel</span>
-                          <span className="marketplace-pane__detail-value">
-                            {readString(selectedDetails.packagePayload.release_channel, 'stable')}
-                          </span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Replacement</span>
-                          <span className="marketplace-pane__detail-value">
-                            {readString(
-                              selectedDetails.packagePayload.successor_package_id
-                              || selectedDetails.packagePayload.replacement_package_id
-                              || selectedDetails.runtimeTruth.successor_package_id,
-                              'Not provided',
-                            )}
-                          </span>
-                        </div>
-                      </div>
-                      {readString(
-                        selectedDetails.packagePayload.deprecation_reason
-                        || selectedDetails.runtimeTruth.deprecation_reason
-                        || selectedDetails.item.deprecation_reason,
-                      ) ? (
-                        <p className="marketplace-pane__panel-copy">
-                          {readString(
-                            selectedDetails.packagePayload.deprecation_reason
-                            || selectedDetails.runtimeTruth.deprecation_reason
-                            || selectedDetails.item.deprecation_reason,
-                          )}
-                        </p>
+                      {selectedPackage.docsHref ? (
+                        <a
+                          href={selectedPackage.docsHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="marketplace-pane__bookmark-link"
+                          aria-label="Open publisher docs"
+                        >
+                          Docs
+                        </a>
                       ) : null}
                     </div>
-
-                    <div className="marketplace-pane__detail-group">
-                      <strong className="marketplace-pane__detail-title">Publisher and onboarding</strong>
-                      <div className="marketplace-pane__detail-grid">
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Publisher</span>
-                          <span className="marketplace-pane__detail-value">{readString(selectedDetails.publisher.label, 'Unknown publisher')}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Website</span>
-                          <span className="marketplace-pane__detail-value">{readString(selectedDetails.publisher.website, 'Not provided')}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Docs</span>
-                          <span className="marketplace-pane__detail-value">{readString(selectedDetails.onboarding.docs_url, 'Not provided')}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Approval gate</span>
-                          <span className="marketplace-pane__detail-value">{readBoolean(selectedPackage.item.approval_required) ? 'Required' : 'Not required'}</span>
-                        </div>
+                        </>
+                      );
+                    })()}
                       </div>
-                    </div>
-
-                    <div className="marketplace-pane__detail-group">
-                      <strong className="marketplace-pane__detail-title">Billing metadata</strong>
-                      <p className="marketplace-pane__panel-copy">
-                        Marketplace billing fields are accounting metadata only. They do not start payment processing or subscriptions in the pilot.
-                      </p>
-                      <div className="marketplace-pane__detail-grid">
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Monetization</span>
-                          <span className="marketplace-pane__detail-value">{humanizeToken(readString(selectedDetails.billing.monetization_kind, 'free'))}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Revenue share</span>
-                          <span className="marketplace-pane__detail-value">
-                            {readNumber(selectedDetails.billing.revenue_share_bps) !== null
-                              ? `${readNumber(selectedDetails.billing.revenue_share_bps)} bps`
-                              : '0 bps'}
-                          </span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Billing product</span>
-                          <span className="marketplace-pane__detail-value">{readString(selectedDetails.billing.billing_product_id, 'Not provided')}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Payment processing</span>
-                          <span className="marketplace-pane__detail-value">
-                            {readBoolean(selectedDetails.billing.payment_processing_live) ? 'Live' : 'Not live; metadata only'}
-                          </span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Ledger hook</span>
-                          <span className="marketplace-pane__detail-value">{readString(selectedDetails.accountingHook.ledger_key, 'Not provided')}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="marketplace-pane__detail-group">
-                      <strong className="marketplace-pane__detail-title">Install and runtime analytics</strong>
-                      <div className="marketplace-pane__detail-grid">
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Install state</span>
-                          <span className="marketplace-pane__detail-value">{humanizeToken(readString(selectedDetails.runtimeTruth.install_state, 'available'))}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Installs</span>
-                          <span className="marketplace-pane__detail-value">{readNumber(selectedDetails.analytics.install_count) ?? 0}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Runtime events</span>
-                          <span className="marketplace-pane__detail-value">{readNumber(selectedDetails.analytics.runtime_event_count) ?? 0}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Last install</span>
-                          <span className="marketplace-pane__detail-value">{formatTimestamp(selectedDetails.analytics.last_install_at)}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Last runtime</span>
-                          <span className="marketplace-pane__detail-value">{formatTimestamp(selectedDetails.analytics.last_runtime_at)}</span>
-                        </div>
-                        <div className="marketplace-pane__detail-item">
-                          <span className="marketplace-pane__detail-label">Open destination</span>
-                          <span className="marketplace-pane__detail-value">{readString(selectedDetails.install.open_href || selectedDetails.runtimeTruth.open_href, 'Not available')}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {selectedPackage.kind === 'app' || selectedPackage.kind === 'mini_app' ? (
-                      <div className="marketplace-pane__detail-group">
-                        <strong className="marketplace-pane__detail-title">
-                          {selectedPackage.kind === 'mini_app' ? 'Mini-app contract' : 'Hosted app contract'}
-                        </strong>
-                        <div className="marketplace-pane__detail-grid">
-                          <div className="marketplace-pane__detail-item">
-                            <span className="marketplace-pane__detail-label">Hosted URL</span>
-                            <span className="marketplace-pane__detail-value">{readString(selectedDetails.packagePayload.hosted_url, 'Not provided')}</span>
-                          </div>
-                          <div className="marketplace-pane__detail-item">
-                            <span className="marketplace-pane__detail-label">Release</span>
-                            <span className="marketplace-pane__detail-value">
-                              {readString(selectedDetails.packagePayload.version, '1.0.0')} · {readString(selectedDetails.packagePayload.release_channel, 'stable')}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="marketplace-pane__token-row">
-                          {(selectedDetails.permissionList.length ? selectedDetails.permissionList : ['No extra permissions']).map((token) => (
-                            <span key={token} className="marketplace-pane__stat-token">{humanizeToken(token)}</span>
-                          ))}
-                        </div>
-                        <div className="marketplace-pane__token-row">
-                          {(selectedDetails.allowedOrigins.length ? selectedDetails.allowedOrigins : ['No allowed origins']).map((token) => (
-                            <span key={token} className="marketplace-pane__status-badge marketplace-pane__status-badge--approved">{token}</span>
-                          ))}
-                        </div>
-                        {selectedDetails.appBridgeContracts.length ? (
-                          <div className="marketplace-pane__detail-list">
-                            {selectedDetails.appBridgeContracts.map(([kind, value]) => (
-                              <div key={kind} className="marketplace-pane__detail-list-row">
-                                <span className="marketplace-pane__detail-label">{humanizeToken(kind)}</span>
-                                <span className="marketplace-pane__detail-value">{readStringList(value).map(humanizeToken).join(' · ')}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="marketplace-pane__panel-copy">No bridge contracts declared for this app package.</p>
-                        )}
-                      </div>
-                    ) : selectedPackage.kind === 'provider' ? (
-                      <div className="marketplace-pane__detail-group">
-                        <strong className="marketplace-pane__detail-title">Provider contract</strong>
-                        <div className="marketplace-pane__detail-grid">
-                          <div className="marketplace-pane__detail-item">
-                            <span className="marketplace-pane__detail-label">Default model</span>
-                            <span className="marketplace-pane__detail-value">{readString(selectedDetails.packagePayload.default_model, 'Not provided')}</span>
-                          </div>
-                          <div className="marketplace-pane__detail-item">
-                            <span className="marketplace-pane__detail-label">Privacy posture</span>
-                            <span className="marketplace-pane__detail-value">{readString(selectedDetails.packagePayload.privacy_posture, 'Not provided')}</span>
-                          </div>
-                          <div className="marketplace-pane__detail-item">
-                            <span className="marketplace-pane__detail-label">Jurisdiction</span>
-                            <span className="marketplace-pane__detail-value">{readString(selectedDetails.packagePayload.jurisdiction, 'Not provided')}</span>
-                          </div>
-                          <div className="marketplace-pane__detail-item">
-                            <span className="marketplace-pane__detail-label">Residency</span>
-                            <span className="marketplace-pane__detail-value">{readString(selectedDetails.packagePayload.residency, 'Not provided')}</span>
-                          </div>
-                        </div>
-                        <div className="marketplace-pane__token-row">
-                          {(selectedDetails.providerAuthModes.length ? selectedDetails.providerAuthModes : ['api_key']).map((token) => (
-                            <span key={token} className="marketplace-pane__stat-token">{humanizeToken(token)}</span>
-                          ))}
-                        </div>
-                        <div className="marketplace-pane__token-row">
-                          {(selectedDetails.providerCapabilities.length ? selectedDetails.providerCapabilities : ['Marketplace provider']).map((token) => (
-                            <span key={token} className="marketplace-pane__status-badge marketplace-pane__status-badge--partner">{humanizeToken(token)}</span>
-                          ))}
-                        </div>
-                        {selectedDetails.providerModels.length ? (
-                          <div className="marketplace-pane__detail-list">
-                            {selectedDetails.providerModels.map((model) => (
-                              <div key={readString(model.id)} className="marketplace-pane__detail-list-row">
-                                <span className="marketplace-pane__detail-label">{readString(model.id, 'model')}</span>
-                                <span className="marketplace-pane__detail-value">{readString(model.label, readString(model.id, 'Model'))}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="marketplace-pane__panel-copy">No model metadata has been provided for this package yet.</p>
-                        )}
-                      </div>
-                    ) : selectedPackage.kind === 'agent_template' ? (
-                      <div className="marketplace-pane__detail-group">
-                        <strong className="marketplace-pane__detail-title">Business proof snapshot</strong>
-                        {(() => {
-                          const proof = readAgentTemplateProofDetails(selectedDetails.packagePayload);
-                          return (
-                            <>
-                              <div className="marketplace-pane__detail-list">
-                                <div className="marketplace-pane__detail-list-row">
-                                  <span className="marketplace-pane__detail-label">What it does</span>
-                                  <span className="marketplace-pane__detail-value">{proof.does}</span>
-                                </div>
-                                <div className="marketplace-pane__detail-list-row">
-                                  <span className="marketplace-pane__detail-label">Channels</span>
-                                  <span className="marketplace-pane__detail-value">{proof.channels.slice(0, 4).join(' · ') || 'Defined during setup'}</span>
-                                </div>
-                                <div className="marketplace-pane__detail-list-row">
-                                  <span className="marketplace-pane__detail-label">Data needed</span>
-                                  <span className="marketplace-pane__detail-value">{proof.dataNeeds.slice(0, 4).join(' · ') || 'Connect trusted sources during setup'}</span>
-                                </div>
-                                <div className="marketplace-pane__detail-list-row">
-                                  <span className="marketplace-pane__detail-label">How it makes money</span>
-                                  <span className="marketplace-pane__detail-value">{proof.moneyModel}</span>
-                                </div>
-                                <div className="marketplace-pane__detail-list-row">
-                                  <span className="marketplace-pane__detail-label">Runtime tier</span>
-                                  <span className="marketplace-pane__detail-value">{proof.runtimeTier}</span>
-                                </div>
-                                <div className="marketplace-pane__detail-list-row">
-                                  <span className="marketplace-pane__detail-label">Safety policy</span>
-                                  <span className="marketplace-pane__detail-value">{proof.safetyPolicy}</span>
-                                </div>
-                              </div>
-                              <div className="marketplace-pane__token-row">
-                                {readStringList(selectedDetails.packagePayload.suggested_tools).slice(0, 6).map((toolId) => (
-                                  <span key={toolId} className="marketplace-pane__stat-token">{humanizeToken(toolId)}</span>
-                                ))}
-                              </div>
-                            </>
-                          );
-                        })()}
-                      </div>
-                    ) : (
-                      <div className="marketplace-pane__detail-group">
-                        <strong className="marketplace-pane__detail-title">{`${humanizeToken(selectedPackage.kind)} contract`}</strong>
-                        <div className="marketplace-pane__detail-grid">
-                          {Object.entries(selectedDetails.packagePayload)
-                            .filter(([, value]) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
-                            .slice(0, 8)
-                            .map(([key, value]) => (
-                              <div key={key} className="marketplace-pane__detail-item">
-                                <span className="marketplace-pane__detail-label">{humanizeToken(key)}</span>
-                                <span className="marketplace-pane__detail-value">{readString(value, String(value))}</span>
-                              </div>
-                            ))}
-                        </div>
-                        <div className="marketplace-pane__token-row">
-                          {[
-                            ...readStringList(selectedDetails.packagePayload.required_connectors),
-                            ...readStringList(selectedDetails.packagePayload.suggested_tools),
-                            ...readStringList(selectedDetails.packagePayload.permissions),
-                            ...readStringList(selectedDetails.packagePayload.actions),
-                            ...readStringList(selectedDetails.packagePayload.scopes),
-                          ].slice(0, 8).map((token) => (
-                            <span key={token} className="marketplace-pane__stat-token">{humanizeToken(token)}</span>
-                          ))}
-                        </div>
-                        {readStringList(selectedDetails.packagePayload.launch_checklist).length ? (
-                          <div className="marketplace-pane__detail-list">
-                            {readStringList(selectedDetails.packagePayload.launch_checklist).map((item) => (
-                              <div key={item} className="marketplace-pane__detail-list-row">
-                                <span className="marketplace-pane__detail-label">Checklist</span>
-                                <span className="marketplace-pane__detail-value">{item}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="marketplace-pane__panel-copy">This package exposes a governed contract and can be expanded by its installer surface.</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
                 ) : (
                   <EmptyPanel
-                    title="No package selected"
-                    body="Choose a package on the left to inspect its governed trust, billing, and runtime metadata."
+                    title="No item selected"
+                    body="Choose an item on the left to see what it does, what gets created, setup needed, access, and cost."
                   />
                 )}
-              </ListDetailPanel>
+              </div>
 
               {canPublishPackages && showDeveloperRegistration ? (
                 <ListDetailPanel
@@ -1890,27 +1779,10 @@ export function MarketplacePane() {
                   </AppButton>
                 </div>
               </ListDetailPanel>
-              ) : canPublishPackages ? (
-                <ListDetailPanel
-                  className="marketplace-pane__composer-panel marketplace-pane__composer-panel--collapsed"
-                  eyebrow="Operator publishing"
-                  title="Publish a package"
-                  subtitle="Discover is for installation. Build is for private specialists. Only open this if you are curating governed package inventory."
-                >
-                  <p className="marketplace-pane__panel-copy">
-                    Normal users should browse, inspect trust metadata, and install packages. Package publishing stays intentionally hidden to keep Discover curated and professional.
-                  </p>
-                  <div className="marketplace-pane__form-actions">
-                    <AppButton type="button" tone="secondary" onClick={() => setShowDeveloperRegistration(true)}>
-                      Show developer registration
-                    </AppButton>
-                  </div>
-                </ListDetailPanel>
               ) : null}
             </div>
-          )}
-        />
-      </ListDetailShell>
+        </WorkstationSplitWorkbench>
+      </section>
     </WorkstationSurfaceRoot>
   );
 }

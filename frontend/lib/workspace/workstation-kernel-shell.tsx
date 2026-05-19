@@ -3,7 +3,7 @@
 import type { PropsWithChildren } from 'react';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { Activity, Bot, Compass, LayoutGrid, Menu, Monitor, Plus, Waypoints } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -43,6 +43,29 @@ const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
   'approvals',
   'activity',
 ]);
+
+const MARKETPLACE_TITLEBAR_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'agent_template', label: 'Agent templates' },
+  { id: 'app', label: 'Apps' },
+  { id: 'bundle', label: 'Bundles' },
+] as const;
+
+type MarketplaceTitlebarFilter = typeof MARKETPLACE_TITLEBAR_FILTERS[number]['id'];
+
+function normalizeMarketplaceTitlebarFilter(value: string | null): MarketplaceTitlebarFilter {
+  return MARKETPLACE_TITLEBAR_FILTERS.some((filter) => filter.id === value)
+    ? value as MarketplaceTitlebarFilter
+    : 'all';
+}
+
+function buildMarketplaceCategoryHref(workspaceId: string, filter: MarketplaceTitlebarFilter): string {
+  const baseHref = buildWorkspaceRouteHref(workspaceId, 'marketplace');
+  if (filter === 'all') {
+    return baseHref;
+  }
+  return `${baseHref}?category=${encodeURIComponent(filter)}`;
+}
 
 type ThreadTurnRecord = Record<string, unknown> & {
   role?: string | null;
@@ -330,6 +353,7 @@ export function WorkstationKernelShell({
   children,
 }: PropsWithChildren) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { bootstrap, routeManifest, workspaceId } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const activityVersion = useWorkstationActivityVersion();
@@ -447,6 +471,48 @@ export function WorkstationKernelShell({
     }
     return false;
   };
+  const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('category'));
+  const titlebarNavigation = activeDestinationId === 'marketplace'
+    ? MARKETPLACE_TITLEBAR_FILTERS.map((filter) => (
+      <Link
+        key={filter.id}
+        href={buildMarketplaceCategoryHref(workspaceId, filter.id)}
+        prefetch
+        aria-current={marketplaceFilter === filter.id ? 'page' : undefined}
+        className={joinClassNames(
+          'workstation-titlebar__link',
+          'workstation-titlebar__link--marketplace-filter',
+          marketplaceFilter === filter.id && 'workstation-titlebar__link--active',
+        )}
+      >
+        <span>{filter.label}</span>
+      </Link>
+    ))
+    : contextRoutes.length > 0
+      ? contextRoutes.map((route) => (
+        route.id === 'activity' ? (
+          <MainAgentHistoryPopover
+            key={route.id}
+            chatHref={routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`}
+            client={services.client}
+            workspaceId={workspaceId}
+          />
+        ) : (
+          <Link
+            key={route.id}
+            href={route.href}
+            prefetch
+            aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
+            className={joinClassNames(
+              'workstation-titlebar__link',
+              isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
+            )}
+          >
+            <span>{route.label}</span>
+          </Link>
+        )
+      ))
+      : null;
 
   return (
     <div
@@ -500,29 +566,7 @@ export function WorkstationKernelShell({
                 ) : null}
               </>
             )}
-            navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
-              route.id === 'activity' ? (
-                <MainAgentHistoryPopover
-                  key={route.id}
-                  chatHref={routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`}
-                  client={services.client}
-                  workspaceId={workspaceId}
-                />
-              ) : (
-                <Link
-                  key={route.id}
-                  href={route.href}
-                  prefetch
-                  aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
-                  className={joinClassNames(
-                    'workstation-titlebar__link',
-                    isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
-                  )}
-                >
-                  <span>{route.label}</span>
-                </Link>
-              )
-            )) : null}
+            navigation={titlebarNavigation}
           />
         </div>
       ) : null}

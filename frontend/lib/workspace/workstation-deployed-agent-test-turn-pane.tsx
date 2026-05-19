@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { ArrowUp, Loader2 } from "lucide-react";
 import { joinClassNames } from "@/lib/ui/primitives";
+import { ChatMessage, type WorkstationChatMessageRecord } from "@/lib/workspace/chat-message";
 
 const CHANNELS: ReadonlyArray<{ value: string; label: string; disabled?: boolean }> = [
   { value: "test", label: "Test (No customer send)" },
@@ -30,7 +31,53 @@ type ChatTurn = {
   content: string;
   tone?: "normal" | "loading" | "error";
   result?: TestTurnResult | null;
+  createdAt: string | null;
 };
+
+function convertToChatMessage(turn: ChatTurn): WorkstationChatMessageRecord {
+  if (turn.tone === "loading") {
+    return {
+      id: turn.id,
+      role: "assistant",
+      content: turn.content,
+      status: "running",
+      createdAt: turn.createdAt,
+      runId: null,
+      approvals: [],
+      interventions: [],
+      artifacts: [],
+      metadata: { display_kind: "activity_step", step_kind: "thinking", step_status: "active" },
+    };
+  }
+
+  if (turn.tone === "error") {
+    return {
+      id: turn.id,
+      role: "assistant",
+      content: turn.content,
+      status: "error",
+      createdAt: turn.createdAt,
+      runId: null,
+      approvals: [],
+      interventions: [],
+      artifacts: [],
+      metadata: {},
+    };
+  }
+
+  return {
+    id: turn.id,
+    role: turn.role === "user" ? "user" : "assistant",
+    content: turn.content,
+    status: "done",
+    createdAt: turn.createdAt,
+    runId: null,
+    approvals: [],
+    interventions: [],
+    artifacts: [],
+    metadata: {},
+  };
+}
 
 export function DeployedAgentTestTurnPane({
   deployedAgentId,
@@ -66,14 +113,14 @@ export function DeployedAgentTestTurnPane({
   const handleRun = async () => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage || loading) return;
-    const turnId = `${Date.now()}`;
-    const responseTurnId = `${turnId}-agent`;
+    const turnId = Date.now().toString();
+    const responseTurnId = turnId + "-agent";
     setLoading(true);
     setMessage("");
     setTurns((current) => [
       ...current,
-      { id: `${turnId}-user`, role: "user", content: trimmedMessage },
-      { id: responseTurnId, role: "agent", content: "Checking the agent response...", tone: "loading" },
+      { id: turnId + "-user", role: "user", content: trimmedMessage, createdAt: new Date().toISOString() },
+      { id: responseTurnId, role: "agent", content: "Checking the agent response...", tone: "loading", createdAt: new Date().toISOString() },
     ]);
     try {
       const res = await client.testTurnDeployedAgent({
@@ -125,21 +172,10 @@ export function DeployedAgentTestTurnPane({
         ) : null}
 
         {turns.map((turn) => (
-          <article
-            key={turn.id}
-            className={joinClassNames(
-              "deployed-agent-chat__message",
-              turn.role === "user" ? "deployed-agent-chat__message--user" : "deployed-agent-chat__message--agent",
-              turn.tone === "error" && "deployed-agent-chat__message--error",
-              turn.tone === "loading" && "deployed-agent-chat__message--loading",
-            )}
-          >
-            <div className="deployed-agent-chat__bubble">
-              {turn.tone === "loading" ? <Loader2 className="deployed-agent-chat__loader" aria-hidden="true" /> : null}
-              <p>{turn.content}</p>
-            </div>
+          <div key={turn.id} className="deployed-agent-chat__turn-wrapper">
+            <ChatMessage message={convertToChatMessage(turn)} />
             {turn.result ? <RunMeta result={turn.result} /> : null}
-          </article>
+          </div>
         ))}
       </div>
 
@@ -149,7 +185,7 @@ export function DeployedAgentTestTurnPane({
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleComposerKeyDown}
-          placeholder={`Ask ${friendlyAgentName} a customer question...`}
+          placeholder={"Ask " + friendlyAgentName + " a customer question..."}
           rows={2}
         />
         <div className="deployed-agent-chat__toolbar" aria-label="Private test controls">
@@ -182,14 +218,22 @@ export function DeployedAgentTestTurnPane({
 function RunMeta({ result }: { result: TestTurnResult }) {
   const toolsUsed = Array.isArray(result.tools_used) ? result.tools_used : [];
   const memoryApplied = result.memory_context && Object.keys(result.memory_context).length > 0;
+  const policies = Array.isArray(result.policy_decisions) ? result.policy_decisions : [];
+  const events = Array.isArray(result.transparency_events) ? result.transparency_events : [];
 
   return (
     <details className="deployed-agent-chat__meta-details">
       <summary>System proof</summary>
       <div className="deployed-agent-chat__meta" aria-label="Private test result">
-        <span>{result.approval_required ? "Needs approval" : "No approval needed"}</span>
-        <span>{toolsUsed.length > 0 ? `${toolsUsed.length} tool${toolsUsed.length === 1 ? "" : "s"} used` : "No tools used"}</span>
+        {result.approval_required ? (
+          <span className="deployed-agent-chat__badge--alert">Approval required</span>
+        ) : (
+          <span>No approval needed</span>
+        )}
+        <span>{toolsUsed.length > 0 ? toolsUsed.length.toString() + " tool" + (toolsUsed.length === 1 ? "" : "s") + " used" : "No tools used"}</span>
         <span>{memoryApplied ? "Memory checked" : "Memory off for test"}</span>
+        {policies.length > 0 ? <span>{policies.length.toString()} polic{policies.length === 1 ? "y" : "ies"} applied</span> : null}
+        {events.length > 0 ? <span>{events.length.toString()} transparency event{events.length === 1 ? "" : "s"}</span> : null}
         {result.trace_id ? <span title={result.trace_id}>Trace {result.trace_id.slice(0, 8)}</span> : null}
       </div>
     </details>

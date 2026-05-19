@@ -4,7 +4,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'heartbeat', 'artifacts', 'activity', 'profile', 'approvals', 'notifications'],
+    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'heartbeat', 'artifacts', 'activity', 'approvals', 'notifications'],
     direct: true,
   },
   {
@@ -82,15 +82,6 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     segment: 'memory',
     destinationId: 'sage',
     web: {},
-  },
-  {
-    id: 'profile',
-    label: 'Profile',
-    segment: 'profile',
-    destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
   },
   {
     id: 'approvals',

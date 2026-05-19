@@ -42,10 +42,6 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
     destinationId: 'sage',
     render: () => <WorkstationActivityPane />,
   },
-  profile: {
-    destinationId: 'sage',
-    render: () => <WorkstationSageProfilePane />,
-  },
   approvals: {
     destinationId: 'sage',
     render: () => <WorkstationApprovalsPane />,

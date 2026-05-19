@@ -6709,16 +6709,17 @@ textarea.app-field.app-chat-composer__textarea:focus-visible {
 }
 
 .account-switcher__link:hover {
-  background: var(--premium-glass-hover);
+  border-color: transparent;
+  background: transparent;
   color: var(--app-text-primary);
 }
 
 .account-switcher__link--active,
 .account-switcher__link[aria-current='page'] {
-  background: var(--premium-glass-bg) !important;
-  border-color: var(--premium-glass-border) !important;
+  background: transparent !important;
+  border-color: transparent !important;
   color: var(--app-text-primary);
-  box-shadow: var(--premium-glass-shadow) !important;
+  box-shadow: none !important;
 }
 
 .account-switcher__avatar {
@@ -6760,8 +6761,6 @@ body[data-emp-theme='dark'] .app-shell-frame__sidebar {
 
 :root[data-emp-theme='dark'] .account-switcher__link:hover,
 body[data-emp-theme='dark'] .account-switcher__link:hover {
-  border-color: transparent;
-  background: transparent;
   color: var(--text-primary);
 }
 
@@ -6769,10 +6768,7 @@ body[data-emp-theme='dark'] .account-switcher__link:hover {
 body[data-emp-theme='dark'] .account-switcher__link--active,
 :root[data-emp-theme='dark'] .account-switcher__link[aria-current='page'],
 body[data-emp-theme='dark'] .account-switcher__link[aria-current='page'] {
-  border-color: transparent !important;
-  background: transparent !important;
   color: var(--text-primary);
-  box-shadow: none !important;
 }
 
 :root[data-emp-theme='dark'] .account-switcher__link--active::before,

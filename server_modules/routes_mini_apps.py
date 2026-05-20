@@ -815,6 +815,16 @@ async def _persist_mini_app_hosted_ai_usage(
         raise RuntimeError("Mini app unified credit ledger persistence failed.") from exc
     if not isinstance(durable_event, dict):
         raise RuntimeError("Mini app unified credit ledger persistence failed.")
+    try:
+        from server_modules import billing_service
+
+        billing_service.debit_workspace_credit_balance_for_hosted_usage(
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+        )
+    except Exception as exc:
+        raise RuntimeError("Mini app hosted AI credit debit failed.") from exc
 
 
 def _write_authorization(current_user: Dict[str, Any], *, explicit_user_intent: bool) -> Dict[str, Any]:

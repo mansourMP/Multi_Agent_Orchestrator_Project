@@ -6,9 +6,9 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi import FastAPI
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
-from server_modules import mini_apps_service, routes_mini_apps, workspace_context
+from server_modules import billing_service, mini_apps_service, routes_mini_apps, workspace_context
 
 
 def _build_app() -> FastAPI:
@@ -63,6 +63,7 @@ def _patch_mini_app_billing(
     *,
     monthly_rows: list[dict] | None = None,
     durable_rows: list[dict] | None = None,
+    debit_side_effect=None,
 ):
     monkeypatch.setattr(
         routes_mini_apps.control_plane_repository,
@@ -91,7 +92,16 @@ def _patch_mini_app_billing(
         "record_credit_ledger_event",
         credit_ledger_mock,
     )
+    debit_mock = Mock(return_value={"ok": True, "debited_usd": 0.0})
+    if debit_side_effect is not None:
+        debit_mock = Mock(side_effect=debit_side_effect)
+    monkeypatch.setattr(
+        billing_service,
+        "debit_workspace_credit_balance_for_hosted_usage",
+        debit_mock,
+    )
     ledger_mock.credit_ledger_mock = credit_ledger_mock
+    ledger_mock.debit_mock = debit_mock
     return ledger_mock
 
 
@@ -337,6 +347,11 @@ async def test_mini_app_invoke_route_returns_thin_app_response(monkeypatch: pyte
     assert unified["app_id"] == "writing"
     assert unified["provider"] == "deepseek"
     assert unified["model"] == "deepseek-chat"
+    ledger_mock.debit_mock.assert_called_once_with(
+        workspace_id="ws-1",
+        tenant_id="tenant-1",
+        request_id=ledger_mock.await_args.kwargs["request_id"],
+    )
 
 
 @pytest.mark.anyio
@@ -398,6 +413,47 @@ async def test_mini_app_invoke_route_locks_provider_and_model_to_policy(monkeypa
     assert invoke_response.status_code == 200
     assert captured["requested_provider"] == "deepseek"
     assert captured["requested_model"] == "deepseek-v4-flash"
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_surfaces_credit_debit_failure(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    ledger_mock = _patch_mini_app_billing(monkeypatch, debit_side_effect=RuntimeError("credit store down"))
+    append_event = AsyncMock(return_value={"id": "activity-1"})
+    monkeypatch.setattr(routes_mini_apps.activity_ledger_service, "append_activity_event", append_event)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda workspace_id, app_id, user_input, requested_provider="", requested_model="": {
+            "app_id": app_id,
+            "mode": "invoke",
+            "memory_scope": "none",
+            "reply": "ok",
+            "provider": "deepseek",
+            "model": "deepseek-chat",
+            "usage": _exact_usage(provider="deepseek", model="deepseek-chat", total_tokens=42),
+        },
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await _grant_mini_app_ai_invoke(client)
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this."),
+            )
+
+    assert response.status_code == 503
+    assert "credit debit failed" in response.json()["detail"]
+    ledger_mock.assert_awaited_once()
+    ledger_mock.credit_ledger_mock.assert_awaited_once()
+    ledger_mock.debit_mock.assert_called_once()
+    append_event.assert_not_awaited()
 
 
 @pytest.mark.anyio

@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from server_modules import model_router
+from server_modules import usage_accounting_service
 
 
 class ModelRouterTests(unittest.TestCase):
@@ -157,10 +158,10 @@ class ModelRouterTests(unittest.TestCase):
                 "choices": [{"message": {"content": "deepseek ok"}}],
                 "usage": {
                     "prompt_tokens": 100,
+                    "prompt_cache_hit_tokens": 40,
+                    "prompt_cache_miss_tokens": 60,
                     "completion_tokens": 25,
                     "total_tokens": 125,
-                    "prompt_tokens_details": {"cached_tokens": 40},
-                    "completion_tokens_details": {"reasoning_tokens": 8},
                 },
             },
             "text": "",
@@ -183,8 +184,10 @@ class ModelRouterTests(unittest.TestCase):
         usage = result["usage"]
         self.assertEqual(usage["prompt_tokens"], 60)
         self.assertEqual(usage["cached_input_tokens"], 40)
-        self.assertEqual(usage["reasoning_tokens"], 8)
+        self.assertEqual(usage["cache_read_tokens"], 40)
+        self.assertEqual(usage["completion_tokens"], 25)
         self.assertEqual(usage["total_tokens"], 125)
+        self.assertNotEqual(usage["total_tokens"], 0)
         self.assertEqual(usage["source_surface"], "durable_run")
         _, kwargs = http_json_request_mock.call_args
         self.assertEqual(kwargs["payload"]["model"], "deepseek-v4-flash")
@@ -220,6 +223,11 @@ class ModelRouterTests(unittest.TestCase):
         self.assertEqual(result["provider"], "vertex")
         self.assertEqual(result["model"], "vertex_ai/gemini-1.5-pro")
         self.assertEqual(result["usage"]["total_tokens"], 0)
+        self.assertEqual(result["usage"]["estimation_mode"], "provider_usage_missing")
+        self.assertEqual(
+            usage_accounting_service.platform_paid_usage_validation_error(result["usage"]),
+            "missing_provider_token_usage",
+        )
         self.assertEqual(adapter.last_call["system_prompt"], "system prompt")
         self.assertEqual(adapter.last_call["user_input"], "user prompt")
         self.assertEqual(adapter.last_call["model"], "gemini-1.5-pro")

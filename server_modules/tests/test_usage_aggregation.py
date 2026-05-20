@@ -206,6 +206,34 @@ class UsageAggregationTests(unittest.TestCase):
         self.assertEqual(usage["completion_tokens"], 25)
         self.assertEqual(usage["estimation_mode"], "provider_usage_exact")
 
+    def test_deepseek_usage_normalizer_captures_prompt_cache_hit_and_miss_tokens(self):
+        record = usage_accounting_service.normalize_provider_usage(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            usage={
+                "prompt_tokens": 100,
+                "prompt_cache_hit_tokens": 40,
+                "prompt_cache_miss_tokens": 60,
+                "completion_tokens": 10,
+                "total_tokens": 110,
+            },
+            run_id="run-deepseek-cache",
+            payer="platform_credits",
+        )
+
+        usage = usage_accounting_service.usage_projection_from_record(record)
+        self.assertEqual(usage["prompt_tokens"], 60)
+        self.assertEqual(usage["cached_input_tokens"], 40)
+        self.assertEqual(usage["cache_read_tokens"], 40)
+        self.assertEqual(usage["visible_output_tokens"], 10)
+        self.assertEqual(usage["completion_tokens"], 10)
+        self.assertEqual(usage["total_tokens"], 110)
+        self.assertEqual(usage["estimation_mode"], "provider_usage_exact")
+        self.assertEqual(usage["pricing_known"], True)
+        self.assertAlmostEqual(float(usage["provider_cost_usd"]), 0.000011, places=6)
+        self.assertIn("prompt_cache_hit_tokens", record["metadata"]["raw_usage_keys"])
+        self.assertIn("prompt_cache_miss_tokens", record["metadata"]["raw_usage_keys"])
+
     def test_openrouter_usage_normalizer_preserves_cache_reasoning_and_reported_cost(self):
         record = usage_accounting_service.normalize_provider_usage(
             provider="openrouter",

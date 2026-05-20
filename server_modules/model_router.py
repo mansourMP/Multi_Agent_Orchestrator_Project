@@ -283,11 +283,25 @@ def _legacy_adapter_call(
     system_prompt, user_input = _legacy_adapter_payload(messages)
     adapter_model = model.split("/", 1)[1] if provider == "vertex" and "/" in model else model
     content = adapter.generate(system_prompt, user_input, adapter_model, credentials)
+    usage = usage_accounting_service.usage_projection_from_record(
+        usage_accounting_service.build_usage_accounting_record(
+            run_id=None,
+            requested_provider=provider,
+            effective_provider=provider,
+            requested_model=model,
+            effective_model=model,
+            input_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            estimation_mode="provider_usage_missing",
+            metadata={"legacy_adapter_fallback": True},
+        )
+    )
     return {
         "content": str(content or "").strip(),
         "model": model,
         "provider": provider,
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage,
     }
 
 

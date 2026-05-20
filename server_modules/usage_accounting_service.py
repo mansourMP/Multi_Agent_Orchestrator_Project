@@ -639,15 +639,33 @@ def normalize_provider_usage(
         prompt_tokens = _nonnegative_int(raw.get("prompt_tokens") or raw.get("input_tokens"))
         prompt_details = _coerce_dict(raw.get("prompt_tokens_details") or raw.get("input_tokens_details"))
         completion_details = _coerce_dict(raw.get("completion_tokens_details"))
+        prompt_cache_hit_tokens = _nonnegative_int(
+            raw.get("prompt_cache_hit_tokens")
+            or raw.get("prompt_cache_read_tokens")
+            or prompt_details.get("prompt_cache_hit_tokens")
+        )
         cache_read_tokens = _nonnegative_int(
             raw.get("cached_input_tokens")
+            or prompt_cache_hit_tokens
             or prompt_details.get("cached_tokens")
             or prompt_details.get("cache_read_tokens")
             or prompt_details.get("cache_read_input_tokens")
             or raw.get("cache_read_input_tokens")
             or raw.get("cache_read_tokens")
         )
-        input_tokens = max(0, prompt_tokens - cache_read_tokens)
+        cache_miss_present = (
+            "prompt_cache_miss_tokens" in raw
+            or "cache_miss_tokens" in raw
+            or "prompt_cache_miss_tokens" in prompt_details
+            or "cache_miss_tokens" in prompt_details
+        )
+        cache_miss_tokens = _nonnegative_int(
+            raw.get("prompt_cache_miss_tokens")
+            or raw.get("cache_miss_tokens")
+            or prompt_details.get("prompt_cache_miss_tokens")
+            or prompt_details.get("cache_miss_tokens")
+        )
+        input_tokens = cache_miss_tokens if cache_miss_present else max(0, prompt_tokens - cache_read_tokens)
         cache_write_tokens = _nonnegative_int(
             raw.get("cache_write_input_tokens")
             or raw.get("cache_creation_input_tokens")

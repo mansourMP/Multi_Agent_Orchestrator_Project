@@ -14,6 +14,7 @@ import type {
   WizardState,
 } from './types';
 import {
+  STUDIO_AI_SOURCE_OPTIONS,
   STUDIO_AI_TIER_OPTIONS,
 } from './constants';
 import {
@@ -27,6 +28,7 @@ export function AgentAiSettingsSections({
   providerCatalog,
   isLoadingProviderCatalog,
   onSelectTier,
+  onSelectAiSource,
   onSelectProvider,
   onSelectModel,
   onRefreshProviderModels,
@@ -36,46 +38,77 @@ export function AgentAiSettingsSections({
   providerCatalog: ProviderCatalogSnapshot[];
   isLoadingProviderCatalog: boolean;
   onSelectTier: (nextTier: WizardState['aiTier']) => void;
+  onSelectAiSource: (nextSource: WizardState['aiSource']) => void;
   onSelectProvider: (nextProviderId: string) => void;
   onSelectModel: (nextModelId: string) => void;
   onRefreshProviderModels?: (providerId: string) => void;
   onOpenIntegrations?: () => void;
 }) {
   const [showModelBrowser, setShowModelBrowser] = useState(false);
-  const usesEmpyralisCredits = !value.providerId || value.providerId === 'empyralis';
+  const usesEmpyralisCredits = value.aiSource === 'empyralis_credits';
+  const usesWorkspaceApiKey = value.aiSource === 'workspace_api_key';
+  const usesLocalModel = value.aiSource === 'local_model';
+  const usesSubscriptionPassthrough = value.aiSource === 'subscription_passthrough';
   const selectedProvider = providerCatalog.find((provider) => provider.id === value.providerId) ?? null;
   const selectedModel = selectedProvider?.models.find((model) => model.id === value.modelId) ?? null;
   const selectedTier = STUDIO_AI_TIER_OPTIONS.find((option) => option.value === value.aiTier) ?? STUDIO_AI_TIER_OPTIONS[1];
-  const providerReady = usesEmpyralisCredits || providerReadyForStudio(selectedProvider);
+  const providerReady = usesEmpyralisCredits || usesSubscriptionPassthrough || providerReadyForStudio(selectedProvider);
   const readyProviders = providerCatalog.filter((provider) => providerReadyForStudio(provider));
+  const localProvider = providerCatalog.find((provider) =>
+    provider.localSelfHostedCompatible || ['codex', 'codex_cli', 'local', 'local_ollama', 'ollama'].includes(provider.id),
+  ) ?? null;
   const firstReadyProvider = readyProviders[0] ?? providerCatalog[0] ?? null;
   const selectedRouteLabel = usesEmpyralisCredits
-    ? 'Empyralis Credits'
-    : providerReady
-      ? selectedProvider?.label ?? 'Connected provider'
-      : selectedProvider
-        ? `Connect ${selectedProvider.label}`
-        : 'Connect AI';
+    ? 'Empyralis credits'
+    : usesWorkspaceApiKey
+      ? providerReady
+        ? selectedProvider?.label ?? 'Workspace API key'
+        : selectedProvider
+          ? `Connect ${selectedProvider.label}`
+          : 'Connect API key'
+      : usesLocalModel
+        ? selectedProvider?.label ?? localProvider?.label ?? 'Local model'
+        : 'Subscription passthrough';
   const selectedRouteDetail = usesEmpyralisCredits
     ? 'Use the workspace credit balance. No API key is required for this agent.'
-    : providerReady
-      ? 'Provider setup lives in Integrations. This agent will use the selected API route at runtime.'
-      : selectedProvider
-        ? 'Connect the provider account in Integrations before using it for customers.'
-        : 'Connect an API provider before using your own model route.';
+    : usesWorkspaceApiKey
+      ? providerReady
+        ? 'Provider setup lives in Integrations. This agent will use the selected API account at runtime.'
+        : selectedProvider
+          ? 'Connect the provider account in Integrations before using it for customers.'
+          : 'Connect an API provider before using your own model route.'
+      : usesLocalModel
+        ? 'Uses an explicit local/computer model route. This should not spend Empyralis credits.'
+        : 'Reserved for supported subscription-backed local/coding routes. It does not use platform credits.';
   const selectedModelLabel = usesEmpyralisCredits
     ? `${selectedTier.label} quality`
-    : (selectedModel?.label ?? value.modelId) || 'Choose a model';
+    : (selectedModel?.label ?? value.modelId) || (usesSubscriptionPassthrough ? 'Subscription default' : 'Choose a model');
   const selectedModelDetail = usesEmpyralisCredits
-    ? 'Empyralis manages routing, billing, and provider reliability for this agent.'
+    ? 'Empyralis meters exact provider cost internally and charges simple workspace credits.'
     : providerReady
-      ? `${selectedProvider?.label ?? 'Provider'} API account. Pricing follows the provider route.`
+      ? `${selectedProvider?.label ?? selectedRouteLabel} route. Pricing follows the selected source.`
       : 'Provider connection is required before this route can answer customers.';
 
   function selectProviderModel(providerId: string, modelId: string) {
     onSelectProvider(providerId);
     onSelectModel(modelId);
   }
+
+  function selectAiSource(nextSource: WizardState['aiSource']) {
+    onSelectAiSource(nextSource);
+    if (nextSource === 'empyralis_credits') {
+      selectProviderModel('', '');
+      return;
+    }
+    if (nextSource === 'workspace_api_key' && firstReadyProvider) {
+      selectProviderModel(firstReadyProvider.id, firstReadyProvider.defaultModel || firstReadyProvider.models[0]?.id || '');
+      return;
+    }
+    if (nextSource === 'local_model' && localProvider) {
+      selectProviderModel(localProvider.id, localProvider.defaultModel || localProvider.models[0]?.id || '');
+    }
+  }
+
   return (
     <div
       className={joinClassNames('studio-ai-settings', isLoadingProviderCatalog && 'studio-ai-settings--loading')}
@@ -83,41 +116,42 @@ export function AgentAiSettingsSections({
     >
       <section className="studio-ai-settings__route-overview" aria-label="AI route options">
         <div className="studio-ai-settings__route-grid">
-          <button
-            type="button"
-            className={joinClassNames('studio-ai-settings__route-option', usesEmpyralisCredits && 'studio-ai-settings__route-option--selected')}
-            aria-pressed={usesEmpyralisCredits}
-            onClick={() => selectProviderModel('', '')}
-          >
-            <div className="studio-ai-settings__route-option-head">
-              <span>Managed route</span>
-              <DataBadge tone="success">Recommended</DataBadge>
-            </div>
-            <strong>Empyralis Credits</strong>
-            <p>Best for non-technical teams. Empyralis handles the API model route and usage accounting.</p>
-          </button>
-
-          <button
-            type="button"
-            className={joinClassNames('studio-ai-settings__route-option', !usesEmpyralisCredits && 'studio-ai-settings__route-option--selected')}
-            aria-pressed={!usesEmpyralisCredits}
-            onClick={() => {
-              if (firstReadyProvider) {
-                selectProviderModel(firstReadyProvider.id, firstReadyProvider.defaultModel || firstReadyProvider.models[0]?.id || '');
-              } else {
-                onOpenIntegrations?.();
-              }
-            }}
-          >
-            <div className="studio-ai-settings__route-option-head">
-              <span>Bring your own key</span>
-              <DataBadge tone={readyProviders.length > 0 ? 'success' : 'neutral'}>
-                {readyProviders.length > 0 ? `${readyProviders.length} ready` : 'Connect'}
-              </DataBadge>
-            </div>
-            <strong>Custom API Account</strong>
-            <p>Use OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, or another connected API provider.</p>
-          </button>
+          {STUDIO_AI_SOURCE_OPTIONS.map((option) => {
+            const selected = value.aiSource === option.value;
+            const badge = option.value === 'empyralis_credits'
+              ? 'Recommended'
+              : option.value === 'workspace_api_key'
+                ? readyProviders.length > 0 ? `${readyProviders.length} ready` : 'Connect'
+                : option.value === 'local_model'
+                  ? localProvider ? 'Available' : 'Needs computer'
+                  : 'Limited';
+            const badgeTone = option.value === 'empyralis_credits' || (option.value === 'workspace_api_key' && readyProviders.length > 0) || (option.value === 'local_model' && localProvider)
+              ? 'success'
+              : 'neutral';
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={joinClassNames('studio-ai-settings__route-option', selected && 'studio-ai-settings__route-option--selected')}
+                aria-pressed={selected}
+                onClick={() => {
+                  if (option.value === 'workspace_api_key' && !firstReadyProvider) {
+                    onSelectAiSource(option.value);
+                    onOpenIntegrations?.();
+                    return;
+                  }
+                  selectAiSource(option.value);
+                }}
+              >
+                <div className="studio-ai-settings__route-option-head">
+                  <span>{option.label}</span>
+                  <DataBadge tone={badgeTone}>{badge}</DataBadge>
+                </div>
+                <strong>{option.title}</strong>
+                <p>{option.hint}</p>
+              </button>
+            );
+          })}
         </div>
 
         <div className="studio-ai-settings__quality-card">
@@ -173,7 +207,7 @@ export function AgentAiSettingsSections({
             <small>{providerCatalog.length} provider{providerCatalog.length === 1 ? '' : 's'}</small>
           </div>
 
-          {value.providerId && value.providerId !== 'empyralis' ? (
+          {!usesEmpyralisCredits && !usesSubscriptionPassthrough ? (
             <div className="studio-ai-settings__byok">
               <FormField label="AI Provider" hint="Select the provider you have configured in Integrations.">
                 <FormSelect
@@ -218,8 +252,8 @@ export function AgentAiSettingsSections({
             </div>
           ) : (
             <div className="studio-ai-settings__catalog-empty">
-              <strong>Using Empyralis Credits</strong>
-              <p>The direct model catalog is only needed when this agent uses your own API account.</p>
+              <strong>{usesSubscriptionPassthrough ? 'Using subscription passthrough' : 'Using Empyralis credits'}</strong>
+              <p>The direct model catalog is only needed when this agent uses a workspace API key or local model route.</p>
               <AppButton type="button" tone="secondary" onClick={() => {
                 if (firstReadyProvider) {
                   selectProviderModel(firstReadyProvider.id, firstReadyProvider.defaultModel || firstReadyProvider.models[0]?.id || '');

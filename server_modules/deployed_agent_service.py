@@ -3510,17 +3510,75 @@ async def evaluate_deployed_shop_assistant_customer_question(
     billing_evidence = _coerce_dict(result.get("activity_billing_evidence"))
     credit_line_items = list(billing_evidence.get("credit_line_items") or [])
     visible_activity = _coerce_dict(billing_evidence.get("visible_activity"))
-    for item in credit_line_items:
+    billing_accounting_warnings: List[str] = []
+    shop_run_id = f"shop-{deployed_agent_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+    ai_usage_records_by_index: Dict[int, Dict[str, Any]] = {}
+    for index, item in enumerate(credit_line_items):
+        if not isinstance(item, dict):
+            continue
+        credit_item_type = str(item.get("credit_item_type") or "").strip()
+        quantity = max(0, int(item.get("quantity") or 0))
+        billing_source = str(item.get("billing_source") or "empyralis_credits").strip()
+        if not credit_item_type.startswith("ai_") or quantity <= 0:
+            continue
+        if not usage_accounting_service.is_platform_paid_usage_value(billing_source):
+            continue
+        try:
+            usage_record = usage_accounting_service.build_usage_accounting_record(
+                run_id=shop_run_id,
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                deployed_agent_id=deployed_agent_id,
+                source_surface="shop_assistant",
+                effective_provider=provider_metadata.get("effective_provider"),
+                effective_model=provider_metadata.get("effective_model"),
+                input_tokens=quantity,
+                output_tokens=0,
+                total_tokens=quantity,
+                allow_provider_fallback=False,
+            )
+        except Exception:
+            usage_record = {}
+        if isinstance(usage_record, dict) and usage_record.get("usage_record_id"):
+            usage_record["estimation_mode"] = "provider_usage_missing"
+        usage_validation_error = (
+            usage_accounting_service.platform_paid_usage_validation_error(usage_record)
+            if isinstance(usage_record, dict)
+            else "missing_provider_token_usage"
+        )
+        if isinstance(usage_record, dict) and bool(usage_record.get("pricing_known")) and not usage_validation_error:
+            ai_usage_records_by_index[index] = usage_record
+        else:
+            billing_accounting_warnings.append(
+                "shop_assistant_platform_credit_ai_usage_requires_provider_measured_usage"
+            )
+
+    for index, item in enumerate(credit_line_items):
+        credit_item_type = str(item.get("credit_item_type") or "").strip()
+        billing_source = str(item.get("billing_source") or "empyralis_credits").strip()
+        platform_ai_without_provider_usage = (
+            credit_item_type.startswith("ai_")
+            and usage_accounting_service.is_platform_paid_usage_value(billing_source)
+            and index not in ai_usage_records_by_index
+        )
         try:
             await activity_ledger_service.append_activity_event(
                 tenant_id=tenant_id,
                 workspace_id=resolved_workspace_id,
                 actor_type="deployed_agent",
                 actor_id=deployed_agent_id,
-                event_class="studio.proof.shop_assistant.credit_consumed",
-                title="Shop Assistant credit usage",
+                event_class=(
+                    "studio.proof.shop_assistant.credit_unmetered"
+                    if platform_ai_without_provider_usage
+                    else "studio.proof.shop_assistant.credit_consumed"
+                ),
+                title=(
+                    "Shop Assistant AI usage not charged"
+                    if platform_ai_without_provider_usage
+                    else "Shop Assistant credit usage"
+                ),
                 summary=f"{visible_activity.get('tier_label', 'Pro')} tier · {item.get('credit_item_type', 'usage')}: {item.get('quantity', 0)} {item.get('quantity_unit', 'tokens')}",
-                status="logged",
+                status="blocked" if platform_ai_without_provider_usage else "logged",
                 review_required=False,
                 payload={
                     "credit_item_type": str(item.get("credit_item_type") or ""),
@@ -3530,59 +3588,65 @@ async def evaluate_deployed_shop_assistant_customer_question(
                     "public_tier": str(item.get("public_tier") or ""),
                     "credit_multiplier": item.get("credit_multiplier"),
                     "used_credits": visible_activity.get("used_credits"),
+                    "charge_blocked": platform_ai_without_provider_usage,
+                    "blocked_reason": (
+                        "provider_measured_usage_required"
+                        if platform_ai_without_provider_usage
+                        else None
+                    ),
                 },
             )
         except Exception:
             pass
+    if billing_accounting_warnings:
+        result["billing_accounting_state"] = "charge_blocked"
+        result["billing_accounting_warnings"] = sorted(set(billing_accounting_warnings))
 
     # Phase 6: Persist real usage line items to the deployed_agent_monthly_cost_ledger.
-    shop_run_id = f"shop-{deployed_agent_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
-    for item in credit_line_items:
+    for index, item in enumerate(credit_line_items):
+        credit_item_type = str(item.get("credit_item_type") or "").strip()
+        quantity = max(0, int(item.get("quantity") or 0))
+        billing_source = str(item.get("billing_source") or "empyralis_credits").strip()
+        if credit_item_type.startswith("ai_") and quantity > 0:
+            usage_record = ai_usage_records_by_index.get(index)
+            if usage_accounting_service.is_platform_paid_usage_value(billing_source) and usage_record:
+                try:
+                    await control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry(
+                        tenant_id=tenant_id,
+                        workspace_id=resolved_workspace_id,
+                        deployed_agent_id=deployed_agent_id,
+                        run_id=shop_run_id,
+                        run_status="completed",
+                        provider=usage_record.get("provider") or provider_metadata.get("effective_provider"),
+                        model=usage_record.get("model") or provider_metadata.get("effective_model"),
+                        total_tokens=int(usage_record.get("total_tokens") or quantity),
+                        estimated_cost_usd=float(usage_record.get("estimated_cost_usd") or 0.0),
+                        metadata={
+                            "credit_item_type": credit_item_type,
+                            "credit_quantity": quantity,
+                            "credit_quantity_unit": str(item.get("quantity_unit") or "tokens"),
+                            "credit_multiplier": float(item.get("credit_multiplier") or 0.0),
+                            "billing_source": billing_source,
+                            "source_surface": "shop_assistant",
+                            "pricing_source": usage_record.get("pricing_source"),
+                            "pricing_known": bool(usage_record.get("pricing_known")),
+                        },
+                    )
+                except Exception:
+                    pass
+                continue
+            LOGGER.info(
+                "Skipping heuristic shop-assistant AI cost ledger entry for non-platform billing source",
+                extra={
+                    "workspace_id": resolved_workspace_id,
+                    "deployed_agent_id": deployed_agent_id,
+                    "billing_source": billing_source,
+                    "credit_item_type": credit_item_type,
+                },
+            )
+            continue
         try:
-            credit_item_type = str(item.get("credit_item_type") or "").strip()
-            quantity = max(0, int(item.get("quantity") or 0))
-            if credit_item_type.startswith("ai_") and quantity > 0:
-                # Heuristic 70/30 input/output split for cost estimation.
-                input_tokens = int(quantity * 0.7)
-                output_tokens = quantity - input_tokens
-                usage_record = usage_accounting_service.build_usage_accounting_record(
-                    run_id=shop_run_id,
-                    tenant_id=tenant_id,
-                    workspace_id=resolved_workspace_id,
-                    deployed_agent_id=deployed_agent_id,
-                    source_surface="shop_assistant",
-                    effective_provider=provider_metadata.get("effective_provider"),
-                    effective_model=provider_metadata.get("effective_model"),
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    total_tokens=quantity,
-                    allow_provider_fallback=True,
-                )
-                await control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry(
-                    tenant_id=tenant_id,
-                    workspace_id=resolved_workspace_id,
-                    deployed_agent_id=deployed_agent_id,
-                    run_id=shop_run_id,
-                    run_status="completed",
-                    provider=usage_record.get("provider") or provider_metadata.get("effective_provider"),
-                    model=usage_record.get("model") or provider_metadata.get("effective_model"),
-                    prompt_tokens=usage_record.get("prompt_tokens", 0),
-                    completion_tokens=usage_record.get("completion_tokens", 0),
-                    total_tokens=usage_record.get("total_tokens", quantity),
-                    estimated_cost_usd=usage_record.get("estimated_cost_usd", 0.0),
-                    metadata={
-                        "credit_item_type": credit_item_type,
-                        "credit_quantity": quantity,
-                        "credit_quantity_unit": str(item.get("quantity_unit") or "tokens"),
-                        "credit_multiplier": float(item.get("credit_multiplier") or 0.0),
-                        "billing_source": str(item.get("billing_source") or "empyralis_credits"),
-                        "public_tier": str(item.get("public_tier") or "pro"),
-                        "source_surface": "shop_assistant",
-                        "pricing_known": bool(usage_record.get("pricing_known")),
-                        "pricing_source": str(usage_record.get("pricing_source") or ""),
-                    },
-                )
-            elif credit_item_type == "connector_read":
+            if credit_item_type == "connector_read":
                 await control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry(
                     tenant_id=tenant_id,
                     workspace_id=resolved_workspace_id,

@@ -595,8 +595,10 @@ export const AgentDetailView = memo(({
                 providerCatalog={providerCatalog}
                 isLoadingProviderCatalog={isLoadingProviderCatalog}
                 onSelectTier={(nextTier) => {
-                  // We need updateDetailAiTier logic here or passed as prop
                   onUpdateDetailConfig({ aiTier: nextTier });
+                }}
+                onSelectAiSource={(nextSource) => {
+                  onUpdateDetailConfig({ aiSource: nextSource });
                 }}
                 onSelectProvider={(nextProviderId) => {
                    onUpdateDetailConfig({ providerId: nextProviderId });

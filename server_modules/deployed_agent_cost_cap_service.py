@@ -28,6 +28,10 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return token or None
 
 
+def _coerce_dict(value: Any) -> Dict[str, Any]:
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
 def _round_usd(value: Any) -> float:
     try:
         return round(float(value or 0.0), 6)
@@ -67,6 +71,13 @@ def _parse_positive_usd(value: Any) -> Optional[float]:
 def deployed_agent_monthly_cost_cap_usd(deployed_agent: Optional[Dict[str, Any]]) -> Optional[float]:
     config = deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent)
     return _parse_positive_usd(config.commerce_policy.monthly_cost_cap_usd)
+
+
+def _deployed_agent_ai_source(deployed_agent: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    config = deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent)
+    runtime_supply = _coerce_dict(config.runtime_supply)
+    ai_source = _coerce_dict(runtime_supply.get("ai_source"))
+    return ai_source
 
 
 def _budget_cycle_from_metadata(deployed_agent: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -393,9 +404,15 @@ async def settle_deployed_agent_monthly_cost_cap(
     tenant_id = _normalize_text(deployed_agent.get("tenant_id") or tenant_id) or tenant_id
     workspace_id = _normalize_text(deployed_agent.get("owner_workspace_id") or workspace_id) or workspace_id
     cap_usd = deployed_agent_monthly_cost_cap_usd(deployed_agent)
+    ai_source = _deployed_agent_ai_source(deployed_agent)
+    ai_source_kind = _normalize_text(ai_source.get("kind") or ai_source.get("source")).lower()
+    ai_payer = _normalize_text(ai_source.get("payer")).lower()
+    platform_paid_ai = bool(ai_source.get("uses_platform_credits")) or usage_accounting_service.is_platform_paid_usage_value(
+        ai_payer or ai_source_kind
+    )
     usage_row = _run_usage_row(run_id, run, status=status, now_iso=now_iso)
     if usage_row is None:
-        if cap_usd is not None and _run_has_usage_signal(run):
+        if (cap_usd is not None or platform_paid_ai) and _run_has_usage_signal(run):
             return await _pause_deployment_fail_closed(
                 deployed_agent=deployed_agent,
                 tenant_id=tenant_id,
@@ -405,8 +422,24 @@ async def settle_deployed_agent_monthly_cost_cap(
                 burn_usd=None,
                 now_iso=now_iso,
                 error_text=f"Run {run_id} completed with usage that could not be priced safely.",
-            )
+        )
         return {"applied": False, "reason": "no_billable_usage"}
+    if platform_paid_ai:
+        validation_error = usage_accounting_service.platform_paid_usage_validation_error(usage_row)
+        if validation_error:
+            return await _pause_deployment_fail_closed(
+                deployed_agent=deployed_agent,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                usage_month=_month_start_iso(usage_row.get("timestamp") or now_iso),
+                cap_usd=cap_usd,
+                burn_usd=None,
+                now_iso=now_iso,
+                error_text=(
+                    f"Run {run_id} platform-credit AI usage was not exact enough for deployment "
+                    f"billing ({validation_error})."
+                ),
+            )
     if cap_usd is not None and usage_row.get("estimated_cost_usd") is None and _run_has_usage_signal(run):
         return await _pause_deployment_fail_closed(
             deployed_agent=deployed_agent,
@@ -420,28 +453,21 @@ async def settle_deployed_agent_monthly_cost_cap(
         )
 
     usage_month = _month_start_iso(usage_row.get("timestamp") or now_iso)
+    usage_metadata = usage_row.get("metadata") if isinstance(usage_row.get("metadata"), dict) else {}
     line_item_metadata = credit_ledger_contract.build_credit_ledger_line_item(
         metadata={
-            **(
-                usage_row.get("metadata")
-                if isinstance(usage_row.get("metadata"), dict)
-                else {}
-            ),
+            **usage_metadata,
             "source_surface": _normalize_optional_text(usage_row.get("source_surface")),
+            "ai_source_kind": ai_source_kind or None,
+            "ai_payer": ai_payer or None,
+            "platform_credit_enforced": platform_paid_ai,
         },
         public_tier=_normalize_optional_text(
-            (
-                usage_row.get("metadata")
-                if isinstance(usage_row.get("metadata"), dict)
-                else {}
-            ).get("public_tier")
+            usage_metadata.get("public_tier")
         ),
         billing_source=_normalize_optional_text(
-            (
-                usage_row.get("metadata")
-                if isinstance(usage_row.get("metadata"), dict)
-                else {}
-            ).get("billing_source")
+            ai_source_kind
+            or usage_metadata.get("billing_source")
         ),
         total_tokens=int(usage_row.get("total_tokens") or 0),
     )
@@ -469,6 +495,10 @@ async def settle_deployed_agent_monthly_cost_cap(
                 "source_surface": _normalize_optional_text(usage_row.get("source_surface")),
                 "cost_band": _normalize_optional_text(usage_row.get("cost_band")),
                 "billing_source": line_item_metadata.get("billing_source"),
+                "ai_source_kind": ai_source_kind or None,
+                "ai_payer": ai_payer or None,
+                "platform_credit_enforced": platform_paid_ai,
+                "credit_type": line_item_metadata.get("credit_type"),
                 "public_tier": line_item_metadata.get("public_tier"),
                 "credit_item_type": line_item_metadata.get("credit_item_type"),
                 "credit_quantity": line_item_metadata.get("quantity"),
@@ -484,7 +514,7 @@ async def settle_deployed_agent_monthly_cost_cap(
         )
     except Exception as exc:
         LOGGER.warning("Failed to record deployed-agent cost ledger for %s: %s", run_id, exc)
-        if cap_usd is not None:
+        if cap_usd is not None or platform_paid_ai:
             return await _pause_deployment_fail_closed(
                 deployed_agent=deployed_agent,
                 tenant_id=tenant_id,

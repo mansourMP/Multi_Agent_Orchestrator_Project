@@ -921,6 +921,7 @@ export function WorkstationDeployedAgentsPane({
     const nextState: WizardState = {
       ...currentState,
       aiTier: detailConfigDraft.aiTier,
+      aiSource: detailConfigDraft.aiSource,
       providerId: detailConfigDraft.providerId,
       modelId: detailConfigDraft.modelId,
       billingPlan: detailConfigDraft.billingPlan,
@@ -942,6 +943,9 @@ export function WorkstationDeployedAgentsPane({
     const currentMetadata = readRecord(selectedAgent?.metadata);
     const mergedConfig = {
       ...currentConfig,
+      runtime_supply: readRecord(nextConfigPayload.runtime_supply),
+      provider: resolvedProviderId || null,
+      model: resolvedModelId || null,
       memory_policy: {
         ...readRecord(currentConfig.memory_policy),
         ...readRecord(nextConfigPayload.memory_policy),
@@ -956,6 +960,7 @@ export function WorkstationDeployedAgentsPane({
       public_tier: nextState.aiTier,
       model_tier: nextState.aiTier,
       empyralis_model_tier: nextState.aiTier,
+      billing_source: nextState.aiSource,
     };
 
     setIsSavingDetailConfig(true);

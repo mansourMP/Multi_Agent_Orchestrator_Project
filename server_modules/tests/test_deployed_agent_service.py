@@ -1536,6 +1536,11 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(item["credit_item_type"] == "connector_read" for item in evidence["credit_line_items"])
         )
+        self.assertEqual(payload["billing_accounting_state"], "charge_blocked")
+        self.assertIn(
+            "shop_assistant_platform_credit_ai_usage_requires_provider_measured_usage",
+            payload["billing_accounting_warnings"],
+        )
 
     def test_project_deployed_agent_includes_restaurant_specialist_profile(self) -> None:
         row = _deployed_agent_row(

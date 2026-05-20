@@ -132,6 +132,32 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
         self.assertEqual(payload["placement"]["runtime_target"], "cloud")
         self.assertFalse(payload["computer_automation"]["enabled"])
         self.assertFalse(payload["provider_binding"]["expose_provider_model_to_ordinary_ui"])
+        self.assertEqual(payload["ai_source"]["kind"], "empyralis_credits")
+        self.assertTrue(payload["ai_source"]["uses_platform_credits"])
+
+    def test_runtime_supply_contract_normalizes_studio_ai_source(self):
+        payload = contract.normalize_runtime_supply_contract(
+            {
+                "model_tier": {"billing_source": "my_api_key"},
+                "provider_binding": {"internal_provider": "openai", "internal_model": "gpt-5.1"},
+            }
+        )
+
+        self.assertEqual(payload["model_tier"]["billing_source"], "workspace_api_key")
+        self.assertEqual(payload["ai_source"]["kind"], "workspace_api_key")
+        self.assertEqual(payload["ai_source"]["payer"], "BYOK")
+        self.assertTrue(payload["ai_source"]["requires_vault_provider"])
+        self.assertFalse(payload["ai_source"]["uses_platform_credits"])
+
+    def test_runtime_supply_contract_local_source_requires_local_runtime(self):
+        payload = contract.normalize_runtime_supply_contract(
+            {"ai_source": {"kind": "local_model"}},
+            studio_agent_mode="my_computer_agent",
+        )
+
+        self.assertEqual(payload["ai_source"]["kind"], "local_model")
+        self.assertEqual(payload["ai_source"]["payer"], "local")
+        self.assertTrue(payload["ai_source"]["requires_local_runtime"])
 
     def test_validate_mode_capability_matrix_rejects_text_agent_computer_automation(self):
         with self.assertRaises(ValueError) as error:

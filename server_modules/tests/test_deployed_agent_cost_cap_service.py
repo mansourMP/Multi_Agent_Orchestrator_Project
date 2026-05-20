@@ -133,6 +133,7 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
             pricing_registry_service.pricing_registry_version(),
         )
         self.assertEqual(ledger_metadata["source_surface"], "deployed_agent_channel")
+        self.assertEqual(ledger_metadata["credit_type"], "ai_tokens")
         self.assertEqual(ledger_metadata["credit_item_type"], "ai_pro_tokens")
         self.assertEqual(ledger_metadata["credit_quantity"], 2000.0)
         self.assertEqual(ledger_metadata["credit_quantity_unit"], "tokens")
@@ -212,8 +213,53 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ledger_kwargs["provider"], "openai")
         self.assertEqual(ledger_kwargs["model"], "gpt-4.1")
         self.assertEqual(ledger_kwargs["metadata"]["usage_record_id"], "uacct_run-usage-accounting")
+        self.assertEqual(ledger_kwargs["metadata"]["platform_credit_enforced"], True)
         self.assertEqual(ledger_kwargs["metadata"]["credit_item_type"], "ai_pro_tokens")
         self.assertEqual(ledger_kwargs["metadata"]["credit_quantity"], 2000.0)
+
+    async def test_platform_paid_studio_usage_fail_closes_without_cap_when_pricing_is_unknown(self) -> None:
+        deployed_agent = _deployed_agent()
+
+        with (
+            patch(
+                "server_modules.deployed_agent_cost_cap_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=deployed_agent),
+            ),
+            patch(
+                "server_modules.deployed_agent_cost_cap_service.control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry",
+                new=AsyncMock(return_value={"id": "dcost_1"}),
+            ) as record_mock,
+            patch(
+                "server_modules.deployed_agent_cost_cap_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(return_value=deployed_agent),
+            ) as update_mock,
+            patch(
+                "server_modules.deployed_agent_cost_cap_service.control_plane_repository.set_deployed_agent_state",
+                new=AsyncMock(return_value={**deployed_agent, "deployment_state": "suspended"}),
+            ) as pause_mock,
+            patch(
+                "server_modules.deployed_agent_cost_cap_service.outbox_service.emit_notification_event",
+            ),
+        ):
+            result = await deployed_agent_cost_cap_service.settle_deployed_agent_monthly_cost_cap(
+                run_id="run-platform-unknown-pricing",
+                run=_run(
+                    usage_masked={
+                        "provider": "openai",
+                        "model": "unknown-frontier-model",
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 1000,
+                    }
+                ),
+                status="completed",
+                now_iso="2026-04-13T12:00:00Z",
+            )
+
+        self.assertTrue(result["fail_closed"])
+        pause_mock.assert_awaited_once()
+        record_mock.assert_not_awaited()
+        budget_cycle = update_mock.await_args.kwargs["updates"]["operational_state"]["current_budget_cycle"]
+        self.assertEqual(budget_cycle["accounting_state"], "suspended_accounting_error")
 
     async def test_settle_skips_duplicate_80_percent_notification_with_same_cap(self) -> None:
         deployed_agent = _deployed_agent(

@@ -41,6 +41,7 @@ export type WizardState = {
   systemPrompt: string;
   knowledgeSourceText: string;
   aiTier: 'light' | 'pro' | 'max';
+  aiSource: 'empyralis_credits' | 'workspace_api_key' | 'local_model' | 'subscription_passthrough';
   runtimeSupplierKind: 'empyralis' | 'customer' | 'third_party_certified';
   runtimeSupplierId: string;
   runtimeSupplierLabel: string;
@@ -130,7 +131,7 @@ export type StudioPaneCache = {
 
 export type DetailConfigDraft = Pick<
   WizardState,
-  'aiTier' | 'providerId' | 'modelId' | 'billingPlan' | 'selectedToolIds' | 'memoryEnabled' | 'contextBudgetPreset' | 'retentionPreset'
+  'aiTier' | 'aiSource' | 'providerId' | 'modelId' | 'billingPlan' | 'selectedToolIds' | 'memoryEnabled' | 'contextBudgetPreset' | 'retentionPreset'
 >;
 
 export type ProviderCatalogModelSnapshot = {

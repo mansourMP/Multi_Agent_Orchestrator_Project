@@ -82,6 +82,38 @@ export const STUDIO_AI_TIER_OPTIONS: ReadonlyArray<{
   { value: 'max', label: 'Best', hint: 'Highest answer quality when accuracy matters more than cost.' },
 ];
 
+export const STUDIO_AI_SOURCE_OPTIONS: ReadonlyArray<{
+  value: WizardState['aiSource'];
+  label: string;
+  title: string;
+  hint: string;
+}> = [
+  {
+    value: 'empyralis_credits',
+    label: 'Platform credits',
+    title: 'Use Empyralis credits',
+    hint: 'Best default. Empyralis meters the provider cost and charges workspace credits.',
+  },
+  {
+    value: 'workspace_api_key',
+    label: 'Workspace API key',
+    title: 'Use your API key',
+    hint: 'Runs through a connected provider account stored in the workspace vault.',
+  },
+  {
+    value: 'local_model',
+    label: 'Local model',
+    title: 'Use local computer model',
+    hint: 'Uses the selected computer/local provider path when it is available.',
+  },
+  {
+    value: 'subscription_passthrough',
+    label: 'Subscription',
+    title: 'Use subscription passthrough',
+    hint: 'Reserved for supported local/coding subscription routes. It is not Empyralis credits.',
+  },
+];
+
 export const STUDIO_API_PROVIDER_IDS = new Set([
   'anthropic',
   'azure_openai',

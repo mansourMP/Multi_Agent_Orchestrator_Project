@@ -820,6 +820,26 @@ export function normalizeWizardAiTier(value: unknown): WizardState['aiTier'] {
   return 'pro';
 }
 
+export function normalizeStudioAiSource(value: unknown): WizardState['aiSource'] {
+  const token = readString(value).toLowerCase().replace(/[-\s]+/g, '_');
+  if (
+    token === 'workspace_api_key'
+    || token === 'my_api_key'
+    || token === 'my_ai_account'
+    || token === 'byok'
+    || token === 'api_key'
+  ) {
+    return 'workspace_api_key';
+  }
+  if (token === 'local_model' || token === 'local_ai' || token === 'local') {
+    return 'local_model';
+  }
+  if (token === 'subscription_passthrough' || token === 'subscription' || token === 'third_party_subscription') {
+    return 'subscription_passthrough';
+  }
+  return 'empyralis_credits';
+}
+
 export function normalizeRuntimePlacement(value: unknown): WizardState['runtimePlacement'] {
   const token = readString(value).toLowerCase().replace('-', '_');
   if (
@@ -1111,13 +1131,22 @@ export function buildWizardState(agent?: DeployedAgentRecord | null): WizardStat
   const runtimeSupply = readRecord(config.runtime_supply ?? metadata.runtime_supply);
   const runtimeSupplySupplier = readRecord(runtimeSupply.supplier);
   const runtimeSupplyMarketplace = readRecord(runtimeSupply.marketplace_policy);
-  const providerId = readString(agent?.provider ?? metadata.provider);
-  const modelId = readString(agent?.model ?? metadata.model);
+  const runtimeSupplyModelTier = readRecord(runtimeSupply.model_tier);
+  const runtimeSupplyAiSource = readRecord(runtimeSupply.ai_source);
+  const runtimeSupplyProviderBinding = readRecord(runtimeSupply.provider_binding);
+  const providerId = readString(agent?.provider ?? metadata.provider ?? runtimeSupplyProviderBinding.internal_provider);
+  const modelId = readString(agent?.model ?? metadata.model ?? runtimeSupplyProviderBinding.internal_model);
   const aiTier = normalizeWizardAiTier(
     metadata.public_tier
     ?? metadata.model_tier
     ?? metadata.empyralis_model_tier
     ?? inferAiTierFromProviderModel(providerId, modelId),
+  );
+  const aiSource = normalizeStudioAiSource(
+    runtimeSupplyAiSource.kind
+    ?? runtimeSupplyAiSource.payer
+    ?? runtimeSupplyModelTier.billing_source
+    ?? metadata.billing_source,
   );
   const customerChannel = inferCustomerChannel(channels);
   const runtimePlacement = normalizeRuntimePlacement(
@@ -1148,6 +1177,7 @@ export function buildWizardState(agent?: DeployedAgentRecord | null): WizardStat
     ),
     knowledgeSourceText: serializeKnowledgeSources(agent?.knowledge_sources),
     aiTier,
+    aiSource,
     runtimeSupplierKind,
     runtimeSupplierId: readString(runtimeSupplySupplier.id, runtimeSupplierKind),
     runtimeSupplierLabel: readString(runtimeSupplySupplier.label, runtimeSupplierKind === 'empyralis' ? 'Empyralis' : 'Customer-owned compute'),
@@ -1321,7 +1351,10 @@ export function buildDeploymentConfig(state: WizardState): Record<string, unknow
       model_tier: {
         public_tier: state.aiTier,
         public_label: STUDIO_AI_TIER_OPTIONS.find((item) => item.value === state.aiTier)?.label ?? 'Pro',
-        billing_source: 'empyralis_credits',
+        billing_source: state.aiSource,
+      },
+      ai_source: {
+        kind: state.aiSource,
       },
       provider_binding: {
         internal_provider: state.providerId || null,
@@ -1367,6 +1400,7 @@ export function buildDetailConfigDraft(agent?: DeployedAgentRecord | null): Deta
   const state = buildWizardState(agent);
   return {
     aiTier: state.aiTier,
+    aiSource: state.aiSource,
     providerId: state.providerId,
     modelId: state.modelId,
     billingPlan: state.billingPlan,

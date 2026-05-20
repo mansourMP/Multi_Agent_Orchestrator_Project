@@ -148,6 +148,38 @@ STUDIO_AGENT_MODE_PROFILES = {
     },
 }
 
+STUDIO_AI_SOURCE_EMPYRALIS_CREDITS = "empyralis_credits"
+STUDIO_AI_SOURCE_WORKSPACE_API_KEY = "workspace_api_key"
+STUDIO_AI_SOURCE_LOCAL_MODEL = "local_model"
+STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH = "subscription_passthrough"
+STUDIO_AI_SOURCES = {
+    STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
+    STUDIO_AI_SOURCE_WORKSPACE_API_KEY,
+    STUDIO_AI_SOURCE_LOCAL_MODEL,
+    STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH,
+}
+STUDIO_AI_SOURCE_ALIASES = {
+    "empyralis": STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
+    "empyralis_credit": STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
+    "empyralis_credits": STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
+    "hosted": STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
+    "platform": STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
+    "platform_credit": STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
+    "platform_credits": STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
+    "api_key": STUDIO_AI_SOURCE_WORKSPACE_API_KEY,
+    "byok": STUDIO_AI_SOURCE_WORKSPACE_API_KEY,
+    "my_api_key": STUDIO_AI_SOURCE_WORKSPACE_API_KEY,
+    "my_ai_account": STUDIO_AI_SOURCE_WORKSPACE_API_KEY,
+    "workspace_api_key": STUDIO_AI_SOURCE_WORKSPACE_API_KEY,
+    "workspace_key": STUDIO_AI_SOURCE_WORKSPACE_API_KEY,
+    "local": STUDIO_AI_SOURCE_LOCAL_MODEL,
+    "local_ai": STUDIO_AI_SOURCE_LOCAL_MODEL,
+    "local_model": STUDIO_AI_SOURCE_LOCAL_MODEL,
+    "subscription": STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH,
+    "subscription_passthrough": STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH,
+    "third_party_subscription": STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH,
+}
+
 STUDIO_AGENT_MODE_DEPLOY_TARGETS = {
     STUDIO_AGENT_MODE_TEXT: "cloud_default",
     STUDIO_AGENT_MODE_CLOUD_COMPUTER: "sage_cloud_computer",
@@ -170,6 +202,33 @@ def _bool(value: Any, *, default: bool = False) -> bool:
     if not token:
         return default
     return token in {"1", "true", "yes", "on", "enabled"}
+
+
+def normalize_studio_ai_source(value: Any = None, *, fallback: Any = None) -> Dict[str, Any]:
+    payload = value if isinstance(value, dict) else {}
+    requested = (
+        payload.get("kind")
+        or payload.get("source")
+        or payload.get("payer")
+        or value
+        or fallback
+        or STUDIO_AI_SOURCE_EMPYRALIS_CREDITS
+    )
+    source = STUDIO_AI_SOURCE_ALIASES.get(_text(requested).lower(), STUDIO_AI_SOURCE_EMPYRALIS_CREDITS)
+    payer = {
+        STUDIO_AI_SOURCE_EMPYRALIS_CREDITS: "platform_credits",
+        STUDIO_AI_SOURCE_WORKSPACE_API_KEY: "BYOK",
+        STUDIO_AI_SOURCE_LOCAL_MODEL: "local",
+        STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH: "subscription_passthrough",
+    }[source]
+    return {
+        "kind": source,
+        "payer": payer,
+        "requires_vault_provider": source == STUDIO_AI_SOURCE_WORKSPACE_API_KEY,
+        "requires_local_runtime": source == STUDIO_AI_SOURCE_LOCAL_MODEL,
+        "uses_platform_credits": source == STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
+        "uses_subscription_passthrough": source == STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH,
+    }
 
 
 def _positive_int(value: Any, *, default: int = 0) -> int:
@@ -614,6 +673,7 @@ def normalize_runtime_supply_contract(
     marketplace_payload = payload.get("marketplace_policy") if isinstance(payload.get("marketplace_policy"), dict) else {}
     model_tier_payload = payload.get("model_tier") if isinstance(payload.get("model_tier"), dict) else {}
     provider_binding_payload = payload.get("provider_binding") if isinstance(payload.get("provider_binding"), dict) else {}
+    ai_source_payload = payload.get("ai_source") if isinstance(payload.get("ai_source"), dict) else {}
 
     resolved_mode = resolve_studio_agent_mode(
         studio_agent_mode,
@@ -634,7 +694,11 @@ def normalize_runtime_supply_contract(
     tier = _text(public_tier or model_tier_payload.get("public_tier") or payload.get("public_tier") or "pro").lower()
     if tier not in {"light", "pro", "max", "local_ai", "my_api_key", "my_ai_account"}:
         tier = "pro"
-    resolved_billing_source = _text(billing_source or model_tier_payload.get("billing_source") or "empyralis_credits")
+    ai_source = normalize_studio_ai_source(
+        ai_source_payload,
+        fallback=billing_source or model_tier_payload.get("billing_source") or "empyralis_credits",
+    )
+    resolved_billing_source = ai_source["kind"]
     third_party_runtime_allowed = _bool(marketplace_payload.get("third_party_runtime_allowed"), default=False)
     visibility = _text(marketplace_payload.get("visibility"), default="private").lower()
     install_blockers: List[str] = [
@@ -676,6 +740,7 @@ def normalize_runtime_supply_contract(
             "public_label": _text(model_tier_payload.get("public_label"), default=tier.replace("_", " ").title()),
             "billing_source": resolved_billing_source,
         },
+        "ai_source": ai_source,
         "provider_binding": {
             "internal_provider": _text(provider or provider_binding_payload.get("internal_provider")) or None,
             "internal_model": _text(model or provider_binding_payload.get("internal_model")) or None,

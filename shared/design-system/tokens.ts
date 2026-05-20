@@ -25,7 +25,7 @@ export const DESIGN_SYSTEM_FONT_WEIGHTS = {
 } as const;
 
 export const DESIGN_SYSTEM_LAYOUT = {
-  sidebarWidth: 88,
+  sidebarWidth: 64,
   inspectorWidth: 360,
   titlebarHeight: 40,
 } as const;

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  Activity,
   Bot,
   Compass,
   LayoutGrid,
@@ -31,7 +30,7 @@ import {
 import { useAppTheme } from '@/lib/ui/app-theme';
 import { APP_THEME_ATTRIBUTE } from '@/lib/ui/tokens';
 
-type RailDestinationId = 'chat' | 'studio' | 'gateway' | 'marketplace' | 'activity' | 'settings';
+type RailDestinationId = 'chat' | 'studio' | 'gateway' | 'marketplace' | 'settings';
 
 type RailDestination = {
   id: RailDestinationId;
@@ -43,7 +42,6 @@ type RailDestination = {
 
 const PRIMARY_DESTINATIONS: RailDestination[] = [
   { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot, dataLinkId: 'sage' },
-  { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
   { id: 'gateway', label: 'Computers', defaultRouteId: 'gateway', icon: Monitor },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
@@ -52,12 +50,6 @@ const PRIMARY_DESTINATIONS: RailDestination[] = [
 const SECONDARY_DESTINATIONS: RailDestination[] = [
   { id: 'settings', label: 'Settings', defaultRouteId: 'settings', icon: Settings2 },
 ];
-
-const ACTIVITY_ROUTE_IDS = new Set<WorkspaceRouteId>([
-  'activity',
-  'approvals',
-  'notifications',
-]);
 
 function buildDestinationHref(
   workspaceId: string,
@@ -96,9 +88,6 @@ function extractActiveRailId(pathname: string | null): RailDestinationId {
   const routeId = extractActiveRouteId(pathname);
   if (!routeId) {
     return 'chat';
-  }
-  if (ACTIVITY_ROUTE_IDS.has(routeId)) {
-    return 'activity';
   }
 
   const destinationId = getWorkspaceNavRouteDefinition(routeId).destinationId;

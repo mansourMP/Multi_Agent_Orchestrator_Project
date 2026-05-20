@@ -55,6 +55,19 @@ class RunsExecutionGraphTests(unittest.TestCase):
         runs_execution.ACP_MANAGER.reload_runtime_state()
         self.tmpdir.cleanup()
 
+    @patch.dict("os.environ", {"EMPYRALIS_MAX_WORKFLOW_TURN_DEPTH": "1"})
+    def test_workflow_child_run_request_rejects_recursion_depth_over_limit(self) -> None:
+        request = run_service.RunStartRequest(
+            engine="orion",
+            workflow_id="wf-child",
+            workspace_id="ws-1",
+            user_goal="child",
+            metadata={"workflow_turn_depth": 2},
+        )
+
+        with self.assertRaises(run_service.WorkflowRecursionError):
+            runs_execution._execute_workflow_child_run_request(request)
+
     def _sync_upsert_live_run(
         self,
         run_id: str,

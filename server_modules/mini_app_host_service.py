@@ -7,6 +7,7 @@ import ipaddress
 import importlib
 import json
 import os
+import secrets
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -129,6 +130,7 @@ def issue_hosted_launch_token(
         "user_id": _normalized_text(user_id),
         "install_id": _normalized_text(install_id),
         "origin": normalized_origin,
+        "bridge_nonce": secrets.token_urlsafe(24),
         "iat": now,
         "exp": now + max(30, int(ttl_seconds or _LAUNCH_TOKEN_TTL_SECONDS)),
     }
@@ -139,6 +141,7 @@ def issue_hosted_launch_token(
         "token": f"{body}.{_b64url_encode(signature)}",
         "expires_at": payload["exp"],
         "bound_origin": normalized_origin,
+        "bridge_nonce": payload["bridge_nonce"],
     }
 
 

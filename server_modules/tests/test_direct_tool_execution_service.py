@@ -334,6 +334,39 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertIn("[redacted-secret]", completed)
         self.assertNotIn("sk-secret123456", completed)
 
+    def test_execute_single_direct_tool_call_redacts_unknown_high_entropy_result_summary(self) -> None:
+        callbacks = _callbacks()
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(callbacks),
+                "build_direct_local_tool_config": lambda connector_id, action_id, arguments: (
+                    "read",
+                    {"connector": connector_id, "action": action_id},
+                ),
+            }
+        )
+        token = "Ab9_Qx7Lm5Np3Rs8Yv2Kt6Wd4Fg1Hj"
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ) as emit_audit, patch(
+            "server_modules.skills_service._execute_safe_direct_local_tool_call",
+            return_value=f"connector returned {token}",
+        ):
+            service.execute_single_direct_tool_call(
+                tool_call={
+                    "name": "shell_exec",
+                    "arguments": {"command": "echo ok"},
+                },
+                workspace_id="workspace-1",
+                thread_id="thread-1",
+                callbacks=callbacks,
+            )
+
+        completed = emit_audit.call_args_list[1].kwargs["metadata"]["result_summary"]
+        self.assertIn("[redacted-secret]", completed)
+        self.assertNotIn(token, completed)
+
     def test_execute_single_direct_tool_call_emits_governance_metadata_for_shell(self) -> None:
         callbacks = _callbacks()
         callbacks = service.DirectToolExecutionCallbacks(

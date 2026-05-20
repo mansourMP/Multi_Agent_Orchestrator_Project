@@ -63,6 +63,7 @@ def test_hosted_manifest_can_issue_signed_launch_token(monkeypatch: pytest.Monke
     )
 
     launch = manifest["hosted_app"]["launch"]
+    assert launch["bridge_nonce"]
     payload = mini_app_host_service.verify_hosted_launch_token(
         launch["token"],
         workspace_id="ws-1",
@@ -72,6 +73,7 @@ def test_hosted_manifest_can_issue_signed_launch_token(monkeypatch: pytest.Monke
     )
     assert payload["workspace_id"] == "ws-1"
     assert payload["app_id"] == "travel_partner"
+    assert payload["bridge_nonce"] == launch["bridge_nonce"]
 
 
 def test_production_launch_token_requires_strong_secret(monkeypatch: pytest.MonkeyPatch):

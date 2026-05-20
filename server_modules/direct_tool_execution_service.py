@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 from server_modules import security_audit_service
 from server_modules import deployed_agent_virtual_runtime_service
 from server_modules import skills_service
+from server_modules import secret_redaction_service
 from server_modules import agent_action_metering_service, tool_broker_guard_service
 
 _BROWSER_CAPTURE_ACTIONS = {"screenshot", "pdf"}
@@ -276,21 +277,10 @@ def _compact_trace_text(value: Any, limit: int = 240) -> str:
 
 
 def _redact_audit_summary(value: Any) -> str:
-    text = _compact_trace_text(value)
+    text = _compact_trace_text(secret_redaction_service.redact_text(value))
     if not text:
         return ""
-    text = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "[redacted-secret]", text)
-    text = re.sub(
-        r"(?i)\b(api[_-]?key|token|secret|password)\s*=\s*[^\s&]+",
-        lambda match: f"{match.group(1)}=[redacted-secret]",
-        text,
-    )
-    text = re.sub(
-        r"(?i)\b(authorization:\s*bearer)\s+[^\s]+",
-        lambda match: f"{match.group(1)} [redacted-secret]",
-        text,
-    )
-    return text
+    return text.replace("[redacted]", "[redacted-secret]")
 
 
 def _infer_trace_capability_id(connector_id: str, action_id: str) -> Optional[str]:

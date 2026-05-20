@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+import os
 import queue
 import re
 import time
@@ -32,6 +33,76 @@ from server_modules.runtime_models import RunStartRequest
 from server_modules.telemetry import get_tracer, record_reliability_latency_sample, set_span_attributes
 
 LOGGER = logging.getLogger(__name__)
+MAX_WORKFLOW_TURN_DEPTH_DEFAULT = 30
+WORKFLOW_TURN_DEPTH_METADATA_KEY = "workflow_turn_depth"
+_WORKFLOW_TURN_DEPTH_PROTECTED_KEYS = {
+    WORKFLOW_TURN_DEPTH_METADATA_KEY,
+    "workflow_turn_depth_limit",
+    "workflow_turn_parent_run_id",
+    "workflow_turn_child_kind",
+}
+
+
+class WorkflowRecursionError(RuntimeError):
+    """Raised when workflow child-run recursion exceeds the configured limit."""
+
+
+def _max_workflow_turn_depth() -> int:
+    raw = str(os.getenv("EMPYRALIS_MAX_WORKFLOW_TURN_DEPTH") or "").strip()
+    if not raw:
+        return MAX_WORKFLOW_TURN_DEPTH_DEFAULT
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return MAX_WORKFLOW_TURN_DEPTH_DEFAULT
+
+
+def _workflow_turn_depth_from_metadata(metadata: Any) -> int:
+    payload = metadata if isinstance(metadata, dict) else {}
+    try:
+        return max(0, int(payload.get(WORKFLOW_TURN_DEPTH_METADATA_KEY) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def assert_workflow_turn_depth_allowed(metadata: Any) -> int:
+    depth = _workflow_turn_depth_from_metadata(metadata)
+    limit = _max_workflow_turn_depth()
+    if depth > limit:
+        raise WorkflowRecursionError(f"Workflow recursion depth limit reached ({limit}).")
+    return depth
+
+
+def build_workflow_child_metadata(
+    context: Dict[str, Any],
+    *,
+    parent_run_id: str,
+    child_kind: str,
+) -> Dict[str, Any]:
+    metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
+    parent_depth = _workflow_turn_depth_from_metadata(metadata)
+    child_depth = parent_depth + 1
+    limit = _max_workflow_turn_depth()
+    if child_depth > limit:
+        raise WorkflowRecursionError(f"Workflow recursion depth limit reached ({limit}).")
+    metadata[WORKFLOW_TURN_DEPTH_METADATA_KEY] = child_depth
+    metadata["workflow_turn_depth_limit"] = limit
+    metadata["workflow_turn_parent_run_id"] = str(parent_run_id or "").strip() or None
+    metadata["workflow_turn_child_kind"] = str(child_kind or "").strip() or "workflow_child_run"
+    return metadata
+
+
+def merge_workflow_child_metadata_overrides(
+    child_metadata: Dict[str, Any],
+    metadata_overrides: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not isinstance(metadata_overrides, dict):
+        return child_metadata
+    for key, value in metadata_overrides.items():
+        if str(key) in _WORKFLOW_TURN_DEPTH_PROTECTED_KEYS:
+            continue
+        child_metadata[key] = value
+    return child_metadata
 
 
 RUN_STATES = (
@@ -3030,7 +3101,11 @@ def create_workflow_child_local_run(
     trust_mode_auto: str,
     metadata_overrides: Optional[Dict[str, Any]] = None,
 ) -> str:
-    child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
+    child_metadata = build_workflow_child_metadata(
+        context,
+        parent_run_id=run_id,
+        child_kind="local_tool_child_run",
+    )
     child_metadata.update(
         {
             "outcome_pack": local_execution_pack_id,
@@ -3041,8 +3116,7 @@ def create_workflow_child_local_run(
             "workflow_tool_parent_run_id": run_id,
         }
     )
-    if isinstance(metadata_overrides, dict):
-        child_metadata.update(metadata_overrides)
+    merge_workflow_child_metadata_overrides(child_metadata, metadata_overrides)
     child_req = RunStartRequest(
         engine=str(context.get("engine") or "orion"),
         workflow_id=None,
@@ -3126,7 +3200,11 @@ def execute_workflow_subflow_node(
     if child_workflow_id == str(context.get("workflow_id") or "").strip():
         raise RuntimeError("Recursive subflow calls are not allowed.")
 
-    child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
+    child_metadata = build_workflow_child_metadata(
+        context,
+        parent_run_id=run_id,
+        child_kind="subflow",
+    )
     child_metadata["subflow_parent_run_id"] = run_id
     child_metadata["subflow_parent_workflow_id"] = str(context.get("workflow_id") or "").strip() or None
     child_req = RunStartRequest(

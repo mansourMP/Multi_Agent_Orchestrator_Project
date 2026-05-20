@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import math
 from typing import Any, Dict, List, Mapping, Optional
 
 
@@ -46,6 +47,52 @@ _SENSITIVE_VALUE_PATTERNS = (
 _MAX_RECURSION_DEPTH = 10
 _MAX_LIST_ITEMS = 100
 _UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_HEX_IDENTIFIER_PATTERN = re.compile(r"^[0-9a-f]{32,64}$", re.IGNORECASE)
+_SAFE_IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$")
+_HIGH_ENTROPY_CANDIDATE_PATTERN = re.compile(r"(?<![A-Za-z0-9])([A-Za-z0-9._~+/=-]{20,})(?![A-Za-z0-9])")
+_URLISH_TOKEN_PATTERN = re.compile(r"(?i)(?:^|[./])[a-z0-9-]+\.[a-z]{2,}(?:[/:]|$)")
+
+
+def _shannon_entropy(value: str) -> float:
+    token = str(value or "")
+    if not token:
+        return 0.0
+    counts: Dict[str, int] = {}
+    for char in token:
+        counts[char] = counts.get(char, 0) + 1
+    length = float(len(token))
+    entropy = 0.0
+    for count in counts.values():
+        probability = count / length
+        entropy -= probability * math.log2(probability)
+    return entropy
+
+
+def _looks_like_high_entropy_secret(value: str) -> bool:
+    token = str(value or "").strip()
+    if len(token) < 20:
+        return False
+    if _UUID_PATTERN.match(token):
+        return False
+    if _HEX_IDENTIFIER_PATTERN.match(token) and len(token) in {32, 40, 64}:
+        return False
+    if _SAFE_IDENTIFIER_PATTERN.match(token):
+        return False
+    if _URLISH_TOKEN_PATTERN.search(token):
+        return False
+    character_classes = sum(
+        1
+        for matched in (
+            any(char.islower() for char in token),
+            any(char.isupper() for char in token),
+            any(char.isdigit() for char in token),
+            any(not char.isalnum() for char in token),
+        )
+        if matched
+    )
+    if character_classes < 2:
+        return False
+    return _shannon_entropy(token) >= 3.5
 
 
 def is_sensitive_key(key: Any) -> bool:
@@ -59,6 +106,10 @@ def redact_text(value: Any) -> str:
     redacted = str(value or "")
     for pattern, replacement in _SENSITIVE_VALUE_PATTERNS:
         redacted = pattern.sub(replacement, redacted)
+    redacted = _HIGH_ENTROPY_CANDIDATE_PATTERN.sub(
+        lambda match: "[redacted-secret]" if _looks_like_high_entropy_secret(match.group(1)) else match.group(1),
+        redacted,
+    )
     return redacted
 
 

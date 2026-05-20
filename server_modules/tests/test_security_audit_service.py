@@ -92,6 +92,28 @@ class SecurityAuditServiceTests(unittest.TestCase):
 
         self.assertEqual(captured["payload"]["detail"], "Authorization: [redacted]")
 
+    def test_emit_security_audit_event_redacts_unknown_high_entropy_metadata(self):
+        captured = {}
+        token = "Sf9_Za4Yp7Nq2Rt6Lm8Cb3Kx5Vh1Wd"
+
+        def fake_emit_runtime_event(**kwargs):
+            captured.update(kwargs)
+            return {"id": "event-1"}
+
+        with patch(
+            "server_modules.security_audit_service.outbox_service.emit_runtime_event",
+            side_effect=fake_emit_runtime_event,
+        ):
+            security_audit_service.emit_security_audit_event(
+                action="connector.output",
+                workspace_id="workspace-1",
+                metadata={"result_summary": f"connector returned {token}"},
+            )
+
+        summary = captured["payload"]["metadata"]["result_summary"]
+        self.assertIn("[redacted-secret]", summary)
+        self.assertNotIn(token, summary)
+
 
 if __name__ == "__main__":
     unittest.main()

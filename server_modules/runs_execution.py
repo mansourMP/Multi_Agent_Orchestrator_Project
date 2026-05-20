@@ -143,6 +143,11 @@ def _workflow_child_run_execution_services() -> RunExecutionServices:
 def _execute_workflow_child_run_request(request: Any) -> Dict[str, Any]:
     from server_modules import runs_delegation as _runs_delegation
 
+    run_service.assert_workflow_turn_depth_allowed(
+        getattr(request, "metadata", None)
+        if not isinstance(request, dict)
+        else request.get("metadata")
+    )
     return execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
         request,
         execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,

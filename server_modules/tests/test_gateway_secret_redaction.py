@@ -151,6 +151,19 @@ class TestSecretRedactionSanitizeValue:
         )
         assert "x-api-key: [redacted]" in result
 
+    def test_unknown_high_entropy_token_in_text_redacted(self) -> None:
+        token = "Qx9v_Lp2R8mN4sT6uY7zA1bC3dE5fG"
+        result = secret_redaction_service.sanitize_value(
+            f"tool output included {token} from a B2B connector",
+        )
+        assert "[redacted-secret]" in result
+        assert token not in result
+
+    def test_normal_text_and_url_are_not_entropy_redacted(self) -> None:
+        text = "Open https://docs.example.com/product/reference for the normal integration documentation."
+        result = secret_redaction_service.sanitize_value(text)
+        assert result == text
+
     def test_bool_value_preserved(self) -> None:
         result = secret_redaction_service.sanitize_value(True)
         assert result is True

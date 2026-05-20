@@ -48,6 +48,7 @@ type HostedMiniAppManifest = {
       token?: string | null;
       expires_at?: number | null;
       bound_origin?: string | null;
+      bridge_nonce?: string | null;
     } | null;
   } | null;
 };
@@ -267,7 +268,10 @@ export function HostedMiniAppSurface({
         request_text: payload.requestText,
         target: payload.target,
         context_envelope: payload.contextEnvelope,
-        metadata: payload.metadata,
+        metadata: {
+          ...(payload.metadata || {}),
+          bridge_nonce: manifest.hosted_app?.launch?.bridge_nonce,
+        },
         launch_token: manifest.hosted_app?.launch?.token,
       })
         .then((responsePayload) => {
@@ -344,6 +348,7 @@ export function HostedMiniAppSurface({
         memoryScope: manifest?.memory_scope || 'none_by_default',
         launchToken: manifest?.hosted_app?.launch?.token,
         launchTokenExpiresAt: manifest?.hosted_app?.launch?.expires_at,
+        bridgeNonce: manifest?.hosted_app?.launch?.bridge_nonce,
       },
       targetOrigin,
     );

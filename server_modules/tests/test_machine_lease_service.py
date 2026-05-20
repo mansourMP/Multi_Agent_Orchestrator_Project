@@ -195,6 +195,67 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(registry["runtime-1"]["session_scope"]["workspace_id"], "ws-1")
         self.assertTrue(str(registry["runtime-1"].get("session_scope_key") or "").strip())
 
+    def test_assert_machine_session_accepts_hydrated_durable_record(self) -> None:
+        durable_record = {
+            "runtime_id": "runtime-1",
+            "machine_id": "runtime-1",
+            "instance_id": "instance-1",
+            "tenant_id": "tenant-1",
+            "workspace_id": "ws-1",
+            "runtime_type": "local_companion",
+            "runtime_role": "owner",
+            "session_token_hash": "hash:good",
+            "session_scope": {
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "runtime_type": "local_companion",
+                "runtime_role": "owner",
+                "install_id": "",
+                "specialist_key": "",
+                "instance_id": "instance-1",
+                "capability_digest": "",
+                "machine_enrollment_scope": "workspace",
+            },
+        }
+        durable_record["session_scope_key"] = "tenant-1|ws-1|local_companion|owner|||instance-1||workspace"
+        registry = {"runtime-1": dict(durable_record)}
+
+        verified = machine_lease_service.assert_machine_session(
+            "runtime-1",
+            "good",
+            machine_registry=registry,
+            machine_registry_lock=threading.Lock(),
+            instance_id="instance-1",
+            hash_token_fn=lambda token: f"hash:{token}",
+            touch_machine_session_fn=lambda record: record.update({"trust_state": "verified"}),
+        )
+
+        self.assertEqual(verified["workspace_id"], "ws-1")
+        self.assertEqual(registry["runtime-1"]["trust_state"], "verified")
+
+    def test_assert_machine_session_rejects_revoked_or_stale_record(self) -> None:
+        registry = {
+            "runtime-1": {
+                "runtime_id": "runtime-1",
+                "machine_id": "runtime-1",
+                "instance_id": "instance-1",
+            }
+        }
+
+        with self.assertRaises(HTTPException) as exc:
+            machine_lease_service.assert_machine_session(
+                "runtime-1",
+                "good",
+                machine_registry=registry,
+                machine_registry_lock=threading.Lock(),
+                instance_id="instance-1",
+                hash_token_fn=lambda token: f"hash:{token}",
+                touch_machine_session_fn=lambda record: record.update({"trust_state": "verified"}),
+            )
+
+        self.assertEqual(exc.exception.status_code, 409)
+        self.assertEqual(exc.exception.detail, "runtime session is not active. Re-register this machine.")
+
     def test_claim_local_machine_lease_records_machine_and_lease_identity(self) -> None:
         pending = ["run-1"]
         claimed = {}

@@ -343,16 +343,31 @@ def _assert_hosted_launch_allowed(
     current_user: Dict[str, Any],
     origin: str,
     launch_token: Optional[str],
-) -> None:
+) -> Dict[str, Any]:
     if not _requires_launch_token(contract):
-        return
-    mini_app_host_service.verify_hosted_launch_token(
+        return {}
+    return mini_app_host_service.verify_hosted_launch_token(
         str(launch_token or ""),
         workspace_id=workspace_id,
         app_id=str(contract.get("app_id") or app_id),
         user_id=_current_user_id(current_user),
         origin=origin,
     )
+
+
+def _assert_hosted_bridge_nonce(
+    *,
+    launch_payload: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    clean_metadata = _coerce_dict(metadata)
+    expected_nonce = str(launch_payload.get("bridge_nonce") or "").strip()
+    provided_nonce = str(clean_metadata.get("bridge_nonce") or "").strip()
+    if not expected_nonce or provided_nonce != expected_nonce:
+        raise PermissionError("Hosted mini app bridge nonce is invalid.")
+    clean_metadata.pop("bridge_nonce", None)
+    clean_metadata["bridge_nonce_verified"] = True
+    return clean_metadata
 
 
 def _assert_mini_app_ai_invoke_allowed(workspace_id: str, app_id: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -1068,7 +1083,7 @@ async def bridge_hosted_mini_app_message(
     tenant_id = _workspace_tenant_id(current_user, resolved_workspace_id)
     try:
         contract = mini_apps_service.get_mini_app_contract(resolved_workspace_id, app_id)
-        _assert_hosted_launch_allowed(
+        launch_payload = _assert_hosted_launch_allowed(
             contract=contract,
             workspace_id=resolved_workspace_id,
             app_id=app_id,
@@ -1076,6 +1091,10 @@ async def bridge_hosted_mini_app_message(
             origin=body.origin,
             launch_token=body.launch_token,
         )
+        bridge_metadata = _assert_hosted_bridge_nonce(
+            launch_payload=launch_payload,
+            metadata=body.metadata,
+        ) if _requires_launch_token(contract) else _coerce_dict(body.metadata)
         return await mini_app_host_service.process_hosted_bridge_request(
             workspace_id=resolved_workspace_id,
             tenant_id=tenant_id,
@@ -1087,7 +1106,7 @@ async def bridge_hosted_mini_app_message(
             request_text=str(body.request_text or "").strip(),
             target=body.target,
             context_envelope=body.context_envelope,
-            metadata=body.metadata,
+            metadata=bridge_metadata,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

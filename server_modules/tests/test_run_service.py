@@ -99,6 +99,7 @@ from server_modules.run_service import (
     LegacyRunPreparationServices,
     LegacyRunRequestServices,
     RunPreparedResultServices,
+    WorkflowRecursionError,
     safe_int,
     build_run_start_request_from_turn,
     build_schedule_bound_create_run_from_request,
@@ -1445,6 +1446,31 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(request.metadata["outcome_pack"], "local-execution-v1")
         self.assertEqual(request.metadata["pack_inputs"]["operations"][0]["tool"], "read_write_files")
         self.assertEqual(request.metadata["browser_session_profile"], "default")
+        self.assertEqual(request.metadata["workflow_turn_depth"], 1)
+        self.assertEqual(request.metadata["workflow_turn_parent_run_id"], "run-parent")
+        self.assertEqual(request.metadata["workflow_turn_child_kind"], "local_tool_child_run")
+
+    @patch.dict("os.environ", {"EMPYRALIS_MAX_WORKFLOW_TURN_DEPTH": "1"})
+    def test_create_workflow_child_local_run_blocks_depth_limit(self):
+        with self.assertRaises(WorkflowRecursionError):
+            create_workflow_child_local_run(
+                run_id="run-parent",
+                context={
+                    "engine": "orion",
+                    "workspace_id": "ws-1",
+                    "metadata": {"workflow_turn_depth": 1},
+                },
+                label="Write file",
+                operation={"tool": "read_write_files", "path": "README.md", "mode": "write"},
+                summary="Write README",
+                execute_workflow_child_run_request_fn=lambda request: {
+                    "run_id": "child-1",
+                    "route": {"selected": "local_companion"},
+                },
+                local_execution_pack_id="local-execution-v1",
+                execution_target_local_companion="local_companion",
+                trust_mode_auto="auto",
+            )
 
     def test_wait_for_workflow_child_run_emits_wait_and_resume_callbacks(self):
         runs_by_id = [
@@ -1519,11 +1545,42 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(result, "Child result")
         self.assertEqual(requests[0].workflow_id, "wf-child")
+        self.assertEqual(requests[0].metadata["workflow_turn_depth"], 1)
+        self.assertEqual(requests[0].metadata["workflow_turn_child_kind"], "subflow")
         self.assertEqual(state["last_text"], "Child result")
         self.assertEqual(state["last_data"]["child_workflow_id"], "wf-child")
         self.assertEqual(emitted[0][1]["event"], "workflow_subflow_start")
         self.assertEqual(emitted[1][1]["event"], "workflow_subflow_complete")
         self.assertEqual(updates[-1][1]["status"], "succeeded")
+
+    @patch.dict("os.environ", {"EMPYRALIS_MAX_WORKFLOW_TURN_DEPTH": "1"})
+    def test_execute_workflow_subflow_node_blocks_cross_workflow_recursion_limit(self):
+        with self.assertRaises(WorkflowRecursionError):
+            execute_workflow_subflow_node(
+                run_id="run-parent",
+                node_id="subflow_1",
+                label="Call child workflow",
+                context={
+                    "engine": "orion",
+                    "workflow_id": "wf-parent",
+                    "workspace_id": "ws-1",
+                    "metadata": {"workflow_turn_depth": 1},
+                },
+                config={"workflow_id": "wf-child", "mode": "sync", "timeout_seconds": 45},
+                current_text="Parent text",
+                state={"last_text": "Initial text"},
+                update_node_state_fn=lambda *args, **kwargs: None,
+                emit_log_fn=lambda *args, **kwargs: None,
+                workflow_text_payload_fn=lambda value: str(value or ""),
+                node_preview_text_fn=lambda value: str(value or ""),
+                execute_workflow_child_run_request_fn=lambda request: {
+                    "run_id": "child-run-1",
+                    "route": {"selected": "cloud"},
+                },
+                load_run_fn=lambda _run_id: {"status": "completed", "result": "Child result"},
+                log_queue=queue.Queue(),
+                execution_target_local_companion="local_companion",
+            )
 
     def test_execute_workflow_subflow_node_supports_local_companion_child_runs(self):
         state = {"last_text": "Initial text"}
@@ -1567,6 +1624,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(result, "Local child result")
         self.assertEqual(requests[0].workflow_id, "wf-child-local")
         self.assertEqual(requests[0].metadata["execution_target"], "local_companion")
+        self.assertEqual(requests[0].metadata["workflow_turn_depth"], 1)
         self.assertEqual(state["last_data"]["child_run_id"], "child-local-run-1")
 
     def test_execute_workflow_local_tool_runs_via_child_local_run_lifecycle(self):
@@ -1610,6 +1668,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(result["summary"], "Local tool finished")
         self.assertEqual(result["result_data"]["local_child_run_id"], "child-local-1")
         self.assertEqual(requests[0].metadata["pack_inputs"]["operations"][0]["tool"], "filesystem.read_write")
+        self.assertEqual(requests[0].metadata["workflow_turn_depth"], 1)
 
     def test_safe_int_and_normalize_requested_max_iterations(self):
         self.assertEqual(safe_int("7", 0), 7)

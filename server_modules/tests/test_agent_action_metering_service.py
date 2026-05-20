@@ -112,3 +112,42 @@ async def test_ai_usage_reference_does_not_write_second_credit_row(monkeypatch: 
 
     assert row["billing_mode"] == "ai_token_usage_ref"
     assert calls["credit"] == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_action_summaries_redact_unknown_high_entropy_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, object] = {}
+    token = "Rt9_Zx7Lm5Qp3Nc8Yv2Ha6Ks1Wd4Fg"
+
+    async def fake_action_event(**kwargs):
+        calls["action"] = kwargs
+        return {"id": "aact-redacted", **kwargs["event"]}
+
+    async def fake_activity_event(**kwargs):
+        calls["activity"] = kwargs
+        return {"id": "act-redacted"}
+
+    monkeypatch.setattr(agent_action_metering_service.control_plane_repository, "record_agent_action_event", fake_action_event)
+    monkeypatch.setattr(agent_action_metering_service.activity_ledger_service, "append_activity_event", fake_activity_event)
+
+    row = await agent_action_metering_service.record_completed(
+        tenant_id="tenant-1",
+        workspace_id="workspace-1",
+        surface="sage",
+        source_surface="sage_direct_tool",
+        action_domain="tool",
+        action_type="execute",
+        action_name="sap.lookup",
+        billing_mode="transparency",
+        input_summary=f"lookup with {token}",
+        output_summary=f"result contained {token}",
+        source_table="direct_tool_calls",
+        source_event_id="run-1:sap-lookup",
+    )
+
+    event = calls["action"]["event"]
+    assert row["status"] == "completed"
+    assert token not in event["input_summary"]
+    assert token not in event["output_summary"]
+    assert "[redacted-secret]" in event["input_summary"]
+    assert "[redacted-secret]" in event["output_summary"]

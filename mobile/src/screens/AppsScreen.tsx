@@ -4,26 +4,15 @@ import { useRouter } from "expo-router";
 
 import { BrandedAppIcon } from "@/src/components/apps/BrandedAppIcon";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
-import { ActionButton } from "@/src/components/system/ActionButton";
 import { MotionPressable } from "@/src/components/system/MotionPressable";
-import { getPreviewAppRecord, normalizeAppRecord } from "@/src/lib/appRegistry";
+import { normalizeAppRecord } from "@/src/lib/appRegistry";
 import { appRegistryApi } from "@/src/lib/appRegistryApi";
-import { APP_CATALOG } from "@/src/lib/appCatalog";
 import { useSessionState } from "@/src/lib/session-context";
 import type { AppRecord } from "@/src/lib/types";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
 const CURATED_ORDER = ["calorie_tracking", "flashcards"] as const;
-
-function sortApps(items: typeof APP_CATALOG) {
-  const order = new Map<string, number>(CURATED_ORDER.map((id, index) => [id, index]));
-  return [...items].sort((a, b) => {
-    const orderA = order.get(a.id) ?? Number.MAX_SAFE_INTEGER;
-    const orderB = order.get(b.id) ?? Number.MAX_SAFE_INTEGER;
-    if (orderA !== orderB) return orderA - orderB;
-    return a.name.localeCompare(b.name);
-  });
-}
+const HIDDEN_DEMO_APP_IDS = new Set<string>(CURATED_ORDER);
 
 function sortAppRecords(items: AppRecord[]) {
   const order = new Map<string, number>(CURATED_ORDER.map((id, index) => [id, index]));
@@ -33,6 +22,25 @@ function sortAppRecords(items: AppRecord[]) {
     if (orderA !== orderB) return orderA - orderB;
     return a.name.localeCompare(b.name);
   });
+}
+
+function normalizeMiniAppContract(raw: any): AppRecord | null {
+  const id = String(raw?.app_id || raw?.id || "").trim();
+  if (!id || String(raw?.install_status || "installed").toLowerCase() === "removed") {
+    return null;
+  }
+  return {
+    id,
+    name: String(raw?.label || raw?.name || id),
+    description: raw?.description ? String(raw.description) : undefined,
+    icon: raw?.icon ? String(raw.icon) : "apps-outline",
+    category: raw?.delivery_mode === "hosted" ? "Hosted mini app" : "Mini app",
+    publisher: "Workspace",
+    status: "installed",
+    version: "1.0.0",
+    permissions: Array.isArray(raw?.permissions) ? raw.permissions.map((item: unknown) => String(item)) : [],
+    source: "core",
+  };
 }
 
 function AppShelfCard({
@@ -150,15 +158,8 @@ export default function AppsScreen() {
   const router = useRouter();
   const { session } = useSessionState();
   const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
-  const fallbackDiscoverApps = React.useMemo(
-    () =>
-      sortApps(APP_CATALOG)
-        .map((app) => normalizeAppRecord(app, "preview"))
-        .filter((item): item is AppRecord => Boolean(item)),
-    [],
-  );
   const [installedApps, setInstalledApps] = React.useState<AppRecord[]>([]);
-  const [discoverApps, setDiscoverApps] = React.useState<AppRecord[]>(fallbackDiscoverApps);
+  const [discoverApps, setDiscoverApps] = React.useState<AppRecord[]>([]);
   const [loading, setLoading] = React.useState(false);
 
   React.useEffect(() => {
@@ -168,16 +169,17 @@ export default function AppsScreen() {
       if (!connected || !session?.runtimeUrl || !session?.runtimeKey) {
         if (active) {
           setInstalledApps([]);
-          setDiscoverApps(fallbackDiscoverApps);
+          setDiscoverApps([]);
         }
         return;
       }
 
       setLoading(true);
       try {
-        const [installedResult, platformResult] = await Promise.allSettled([
+        const [installedResult, platformResult, miniAppsResult] = await Promise.allSettled([
           appRegistryApi.getInstalledApps(session),
           session.platformUrl ? appRegistryApi.getPlatformStoreApps(session) : Promise.resolve({ items: [] }),
+          appRegistryApi.listMiniApps(session),
         ]);
 
         const installedRecords =
@@ -193,34 +195,29 @@ export default function AppsScreen() {
                 .map((item: any) => normalizeAppRecord(item, "platform"))
                 .filter((item): item is AppRecord => Boolean(item))
             : [];
+        const miniAppRecords =
+          miniAppsResult.status === "fulfilled"
+            ? (miniAppsResult.value.items ?? [])
+                .map((item: any) => normalizeMiniAppContract(item))
+                .filter((item): item is AppRecord => Boolean(item))
+            : [];
 
         if (!active) return;
 
-        const installedById = new Map(installedRecords.map((app) => [app.id, app] as const));
-        const platformById = new Map(platformRecords.map((app) => [app.id, app] as const));
-        const previewById = new Map(
-          fallbackDiscoverApps
-            .map((app) => [app.id, app] as const),
-        );
-        const discoverIds = new Set<string>([
-          ...CURATED_ORDER,
-          ...fallbackDiscoverApps.map((app) => app.id),
-          ...platformRecords.map((app) => app.id),
-        ]);
+        const installedById = new Map([...installedRecords, ...miniAppRecords].map((app) => [app.id, app] as const));
 
-        setInstalledApps(sortAppRecords(installedRecords));
+        setInstalledApps(sortAppRecords([...installedRecords, ...miniAppRecords]));
         setDiscoverApps(
           sortAppRecords(
-            Array.from(discoverIds)
-              .map((id) => platformById.get(id) || previewById.get(id) || getPreviewAppRecord(id))
-              .filter((item): item is AppRecord => Boolean(item))
-              .filter((item) => !installedById.has(item.id)),
+            platformRecords
+              .filter((item) => !installedById.has(item.id))
+              .filter((item) => !HIDDEN_DEMO_APP_IDS.has(item.id)),
           ),
         );
       } catch {
         if (active) {
           setInstalledApps([]);
-          setDiscoverApps(fallbackDiscoverApps);
+          setDiscoverApps([]);
         }
       } finally {
         if (active) {
@@ -234,7 +231,7 @@ export default function AppsScreen() {
     return () => {
       active = false;
     };
-  }, [connected, fallbackDiscoverApps, session]);
+  }, [connected, session]);
 
   return (
     <ScrollView
@@ -244,14 +241,7 @@ export default function AppsScreen() {
     >
       <PrimaryScreenHeader
         title="Discover"
-        subtitle="Installed tools and new things to try."
-        action={{
-          accessibilityLabel: "Open Discover Store",
-          label: "Store",
-          icon: "bag-handle-outline",
-          onPress: () => router.push("/apps/store"),
-          variant: "secondary",
-        }}
+        subtitle="Installed mini apps and shareable tools."
       />
 
       <View style={{ gap: 10 }}>
@@ -288,7 +278,7 @@ export default function AppsScreen() {
             contentContainerStyle={{ gap: 12, paddingRight: 4 }}
           >
             {installedApps.map((app) => (
-              <AppShelfCard key={app.id} app={app} onPress={(next) => router.push(`/apps/${next.id}`)} />
+              <AppShelfCard key={app.id} app={app} onPress={(next) => router.push(`/apps/${next.id}/home`)} />
             ))}
           </ScrollView>
         ) : (
@@ -309,14 +299,9 @@ export default function AppsScreen() {
               Nothing installed yet
             </Text>
             <Text style={{ fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary }}>
-              Open the store to install your first tool.
+              Open a mini app from Discover, an agent message, or a shared app link.
             </Text>
-            <ActionButton
-              label="Open Store"
-              variant="primary"
-              onPress={() => router.push("/apps/store")}
-              style={{ alignSelf: "flex-start", marginTop: 6 }}
-            />
+            <TouchableMiniLink label="Register hosted app" onPress={() => router.push("/apps/register")} />
           </View>
         )}
       </View>
@@ -334,7 +319,7 @@ export default function AppsScreen() {
           Discover
         </Text>
         <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-          Explore tools, builds, and marketplace installs from the same place.
+          Public mini apps will appear here when they are shared with this workspace.
         </Text>
       </View>
 
@@ -351,10 +336,10 @@ export default function AppsScreen() {
         {discoverApps.map((app) => (
           <DiscoverCard key={app.id} app={app} onPress={(next) => {
             if (next.status === "installed") {
-              router.push(`/apps/${next.id}`);
+              router.push(`/apps/${next.id}/home`);
               return;
             }
-            router.push("/apps/store");
+            router.push(`/apps/${next.id}/home`);
           }} />
         ))}
       </View>
@@ -377,17 +362,35 @@ export default function AppsScreen() {
           <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
             Nothing else is available right now
           </Text>
-          <Text style={{ fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary }}>
-            Your installed shelf stays here. Open the store to check again or install from the broader marketplace.
-          </Text>
-          <ActionButton
-            label="Open Store"
-            variant="secondary"
-            onPress={() => router.push("/apps/store")}
-            style={{ alignSelf: "flex-start", marginTop: 6 }}
-          />
+            <Text style={{ fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary }}>
+              Discover stays lightweight for now. Register a hosted app or open one from an agent message.
+            </Text>
+          <TouchableMiniLink label="Register hosted app" onPress={() => router.push("/apps/register")} />
         </View>
       ) : null}
     </ScrollView>
+  );
+}
+
+function TouchableMiniLink({ label, onPress }: { label: string; onPress: () => void }) {
+  const theme = useTheme();
+  return (
+    <MotionPressable
+      onPress={onPress}
+      style={{
+        alignSelf: "flex-start",
+        marginTop: 8,
+        paddingHorizontal: 13,
+        paddingVertical: 8,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.card,
+      }}
+    >
+      <Text style={{ color: theme.colors.text, fontFamily: "DMSans_700Bold", fontSize: 12 }}>
+        {label}
+      </Text>
+    </MotionPressable>
   );
 }

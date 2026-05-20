@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
+import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -12,6 +17,7 @@ from server_modules import mini_app_host_service, workspace_context
 MINI_APP_CONTRACT_VERSION = 1
 MAX_RETRIEVE_LIMIT = 200
 DEFAULT_RETRIEVE_LIMIT = 25
+UNLISTED_SHARE_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
 SUPPORTED_RETRIEVE_FILTERS = (
     "ids",
     "kind",
@@ -28,6 +34,26 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(token: str) -> bytes:
+    padding = "=" * ((4 - len(token) % 4) % 4)
+    return base64.urlsafe_b64decode((token + padding).encode("ascii"))
+
+
+def _share_token_secret() -> bytes:
+    secret = (
+        os.getenv("EMPYRALIS_MINI_APP_SHARE_SECRET")
+        or os.getenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET")
+        or os.getenv("ORION_JWT_SECRET")
+        or os.getenv("ORION_SECRET_KEY")
+        or "empyralis-mini-app-share-local-dev-secret"
+    )
+    return secret.encode("utf-8")
+
+
 def _mini_apps_state_path(workspace_id: str) -> Path:
     return workspace_context.workspace_scope_dir(workspace_id) / "mini_apps.json"
 
@@ -39,6 +65,57 @@ def _normalize_workspace_id(workspace_id: Any) -> str:
 def _normalize_app_id(app_id: Any) -> str:
     token = re.sub(r"[^a-z0-9_-]+", "_", str(app_id or "").strip().lower()).strip("_")
     return token
+
+
+def issue_unlisted_share_token(
+    *,
+    workspace_id: str,
+    app_id: str,
+    ttl_seconds: int = UNLISTED_SHARE_TOKEN_TTL_SECONDS,
+) -> Dict[str, Any]:
+    now = int(time.time())
+    payload = {
+        "workspace_id": _normalize_workspace_id(workspace_id),
+        "app_id": _normalize_app_id(app_id),
+        "iat": now,
+        "exp": now + max(60, int(ttl_seconds or UNLISTED_SHARE_TOKEN_TTL_SECONDS)),
+    }
+    payload_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    body = _b64url_encode(payload_bytes)
+    signature = hmac.new(_share_token_secret(), body.encode("ascii"), hashlib.sha256).digest()
+    return {
+        "token": f"{body}.{_b64url_encode(signature)}",
+        "expires_at": payload["exp"],
+    }
+
+
+def verify_unlisted_share_token(token: str, *, now: Optional[int] = None) -> Dict[str, Any]:
+    raw_token = str(token or "").strip()
+    if not raw_token or "." not in raw_token:
+        raise PermissionError("Mini app share token is required.")
+    body, signature = raw_token.split(".", 1)
+    expected = _b64url_encode(hmac.new(_share_token_secret(), body.encode("ascii"), hashlib.sha256).digest())
+    if not hmac.compare_digest(signature, expected):
+        raise PermissionError("Mini app share token signature is invalid.")
+    try:
+        payload = json.loads(_b64url_decode(body).decode("utf-8"))
+    except Exception as exc:
+        raise PermissionError("Mini app share token is malformed.") from exc
+    if not isinstance(payload, dict):
+        raise PermissionError("Mini app share token payload is malformed.")
+    expiry = int(payload.get("exp") or 0)
+    if expiry <= int(now if now is not None else time.time()):
+        raise PermissionError("Mini app share token has expired.")
+    workspace_id = _normalize_workspace_id(payload.get("workspace_id"))
+    app_id = _normalize_app_id(payload.get("app_id"))
+    if not workspace_id or not app_id:
+        raise PermissionError("Mini app share token is missing its target.")
+    return {
+        "workspace_id": workspace_id,
+        "app_id": app_id,
+        "exp": expiry,
+        "iat": int(payload.get("iat") or 0),
+    }
 
 
 def _default_state() -> Dict[str, Any]:
@@ -55,6 +132,8 @@ def _default_app_entry(app_id: str) -> Dict[str, Any]:
         "label": " ".join(part.capitalize() for part in app_id.replace("-", "_").split("_") if part) or app_id,
         "description": "",
         "delivery_mode": "structured",
+        "visibility": "workspace_private",
+        "install_status": "installed",
         "hosted_url": None,
         "embed_kind": "iframe",
         "allowed_origins": [],
@@ -101,6 +180,8 @@ def _safe_read_state(workspace_id: str) -> Dict[str, Any]:
             "label": str(entry.get("label") or base["label"]).strip() or base["label"],
             "description": str(entry.get("description") or "").strip(),
             "delivery_mode": str(entry.get("delivery_mode") or base["delivery_mode"]).strip().lower() or base["delivery_mode"],
+            "visibility": str(entry.get("visibility") or base["visibility"]).strip().lower() or base["visibility"],
+            "install_status": str(entry.get("install_status") or base["install_status"]).strip().lower() or base["install_status"],
             "hosted_url": str(entry.get("hosted_url") or "").strip() or None,
             "embed_kind": str(entry.get("embed_kind") or base["embed_kind"]).strip().lower() or base["embed_kind"],
             "allowed_origins": list(entry.get("allowed_origins") or []) if isinstance(entry.get("allowed_origins"), list) else [],
@@ -258,6 +339,8 @@ def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Di
         "label": str(entry.get("label") or app_id).strip() or app_id,
         "description": str(entry.get("description") or "").strip(),
         "delivery_mode": hosted_fields["delivery_mode"],
+        "visibility": str(entry.get("visibility") or "workspace_private").strip().lower() or "workspace_private",
+        "install_status": str(entry.get("install_status") or "installed").strip().lower() or "installed",
         "memory_scope": "none_by_default",
         "permissions": list(hosted_fields.get("permissions") or []),
         "bridge_contracts": dict(hosted_fields.get("bridge_contracts") or {}),
@@ -278,6 +361,12 @@ def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Di
             "default_limit": DEFAULT_RETRIEVE_LIMIT,
         },
     }
+    if contract_payload["visibility"] == "unlisted_link":
+        contract_payload["public_distribution"] = {
+            "mode": "unlisted_link",
+            "install_path": f"/apps/{app_id}/install",
+            "requires_permission_review": True,
+        }
     if hosted_fields.get("hosted_url"):
         contract_payload["hosted_url"] = hosted_fields["hosted_url"]
         manifest = mini_app_host_service.build_hosted_mini_app_manifest(
@@ -287,6 +376,23 @@ def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Di
         if manifest:
             contract_payload.update(manifest)
     return contract_payload
+
+
+def _safe_unlisted_preview(contract: Dict[str, Any], *, token_expires_at: Optional[int] = None) -> Dict[str, Any]:
+    hosted = contract.get("hosted_app") if isinstance(contract.get("hosted_app"), dict) else {}
+    return {
+        "app_id": contract.get("app_id"),
+        "label": contract.get("label"),
+        "description": contract.get("description"),
+        "delivery_mode": contract.get("delivery_mode"),
+        "visibility": contract.get("visibility"),
+        "memory_scope": contract.get("memory_scope") or "none_by_default",
+        "permissions": list(contract.get("permissions") or []),
+        "bridge_contracts": dict(contract.get("bridge_contracts") or {}),
+        "allowed_origins": list(contract.get("allowed_origins") or hosted.get("allowed_origins") or []),
+        "hosted_url": hosted.get("hosted_url") or contract.get("hosted_url"),
+        "expires_at": token_expires_at,
+    }
 
 
 def list_mini_app_contracts(workspace_id: str) -> Dict[str, Any]:
@@ -318,6 +424,66 @@ def get_mini_app_contract(workspace_id: str, app_id: str) -> Dict[str, Any]:
     return _normalized_contract_payload(normalized_workspace_id, entry)
 
 
+def generate_unlisted_share_link(workspace_id: str, app_id: str) -> Dict[str, Any]:
+    existing_contract = get_mini_app_contract(workspace_id, app_id)
+    contract = upsert_mini_app_contract(
+        workspace_id,
+        str(existing_contract.get("app_id") or app_id),
+        visibility="unlisted_link",
+        install_status="installed",
+    )
+    issued = issue_unlisted_share_token(
+        workspace_id=_normalize_workspace_id(workspace_id),
+        app_id=str(contract.get("app_id") or app_id),
+    )
+    return {
+        "workspace_id": _normalize_workspace_id(workspace_id),
+        "app_id": contract.get("app_id"),
+        "visibility": contract.get("visibility"),
+        "token": issued["token"],
+        "expires_at": issued["expires_at"],
+        "preview_path": f"/api/mini-apps/share/{issued['token']}",
+        "install_path": "/api/workspaces/{workspace_id}/mini-apps/install-shared",
+    }
+
+
+def preview_unlisted_shared_app(token: str) -> Dict[str, Any]:
+    target = verify_unlisted_share_token(token)
+    contract = get_mini_app_contract(target["workspace_id"], target["app_id"])
+    if contract.get("visibility") != "unlisted_link":
+        raise PermissionError("Mini app is not shared by unlisted link.")
+    return {
+        "source_workspace_id": target["workspace_id"],
+        "share": {
+            "mode": "unlisted_link",
+            "expires_at": target["exp"],
+        },
+        "app": _safe_unlisted_preview(contract, token_expires_at=target["exp"]),
+    }
+
+
+def install_unlisted_shared_app(target_workspace_id: str, token: str) -> Dict[str, Any]:
+    target = verify_unlisted_share_token(token)
+    source_contract = get_mini_app_contract(target["workspace_id"], target["app_id"])
+    if source_contract.get("visibility") != "unlisted_link":
+        raise PermissionError("Mini app is not shared by unlisted link.")
+    return upsert_mini_app_contract(
+        target_workspace_id,
+        str(source_contract.get("app_id") or target["app_id"]),
+        label=source_contract.get("label"),
+        description=source_contract.get("description"),
+        delivery_mode=source_contract.get("delivery_mode"),
+        hosted_url=source_contract.get("hosted_url") or (source_contract.get("hosted_app") or {}).get("hosted_url"),
+        embed_kind=source_contract.get("embed_kind"),
+        allowed_origins=source_contract.get("allowed_origins"),
+        bridge_contracts=source_contract.get("bridge_contracts"),
+        permissions=source_contract.get("permissions"),
+        context_envelope=source_contract.get("context_envelope"),
+        visibility="workspace_private",
+        install_status="installed",
+    )
+
+
 def upsert_mini_app_contract(
     workspace_id: str,
     app_id: str,
@@ -331,6 +497,8 @@ def upsert_mini_app_contract(
     bridge_contracts: Any = None,
     permissions: Any = None,
     context_envelope: Any = None,
+    visibility: Any = None,
+    install_status: Any = None,
     current_state: Any = None,
     recent_events: Any = None,
     daily_summary: Any = None,
@@ -349,6 +517,16 @@ def upsert_mini_app_contract(
         entry["label"] = str(label or "").strip() or entry["label"]
     if description is not None:
         entry["description"] = str(description or "").strip()
+    if visibility is not None:
+        normalized_visibility = str(visibility or "workspace_private").strip().lower() or "workspace_private"
+        if normalized_visibility not in {"workspace_private", "unlisted_link"}:
+            raise ValueError("visibility must be either 'workspace_private' or 'unlisted_link'.")
+        entry["visibility"] = normalized_visibility
+    if install_status is not None:
+        normalized_install_status = str(install_status or "installed").strip().lower() or "installed"
+        if normalized_install_status not in {"installed", "pending", "removed"}:
+            raise ValueError("install_status must be installed, pending, or removed.")
+        entry["install_status"] = normalized_install_status
     if any(
         value is not None
         for value in (
@@ -400,11 +578,13 @@ def upsert_mini_app_contract(
     return _normalized_contract_payload(normalized_workspace_id, entry)
 
 
-def get_hosted_mini_app_manifest(workspace_id: str, app_id: str) -> Dict[str, Any]:
+def get_hosted_mini_app_manifest(workspace_id: str, app_id: str, *, user_id: str = "") -> Dict[str, Any]:
     contract = get_mini_app_contract(workspace_id, app_id)
     manifest = mini_app_host_service.build_hosted_mini_app_manifest(
         workspace_id=_normalize_workspace_id(workspace_id),
         app_contract=contract,
+        launch_user_id=user_id,
+        install_id=str(contract.get("install_id") or contract.get("install_status") or "").strip(),
     )
     if not manifest:
         raise KeyError(f"Mini app '{_normalize_app_id(app_id)}' does not expose a hosted manifest.")

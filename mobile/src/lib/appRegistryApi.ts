@@ -13,6 +13,62 @@ type MiniAppInvokeRequest = {
   model?: string;
 };
 
+export type MiniAppContract = {
+  app_id: string;
+  label?: string | null;
+  description?: string | null;
+  delivery_mode?: "structured" | "hosted" | string;
+  visibility?: "workspace_private" | "unlisted_link" | string;
+  install_status?: "installed" | "pending" | "removed" | string;
+  memory_scope?: string | null;
+  permissions?: string[];
+  hosted_url?: string | null;
+  hosted_app?: {
+    hosted_url?: string | null;
+    allowed_origins?: string[];
+  } | null;
+  public_distribution?: {
+    mode?: string;
+    install_path?: string;
+    preview_path?: string;
+    requires_permission_review?: boolean;
+  } | null;
+  updated_at?: string | null;
+};
+
+export type MiniAppShareLink = {
+  workspace_id: string;
+  app_id: string;
+  visibility: "unlisted_link" | string;
+  token: string;
+  expires_at: number;
+  preview_path: string;
+  install_path: string;
+};
+
+export type MiniAppSharePreview = {
+  source_workspace_id: string;
+  share: {
+    mode: "unlisted_link" | string;
+    expires_at: number;
+  };
+  app: MiniAppContract & {
+    allowed_origins?: string[];
+    hosted_url?: string | null;
+    expires_at?: number | null;
+  };
+};
+
+type RegisterMiniAppRequest = {
+  label: string;
+  description?: string;
+  hosted_url: string;
+  allowed_origins?: string[];
+  permissions?: string[];
+  bridge_contracts?: Record<string, string[]>;
+  visibility?: "workspace_private" | "unlisted_link";
+};
+
 type CalorieEventRequest = {
   meal_label?: string;
   calories?: number;
@@ -181,6 +237,85 @@ export const appRegistryApi = {
   },
   getAppManifest(session: MobileSession, appId: string) {
     return requestRuntime<{ item?: any }>(session, `/apps/manifest/${encodeURIComponent(appId)}`);
+  },
+  listMiniApps(session: MobileSession) {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Mini apps are not ready for this session yet.");
+    }
+    return requestRuntime<{ items?: MiniAppContract[] }>(
+      session,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps`,
+    );
+  },
+  getMiniAppContract(session: MobileSession, appId: string) {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Mini apps are not ready for this session yet.");
+    }
+    return requestRuntime<MiniAppContract>(
+      session,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps/${encodeURIComponent(appId)}`,
+    );
+  },
+  registerMiniAppContract(session: MobileSession, appId: string, body: RegisterMiniAppRequest) {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Mini apps are not ready for this session yet.");
+    }
+    return requestRuntime<MiniAppContract>(
+      session,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps/${encodeURIComponent(appId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          label: body.label,
+          description: body.description,
+          delivery_mode: "hosted",
+          hosted_url: body.hosted_url,
+          embed_kind: "webview",
+          allowed_origins: body.allowed_origins,
+          permissions: body.permissions || [],
+          bridge_contracts: body.bridge_contracts || {},
+          visibility: body.visibility || "workspace_private",
+          install_status: "installed",
+        }),
+      },
+    );
+  },
+  generateMiniAppShareLink(session: MobileSession, appId: string) {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Mini apps are not ready for this session yet.");
+    }
+    return requestRuntime<MiniAppShareLink>(
+      session,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps/${encodeURIComponent(appId)}/share-link`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+    );
+  },
+  previewSharedMiniApp(session: MobileSession, token: string) {
+    return requestRuntime<MiniAppSharePreview>(
+      session,
+      `/api/mini-apps/share/${encodeURIComponent(token)}`,
+    );
+  },
+  installSharedMiniApp(session: MobileSession, token: string) {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Mini apps are not ready for this session yet.");
+    }
+    return requestRuntime<MiniAppContract>(
+      session,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps/install-shared`,
+      {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      },
+    );
   },
   installApp(session: MobileSession, appId: string, metadata?: AppInstallMetadata) {
     return requestRuntime<any>(session, "/apps/install", {

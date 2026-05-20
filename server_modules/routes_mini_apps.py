@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from server_modules import auth as auth_module
 from server_modules import mini_app_host_service
+from server_modules import activity_ledger_service
 from server_modules import calorie_tracking_service
 from server_modules import flashcards_tracking_service
 from server_modules import mini_app_invoke_service
@@ -82,6 +83,8 @@ class MiniAppContractUpsertRequest(BaseModel):
     bridge_contracts: Optional[Dict[str, List[str]]] = None
     permissions: Optional[List[str]] = None
     context_envelope: Optional[Dict[str, List[str]]] = None
+    visibility: Optional[str] = None
+    install_status: Optional[str] = None
     current_state: Optional[Dict[str, Any]] = None
     recent_events: Optional[List[Dict[str, Any]]] = None
     daily_summary: Optional[Dict[str, Any]] = None
@@ -193,6 +196,63 @@ class HostedMiniAppBridgeRequest(BaseModel):
     target: Optional[Dict[str, Any]] = None
     context_envelope: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
+    launch_token: Optional[str] = None
+
+
+class MiniAppInstallSharedRequest(BaseModel):
+    token: str = Field(min_length=1)
+
+
+def _current_user_id(current_user: Dict[str, Any]) -> str:
+    return str((current_user or {}).get("user_id") or "").strip()
+
+
+def _workspace_tenant_id(current_user: Dict[str, Any], workspace_id: str) -> str:
+    try:
+        return auth_module.workspace_tenant_id(current_user, workspace_id)
+    except Exception:
+        return str((current_user or {}).get("tenant_id") or "default").strip() or "default"
+
+
+def _requires_launch_token(contract: Dict[str, Any]) -> bool:
+    return (
+        str(contract.get("delivery_mode") or "").strip().lower() == "hosted"
+        and bool(str(contract.get("hosted_url") or "").strip())
+    )
+
+
+def _assert_hosted_launch_allowed(
+    *,
+    contract: Dict[str, Any],
+    workspace_id: str,
+    app_id: str,
+    current_user: Dict[str, Any],
+    origin: str,
+    launch_token: Optional[str],
+) -> None:
+    if not _requires_launch_token(contract):
+        return
+    mini_app_host_service.verify_hosted_launch_token(
+        str(launch_token or ""),
+        workspace_id=workspace_id,
+        app_id=str(contract.get("app_id") or app_id),
+        user_id=_current_user_id(current_user),
+        origin=origin,
+    )
+
+
+def _assert_mini_app_ai_invoke_allowed(workspace_id: str, app_id: str) -> None:
+    try:
+        contract = mini_apps_service.get_mini_app_contract(workspace_id, app_id)
+    except KeyError:
+        return
+    permissions = {
+        str(item or "").strip().lower()
+        for item in list(contract.get("permissions") or [])
+        if str(item or "").strip()
+    }
+    if mini_app_host_service.APP_PERMISSION_AI_INVOKE not in permissions:
+        raise PermissionError("Mini app AI invoke requires explicit permission 'app.ai.invoke'.")
 
 
 def _write_authorization(current_user: Dict[str, Any], *, explicit_user_intent: bool) -> Dict[str, Any]:
@@ -201,6 +261,20 @@ def _write_authorization(current_user: Dict[str, Any], *, explicit_user_intent: 
         "actor_user_id": str((current_user or {}).get("user_id") or "").strip() or None,
         "approval_source": "mini_app_route",
     }
+
+
+@router.get("/mini-apps/share/{share_token}")
+async def preview_shared_mini_app(
+    share_token: str,
+):
+    try:
+        return mini_apps_service.preview_unlisted_shared_app(share_token)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/workspaces/{workspace_id}/mini-apps")
@@ -246,6 +320,8 @@ async def upsert_mini_app_contract(
             bridge_contracts=body.bridge_contracts,
             permissions=body.permissions,
             context_envelope=body.context_envelope,
+            visibility=body.visibility,
+            install_status=body.install_status,
             current_state=body.current_state,
             recent_events=body.recent_events,
             daily_summary=body.daily_summary,
@@ -253,6 +329,40 @@ async def upsert_mini_app_contract(
             long_term_facts=body.long_term_facts,
             records=body.records,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workspaces/{workspace_id}/mini-apps/{app_id}/share-link")
+async def generate_mini_app_share_link(
+    workspace_id: str,
+    app_id: str,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
+    try:
+        return mini_apps_service.generate_unlisted_share_link(resolved_workspace_id, app_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workspaces/{workspace_id}/mini-apps/install-shared")
+async def install_shared_mini_app(
+    workspace_id: str,
+    body: MiniAppInstallSharedRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
+    try:
+        return mini_apps_service.install_unlisted_shared_app(resolved_workspace_id, body.token)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -285,7 +395,11 @@ async def get_hosted_mini_app_manifest(
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
     try:
-        return mini_apps_service.get_hosted_mini_app_manifest(resolved_workspace_id, app_id)
+        return mini_apps_service.get_hosted_mini_app_manifest(
+            resolved_workspace_id,
+            app_id,
+            user_id=_current_user_id(current_user),
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -309,9 +423,17 @@ async def bridge_hosted_mini_app_message(
         limit=ORION_MINI_APP_BRIDGE_RATE_LIMIT_PER_MINUTE,
     )
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
-    tenant_id = auth_module.workspace_tenant_id(current_user, resolved_workspace_id)
+    tenant_id = _workspace_tenant_id(current_user, resolved_workspace_id)
     try:
         contract = mini_apps_service.get_mini_app_contract(resolved_workspace_id, app_id)
+        _assert_hosted_launch_allowed(
+            contract=contract,
+            workspace_id=resolved_workspace_id,
+            app_id=app_id,
+            current_user=current_user,
+            origin=body.origin,
+            launch_token=body.launch_token,
+        )
         return await mini_app_host_service.process_hosted_bridge_request(
             workspace_id=resolved_workspace_id,
             tenant_id=tenant_id,
@@ -352,15 +474,44 @@ async def invoke_mini_app(
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
     body_input = str(body.input or body.prompt or "").strip()
     try:
-        return mini_app_invoke_service.invoke_mini_app(
+        _assert_mini_app_ai_invoke_allowed(resolved_workspace_id, app_id)
+        result = mini_app_invoke_service.invoke_mini_app(
             resolved_workspace_id,
             app_id,
             body_input,
             requested_provider=str(body.provider or "").strip(),
             requested_model=str(body.model or "").strip(),
         )
+        tenant_id = _workspace_tenant_id(current_user, resolved_workspace_id)
+        activity_event = await activity_ledger_service.append_activity_event(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            actor_type="mini_app",
+            actor_id=str(result.get("app_id") or app_id),
+            event_class="mini_app",
+            detail_level="feed_summary",
+            app_id=str(result.get("app_id") or app_id),
+            channel="mini_app",
+            direction="outbound",
+            action="ai_invoke",
+            title=f"{str(result.get('app_id') or app_id)} used AI",
+            summary=str(result.get("provider") or "configured provider"),
+            status="complete",
+            metadata={
+                "provider": result.get("provider"),
+                "model": result.get("model"),
+                "usage_accounting": result.get("usage"),
+                "attempted_providers": result.get("attempted_providers"),
+            },
+        )
+        return {
+            **result,
+            "activity_event_id": str((activity_event or {}).get("id") or "").strip() or None,
+        }
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

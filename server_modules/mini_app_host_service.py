@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import ipaddress
 import importlib
+import json
+import os
+import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -45,10 +51,98 @@ _DEFAULT_IFRAME_SANDBOX = [
     "allow-scripts",
 ]
 _DEFAULT_IFRAME_ALLOW: List[str] = []
+_LAUNCH_TOKEN_TTL_SECONDS = 15 * 60
 
 
 def _normalized_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(token: str) -> bytes:
+    padding = "=" * ((4 - len(token) % 4) % 4)
+    return base64.urlsafe_b64decode((token + padding).encode("ascii"))
+
+
+def _launch_token_secret() -> bytes:
+    secret = (
+        os.getenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET")
+        or os.getenv("ORION_JWT_SECRET")
+        or os.getenv("ORION_SECRET_KEY")
+        or "empyralis-mini-app-local-dev-secret"
+    )
+    return secret.encode("utf-8")
+
+
+def issue_hosted_launch_token(
+    *,
+    workspace_id: str,
+    app_id: str,
+    user_id: str,
+    origin: str,
+    install_id: str = "",
+    ttl_seconds: int = _LAUNCH_TOKEN_TTL_SECONDS,
+) -> Dict[str, Any]:
+    normalized_origin = _normalize_origin(origin)
+    now = int(time.time())
+    payload = {
+        "workspace_id": _normalized_text(workspace_id) or "default",
+        "app_id": _normalized_text(app_id),
+        "user_id": _normalized_text(user_id),
+        "install_id": _normalized_text(install_id),
+        "origin": normalized_origin,
+        "iat": now,
+        "exp": now + max(30, int(ttl_seconds or _LAUNCH_TOKEN_TTL_SECONDS)),
+    }
+    payload_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    body = _b64url_encode(payload_bytes)
+    signature = hmac.new(_launch_token_secret(), body.encode("ascii"), hashlib.sha256).digest()
+    return {
+        "token": f"{body}.{_b64url_encode(signature)}",
+        "expires_at": payload["exp"],
+        "bound_origin": normalized_origin,
+    }
+
+
+def verify_hosted_launch_token(
+    token: str,
+    *,
+    workspace_id: str,
+    app_id: str,
+    user_id: str,
+    origin: str,
+    now: Optional[int] = None,
+) -> Dict[str, Any]:
+    raw_token = _normalized_text(token)
+    if not raw_token or "." not in raw_token:
+        raise PermissionError("Hosted mini app launch token is required.")
+    body, signature = raw_token.split(".", 1)
+    expected = _b64url_encode(hmac.new(_launch_token_secret(), body.encode("ascii"), hashlib.sha256).digest())
+    if not hmac.compare_digest(signature, expected):
+        raise PermissionError("Hosted mini app launch token signature is invalid.")
+    try:
+        payload = json.loads(_b64url_decode(body).decode("utf-8"))
+    except Exception as exc:
+        raise PermissionError("Hosted mini app launch token is malformed.") from exc
+    if not isinstance(payload, dict):
+        raise PermissionError("Hosted mini app launch token payload is malformed.")
+    normalized_origin = _normalize_origin(origin)
+    expected_fields = {
+        "workspace_id": _normalized_text(workspace_id) or "default",
+        "app_id": _normalized_text(app_id),
+        "user_id": _normalized_text(user_id),
+        "origin": normalized_origin,
+    }
+    for key, expected_value in expected_fields.items():
+        if _normalized_text(payload.get(key)) != expected_value:
+            raise PermissionError(f"Hosted mini app launch token is not valid for this {key}.")
+    expiry = int(payload.get("exp") or 0)
+    if expiry <= int(now if now is not None else time.time()):
+        raise PermissionError("Hosted mini app launch token has expired.")
+    return payload
 
 
 def _is_local_dev_host(hostname: str) -> bool:
@@ -278,6 +372,8 @@ def build_hosted_mini_app_manifest(
     *,
     workspace_id: str,
     app_contract: Dict[str, Any],
+    launch_user_id: str = "",
+    install_id: str = "",
 ) -> Optional[Dict[str, Any]]:
     if str(app_contract.get("delivery_mode") or "").strip().lower() != "hosted":
         return None
@@ -292,7 +388,18 @@ def build_hosted_mini_app_manifest(
     iframe_sandbox = list(_DEFAULT_IFRAME_SANDBOX)
     if _should_allow_same_origin_in_iframe(app_contract=app_contract, hosted_url=hosted_url):
         iframe_sandbox.append("allow-same-origin")
-    return {
+    launch_token = (
+        issue_hosted_launch_token(
+            workspace_id=_normalized_text(workspace_id) or "default",
+            app_id=app_id,
+            user_id=launch_user_id,
+            origin=allowed_origins[0],
+            install_id=install_id,
+        )
+        if _normalized_text(launch_user_id) and allowed_origins
+        else None
+    )
+    manifest = {
         "app_id": app_id,
         "workspace_id": _normalized_text(workspace_id) or "default",
         "delivery_mode": "hosted",
@@ -316,9 +423,13 @@ def build_hosted_mini_app_manifest(
                 "permissions": permissions,
                 "context_envelope": context_envelope,
                 "denied_by_default": list(app_bridge_service._app_denials()),
+                "launch_token_required": True,
             },
         },
     }
+    if launch_token:
+        manifest["hosted_app"]["launch"] = launch_token
+    return manifest
 
 
 def _allowed_bridge_tokens(manifest: Dict[str, Any]) -> Dict[str, List[str]]:

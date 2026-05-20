@@ -47,6 +47,70 @@ def test_hosted_manifest_defaults_to_isolated_iframe_policy():
     assert "allow-same-origin" not in embed["sandbox"]
 
 
+def test_hosted_manifest_can_issue_signed_launch_token(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET", "test-secret")
+    manifest = mini_app_host_service.build_hosted_mini_app_manifest(
+        workspace_id="ws-1",
+        app_contract={
+            "app_id": "travel_partner",
+            "delivery_mode": "hosted",
+            "hosted_url": "https://miniapps.example.com/travel",
+            "allowed_origins": ["https://miniapps.example.com"],
+            "bridge_contracts": {"app_to_sage": ["summary_request"]},
+            "permissions": ["app.bridge.sage.request"],
+        },
+        launch_user_id="user-1",
+    )
+
+    launch = manifest["hosted_app"]["launch"]
+    payload = mini_app_host_service.verify_hosted_launch_token(
+        launch["token"],
+        workspace_id="ws-1",
+        app_id="travel_partner",
+        user_id="user-1",
+        origin="https://miniapps.example.com",
+    )
+    assert payload["workspace_id"] == "ws-1"
+    assert payload["app_id"] == "travel_partner"
+
+
+def test_hosted_launch_token_rejects_wrong_origin_and_expiry(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET", "test-secret")
+    issued = mini_app_host_service.issue_hosted_launch_token(
+        workspace_id="ws-1",
+        app_id="travel_partner",
+        user_id="user-1",
+        origin="https://miniapps.example.com",
+        ttl_seconds=30,
+    )
+
+    with pytest.raises(PermissionError):
+        mini_app_host_service.verify_hosted_launch_token(
+            issued["token"],
+            workspace_id="ws-1",
+            app_id="other_app",
+            user_id="user-1",
+            origin="https://miniapps.example.com",
+        )
+    with pytest.raises(PermissionError):
+        mini_app_host_service.verify_hosted_launch_token(
+            issued["token"],
+            workspace_id="ws-1",
+            app_id="travel_partner",
+            user_id="user-1",
+            origin="https://evil.example.com",
+        )
+    with pytest.raises(PermissionError):
+        mini_app_host_service.verify_hosted_launch_token(
+            issued["token"],
+            workspace_id="ws-1",
+            app_id="travel_partner",
+            user_id="user-1",
+            origin="https://miniapps.example.com",
+            now=issued["expires_at"] + 1,
+        )
+
+
 def test_hosted_manifest_allows_same_origin_for_verified_trusted_apps():
     manifest = mini_app_host_service.build_hosted_mini_app_manifest(
         workspace_id="ws-1",

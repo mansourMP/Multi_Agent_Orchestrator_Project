@@ -1,8 +1,12 @@
 import React from "react";
 import {
   Animated,
+  Linking,
+  Modal,
   PanResponder,
+  Pressable,
   ScrollView,
+  Share,
   Text,
   TextInput,
   TouchableOpacity,
@@ -15,7 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { BrandedAppIcon } from "@/src/components/apps/BrandedAppIcon";
 import { getCatalogApp } from "@/src/lib/appCatalog";
-import { appRegistryApi } from "@/src/lib/appRegistryApi";
+import { appRegistryApi, type MiniAppContract } from "@/src/lib/appRegistryApi";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
@@ -36,6 +40,12 @@ type FlashcardsOverview = {
 
 type CalorieTab = "main" | "track";
 type FlashcardsTab = "create" | "cards";
+type AppMenuDetails = {
+  historyItems?: string[];
+  historyEmpty?: string;
+  modelSummary?: string;
+  creditSummary?: string;
+};
 
 export default function AppHomeScreen() {
   const router = useRouter();
@@ -44,7 +54,7 @@ export default function AppHomeScreen() {
   const app = getCatalogApp(appId);
 
   if (!app) {
-    return <MissingAppScreen onBack={() => router.back()} />;
+    return <HostedRegisteredAppScreen appId={appId} onBack={() => router.back()} />;
   }
 
   if (app.id === "calorie_tracking") {
@@ -118,6 +128,12 @@ function CaloriesAppScreen({ onBack }: { onBack: () => void }) {
           onChange={(next) => setTab(next as CalorieTab)}
         />
       }
+      menuDetails={{
+        historyItems: records.slice(0, 3).map((record) => String(record.meal_label || record.summary || "Meal tracked")),
+        historyEmpty: "Tracked meals will appear after this app runs.",
+        modelSummary: "No model used yet.",
+        creditSummary: "Usage will appear after this app runs.",
+      }}
     >
       {tab === "main" ? (
         <View style={{ flex: 1, justifyContent: "center", paddingVertical: 24 }}>
@@ -177,6 +193,7 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
   const [working, setWorking] = React.useState(false);
   const [setName, setSetName] = React.useState("");
   const [sourceText, setSourceText] = React.useState("");
+  const [lastRun, setLastRun] = React.useState<Record<string, any> | null>(null);
 
   const refresh = React.useCallback(async () => {
     if (!session) {
@@ -245,6 +262,15 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
           onChange={(next) => setTab(next as FlashcardsTab)}
         />
       }
+      menuDetails={{
+        historyItems: decks.slice(0, 3).map((deck) => `${deck} deck`),
+        historyEmpty: "Generated or reviewed cards will appear after this app runs.",
+        modelSummary:
+          lastRun?.provider || lastRun?.model
+            ? [lastRun.provider, lastRun.model].filter(Boolean).join(" · ")
+            : "No model used yet.",
+        creditSummary: summarizeUsage(lastRun?.usage),
+      }}
     >
       {tab === "create" ? (
         <View style={{ gap: 14, paddingTop: 8 }}>
@@ -266,11 +292,12 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
               }
               try {
                 setWorking(true);
-                await appRegistryApi.generateFlashcards(session, {
+                const payload = await appRegistryApi.generateFlashcards(session, {
                   deck: setName.trim(),
                   source_text: sourceText.trim(),
                   count: 8,
                 });
+                setLastRun(payload);
                 setSourceText("");
                 await refresh();
                 setSelectedDeck(setName.trim());
@@ -319,6 +346,110 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
+function HostedRegisteredAppScreen({ appId, onBack }: { appId: string; onBack: () => void }) {
+  const insets = useSafeAreaInsets();
+  const { session } = useSessionState();
+  const theme = useTheme();
+  const [contract, setContract] = React.useState<MiniAppContract | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let active = true;
+    async function loadContract() {
+      if (!session || !appId) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const payload = await appRegistryApi.getMiniAppContract(session, appId);
+        if (active) {
+          setContract(payload);
+        }
+      } catch {
+        if (active) {
+          setContract(null);
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+    void loadContract();
+    return () => {
+      active = false;
+    };
+  }, [appId, session]);
+
+  if (!contract && !loading) {
+    return <MissingAppScreen onBack={onBack} />;
+  }
+
+  const title = String(contract?.label || appId);
+  const hostedUrl = String(contract?.hosted_app?.hosted_url || contract?.hosted_url || "");
+
+  return (
+    <AppFrame
+      appId={appId}
+      title={title}
+      onBack={onBack}
+      bottomInset={insets.bottom}
+      menuDetails={{
+        historyEmpty: "History will appear after this app runs.",
+        modelSummary: "No model used yet.",
+        creditSummary: "Usage will appear after this app runs.",
+      }}
+    >
+      <View style={{ gap: 16, paddingTop: 12 }}>
+        <View
+          style={{
+            padding: 18,
+            borderRadius: 24,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            gap: 10,
+          }}
+        >
+          <Text style={{ fontSize: 20, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+            {loading ? "Loading app..." : title}
+          </Text>
+          <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
+            {contract?.description || "This hosted mini app is registered to your workspace."}
+          </Text>
+          <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
+            Memory is denied by default. Bridge, provider, and connector access stay explicit.
+          </Text>
+          {hostedUrl ? (
+            <PrimaryButton
+              label="Open hosted app"
+              onPress={() => {
+                void Linking.openURL(hostedUrl);
+              }}
+            />
+          ) : null}
+        </View>
+      </View>
+    </AppFrame>
+  );
+}
+
+function summarizeUsage(usage: unknown): string {
+  if (!usage || typeof usage !== "object") {
+    return "Usage will appear after this app runs.";
+  }
+  const payload = usage as Record<string, any>;
+  const credits = payload.credits ?? payload.credit_cost ?? payload.cost_credits;
+  if (credits !== undefined && credits !== null) {
+    return `${String(credits)} credits`;
+  }
+  const tokens = payload.total_tokens ?? payload.tokens;
+  if (tokens !== undefined && tokens !== null) {
+    return `${String(tokens)} tokens`;
+  }
+  return "Usage recorded for this run.";
+}
+
 function AppFrame({
   appId,
   title,
@@ -326,16 +457,98 @@ function AppFrame({
   children,
   tabs,
   bottomInset,
+  menuDetails,
 }: {
   appId: string;
   title: string;
   onBack: () => void;
   children: React.ReactNode;
-  tabs: React.ReactNode;
+  tabs?: React.ReactNode;
   bottomInset: number;
+  menuDetails?: AppMenuDetails;
 }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const { session } = useSessionState();
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const [contract, setContract] = React.useState<MiniAppContract | null>(null);
+  const [installed, setInstalled] = React.useState(false);
+
+  React.useEffect(() => {
+    let active = true;
+    async function loadMenuContext() {
+      if (!session) {
+        return;
+      }
+      try {
+        const [contractResult, installedResult] = await Promise.allSettled([
+          appRegistryApi.getMiniAppContract(session, appId),
+          appRegistryApi.getInstalledApps(session),
+        ]);
+        if (!active) {
+          return;
+        }
+        if (contractResult.status === "fulfilled") {
+          setContract(contractResult.value);
+        }
+        if (installedResult.status === "fulfilled") {
+          setInstalled(
+            (installedResult.value.items || []).some((item: any) => String(item?.id || item?.app_id || "") === appId),
+          );
+        }
+      } catch {
+        if (active) {
+          setContract(null);
+        }
+      }
+    }
+    void loadMenuContext();
+    return () => {
+      active = false;
+    };
+  }, [appId, session]);
+
+  const shareApp = React.useCallback(async () => {
+    let sharePath = `empyralis://apps/${appId}/home`;
+    if (session && contract?.app_id) {
+      try {
+        const shareLink = await appRegistryApi.generateMiniAppShareLink(session, appId);
+        sharePath = `empyralis://apps/shared/${encodeURIComponent(shareLink.token)}`;
+        setContract({
+          ...contract,
+          visibility: shareLink.visibility,
+          public_distribution: {
+            mode: "unlisted_link",
+            install_path: shareLink.install_path,
+            preview_path: shareLink.preview_path,
+            requires_permission_review: true,
+          },
+        });
+      } catch (error) {
+        console.warn("Mini app share link failed", error);
+      }
+    }
+    try {
+      await Share.share({
+        message: `${title}\nOpen in Empyralis: ${sharePath}`,
+      });
+    } catch (error) {
+      console.warn("Mini app share failed", error);
+    }
+  }, [appId, contract, session, title]);
+
+  const removeApp = React.useCallback(async () => {
+    if (!session || !installed) {
+      return;
+    }
+    try {
+      await appRegistryApi.uninstallApp(session, appId);
+      setInstalled(false);
+      onBack();
+    } catch (error) {
+      console.warn("Mini app removal failed", error);
+    }
+  }, [appId, installed, onBack, session]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -352,6 +565,24 @@ function AppFrame({
         <BackButton onPress={onBack} />
         <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={40} />
         <Text style={{ flex: 1, fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
+        <TouchableOpacity
+          activeOpacity={0.86}
+          onPress={() => setMenuOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Open app menu"
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name="ellipsis-horizontal" size={20} color={theme.colors.text} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -363,17 +594,145 @@ function AppFrame({
         {children}
       </ScrollView>
 
-      <View
+      {tabs ? (
+        <View
+          style={{
+            borderTopWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.background,
+            paddingHorizontal: 16,
+            paddingTop: 10,
+            paddingBottom: Math.max(bottomInset, 10) + 8,
+          }}
+        >
+          {tabs}
+        </View>
+      ) : null}
+      <MiniAppMenuModal
+        appId={appId}
+        title={title}
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        contract={contract}
+        details={menuDetails}
+        installed={installed}
+        onShare={shareApp}
+        onRemove={installed ? removeApp : undefined}
+      />
+    </View>
+  );
+}
+
+function MiniAppMenuModal({
+  appId,
+  title,
+  visible,
+  onClose,
+  contract,
+  details,
+  installed,
+  onShare,
+  onRemove,
+}: {
+  appId: string;
+  title: string;
+  visible: boolean;
+  onClose: () => void;
+  contract: MiniAppContract | null;
+  details?: AppMenuDetails;
+  installed: boolean;
+  onShare: () => void;
+  onRemove?: () => void;
+}) {
+  const theme = useTheme();
+  const permissions = Array.isArray(contract?.permissions) ? contract.permissions : [];
+  const memoryLabel =
+    contract?.memory_scope === "none_by_default" || !contract?.memory_scope
+      ? "No Sage memory by default."
+      : String(contract.memory_scope);
+  const providerLabel = details?.modelSummary || "No model used yet.";
+  const creditLabel = details?.creditSummary || "Usage will appear after this app runs.";
+  const historyItems = details?.historyItems || [];
+  return (
+    <Modal animationType="fade" visible={visible} transparent onRequestClose={onClose}>
+      <Pressable
+        onPress={onClose}
         style={{
-          borderTopWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: theme.colors.background,
-          paddingHorizontal: 16,
-          paddingTop: 10,
-          paddingBottom: Math.max(bottomInset, 10) + 8,
+          flex: 1,
+          backgroundColor: "rgba(0,0,0,0.28)",
+          justifyContent: "flex-end",
         }}
       >
-        {tabs}
+        <Pressable
+          onPress={(event) => event.stopPropagation()}
+          style={{
+            margin: 14,
+            padding: 18,
+            borderRadius: 26,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.card,
+            gap: 16,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={42} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
+              <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
+                {contract?.delivery_mode === "hosted" ? "Hosted mini app" : "Mini app"}
+                {installed ? " · Installed" : ""}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={onClose} accessibilityRole="button" accessibilityLabel="Close app menu">
+              <Ionicons name="close" size={22} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <MenuSection
+            icon="time-outline"
+            title="History"
+            rows={historyItems.length ? historyItems : [details?.historyEmpty || "History will appear after this app runs."]}
+          />
+          <MenuSection icon="sparkles-outline" title="Memory" rows={[memoryLabel]} />
+          <MenuSection icon="hardware-chip-outline" title="Model/provider" rows={[providerLabel]} />
+          <MenuSection icon="wallet-outline" title="Credits" rows={[creditLabel]} />
+          <MenuSection
+            icon="shield-checkmark-outline"
+            title="Permissions"
+            rows={permissions.length ? permissions : ["No additional app permissions granted."]}
+          />
+
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <SecondaryButton label="Share" onPress={onShare} />
+            {onRemove ? <SecondaryButton label="Remove" onPress={onRemove} /> : null}
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function MenuSection({
+  icon,
+  title,
+  rows,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  rows: string[];
+}) {
+  const theme = useTheme();
+  return (
+    <View style={{ flexDirection: "row", gap: 12 }}>
+      <Ionicons name={icon} size={20} color={theme.colors.textSecondary} />
+      <View style={{ flex: 1, gap: 4 }}>
+        <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
+        {rows.map((row, index) => (
+          <Text key={`${title}-${index}`} style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
+            {row}
+          </Text>
+        ))}
       </View>
     </View>
   );

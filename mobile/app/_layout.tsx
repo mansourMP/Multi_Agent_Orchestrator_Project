@@ -159,6 +159,14 @@ export default function RootLayout() {
                     options={MOBILE_STACK_MOTION_PRESETS.sheet}
                   />
                   <Stack.Screen
+                    name="apps/register"
+                    options={MOBILE_STACK_MOTION_PRESETS.sheet}
+                  />
+                  <Stack.Screen
+                    name="apps/shared/[token]"
+                    options={MOBILE_STACK_MOTION_PRESETS.sheet}
+                  />
+                  <Stack.Screen
                     name="apps/[id]/home"
                     options={MOBILE_STACK_MOTION_PRESETS.sheet}
                   />

@@ -42,6 +42,12 @@ type HostedMiniAppManifest = {
         inherits_specialist_memory_by_default?: boolean;
       } | null;
       denied_by_default?: string[];
+      launch_token_required?: boolean;
+    } | null;
+    launch?: {
+      token?: string | null;
+      expires_at?: number | null;
+      bound_origin?: string | null;
     } | null;
   } | null;
 };
@@ -262,6 +268,7 @@ export function HostedMiniAppSurface({
         target: payload.target,
         context_envelope: payload.contextEnvelope,
         metadata: payload.metadata,
+        launch_token: manifest.hosted_app?.launch?.token,
       })
         .then((responsePayload) => {
           const audit =
@@ -335,6 +342,8 @@ export function HostedMiniAppSurface({
           optionalClasses: optionalEnvelopeClasses,
         },
         memoryScope: manifest?.memory_scope || 'none_by_default',
+        launchToken: manifest?.hosted_app?.launch?.token,
+        launchTokenExpiresAt: manifest?.hosted_app?.launch?.expires_at,
       },
       targetOrigin,
     );

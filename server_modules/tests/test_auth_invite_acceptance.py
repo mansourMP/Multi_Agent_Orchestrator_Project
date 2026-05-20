@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from server_modules import auth
 
@@ -28,8 +28,8 @@ def test_accept_workspace_invites_for_user_creates_memberships_and_marks_accepta
 
     with (
         patch.object(auth, "_control_plane_call", side_effect=[invites, {"id": "invite-1"}, {"id": "invite-2"}]),
-        patch.object(auth.control_plane_repository, "list_pending_workspace_invites_for_email"),
-        patch.object(auth.control_plane_repository, "accept_workspace_invite"),
+        patch.object(auth.control_plane_repository, "list_pending_workspace_invites_for_email", new=Mock(return_value=None)),
+        patch.object(auth.control_plane_repository, "accept_workspace_invite", new=Mock(return_value=None)),
         patch.object(
             auth,
             "upsert_workspace_membership",
@@ -56,6 +56,7 @@ def test_login_user_accepts_pending_workspace_invites_before_resolving_access() 
 
     with (
         patch.object(auth, "_find_user_by_email", return_value=user),
+        patch.object(auth.control_plane_repository, "get_local_auth_identity_by_email", new=Mock(return_value=None)),
         patch.object(auth, "_control_plane_call", return_value=None),
         patch.object(auth, "_verify_password", return_value=True),
         patch.object(auth, "accept_workspace_invites_for_user") as accept_mock,
@@ -80,7 +81,8 @@ def test_register_user_accepts_pending_workspace_invites_before_resolving_access
     with (
         patch.object(auth, "_find_user_by_email", return_value=None),
         patch.object(auth, "_hash_password", return_value="hash"),
-        patch.object(auth.control_plane_repository, "create_local_password_account", return_value=None),
+        patch.object(auth.control_plane_repository, "create_local_password_account", new=Mock(return_value=None)),
+        patch.object(auth.control_plane_repository, "get_local_auth_identity_by_email", new=Mock(return_value=None)),
         patch.object(
             auth,
             "_control_plane_call",

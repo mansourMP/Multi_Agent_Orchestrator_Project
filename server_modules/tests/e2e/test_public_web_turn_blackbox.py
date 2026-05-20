@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
+pytestmark = pytest.mark.blackbox_db
+
 
 def test_public_web_turn_blackbox(blackbox_runtime) -> None:
     owner = blackbox_runtime.register_owner(email_prefix="web-turn")

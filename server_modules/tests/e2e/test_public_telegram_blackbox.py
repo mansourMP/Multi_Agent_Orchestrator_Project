@@ -3,6 +3,10 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Tuple
 
+import pytest
+
+pytestmark = pytest.mark.blackbox_db
+
 
 def _wait_for_conversation_item(
     blackbox_runtime,

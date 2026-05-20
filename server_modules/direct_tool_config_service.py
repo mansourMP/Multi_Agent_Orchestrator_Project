@@ -76,10 +76,9 @@ def approved_action_to_tool_call(
 
 def run_async_tool_call(coro: Any) -> Any:
     try:
+        asyncio.get_running_loop()
+    except RuntimeError:
         return asyncio.run(coro)
-    except RuntimeError as exc:
-        if "asyncio.run() cannot be called from a running event loop" not in str(exc):
-            raise
 
     import threading
 

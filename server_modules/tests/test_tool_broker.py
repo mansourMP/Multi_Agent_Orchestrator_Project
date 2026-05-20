@@ -53,6 +53,7 @@ class ToolBrokerTests(unittest.TestCase):
                         "action_class": "read",
                         "connector_scopes": ["inventory"],
                         "trigger_terms": ["lookup stock"],
+                        "approved": True,
                     }
                 ],
                 metadata={},

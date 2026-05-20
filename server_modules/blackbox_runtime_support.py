@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
 import sys
 import time
 import uuid
@@ -1067,7 +1068,6 @@ def _apply_common_runtime_environment(
 ) -> None:
     monkeypatch.setenv("EMPYRALIS_STATE_HOME", str(state_home))
     monkeypatch.delenv("EMPYRALIS_JWT_SECRET_FILE", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("ORION_ENV", "test")
     monkeypatch.setenv("ORION_JWT_SECRET", "blackbox-jwt-secret")
     monkeypatch.setenv("EMPYRALIS_SECRETS_BROKER_SECRET", "blackbox-secrets-broker-secret")
@@ -1089,6 +1089,10 @@ def _apply_common_runtime_environment(
         monkeypatch.setenv(str(key), str(value))
 
 
+def _blackbox_database_url(extra_env: Optional[Dict[str, str]] = None) -> str:
+    return str(dict(extra_env or {}).get("DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+
+
 @contextmanager
 def blackbox_runtime_context(
     *,
@@ -1106,6 +1110,11 @@ def blackbox_runtime_context(
     resolved_tmp_path = Path(tmp_path or Path.cwd() / ".pytest-blackbox-runtime")
     resolved_state_home = Path(state_home or (resolved_tmp_path / "state"))
     resolved_state_home.mkdir(parents=True, exist_ok=True)
+
+    if not _blackbox_database_url(extra_env):
+        if owned_monkeypatch:
+            active_monkeypatch.undo()
+        pytest.skip("Black-box runtime requires DATABASE_URL for a reachable Postgres control-plane test database.")
 
     _apply_common_runtime_environment(
         active_monkeypatch,
@@ -1241,9 +1250,13 @@ def blackbox_runtime_context(
 
     async def _ensure_pool():
         pool = await db_module.get_pool()
-        assert pool is not None, "Black-box runtime requires a reachable Postgres control-plane database."
+        return pool is not None
 
-    asyncio.run(_ensure_pool())
+    if not asyncio.run(_ensure_pool()):
+        _purge_runtime_modules()
+        if owned_monkeypatch:
+            active_monkeypatch.undo()
+        pytest.skip("Black-box runtime requires a reachable Postgres control-plane test database.")
 
     module_refs = {
         "server": server,
@@ -1281,5 +1294,6 @@ def blackbox_runtime_context(
                 module_refs=module_refs,
             )
     finally:
+        _purge_runtime_modules()
         if owned_monkeypatch:
             active_monkeypatch.undo()

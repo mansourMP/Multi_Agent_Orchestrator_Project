@@ -48,6 +48,14 @@ def _fake_set_auth_cookies(
     response.set_cookie("empyralis_csrf_token", "csrf-cookie", httponly=False, path="/")
 
 
+def _seed_browser_cookies(client: httpx.AsyncClient, *, refresh: bool = True, csrf: bool = True) -> None:
+    client.cookies.set("empyralis_access_token", "access-cookie", path="/")
+    if refresh:
+        client.cookies.set("empyralis_refresh_token", "refresh-cookie", path="/")
+    if csrf:
+        client.cookies.set("empyralis_csrf_token", "csrf-cookie", path="/")
+
+
 @pytest.mark.anyio
 async def test_browser_login_sets_cookies_and_redacts_tokens(monkeypatch: pytest.MonkeyPatch):
     app = _build_app()
@@ -76,14 +84,10 @@ async def test_browser_refresh_requires_csrf_when_using_cookie_session():
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_cookies(client)
         response = await client.post(
             "/auth/refresh",
             json={"channel": "web"},
-            cookies={
-                "empyralis_access_token": "access-cookie",
-                "empyralis_refresh_token": "refresh-cookie",
-                "empyralis_csrf_token": "csrf-cookie",
-            },
         )
 
     assert response.status_code == 403
@@ -99,25 +103,17 @@ async def test_browser_refresh_csrf_failures_are_rate_limited(monkeypatch: pytes
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         for _ in range(2):
+            _seed_browser_cookies(client)
             failure = await client.post(
                 "/auth/refresh",
                 json={"channel": "web"},
-                cookies={
-                    "empyralis_access_token": "access-cookie",
-                    "empyralis_refresh_token": "refresh-cookie",
-                    "empyralis_csrf_token": "csrf-cookie",
-                },
             )
             assert failure.status_code == 403
 
+        _seed_browser_cookies(client)
         limited = await client.post(
             "/auth/refresh",
             json={"channel": "web"},
-            cookies={
-                "empyralis_access_token": "access-cookie",
-                "empyralis_refresh_token": "refresh-cookie",
-                "empyralis_csrf_token": "csrf-cookie",
-            },
         )
 
     assert limited.status_code == 429
@@ -143,15 +139,11 @@ async def test_browser_refresh_uses_cookie_refresh_token_and_sets_new_cookies(
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_cookies(client)
         response = await client.post(
             "/auth/refresh",
             json={"channel": "web"},
             headers={"x-csrf-token": "csrf-cookie"},
-            cookies={
-                "empyralis_access_token": "access-cookie",
-                "empyralis_refresh_token": "refresh-cookie",
-                "empyralis_csrf_token": "csrf-cookie",
-            },
         )
 
     assert response.status_code == 200
@@ -179,14 +171,10 @@ async def test_logout_clears_browser_cookies(monkeypatch: pytest.MonkeyPatch):
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_cookies(client)
         response = await client.post(
             "/auth/logout",
             headers={"x-csrf-token": "csrf-cookie"},
-            cookies={
-                "empyralis_access_token": "access-cookie",
-                "empyralis_refresh_token": "refresh-cookie",
-                "empyralis_csrf_token": "csrf-cookie",
-            },
         )
 
     assert response.status_code == 200
@@ -254,9 +242,9 @@ async def test_auth_me_accepts_access_token_cookie(monkeypatch: pytest.MonkeyPat
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        client.cookies.set("empyralis_access_token", "cookie-bearer-token", path="/")
         response = await client.get(
             "/auth/me",
-            cookies={"empyralis_access_token": "cookie-bearer-token"},
         )
 
     assert response.status_code == 200
@@ -331,15 +319,11 @@ async def test_browser_refresh_clears_cookies_when_refresh_token_is_stale(
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_cookies(client)
         response = await client.post(
             "/auth/refresh",
             json={"channel": "web"},
             headers={"x-csrf-token": "csrf-cookie"},
-            cookies={
-                "empyralis_access_token": "access-cookie",
-                "empyralis_refresh_token": "refresh-cookie",
-                "empyralis_csrf_token": "csrf-cookie",
-            },
         )
 
     assert response.status_code == 401
@@ -388,13 +372,10 @@ async def test_state_changing_auth_routes_require_csrf_for_browser_session(
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_cookies(client, refresh=False)
         response = await getattr(client, method)(
             path,
             json=json_body,
-            cookies={
-                "empyralis_access_token": "access-cookie",
-                "empyralis_csrf_token": "csrf-cookie",
-            },
         )
 
     assert response.status_code == 403

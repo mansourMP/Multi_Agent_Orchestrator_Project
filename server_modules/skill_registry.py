@@ -539,6 +539,27 @@ def skill_connector_scopes(skill_ids: list[str] | tuple[str, ...], *, workspace_
 
 
 def detect_skill_need(goal: str, *, workspace_id: str | None = None) -> SkillDefinition | None:
+    normalized = str(goal or "").strip().lower()
+    if not normalized:
+        return None
+    if any(
+        token in normalized
+        for token in (
+            "in stock",
+            "inventory",
+            "availability",
+            "available",
+            "sku",
+            "fitment",
+            "part",
+            "parts",
+            "wiper",
+            "wipers",
+            "brake",
+            "brakes",
+        )
+    ):
+        return get_skill_definition("inventory-tool", workspace_id=workspace_id, include_disabled=True)
     return None
 
 

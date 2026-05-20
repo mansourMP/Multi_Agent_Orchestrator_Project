@@ -113,10 +113,7 @@ class AuthHardeningTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 503)
 
     def test_database_url_does_not_backfill_from_backend_env_in_production(self):
-        with (
-            patch.dict(os.environ, {"ORION_ENV": "production"}, clear=True),
-            patch.object(runtime_db, "_ENV_DSN_LOADED", False),
-        ):
+        with patch.dict(os.environ, {"ORION_ENV": "production"}, clear=True):
             self.assertEqual(runtime_db.configured_database_url(), "")
 
     def test_runtime_config_only_loads_dotenv_in_explicit_local_dev(self):

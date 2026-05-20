@@ -642,6 +642,79 @@ CREATE TABLE IF NOT EXISTS credit_ledger_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_sources (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_id TEXT NULL,
+    source_uri TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'file',
+    label TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'indexed',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    indexed_at TIMESTAMPTZ NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+    agent_id TEXT NULL,
+    chunk_index INTEGER NOT NULL,
+    chunk_text TEXT NOT NULL,
+    token_estimate INTEGER NOT NULL DEFAULT 0,
+    content_hash TEXT NOT NULL DEFAULT '',
+    source_start INTEGER NULL,
+    source_end INTEGER NULL,
+    citation JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(source_id, chunk_index)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_embeddings (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+    chunk_id TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+    agent_id TEXT NULL,
+    embedding_model TEXT NOT NULL,
+    embedding JSONB NOT NULL DEFAULT '[]'::jsonb,
+    dimensions INTEGER NOT NULL DEFAULT 0,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(chunk_id, embedding_model)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_retrieval_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    source_surface TEXT NOT NULL DEFAULT '',
+    query_hash TEXT NOT NULL,
+    query_text TEXT NULL,
+    user_id TEXT NULL,
+    thread_id TEXT NULL,
+    run_id TEXT NULL,
+    agent_id TEXT NULL,
+    app_id TEXT NULL,
+    source_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    retrieved_chunk_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    top_k INTEGER NOT NULL DEFAULT 0,
+    confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'logged',
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS channel_user_acquisition_touches (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -1134,6 +1207,15 @@ CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_run ON credit_ledger_events(
 CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_ledger_events_source
     ON credit_ledger_events(tenant_id, workspace_id, source_table, source_event_id)
     WHERE source_table IS NOT NULL AND source_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_knowledge_sources_scope ON knowledge_sources(tenant_id, workspace_id, agent_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_sources_uri ON knowledge_sources(tenant_id, workspace_id, source_uri);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_scope ON knowledge_chunks(tenant_id, workspace_id, agent_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source ON knowledge_chunks(tenant_id, workspace_id, source_id, chunk_index);
+CREATE INDEX IF NOT EXISTS idx_knowledge_embeddings_chunk ON knowledge_embeddings(tenant_id, workspace_id, chunk_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_retrieval_events_scope_created ON knowledge_retrieval_events(tenant_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_retrieval_events_surface ON knowledge_retrieval_events(tenant_id, workspace_id, surface, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_retrieval_events_agent ON knowledge_retrieval_events(tenant_id, workspace_id, agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_retrieval_events_thread ON knowledge_retrieval_events(tenant_id, workspace_id, thread_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_governance_holds_scope ON governance_holds(tenant_id, workspace_id, scope_type, status, updated_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_channel_execution_leases_active_thread
     ON agent_channel_execution_leases(tenant_id, workspace_id, thread_id);
@@ -1615,6 +1697,85 @@ def _row_to_credit_ledger_event(row: Any) -> Optional[Dict[str, Any]]:
         "estimation_mode": str(payload.get("estimation_mode") or "").strip() or None,
         "source_table": str(payload.get("source_table") or "").strip() or None,
         "source_event_id": str(payload.get("source_event_id") or "").strip() or None,
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "created_at": _iso(payload.get("created_at")),
+    }
+
+
+def _row_to_knowledge_source(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "agent_id": str(payload.get("agent_id") or "").strip() or None,
+        "source_uri": str(payload.get("source_uri") or "").strip(),
+        "source_kind": str(payload.get("source_kind") or "").strip().lower() or "file",
+        "label": str(payload.get("label") or "").strip(),
+        "content_hash": str(payload.get("content_hash") or "").strip(),
+        "status": str(payload.get("status") or "").strip().lower() or "indexed",
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "indexed_at": _iso(payload.get("indexed_at")),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_knowledge_chunk(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    embedding = _decode_json_array(payload.get("embedding"))
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "source_id": str(payload.get("source_id") or "").strip() or None,
+        "agent_id": str(payload.get("agent_id") or "").strip() or None,
+        "chunk_index": int(payload.get("chunk_index") or 0),
+        "chunk_text": str(payload.get("chunk_text") or ""),
+        "token_estimate": int(payload.get("token_estimate") or 0),
+        "content_hash": str(payload.get("content_hash") or "").strip(),
+        "source_start": int(payload.get("source_start")) if payload.get("source_start") is not None else None,
+        "source_end": int(payload.get("source_end")) if payload.get("source_end") is not None else None,
+        "citation": _decode_json_object(payload.get("citation")),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "source_uri": str(payload.get("source_uri") or "").strip() or None,
+        "source_label": str(payload.get("source_label") or "").strip() or None,
+        "source_kind": str(payload.get("source_kind") or "").strip().lower() or None,
+        "embedding_model": str(payload.get("embedding_model") or "").strip() or None,
+        "embedding": [float(item) for item in embedding if isinstance(item, (int, float))],
+        "dimensions": int(payload.get("dimensions") or len(embedding) or 0),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_knowledge_retrieval_event(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "surface": str(payload.get("surface") or "").strip().lower() or None,
+        "source_surface": str(payload.get("source_surface") or "").strip().lower() or None,
+        "query_hash": str(payload.get("query_hash") or "").strip(),
+        "query_text": str(payload.get("query_text") or "").strip() or None,
+        "user_id": str(payload.get("user_id") or "").strip() or None,
+        "thread_id": str(payload.get("thread_id") or "").strip() or None,
+        "run_id": str(payload.get("run_id") or "").strip() or None,
+        "agent_id": str(payload.get("agent_id") or "").strip() or None,
+        "app_id": str(payload.get("app_id") or "").strip() or None,
+        "source_ids": _decode_json_array(payload.get("source_ids")),
+        "retrieved_chunk_ids": _decode_json_array(payload.get("retrieved_chunk_ids")),
+        "top_k": int(payload.get("top_k") or 0),
+        "confidence_score": round(float(payload.get("confidence_score") or 0.0), 6),
+        "status": str(payload.get("status") or "").strip().lower() or "logged",
+        "latency_ms": int(payload.get("latency_ms") or 0),
         "metadata": _decode_json_object(payload.get("metadata")),
         "created_at": _iso(payload.get("created_at")),
     }
@@ -5373,6 +5534,289 @@ async def summarize_credit_ledger_events(
         "by_credit_type": by_credit_type,
         "by_payer": by_payer,
     }
+
+
+async def upsert_knowledge_source(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    source_id: str,
+    source_uri: str,
+    source_kind: str = "file",
+    label: str = "",
+    content_hash: str = "",
+    agent_id: Optional[str] = None,
+    status: str = "indexed",
+    metadata: Optional[Dict[str, Any]] = None,
+    indexed_at: Any = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_source_id = _require_scope_token(source_id, "source_id")
+    resolved_source_uri = _require_scope_token(source_uri, "source_uri")
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO knowledge_sources (
+                id, tenant_id, workspace_id, agent_id, source_uri, source_kind, label,
+                content_hash, status, metadata, indexed_at, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10::jsonb, $11::timestamptz, $12::timestamptz, $12::timestamptz
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                agent_id = EXCLUDED.agent_id,
+                source_uri = EXCLUDED.source_uri,
+                source_kind = EXCLUDED.source_kind,
+                label = EXCLUDED.label,
+                content_hash = EXCLUDED.content_hash,
+                status = EXCLUDED.status,
+                metadata = knowledge_sources.metadata || EXCLUDED.metadata,
+                indexed_at = EXCLUDED.indexed_at,
+                updated_at = EXCLUDED.updated_at
+            RETURNING *
+            """,
+            resolved_source_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            str(agent_id or "").strip() or None,
+            resolved_source_uri,
+            str(source_kind or "file").strip().lower() or "file",
+            str(label or "").strip(),
+            str(content_hash or "").strip(),
+            str(status or "indexed").strip().lower() or "indexed",
+            _to_json(metadata, default={}),
+            _coerce_timestamptz(indexed_at) or now_ts,
+            now_ts,
+        )
+    return _row_to_knowledge_source(row)
+
+
+async def replace_knowledge_source_chunks(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    source_id: str,
+    chunks: List[Dict[str, Any]],
+    agent_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_source_id = _require_scope_token(source_id, "source_id")
+    normalized_chunks = [dict(item) for item in list(chunks or []) if isinstance(item, dict)]
+    now_ts = _utc_now_ts()
+    inserted: List[Dict[str, Any]] = []
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        await connection.execute(
+            """
+            DELETE FROM knowledge_chunks
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND source_id = $3
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_source_id,
+        )
+        for index, item in enumerate(normalized_chunks):
+            chunk_id = str(item.get("id") or f"kchk_{uuid.uuid4().hex[:16]}").strip()
+            chunk_index = int(item.get("chunk_index") if item.get("chunk_index") is not None else index)
+            row = await connection.fetchrow(
+                """
+                INSERT INTO knowledge_chunks (
+                    id, tenant_id, workspace_id, source_id, agent_id, chunk_index,
+                    chunk_text, token_estimate, content_hash, source_start, source_end,
+                    citation, metadata, created_at, updated_at
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6,
+                    $7, $8, $9, $10, $11,
+                    $12::jsonb, $13::jsonb, $14::timestamptz, $14::timestamptz
+                )
+                RETURNING *
+                """,
+                chunk_id,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                resolved_source_id,
+                str(item.get("agent_id") or agent_id or "").strip() or None,
+                chunk_index,
+                str(item.get("chunk_text") or ""),
+                max(0, int(item.get("token_estimate") or 0)),
+                str(item.get("content_hash") or "").strip(),
+                int(item.get("source_start")) if item.get("source_start") is not None else None,
+                int(item.get("source_end")) if item.get("source_end") is not None else None,
+                _to_json(item.get("citation"), default={}),
+                _to_json(item.get("metadata"), default={}),
+                now_ts,
+            )
+            embedding = item.get("embedding")
+            embedding_vector = list(embedding) if isinstance(embedding, list) else []
+            embedding_model = str(item.get("embedding_model") or "").strip()
+            if embedding_model and embedding_vector:
+                await connection.execute(
+                    """
+                    INSERT INTO knowledge_embeddings (
+                        id, tenant_id, workspace_id, source_id, chunk_id, agent_id,
+                        embedding_model, embedding, dimensions, metadata, created_at
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6,
+                        $7, $8::jsonb, $9, $10::jsonb, $11::timestamptz
+                    )
+                    ON CONFLICT (chunk_id, embedding_model) DO UPDATE SET
+                        embedding = EXCLUDED.embedding,
+                        dimensions = EXCLUDED.dimensions,
+                        metadata = knowledge_embeddings.metadata || EXCLUDED.metadata
+                    """,
+                    str(item.get("embedding_id") or f"kemb_{uuid.uuid4().hex[:16]}").strip(),
+                    resolved_tenant_id,
+                    resolved_workspace_id,
+                    resolved_source_id,
+                    chunk_id,
+                    str(item.get("agent_id") or agent_id or "").strip() or None,
+                    embedding_model,
+                    _to_json([float(value) for value in embedding_vector], default=[]),
+                    len(embedding_vector),
+                    _to_json(item.get("embedding_metadata"), default={}),
+                    now_ts,
+                )
+            payload = _row_to_knowledge_chunk(row)
+            if isinstance(payload, dict):
+                inserted.append(payload)
+    return inserted
+
+
+async def list_knowledge_chunks(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    agent_id: Optional[str] = None,
+    source_ids: Optional[List[str]] = None,
+    include_workspace_scope: bool = True,
+    limit: int = 1000,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    conditions = ["c.tenant_id = $1", "c.workspace_id = $2"]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    normalized_agent_id = str(agent_id or "").strip()
+    if normalized_agent_id:
+        params.append(normalized_agent_id)
+        if include_workspace_scope:
+            conditions.append(f"(c.agent_id = ${len(params)} OR c.agent_id IS NULL)")
+        else:
+            conditions.append(f"c.agent_id = ${len(params)}")
+    elif not include_workspace_scope:
+        conditions.append("c.agent_id IS NULL")
+    normalized_source_ids = [str(item or "").strip() for item in list(source_ids or []) if str(item or "").strip()]
+    if normalized_source_ids:
+        params.append(normalized_source_ids)
+        conditions.append(f"c.source_id = ANY(${len(params)}::text[])")
+    params.append(max(1, min(int(limit or 1000), 5000)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT
+                c.*,
+                s.source_uri,
+                s.label AS source_label,
+                s.source_kind,
+                e.embedding_model,
+                e.embedding,
+                e.dimensions
+            FROM knowledge_chunks c
+            JOIN knowledge_sources s
+              ON s.id = c.source_id
+             AND s.tenant_id = c.tenant_id
+             AND s.workspace_id = c.workspace_id
+            LEFT JOIN knowledge_embeddings e
+              ON e.chunk_id = c.id
+             AND e.tenant_id = c.tenant_id
+             AND e.workspace_id = c.workspace_id
+            WHERE {' AND '.join(conditions)}
+            ORDER BY s.updated_at DESC, c.source_id ASC, c.chunk_index ASC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [
+        payload
+        for payload in (_row_to_knowledge_chunk(row) for row in rows)
+        if isinstance(payload, dict)
+    ]
+
+
+async def record_knowledge_retrieval_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    surface: str,
+    query_hash: str,
+    source_surface: Optional[str] = None,
+    query_text: Optional[str] = None,
+    user_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+    source_ids: Optional[List[str]] = None,
+    retrieved_chunk_ids: Optional[List[str]] = None,
+    top_k: int = 0,
+    confidence_score: float = 0.0,
+    status: str = "logged",
+    latency_ms: int = 0,
+    metadata: Optional[Dict[str, Any]] = None,
+    event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_event_id = str(event_id or f"kret_{uuid.uuid4().hex[:16]}").strip()
+    resolved_surface = _require_scope_token(surface, "surface").lower()
+    resolved_query_hash = _require_scope_token(query_hash, "query_hash")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO knowledge_retrieval_events (
+                id, tenant_id, workspace_id, surface, source_surface, query_hash, query_text,
+                user_id, thread_id, run_id, agent_id, app_id, source_ids, retrieved_chunk_ids,
+                top_k, confidence_score, status, latency_ms, metadata, created_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb,
+                $15, $16, $17, $18, $19::jsonb, $20::timestamptz
+            )
+            RETURNING *
+            """,
+            resolved_event_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_surface,
+            str(source_surface or resolved_surface).strip().lower() or resolved_surface,
+            resolved_query_hash,
+            str(query_text or "").strip() or None,
+            str(user_id or "").strip() or None,
+            str(thread_id or "").strip() or None,
+            str(run_id or "").strip() or None,
+            str(agent_id or "").strip() or None,
+            str(app_id or "").strip() or None,
+            _to_json(list(source_ids or []), default=[]),
+            _to_json(list(retrieved_chunk_ids or []), default=[]),
+            max(0, int(top_k or 0)),
+            max(0.0, min(round(float(confidence_score or 0.0), 6), 1.0)),
+            str(status or "logged").strip().lower() or "logged",
+            max(0, int(latency_ms or 0)),
+            _to_json(metadata, default={}),
+            _utc_now_ts(),
+        )
+    return _row_to_knowledge_retrieval_event(row)
 
 
 async def upsert_channel_user_acquisition_touch(

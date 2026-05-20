@@ -80,9 +80,45 @@ class AuthHardeningTests(unittest.TestCase):
                     auth.ensure_public_registration_enabled()
         self.assertEqual(ctx.exception.status_code, 404)
 
-    def test_require_admin_access_allows_service_key_identity(self):
+    def test_require_admin_access_blocks_restricted_service_key_identity(self):
         request = _request()
-        with patch("server_modules.auth.get_current_user", return_value={"user_id": "service", "auth_type": "api_key"}):
+        with patch(
+            "server_modules.auth.get_current_user",
+            return_value={
+                "user_id": "service",
+                "auth_type": "api_key",
+                "role": "service",
+                "is_admin": False,
+                "auth_admin": False,
+                "workspace_ids": [],
+                "tenant_ids": [],
+            },
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                auth.require_admin_access(request=request)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_restricted_service_key_identity_is_scoped(self):
+        current_user = {
+            "user_id": "service",
+            "auth_type": "api_key",
+            "role": "service",
+            "is_admin": False,
+            "auth_admin": False,
+            "workspace_ids": [],
+            "tenant_ids": [],
+        }
+        self.assertEqual(auth.current_user_role(current_user), "member")
+        self.assertFalse(auth.current_user_has_auth_admin_access(current_user))
+        self.assertEqual(auth.allowed_workspace_ids(current_user), set())
+        self.assertEqual(auth.allowed_tenant_ids(current_user), set())
+
+    def test_explicit_admin_api_key_identity_still_allows_admin_access(self):
+        request = _request()
+        with patch(
+            "server_modules.auth.get_current_user",
+            return_value={"user_id": "admin-service", "auth_type": "api_key", "role": "owner", "is_admin": True},
+        ):
             result = auth.require_admin_access(request=request)
         self.assertTrue(result["is_admin"])
         self.assertEqual(result["role"], "owner")

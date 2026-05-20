@@ -74,6 +74,28 @@ def test_hosted_manifest_can_issue_signed_launch_token(monkeypatch: pytest.Monke
     assert payload["app_id"] == "travel_partner"
 
 
+def test_production_launch_token_requires_strong_secret(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ORION_ENV", "production")
+    monkeypatch.setenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET", "short")
+
+    with pytest.raises(RuntimeError, match="high-entropy"):
+        mini_app_host_service.issue_hosted_launch_token(
+            workspace_id="ws-1",
+            app_id="travel_partner",
+            user_id="user-1",
+            origin="https://miniapps.example.com",
+        )
+
+    monkeypatch.setenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET", "abcdefghijklmnopqrstuvwxyzABCDEF123456")
+    issued = mini_app_host_service.issue_hosted_launch_token(
+        workspace_id="ws-1",
+        app_id="travel_partner",
+        user_id="user-1",
+        origin="https://miniapps.example.com",
+    )
+    assert issued["token"]
+
+
 def test_hosted_launch_token_rejects_wrong_origin_and_expiry(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET", "test-secret")
     issued = mini_app_host_service.issue_hosted_launch_token(

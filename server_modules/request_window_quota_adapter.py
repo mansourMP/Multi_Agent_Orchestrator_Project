@@ -4,6 +4,11 @@ import threading
 import time
 from typing import Dict, Optional
 
+_MAX_BUCKETS_BEFORE_DEAD_PRUNE = 1000
+_DEAD_BUCKET_PRUNE_INTERVAL_SECONDS = 60.0
+_DEAD_BUCKET_RETENTION_SECONDS = 120.0
+_LAST_DEAD_BUCKET_PRUNE_AT = 0.0
+
 
 def evaluate_request_window(
     *,
@@ -13,9 +18,21 @@ def evaluate_request_window(
     limit: int,
     now: Optional[float] = None,
 ) -> Dict[str, int | bool]:
+    global _LAST_DEAD_BUCKET_PRUNE_AT
+
     current = float(now if now is not None else time.time())
     normalized_limit = max(int(limit or 0), 1)
     with lock:
+        if (
+            len(buckets) > _MAX_BUCKETS_BEFORE_DEAD_PRUNE
+            and current - _LAST_DEAD_BUCKET_PRUNE_AT >= _DEAD_BUCKET_PRUNE_INTERVAL_SECONDS
+        ):
+            _LAST_DEAD_BUCKET_PRUNE_AT = current
+            dead_cutoff = current - _DEAD_BUCKET_RETENTION_SECONDS
+            dead_keys = [k for k, v in buckets.items() if not v or v[-1] < dead_cutoff]
+            for dk in dead_keys:
+                buckets.pop(dk, None)
+
         bucket = list(buckets.get(key, []))
         cutoff = current - 60.0
         bucket = [item for item in bucket if item >= cutoff]

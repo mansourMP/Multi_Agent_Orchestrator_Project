@@ -79,6 +79,15 @@ def _is_local_dev_environment() -> bool:
     return _normalized_text(os.getenv("EMPYRALIS_ALLOW_LOCAL_MINI_APP_HTTP")).lower() in {"1", "true", "yes", "on"}
 
 
+def _is_weak_launch_secret(secret: str) -> bool:
+    token = _normalized_text(secret)
+    if len(token) < 32:
+        return True
+    if token == "empyralis-mini-app-local-dev-secret":
+        return True
+    return len(set(token)) < 8
+
+
 def _b64url_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
@@ -93,8 +102,13 @@ def _launch_token_secret() -> bytes:
         os.getenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET")
         or os.getenv("ORION_JWT_SECRET")
         or os.getenv("ORION_SECRET_KEY")
-        or "empyralis-mini-app-local-dev-secret"
     )
+    if not secret:
+        if _is_production_environment():
+            raise RuntimeError("CRITICAL: EMPYRALIS_MINI_APP_LAUNCH_SECRET must be configured in production.")
+        secret = "empyralis-mini-app-local-dev-secret"
+    if _is_production_environment() and _is_weak_launch_secret(secret):
+        raise RuntimeError("CRITICAL: EMPYRALIS_MINI_APP_LAUNCH_SECRET must be at least 32 high-entropy characters in production.")
     return secret.encode("utf-8")
 
 

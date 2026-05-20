@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, Tuple
+from urllib.parse import unquote
 
 try:
     from server_modules.builder_runtime_mapping import normalize_file_mount_grants
@@ -34,12 +35,24 @@ def normalize_file_operation_mode(value: Any) -> str:
     return FILE_OPERATION_MODE_READ
 
 
+def _is_path_traversal(path: str) -> bool:
+    normalized = unquote(path).replace("\\", "/").lower()
+    parts = normalized.split("/")
+    for part in parts:
+        if part == "..":
+            return True
+    return False
+
+
 def infer_file_mount_for_path(raw_path: Any) -> Tuple[str, str]:
     text = str(raw_path or "").strip()
     if not text:
         return "project", ""
     if text in {".", "./"}:
         return "project", "."
+    if _is_path_traversal(text):
+        raise RuntimeError(f"Path traversal is forbidden: {text}")
+
     try:
         candidate = Path(text).expanduser()
     except Exception:

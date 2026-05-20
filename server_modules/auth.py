@@ -1012,7 +1012,7 @@ def current_user_role(current_user: Optional[Dict[str, Any]], *, default: str = 
         return normalize_rbac_role(default)
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
     if auth_type == "api_key":
-        return "owner"
+        return normalize_rbac_role(current_user.get("role"), default=default)
     return normalize_rbac_role(current_user.get("role"), default=default)
 
 
@@ -1034,7 +1034,10 @@ def current_user_has_auth_admin_access(current_user: Optional[Dict[str, Any]]) -
         return False
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
     if auth_type == "api_key":
-        return True
+        return bool(current_user.get("auth_admin")) or (
+            bool(current_user.get("is_admin"))
+            and normalize_rbac_role(current_user.get("role"), default="member") == "owner"
+        )
     if auth_type == "local_dev":
         return current_user_role(current_user, default="viewer") == "owner"
     if auth_type == "bearer":
@@ -4326,7 +4329,7 @@ def allowed_workspace_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
     if not isinstance(user, dict):
         return None
     auth_type = str(user.get("auth_type") or "").strip().lower()
-    if auth_type == "api_key":
+    if auth_type == "api_key" and current_user_has_auth_admin_access(user):
         return None
     if bool(user.get("is_admin")) and auth_type not in {"bearer", "local_dev"}:
         return None
@@ -4342,7 +4345,7 @@ def allowed_tenant_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
     if not isinstance(user, dict):
         return None
     auth_type = str(user.get("auth_type") or "").strip().lower()
-    if auth_type == "api_key":
+    if auth_type == "api_key" and current_user_has_auth_admin_access(user):
         return None
     if bool(user.get("is_admin")) and auth_type not in {"bearer", "local_dev"}:
         return None
@@ -4467,7 +4470,7 @@ def workspace_role(current_user: Optional[Dict[str, Any]], workspace_id: Optiona
     if not isinstance(current_user, dict):
         return None
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
-    if auth_type == "api_key":
+    if auth_type == "api_key" and current_user_has_auth_admin_access(current_user):
         return "owner"
     if auth_type != "bearer" and bool(current_user.get("is_admin")):
         return "owner"
@@ -4499,7 +4502,7 @@ def tenant_role(current_user: Optional[Dict[str, Any]], tenant_id: Optional[str]
     if not isinstance(current_user, dict):
         return None
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
-    if auth_type == "api_key":
+    if auth_type == "api_key" and current_user_has_auth_admin_access(current_user):
         return "owner"
     if auth_type != "bearer" and bool(current_user.get("is_admin")):
         return "owner"
@@ -5650,9 +5653,11 @@ def get_current_user(
             "user_id": "service",
             "auth_type": "api_key",
             "email": None,
-            "role": "owner",
-            "is_admin": True,
-            "auth_admin": True,
+            "role": "service",
+            "is_admin": False,
+            "auth_admin": False,
+            "workspace_ids": [],
+            "tenant_ids": [],
         }
 
     raise HTTPException(status_code=401, detail="Authentication required.")

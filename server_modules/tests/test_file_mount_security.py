@@ -33,6 +33,17 @@ class FileMountSecurityTests(unittest.TestCase):
         self.assertEqual(access["path"], ".")
         self.assertEqual(access["mode"], "read")
 
+    def test_assert_file_mount_access_blocks_relative_path_traversal(self):
+        for path in ("../secret.txt", "project/../secret.txt", "project\\..\\secret.txt", "%2e%2e/secret.txt"):
+            with self.subTest(path=path):
+                with self.assertRaises(RuntimeError):
+                    assert_file_mount_access(
+                        path,
+                        "read",
+                        default_file_mount_grants(),
+                        "local_companion",
+                    )
+
     def test_assert_file_mount_access_blocks_absolute_local_root_without_grant(self):
         with self.assertRaises(RuntimeError):
             assert_file_mount_access(

@@ -8,7 +8,7 @@ from server_modules import deployed_agent_service
 
 
 class DeployedAgentKnowledgeVerificationTests(unittest.TestCase):
-    def test_reference_verification_matches_saved_source_metadata(self):
+    def test_verification_returns_real_retrieved_chunks_when_indexed(self):
         with patch(
             "server_modules.deployed_agent_service.auth_module.enforce_workspace_access",
             return_value="ws-1",
@@ -36,6 +36,27 @@ class DeployedAgentKnowledgeVerificationTests(unittest.TestCase):
                     },
                 ],
             }),
+        ), patch(
+            "server_modules.deployed_agent_service.knowledge_rag_service.ingest_workspace_knowledge_files",
+            new=AsyncMock(return_value={"source_count": 1, "chunk_count": 1}),
+        ), patch(
+            "server_modules.deployed_agent_service.knowledge_rag_service.retrieve_knowledge",
+            new=AsyncMock(return_value={
+                "status": "retrieval_available",
+                "message": "Retrieved source-grounded knowledge chunks.",
+                "content_retrieval_available": True,
+                "matched_chunks": [
+                    {
+                        "id": "chunk-1",
+                        "source_id": "policy-doc",
+                        "chunk_text": "Refund Policy: Refunds are available within 30 days.",
+                        "citation": {"label": "Refund Policy", "path": "knowledge/refunds.md"},
+                        "score": 0.91,
+                    }
+                ],
+                "retrieved_chunk_ids": ["chunk-1"],
+                "confidence_score": 0.91,
+            }),
         ):
             result = asyncio.run(
                 deployed_agent_service.verify_deployed_agent_knowledge_retrieval(
@@ -46,14 +67,16 @@ class DeployedAgentKnowledgeVerificationTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(result["status"], "reference_match")
-        self.assertEqual(result["verification_kind"], "source_reference")
-        self.assertFalse(result["content_retrieval_available"])
+        self.assertEqual(result["status"], "retrieval_available")
+        self.assertEqual(result["verification_kind"], "content_retrieval")
+        self.assertTrue(result["content_retrieval_available"])
         self.assertEqual(result["source_count"], 2)
         self.assertEqual(result["matched_sources"][0]["id"], "policy-doc")
         self.assertGreaterEqual(result["matched_sources"][0]["score"], 1)
+        self.assertEqual(result["matched_chunks"][0]["id"], "chunk-1")
+        self.assertEqual(result["confidence_score"], 0.91)
 
-    def test_reference_verification_reports_no_content_retrieval_when_no_match(self):
+    def test_verification_reports_index_missing_without_pretending_retrieval(self):
         with patch(
             "server_modules.deployed_agent_service.auth_module.enforce_workspace_access",
             return_value="ws-1",
@@ -75,6 +98,19 @@ class DeployedAgentKnowledgeVerificationTests(unittest.TestCase):
                     },
                 ],
             }),
+        ), patch(
+            "server_modules.deployed_agent_service.knowledge_rag_service.ingest_workspace_knowledge_files",
+            new=AsyncMock(return_value={"source_count": 0, "chunk_count": 0}),
+        ), patch(
+            "server_modules.deployed_agent_service.knowledge_rag_service.retrieve_knowledge",
+            new=AsyncMock(return_value={
+                "status": "index_missing",
+                "message": "No indexed knowledge chunks are available.",
+                "content_retrieval_available": False,
+                "matched_chunks": [],
+                "retrieved_chunk_ids": [],
+                "confidence_score": 0.0,
+            }),
         ):
             result = asyncio.run(
                 deployed_agent_service.verify_deployed_agent_knowledge_retrieval(
@@ -85,10 +121,11 @@ class DeployedAgentKnowledgeVerificationTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(result["status"], "no_reference_match")
+        self.assertEqual(result["status"], "index_missing")
         self.assertFalse(result["content_retrieval_available"])
         self.assertEqual(result["matched_sources"], [])
-        self.assertIn("Content-level citation retrieval is not wired yet", result["message"])
+        self.assertNotIn("not wired yet", result["message"])
+        self.assertEqual(result["matched_chunks"], [])
 
     def test_reference_verification_rejects_empty_query(self):
         with patch(

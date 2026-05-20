@@ -19,6 +19,7 @@ from server_modules import deployed_agent_analytics_service
 from server_modules import deployed_agent_virtual_runtime_service
 from server_modules import entitlements_service
 from server_modules import external_user_privacy_service
+from server_modules import knowledge_rag_service
 from server_modules import provider_catalog_service
 from server_modules import pricing_registry_service
 from server_modules import product_catalog_live_data_service
@@ -1580,14 +1581,67 @@ async def verify_deployed_agent_knowledge_retrieval(
     bounded_limit = max(1, min(int(limit or 5), 10))
     matched_sources = scored_sources[:bounded_limit]
     if not sources:
-        status = "no_sources"
-        message = "No trusted knowledge source references are configured for this agent."
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            "deployed_agent_id": deployed_agent_id,
+            "query": normalized_query,
+            "status": "no_sources",
+            "message": "No trusted knowledge source references are configured for this agent.",
+            "verification_kind": "content_retrieval",
+            "content_retrieval_available": False,
+            "source_count": 0,
+            "matched_sources": [],
+            "matched_chunks": [],
+            "confidence_score": 0.0,
+            "checked_at": _utc_now_iso(),
+        }
+    ingestion_status: Dict[str, Any] = {}
+    ingestion_error: Optional[str] = None
+    try:
+        ingestion_status = await knowledge_rag_service.ingest_workspace_knowledge_files(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            agent_id=deployed_agent_id,
+            user_id=_normalize_text((current_user or {}).get("user_id")),
+        )
+    except Exception as exc:
+        ingestion_error = str(exc)
+    try:
+        retrieval = await knowledge_rag_service.retrieve_knowledge(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            query=normalized_query,
+            surface="studio",
+            source_surface="studio_knowledge_verify",
+            agent_id=deployed_agent_id,
+            user_id=_normalize_text((current_user or {}).get("user_id")),
+            allowed_source_refs=knowledge_rag_service.source_reference_filter_values(sources),
+            top_k=bounded_limit,
+            payer="local",
+        )
+    except Exception as exc:
+        retrieval = {
+            "status": "index_missing",
+            "message": f"Knowledge retrieval index is unavailable: {exc}",
+            "content_retrieval_available": False,
+            "matched_chunks": [],
+            "confidence_score": 0.0,
+        }
+    status = str(retrieval.get("status") or "index_missing").strip().lower() or "index_missing"
+    if status == "retrieval_available":
+        message = "Retrieved source-grounded knowledge chunks for this agent."
+    elif status == "no_hits":
+        message = "Indexed knowledge exists for this agent, but no chunk matched this query."
     elif matched_sources:
-        status = "reference_match"
-        message = "Matched saved knowledge source references. Content-level citation retrieval is not wired yet."
+        message = "Saved knowledge references matched, but no indexed content chunks are available for citation retrieval."
     else:
-        status = "no_reference_match"
-        message = "No saved knowledge source reference matched this query. Content-level citation retrieval is not wired yet."
+        message = "No indexed content chunks are available for the saved knowledge references."
+    metadata = {
+        "ingestion": ingestion_status,
+        "ingestion_error": ingestion_error,
+        "retrieval_event": retrieval.get("retrieval_event"),
+    }
     return {
         "workspace_id": resolved_workspace_id,
         "tenant_id": tenant_id,
@@ -1595,10 +1649,14 @@ async def verify_deployed_agent_knowledge_retrieval(
         "query": normalized_query,
         "status": status,
         "message": message,
-        "verification_kind": "source_reference",
-        "content_retrieval_available": False,
+        "verification_kind": "content_retrieval",
+        "content_retrieval_available": bool(retrieval.get("content_retrieval_available")),
         "source_count": len(sources),
         "matched_sources": matched_sources,
+        "matched_chunks": list(retrieval.get("matched_chunks") or retrieval.get("chunks") or []),
+        "confidence_score": float(retrieval.get("confidence_score") or 0.0),
+        "retrieved_chunk_ids": list(retrieval.get("retrieved_chunk_ids") or []),
+        "metadata": metadata,
         "checked_at": _utc_now_iso(),
     }
 

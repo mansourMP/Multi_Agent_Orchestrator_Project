@@ -59,6 +59,7 @@ def load_workspace_context_payload(
     stable_sections: List[str] = []
     retrieved_sections: List[str] = []
     semantic_hits: List[Dict[str, Any]] = []
+    knowledge_hits: List[Dict[str, Any]] = []
     mini_app_summary_count = 0
     try:
         context_files = read_workspace_context_files(
@@ -107,6 +108,29 @@ def load_workspace_context_payload(
             target_sections = retrieved_sections if semantic_hits else stable_sections
             target_sections.append(f"{memory_heading}\n{sanitized_memory_facts}")
 
+    if normalized_query:
+        try:
+            from server_modules import unified_memory_service
+
+            knowledge_hits = unified_memory_service.search_unified_memory_documents(
+                workspace_id=workspace_id,
+                query=normalized_query,
+                agent_install_id=agent_install_id,
+                limit=4,
+            )
+        except Exception:
+            knowledge_hits = []
+    if knowledge_hits:
+        knowledge_facts = "\n".join(
+            f"- {str(item.get('path') or '').strip()}: {str(item.get('snippet') or '').strip()}"
+            for item in knowledge_hits
+            if str(item.get("snippet") or "").strip()
+        ).strip()
+        if knowledge_facts:
+            sanitized_knowledge = strip_red_facts_from_external_context(knowledge_facts)
+            if sanitized_knowledge:
+                retrieved_sections.append(f"Retrieved Knowledge Sources\n{sanitized_knowledge}")
+
     if not agent_install_id:
         try:
             from server_modules import sage_memory_service
@@ -154,6 +178,7 @@ def load_workspace_context_payload(
             ),
             "recent_log_days": policy_profile.max_recent_log_days,
             "semantic_hit_count": len(semantic_hits),
+            "knowledge_hit_count": len(knowledge_hits),
             "mini_app_summary_count": mini_app_summary_count,
             "stable_context_block_count": len(stable_sections),
             "retrieved_context_block_count": len(retrieved_sections),
@@ -187,7 +212,8 @@ def render_workspace_context_text(
         if not segments:
             return ""
         return (
-            "Workspace context files. Use these as durable background instructions and facts when they are relevant.\n\n"
+            "Workspace context files. Use these as durable background instructions and facts when they are relevant. "
+            "When retrieved knowledge is insufficient for a source-grounded answer, say the source evidence is insufficient rather than inventing.\n\n"
             + "\n\n".join(segments)
         ).strip()
 
@@ -195,7 +221,8 @@ def render_workspace_context_text(
     if not blocks:
         return ""
     return (
-        "Workspace context files. Use these as durable background instructions and facts when they are relevant.\n\n"
+        "Workspace context files. Use these as durable background instructions and facts when they are relevant. "
+        "When retrieved knowledge is insufficient for a source-grounded answer, say the source evidence is insufficient rather than inventing.\n\n"
         + "\n\n".join(blocks)
     ).strip()
 

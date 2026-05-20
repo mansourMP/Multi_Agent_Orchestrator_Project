@@ -354,6 +354,9 @@ export const AgentDetailView = memo(({
   const knowledgeVerificationMatches = Array.isArray(knowledgeVerificationRecord.matched_sources)
     ? knowledgeVerificationRecord.matched_sources
     : [];
+  const knowledgeVerificationChunks = Array.isArray(knowledgeVerificationRecord.matched_chunks)
+    ? knowledgeVerificationRecord.matched_chunks
+    : [];
   const knowledgeVerificationAvailable = knowledgeVerificationRecord.content_retrieval_available === true;
   const canVerifyKnowledge = Boolean(
     selectedAgentId &&
@@ -469,7 +472,7 @@ export const AgentDetailView = memo(({
                 <div>
                   <span>Retrieval health</span>
                   <strong>
-                    {knowledgeSourceCount > 0 ? 'Reference check ready' : 'Needs data'}
+                    {knowledgeSourceCount > 0 ? 'Retrieval check ready' : 'Needs data'}
                   </strong>
                 </div>
               </div>
@@ -503,7 +506,7 @@ export const AgentDetailView = memo(({
               <div className="studio-agent-knowledge__test-box">
                 <p>
                   {knowledgeSourceCount > 0
-                    ? "Run a reference check against saved knowledge sources. Content-level citation retrieval will report as unavailable until indexing is connected."
+                    ? "Run a retrieval check against saved knowledge sources and inspect the grounded chunks used as evidence."
                     : "Add at least one trusted source to enable retrieval testing."}
                 </p>
                 <div className="studio-agent-knowledge__test-input">
@@ -540,10 +543,25 @@ export const AgentDetailView = memo(({
                         <strong>{humanizeToken(knowledgeVerificationStatus, 'Verification result')}</strong>
                         <span>{knowledgeVerificationMessage || 'Knowledge verification completed.'}</span>
                       </div>
-                      <DataBadge tone={knowledgeVerificationStatus === 'reference_match' ? 'success' : 'warning'}>
-                        {knowledgeVerificationAvailable ? 'Content retrieval' : 'Reference only'}
+                      <DataBadge tone={knowledgeVerificationStatus === 'retrieval_available' ? 'success' : 'warning'}>
+                        {knowledgeVerificationAvailable ? 'Grounded chunks' : 'Index needed'}
                       </DataBadge>
                     </div>
+                    {knowledgeVerificationChunks.length > 0 ? knowledgeVerificationChunks.map((chunk, index) => {
+                      const match = readRecord(chunk);
+                      const citation = readRecord(match.citation);
+                      const label = readString(citation.label ?? match.source_label ?? match.source_uri, `Retrieved chunk ${index + 1}`);
+                      const snippet = readString(match.chunk_text, 'Retrieved evidence');
+                      return (
+                        <div key={`${label}-chunk-${index}`} className="studio-agent-knowledge__source">
+                          <div className="studio-agent-knowledge__source-main">
+                            <strong>{label}</strong>
+                            <span>{snippet}</span>
+                          </div>
+                          <DataBadge tone="success">Evidence</DataBadge>
+                        </div>
+                      );
+                    }) : null}
                     {knowledgeVerificationMatches.length > 0 ? knowledgeVerificationMatches.map((source, index) => {
                       const match = readRecord(source);
                       const label = readString(match.label ?? match.uri ?? match.path ?? match.id, `Matched source ${index + 1}`);

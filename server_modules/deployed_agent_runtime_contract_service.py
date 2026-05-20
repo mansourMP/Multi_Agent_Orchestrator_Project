@@ -180,6 +180,24 @@ STUDIO_AI_SOURCE_ALIASES = {
     "third_party_subscription": STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH,
 }
 
+STUDIO_BYOK_FIRST_PROVIDERS = {
+    "openrouter",
+    "groq",
+    "azure_openai",
+    "custom_openai_compatible",
+}
+STUDIO_SUBSCRIPTION_PROVIDER_IDS = {
+    "codex_cli",
+    "claude_code_cli",
+    "openai-codex",
+}
+STUDIO_LOCAL_PROVIDER_IDS = {
+    "ollama",
+    "local",
+    "local_model",
+    "local_companion",
+}
+
 STUDIO_AGENT_MODE_DEPLOY_TARGETS = {
     STUDIO_AGENT_MODE_TEXT: "cloud_default",
     STUDIO_AGENT_MODE_CLOUD_COMPUTER: "sage_cloud_computer",
@@ -228,6 +246,97 @@ def normalize_studio_ai_source(value: Any = None, *, fallback: Any = None) -> Di
         "requires_local_runtime": source == STUDIO_AI_SOURCE_LOCAL_MODEL,
         "uses_platform_credits": source == STUDIO_AI_SOURCE_EMPYRALIS_CREDITS,
         "uses_subscription_passthrough": source == STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH,
+    }
+
+
+def validate_studio_ai_source_provider_runtime(
+    *,
+    ai_source: Any = None,
+    provider: Any = None,
+    model: Any = None,
+    runtime_placement: Any = None,
+    runtime_target: Any = None,
+    runtime_supply: Any = None,
+    provider_scopes: Any = None,
+    pricing_known: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Validate the deployed-agent AI payer/source against provider and runtime policy."""
+    source = normalize_studio_ai_source(ai_source)
+    source_kind = source["kind"]
+    provider_id = _text(provider).lower()
+    model_id = _text(model)
+    scopes = {
+        _text(item).lower()
+        for item in list(provider_scopes or [])
+        if _text(item)
+    }
+    supply = runtime_supply if isinstance(runtime_supply, dict) else {}
+    placement = normalize_runtime_placement(runtime_placement, runtime_target=runtime_target)
+    target = _text(runtime_target).lower() or runtime_target_for_placement(placement)
+    supply_ai_source = normalize_studio_ai_source(supply.get("ai_source") if isinstance(supply.get("ai_source"), dict) else None)
+    errors: List[str] = []
+
+    if provider_id == "custom_openai_compatible" and not model_id:
+        errors.append("custom_openai_compatible requires an explicit model id.")
+    if provider_id == "azure_openai" and not model_id:
+        errors.append("azure_openai requires an explicit deployment/model id.")
+    if supply.get("ai_source") and supply_ai_source["kind"] != source_kind:
+        errors.append(
+            f"runtime_supply.ai_source must be {source_kind}, received {supply_ai_source['kind']}."
+        )
+
+    requires_local_runtime = placement == RUNTIME_PLACEMENT_CUSTOMER_LOCAL or target == "local"
+    is_byok_first = provider_id in STUDIO_BYOK_FIRST_PROVIDERS
+    is_subscription_provider = provider_id in STUDIO_SUBSCRIPTION_PROVIDER_IDS
+    is_local_provider = provider_id in STUDIO_LOCAL_PROVIDER_IDS
+    subscription_cli_override = (
+        source_kind == STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH
+        and is_subscription_provider
+        and requires_local_runtime
+    )
+
+    if provider_id and scopes and "studio_safe" not in scopes and not subscription_cli_override:
+        errors.append(f"Provider '{provider_id}' is not available for Studio agents.")
+
+    if source_kind == STUDIO_AI_SOURCE_EMPYRALIS_CREDITS:
+        if is_byok_first:
+            errors.append(f"{provider_id} is BYOK/workspace-key only and cannot use Empyralis credits.")
+        if is_subscription_provider:
+            errors.append(f"{provider_id} requires subscription_passthrough, not Empyralis credits.")
+        if is_local_provider:
+            errors.append(f"{provider_id} requires local_model, not Empyralis credits.")
+        if pricing_known is False and provider_id and model_id:
+            errors.append(f"Empyralis-credit Studio usage requires known pricing for {provider_id}:{model_id}.")
+    elif source_kind == STUDIO_AI_SOURCE_WORKSPACE_API_KEY:
+        if not provider_id:
+            errors.append("workspace_api_key requires a provider.")
+        if scopes and "workspace_api" not in scopes:
+            errors.append(f"Provider '{provider_id}' does not support workspace API keys.")
+        if is_subscription_provider:
+            errors.append(f"{provider_id} uses subscription passthrough, not workspace_api_key.")
+        if is_local_provider:
+            errors.append(f"{provider_id} uses local_model, not workspace_api_key.")
+    elif source_kind == STUDIO_AI_SOURCE_LOCAL_MODEL:
+        if not requires_local_runtime:
+            errors.append("local_model requires local_companion runtime.")
+        if provider_id and not is_local_provider:
+            errors.append(f"{provider_id} is not a local model provider for Studio local_model source.")
+    elif source_kind == STUDIO_AI_SOURCE_SUBSCRIPTION_PASSTHROUGH:
+        if not requires_local_runtime:
+            errors.append("subscription_passthrough requires local_companion runtime.")
+        if provider_id and not is_subscription_provider:
+            errors.append(
+                "subscription_passthrough is limited to codex_cli or claude_code_cli providers."
+            )
+
+    if errors:
+        raise ValueError(" ".join(errors))
+    return {
+        "ai_source": source,
+        "provider": provider_id or None,
+        "model": model_id or None,
+        "runtime_placement": placement,
+        "runtime_target": target,
     }
 
 

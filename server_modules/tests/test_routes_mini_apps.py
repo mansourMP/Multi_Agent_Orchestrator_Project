@@ -817,6 +817,46 @@ async def test_mini_app_invoke_denies_byok_until_source_routing_exists(monkeypat
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("payer", ["local", "subscription_passthrough"])
+async def test_mini_app_invoke_denies_local_and_subscription_sources(monkeypatch: pytest.MonkeyPatch, payer: str):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda *args, **kwargs: pytest.fail("invoke service should not be called for unsupported mini-app AI source"),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create_response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/writing",
+                json={
+                    "label": "Writing",
+                    "delivery_mode": "structured",
+                    "permissions": ["app.ai.invoke"],
+                    "ai_invoke_policy": {
+                        "consent_status": "granted",
+                        "payer": payer,
+                        "monthly_credit_cap": 500,
+                        "per_invocation_credit_cap": 50,
+                    },
+                },
+            )
+            assert create_response.status_code == 200
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this."),
+            )
+
+    assert response.status_code == 403
+    assert "BYOK/local AI routing is not enabled" in response.json()["detail"]
+
+
+@pytest.mark.anyio
 async def test_mini_app_invoke_route_rate_limits_requests(monkeypatch: pytest.MonkeyPatch):
     app = _build_app()
     app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}

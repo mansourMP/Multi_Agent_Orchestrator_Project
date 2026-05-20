@@ -824,6 +824,112 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(specialist_kwargs["metadata"]["provider"], "deepseek")
         self.assertEqual(specialist_kwargs["metadata"]["model"], "deepseek-reasoner")
 
+    async def test_create_draft_deployed_agent_rejects_byok_first_provider_on_platform_credits(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.create_deployed_agent",
+                new=AsyncMock(return_value=_deployed_agent_row()),
+            ) as create_deployed_agent_mock,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.create_draft_deployed_agent(
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    name="Store Assistant",
+                    provider="openrouter",
+                    model="openai/gpt-5.2",
+                )
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertIn("BYOK/workspace-key only", error.exception.detail)
+        create_deployed_agent_mock.assert_not_awaited()
+
+    async def test_create_draft_deployed_agent_accepts_openrouter_with_workspace_api_key_source(self) -> None:
+        backing_install = _backing_install()
+        persisted_row = _deployed_agent_row(
+            metadata={
+                "provider": "openrouter",
+                "model": "openai/gpt-5.2",
+                "runtime_supply": {
+                    "ai_source": {"kind": "workspace_api_key", "payer": "BYOK"},
+                },
+            }
+        )
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
+                new=AsyncMock(return_value=backing_install),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.create_deployed_agent",
+                new=AsyncMock(return_value=persisted_row),
+            ) as create_deployed_agent_mock,
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(return_value=backing_install),
+            ),
+        ):
+            created = await deployed_agent_service.create_draft_deployed_agent(
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                name="Store Assistant",
+                provider="openrouter",
+                model="openai/gpt-5.2",
+                config={"runtime_supply": {"ai_source": {"kind": "workspace_api_key"}}},
+            )
+
+        self.assertEqual(created["provider"], "openrouter")
+        self.assertEqual(created["model"], "openai/gpt-5.2")
+        metadata = create_deployed_agent_mock.await_args.kwargs["metadata"]
+        self.assertEqual(metadata["provider"], "openrouter")
+        self.assertEqual(metadata["model"], "openai/gpt-5.2")
+        self.assertEqual(metadata["runtime_supply"]["ai_source"]["kind"], "workspace_api_key")
+
+    async def test_create_draft_deployed_agent_rejects_sage_only_codex_provider_payload(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.create_deployed_agent",
+                new=AsyncMock(return_value=_deployed_agent_row()),
+            ) as create_deployed_agent_mock,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.create_draft_deployed_agent(
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    name="Store Assistant",
+                    provider="openai-codex",
+                    config={"runtime_supply": {"ai_source": {"kind": "subscription_passthrough"}}},
+                )
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertIn("requires local_companion runtime", error.exception.detail)
+        create_deployed_agent_mock.assert_not_awaited()
+
     async def test_create_draft_deployed_agent_applies_workspace_admin_defaults(self) -> None:
         backing_install = _backing_install()
         persisted_row = _deployed_agent_row(

@@ -125,3 +125,48 @@ def test_pro_line_item_preserves_internal_route_metadata() -> None:
     assert item["effective_model"] == "deepseek-v4-pro"
     assert item["fallback_provider"] == "deepseek"
     assert item["fallback_model"] == "deepseek-v4-flash"
+
+
+def test_unified_ledger_event_carries_measurement_dimensions() -> None:
+    event = credit_ledger_contract.build_unified_credit_ledger_event(
+        surface="studio",
+        source_surface="deployed_agent_channel",
+        payer="BYOK",
+        credit_type="ai_tokens",
+        provider="openrouter",
+        model="openai/gpt-5.2",
+        runtime_target="cloud_default",
+        workspace_id="ws-1",
+        user_id="user-1",
+        thread_id="thread-1",
+        run_id="run-1",
+        agent_id="agent-1",
+        provider_usage={"prompt_tokens": 10, "completion_tokens": 5},
+        platform_cost_usd=0,
+        provider_reported_cost=0.0003,
+        provider_reported_currency="USD",
+        credits_debited=0,
+        estimation_mode="provider_usage_exact",
+        created_at="2026-05-21T00:00:00Z",
+    )
+
+    assert event["surface"] == "studio"
+    assert event["source_surface"] == "deployed_agent_channel"
+    assert event["payer"] == "BYOK"
+    assert event["credit_type"] == "ai_tokens"
+    assert event["provider_reported_cost"] == 0.0003
+    assert event["credits_debited"] == 0.0
+    assert event["provider_usage"]["prompt_tokens"] == 10
+
+
+def test_unified_ledger_event_rejects_unknown_surface() -> None:
+    try:
+        credit_ledger_contract.build_unified_credit_ledger_event(
+            surface="runtime",
+            payer="platform_credits",
+            credit_type="ai_tokens",
+        )
+    except ValueError as exc:
+        assert "surface" in str(exc)
+    else:
+        raise AssertionError("expected invalid surface to fail")

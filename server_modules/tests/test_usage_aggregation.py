@@ -184,6 +184,35 @@ class UsageAggregationTests(unittest.TestCase):
         self.assertEqual(usage["completion_tokens"], 25)
         self.assertEqual(usage["estimation_mode"], "provider_usage_exact")
 
+    def test_openrouter_usage_normalizer_preserves_cache_reasoning_and_reported_cost(self):
+        record = usage_accounting_service.normalize_provider_usage(
+            provider="openrouter",
+            model="openai/gpt-5.2",
+            usage={
+                "prompt_tokens": 120,
+                "completion_tokens": 35,
+                "total_tokens": 155,
+                "prompt_tokens_details": {
+                    "cached_tokens": 20,
+                    "cache_write_tokens": 10,
+                },
+                "completion_tokens_details": {"reasoning_tokens": 12},
+                "cost": 0.0042,
+                "currency": "USD",
+            },
+            run_id="run-openrouter",
+            payer="BYOK",
+        )
+
+        usage = usage_accounting_service.usage_projection_from_record(record)
+        self.assertEqual(usage["prompt_tokens"], 100)
+        self.assertEqual(usage["cache_read_tokens"], 20)
+        self.assertEqual(usage["cache_write_tokens"], 10)
+        self.assertEqual(usage["reasoning_tokens"], 12)
+        self.assertEqual(usage["provider_cost_usd"], 0.0042)
+        self.assertEqual(record["metadata"]["provider_reported_cost"], 0.0042)
+        self.assertEqual(record["metadata"]["provider_reported_currency"], "USD")
+
     def test_gemini_usage_normalizer_captures_cached_and_thinking_tokens(self):
         record = usage_accounting_service.normalize_provider_usage(
             provider="gemini",

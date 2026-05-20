@@ -610,15 +610,24 @@ def normalize_provider_usage(
         thinking_tokens = 0
     else:
         prompt_tokens = _nonnegative_int(raw.get("prompt_tokens") or raw.get("input_tokens"))
-        prompt_details = _coerce_dict(raw.get("prompt_tokens_details"))
+        prompt_details = _coerce_dict(raw.get("prompt_tokens_details") or raw.get("input_tokens_details"))
         completion_details = _coerce_dict(raw.get("completion_tokens_details"))
         cache_read_tokens = _nonnegative_int(
             raw.get("cached_input_tokens")
             or prompt_details.get("cached_tokens")
+            or prompt_details.get("cache_read_tokens")
+            or prompt_details.get("cache_read_input_tokens")
             or raw.get("cache_read_input_tokens")
+            or raw.get("cache_read_tokens")
         )
         input_tokens = max(0, prompt_tokens - cache_read_tokens)
-        cache_write_tokens = _nonnegative_int(raw.get("cache_write_input_tokens") or raw.get("cache_creation_input_tokens"))
+        cache_write_tokens = _nonnegative_int(
+            raw.get("cache_write_input_tokens")
+            or raw.get("cache_creation_input_tokens")
+            or raw.get("cache_write_tokens")
+            or prompt_details.get("cache_write_tokens")
+            or prompt_details.get("cache_creation_tokens")
+        )
         reasoning_tokens = _nonnegative_int(
             raw.get("reasoning_tokens")
             or completion_details.get("reasoning_tokens")
@@ -632,6 +641,15 @@ def normalize_provider_usage(
     total_tokens = _nonnegative_int(raw.get("total_tokens") or raw.get("totalTokenCount"))
     if total_tokens <= 0:
         total_tokens = input_tokens + cache_read_tokens + cache_write_tokens + output_tokens
+    provider_reported_cost = _safe_float(
+        raw.get("cost")
+        or raw.get("provider_reported_cost")
+        or raw.get("provider_cost_usd")
+        or raw.get("estimated_cost_usd")
+    )
+    provider_reported_currency = _normalize_optional_text(
+        raw.get("currency") or raw.get("provider_reported_currency")
+    )
     return build_usage_accounting_record(
         run_id=run_id,
         surface=surface,
@@ -649,8 +667,14 @@ def normalize_provider_usage(
         visible_output_tokens=visible_output_tokens,
         reasoning_tokens=reasoning_tokens,
         thinking_tokens=thinking_tokens,
+        provider_cost_usd=provider_reported_cost,
         estimation_mode="provider_usage_exact" if raw else "provider_usage_missing",
-        metadata={**_coerce_dict(metadata), "raw_usage_keys": sorted(str(key) for key in raw.keys())},
+        metadata={
+            **_coerce_dict(metadata),
+            "raw_usage_keys": sorted(str(key) for key in raw.keys()),
+            "provider_reported_cost": provider_reported_cost,
+            "provider_reported_currency": provider_reported_currency,
+        },
         payer=payer,
         require_known_pricing=require_known_pricing,
     )

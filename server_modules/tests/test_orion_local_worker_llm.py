@@ -379,7 +379,7 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
     def test_openai_chat_text_applies_provider_output_cap_to_payload(self):
         captured_payload: dict[str, object] = {}
 
-        def _mock_request(*, base_url, api_key, payload, timeout_seconds):
+        def _mock_request(*, base_url, api_key, payload, timeout_seconds, query_params=None):
             captured_payload.update(payload)
             return {
                 "choices": [{"message": {"content": "ok"}}],
@@ -407,6 +407,63 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertEqual(model, "gpt-4.1")
         self.assertEqual(captured_payload.get("max_tokens"), 777)
         self.assertEqual(usage, {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8})
+
+    def test_openai_compatible_supports_byok_first_provider_defaults(self):
+        self.assertIn("openrouter", worker_llm.SUPPORTED_PROVIDERS)
+        self.assertIn("groq", worker_llm.SUPPORTED_PROVIDERS)
+        self.assertEqual(
+            worker_llm.resolve_openai_compatible_base_url("openrouter"),
+            "https://openrouter.ai/api/v1",
+        )
+        self.assertEqual(
+            worker_llm.resolve_openai_compatible_base_url("groq"),
+            "https://api.groq.com/openai/v1",
+        )
+        self.assertEqual(worker_llm.default_openai_compatible_model("groq"), "llama-3.3-70b-versatile")
+
+    def test_azure_openai_requires_endpoint_deployment_and_api_version(self):
+        base_url = worker_llm.resolve_openai_compatible_base_url(
+            "azure_openai",
+            credential_override={"endpoint": "https://example.openai.azure.com"},
+            model="deployment-a",
+        )
+        self.assertEqual(
+            base_url,
+            "https://example.openai.azure.com/openai/deployments/deployment-a",
+        )
+
+        _text, _usage, model, error = worker_llm.openai_chat_text(
+            "system",
+            "hello",
+            provider="azure_openai",
+            credential_override={
+                "api_key": "k",
+                "endpoint": "https://example.openai.azure.com",
+                "deployment": "deployment-a",
+            },
+        )
+        self.assertEqual(model, "deployment-a")
+        self.assertIn("API version", error)
+
+    def test_custom_openai_compatible_requires_base_url_and_model(self):
+        _text, _usage, model, error = worker_llm.openai_chat_text(
+            "system",
+            "hello",
+            provider="custom_openai_compatible",
+            credential_override={"api_key": "k"},
+        )
+        self.assertEqual(model, "")
+        self.assertIn("model id", error)
+
+        _text, _usage, model, error = worker_llm.openai_chat_text(
+            "system",
+            "hello",
+            provider="custom_openai_compatible",
+            model_override="my-model",
+            credential_override={"api_key": "k"},
+        )
+        self.assertEqual(model, "my-model")
+        self.assertIn("base URL", error)
 
     def test_generate_chat_retries_rate_limited_provider_before_fallback(self):
         with patch.object(worker_llm, "provider_order_for_run", return_value=["openai", "anthropic"]), patch.object(

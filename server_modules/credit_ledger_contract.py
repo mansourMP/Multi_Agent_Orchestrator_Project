@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from server_modules import empyralis_model_tier_contract
@@ -33,6 +34,8 @@ CREDIT_LEDGER_TYPES: tuple[str, ...] = (
     "mini_app_action",
     "custom_api_key_usage",
 )
+PRODUCT_SURFACES: tuple[str, ...] = ("sage", "studio", "mini_app")
+LEDGER_PAYERS: tuple[str, ...] = ("platform_credits", "BYOK", "local", "subscription_passthrough")
 
 _TOKEN_ITEM_TYPES = {"ai_light_tokens", "ai_pro_tokens", "ai_max_tokens", "local_ai_tokens"}
 _MINUTE_ITEM_TYPES = {"virtual_browser_minutes", "virtual_desktop_minutes", "virtual_code_sandbox_minutes"}
@@ -71,6 +74,24 @@ def _float_count(value: Any) -> float:
         return max(0.0, round(float(value or 0.0), 6))
     except Exception:
         return 0.0
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return max(0.0, round(float(value), 6))
+    except Exception:
+        return None
+
+
+def _optional_text(value: Any) -> Optional[str]:
+    token = _text(value)
+    return token or None
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_tier(value: Any) -> Optional[str]:
@@ -228,3 +249,63 @@ def build_credit_ledger_line_item(
         **payload,
         **line_item,
     }
+
+
+def build_unified_credit_ledger_event(
+    *,
+    surface: Any,
+    payer: Any,
+    credit_type: Any,
+    source_surface: Any = None,
+    provider: Any = None,
+    model: Any = None,
+    runtime_target: Any = None,
+    workspace_id: Any = None,
+    user_id: Any = None,
+    thread_id: Any = None,
+    run_id: Any = None,
+    agent_id: Any = None,
+    app_id: Any = None,
+    provider_usage: Any = None,
+    platform_cost_usd: Any = None,
+    provider_reported_cost: Any = None,
+    provider_reported_currency: Any = None,
+    credits_debited: Any = None,
+    estimation_mode: Any = None,
+    created_at: Any = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_surface = _text(surface).lower()
+    if resolved_surface not in PRODUCT_SURFACES:
+        raise ValueError("surface must be sage, studio, or mini_app.")
+    resolved_credit_type = _text(credit_type).lower()
+    if resolved_credit_type not in CREDIT_LEDGER_TYPES:
+        raise ValueError("credit_type is not supported.")
+    resolved_payer = _text(payer) or "platform_credits"
+    if resolved_payer not in LEDGER_PAYERS:
+        raise ValueError("payer is not supported.")
+    usage = dict(provider_usage or {}) if isinstance(provider_usage, dict) else {}
+    event = {
+        "surface": resolved_surface,
+        "source_surface": _text(source_surface).lower() or resolved_surface,
+        "payer": resolved_payer,
+        "credit_type": resolved_credit_type,
+        "provider": _optional_text(provider),
+        "model": _optional_text(model),
+        "runtime_target": _optional_text(runtime_target),
+        "workspace_id": _optional_text(workspace_id),
+        "user_id": _optional_text(user_id),
+        "thread_id": _optional_text(thread_id),
+        "run_id": _optional_text(run_id),
+        "agent_id": _optional_text(agent_id),
+        "app_id": _optional_text(app_id),
+        "provider_usage": usage,
+        "platform_cost_usd": _optional_float(platform_cost_usd),
+        "provider_reported_cost": _optional_float(provider_reported_cost),
+        "provider_reported_currency": _optional_text(provider_reported_currency),
+        "credits_debited": _float_count(credits_debited),
+        "estimation_mode": _optional_text(estimation_mode),
+        "created_at": _optional_text(created_at) or _utc_now_iso(),
+        "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
+    }
+    return event

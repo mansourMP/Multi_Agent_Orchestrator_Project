@@ -159,6 +159,87 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
         self.assertEqual(payload["ai_source"]["payer"], "local")
         self.assertTrue(payload["ai_source"]["requires_local_runtime"])
 
+    def test_studio_platform_credits_reject_byok_first_provider(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_studio_ai_source_provider_runtime(
+                ai_source={"kind": "empyralis_credits"},
+                provider="openrouter",
+                model="openai/gpt-5.2",
+                runtime_placement="managed_cloud",
+                runtime_target="cloud",
+                provider_scopes=["sage_personal", "workspace_api", "studio_safe"],
+                pricing_known=False,
+            )
+
+        self.assertIn("BYOK/workspace-key only", str(error.exception))
+
+    def test_studio_workspace_api_key_accepts_byok_first_provider(self):
+        payload = contract.validate_studio_ai_source_provider_runtime(
+            ai_source={"kind": "workspace_api_key"},
+            provider="groq",
+            model="llama-3.3-70b-versatile",
+            runtime_placement="managed_cloud",
+            runtime_target="cloud",
+            provider_scopes=["sage_personal", "workspace_api", "studio_safe"],
+        )
+
+        self.assertEqual(payload["ai_source"]["kind"], "workspace_api_key")
+        self.assertEqual(payload["provider"], "groq")
+
+    def test_studio_rejects_provider_without_studio_safe_scope(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_studio_ai_source_provider_runtime(
+                ai_source={"kind": "empyralis_credits"},
+                provider="openai-codex",
+                model="gpt-5.2-codex",
+                runtime_placement="managed_cloud",
+                runtime_target="cloud",
+                provider_scopes=["sage_personal"],
+            )
+
+        self.assertIn("not available for Studio agents", str(error.exception))
+
+    def test_studio_subscription_passthrough_allows_cli_provider_on_local_runtime(self):
+        payload = contract.validate_studio_ai_source_provider_runtime(
+            ai_source={"kind": "subscription_passthrough"},
+            provider="openai-codex",
+            model="gpt-5.3-codex",
+            runtime_placement="customer_local",
+            runtime_target="local",
+            provider_scopes=["sage_personal"],
+        )
+
+        self.assertEqual(payload["ai_source"]["kind"], "subscription_passthrough")
+        self.assertEqual(payload["provider"], "openai-codex")
+
+    def test_studio_subscription_passthrough_requires_local_runtime_and_cli_provider(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_studio_ai_source_provider_runtime(
+                ai_source={"kind": "subscription_passthrough"},
+                provider="openai",
+                model="gpt-5.4",
+                runtime_placement="managed_cloud",
+                runtime_target="cloud",
+                provider_scopes=["sage_personal", "workspace_api", "studio_safe"],
+            )
+
+        message = str(error.exception)
+        self.assertIn("requires local_companion runtime", message)
+        self.assertIn("limited to codex_cli or claude_code_cli", message)
+
+    def test_studio_local_model_requires_local_runtime(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_studio_ai_source_provider_runtime(
+                ai_source={"kind": "local_model"},
+                provider="ollama",
+                model="llama3.2",
+                runtime_placement="managed_cloud",
+                runtime_target="cloud",
+                provider_scopes=["sage_personal", "studio_safe", "local_only"],
+            )
+
+        self.assertIn("local_companion runtime", str(error.exception))
+
     def test_validate_mode_capability_matrix_rejects_text_agent_computer_automation(self):
         with self.assertRaises(ValueError) as error:
             contract.validate_mode_capability_matrix(

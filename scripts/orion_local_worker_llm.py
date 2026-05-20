@@ -29,7 +29,22 @@ from server_modules.agent_turn import (
 from server_modules import usage_accounting_service
 from server_modules.usage_reporting import build_usage_record
 
-SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama", "ollama_cloud", "qwen", "deepseek", "mistral")
+SUPPORTED_PROVIDERS = (
+    "codex_cli",
+    "claude_code_cli",
+    "openai",
+    "anthropic",
+    "gemini",
+    "ollama",
+    "ollama_cloud",
+    "qwen",
+    "deepseek",
+    "mistral",
+    "groq",
+    "openrouter",
+    "azure_openai",
+    "custom_openai_compatible",
+)
 LOCAL_CLI_AUTH_MODES = {"local_cli", "local_subscription", "subscription_cli", "claude_code_cli"}
 AUTH_SCOPE_ERROR_MARKERS = (
     "api.responses.write",
@@ -893,6 +908,38 @@ def get_mistral_api_key() -> str:
     ).strip()
 
 
+def get_groq_api_key() -> str:
+    return (
+        os.getenv("ORION_LOCAL_WORKER_GROQ_API_KEY")
+        or os.getenv("GROQ_API_KEY")
+        or ""
+    ).strip()
+
+
+def get_openrouter_api_key() -> str:
+    return (
+        os.getenv("ORION_LOCAL_WORKER_OPENROUTER_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or ""
+    ).strip()
+
+
+def get_azure_openai_api_key() -> str:
+    return (
+        os.getenv("ORION_LOCAL_WORKER_AZURE_OPENAI_API_KEY")
+        or os.getenv("AZURE_OPENAI_API_KEY")
+        or ""
+    ).strip()
+
+
+def get_custom_openai_compatible_api_key() -> str:
+    return (
+        os.getenv("ORION_LOCAL_WORKER_CUSTOM_OPENAI_COMPATIBLE_API_KEY")
+        or os.getenv("CUSTOM_OPENAI_COMPATIBLE_API_KEY")
+        or ""
+    ).strip()
+
+
 def get_ollama_cloud_api_key() -> str:
     return (
         os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_API_KEY")
@@ -1277,8 +1324,17 @@ def _openai_compatible_chat_completion_request(
     api_key: str,
     payload: Dict[str, Any],
     timeout_seconds: int,
+    query_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     url = f"{ensure_trailing_slashless(base_url)}/chat/completions"
+    query = {
+        str(key): str(value)
+        for key, value in dict(query_params or {}).items()
+        if str(key or "").strip() and str(value or "").strip()
+    }
+    if query:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}{urllib.parse.urlencode(query)}"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -1598,18 +1654,51 @@ def resolve_openai_compatible_api_key(
         return get_deepseek_api_key()
     if pid == "mistral":
         return get_mistral_api_key()
+    if pid == "groq":
+        return get_groq_api_key()
+    if pid == "openrouter":
+        return get_openrouter_api_key()
+    if pid == "azure_openai":
+        return get_azure_openai_api_key()
+    if pid == "custom_openai_compatible":
+        return get_custom_openai_compatible_api_key()
     return ""
 
 
 def resolve_openai_compatible_base_url(
     provider: str,
     credential_override: Optional[Dict[str, Any]] = None,
+    model: Any = None,
 ) -> str:
     override = credential_override if isinstance(credential_override, dict) else {}
     override_base_url = str(override.get("base_url") or "").strip()
+    pid = str(provider or "openai").strip().lower()
+    if pid == "azure_openai":
+        deployment = str(
+            override.get("deployment")
+            or override.get("deployment_name")
+            or override.get("azure_deployment")
+            or model
+            or ""
+        ).strip()
+        endpoint = str(
+            override.get("endpoint")
+            or override.get("azure_endpoint")
+            or os.getenv("ORION_LOCAL_WORKER_AZURE_OPENAI_ENDPOINT")
+            or os.getenv("AZURE_OPENAI_ENDPOINT")
+            or ""
+        ).strip()
+        if override_base_url and "/openai/deployments/" in override_base_url:
+            return ensure_trailing_slashless(override_base_url.rsplit("/chat/completions", 1)[0])
+        if endpoint and deployment:
+            return ensure_trailing_slashless(
+                f"{ensure_trailing_slashless(endpoint)}/openai/deployments/{urllib.parse.quote(deployment, safe='')}"
+            )
+        if override_base_url:
+            return ensure_trailing_slashless(override_base_url)
+        return ""
     if override_base_url:
         return ensure_trailing_slashless(override_base_url)
-    pid = str(provider or "openai").strip().lower()
     if pid == "qwen":
         return ensure_trailing_slashless(
             os.getenv("ORION_LOCAL_WORKER_QWEN_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -1622,6 +1711,20 @@ def resolve_openai_compatible_base_url(
         return ensure_trailing_slashless(
             os.getenv("ORION_LOCAL_WORKER_MISTRAL_URL") or "https://api.mistral.ai/v1"
         )
+    if pid == "groq":
+        return ensure_trailing_slashless(
+            os.getenv("ORION_LOCAL_WORKER_GROQ_URL") or "https://api.groq.com/openai/v1"
+        )
+    if pid == "openrouter":
+        return ensure_trailing_slashless(
+            os.getenv("ORION_LOCAL_WORKER_OPENROUTER_URL") or "https://openrouter.ai/api/v1"
+        )
+    if pid == "custom_openai_compatible":
+        return ensure_trailing_slashless(
+            os.getenv("ORION_LOCAL_WORKER_CUSTOM_OPENAI_COMPATIBLE_URL")
+            or os.getenv("CUSTOM_OPENAI_COMPATIBLE_BASE_URL")
+            or ""
+        )
     return ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OPENAI_URL") or "https://api.openai.com/v1")
 
 
@@ -1633,7 +1736,44 @@ def default_openai_compatible_model(provider: str) -> str:
         return (os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_MODEL") or "deepseek-chat").strip() or "deepseek-chat"
     if pid == "mistral":
         return (os.getenv("ORION_LOCAL_WORKER_MISTRAL_MODEL") or "mistral-small-latest").strip() or "mistral-small-latest"
+    if pid == "groq":
+        return (os.getenv("ORION_LOCAL_WORKER_GROQ_MODEL") or "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile"
+    if pid == "openrouter":
+        return (os.getenv("ORION_LOCAL_WORKER_OPENROUTER_MODEL") or "openai/gpt-5.2").strip() or "openai/gpt-5.2"
+    if pid == "azure_openai":
+        return (
+            os.getenv("ORION_LOCAL_WORKER_AZURE_OPENAI_DEPLOYMENT")
+            or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+            or os.getenv("ORION_LOCAL_WORKER_AZURE_OPENAI_MODEL")
+            or ""
+        ).strip()
+    if pid == "custom_openai_compatible":
+        return (
+            os.getenv("ORION_LOCAL_WORKER_CUSTOM_OPENAI_COMPATIBLE_MODEL")
+            or os.getenv("CUSTOM_OPENAI_COMPATIBLE_MODEL")
+            or ""
+        ).strip()
     return (os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
+
+
+def openai_compatible_model_from_request(
+    provider: str,
+    model_override: Optional[str] = None,
+    credential_override: Optional[Dict[str, Any]] = None,
+) -> str:
+    model = str(model_override or "").strip()
+    override = credential_override if isinstance(credential_override, dict) else {}
+    pid = str(provider or "openai").strip().lower()
+    if not model and pid == "azure_openai":
+        model = str(
+            override.get("deployment")
+            or override.get("deployment_name")
+            or override.get("azure_deployment")
+            or ""
+        ).strip()
+    if not model and pid == "custom_openai_compatible":
+        model = str(override.get("model") or override.get("model_id") or "").strip()
+    return (model or default_openai_compatible_model(provider)).strip()
 
 
 def openai_compatible_missing_key_error(provider: str) -> str:
@@ -1644,7 +1784,51 @@ def openai_compatible_missing_key_error(provider: str) -> str:
         return "No DeepSeek API key configured. Add one from the AI accounts page."
     if pid == "mistral":
         return "No Mistral API key configured. Add one from the AI accounts page."
+    if pid == "groq":
+        return "No Groq API key configured. Add one from the AI accounts page."
+    if pid == "openrouter":
+        return "No OpenRouter API key configured. Add one from the AI accounts page."
+    if pid == "azure_openai":
+        return "No Azure OpenAI API key configured. Add one from the AI accounts page."
+    if pid == "custom_openai_compatible":
+        return "No custom OpenAI-compatible API key configured. Add one from the AI accounts page."
     return OPENAI_API_KEY_MISSING_ERROR
+
+
+def openai_compatible_missing_model_error(provider: str) -> str:
+    pid = str(provider or "openai").strip().lower()
+    if pid == "azure_openai":
+        return "Azure OpenAI requires a workspace deployment/model id."
+    if pid == "custom_openai_compatible":
+        return "Custom OpenAI-compatible providers require an explicit model id."
+    return "Provider model is not configured."
+
+
+def openai_compatible_missing_base_url_error(provider: str) -> str:
+    pid = str(provider or "openai").strip().lower()
+    if pid == "azure_openai":
+        return "Azure OpenAI requires a workspace endpoint/base URL and API version."
+    if pid == "custom_openai_compatible":
+        return "Custom OpenAI-compatible providers require a workspace base URL."
+    return "Provider base URL is not configured."
+
+
+def openai_compatible_query_params(
+    provider: str,
+    credential_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    pid = str(provider or "openai").strip().lower()
+    if pid != "azure_openai":
+        return {}
+    override = credential_override if isinstance(credential_override, dict) else {}
+    api_version = str(
+        override.get("api_version")
+        or override.get("azure_api_version")
+        or os.getenv("ORION_LOCAL_WORKER_AZURE_OPENAI_API_VERSION")
+        or os.getenv("AZURE_OPENAI_API_VERSION")
+        or ""
+    ).strip()
+    return {"api-version": api_version} if api_version else {}
 
 
 def openai_chat_json(
@@ -1660,10 +1844,21 @@ def openai_chat_json(
     if not api_key:
         return None, None, "", openai_compatible_missing_key_error(provider)
 
-    model = (str(model_override or "").strip() or default_openai_compatible_model(provider)).strip() or default_openai_compatible_model(provider)
+    model = openai_compatible_model_from_request(
+        provider,
+        model_override=model_override,
+        credential_override=credential_override,
+    )
+    if not model:
+        return None, None, "", openai_compatible_missing_model_error(provider)
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
-    base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override)
+    base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override, model=model)
+    if not base_url:
+        return None, None, model, openai_compatible_missing_base_url_error(provider)
+    query_params = openai_compatible_query_params(provider, credential_override=credential_override)
+    if str(provider or "").strip().lower() == "azure_openai" and not query_params.get("api-version"):
+        return None, None, model, openai_compatible_missing_base_url_error(provider)
     max_tokens = _resolved_output_token_cap(provider, model)
 
     messages: List[Dict[str, str]] = []
@@ -1683,6 +1878,7 @@ def openai_chat_json(
             api_key=api_key,
             payload=payload,
             timeout_seconds=timeout_seconds,
+            query_params=query_params,
         )
         choices = parsed.get("choices") if isinstance(parsed, dict) else None
         if not isinstance(choices, list) or not choices:
@@ -1714,10 +1910,21 @@ def openai_chat_text(
     if not api_key:
         return "", None, "", openai_compatible_missing_key_error(provider)
 
-    model = (str(model_override or "").strip() or default_openai_compatible_model(provider)).strip() or default_openai_compatible_model(provider)
+    model = openai_compatible_model_from_request(
+        provider,
+        model_override=model_override,
+        credential_override=credential_override,
+    )
+    if not model:
+        return "", None, "", openai_compatible_missing_model_error(provider)
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
-    base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override)
+    base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override, model=model)
+    if not base_url:
+        return "", None, model, openai_compatible_missing_base_url_error(provider)
+    query_params = openai_compatible_query_params(provider, credential_override=credential_override)
+    if str(provider or "").strip().lower() == "azure_openai" and not query_params.get("api-version"):
+        return "", None, model, openai_compatible_missing_base_url_error(provider)
     max_tokens = _resolved_output_token_cap(provider, model)
 
     messages: List[Dict[str, str]] = []
@@ -1736,6 +1943,7 @@ def openai_chat_text(
             api_key=api_key,
             payload=payload,
             timeout_seconds=timeout_seconds,
+            query_params=query_params,
         )
         choices = parsed.get("choices") if isinstance(parsed, dict) else None
         if not isinstance(choices, list) or not choices:
@@ -1809,10 +2017,24 @@ def iter_openai_compatible_chat_events(
         yield {"type": "error", "error": openai_compatible_missing_key_error(provider), "model": ""}
         return
 
-    model = (str(model_override or "").strip() or default_openai_compatible_model(provider)).strip() or default_openai_compatible_model(provider)
+    model = openai_compatible_model_from_request(
+        provider,
+        model_override=model_override,
+        credential_override=credential_override,
+    )
+    if not model:
+        yield {"type": "error", "error": openai_compatible_missing_model_error(provider), "model": ""}
+        return
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
-    base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override)
+    base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override, model=model)
+    if not base_url:
+        yield {"type": "error", "error": openai_compatible_missing_base_url_error(provider), "model": model}
+        return
+    query_params = openai_compatible_query_params(provider, credential_override=credential_override)
+    if str(provider or "").strip().lower() == "azure_openai" and not query_params.get("api-version"):
+        yield {"type": "error", "error": openai_compatible_missing_base_url_error(provider), "model": model}
+        return
     max_tokens = _resolved_output_token_cap(provider, model)
 
     messages = _build_openai_compatible_messages(user_prompt, prior_messages=prior_messages)
@@ -1848,6 +2070,7 @@ def iter_openai_compatible_chat_events(
                 api_key=api_key,
                 payload=payload,
                 timeout_seconds=timeout_seconds,
+                query_params=query_params,
             )
             choices = parsed.get("choices") if isinstance(parsed, dict) else None
             if not isinstance(choices, list) or not choices:
@@ -3606,7 +3829,7 @@ def generate_chat_reply_with_provider_fallback(
                 f"{provider_error or provider_error_chat or 'unknown_error'}"
             )
             continue
-        if provider in {"qwen", "deepseek", "mistral"}:
+        if provider in {"qwen", "deepseek", "mistral", "groq", "openrouter", "azure_openai", "custom_openai_compatible"}:
             text, usage, model, provider_error = _run_text_with_limits(
                 provider,
                 provider_model,

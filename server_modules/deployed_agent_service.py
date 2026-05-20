@@ -20,6 +20,7 @@ from server_modules import deployed_agent_virtual_runtime_service
 from server_modules import entitlements_service
 from server_modules import external_user_privacy_service
 from server_modules import provider_catalog_service
+from server_modules import pricing_registry_service
 from server_modules import product_catalog_live_data_service
 from server_modules import runtime_attachment_service
 from server_modules import run_state_repository
@@ -2072,6 +2073,41 @@ def _apply_provider_model_selection_to_config(
     return deployed_agent_config_schema.DeployedAgentConfig.model_validate(next_payload)
 
 
+def _enforce_ai_source_provider_runtime(
+    *,
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+) -> None:
+    provider = _normalize_optional_text(config.provider)
+    model = _normalize_optional_text(config.model)
+    provider_entry = (
+        provider_catalog_service.provider_profiles.provider_catalog_entry(provider)
+        if provider
+        else {}
+    )
+    pricing_known: Optional[bool] = None
+    if provider and model:
+        pricing_known = bool(
+            pricing_registry_service.catalog_price_projection(provider, model).get("pricing_known")
+        )
+    try:
+        deployed_agent_runtime_contract_service.validate_studio_ai_source_provider_runtime(
+            ai_source=(
+                config.runtime_supply.get("ai_source")
+                if isinstance(config.runtime_supply, dict)
+                else None
+            ),
+            provider=provider,
+            model=model,
+            runtime_placement=config.runtime_placement,
+            runtime_target=config.runtime_target,
+            runtime_supply=config.runtime_supply,
+            provider_scopes=provider_entry.get("provider_scopes") if provider_entry else None,
+            pricing_known=pricing_known,
+        )
+    except ValueError as error:
+        raise _http_bad_request(str(error)) from error
+
+
 def _normalize_deployed_agent_metadata(
     value: Any,
     *,
@@ -3154,6 +3190,7 @@ async def create_draft_deployed_agent(
         runtime_targets=runtime_targets,
         explicit_mode=explicit_mode,
     )
+    _enforce_ai_source_provider_runtime(config=draft_config)
     _enforce_runtime_eligibility(
         workspace=workspace,
         workspace_id=resolved_workspace_id,
@@ -4074,6 +4111,7 @@ async def update_deployed_agent(
         and isinstance(updates.get("config"), dict)
         and "studio_agent_mode" in dict(updates.get("config") or {}),
     )
+    _enforce_ai_source_provider_runtime(config=next_config)
     update_explicit_mode = (
         "config" in updates
         and isinstance(updates.get("config"), dict)

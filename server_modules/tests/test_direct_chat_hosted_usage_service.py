@@ -125,6 +125,35 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
         self.assertEqual(event["provider"], "openai")
         self.assertEqual(event["model"], "gpt-4o")
 
+    def test_persist_direct_chat_hosted_usage_best_effort_records_subscription_transparency_row(self) -> None:
+        with patch(
+            "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_credit_ledger_event",
+            new=AsyncMock(return_value={"id": "cled_subscription"}),
+        ) as record_credit_ledger:
+            direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                workspace_id="ws-1",
+                thread_id="thread-1",
+                session_ctx={"tenant_id": "tenant-1", "request_id": "req-cli-1"},
+                availability_payload={
+                    "credential_plane": "local_subscription",
+                    "billing_source": "subscription_passthrough",
+                },
+                usage_masked={
+                    "provider": "codex_cli",
+                    "model": "gpt-5.4",
+                    "total_tokens": 0,
+                },
+                requested_provider="codex_cli",
+                effective_provider="codex_cli",
+                requested_model="gpt-5.4",
+                effective_model="gpt-5.4",
+            )
+
+        event = record_credit_ledger.await_args.kwargs["event"]
+        self.assertEqual(event["payer"], "subscription_passthrough")
+        self.assertEqual(event["runtime_target"], "local_companion")
+        self.assertEqual(event["credits_debited"], 0.0)
+
     def test_persist_direct_chat_hosted_usage_best_effort_fails_closed_on_unknown_pricing(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unknown pricing"):
             direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(

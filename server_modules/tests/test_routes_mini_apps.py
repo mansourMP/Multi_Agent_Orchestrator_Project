@@ -58,7 +58,12 @@ def _exact_usage(*, provider: str = "deepseek", model: str = "deepseek-v4-flash"
     }
 
 
-def _patch_mini_app_billing(monkeypatch: pytest.MonkeyPatch, *, monthly_rows: list[dict] | None = None):
+def _patch_mini_app_billing(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    monthly_rows: list[dict] | None = None,
+    durable_rows: list[dict] | None = None,
+):
     monkeypatch.setattr(
         routes_mini_apps.control_plane_repository,
         "ensure_control_plane_schema",
@@ -72,7 +77,7 @@ def _patch_mini_app_billing(monkeypatch: pytest.MonkeyPatch, *, monthly_rows: li
     monkeypatch.setattr(
         routes_mini_apps.control_plane_repository,
         "list_credit_ledger_events",
-        AsyncMock(return_value=[]),
+        AsyncMock(return_value=list(durable_rows or [])),
     )
     ledger_mock = AsyncMock(return_value={"id": "shost_mini_app_1"})
     monkeypatch.setattr(
@@ -591,6 +596,68 @@ async def test_mini_app_invoke_route_blocks_monthly_cap_overspend(monkeypatch: p
                     "app_id": "writing",
                     "usage_accounting": {"total_tokens": 498},
                 },
+            }
+        ],
+    )
+    append_event = AsyncMock(return_value={"id": "activity-1"})
+    monkeypatch.setattr(routes_mini_apps.activity_ledger_service, "append_activity_event", append_event)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda workspace_id, app_id, user_input, requested_provider="", requested_model="": {
+            "app_id": app_id,
+            "reply": "ok",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "usage": _exact_usage(provider="deepseek", model="deepseek-v4-flash", total_tokens=3),
+        },
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/writing",
+                json={
+                    "label": "Writing",
+                    "delivery_mode": "structured",
+                    "permissions": ["app.ai.invoke"],
+                    "ai_invoke_policy": {
+                        "consent_status": "granted",
+                        "payer": "platform_credits",
+                        "monthly_credit_cap": 500,
+                        "per_invocation_credit_cap": 50,
+                    },
+                },
+            )
+            assert response.status_code == 200
+            invoke_response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this."),
+            )
+
+    assert invoke_response.status_code == 403
+    assert "monthly credit cap" in invoke_response.json()["detail"]
+    append_event.assert_not_awaited()
+    ledger_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_mini_app_monthly_cap_reads_durable_credit_ledger(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    ledger_mock = _patch_mini_app_billing(
+        monkeypatch,
+        durable_rows=[
+            {
+                "surface": "mini_app",
+                "credit_type": "ai_tokens",
+                "app_id": "writing",
+                "credits_debited": 498,
+                "created_at": "2026-05-10T00:00:00Z",
             }
         ],
     )

@@ -35,6 +35,30 @@ type CreditUsagePayload = Record<string, unknown> & {
   summary?: Record<string, unknown> | null;
 };
 
+type UsageLedgerFilter = 'all' | 'sage' | 'studio' | 'mini_app' | 'computer_runtime' | 'non_platform';
+
+const USAGE_LEDGER_FILTERS: Array<{ id: UsageLedgerFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'sage', label: 'Sage' },
+  { id: 'studio', label: 'Studio' },
+  { id: 'mini_app', label: 'Mini-apps' },
+  { id: 'computer_runtime', label: 'Runtime' },
+  { id: 'non_platform', label: 'No-credit rows' },
+];
+
+function usageLedgerQuery(filter: UsageLedgerFilter): {
+  surface?: string | null;
+  creditType?: string | null;
+} {
+  if (filter === 'sage' || filter === 'studio' || filter === 'mini_app') {
+    return { surface: filter };
+  }
+  if (filter === 'computer_runtime') {
+    return { creditType: 'computer_runtime' };
+  }
+  return {};
+}
+
 function readText(value: unknown, fallback = 'n/a'): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
 }
@@ -136,6 +160,7 @@ export function WorkstationBillingPane() {
   const [creditCapPending, setCreditCapPending] = useState(false);
   const [creditPurchaseAmount, setCreditPurchaseAmount] = useState('');
   const [creditPurchasePending, setCreditPurchasePending] = useState(false);
+  const [usageFilter, setUsageFilter] = useState<UsageLedgerFilter>('all');
 
   useEffect(() => {
     let cancelled = false;
@@ -143,7 +168,7 @@ export function WorkstationBillingPane() {
     setError(null);
     void Promise.allSettled([
       services.client.getBillingSummary(),
-      services.client.getCreditUsage({ limit: 30 }),
+      services.client.getCreditUsage({ limit: 30, ...usageLedgerQuery(usageFilter) }),
     ])
       .then(([summaryResult, usageResult]) => {
         if (cancelled) {
@@ -176,7 +201,7 @@ export function WorkstationBillingPane() {
     return () => {
       cancelled = true;
     };
-  }, [services.client]);
+  }, [services.client, usageFilter]);
 
   const subscription = summary && typeof summary.subscription === 'object'
     ? summary.subscription as Record<string, unknown>
@@ -207,8 +232,14 @@ export function WorkstationBillingPane() {
     ? creditUsage.summary as Record<string, unknown>
     : {};
   const creditUsageRows = useMemo(
-    () => Array.isArray(creditUsage?.items) ? (creditUsage.items as Array<Record<string, unknown>>) : [],
-    [creditUsage?.items],
+    () => {
+      const rows = Array.isArray(creditUsage?.items) ? (creditUsage.items as Array<Record<string, unknown>>) : [];
+      if (usageFilter === 'non_platform') {
+        return rows.filter((item) => readText(item.payer, '').toLowerCase() !== 'platform_credits');
+      }
+      return rows;
+    },
+    [creditUsage?.items, usageFilter],
   );
 
   useEffect(() => {
@@ -221,7 +252,7 @@ export function WorkstationBillingPane() {
     setError(null);
     void Promise.allSettled([
       services.client.getBillingSummary(),
-      services.client.getCreditUsage({ limit: 30 }),
+      services.client.getCreditUsage({ limit: 30, ...usageLedgerQuery(usageFilter) }),
     ])
       .then(([summaryResult, usageResult]) => {
         if (summaryResult.status === 'fulfilled') {
@@ -240,6 +271,11 @@ export function WorkstationBillingPane() {
         setLoading(false);
         setUsageLoading(false);
       });
+  };
+
+  const chooseUsageFilter = (nextFilter: UsageLedgerFilter) => {
+    setUsageFilter(nextFilter);
+    setUsageLoading(true);
   };
 
   const saveHostedCreditCap = () => {
@@ -349,6 +385,27 @@ export function WorkstationBillingPane() {
             hint="Internal provider/runtime cost."
           />
         </WorkstationSurfaceStatGrid>
+        <WorkstationSurfaceList>
+          <WorkstationSurfaceListItem
+            title="View"
+            subtitle={USAGE_LEDGER_FILTERS.find((item) => item.id === usageFilter)?.label ?? 'All'}
+            description="Filter recent ledger rows by product surface, runtime, or non-platform payer."
+            actions={(
+              <>
+                {USAGE_LEDGER_FILTERS.map((item) => (
+                  <WorkstationActionButton
+                    key={item.id}
+                    type="button"
+                    tone={usageFilter === item.id ? 'primary' : 'secondary'}
+                    onClick={() => chooseUsageFilter(item.id)}
+                  >
+                    {item.label}
+                  </WorkstationActionButton>
+                ))}
+              </>
+            )}
+          />
+        </WorkstationSurfaceList>
         {usageLoading ? (
           <WorkstationSurfaceNotice>Loading usage ledger.</WorkstationSurfaceNotice>
         ) : creditUsageRows.length > 0 ? (

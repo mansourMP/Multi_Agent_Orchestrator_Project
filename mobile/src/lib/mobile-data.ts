@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { mobileApi } from "./api";
-import type { MobileBillingSummaryResponse } from "./api";
+import type { MobileBillingSummaryResponse, MobileCreditUsageResponse } from "./api";
 import { useSessionState } from "./session-context";
 import type {
   ActivitySummary,
@@ -449,6 +449,18 @@ export function useMobileBillingSummary() {
     retry: false,
     refetchInterval: enabled ? 60_000 : false,
     queryFn: async () => mobileApi.getBillingSummary(session!),
+  });
+}
+
+export function useMobileCreditUsage() {
+  const { session } = useSessionState();
+  const enabled = Boolean(session?.runtimeUrl && session?.runtimeKey && session?.workspaceId);
+  return useQuery<MobileCreditUsageResponse>({
+    queryKey: ["mobile", "credit-usage", session?.runtimeUrl, session?.workspaceId],
+    enabled,
+    retry: false,
+    refetchInterval: enabled ? 60_000 : false,
+    queryFn: async () => mobileApi.getCreditUsage(session!),
   });
 }
 

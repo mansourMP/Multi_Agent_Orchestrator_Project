@@ -757,6 +757,7 @@ export type WorkstationClientPaths = {
   billingCreditPurchase: string;
   billingCreditBalance: string;
   billingCreditUsageHistory: (limit?: number) => string;
+  billingCreditUsage: (limit?: number) => string;
   notificationsStream: (options?: WorkstationClientStreamOptions) => string;
   channelEventsStream: (options?: WorkstationClientStreamOptions) => string;
 };
@@ -1127,6 +1128,7 @@ export type WorkstationClient = {
   }) => Promise<Record<string, unknown> | null>;
   getCreditBalance: () => Promise<Record<string, unknown>>;
   getCreditUsageHistory: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  getCreditUsage: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
   createSession: (options: {
     actor: WorkstationSessionActor;
     threadId: string;
@@ -1475,6 +1477,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     billingCreditBalance: `/api/billing/credits/balance${buildQueryString({ workspace_id: workspaceId })}`,
     billingCreditUsageHistory: (limit = 50) =>
       `/api/billing/credits/usage-history${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    billingCreditUsage: (limit = 50) =>
+      `/api/billing/credits/usage${buildQueryString({ workspace_id: workspaceId, limit })}`,
     notificationsStream: (options = {}) =>
       `/api/notifications${buildQueryString({
         workspace_id: workspaceId,
@@ -3358,6 +3362,11 @@ export function createWorkstationClient(
     getCreditUsageHistory: ({ limit } = {}) =>
       requestJson<Record<string, unknown>>({
         path: paths.billingCreditUsageHistory(limit),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getCreditUsage: ({ limit } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.billingCreditUsage(limit),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     createSession,

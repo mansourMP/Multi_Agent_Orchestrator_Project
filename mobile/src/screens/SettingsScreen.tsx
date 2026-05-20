@@ -10,6 +10,7 @@ import { ActionButton } from "@/src/components/system/ActionButton";
 import { MotionPressable } from "@/src/components/system/MotionPressable";
 import {
   useMobileBillingSummary,
+  useMobileCreditUsage,
   useMobileConnectors,
   useMobileMachines,
   useMobileOverviewData,
@@ -62,6 +63,17 @@ function resolveHostedCredits(payload: unknown) {
   };
 }
 
+function resolveCreditUsage(payload: unknown) {
+  const root = payload && typeof payload === "object" ? payload as Record<string, any> : {};
+  const summary = root.summary && typeof root.summary === "object" ? root.summary as Record<string, unknown> : {};
+  const items = Array.isArray(root.items) ? root.items : [];
+  return {
+    count: Math.max(0, readNumber(summary.count, items.length)),
+    credits: Math.max(0, readNumber(summary.total_credits_debited)),
+    cost: Math.max(0, readNumber(summary.total_platform_cost_usd)),
+  };
+}
+
 export function ProfileScreen() {
   const theme = useTheme();
   const router = useRouter();
@@ -71,6 +83,7 @@ export function ProfileScreen() {
   const overview = useMobileOverviewData();
   const gatewayDoctor = usePrimaryGatewayDoctor();
   const billingQuery = useMobileBillingSummary();
+  const creditUsageQuery = useMobileCreditUsage();
   const appVersion = Constants.expoConfig?.version || Constants.nativeAppVersion || "0.1.0";
   const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
   const connectorCount = (connectorsQuery.data ?? []).filter((item) => item.connected || item.runtime_usable).length;
@@ -80,12 +93,15 @@ export function ProfileScreen() {
   const gatewayDoctorStatus = String(gatewayDoctor.doctor?.status ?? "").trim().toLowerCase();
   const gatewayDoctorApprovals = Number((gatewayDoctor.doctor?.approvals as { pending_count?: number } | undefined)?.pending_count ?? 0);
   const hostedCredits = resolveHostedCredits(billingQuery.data);
+  const creditUsage = resolveCreditUsage(creditUsageQuery.data);
   const hostedCreditPercent = hostedCredits.cap > 0
     ? Math.min(100, Math.max(0, (hostedCredits.used / hostedCredits.cap) * 100))
     : 0;
   const usageSummary = connected
-    ? billingQuery.isLoading
+    ? billingQuery.isLoading || creditUsageQuery.isLoading
       ? "Checking hosted credits and runtime usage..."
+      : creditUsage.count > 0
+        ? `${formatCredits(creditUsage.credits)} credits spent · ${creditUsage.count} metered row${creditUsage.count === 1 ? "" : "s"}`
       : hostedCredits.cap > 0
         ? `${formatCredits(hostedCredits.remaining)} credits left · ${formatCredits(hostedCredits.used)}/${formatCredits(hostedCredits.cap)} used this month`
         : `${overview.runs.length} run${overview.runs.length === 1 ? "" : "s"} · ${overview.artifacts.length} output${overview.artifacts.length === 1 ? "" : "s"} · ${connectorCount} connected app${connectorCount === 1 ? "" : "s"}`
@@ -249,7 +265,7 @@ export function ProfileScreen() {
         </View>
         <Text style={{ fontSize: 12.5, lineHeight: 18, color: theme.colors.textSecondary }}>
           {connected && hostedCredits.cap > 0
-            ? `${formatCredits(hostedCredits.used)} used of ${formatCredits(hostedCredits.cap)} monthly credits. BYOK users spend through their own provider.`
+            ? `${formatCredits(hostedCredits.used)} used of ${formatCredits(hostedCredits.cap)} monthly credits. ${creditUsage.count > 0 ? `${formatCredits(creditUsage.credits)} credits in the usage ledger.` : "BYOK users spend through their own provider."}`
             : connected
               ? "Hosted credits are unavailable for this workspace. You can still use connected providers or your own API key."
               : "Sign in and connect your workspace to see monthly usage."}

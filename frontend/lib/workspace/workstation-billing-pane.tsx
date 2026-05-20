@@ -30,6 +30,11 @@ type BillingSummaryPayload = Record<string, unknown> & {
   plans?: Array<Record<string, unknown>>;
 };
 
+type CreditUsagePayload = Record<string, unknown> & {
+  items?: Array<Record<string, unknown>>;
+  summary?: Record<string, unknown> | null;
+};
+
 function readText(value: unknown, fallback = 'n/a'): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
 }
@@ -48,6 +53,66 @@ function formatCredits(value: unknown): string {
   }).format(Math.max(0, Math.round(readNumber(value))));
 }
 
+function formatSignedCredits(value: unknown): string {
+  const amount = Math.round(readNumber(value));
+  if (amount === 0) {
+    return '0 credits';
+  }
+  const formatted = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.abs(amount));
+  return `${amount > 0 ? '-' : '+'}${formatted} credits`;
+}
+
+function surfaceLabel(value: unknown): string {
+  const token = readText(value, '').toLowerCase();
+  if (token === 'studio') {
+    return 'Studio';
+  }
+  if (token === 'mini_app') {
+    return 'Mini-app';
+  }
+  if (token === 'sage') {
+    return 'Sage';
+  }
+  return token ? token.replace(/_/g, ' ') : 'Usage';
+}
+
+function creditTypeLabel(value: unknown): string {
+  const token = readText(value, '').toLowerCase();
+  if (token === 'computer_runtime') {
+    return 'Runtime';
+  }
+  if (token === 'ai_tokens') {
+    return 'AI';
+  }
+  if (token === 'connector_read') {
+    return 'Connector';
+  }
+  if (token === 'mini_app_action') {
+    return 'Mini-app action';
+  }
+  return token ? token.replace(/_/g, ' ') : 'Usage';
+}
+
+function usageRowSubtitle(item: Record<string, unknown>): string {
+  const payer = readText(item.payer, '').toLowerCase();
+  const credits = readNumber(item.credits_debited, 0);
+  if (payer !== 'platform_credits') {
+    return 'No Empyralis credits used';
+  }
+  return credits > 0 ? formatSignedCredits(credits) : '0 credits';
+}
+
+function usageRowDescription(item: Record<string, unknown>): string {
+  const parts = [
+    surfaceLabel(item.surface),
+    creditTypeLabel(item.credit_type),
+    readText(item.provider, ''),
+    readText(item.model, ''),
+    readText(item.runtime_target, ''),
+  ].filter(Boolean);
+  return parts.join(' · ') || 'Usage ledger row';
+}
+
 function hostedCreditValue(hostedSageAi: Record<string, unknown>, usdKey: string, creditKey: string): number {
   const explicitCredits = readNumber(hostedSageAi[creditKey], Number.NaN);
   if (Number.isFinite(explicitCredits)) {
@@ -61,7 +126,9 @@ export function WorkstationBillingPane() {
   const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const [summary, setSummary] = useState<BillingSummaryPayload | null>(null);
+  const [creditUsage, setCreditUsage] = useState<CreditUsagePayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [usageLoading, setUsageLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
   const [portalPending, setPortalPending] = useState(false);
@@ -74,21 +141,37 @@ export function WorkstationBillingPane() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    void services.client.getBillingSummary()
-      .then((payload) => {
+    void Promise.allSettled([
+      services.client.getBillingSummary(),
+      services.client.getCreditUsage({ limit: 30 }),
+    ])
+      .then(([summaryResult, usageResult]) => {
         if (cancelled) {
           return;
         }
-        setSummary((payload ?? null) as BillingSummaryPayload | null);
+        if (summaryResult.status === 'fulfilled') {
+          setSummary((summaryResult.value ?? null) as BillingSummaryPayload | null);
+        } else {
+          setSummary(null);
+          setError(summaryResult.reason instanceof Error ? summaryResult.reason.message : 'Billing summary is unavailable.');
+        }
+        if (usageResult.status === 'fulfilled') {
+          setCreditUsage((usageResult.value ?? null) as CreditUsagePayload | null);
+        } else {
+          setCreditUsage(null);
+        }
         setLoading(false);
+        setUsageLoading(false);
       })
       .catch((loadError) => {
         if (cancelled) {
           return;
         }
         setSummary(null);
+        setCreditUsage(null);
         setError(loadError instanceof Error ? loadError.message : 'Billing summary is unavailable.');
         setLoading(false);
+        setUsageLoading(false);
       });
     return () => {
       cancelled = true;
@@ -120,6 +203,13 @@ export function WorkstationBillingPane() {
   const hostedCreditsRemaining = hostedCreditValue(hostedSageAi, 'monthly_remaining_usd', 'monthly_credits_remaining');
   const hostedCreditsCap = hostedCreditValue(hostedSageAi, 'monthly_cap_usd', 'monthly_credit_cap');
   const hostedCreditsUsed = hostedCreditValue(hostedSageAi, 'monthly_cost_usd', 'monthly_credits_used');
+  const creditUsageSummary = creditUsage && typeof creditUsage.summary === 'object'
+    ? creditUsage.summary as Record<string, unknown>
+    : {};
+  const creditUsageRows = useMemo(
+    () => Array.isArray(creditUsage?.items) ? (creditUsage.items as Array<Record<string, unknown>>) : [],
+    [creditUsage?.items],
+  );
 
   useEffect(() => {
     setCreditCapDraft(String(Math.max(0, Math.round(hostedCreditsCap))));
@@ -127,16 +217,28 @@ export function WorkstationBillingPane() {
 
   const reloadSummary = () => {
     setLoading(true);
+    setUsageLoading(true);
     setError(null);
-    void services.client.getBillingSummary()
-      .then((payload) => {
-        setSummary((payload ?? null) as BillingSummaryPayload | null);
+    void Promise.allSettled([
+      services.client.getBillingSummary(),
+      services.client.getCreditUsage({ limit: 30 }),
+    ])
+      .then(([summaryResult, usageResult]) => {
+        if (summaryResult.status === 'fulfilled') {
+          setSummary((summaryResult.value ?? null) as BillingSummaryPayload | null);
+        }
+        if (usageResult.status === 'fulfilled') {
+          setCreditUsage((usageResult.value ?? null) as CreditUsagePayload | null);
+        }
         setLoading(false);
+        setUsageLoading(false);
       })
       .catch((loadError) => {
         setSummary(null);
+        setCreditUsage(null);
         setError(loadError instanceof Error ? loadError.message : 'Billing summary is unavailable.');
         setLoading(false);
+        setUsageLoading(false);
       });
   };
 
@@ -221,6 +323,52 @@ export function WorkstationBillingPane() {
           hint={`${formatCredits(hostedCreditsUsed)} used of ${formatCredits(hostedCreditsCap)} this month.`}
         />
       </WorkstationSurfaceStatGrid>
+      <WorkstationSurfaceCard
+        title="Usage ledger"
+        description="Credit and runtime usage across Sage, Studio, mini-app invokes, and Cloud Computer sessions."
+        actions={(
+          <WorkstationActionButton type="button" tone="secondary" onClick={reloadSummary}>
+            Refresh
+          </WorkstationActionButton>
+        )}
+      >
+        <WorkstationSurfaceStatGrid>
+          <WorkstationSurfaceStat
+            label="Rows"
+            value={formatCredits(creditUsageSummary.count)}
+            hint="Recent metered entries."
+          />
+          <WorkstationSurfaceStat
+            label="Credits spent"
+            value={formatCredits(creditUsageSummary.total_credits_debited)}
+            hint="Empyralis credit debit total in this view."
+          />
+          <WorkstationSurfaceStat
+            label="Platform cost"
+            value={`$${readNumber(creditUsageSummary.total_platform_cost_usd, 0).toFixed(4)}`}
+            hint="Internal provider/runtime cost."
+          />
+        </WorkstationSurfaceStatGrid>
+        {usageLoading ? (
+          <WorkstationSurfaceNotice>Loading usage ledger.</WorkstationSurfaceNotice>
+        ) : creditUsageRows.length > 0 ? (
+          <WorkstationSurfaceList>
+            {creditUsageRows.slice(0, 12).map((item, index) => {
+              const rowId = readText(item.id, `usage-${index}`);
+              return (
+                <WorkstationSurfaceListItem
+                  key={rowId}
+                  title={readText(item.label, surfaceLabel(item.surface))}
+                  subtitle={usageRowSubtitle(item)}
+                  description={usageRowDescription(item)}
+                />
+              );
+            })}
+          </WorkstationSurfaceList>
+        ) : (
+          <WorkstationSurfaceNotice>No metered credit usage has been recorded yet.</WorkstationSurfaceNotice>
+        )}
+      </WorkstationSurfaceCard>
       <WorkstationSurfaceCard
         title="Hosted AI credits"
         description="Empyralis-hosted model usage for users who do not want to manage API keys."

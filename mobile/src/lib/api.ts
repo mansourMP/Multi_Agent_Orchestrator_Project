@@ -269,6 +269,15 @@ export type MobileBillingSummaryResponse = {
   usage?: Record<string, unknown> | null;
 };
 
+export type MobileCreditUsageResponse = {
+  items?: Record<string, unknown>[];
+  summary?: {
+    count?: number | null;
+    total_credits_debited?: number | null;
+    total_platform_cost_usd?: number | null;
+  } | null;
+};
+
 export type SageMemoryCategory =
   | "work_context"
   | "personal_context"
@@ -987,6 +996,16 @@ export const mobileApi = {
       `/billing/summary?workspace_id=${encodeURIComponent(workspaceId)}`,
       {
         fallback: "Could not load hosted credits.",
+      },
+    );
+  },
+  getCreditUsage(session: MobileSession) {
+    const workspaceId = requireSessionWorkspaceId(session, "load credit usage");
+    return fetchSessionJson<MobileCreditUsageResponse>(
+      session,
+      `/billing/credits/usage?workspace_id=${encodeURIComponent(workspaceId)}&limit=12`,
+      {
+        fallback: "Could not load credit usage.",
       },
     );
   },

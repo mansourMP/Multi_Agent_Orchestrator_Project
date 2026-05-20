@@ -8,7 +8,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
-from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
+from starlette.concurrency import run_in_threadpool
 
 from server_modules.auth import (
     allowed_workspace_ids,
@@ -1343,14 +1343,12 @@ def register_runtime_routes(app) -> None:
         local_queue._assert_runtime_session(runtime_token, session_token, instance_id=instance_id)
         safe_heartbeat = max(1.0, min(float(heartbeat_seconds), 60.0))
         return EventSourceResponse(
-            iterate_in_threadpool(
-                local_queue.iter_runtime_control_stream(
-                    runtime_token,
-                    since_sequence=max(0, int(since_sequence or 0)),
-                    include_backlog=bool(include_backlog),
-                    heartbeat_seconds=safe_heartbeat,
-                    timeout_seconds=max(safe_heartbeat, min(float(timeout_seconds or 30.0), 300.0)),
-                )
+            local_queue.aiter_runtime_control_stream(
+                runtime_token,
+                since_sequence=max(0, int(since_sequence or 0)),
+                include_backlog=bool(include_backlog),
+                heartbeat_seconds=safe_heartbeat,
+                timeout_seconds=max(safe_heartbeat, min(float(timeout_seconds or 30.0), 300.0)),
             ),
             ping=max(3, int(safe_heartbeat)),
         )

@@ -134,7 +134,8 @@ def test_hosted_manifest_allows_same_origin_for_verified_trusted_apps():
     assert "allow-same-origin" in manifest["hosted_app"]["embed"]["sandbox"]
 
 
-def test_hosted_manifest_allows_same_origin_for_local_dev():
+def test_hosted_manifest_allows_same_origin_for_local_dev(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ORION_ENV", "development")
     manifest = mini_app_host_service.build_hosted_mini_app_manifest(
         workspace_id="ws-1",
         app_contract={
@@ -150,6 +151,46 @@ def test_hosted_manifest_allows_same_origin_for_local_dev():
 
     assert manifest is not None
     assert "allow-same-origin" in manifest["hosted_app"]["embed"]["sandbox"]
+
+
+def test_local_dev_http_host_requires_explicit_dev_environment(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ORION_ENV", raising=False)
+    monkeypatch.delenv("EMPYRALIS_ENV", raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("EMPYRALIS_ALLOW_LOCAL_MINI_APP_HTTP", raising=False)
+
+    with pytest.raises(ValueError, match="https"):
+        mini_app_host_service.normalize_hosted_app_fields(
+            app_id="dev_app",
+            delivery_mode="hosted",
+            hosted_url="http://127.0.0.1:5173/app",
+        )
+
+
+def test_production_rejects_insecure_local_dev_hosts(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ORION_ENV", "production")
+
+    with pytest.raises(ValueError, match="https"):
+        mini_app_host_service.normalize_hosted_app_fields(
+            app_id="dev_app",
+            delivery_mode="hosted",
+            hosted_url="http://127.0.0.1:5173/app",
+        )
+
+    with pytest.raises(ValueError, match="https"):
+        mini_app_host_service.normalize_hosted_app_fields(
+            app_id="evil_app",
+            delivery_mode="hosted",
+            hosted_url="http://evil-attacker-site.local/app",
+        )
+
+    with pytest.raises(ValueError, match="private"):
+        mini_app_host_service.normalize_hosted_app_fields(
+            app_id="evil_app",
+            delivery_mode="hosted",
+            hosted_url="https://evil-attacker-site.local/app",
+        )
 
 
 def test_normalize_hosted_fields_rejects_private_non_dev_hosted_url():

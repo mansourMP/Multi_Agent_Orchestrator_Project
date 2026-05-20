@@ -58,6 +58,27 @@ def _normalized_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _normalized_environment() -> str:
+    return _normalized_text(
+        os.getenv("ORION_ENV")
+        or os.getenv("EMPYRALIS_ENV")
+        or os.getenv("APP_ENV")
+        or os.getenv("ENVIRONMENT")
+    ).lower()
+
+
+def _is_production_environment() -> bool:
+    return _normalized_environment() in {"prod", "production"}
+
+
+def _is_local_dev_environment() -> bool:
+    if _is_production_environment():
+        return False
+    if _normalized_environment() in {"dev", "development", "local", "test"}:
+        return True
+    return _normalized_text(os.getenv("EMPYRALIS_ALLOW_LOCAL_MINI_APP_HTTP")).lower() in {"1", "true", "yes", "on"}
+
+
 def _b64url_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
@@ -146,6 +167,8 @@ def verify_hosted_launch_token(
 
 
 def _is_local_dev_host(hostname: str) -> bool:
+    if not _is_local_dev_environment():
+        return False
     normalized = _normalized_text(hostname).lower()
     if not normalized:
         return False

@@ -5,6 +5,7 @@ Extracted from server.py to reduce hotspot size.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import threading
@@ -53,6 +54,7 @@ _RUNTIME_CONTROL_STREAM_LOCK = threading.Lock()
 _RUNTIME_CONTROL_STREAM_CONDITION = threading.Condition(_RUNTIME_CONTROL_STREAM_LOCK)
 _RUNTIME_CONTROL_STREAM_SEQUENCE = 0
 _RUNTIME_CONTROL_STREAM_EVENTS: Dict[str, List[Dict[str, Any]]] = {}
+_RUNTIME_CONTROL_STREAM_ASYNC_SUBSCRIBERS: Dict[str, List[Dict[str, Any]]] = {}
 _TRANSIENT_WORKER_NOTES = {
     "",
     "idle",
@@ -493,6 +495,7 @@ def _append_runtime_control_event(runtime_id: str, event_type: str, payload: Opt
             backlog = backlog[-_RUNTIME_CONTROL_STREAM_BACKLOG_LIMIT :]
         _RUNTIME_CONTROL_STREAM_EVENTS[runtime_token] = backlog
         _RUNTIME_CONTROL_STREAM_CONDITION.notify_all()
+    _notify_runtime_control_async_subscribers(runtime_token)
     return dict(event_record)
 
 
@@ -552,10 +555,110 @@ def iter_runtime_control_stream(
             _RUNTIME_CONTROL_STREAM_CONDITION.wait(timeout=wait_seconds)
 
 
+def _register_runtime_control_async_subscriber(runtime_id: str, subscriber: Dict[str, Any]) -> None:
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        return
+    with _RUNTIME_CONTROL_STREAM_LOCK:
+        subscribers = list(_RUNTIME_CONTROL_STREAM_ASYNC_SUBSCRIBERS.get(runtime_token) or [])
+        subscribers.append(subscriber)
+        _RUNTIME_CONTROL_STREAM_ASYNC_SUBSCRIBERS[runtime_token] = subscribers
+
+
+def _unregister_runtime_control_async_subscriber(runtime_id: str, subscriber: Dict[str, Any]) -> None:
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        return
+    with _RUNTIME_CONTROL_STREAM_LOCK:
+        subscribers = [
+            item
+            for item in (_RUNTIME_CONTROL_STREAM_ASYNC_SUBSCRIBERS.get(runtime_token) or [])
+            if item is not subscriber
+        ]
+        if subscribers:
+            _RUNTIME_CONTROL_STREAM_ASYNC_SUBSCRIBERS[runtime_token] = subscribers
+        else:
+            _RUNTIME_CONTROL_STREAM_ASYNC_SUBSCRIBERS.pop(runtime_token, None)
+
+
+def _notify_runtime_control_async_subscribers(runtime_id: str) -> None:
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        return
+    with _RUNTIME_CONTROL_STREAM_LOCK:
+        subscribers = list(_RUNTIME_CONTROL_STREAM_ASYNC_SUBSCRIBERS.get(runtime_token) or [])
+    for subscriber in subscribers:
+        loop = subscriber.get("loop")
+        signal = subscriber.get("signal")
+        try:
+            if loop and signal and not loop.is_closed():
+                loop.call_soon_threadsafe(signal.set)
+        except RuntimeError:
+            continue
+
+
+async def aiter_runtime_control_stream(
+    runtime_id: str,
+    *,
+    since_sequence: int = 0,
+    include_backlog: bool = True,
+    heartbeat_seconds: float = 5.0,
+    timeout_seconds: float = 30.0,
+):
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        return
+    last_sequence = max(0, int(since_sequence or 0))
+    start = _monotonic()
+    last_heartbeat = start
+    safe_heartbeat = max(1.0, float(heartbeat_seconds or 5.0))
+    safe_timeout = max(1.0, float(timeout_seconds or 30.0))
+    signal = asyncio.Event()
+    subscriber = {"loop": asyncio.get_running_loop(), "signal": signal}
+    _register_runtime_control_async_subscriber(runtime_token, subscriber)
+    try:
+        while True:
+            pending = _list_runtime_control_events(runtime_token, since_sequence=last_sequence) if include_backlog or last_sequence else _list_runtime_control_events(runtime_token, since_sequence=last_sequence)
+            for event_record in pending:
+                last_sequence = max(last_sequence, int(event_record.get("sequence") or 0))
+                yield {
+                    "event": str(event_record.get("event") or "runtime_control").strip().lower() or "runtime_control",
+                    "id": str(event_record.get("sequence") or ""),
+                    "data": dict(event_record),
+                }
+            now = _monotonic()
+            remaining = safe_timeout - (now - start)
+            if remaining <= 0:
+                break
+            if (now - last_heartbeat) >= safe_heartbeat:
+                last_heartbeat = now
+                yield {
+                    "event": "heartbeat",
+                    "id": str(last_sequence),
+                    "data": {
+                        "event": "heartbeat",
+                        "runtime_id": runtime_token,
+                        "sequence": last_sequence,
+                        "requested_at": _safe_utc_now_iso(),
+                    },
+                }
+                continue
+            wait_seconds = max(0.05, min(safe_heartbeat - (now - last_heartbeat), remaining))
+            try:
+                await asyncio.wait_for(signal.wait(), timeout=wait_seconds)
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                signal.clear()
+    finally:
+        _unregister_runtime_control_async_subscriber(runtime_token, subscriber)
+
+
 def reset_runtime_control_stream_state_for_tests() -> None:
     global _RUNTIME_CONTROL_STREAM_SEQUENCE, _LOCAL_CLAIM_CLEANUP_NEXT_AT_MONOTONIC
     with _RUNTIME_CONTROL_STREAM_CONDITION:
         _RUNTIME_CONTROL_STREAM_EVENTS.clear()
+        _RUNTIME_CONTROL_STREAM_ASYNC_SUBSCRIBERS.clear()
         _RUNTIME_CONTROL_STREAM_SEQUENCE = 0
         _RUNTIME_CONTROL_STREAM_CONDITION.notify_all()
     with _LOCAL_CLAIM_CLEANUP_LOCK:

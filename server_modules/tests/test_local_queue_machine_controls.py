@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 import unittest
@@ -1190,6 +1191,41 @@ class LocalQueueMachineControlTests(unittest.TestCase):
             timeout_seconds=1.0,
         )
         payload = next(iterator)
+
+        self.assertEqual(payload["event"], "hard_kill")
+        self.assertEqual(payload["data"]["machine_id"], "machine-1")
+        self.assertEqual(payload["data"]["reason"], "Operator stop")
+
+    def test_async_runtime_control_stream_yields_without_threadpool_blocking(self) -> None:
+        async def _consume_first_event():
+            iterator = local_queue.aiter_runtime_control_stream(
+                "machine-1",
+                since_sequence=0,
+                include_backlog=True,
+                heartbeat_seconds=5.0,
+                timeout_seconds=1.0,
+            )
+
+            async def _append_event() -> None:
+                await asyncio.sleep(0.01)
+                local_queue._append_runtime_control_event(
+                    "machine-1",
+                    "hard_kill",
+                    {
+                        "machine_id": "machine-1",
+                        "reason": "Operator stop",
+                        "scope": "machine",
+                    },
+                )
+
+            append_task = asyncio.create_task(_append_event())
+            try:
+                return await iterator.__anext__()
+            finally:
+                await append_task
+                await iterator.aclose()
+
+        payload = asyncio.run(_consume_first_event())
 
         self.assertEqual(payload["event"], "hard_kill")
         self.assertEqual(payload["data"]["machine_id"], "machine-1")

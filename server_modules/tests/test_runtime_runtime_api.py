@@ -754,16 +754,16 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         mock_audit.assert_called_once()
 
     @patch("server_modules.runtime_runtime_api.EventSourceResponse", side_effect=lambda iterator, ping: _FakeEventSourceResponse(iterator, ping))
-    @patch("server_modules.runtime_runtime_api.iterate_in_threadpool")
-    @patch("server_modules.local_queue.iter_runtime_control_stream")
+    @patch("server_modules.local_queue.aiter_runtime_control_stream")
     @patch("server_modules.local_queue._assert_runtime_session")
-    def test_runtime_control_stream_route_forwards_runtime_session(self, mock_assert_session, mock_iter_stream, mock_iterate_in_threadpool, _mock_event_source):
+    def test_runtime_control_stream_route_forwards_runtime_session(self, mock_assert_session, mock_iter_stream, _mock_event_source):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
-        stream_marker = iter([{"event": "hard_kill"}])
-        threaded_stream_marker = object()
+        async def _stream_marker():
+            if False:
+                yield {"event": "hard_kill"}
+        stream_marker = _stream_marker()
         mock_iter_stream.return_value = stream_marker
-        mock_iterate_in_threadpool.return_value = threaded_stream_marker
         handler = app.routes[("GET", "/runtime/runtimes/{runtime_id}/control/stream")]
 
         result = self._run_async(
@@ -779,11 +779,10 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         )
 
         self.assertIsInstance(result, _FakeEventSourceResponse)
-        self.assertIs(result.iterator, threaded_stream_marker)
+        self.assertIs(result.iterator, stream_marker)
         self.assertEqual(result.ping, 4)
         mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
         mock_iter_stream.assert_called_once()
-        mock_iterate_in_threadpool.assert_called_once_with(stream_marker)
         kwargs = mock_iter_stream.call_args.kwargs
         self.assertEqual(kwargs["since_sequence"], 4)
         self.assertTrue(kwargs["include_backlog"])

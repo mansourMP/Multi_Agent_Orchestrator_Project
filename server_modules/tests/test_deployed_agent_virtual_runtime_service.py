@@ -2192,6 +2192,77 @@ class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
         self.assertTrue(payload["manual_terminate"])
         self.assertEqual(result["status"], "terminated")
 
+    def test_terminate_bound_cloud_runtime_session_records_runtime_credit_event(self):
+        async def _run():
+            runtime = Mock()
+            runtime.terminate_session = AsyncMock(return_value={"status": "terminated"})
+            registry = Mock()
+            registry.resolve.return_value = runtime
+            append_activity = AsyncMock(return_value={"id": "activity-1"})
+            extend_session = AsyncMock()
+            with (
+                patch.object(
+                    deployed_agent_virtual_runtime_service.session_service,
+                    "get_session",
+                    new=AsyncMock(
+                        return_value={
+                            "session_id": "sess-1",
+                            "tenant_id": "tenant-1",
+                            "workspace_id": "ws-1",
+                            "metadata": {
+                                "deployed_agent_id": "dagent_1",
+                                "thread_id": "thread-1",
+                                "run_id": "run-1",
+                                "runtime_session_binding": "cloud_computer_agent",
+                                "runtime_session_id": "vcsess_1",
+                                "runtime_choice": "virtual_browser",
+                                "runtime_provider_id": "provider_demo",
+                                "runtime_session_started_at": "2026-05-19T08:00:00Z",
+                                "runtime_max_session_seconds": 3600,
+                            },
+                        }
+                    ),
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service,
+                    "get_runtime_registry",
+                    return_value=registry,
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service,
+                    "_utc_now_iso",
+                    return_value="2026-05-19T08:05:00Z",
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service.activity_ledger_service,
+                    "append_activity_event",
+                    new=append_activity,
+                ),
+                patch.object(
+                    deployed_agent_virtual_runtime_service.session_service,
+                    "extend_session",
+                    new=extend_session,
+                ),
+            ):
+                return await deployed_agent_virtual_runtime_service.terminate_bound_cloud_runtime_session(
+                    session_id="sess-1",
+                    tenant_id="tenant-1",
+                    workspace_id="ws-1",
+                ), append_activity, extend_session
+
+        import asyncio
+
+        result, append_activity, extend_session = asyncio.run(_run())
+        self.assertEqual(result["status"], "terminated")
+        append_activity.assert_awaited_once()
+        kwargs = append_activity.await_args.kwargs
+        self.assertEqual(kwargs["action"], "studio_runtime_computer_runtime_metered")
+        self.assertEqual(kwargs["metadata"]["unified_credit_ledger_event"]["credit_type"], "computer_runtime")
+        self.assertEqual(kwargs["metadata"]["unified_credit_ledger_event"]["runtime_target"], "sage_cloud_computer")
+        self.assertEqual(kwargs["metadata"]["unified_credit_ledger_event"]["provider_usage"]["billable_seconds"], 300.0)
+        extend_session.assert_awaited_once()
+        self.assertEqual(extend_session.await_args.kwargs["metadata_updates"]["runtime_metered_event_id"], "activity-1")
+
     def test_terminate_bound_self_hosted_runtime_session_calls_runtime_terminate(self):
         async def _run():
             runtime = Mock()

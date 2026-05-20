@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from server_modules import (
@@ -86,6 +87,47 @@ def _text(value: Any) -> str:
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _runtime_target_from_cloud_metadata(metadata: Dict[str, Any]) -> str:
+    if bool(metadata.get("local_gateway_bound")) or _text(metadata.get("runtime_session_binding")).lower() == _RUNTIME_BINDING_LOCAL_GATEWAY:
+        return "local_companion"
+    return "sage_cloud_computer"
+
+
+def _runtime_billable_seconds(*, started_at: Any, ended_at: Any, max_seconds: Any = None) -> float:
+    started = _parse_iso_datetime(started_at)
+    ended = _parse_iso_datetime(ended_at)
+    if not started or not ended or ended <= started:
+        return 0.0
+    duration = max(0.0, (ended - started).total_seconds())
+    cap = _positive_int(max_seconds, default=0)
+    if cap > 0:
+        duration = min(duration, float(cap))
+    return round(duration, 3)
+
+
+def _runtime_cost_estimate_usd(runtime_target: str, billable_seconds: float) -> float:
+    if runtime_target != "sage_cloud_computer":
+        return 0.0
+    return round(max(0.0, float(billable_seconds or 0.0)) / 3600.0 * DEFAULT_PROVIDER_COST_ESTIMATE, 6)
 
 
 def _coerce_list(value: Any) -> list[Any]:
@@ -1285,6 +1327,9 @@ async def ensure_cloud_runtime_session_binding(
         "deployed_agent_id": resolved_deployed_agent_id,
         "runtime_session_id": runtime_session_id,
         "runtime_session_binding": runtime_session_binding,
+        "runtime_session_started_at": _utc_now_iso(),
+        "runtime_target": "local_companion" if mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_MY_COMPUTER else "sage_cloud_computer",
+        "runtime_max_session_seconds": int(_positive_int(payload.get("max_session_runtime_seconds"), default=DEFAULT_MAX_RUNTIME_SECONDS)),
         "runtime_choice": _text(payload.get("runtime_choice")) or None,
         "runtime_provider_id": _text(response.get("provider_id") or payload.get("runtime_provider_id")) or None,
         "runtime_provider_kind": _text(response.get("provider_kind")) or None,
@@ -1971,7 +2016,100 @@ async def terminate_bound_cloud_runtime_session(
             "runtime_session_id": runtime_session_id,
         },
     }
-    return await runtime.terminate_session({key: value for key, value in payload.items() if value is not None})
+    result = await runtime.terminate_session({key: value for key, value in payload.items() if value is not None})
+    ended_at = _utc_now_iso()
+    await _record_bound_cloud_runtime_usage_event(
+        session_record=session_record or {},
+        metadata=metadata,
+        tenant_id=_text(tenant_id) or _text((session_record or {}).get("tenant_id")),
+        workspace_id=_text(workspace_id) or _text((session_record or {}).get("workspace_id")),
+        runtime_session_id=runtime_session_id,
+        ended_at=ended_at,
+    )
+    return result
+
+
+async def _record_bound_cloud_runtime_usage_event(
+    *,
+    session_record: Dict[str, Any],
+    metadata: Dict[str, Any],
+    tenant_id: Any,
+    workspace_id: Any,
+    runtime_session_id: str,
+    ended_at: str,
+) -> Optional[Dict[str, Any]]:
+    if _text(metadata.get("runtime_metered_at")):
+        return None
+    tenant_token = _text(tenant_id)
+    workspace_token = _text(workspace_id)
+    if not tenant_token or not workspace_token or not _text(runtime_session_id):
+        return None
+    started_at = (
+        _text(metadata.get("runtime_session_started_at"))
+        or _text(session_record.get("created_at"))
+        or _text(session_record.get("updated_at"))
+    )
+    runtime_target = _text(metadata.get("runtime_target")) or _runtime_target_from_cloud_metadata(metadata)
+    active_seconds = _runtime_billable_seconds(
+        started_at=started_at,
+        ended_at=ended_at,
+        max_seconds=metadata.get("runtime_max_session_seconds"),
+    )
+    if active_seconds <= 0:
+        return None
+    billable_seconds = active_seconds
+    estimated_cost_usd = _runtime_cost_estimate_usd(runtime_target, billable_seconds)
+    event = runtime_attachment_service.build_runtime_usage_credit_event(
+        tenant_id=tenant_token,
+        workspace_id=workspace_token,
+        surface="studio",
+        runtime_target=runtime_target,
+        session_id=runtime_session_id,
+        started_at=started_at,
+        ended_at=ended_at,
+        active_seconds=active_seconds,
+        billable_seconds=billable_seconds,
+        estimated_cost_usd=estimated_cost_usd,
+        thread_id=_text(metadata.get("thread_id")) or _text(session_record.get("thread_id")) or runtime_session_id,
+        run_id=_text(metadata.get("run_id")) or _text(session_record.get("run_id")) or runtime_session_id,
+        deployed_agent_id=_text(metadata.get("deployed_agent_id")) or None,
+        app_id=None,
+        metadata={
+            "source_surface": "studio",
+            "runtime_session_binding": _text(metadata.get("runtime_session_binding")) or _RUNTIME_BINDING_CLOUD,
+            "runtime_metering_reason": "runtime_session_terminated",
+        },
+    )
+    activity = await activity_ledger_service.append_activity_event(
+        tenant_id=tenant_token,
+        workspace_id=workspace_token,
+        actor_type="deployed_agent",
+        actor_id=_text(metadata.get("deployed_agent_id")) or "runtime",
+        event_class="system_activity",
+        action="studio_runtime_computer_runtime_metered",
+        title="Runtime usage metered",
+        summary="Computer runtime usage was metered when the session ended.",
+        status="logged",
+        payload={
+            "runtime_session_id": runtime_session_id,
+            "runtime_target": runtime_target,
+            "active_seconds": active_seconds,
+            "billable_seconds": billable_seconds,
+            "estimated_cost_usd": estimated_cost_usd,
+        },
+        metadata=event.get("metadata") if isinstance(event.get("metadata"), dict) else {},
+        thread_id=_text(metadata.get("thread_id")) or _text(session_record.get("thread_id")) or runtime_session_id,
+        run_id=_text(metadata.get("run_id")) or _text(session_record.get("run_id")) or runtime_session_id,
+        session_key=runtime_session_id,
+    )
+    await session_service.extend_session(
+        _text(session_record.get("session_id")) or runtime_session_id,
+        metadata_updates={
+            "runtime_metered_at": ended_at,
+            "runtime_metered_event_id": _text((activity or {}).get("id")) or None,
+        },
+    )
+    return activity
 
 
 async def terminate_bound_self_hosted_runtime_session(

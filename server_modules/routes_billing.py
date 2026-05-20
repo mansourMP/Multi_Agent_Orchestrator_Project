@@ -148,6 +148,24 @@ async def billing_credit_usage_history(
     )
 
 
+@router.get("/billing/credits/usage")
+async def billing_credit_usage(
+    workspace_id: str,
+    limit: int = 50,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+    )
+    return await run_in_threadpool(
+        billing_service.unified_credit_usage_for_workspace,
+        resolved_workspace_id,
+        limit=limit,
+    )
+
+
 @router.post("/billing/webhooks/stripe")
 async def stripe_billing_webhook(request: Request):
     body = await request.body()

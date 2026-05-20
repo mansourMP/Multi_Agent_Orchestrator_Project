@@ -423,6 +423,103 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(history["items"][0]["credits"], -140)
         self.assertEqual(history["items"][1]["credits"], 1000)
 
+    def test_unified_credit_usage_merges_ai_and_runtime_ledger_rows(self):
+        workspace = {
+            "workspace_id": "ws_unified_usage",
+            "tenant_id": "tenant_unified_usage",
+            "name": "Unified Usage",
+            "metadata": {"billing": {}},
+        }
+        ai_event = {
+            "surface": "studio",
+            "source_surface": "studio",
+            "payer": "platform_credits",
+            "credit_type": "ai_tokens",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "workspace_id": "ws_unified_usage",
+            "run_id": "run-1",
+            "agent_id": "agent-1",
+            "provider_usage": {"total_tokens": 250},
+            "platform_cost_usd": 0.02,
+            "provider_reported_cost": 0.02,
+            "provider_reported_currency": "USD",
+            "credits_debited": 20,
+            "estimation_mode": "provider_usage_exact",
+            "created_at": "2026-05-19T08:00:00Z",
+        }
+        runtime_event = {
+            "surface": "sage",
+            "source_surface": "sage",
+            "payer": "platform_credits",
+            "credit_type": "computer_runtime",
+            "runtime_target": "sage_cloud_computer",
+            "workspace_id": "ws_unified_usage",
+            "thread_id": "thread-1",
+            "provider_usage": {"active_seconds": 60, "billable_seconds": 60},
+            "platform_cost_usd": 0.04,
+            "provider_reported_cost": 0.04,
+            "provider_reported_currency": "USD",
+            "credits_debited": 1,
+            "estimation_mode": "runtime_metered",
+            "created_at": "2026-05-19T08:05:00Z",
+        }
+        with patch.object(
+            control_plane_repository,
+            "get_workspace_by_id",
+            new=AsyncMock(return_value=workspace),
+        ), patch.object(
+            control_plane_repository,
+            "list_workspace_hosted_ai_monthly_cost_ledger_entries",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "ledger-ai-1",
+                        "request_id": "req-ai-1",
+                        "thread_id": "",
+                        "provider": "deepseek",
+                        "model": "deepseek-v4-flash",
+                        "total_tokens": 250,
+                        "estimated_cost_usd": 0.02,
+                        "completed_at": "2026-05-19T08:00:00Z",
+                        "metadata": {
+                            "thread_title": "Agent run",
+                            "unified_credit_ledger_event": ai_event,
+                        },
+                    }
+                ]
+            ),
+        ), patch.object(
+            control_plane_repository,
+            "list_activity_ledger_events",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "activity-runtime-1",
+                        "title": "Cloud Computer",
+                        "created_at": "2026-05-19T08:05:00Z",
+                        "metadata": {"unified_credit_ledger_event": runtime_event},
+                    },
+                    {
+                        "id": "activity-ai-duplicate",
+                        "title": "Agent run",
+                        "created_at": "2026-05-19T08:00:00Z",
+                        "metadata": {"unified_credit_ledger_event": ai_event},
+                    },
+                ]
+            ),
+        ):
+            payload = billing_service.unified_credit_usage_for_workspace("ws_unified_usage")
+
+        self.assertEqual(payload["summary"]["count"], 2)
+        self.assertEqual(payload["summary"]["total_platform_cost_usd"], 0.06)
+        self.assertEqual(payload["summary"]["total_credits_debited"], 21)
+        self.assertEqual(payload["summary"]["by_surface"]["studio"]["count"], 1)
+        self.assertEqual(payload["summary"]["by_credit_type"]["computer_runtime"]["count"], 1)
+        self.assertEqual(payload["items"][0]["credit_type"], "computer_runtime")
+        self.assertEqual(payload["items"][1]["credit_type"], "ai_tokens")
+        self.assertTrue(payload["items"][1]["empyralis_credits_used"])
+
 
 if __name__ == "__main__":
     unittest.main()

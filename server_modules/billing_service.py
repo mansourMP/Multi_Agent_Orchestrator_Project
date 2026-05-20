@@ -987,6 +987,219 @@ def credit_usage_history_for_workspace(workspace_id: str, *, limit: int = 50) ->
     }
 
 
+def _usage_api_timestamp(value: Any) -> Optional[str]:
+    return _credit_history_timestamp(value)
+
+
+def _usage_api_label(event: Dict[str, Any], *, fallback: Optional[str] = None) -> str:
+    metadata = _coerce_dict(event.get("metadata"))
+    label = str(
+        metadata.get("label")
+        or metadata.get("thread_title")
+        or metadata.get("chat_title")
+        or fallback
+        or ""
+    ).strip()
+    if label:
+        return label
+    surface = str(event.get("surface") or event.get("source_surface") or "").strip().lower()
+    credit_type = str(event.get("credit_type") or "").strip().lower()
+    if credit_type == "computer_runtime":
+        return "Cloud Computer session"
+    if surface == "studio":
+        agent_id = str(event.get("agent_id") or "").strip()
+        return f"Studio agent {agent_id[:8]}" if agent_id else "Studio agent"
+    if surface == "mini_app":
+        app_id = str(event.get("app_id") or "").strip()
+        return f"Mini-app {app_id[:8]}" if app_id else "Mini-app"
+    return "Sage"
+
+
+def _usage_api_item_from_event(
+    event: Dict[str, Any],
+    *,
+    item_id: Any,
+    created_at: Any = None,
+    fallback_label: Optional[str] = None,
+    ledger_source: str,
+) -> Dict[str, Any]:
+    provider_usage = _coerce_dict(event.get("provider_usage"))
+    payer = str(event.get("payer") or "").strip() or "platform_credits"
+    credit_type = str(event.get("credit_type") or "").strip().lower() or "ai_tokens"
+    platform_cost_usd = _coerce_float(event.get("platform_cost_usd")) or 0.0
+    provider_reported_cost = _coerce_float(event.get("provider_reported_cost"))
+    credits_debited = _coerce_float(event.get("credits_debited")) or 0.0
+    return {
+        "id": str(item_id or event.get("id") or f"usage-{time.time()}").strip(),
+        "surface": str(event.get("surface") or "").strip().lower() or None,
+        "source_surface": str(event.get("source_surface") or event.get("surface") or "").strip().lower() or None,
+        "payer": payer,
+        "credit_type": credit_type,
+        "label": _usage_api_label(event, fallback=fallback_label),
+        "provider": str(event.get("provider") or "").strip().lower() or None,
+        "model": str(event.get("model") or "").strip() or None,
+        "runtime_target": str(event.get("runtime_target") or "").strip() or None,
+        "workspace_id": str(event.get("workspace_id") or "").strip() or None,
+        "user_id": str(event.get("user_id") or "").strip() or None,
+        "thread_id": str(event.get("thread_id") or "").strip() or None,
+        "run_id": str(event.get("run_id") or "").strip() or None,
+        "agent_id": str(event.get("agent_id") or "").strip() or None,
+        "app_id": str(event.get("app_id") or "").strip() or None,
+        "provider_usage": provider_usage,
+        "platform_cost_usd": round(float(platform_cost_usd), 6),
+        "provider_reported_cost": round(float(provider_reported_cost), 6) if provider_reported_cost is not None else None,
+        "provider_reported_currency": str(event.get("provider_reported_currency") or "").strip() or None,
+        "credits_debited": round(float(credits_debited), 6),
+        "estimation_mode": str(event.get("estimation_mode") or "").strip() or None,
+        "empyralis_credits_used": payer == "platform_credits" and credits_debited > 0,
+        "ledger_source": ledger_source,
+        "created_at": _usage_api_timestamp(created_at or event.get("created_at")),
+    }
+
+
+def _usage_api_event_from_hosted_ledger_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = _coerce_dict(entry.get("metadata"))
+    unified = _coerce_dict(metadata.get("unified_credit_ledger_event"))
+    if unified:
+        return {
+            **unified,
+            "metadata": metadata,
+            "provider": unified.get("provider") or entry.get("provider"),
+            "model": unified.get("model") or entry.get("model"),
+            "thread_id": unified.get("thread_id") or entry.get("thread_id"),
+            "created_at": unified.get("created_at") or entry.get("completed_at") or entry.get("updated_at") or entry.get("created_at"),
+        }
+    source_surface = str(entry.get("source_surface") or metadata.get("source_surface") or "sage_direct_chat").strip().lower()
+    surface = str(metadata.get("surface") or source_surface).strip().lower()
+    if surface.startswith("sage"):
+        surface = "sage"
+    elif surface.startswith("studio") or surface in {"deployed_agent", "deployed_agent_channel"}:
+        surface = "studio"
+    elif surface.startswith("mini"):
+        surface = "mini_app"
+    estimated_cost = _coerce_float(entry.get("estimated_cost_usd")) or 0.0
+    return {
+        "surface": surface or "sage",
+        "source_surface": source_surface,
+        "payer": "platform_credits",
+        "credit_type": "ai_tokens",
+        "provider": entry.get("provider"),
+        "model": entry.get("model"),
+        "workspace_id": entry.get("workspace_id"),
+        "thread_id": entry.get("thread_id"),
+        "run_id": metadata.get("run_id"),
+        "agent_id": metadata.get("deployed_agent_id") or metadata.get("agent_id"),
+        "app_id": metadata.get("app_id"),
+        "provider_usage": {
+            "prompt_tokens": int(entry.get("prompt_tokens") or 0),
+            "completion_tokens": int(entry.get("completion_tokens") or 0),
+            "total_tokens": int(entry.get("total_tokens") or 0),
+        },
+        "platform_cost_usd": estimated_cost,
+        "provider_reported_cost": estimated_cost,
+        "provider_reported_currency": "USD",
+        "credits_debited": int(round(estimated_cost * HOSTED_SAGE_AI_CREDITS_PER_USD)),
+        "estimation_mode": metadata.get("estimation_mode") or "provider_usage_exact",
+        "created_at": entry.get("completed_at") or entry.get("updated_at") or entry.get("created_at"),
+        "metadata": metadata,
+    }
+
+
+def _usage_api_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    by_surface: Dict[str, Dict[str, Any]] = {}
+    by_credit_type: Dict[str, Dict[str, Any]] = {}
+    total_platform_cost_usd = 0.0
+    total_credits_debited = 0.0
+    for item in items:
+        platform_cost = float(item.get("platform_cost_usd") or 0.0)
+        credits = float(item.get("credits_debited") or 0.0)
+        total_platform_cost_usd += platform_cost
+        total_credits_debited += credits
+        for bucket, key in ((by_surface, str(item.get("surface") or "unknown")), (by_credit_type, str(item.get("credit_type") or "unknown"))):
+            current = bucket.setdefault(key, {"count": 0, "platform_cost_usd": 0.0, "credits_debited": 0.0})
+            current["count"] += 1
+            current["platform_cost_usd"] = round(float(current["platform_cost_usd"]) + platform_cost, 6)
+            current["credits_debited"] = round(float(current["credits_debited"]) + credits, 6)
+    return {
+        "count": len(items),
+        "total_platform_cost_usd": round(total_platform_cost_usd, 6),
+        "total_credits_debited": round(total_credits_debited, 6),
+        "by_surface": by_surface,
+        "by_credit_type": by_credit_type,
+    }
+
+
+def unified_credit_usage_for_workspace(workspace_id: str, *, limit: int = 50) -> Dict[str, Any]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    safe_limit = max(1, min(int(limit or 50), 200))
+    workspace = run_async_tool_call(control_plane_repository.get_workspace_by_id(clean_workspace_id)) or {}
+    if not isinstance(workspace, dict) or not str(workspace.get("workspace_id") or "").strip():
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    tenant_id = str(workspace.get("tenant_id") or "").strip()
+    if not tenant_id:
+        raise HTTPException(status_code=404, detail="Workspace tenant not found.")
+    usage_entries = run_async_tool_call(
+        control_plane_repository.list_workspace_hosted_ai_monthly_cost_ledger_entries(
+            tenant_id=tenant_id,
+            workspace_id=clean_workspace_id,
+            limit=safe_limit,
+        )
+    ) or []
+    activity_entries = run_async_tool_call(
+        control_plane_repository.list_activity_ledger_events(
+            tenant_id=tenant_id,
+            workspace_id=clean_workspace_id,
+            limit=safe_limit,
+        )
+    ) or []
+    items: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for entry in usage_entries:
+        if not isinstance(entry, dict):
+            continue
+        event = _usage_api_event_from_hosted_ledger_entry(entry)
+        item = _usage_api_item_from_event(
+            event,
+            item_id=entry.get("id") or entry.get("request_id"),
+            created_at=entry.get("completed_at") or entry.get("updated_at") or entry.get("created_at"),
+            fallback_label=str(_coerce_dict(entry.get("metadata")).get("thread_title") or "").strip() or None,
+            ledger_source="workspace_hosted_ai_monthly_cost_ledger",
+        )
+        seen_ids.add(str(item.get("id") or ""))
+        items.append(item)
+    for row in activity_entries:
+        if not isinstance(row, dict):
+            continue
+        metadata = _coerce_dict(row.get("metadata"))
+        event = _coerce_dict(metadata.get("unified_credit_ledger_event"))
+        if not event:
+            continue
+        if str(event.get("credit_type") or "").strip().lower() == "ai_tokens" and str(event.get("payer") or "").strip() == "platform_credits":
+            continue
+        item = _usage_api_item_from_event(
+            {**event, "metadata": metadata},
+            item_id=row.get("id"),
+            created_at=row.get("created_at"),
+            fallback_label=str(row.get("title") or row.get("summary") or "").strip() or None,
+            ledger_source="activity_ledger_events",
+        )
+        item_id = str(item.get("id") or "")
+        if item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+        items.append(item)
+    items.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    items = items[:safe_limit]
+    return {
+        "ok": True,
+        "workspace_id": clean_workspace_id,
+        "tenant_id": tenant_id,
+        "items": items,
+        "summary": _usage_api_summary(items),
+        "history_sources": ["workspace_hosted_ai_monthly_cost_ledger", "activity_ledger_events"],
+    }
+
+
 def _stripe_signature_payload(timestamp: str, body: bytes) -> bytes:
     return f"{timestamp}.{body.decode('utf-8')}".encode("utf-8")
 

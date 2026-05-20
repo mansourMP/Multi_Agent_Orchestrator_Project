@@ -45,6 +45,13 @@ SUPPORTED_PROVIDERS = (
     "azure_openai",
     "custom_openai_compatible",
 )
+
+BYOK_FIRST_OPENAI_COMPATIBLE_PROVIDERS = {
+    "groq",
+    "openrouter",
+    "azure_openai",
+    "custom_openai_compatible",
+}
 LOCAL_CLI_AUTH_MODES = {"local_cli", "local_subscription", "subscription_cli", "claude_code_cli"}
 AUTH_SCOPE_ERROR_MARKERS = (
     "api.responses.write",
@@ -1646,6 +1653,8 @@ def resolve_openai_compatible_api_key(
     if inline_key:
         return inline_key
     pid = str(provider or "openai").strip().lower()
+    if pid in BYOK_FIRST_OPENAI_COMPATIBLE_PROVIDERS:
+        return ""
     if pid == "openai":
         return get_openai_api_key()
     if pid == "qwen":
@@ -1674,18 +1683,10 @@ def resolve_openai_compatible_base_url(
     override_base_url = str(override.get("base_url") or "").strip()
     pid = str(provider or "openai").strip().lower()
     if pid == "azure_openai":
-        deployment = str(
-            override.get("deployment")
-            or override.get("deployment_name")
-            or override.get("azure_deployment")
-            or model
-            or ""
-        ).strip()
+        deployment = _azure_openai_deployment_from_override(override, model=model)
         endpoint = str(
             override.get("endpoint")
             or override.get("azure_endpoint")
-            or os.getenv("ORION_LOCAL_WORKER_AZURE_OPENAI_ENDPOINT")
-            or os.getenv("AZURE_OPENAI_ENDPOINT")
             or ""
         ).strip()
         if override_base_url and "/openai/deployments/" in override_base_url:
@@ -1720,11 +1721,7 @@ def resolve_openai_compatible_base_url(
             os.getenv("ORION_LOCAL_WORKER_OPENROUTER_URL") or "https://openrouter.ai/api/v1"
         )
     if pid == "custom_openai_compatible":
-        return ensure_trailing_slashless(
-            os.getenv("ORION_LOCAL_WORKER_CUSTOM_OPENAI_COMPATIBLE_URL")
-            or os.getenv("CUSTOM_OPENAI_COMPATIBLE_BASE_URL")
-            or ""
-        )
+        return ""
     return ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OPENAI_URL") or "https://api.openai.com/v1")
 
 
@@ -1741,18 +1738,9 @@ def default_openai_compatible_model(provider: str) -> str:
     if pid == "openrouter":
         return (os.getenv("ORION_LOCAL_WORKER_OPENROUTER_MODEL") or "openai/gpt-5.2").strip() or "openai/gpt-5.2"
     if pid == "azure_openai":
-        return (
-            os.getenv("ORION_LOCAL_WORKER_AZURE_OPENAI_DEPLOYMENT")
-            or os.getenv("AZURE_OPENAI_DEPLOYMENT")
-            or os.getenv("ORION_LOCAL_WORKER_AZURE_OPENAI_MODEL")
-            or ""
-        ).strip()
+        return ""
     if pid == "custom_openai_compatible":
-        return (
-            os.getenv("ORION_LOCAL_WORKER_CUSTOM_OPENAI_COMPATIBLE_MODEL")
-            or os.getenv("CUSTOM_OPENAI_COMPATIBLE_MODEL")
-            or ""
-        ).strip()
+        return ""
     return (os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
 
 
@@ -1813,6 +1801,22 @@ def openai_compatible_missing_base_url_error(provider: str) -> str:
     return "Provider base URL is not configured."
 
 
+def _azure_openai_deployment_from_override(
+    override: Dict[str, Any],
+    *,
+    model: Any = None,
+) -> str:
+    return str(
+        override.get("deployment")
+        or override.get("deployment_name")
+        or override.get("azure_deployment")
+        or override.get("model")
+        or override.get("model_id")
+        or model
+        or ""
+    ).strip()
+
+
 def openai_compatible_query_params(
     provider: str,
     credential_override: Optional[Dict[str, Any]] = None,
@@ -1824,8 +1828,6 @@ def openai_compatible_query_params(
     api_version = str(
         override.get("api_version")
         or override.get("azure_api_version")
-        or os.getenv("ORION_LOCAL_WORKER_AZURE_OPENAI_API_VERSION")
-        or os.getenv("AZURE_OPENAI_API_VERSION")
         or ""
     ).strip()
     return {"api-version": api_version} if api_version else {}

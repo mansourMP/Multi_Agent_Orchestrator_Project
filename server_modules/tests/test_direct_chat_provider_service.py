@@ -45,7 +45,17 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertEqual(credentials, {"auth_mode": "none"})
 
     def test_supports_direct_message_native_chat_requires_scoped_key_for_cloud_api_providers(self) -> None:
-        for provider in ("deepseek", "qwen", "mistral", "vertex", "ollama_cloud"):
+        for provider in (
+            "deepseek",
+            "qwen",
+            "mistral",
+            "vertex",
+            "ollama_cloud",
+            "groq",
+            "openrouter",
+            "azure_openai",
+            "custom_openai_compatible",
+        ):
             with self.subTest(provider=provider):
                 self.assertFalse(
                     direct_chat_provider_service.supports_direct_message_native_chat(

@@ -147,9 +147,11 @@ def resolve_call_credentials(
         {
             "workspace_id": str(workspace_id or "default").strip() or "default",
             "credential_id": credential_id,
+            "model": str(model or "").strip() or None,
         },
         {
             "profile_id": str(profile_id or "").strip() or None,
+            "model": str(model or "").strip() or None,
         },
         resolved_provider,
     )

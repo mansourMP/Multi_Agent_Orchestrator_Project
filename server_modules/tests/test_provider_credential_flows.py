@@ -123,6 +123,45 @@ class ProviderValidationMessageTests(unittest.TestCase):
         self.assertTrue(records[0]["supports_json"])
 
     @patch("server_modules.provider_profiles.http_json_request")
+    def test_azure_openai_adapter_uses_deployment_url_and_api_version(self, http_json_request_mock):
+        http_json_request_mock.return_value = {
+            "status": 200,
+            "json": {"choices": [{"message": {"content": "hello"}}]},
+            "text": "",
+        }
+
+        reply = provider_profiles.OpenAICompatibleAdapter("azure_openai", "Azure OpenAI").generate(
+            "system",
+            "hello",
+            "deployment-a",
+            {
+                "api_key": "sk-azure",
+                "endpoint": "https://example.openai.azure.com",
+                "api_version": "2024-10-21",
+            },
+        )
+
+        self.assertEqual(reply, "hello")
+        args, kwargs = http_json_request_mock.call_args
+        self.assertEqual(
+            args[0],
+            "https://example.openai.azure.com/openai/deployments/deployment-a/chat/completions?api-version=2024-10-21",
+        )
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sk-azure")
+
+    def test_azure_openai_adapter_requires_api_version(self):
+        with self.assertRaisesRegex(RuntimeError, "api_version"):
+            provider_profiles.OpenAICompatibleAdapter("azure_openai", "Azure OpenAI").generate(
+                "system",
+                "hello",
+                "deployment-a",
+                {
+                    "api_key": "sk-azure",
+                    "endpoint": "https://example.openai.azure.com",
+                },
+            )
+
+    @patch("server_modules.provider_profiles.http_json_request")
     def test_anthropic_validate_uses_models_endpoint(self, http_json_request_mock):
         http_json_request_mock.return_value = {
             "status": 200,

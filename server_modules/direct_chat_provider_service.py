@@ -292,7 +292,17 @@ def supports_direct_message_native_chat(
         )
     if normalized_provider == "gemini":
         return bool(str(payload.get("api_key") or "").strip())
-    if normalized_provider in {"qwen", "deepseek", "mistral", "vertex", "ollama_cloud"}:
+    if normalized_provider in {
+        "qwen",
+        "deepseek",
+        "mistral",
+        "vertex",
+        "ollama_cloud",
+        "groq",
+        "openrouter",
+        "azure_openai",
+        "custom_openai_compatible",
+    }:
         return bool(str(payload.get("api_key") or "").strip())
     if normalized_provider in {"openai-codex", "codex_cli"}:
         return bool(payload) or provider_has_key_fn("codex_cli")

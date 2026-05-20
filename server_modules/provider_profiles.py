@@ -17,7 +17,7 @@ from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 from server_modules import platform_config_schema, pricing_registry_service, secrets_broker, usage_accounting_service
 
@@ -2094,12 +2094,45 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         self.provider_label = provider_label
         self.requires_auth = requires_auth
 
-    def _base_url(self, credentials: Dict[str, Any]) -> str:
+    def _model_or_deployment(self, credentials: Dict[str, Any], model: Optional[str] = None) -> str:
+        return str(
+            credentials.get("deployment")
+            or credentials.get("deployment_name")
+            or credentials.get("azure_deployment")
+            or credentials.get("model")
+            or credentials.get("model_id")
+            or model
+            or ""
+        ).strip()
+
+    def _base_url(self, credentials: Dict[str, Any], *, model: Optional[str] = None) -> str:
         entry = provider_catalog_entry(self.provider_id)
         base_url = str(credentials.get("base_url") or entry.get("base_url") or "").strip().rstrip("/")
+        if self.provider_id == "azure_openai":
+            if base_url and "/openai/deployments/" in base_url:
+                return base_url.rsplit("/chat/completions", 1)[0].rstrip("/")
+            endpoint = str(credentials.get("endpoint") or credentials.get("azure_endpoint") or "").strip().rstrip("/")
+            deployment = self._model_or_deployment(credentials, model=model)
+            if endpoint and deployment:
+                return f"{endpoint}/openai/deployments/{quote(deployment, safe='')}"
         if not base_url:
             raise RuntimeError(f"{self.provider_label} base URL is not configured.")
         return base_url
+
+    def _query_params(self, credentials: Dict[str, Any]) -> Dict[str, str]:
+        if self.provider_id != "azure_openai":
+            return {}
+        api_version = str(credentials.get("api_version") or credentials.get("azure_api_version") or "").strip()
+        if not api_version:
+            raise RuntimeError("Azure OpenAI api_version is required.")
+        return {"api-version": api_version}
+
+    def _chat_completions_url(self, credentials: Dict[str, Any], *, model: str) -> str:
+        base_url = self._base_url(credentials, model=model)
+        if self.provider_id == "azure_openai":
+            params = self._query_params(credentials)
+            return f"{base_url}/chat/completions?api-version={quote_plus(params['api-version'])}"
+        return f"{base_url}/chat/completions"
 
     def _headers(self, credentials: Dict[str, Any], *, include_content_type: bool = False) -> Dict[str, str]:
         headers: Dict[str, str] = {}
@@ -2122,9 +2155,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         return headers
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        base_url = self._base_url(credentials)
+        base_url = self._base_url(credentials, model=self._model_or_deployment(credentials))
+        params = self._query_params(credentials)
+        url = f"{base_url}/models"
+        if params:
+            url = f"{url}?api-version={quote_plus(params['api-version'])}"
         try:
-            res = http_json_request(f"{base_url}/models", headers=self._headers(credentials))
+            res = http_json_request(url, headers=self._headers(credentials))
         except Exception as exc:
             if self.provider_id == "ollama":
                 raise RuntimeError(f"Ollama is not running at {base_url}") from exc
@@ -2132,7 +2169,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         return _validation_result(self.provider_label, res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
-        res = http_json_request(f"{self._base_url(credentials)}/models", headers=self._headers(credentials))
+        base_url = self._base_url(credentials, model=self._model_or_deployment(credentials))
+        params = self._query_params(credentials)
+        url = f"{base_url}/models"
+        if params:
+            url = f"{url}?api-version={quote_plus(params['api-version'])}"
+        res = http_json_request(url, headers=self._headers(credentials))
         body = res.get("json") or {}
         models: List[str] = []
         for item in body.get("data", []) if isinstance(body.get("data"), list) else []:
@@ -2148,7 +2190,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         return fallback_models
 
     def list_model_records(self, credentials: Dict[str, Any]) -> List[Dict[str, Any]]:
-        res = http_json_request(f"{self._base_url(credentials)}/models", headers=self._headers(credentials))
+        base_url = self._base_url(credentials, model=self._model_or_deployment(credentials))
+        params = self._query_params(credentials)
+        url = f"{base_url}/models"
+        if params:
+            url = f"{url}?api-version={quote_plus(params['api-version'])}"
+        res = http_json_request(url, headers=self._headers(credentials))
         body = res.get("json") or {}
         fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         records: List[Dict[str, Any]] = []
@@ -2180,7 +2227,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         if not str(system_prompt or "").strip():
             payload["messages"] = [{"role": "user", "content": user_input}]
         res = http_json_request(
-            f"{self._base_url(credentials)}/chat/completions",
+            self._chat_completions_url(credentials, model=model),
             method="POST",
             headers=self._headers(credentials, include_content_type=True),
             payload=payload,
@@ -2940,6 +2987,90 @@ def _sorted_profiles(provider: str, workspace_id: Optional[str], preferred_profi
     return filtered
 
 
+_OPENAI_COMPATIBLE_CONFIG_KEYS = {
+    "base_url",
+    "endpoint",
+    "azure_endpoint",
+    "api_version",
+    "azure_api_version",
+    "deployment",
+    "deployment_name",
+    "azure_deployment",
+    "model",
+    "model_id",
+}
+
+BYOK_FIRST_OPENAI_COMPATIBLE_PROVIDER_IDS = {
+    "groq",
+    "openrouter",
+    "azure_openai",
+    "custom_openai_compatible",
+}
+
+
+def _merge_profile_config_into_credentials(
+    credentials: Dict[str, Any],
+    profile: Dict[str, Any],
+) -> Dict[str, Any]:
+    merged = dict(credentials or {})
+    metadata = profile.get("metadata") if isinstance(profile.get("metadata"), dict) else {}
+    for key in _OPENAI_COMPATIBLE_CONFIG_KEYS:
+        if str(merged.get(key) or "").strip():
+            continue
+        value = metadata.get(key)
+        if value in {None, ""}:
+            continue
+        merged[key] = value
+    if not str(merged.get("model") or "").strip() and str(profile.get("model") or "").strip():
+        merged["model"] = str(profile.get("model") or "").strip()
+    return merged
+
+
+def openai_compatible_provider_config_error(
+    provider: Any,
+    credentials: Optional[Dict[str, Any]],
+    *,
+    model: Any = None,
+) -> str:
+    provider_id = normalize_provider_id(provider)
+    if provider_id not in BYOK_FIRST_OPENAI_COMPATIBLE_PROVIDER_IDS:
+        return ""
+    payload = credentials if isinstance(credentials, dict) else {}
+    secret = str(
+        payload.get("api_key")
+        or payload.get("access_token")
+        or payload.get("oauth_token")
+        or payload.get("token")
+        or ""
+    ).strip()
+    if not secret:
+        return f"{provider_id} requires a workspace vault credential."
+    base_url = str(payload.get("base_url") or "").strip()
+    if provider_id == "azure_openai":
+        deployment = str(
+            payload.get("deployment")
+            or payload.get("deployment_name")
+            or payload.get("azure_deployment")
+            or payload.get("model")
+            or payload.get("model_id")
+            or model
+            or ""
+        ).strip()
+        endpoint = str(payload.get("endpoint") or payload.get("azure_endpoint") or "").strip()
+        api_version = str(payload.get("api_version") or payload.get("azure_api_version") or "").strip()
+        if not api_version:
+            return "azure_openai requires api_version."
+        if not ((base_url and "/openai/deployments/" in base_url) or (endpoint and deployment)):
+            return "azure_openai requires endpoint/base_url and deployment/model."
+    if provider_id == "custom_openai_compatible":
+        model_id = str(payload.get("model") or payload.get("model_id") or model or "").strip()
+        if not base_url:
+            return "custom_openai_compatible requires base_url."
+        if not model_id:
+            return "custom_openai_compatible requires model_id."
+    return ""
+
+
 def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dict[str, Any], provider: str) -> List[Dict[str, Any]]:
     _init()
     workspace_id = str(context.get("workspace_id") or metadata.get("workspace_id") or "default").strip() or "default"
@@ -2962,6 +3093,13 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
             purpose="provider_candidate_resolution",
             actor_type="provider_profile",
         )
+        config_error = openai_compatible_provider_config_error(
+            canonical_provider,
+            credentials,
+            model=context.get("model") or metadata.get("model"),
+        )
+        if config_error:
+            return []
         candidates.append(
             {
                 "source": "credential_id",
@@ -2973,6 +3111,13 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
         seen_labels.add(f"credential:{credential_id}")
 
     if isinstance(metadata.get("credentials"), dict) and metadata.get("credentials"):
+        config_error = openai_compatible_provider_config_error(
+            canonical_provider,
+            metadata.get("credentials"),
+            model=context.get("model") or metadata.get("model"),
+        )
+        if config_error:
+            return []
         candidates.append(
             {
                 "source": "inline",
@@ -3012,6 +3157,15 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
                 continue
         else:
             credentials = secretless_provider_credentials(profile.get("provider") or canonical_provider, profile_auth_mode)
+        credentials = _merge_profile_config_into_credentials(credentials, profile)
+        config_error = openai_compatible_provider_config_error(
+            canonical_provider,
+            credentials,
+            model=profile.get("model") or context.get("model") or metadata.get("model"),
+        )
+        if config_error:
+            _mark_profile_failure(pid, config_error)
+            continue
         candidates.append(
             {
                 "source": "profile",

@@ -421,6 +421,28 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         )
         self.assertEqual(worker_llm.default_openai_compatible_model("groq"), "llama-3.3-70b-versatile")
 
+    def test_byok_first_openai_compatible_providers_do_not_use_local_env_credentials(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GROQ_API_KEY": "env-groq",
+                "OPENROUTER_API_KEY": "env-openrouter",
+                "AZURE_OPENAI_API_KEY": "env-azure",
+                "AZURE_OPENAI_ENDPOINT": "https://env.openai.azure.com",
+                "AZURE_OPENAI_API_VERSION": "2024-10-21",
+                "CUSTOM_OPENAI_COMPATIBLE_API_KEY": "env-custom",
+                "CUSTOM_OPENAI_COMPATIBLE_BASE_URL": "https://custom.example/v1",
+                "CUSTOM_OPENAI_COMPATIBLE_MODEL": "custom-model",
+            },
+            clear=False,
+        ):
+            for provider in ("groq", "openrouter", "azure_openai", "custom_openai_compatible"):
+                with self.subTest(provider=provider):
+                    self.assertEqual(worker_llm.resolve_openai_compatible_api_key(provider), "")
+            self.assertEqual(worker_llm.resolve_openai_compatible_base_url("azure_openai", model="deployment-a"), "")
+            self.assertEqual(worker_llm.resolve_openai_compatible_base_url("custom_openai_compatible"), "")
+            self.assertEqual(worker_llm.default_openai_compatible_model("custom_openai_compatible"), "")
+
     def test_azure_openai_requires_endpoint_deployment_and_api_version(self):
         base_url = worker_llm.resolve_openai_compatible_base_url(
             "azure_openai",

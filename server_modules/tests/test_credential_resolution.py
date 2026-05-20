@@ -278,6 +278,67 @@ class CredentialResolutionTests(unittest.TestCase):
 
         self.assertEqual(candidates, [])
 
+    @patch("server_modules.provider_profiles.resolve_vault_credential")
+    def test_build_candidates_merges_openai_compatible_profile_config_into_credentials(
+        self,
+        resolve_vault_credential_mock,
+    ):
+        resolve_vault_credential_mock.return_value = {"api_key": "sk-azure"}
+        profiles = {
+            "profile-azure": {
+                **self._profile(
+                    profile_id="profile-azure",
+                    credential_id="cred-azure",
+                    priority=1,
+                    created_at="2026-03-22T00:00:00Z",
+                    model="deployment-a",
+                    provider="azure_openai",
+                ),
+                "metadata": {
+                    "endpoint": "https://example.openai.azure.com",
+                    "api_version": "2024-10-21",
+                },
+            },
+        }
+
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, profiles, clear=True):
+            candidates = provider_profiles._build_provider_credential_candidates(
+                {"workspace_id": "ws-1"},
+                {},
+                "azure_openai",
+            )
+
+        self.assertEqual(candidates[0]["credentials"]["api_key"], "sk-azure")
+        self.assertEqual(candidates[0]["credentials"]["endpoint"], "https://example.openai.azure.com")
+        self.assertEqual(candidates[0]["credentials"]["api_version"], "2024-10-21")
+        self.assertEqual(candidates[0]["credentials"]["model"], "deployment-a")
+
+    @patch("server_modules.provider_profiles.resolve_vault_credential")
+    def test_build_candidates_skips_incomplete_byok_first_profile_config(
+        self,
+        resolve_vault_credential_mock,
+    ):
+        resolve_vault_credential_mock.return_value = {"api_key": "sk-azure"}
+        profiles = {
+            "profile-azure": self._profile(
+                profile_id="profile-azure",
+                credential_id="cred-azure",
+                priority=1,
+                created_at="2026-03-22T00:00:00Z",
+                model="deployment-a",
+                provider="azure_openai",
+            ),
+        }
+
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, profiles, clear=True):
+            candidates = provider_profiles._build_provider_credential_candidates(
+                {"workspace_id": "ws-1"},
+                {},
+                "azure_openai",
+            )
+
+        self.assertEqual(candidates, [])
+
 
 if __name__ == "__main__":
     unittest.main()

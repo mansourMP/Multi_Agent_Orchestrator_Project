@@ -55,12 +55,21 @@ export default function RegisterMiniAppScreen() {
           ...(allowAi ? ["app.ai.invoke"] : []),
           ...(allowSageBridge ? ["app.bridge.sage.request"] : []),
         ],
+        ai_invoke_policy: {
+          consent_required: true,
+          consent_status: allowAi ? "granted" : "not_granted",
+          payer: "platform_credits",
+          monthly_credit_cap: allowAi ? 500 : 0,
+          per_invocation_credit_cap: allowAi ? 50 : 0,
+        },
+        trust_tier: "user_private",
+        background_ai_allowed: false,
         bridge_contracts: allowSageBridge ? { app_to_sage: ["summary_request"] } : {},
         visibility: "workspace_private",
       });
       router.replace(`/apps/${effectiveSlug}/home`);
     } catch (submissionError) {
-      setError(submissionError instanceof Error ? submissionError.message : "Mini app registration failed.");
+      setError(submissionError instanceof Error ? submissionError.message : "Tool registration failed.");
     } finally {
       setSaving(false);
     }
@@ -83,7 +92,7 @@ export default function RegisterMiniAppScreen() {
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={{ fontSize: 22, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>
-            Register mini app
+            Register tool
           </Text>
           <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>
             Workspace-private by default.
@@ -95,26 +104,26 @@ export default function RegisterMiniAppScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: Math.max(insets.bottom, 18) + 24, gap: 14 }}
       >
-        <Field label="App name" value={name} onChangeText={setName} placeholder="Inventory Helper" />
-        <Field label="App id" value={slug} onChangeText={setSlug} placeholder={slugify(name) || "inventory_helper"} />
+        <Field label="Tool name" value={name} onChangeText={setName} placeholder="Inventory Helper" />
+        <Field label="Tool id" value={slug} onChangeText={setSlug} placeholder={slugify(name) || "inventory_helper"} />
         <Field label="Hosted URL" value={hostedUrl} onChangeText={setHostedUrl} placeholder="https://example.com/app" />
         <Field
           label="Description"
           value={description}
           onChangeText={setDescription}
-          placeholder="What this mini app helps with."
+          placeholder="What this tool helps with."
           multiline
         />
 
         <PermissionRow
           label="Allow AI invoke"
-          detail="The app can spend workspace/platform credits through configured providers."
+          detail="The tool can spend workspace/platform credits through configured providers."
           value={allowAi}
           onValueChange={setAllowAi}
         />
         <PermissionRow
           label="Allow Sage bridge"
-          detail="The app can request a governed Sage summary through an explicit bridge contract."
+          detail="The tool can request a governed Sage summary through an explicit bridge contract."
           value={allowSageBridge}
           onValueChange={setAllowSageBridge}
         />
@@ -161,7 +170,7 @@ export default function RegisterMiniAppScreen() {
               color: canSave ? theme.colors.background : theme.colors.textSecondary,
             }}
           >
-            {saving ? "Registering..." : "Register app"}
+            {saving ? "Registering..." : "Register tool"}
           </Text>
         </TouchableOpacity>
       </ScrollView>

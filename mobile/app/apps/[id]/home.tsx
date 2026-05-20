@@ -130,9 +130,9 @@ function CaloriesAppScreen({ onBack }: { onBack: () => void }) {
       }
       menuDetails={{
         historyItems: records.slice(0, 3).map((record) => String(record.meal_label || record.summary || "Meal tracked")),
-        historyEmpty: "Tracked meals will appear after this app runs.",
+        historyEmpty: "Tracked meals will appear after this tool runs.",
         modelSummary: "No model used yet.",
-        creditSummary: "Usage will appear after this app runs.",
+        creditSummary: "Usage will appear after this tool runs.",
       }}
     >
       {tab === "main" ? (
@@ -194,6 +194,10 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
   const [setName, setSetName] = React.useState("");
   const [sourceText, setSourceText] = React.useState("");
   const [lastRun, setLastRun] = React.useState<Record<string, any> | null>(null);
+  const [activeSessionToken, setActiveSessionToken] = React.useState("");
+  const activeSessionIdRef = React.useRef(
+    `miniapp-flashcards-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
 
   const refresh = React.useCallback(async () => {
     if (!session) {
@@ -238,6 +242,35 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
   }, [refresh]);
 
   React.useEffect(() => {
+    let active = true;
+    async function createActiveSession() {
+      if (!session) {
+        setActiveSessionToken("");
+        return;
+      }
+      try {
+        const payload = await appRegistryApi.createMiniAppActiveSession(
+          session,
+          "flashcards",
+          activeSessionIdRef.current,
+        );
+        if (active) {
+          setActiveSessionToken(String(payload.active_session_token || ""));
+        }
+      } catch (error) {
+        if (active) {
+          setActiveSessionToken("");
+        }
+        console.warn("Flashcards active session failed", error);
+      }
+    }
+    void createActiveSession();
+    return () => {
+      active = false;
+    };
+  }, [session]);
+
+  React.useEffect(() => {
     if (tab === "cards" && selectedDeck) {
       void loadCards(selectedDeck);
     }
@@ -264,7 +297,7 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
       }
       menuDetails={{
         historyItems: decks.slice(0, 3).map((deck) => `${deck} deck`),
-        historyEmpty: "Generated or reviewed cards will appear after this app runs.",
+        historyEmpty: "Generated or reviewed cards will appear after this tool runs.",
         modelSummary:
           lastRun?.provider || lastRun?.model
             ? [lastRun.provider, lastRun.model].filter(Boolean).join(" · ")
@@ -285,9 +318,9 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
           />
           <PrimaryButton
             label={working ? "Creating..." : "Create flashcards"}
-            disabled={working || !setName.trim() || !sourceText.trim()}
+            disabled={working || !setName.trim() || !sourceText.trim() || !activeSessionToken}
             onPress={async () => {
-              if (!session || !setName.trim() || !sourceText.trim()) {
+              if (!session || !setName.trim() || !sourceText.trim() || !activeSessionToken) {
                 return;
               }
               try {
@@ -296,6 +329,10 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
                   deck: setName.trim(),
                   source_text: sourceText.trim(),
                   count: 8,
+                  active_session_id: activeSessionIdRef.current,
+                  active_session_token: activeSessionToken,
+                  session_state: "active",
+                  explicit_user_intent: true,
                 });
                 setLastRun(payload);
                 setSourceText("");
@@ -395,9 +432,8 @@ function HostedRegisteredAppScreen({ appId, onBack }: { appId: string; onBack: (
       onBack={onBack}
       bottomInset={insets.bottom}
       menuDetails={{
-        historyEmpty: "History will appear after this app runs.",
-        modelSummary: "No model used yet.",
-        creditSummary: "Usage will appear after this app runs.",
+        historyEmpty: "History will appear after this tool runs.",
+        creditSummary: "Usage will appear after this tool runs.",
       }}
     >
       <View style={{ gap: 16, paddingTop: 12 }}>
@@ -412,17 +448,17 @@ function HostedRegisteredAppScreen({ appId, onBack }: { appId: string; onBack: (
           }}
         >
           <Text style={{ fontSize: 20, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            {loading ? "Loading app..." : title}
+            {loading ? "Loading tool..." : title}
           </Text>
           <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
-            {contract?.description || "This hosted mini app is registered to your workspace."}
+            {contract?.description || "This hosted tool is registered to your workspace."}
           </Text>
           <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
             Memory is denied by default. Bridge, provider, and connector access stay explicit.
           </Text>
           {hostedUrl ? (
             <PrimaryButton
-              label="Open hosted app"
+              label="Open hosted tool"
               onPress={() => {
                 void Linking.openURL(hostedUrl);
               }}
@@ -436,18 +472,70 @@ function HostedRegisteredAppScreen({ appId, onBack }: { appId: string; onBack: (
 
 function summarizeUsage(usage: unknown): string {
   if (!usage || typeof usage !== "object") {
-    return "Usage will appear after this app runs.";
+    return "Usage will appear after this tool runs.";
   }
   const payload = usage as Record<string, any>;
-  const credits = payload.credits ?? payload.credit_cost ?? payload.cost_credits;
+  const accounting = payload.usage_accounting && typeof payload.usage_accounting === "object"
+    ? payload.usage_accounting as Record<string, any>
+    : payload;
+  const credits =
+    accounting.retail_credits_charged ??
+    accounting.credits ??
+    accounting.credit_cost ??
+    accounting.cost_credits;
   if (credits !== undefined && credits !== null) {
-    return `${String(credits)} credits`;
+    const parsed = Number(credits);
+    return Number.isFinite(parsed) ? `${Math.round(parsed).toLocaleString()} credits` : `${String(credits)} credits`;
   }
-  const tokens = payload.total_tokens ?? payload.tokens;
+  const providerCost = accounting.provider_cost_usd ?? accounting.estimated_cost_usd;
+  if (providerCost !== undefined && providerCost !== null) {
+    const parsed = Number(providerCost);
+    if (Number.isFinite(parsed)) {
+      return parsed < 0.01 ? "Under $0.01 provider cost" : `$${parsed.toFixed(2)} provider cost`;
+    }
+  }
+  const tokens = accounting.total_tokens ?? accounting.tokens;
   if (tokens !== undefined && tokens !== null) {
-    return `${String(tokens)} tokens`;
+    const parsed = Number(tokens);
+    return Number.isFinite(parsed) ? `${Math.round(parsed).toLocaleString()} tokens` : `${String(tokens)} tokens`;
   }
   return "Usage recorded for this run.";
+}
+
+function summarizeAiInvokePolicy(contract: MiniAppContract | null): string[] {
+  const policy = contract?.ai_invoke_policy;
+  if (!policy) {
+    return ["AI is not granted for this tool."];
+  }
+  const status = String(policy.consent_status || "").toLowerCase();
+  const rows = [
+    status === "granted" ? "AI permission granted." : "AI permission not granted.",
+    `Payer: ${String(policy.payer || "platform_credits").replace(/_/g, " ")}`,
+  ];
+  if (policy.monthly_credit_cap !== undefined && policy.monthly_credit_cap !== null) {
+    rows.push(`Monthly cap: ${Number(policy.monthly_credit_cap).toLocaleString()} credits`);
+  }
+  if (policy.per_invocation_credit_cap !== undefined && policy.per_invocation_credit_cap !== null) {
+    rows.push(`Per run cap: ${Number(policy.per_invocation_credit_cap).toLocaleString()} credits`);
+  }
+  return rows;
+}
+
+function summarizeTrustPolicy(contract: MiniAppContract | null): string[] {
+  const tier = String(contract?.trust_tier || "user_private").replace(/_/g, " ");
+  const background = contract?.background_ai_allowed ? "Background AI allowed." : "AI only while this tool is open.";
+  const runtime = contract?.runtime_access && contract.runtime_access !== "none" ? String(contract.runtime_access) : "No computer or local runtime access.";
+  return [`Trust: ${tier}`, background, runtime];
+}
+
+function modelSummaryFromContract(contract: MiniAppContract | null): string {
+  const policy = contract?.ai_invoke_policy;
+  const provider = String(policy?.provider || "").trim();
+  const model = String(policy?.model || "").trim();
+  if (provider || model) {
+    return [provider, model].filter(Boolean).join(" · ");
+  }
+  return "Resolved when this tool runs.";
 }
 
 function AppFrame({
@@ -472,7 +560,6 @@ function AppFrame({
   const { session } = useSessionState();
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [contract, setContract] = React.useState<MiniAppContract | null>(null);
-  const [installed, setInstalled] = React.useState(false);
 
   React.useEffect(() => {
     let active = true;
@@ -481,21 +568,11 @@ function AppFrame({
         return;
       }
       try {
-        const [contractResult, installedResult] = await Promise.allSettled([
-          appRegistryApi.getMiniAppContract(session, appId),
-          appRegistryApi.getInstalledApps(session),
-        ]);
+        const contractResult = await appRegistryApi.getMiniAppContract(session, appId);
         if (!active) {
           return;
         }
-        if (contractResult.status === "fulfilled") {
-          setContract(contractResult.value);
-        }
-        if (installedResult.status === "fulfilled") {
-          setInstalled(
-            (installedResult.value.items || []).some((item: any) => String(item?.id || item?.app_id || "") === appId),
-          );
-        }
+        setContract(contractResult);
       } catch {
         if (active) {
           setContract(null);
@@ -525,7 +602,7 @@ function AppFrame({
           },
         });
       } catch (error) {
-        console.warn("Mini app share link failed", error);
+        console.warn("Tool share link failed", error);
       }
     }
     try {
@@ -533,22 +610,9 @@ function AppFrame({
         message: `${title}\nOpen in Empyralis: ${sharePath}`,
       });
     } catch (error) {
-      console.warn("Mini app share failed", error);
+      console.warn("Tool share failed", error);
     }
   }, [appId, contract, session, title]);
-
-  const removeApp = React.useCallback(async () => {
-    if (!session || !installed) {
-      return;
-    }
-    try {
-      await appRegistryApi.uninstallApp(session, appId);
-      setInstalled(false);
-      onBack();
-    } catch (error) {
-      console.warn("Mini app removal failed", error);
-    }
-  }, [appId, installed, onBack, session]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -569,7 +633,7 @@ function AppFrame({
           activeOpacity={0.86}
           onPress={() => setMenuOpen(true)}
           accessibilityRole="button"
-          accessibilityLabel="Open app menu"
+          accessibilityLabel="Open tool menu"
           style={{
             width: 40,
             height: 40,
@@ -615,9 +679,7 @@ function AppFrame({
         onClose={() => setMenuOpen(false)}
         contract={contract}
         details={menuDetails}
-        installed={installed}
         onShare={shareApp}
-        onRemove={installed ? removeApp : undefined}
       />
     </View>
   );
@@ -630,9 +692,7 @@ function MiniAppMenuModal({
   onClose,
   contract,
   details,
-  installed,
   onShare,
-  onRemove,
 }: {
   appId: string;
   title: string;
@@ -640,9 +700,7 @@ function MiniAppMenuModal({
   onClose: () => void;
   contract: MiniAppContract | null;
   details?: AppMenuDetails;
-  installed: boolean;
   onShare: () => void;
-  onRemove?: () => void;
 }) {
   const theme = useTheme();
   const permissions = Array.isArray(contract?.permissions) ? contract.permissions : [];
@@ -650,9 +708,9 @@ function MiniAppMenuModal({
     contract?.memory_scope === "none_by_default" || !contract?.memory_scope
       ? "No Sage memory by default."
       : String(contract.memory_scope);
-  const providerLabel = details?.modelSummary || "No model used yet.";
-  const creditLabel = details?.creditSummary || "Usage will appear after this app runs.";
+  const creditLabel = details?.creditSummary || "Usage will appear after this tool runs.";
   const historyItems = details?.historyItems || [];
+  const aiPolicyRows = summarizeAiInvokePolicy(contract);
   return (
     <Modal animationType="fade" visible={visible} transparent onRequestClose={onClose}>
       <Pressable
@@ -680,11 +738,10 @@ function MiniAppMenuModal({
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
               <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
-                {contract?.delivery_mode === "hosted" ? "Hosted mini app" : "Mini app"}
-                {installed ? " · Installed" : ""}
+                {contract?.delivery_mode === "hosted" ? "Hosted tool" : "Tool"}
               </Text>
             </View>
-            <TouchableOpacity onPress={onClose} accessibilityRole="button" accessibilityLabel="Close app menu">
+            <TouchableOpacity onPress={onClose} accessibilityRole="button" accessibilityLabel="Close tool menu">
               <Ionicons name="close" size={22} color={theme.colors.textSecondary} />
             </TouchableOpacity>
           </View>
@@ -692,21 +749,20 @@ function MiniAppMenuModal({
           <MenuSection
             icon="time-outline"
             title="History"
-            rows={historyItems.length ? historyItems : [details?.historyEmpty || "History will appear after this app runs."]}
+            rows={historyItems.length ? historyItems : [details?.historyEmpty || "History will appear after this tool runs."]}
           />
           <MenuSection icon="sparkles-outline" title="Memory" rows={[memoryLabel]} />
-          <MenuSection icon="hardware-chip-outline" title="Model/provider" rows={[providerLabel]} />
+          <MenuSection icon="shield-outline" title="Trust" rows={summarizeTrustPolicy(contract)} />
+          <MenuSection icon="hardware-chip-outline" title="Model/provider" rows={[details?.modelSummary || modelSummaryFromContract(contract)]} />
           <MenuSection icon="wallet-outline" title="Credits" rows={[creditLabel]} />
+          <MenuSection icon="speedometer-outline" title="AI budget" rows={aiPolicyRows} />
           <MenuSection
             icon="shield-checkmark-outline"
             title="Permissions"
-            rows={permissions.length ? permissions : ["No additional app permissions granted."]}
+            rows={permissions.length ? permissions : ["No additional tool permissions granted."]}
           />
 
-          <View style={{ flexDirection: "row", gap: 10 }}>
-            <SecondaryButton label="Share" onPress={onShare} />
-            {onRemove ? <SecondaryButton label="Remove" onPress={onRemove} /> : null}
-          </View>
+          <SecondaryButton label="Share" onPress={onShare} />
         </Pressable>
       </Pressable>
     </Modal>
@@ -1209,7 +1265,7 @@ function UnavailableAppScreen({ appName, onBack }: { appName: string; onBack: ()
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background, paddingTop: insets.top + 16, paddingHorizontal: 20, gap: 18 }}>
       <BackButton onPress={onBack} />
-      <EmptyState title={`${appName} is not in beta`} detail="This application stays hidden until it has a real product surface." />
+      <EmptyState title={`${appName} is not in beta`} detail="This tool stays hidden until it has a real product surface." />
     </View>
   );
 }

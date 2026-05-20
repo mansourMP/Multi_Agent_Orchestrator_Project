@@ -331,11 +331,11 @@ export type MobileThreadHistoryItem = {
   created_at?: string | null;
   updated_at?: string | null;
   last_turn_at?: string | null;
-  turns?: Array<{
+  turns?: {
     role?: string | null;
     content?: string | null;
     created_at?: string | null;
-  }>;
+  }[];
 };
 
 export type MobileThreadHistoryResponse = {

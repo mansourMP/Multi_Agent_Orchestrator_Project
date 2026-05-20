@@ -445,6 +445,60 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertTrue(targets["sage_cloud_computer"]["available"])
         self.assertFalse(targets["sage_cloud_computer"]["default_for_workspace"])
 
+    def test_runtime_usage_credit_event_meters_cloud_computer_runtime(self) -> None:
+        event = runtime_attachment_service.build_runtime_usage_credit_event(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            surface="sage",
+            runtime_target="sage_cloud_computer",
+            session_id="session-1",
+            started_at="2026-05-20T00:00:00Z",
+            ended_at="2026-05-20T00:05:00Z",
+            active_seconds=300,
+            billable_seconds=240,
+            estimated_cost_usd=0.08,
+            thread_id="thread-1",
+            metadata={"domain_allowlist": ["example.com"]},
+        )
+
+        self.assertEqual(event["credit_type"], "computer_runtime")
+        self.assertEqual(event["credit_item_type"], "virtual_desktop_minutes")
+        self.assertEqual(event["credit_quantity"], 4.0)
+        self.assertEqual(event["runtime_target"], "sage_cloud_computer")
+        self.assertEqual(event["surface"], "sage")
+        self.assertEqual(event["thread_id"], "thread-1")
+        self.assertEqual(event["metadata"]["runtime_type"], "cloud_computer")
+        self.assertIn("payments", event["metadata"]["sensitive_actions_require_confirmation"])
+
+    def test_runtime_usage_credit_event_requires_session_and_valid_billable_seconds(self) -> None:
+        with self.assertRaises(ValueError) as missing_session:
+            runtime_attachment_service.build_runtime_usage_credit_event(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                surface="studio",
+                runtime_target="sage_cloud_computer",
+                session_id="",
+                started_at="2026-05-20T00:00:00Z",
+                ended_at="2026-05-20T00:05:00Z",
+                active_seconds=300,
+                billable_seconds=240,
+            )
+        self.assertIn("session_id", str(missing_session.exception))
+
+        with self.assertRaises(ValueError) as invalid_billable:
+            runtime_attachment_service.build_runtime_usage_credit_event(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                surface="studio",
+                runtime_target="sage_cloud_computer",
+                session_id="session-1",
+                started_at="2026-05-20T00:00:00Z",
+                ended_at="2026-05-20T00:05:00Z",
+                active_seconds=120,
+                billable_seconds=240,
+            )
+        self.assertIn("billable_seconds", str(invalid_billable.exception))
+
     def test_build_workspace_runtime_targets_projects_self_host_without_identity_fork(self) -> None:
         inventory = {
             "deployment_mode": "self_hosted_business",

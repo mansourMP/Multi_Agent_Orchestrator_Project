@@ -47,6 +47,23 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertEqual(contract["retrieve_records"]["default_limit"], mini_apps_service.DEFAULT_RETRIEVE_LIMIT)
         self.assertIn("since", contract["retrieve_records"]["supported_filters"])
         self.assertEqual(contract["records_count"], 2)
+        self.assertEqual(contract["trust_tier"], "first_party")
+        self.assertFalse(contract["background_ai_allowed"])
+        self.assertEqual(contract["runtime_access"], "none")
+
+    def test_workspace_private_user_apps_default_to_user_private_trust(self) -> None:
+        contract = mini_apps_service.upsert_mini_app_contract(
+            "ws-1",
+            "travel_partner",
+            label="Travel Partner",
+            delivery_mode="hosted",
+            hosted_url="https://miniapps.example.com/travel",
+            allowed_origins=["https://miniapps.example.com"],
+        )
+
+        self.assertEqual(contract["trust_tier"], "user_private")
+        self.assertFalse(contract["background_ai_allowed"])
+        self.assertEqual(contract["runtime_access"], "none")
 
     def test_retrieve_records_filters_narrow_history(self) -> None:
         mini_apps_service.upsert_mini_app_contract(

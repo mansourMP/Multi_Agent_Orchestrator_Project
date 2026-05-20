@@ -3293,7 +3293,7 @@ def normalize_pack_result(pack_id: str, raw_result: Any) -> Dict[str, Any]:
 
     result["pack_id"] = str(result.get("pack_id") or pack_id).strip().lower() or pack_id
     result["summary"] = str(result.get("summary") or f"{pack_id} completed.").strip()
-    result["generated_at"] = str(result.get("generated_at") or datetime.utcnow().isoformat() + "Z")
+    result["generated_at"] = str(result.get("generated_at") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
 
     raw_steps = result.get("next_steps")
     if isinstance(raw_steps, list):

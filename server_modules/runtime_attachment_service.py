@@ -10,6 +10,7 @@ from server_modules import (
     agent_registry_repository,
     auth,
     control_plane_repository,
+    credit_ledger_contract,
     entitlements_service,
     execution_sandbox_service,
     execution_mode_policy,
@@ -27,6 +28,15 @@ SUPPORTED_RUNTIME_TARGET_IDS = ("cloud_default", "sage_cloud_computer", "local_c
 CLOUD_COMPUTER_RUNTIME_CLASSES = {"cloud_computer", "cloud_desktop", "cloud_sandbox", "hosted_cloud_computer"}
 SELF_HOSTED_NODE_KINDS = {"mac_mini", "mac", "linux_server", "docker_host"}
 SELF_HOSTED_NODE_STATUSES = {"pending", "online", "offline", "unhealthy", "revoked"}
+RUNTIME_USAGE_SURFACES = ("sage", "studio", "mini_app")
+RUNTIME_SENSITIVE_ACTIONS = (
+    "payments",
+    "login",
+    "file_delete",
+    "send_message",
+    "purchase",
+    "external_post",
+)
 _RUNTIME_ATTACHMENTS_CACHE: Dict[str, Dict[str, Any]] = {}
 _RUNTIME_TARGETS_CACHE: Dict[str, Dict[str, Any]] = {}
 _RUNTIME_CACHE_LIMIT = 128
@@ -152,6 +162,132 @@ def _stable_json(value: Any) -> str:
 
 def _clone_payload(value: Dict[str, Any]) -> Dict[str, Any]:
     return copy.deepcopy(value)
+
+
+def _utc_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    token = str(value or "").strip()
+    return token or None
+
+
+def _float_or_raise(value: Any, *, field_name: str) -> float:
+    try:
+        parsed = float(value)
+    except Exception as exc:
+        raise ValueError(f"{field_name} must be numeric.") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be non-negative.")
+    return round(parsed, 6)
+
+
+def _runtime_credit_item_type(runtime_target: str) -> str:
+    if runtime_target == "sage_cloud_computer":
+        return "virtual_desktop_minutes"
+    if runtime_target == "cloud_default":
+        return "virtual_code_sandbox_minutes"
+    if runtime_target == "local_companion":
+        return "virtual_desktop_minutes"
+    if runtime_target == "self_host_runtime":
+        return "virtual_code_sandbox_minutes"
+    return "virtual_code_sandbox_minutes"
+
+
+def build_runtime_usage_credit_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    surface: str,
+    runtime_target: str,
+    session_id: str,
+    started_at: Any,
+    ended_at: Any,
+    active_seconds: Any,
+    billable_seconds: Any,
+    estimated_cost_usd: Any = 0.0,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    deployed_agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    tenant_token = str(tenant_id or "").strip()
+    workspace_token = str(workspace_id or "").strip()
+    if not tenant_token:
+        raise ValueError("tenant_id is required for runtime credit events.")
+    if not workspace_token:
+        raise ValueError("workspace_id is required for runtime credit events.")
+    surface_token = str(surface or "").strip().lower()
+    if surface_token not in RUNTIME_USAGE_SURFACES:
+        raise ValueError("surface must be sage, studio, or mini_app.")
+    target_token = str(runtime_target or "").strip()
+    if target_token not in SUPPORTED_RUNTIME_TARGET_IDS:
+        raise ValueError("runtime_target is unsupported.")
+    session_token = str(session_id or "").strip()
+    if not session_token:
+        raise ValueError("session_id is required for runtime credit events.")
+    started_token = _utc_iso(started_at)
+    ended_token = _utc_iso(ended_at)
+    if not started_token or not ended_token:
+        raise ValueError("started_at and ended_at are required for runtime credit events.")
+
+    active = _float_or_raise(active_seconds, field_name="active_seconds")
+    billable = _float_or_raise(billable_seconds, field_name="billable_seconds")
+    if active > 0 and billable > active:
+        raise ValueError("billable_seconds cannot exceed active_seconds.")
+    cost = _float_or_raise(estimated_cost_usd, field_name="estimated_cost_usd")
+    billable_minutes = round(billable / 60.0, 6)
+    target_definition = dict(RUNTIME_TARGET_DEFINITIONS.get(target_token) or {})
+    line_item = credit_ledger_contract.build_credit_ledger_line_item(
+        metadata={
+            **_coerce_dict(metadata),
+            "runtime_target": target_token,
+            "runtime_type": target_definition.get("attachment_kind") or target_token,
+            "credit_item_type": _runtime_credit_item_type(target_token),
+            "billing_source": "empyralis_credits"
+            if target_token in {"cloud_default", "sage_cloud_computer"}
+            else "workspace_runtime_policy",
+        },
+        runtime_minutes=billable_minutes,
+    )
+    event_metadata = {
+        **_coerce_dict(metadata),
+        "runtime_target": target_token,
+        "runtime_type": target_definition.get("attachment_kind") or target_token,
+        "runtime_connection_mode": target_definition.get("connection_mode"),
+        "requires_explicit_selection": bool(target_definition.get("product_default") is False),
+        "sensitive_actions_require_confirmation": list(RUNTIME_SENSITIVE_ACTIONS),
+        "credit_ledger_line_item": line_item,
+    }
+    return {
+        "tenant_id": tenant_token,
+        "workspace_id": workspace_token,
+        "surface": surface_token,
+        "runtime_target": target_token,
+        "runtime_type": target_definition.get("attachment_kind") or target_token,
+        "session_id": session_token,
+        "started_at": started_token,
+        "ended_at": ended_token,
+        "active_seconds": active,
+        "billable_seconds": billable,
+        "billable_minutes": billable_minutes,
+        "estimated_cost_usd": cost,
+        "credit_type": line_item.get("credit_type"),
+        "credit_item_type": line_item.get("credit_item_type"),
+        "credit_quantity": line_item.get("quantity"),
+        "credit_quantity_unit": line_item.get("quantity_unit"),
+        "billing_source": line_item.get("billing_source"),
+        "thread_id": str(thread_id or "").strip() or None,
+        "run_id": str(run_id or "").strip() or None,
+        "deployed_agent_id": str(deployed_agent_id or "").strip() or None,
+        "app_id": str(app_id or "").strip() or None,
+        "metadata": event_metadata,
+    }
 
 
 def _cache_store(cache: Dict[str, Dict[str, Any]], key: str, payload: Dict[str, Any]) -> Dict[str, Any]:

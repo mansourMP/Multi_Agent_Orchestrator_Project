@@ -108,12 +108,7 @@ def _resolve_cloud_provider_for_workspace(
     if normalized_requested_provider and normalized_requested_provider not in CLOUD_PROVIDER_IDS:
         raise ValueError("Mini apps only support cloud providers.")
 
-    candidates = []
-    if normalized_requested_provider:
-        candidates.append(normalized_requested_provider)
-    for provider in CLOUD_PROVIDER_IDS:
-        if provider not in candidates:
-            candidates.append(provider)
+    candidates = [normalized_requested_provider] if normalized_requested_provider else list(CLOUD_PROVIDER_IDS)
 
     for provider in candidates:
         credentials = direct_chat_provider_service.direct_chat_credentials(normalized_workspace_id, provider)

@@ -22,6 +22,9 @@ def register_inbox_routes(app) -> None:
     module_globals = globals()
     module_globals.update(_server.__dict__)
 
+    def _notification_runtime_db_path():
+        return getattr(_server, "ORION_RUNTIME_STATE_DB", globals().get("ORION_RUNTIME_STATE_DB", None))
+
     def _notification_with_read_state(item: Any) -> Dict[str, Any]:
         record = dict(item) if isinstance(item, dict) else {}
         notification_id = str(record.get("id") or "").strip()
@@ -325,6 +328,7 @@ def register_inbox_routes(app) -> None:
                     heartbeat_seconds=heartbeat_seconds,
                     timeout_seconds=timeout_seconds,
                     limit=limit,
+                    db_path=_notification_runtime_db_path(),
                 ),
                 ping=max(3, int(safe_heartbeat)),
             )
@@ -341,6 +345,7 @@ def register_inbox_routes(app) -> None:
             trace_id=trace_id,
             include_sessions=include_sessions,
             session_limit=session_limit,
+            db_path=_notification_runtime_db_path(),
         )
 
     @app.post("/notifications", dependencies=[Depends(require_api_key)])
@@ -360,6 +365,7 @@ def register_inbox_routes(app) -> None:
             tenant_id=str(tenant_id or "").strip() or None,
             workspace_id=str(workspace_id or "").strip() or None,
             mark_all=mark_all,
+            db_path=_notification_runtime_db_path(),
         )
 
     @app.post("/notifications/devices", dependencies=[Depends(require_api_key)])
@@ -389,6 +395,7 @@ def register_inbox_routes(app) -> None:
             app_id=str(payload.get("app_id") or "").strip(),
             capabilities=capabilities if isinstance(capabilities, list) else None,
             workspace=workspace,
+            db_path=_notification_runtime_db_path(),
         )
 
     @app.get("/activity/timeline", dependencies=[Depends(require_api_key)], response_model=ApiActivityListResponse)

@@ -18,6 +18,18 @@ MINI_APP_CONTRACT_VERSION = 1
 MAX_RETRIEVE_LIMIT = 200
 DEFAULT_RETRIEVE_LIMIT = 25
 UNLISTED_SHARE_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
+DEFAULT_AI_MONTHLY_CREDIT_CAP = 500
+DEFAULT_AI_INVOCATION_CREDIT_CAP = 50
+MINI_APP_TRUST_TIERS = (
+    "user_private",
+    "first_party",
+    "reviewed_partner",
+    "public_untrusted_url",
+)
+FIRST_PARTY_MINI_APP_IDS = {
+    "calorie_tracking",
+    "flashcards",
+}
 SUPPORTED_RETRIEVE_FILTERS = (
     "ids",
     "kind",
@@ -65,6 +77,17 @@ def _normalize_workspace_id(workspace_id: Any) -> str:
 def _normalize_app_id(app_id: Any) -> str:
     token = re.sub(r"[^a-z0-9_-]+", "_", str(app_id or "").strip().lower()).strip("_")
     return token
+
+
+def _default_trust_tier(app_id: Any) -> str:
+    return "first_party" if _normalize_app_id(app_id) in FIRST_PARTY_MINI_APP_IDS else "user_private"
+
+
+def _normalize_trust_tier(value: Any, *, app_id: Any = None) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if token in MINI_APP_TRUST_TIERS:
+        return token
+    return _default_trust_tier(app_id)
 
 
 def issue_unlisted_share_token(
@@ -139,6 +162,16 @@ def _default_app_entry(app_id: str) -> Dict[str, Any]:
         "allowed_origins": [],
         "bridge_contracts": {},
         "permissions": [],
+        "trust_tier": _default_trust_tier(app_id),
+        "background_ai_allowed": False,
+        "runtime_access": "none",
+        "ai_invoke_policy": {
+            "consent_required": True,
+            "consent_status": "not_granted",
+            "payer": "platform_credits",
+            "monthly_credit_cap": DEFAULT_AI_MONTHLY_CREDIT_CAP,
+            "per_invocation_credit_cap": DEFAULT_AI_INVOCATION_CREDIT_CAP,
+        },
         "context_envelope": {},
         "current_state": {},
         "recent_events": [],
@@ -187,6 +220,9 @@ def _safe_read_state(workspace_id: str) -> Dict[str, Any]:
             "allowed_origins": list(entry.get("allowed_origins") or []) if isinstance(entry.get("allowed_origins"), list) else [],
             "bridge_contracts": dict(entry.get("bridge_contracts") or {}) if isinstance(entry.get("bridge_contracts"), dict) else {},
             "permissions": list(entry.get("permissions") or []) if isinstance(entry.get("permissions"), list) else [],
+            "trust_tier": _normalize_trust_tier(entry.get("trust_tier"), app_id=app_id),
+            "background_ai_allowed": bool(entry.get("background_ai_allowed", False)),
+            "runtime_access": "none",
             "context_envelope": dict(entry.get("context_envelope") or {}) if isinstance(entry.get("context_envelope"), dict) else {},
             "current_state": dict(entry.get("current_state") or {}) if isinstance(entry.get("current_state"), dict) else {},
             "recent_events": list(entry.get("recent_events") or []) if isinstance(entry.get("recent_events"), list) else [],
@@ -314,6 +350,35 @@ def _normalize_fact_item(value: Any) -> Dict[str, Any]:
     }
 
 
+def _normalize_ai_invoke_policy(value: Any) -> Dict[str, Any]:
+    payload = dict(value or {}) if isinstance(value, dict) else {}
+    consent_status = str(payload.get("consent_status") or "not_granted").strip().lower() or "not_granted"
+    if consent_status not in {"not_granted", "granted", "revoked"}:
+        raise ValueError("ai_invoke_policy.consent_status must be not_granted, granted, or revoked.")
+    payer = str(payload.get("payer") or "platform_credits").strip().lower() or "platform_credits"
+    if payer not in {"platform_credits", "byok", "local", "subscription_passthrough"}:
+        raise ValueError("ai_invoke_policy.payer must be platform_credits, byok, local, or subscription_passthrough.")
+    def _cap_value(key: str, default: int) -> int:
+        raw_value = payload.get(key)
+        if raw_value is None or raw_value == "":
+            return default
+        return int(raw_value)
+
+    monthly_cap = _cap_value("monthly_credit_cap", DEFAULT_AI_MONTHLY_CREDIT_CAP)
+    invocation_cap = _cap_value("per_invocation_credit_cap", DEFAULT_AI_INVOCATION_CREDIT_CAP)
+    if monthly_cap < 0 or invocation_cap < 0:
+        raise ValueError("Mini-app AI credit caps must be non-negative.")
+    return {
+        "consent_required": bool(payload.get("consent_required", True)),
+        "consent_status": consent_status,
+        "payer": payer,
+        "monthly_credit_cap": monthly_cap,
+        "per_invocation_credit_cap": invocation_cap,
+        "provider": str(payload.get("provider") or "").strip() or None,
+        "model": str(payload.get("model") or "").strip() or None,
+    }
+
+
 def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Dict[str, Any]:
     app_id = str(entry.get("id") or "").strip()
     records = [
@@ -342,7 +407,11 @@ def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Di
         "visibility": str(entry.get("visibility") or "workspace_private").strip().lower() or "workspace_private",
         "install_status": str(entry.get("install_status") or "installed").strip().lower() or "installed",
         "memory_scope": "none_by_default",
+        "trust_tier": _normalize_trust_tier(entry.get("trust_tier"), app_id=app_id),
+        "background_ai_allowed": bool(entry.get("background_ai_allowed", False)),
+        "runtime_access": "none",
         "permissions": list(hosted_fields.get("permissions") or []),
+        "ai_invoke_policy": _normalize_ai_invoke_policy(entry.get("ai_invoke_policy")),
         "bridge_contracts": dict(hosted_fields.get("bridge_contracts") or {}),
         "context_envelope": dict(hosted_fields.get("context_envelope") or {}),
         "embed_kind": hosted_fields.get("embed_kind"),
@@ -387,6 +456,9 @@ def _safe_unlisted_preview(contract: Dict[str, Any], *, token_expires_at: Option
         "delivery_mode": contract.get("delivery_mode"),
         "visibility": contract.get("visibility"),
         "memory_scope": contract.get("memory_scope") or "none_by_default",
+        "trust_tier": contract.get("trust_tier") or "public_untrusted_url",
+        "background_ai_allowed": False,
+        "runtime_access": "none",
         "permissions": list(contract.get("permissions") or []),
         "bridge_contracts": dict(contract.get("bridge_contracts") or {}),
         "allowed_origins": list(contract.get("allowed_origins") or hosted.get("allowed_origins") or []),
@@ -477,8 +549,21 @@ def install_unlisted_shared_app(target_workspace_id: str, token: str) -> Dict[st
         embed_kind=source_contract.get("embed_kind"),
         allowed_origins=source_contract.get("allowed_origins"),
         bridge_contracts=source_contract.get("bridge_contracts"),
-        permissions=source_contract.get("permissions"),
+        permissions=[
+            item
+            for item in list(source_contract.get("permissions") or [])
+            if str(item or "").strip().lower() != mini_app_host_service.APP_PERMISSION_AI_INVOKE
+        ],
         context_envelope=source_contract.get("context_envelope"),
+        trust_tier="public_untrusted_url",
+        background_ai_allowed=False,
+        ai_invoke_policy={
+            "consent_required": True,
+            "consent_status": "not_granted",
+            "payer": "platform_credits",
+            "monthly_credit_cap": 0,
+            "per_invocation_credit_cap": 0,
+        },
         visibility="workspace_private",
         install_status="installed",
     )
@@ -496,7 +581,10 @@ def upsert_mini_app_contract(
     allowed_origins: Any = None,
     bridge_contracts: Any = None,
     permissions: Any = None,
+    ai_invoke_policy: Any = None,
     context_envelope: Any = None,
+    trust_tier: Any = None,
+    background_ai_allowed: Any = None,
     visibility: Any = None,
     install_status: Any = None,
     current_state: Any = None,
@@ -527,6 +615,13 @@ def upsert_mini_app_contract(
         if normalized_install_status not in {"installed", "pending", "removed"}:
             raise ValueError("install_status must be installed, pending, or removed.")
         entry["install_status"] = normalized_install_status
+    if ai_invoke_policy is not None:
+        entry["ai_invoke_policy"] = _normalize_ai_invoke_policy(ai_invoke_policy)
+    if trust_tier is not None:
+        entry["trust_tier"] = _normalize_trust_tier(trust_tier, app_id=normalized_app_id)
+    if background_ai_allowed is not None:
+        entry["background_ai_allowed"] = bool(background_ai_allowed)
+    entry["runtime_access"] = "none"
     if any(
         value is not None
         for value in (

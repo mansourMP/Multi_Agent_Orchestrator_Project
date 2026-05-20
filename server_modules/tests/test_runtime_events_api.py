@@ -43,7 +43,7 @@ class RuntimeEventsApiTests(unittest.TestCase):
                 db_path,
                 {
                     "id": "evt-1",
-                    "ts": "2026-05-12T00:00:00Z",
+                    "ts": runtime_events_api._utc_now_iso(),
                     "tenant_id": "default",
                     "workspace_id": "default",
                     "channel": "runtime",

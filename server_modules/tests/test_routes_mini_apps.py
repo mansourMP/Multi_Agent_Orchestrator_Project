@@ -17,6 +17,99 @@ def _build_app() -> FastAPI:
     return app
 
 
+async def _grant_mini_app_ai_invoke(client: httpx.AsyncClient, workspace_id: str = "ws-1", app_id: str = "writing"):
+    response = await client.put(
+        f"/api/workspaces/{workspace_id}/mini-apps/{app_id}",
+        json={
+            "label": "Writing",
+            "delivery_mode": "structured",
+            "permissions": ["app.ai.invoke"],
+            "ai_invoke_policy": {
+                "consent_status": "granted",
+                "payer": "platform_credits",
+                "monthly_credit_cap": 500,
+                "per_invocation_credit_cap": 50,
+            },
+        },
+    )
+    assert response.status_code == 200
+    return response
+
+
+def _exact_usage(*, provider: str = "deepseek", model: str = "deepseek-v4-flash", total_tokens: int = 42, retail_credits: float | None = None):
+    prompt_tokens = max(0, int(total_tokens * 0.6))
+    completion_tokens = max(0, int(total_tokens) - prompt_tokens)
+    return {
+        "usage_accounting": {
+            "effective_provider": provider,
+            "effective_model": model,
+            "requested_provider": provider,
+            "requested_model": model,
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": int(total_tokens),
+            "estimated_cost_usd": 0.001,
+            "provider_cost_usd": 0.001,
+            "pricing_known": True,
+            "estimation_mode": "provider_usage_exact",
+            "retail_credits_charged": retail_credits,
+            "success": True,
+        }
+    }
+
+
+def _patch_mini_app_billing(monkeypatch: pytest.MonkeyPatch, *, monthly_rows: list[dict] | None = None):
+    monkeypatch.setattr(
+        routes_mini_apps.control_plane_repository,
+        "ensure_control_plane_schema",
+        AsyncMock(return_value=object()),
+    )
+    monkeypatch.setattr(
+        routes_mini_apps.control_plane_repository,
+        "list_workspace_hosted_ai_monthly_cost_ledger_entries",
+        AsyncMock(return_value=list(monthly_rows or [])),
+    )
+    ledger_mock = AsyncMock(return_value={"id": "shost_mini_app_1"})
+    monkeypatch.setattr(
+        routes_mini_apps.control_plane_repository,
+        "record_workspace_hosted_ai_monthly_cost_ledger_entry",
+        ledger_mock,
+    )
+    return ledger_mock
+
+
+def _active_mini_app_payload(input_text: str = "Rewrite this.", workspace_id: str = "ws-1", app_id: str = "writing", user_id: str = "user-1", **overrides):
+    active_session_id = str(overrides.pop("active_session_id", "miniapp-session-1"))
+    issued = routes_mini_apps._issue_mini_app_active_session_token(
+        workspace_id=workspace_id,
+        app_id=app_id,
+        user_id=user_id,
+        active_session_id=active_session_id,
+    )
+    return {
+        "input": input_text,
+        "active_session_id": active_session_id,
+        "active_session_token": issued["active_session_token"],
+        "session_state": "active",
+        **overrides,
+    }
+
+
+def _active_flashcards_payload(**overrides):
+    issued = routes_mini_apps._issue_mini_app_active_session_token(
+        workspace_id="ws-1",
+        app_id="flashcards",
+        user_id="user-1",
+        active_session_id=str(overrides.pop("active_session_id", "miniapp-flashcards-1")),
+    )
+    return {
+        "active_session_id": issued["active_session_id"],
+        "active_session_token": issued["active_session_token"],
+        "session_state": "active",
+        **overrides,
+    }
+
+
 @pytest.mark.anyio
 async def test_mini_app_routes_upsert_list_and_retrieve(monkeypatch: pytest.MonkeyPatch):
     app = _build_app()
@@ -136,7 +229,10 @@ async def test_unlisted_mini_app_share_preview_and_install(monkeypatch: pytest.M
             assert install_payload["visibility"] == "workspace_private"
             assert install_payload["install_status"] == "installed"
             assert install_payload["hosted_app"]["allowed_origins"] == ["https://miniapps.example.com"]
-            assert "app.ai.invoke" in install_payload["permissions"]
+            assert install_payload["trust_tier"] == "public_untrusted_url"
+            assert install_payload["background_ai_allowed"] is False
+            assert "app.ai.invoke" not in install_payload["permissions"]
+            assert install_payload["ai_invoke_policy"]["monthly_credit_cap"] == 0
 
 
 @pytest.mark.anyio
@@ -163,6 +259,7 @@ async def test_mini_app_invoke_route_returns_thin_app_response(monkeypatch: pyte
     app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
     monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
     monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    ledger_mock = _patch_mini_app_billing(monkeypatch)
     monkeypatch.setattr(
         routes_mini_apps.activity_ledger_service,
         "append_activity_event",
@@ -179,7 +276,7 @@ async def test_mini_app_invoke_route_returns_thin_app_response(monkeypatch: pyte
             "provider": "deepseek",
             "model": "deepseek-chat",
             "attempted_providers": ["deepseek"],
-            "usage": {"provider": "deepseek", "model": "deepseek-chat", "total_tokens": 42},
+            "usage": _exact_usage(provider="deepseek", model="deepseek-chat", total_tokens=42),
         },
     )
 
@@ -188,9 +285,10 @@ async def test_mini_app_invoke_route_returns_thin_app_response(monkeypatch: pyte
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await _grant_mini_app_ai_invoke(client)
             response = await client.post(
                 "/api/workspaces/ws-1/mini-apps/writing/invoke",
-                json={"input": "Rewrite this in a clearer tone."},
+                json=_active_mini_app_payload("Rewrite this in a clearer tone."),
             )
 
     assert response.status_code == 200
@@ -201,6 +299,348 @@ async def test_mini_app_invoke_route_returns_thin_app_response(monkeypatch: pyte
     assert payload["provider"] == "deepseek"
     assert payload["reply"] == "handled Rewrite this in a clearer tone."
     assert payload["activity_event_id"] == "activity-1"
+    activity_metadata = routes_mini_apps.activity_ledger_service.append_activity_event.await_args.kwargs["metadata"]
+    assert activity_metadata["ai_payer"] == "platform_credits"
+    assert activity_metadata["monthly_credit_cap"] == 500
+    assert activity_metadata["per_invocation_credit_cap"] == 50
+    assert activity_metadata["retail_credits_charged"] == 42.0
+    assert activity_metadata["resolved_provider"] == "deepseek"
+    assert activity_metadata["resolved_model"] == "deepseek-chat"
+    assert activity_metadata["active_session_id"] == "miniapp-session-1"
+    assert activity_metadata["session_state"] == "active"
+    assert activity_metadata["trust_tier"] == "user_private"
+    ledger_mock.assert_awaited_once()
+    assert ledger_mock.await_args.kwargs["metadata"]["credit_type"] == "ai_tokens"
+    assert ledger_mock.await_args.kwargs["metadata"]["app_id"] == "writing"
+    assert ledger_mock.await_args.kwargs["metadata"]["active_session_id"] == "miniapp-session-1"
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_route_locks_provider_and_model_to_policy(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    _patch_mini_app_billing(monkeypatch)
+    monkeypatch.setattr(
+        routes_mini_apps.activity_ledger_service,
+        "append_activity_event",
+        AsyncMock(return_value={"id": "activity-1"}),
+    )
+    captured = {}
+
+    def fake_invoke(workspace_id, app_id, user_input, requested_provider="", requested_model=""):
+        captured["requested_provider"] = requested_provider
+        captured["requested_model"] = requested_model
+        return {
+            "app_id": app_id,
+            "mode": "invoke",
+            "memory_scope": "none",
+            "reply": "ok",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "attempted_providers": ["deepseek"],
+            "usage": _exact_usage(provider="deepseek", model="deepseek-v4-flash", total_tokens=5),
+        }
+
+    monkeypatch.setattr(routes_mini_apps.mini_app_invoke_service, "invoke_mini_app", fake_invoke)
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/writing",
+                json={
+                    "label": "Writing",
+                    "delivery_mode": "structured",
+                    "permissions": ["app.ai.invoke"],
+                    "ai_invoke_policy": {
+                        "consent_status": "granted",
+                        "payer": "platform_credits",
+                        "provider": "deepseek",
+                        "model": "deepseek-v4-flash",
+                        "monthly_credit_cap": 500,
+                        "per_invocation_credit_cap": 50,
+                    },
+                },
+            )
+            assert response.status_code == 200
+            invoke_response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this.", provider="openai", model="gpt-4o"),
+            )
+
+    assert invoke_response.status_code == 200
+    assert captured["requested_provider"] == "deepseek"
+    assert captured["requested_model"] == "deepseek-v4-flash"
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_requires_active_open_session(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    _patch_mini_app_billing(monkeypatch)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda *args, **kwargs: pytest.fail("invoke service should not be called without an active app session"),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await _grant_mini_app_ai_invoke(client)
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json={"input": "Rewrite this.", "session_state": "background"},
+            )
+
+    assert response.status_code == 403
+    assert "active open app session" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_rejects_client_spoofed_active_session_without_token(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    _patch_mini_app_billing(monkeypatch)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda *args, **kwargs: pytest.fail("invoke service should not be called for spoofed active sessions"),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await _grant_mini_app_ai_invoke(client)
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json={
+                    "input": "Rewrite this.",
+                    "active_session_id": "forged-session",
+                    "session_state": "active",
+                },
+            )
+
+    assert response.status_code == 403
+    assert "server-issued active session token" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_mini_app_active_session_endpoint_issues_scoped_token(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await _grant_mini_app_ai_invoke(client)
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/active-session",
+                json={"active_session_id": "session-from-open-app"},
+            )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active_session_id"] == "session-from-open-app"
+    verified = routes_mini_apps._verify_mini_app_active_session_token(
+        payload["active_session_token"],
+        workspace_id="ws-1",
+        app_id="writing",
+        user_id="user-1",
+        active_session_id="session-from-open-app",
+    )
+    assert verified["app_id"] == "writing"
+
+
+@pytest.mark.anyio
+async def test_public_untrusted_mini_app_cannot_use_platform_ai(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda *args, **kwargs: pytest.fail("invoke service should not be called for public untrusted apps"),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/shared_url_app",
+                json={
+                    "label": "Shared URL App",
+                    "delivery_mode": "hosted",
+                    "hosted_url": "https://example.com/app",
+                    "allowed_origins": ["https://example.com"],
+                    "permissions": ["app.ai.invoke"],
+                    "trust_tier": "public_untrusted_url",
+                    "ai_invoke_policy": {
+                        "consent_status": "granted",
+                        "payer": "platform_credits",
+                        "monthly_credit_cap": 500,
+                        "per_invocation_credit_cap": 50,
+                    },
+                },
+            )
+            assert response.status_code == 200
+            invoke_response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/shared_url_app/invoke",
+                json=_active_mini_app_payload("Summarize"),
+            )
+
+    assert invoke_response.status_code == 403
+    assert "Public untrusted" in invoke_response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_route_blocks_per_invocation_cap_overspend(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    ledger_mock = _patch_mini_app_billing(monkeypatch)
+    append_event = AsyncMock(return_value={"id": "activity-1"})
+    monkeypatch.setattr(routes_mini_apps.activity_ledger_service, "append_activity_event", append_event)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda workspace_id, app_id, user_input, requested_provider="", requested_model="": {
+            "app_id": app_id,
+            "reply": "expensive",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "usage": _exact_usage(provider="deepseek", model="deepseek-v4-flash", total_tokens=6, retail_credits=6),
+        },
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/writing",
+                json={
+                    "label": "Writing",
+                    "delivery_mode": "structured",
+                    "permissions": ["app.ai.invoke"],
+                    "ai_invoke_policy": {
+                        "consent_status": "granted",
+                        "payer": "platform_credits",
+                        "monthly_credit_cap": 500,
+                        "per_invocation_credit_cap": 5,
+                    },
+                },
+            )
+            assert response.status_code == 200
+            invoke_response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this."),
+            )
+
+    assert invoke_response.status_code == 403
+    assert "per-invocation credit cap" in invoke_response.json()["detail"]
+    append_event.assert_not_awaited()
+    ledger_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_route_blocks_monthly_cap_overspend(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    ledger_mock = _patch_mini_app_billing(
+        monkeypatch,
+        monthly_rows=[
+            {
+                "source_surface": "mini_app_invoke",
+                "completed_at": "2026-05-10T00:00:00Z",
+                "metadata": {
+                    "app_id": "writing",
+                    "usage_accounting": {"total_tokens": 498},
+                },
+            }
+        ],
+    )
+    append_event = AsyncMock(return_value={"id": "activity-1"})
+    monkeypatch.setattr(routes_mini_apps.activity_ledger_service, "append_activity_event", append_event)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda workspace_id, app_id, user_input, requested_provider="", requested_model="": {
+            "app_id": app_id,
+            "reply": "ok",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "usage": _exact_usage(provider="deepseek", model="deepseek-v4-flash", total_tokens=3),
+        },
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/writing",
+                json={
+                    "label": "Writing",
+                    "delivery_mode": "structured",
+                    "permissions": ["app.ai.invoke"],
+                    "ai_invoke_policy": {
+                        "consent_status": "granted",
+                        "payer": "platform_credits",
+                        "monthly_credit_cap": 500,
+                        "per_invocation_credit_cap": 50,
+                    },
+                },
+            )
+            assert response.status_code == 200
+            invoke_response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this."),
+            )
+
+    assert invoke_response.status_code == 403
+    assert "monthly credit cap" in invoke_response.json()["detail"]
+    append_event.assert_not_awaited()
+    ledger_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_requires_installed_contract(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda *args, **kwargs: pytest.fail("invoke service should not be called without a contract"),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this."),
+            )
+
+    assert response.status_code == 403
+    assert "installed mini-app contract" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -224,11 +664,156 @@ async def test_mini_app_invoke_requires_permission_when_contract_exists(monkeypa
             assert create_response.status_code == 200
             response = await client.post(
                 "/api/workspaces/ws-1/mini-apps/writing/invoke",
-                json={"input": "Rewrite this."},
+                json=_active_mini_app_payload("Rewrite this."),
             )
 
     assert response.status_code == 403
     assert "app.ai.invoke" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_requires_first_run_consent(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda *args, **kwargs: pytest.fail("invoke service should not be called before consent"),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create_response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/writing",
+                json={
+                    "label": "Writing",
+                    "delivery_mode": "structured",
+                    "permissions": ["app.ai.invoke"],
+                },
+            )
+            assert create_response.status_code == 200
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this."),
+            )
+
+    assert response.status_code == 403
+    assert "first-run consent" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_mini_app_contract_preserves_disabled_ai_zero_caps(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create_response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/writing",
+                json={
+                    "label": "Writing",
+                    "delivery_mode": "structured",
+                    "permissions": [],
+                    "ai_invoke_policy": {
+                        "consent_required": True,
+                        "consent_status": "not_granted",
+                        "payer": "platform_credits",
+                        "monthly_credit_cap": 0,
+                        "per_invocation_credit_cap": 0,
+                    },
+                },
+            )
+
+    assert create_response.status_code == 200
+    payload = create_response.json()
+    assert "app.ai.invoke" not in payload["permissions"]
+    assert payload["ai_invoke_policy"]["consent_status"] == "not_granted"
+    assert payload["ai_invoke_policy"]["monthly_credit_cap"] == 0
+    assert payload["ai_invoke_policy"]["per_invocation_credit_cap"] == 0
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_zero_caps_deny_invoke(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda *args, **kwargs: pytest.fail("invoke service should not be called when caps are zero"),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create_response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/writing",
+                json={
+                    "label": "Writing",
+                    "delivery_mode": "structured",
+                    "permissions": ["app.ai.invoke"],
+                    "ai_invoke_policy": {
+                        "consent_status": "granted",
+                        "payer": "platform_credits",
+                        "monthly_credit_cap": 0,
+                        "per_invocation_credit_cap": 0,
+                    },
+                },
+            )
+            assert create_response.status_code == 200
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this."),
+            )
+
+    assert response.status_code == 403
+    assert "positive monthly credit cap" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_mini_app_invoke_denies_byok_until_source_routing_exists(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(
+        routes_mini_apps.mini_app_invoke_service,
+        "invoke_mini_app",
+        lambda *args, **kwargs: pytest.fail("invoke service should not be called for unsupported BYOK mini-app routing"),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create_response = await client.put(
+                "/api/workspaces/ws-1/mini-apps/writing",
+                json={
+                    "label": "Writing",
+                    "delivery_mode": "structured",
+                    "permissions": ["app.ai.invoke"],
+                    "ai_invoke_policy": {
+                        "consent_status": "granted",
+                        "payer": "BYOK",
+                        "monthly_credit_cap": 500,
+                        "per_invocation_credit_cap": 50,
+                    },
+                },
+            )
+            assert create_response.status_code == 200
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("Rewrite this."),
+            )
+
+    assert response.status_code == 403
+    assert "BYOK/local AI routing is not enabled" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -237,6 +822,7 @@ async def test_mini_app_invoke_route_rate_limits_requests(monkeypatch: pytest.Mo
     app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
     monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
     monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    _patch_mini_app_billing(monkeypatch)
     monkeypatch.setattr(
         routes_mini_apps.activity_ledger_service,
         "append_activity_event",
@@ -245,21 +831,31 @@ async def test_mini_app_invoke_route_rate_limits_requests(monkeypatch: pytest.Mo
     monkeypatch.setattr(
         routes_mini_apps.mini_app_invoke_service,
         "invoke_mini_app",
-        lambda workspace_id, app_id, user_input, requested_provider="", requested_model="": {"app_id": app_id, "reply": "ok"},
+        lambda workspace_id, app_id, user_input, requested_provider="", requested_model="": {
+            "app_id": app_id,
+            "reply": "ok",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "usage": _exact_usage(provider="deepseek", model="deepseek-v4-flash", total_tokens=1),
+        },
     )
     routes_mini_apps.MINI_APP_INVOKE_RATE_LIMIT_BUCKETS.clear()
     monkeypatch.setattr(routes_mini_apps, "ORION_MINI_APP_INVOKE_RATE_LIMIT_PER_MINUTE", 1)
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        first = await client.post(
-            "/api/workspaces/ws-1/mini-apps/writing/invoke",
-            json={"input": "one"},
-        )
-        second = await client.post(
-            "/api/workspaces/ws-1/mini-apps/writing/invoke",
-            json={"input": "two"},
-        )
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await _grant_mini_app_ai_invoke(client)
+            routes_mini_apps.MINI_APP_INVOKE_RATE_LIMIT_BUCKETS.clear()
+            first = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("one"),
+            )
+            second = await client.post(
+                "/api/workspaces/ws-1/mini-apps/writing/invoke",
+                json=_active_mini_app_payload("two"),
+            )
 
     assert first.status_code == 200
     assert second.status_code == 429
@@ -424,6 +1020,13 @@ async def test_flashcards_generate_route(monkeypatch: pytest.MonkeyPatch):
     app = _build_app()
     app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
     monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    _patch_mini_app_billing(monkeypatch)
+    monkeypatch.setattr(
+        routes_mini_apps.activity_ledger_service,
+        "append_activity_event",
+        AsyncMock(return_value={"id": "activity-flashcards-1"}),
+    )
     monkeypatch.setattr(
         routes_mini_apps.flashcards_tracking_service,
         "generate_flashcards",
@@ -437,26 +1040,92 @@ async def test_flashcards_generate_route(monkeypatch: pytest.MonkeyPatch):
                 {"front": "Adios", "back": "Goodbye"},
             ],
             "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "attempted_providers": ["deepseek"],
+            "usage": _exact_usage(provider="deepseek", model="deepseek-v4-flash", total_tokens=9),
         },
     )
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            "/api/workspaces/ws-1/mini-apps/flashcards/generate",
-            json={
-                "deck": "Spanish A1",
-                "source_text": "hola = hello, adios = goodbye",
-                "count": 2,
-                "explicit_user_intent": True,
-            },
-        )
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/flashcards/generate",
+                json={
+                    "deck": "Spanish A1",
+                    "source_text": "hola = hello, adios = goodbye",
+                    "count": 2,
+                    "explicit_user_intent": True,
+                    **_active_flashcards_payload(),
+                },
+            )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["app_id"] == "flashcards"
     assert payload["deck"] == "Spanish A1"
     assert payload["count"] == 2
+    assert payload["activity_event_id"] == "activity-flashcards-1"
+
+
+@pytest.mark.anyio
+async def test_flashcards_generate_repairs_existing_first_party_contract_without_ai_permission(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setattr(routes_mini_apps.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    _patch_mini_app_billing(monkeypatch)
+    monkeypatch.setattr(
+        routes_mini_apps.activity_ledger_service,
+        "append_activity_event",
+        AsyncMock(return_value={"id": "activity-flashcards-1"}),
+    )
+    monkeypatch.setattr(
+        routes_mini_apps.flashcards_tracking_service,
+        "generate_flashcards",
+        lambda workspace_id, **kwargs: {
+            "workspace_id": workspace_id,
+            "app_id": "flashcards",
+            "deck": kwargs["deck"],
+            "count": 1,
+            "cards": [{"front": "Hola", "back": "Hello"}],
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "attempted_providers": ["deepseek"],
+            "usage": _exact_usage(provider="deepseek", model="deepseek-v4-flash", total_tokens=8),
+        },
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create_response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/flashcards/cards",
+                json={
+                    "deck": "Spanish A1",
+                    "front": "Hola",
+                    "back": "Hello",
+                    "explicit_user_intent": True,
+                },
+            )
+            assert create_response.status_code == 200
+            assert "app.ai.invoke" not in create_response.json()["contract"]["permissions"]
+
+            generate_response = await client.post(
+                "/api/workspaces/ws-1/mini-apps/flashcards/generate",
+                json={
+                    "deck": "Spanish A1",
+                    "source_text": "hola = hello",
+                    "count": 1,
+                    "explicit_user_intent": True,
+                    **_active_flashcards_payload(),
+                },
+            )
+
+    assert generate_response.status_code == 200
+    assert generate_response.json()["activity_event_id"] == "activity-flashcards-1"
 
 
 @pytest.mark.anyio

@@ -11,6 +11,10 @@ type MiniAppInvokeRequest = {
   input: string;
   provider?: string;
   model?: string;
+  active_session_id?: string;
+  active_session_token?: string;
+  session_state?: "active" | "foreground" | "open" | "background" | "closed";
+  background_invoke?: boolean;
 };
 
 export type MiniAppContract = {
@@ -21,7 +25,19 @@ export type MiniAppContract = {
   visibility?: "workspace_private" | "unlisted_link" | string;
   install_status?: "installed" | "pending" | "removed" | string;
   memory_scope?: string | null;
+  trust_tier?: "user_private" | "first_party" | "reviewed_partner" | "public_untrusted_url" | string | null;
+  background_ai_allowed?: boolean | null;
+  runtime_access?: string | null;
   permissions?: string[];
+  ai_invoke_policy?: {
+    consent_required?: boolean;
+    consent_status?: string | null;
+    payer?: string | null;
+    monthly_credit_cap?: number | null;
+    per_invocation_credit_cap?: number | null;
+    provider?: string | null;
+    model?: string | null;
+  } | null;
   hosted_url?: string | null;
   hosted_app?: {
     hosted_url?: string | null;
@@ -65,6 +81,9 @@ type RegisterMiniAppRequest = {
   hosted_url: string;
   allowed_origins?: string[];
   permissions?: string[];
+  trust_tier?: NonNullable<MiniAppContract["trust_tier"]>;
+  background_ai_allowed?: boolean;
+  ai_invoke_policy?: NonNullable<MiniAppContract["ai_invoke_policy"]>;
   bridge_contracts?: Record<string, string[]>;
   visibility?: "workspace_private" | "unlisted_link";
 };
@@ -118,6 +137,11 @@ type FlashcardGenerateRequest = {
   count?: number;
   provider?: string;
   model?: string;
+  active_session_id?: string;
+  active_session_token?: string;
+  session_state?: "active" | "foreground" | "open" | "background" | "closed";
+  background_invoke?: boolean;
+  explicit_user_intent?: boolean;
 };
 
 function formatNetworkError(baseUrl: string) {
@@ -276,6 +300,7 @@ export const appRegistryApi = {
           embed_kind: "webview",
           allowed_origins: body.allowed_origins,
           permissions: body.permissions || [],
+          ai_invoke_policy: body.ai_invoke_policy,
           bridge_contracts: body.bridge_contracts || {},
           visibility: body.visibility || "workspace_private",
           install_status: "installed",
@@ -365,7 +390,27 @@ export const appRegistryApi = {
         input: body.input,
         provider: body.provider,
         model: body.model,
+        active_session_id: body.active_session_id,
+        active_session_token: body.active_session_token,
+        session_state: body.session_state,
+        background_invoke: body.background_invoke,
       }),
+    });
+  },
+  createMiniAppActiveSession(session: MobileSession, appId: string, activeSessionId?: string) {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Mini apps are not ready for this session yet.");
+    }
+    return requestRuntime<{
+      workspace_id: string;
+      app_id: string;
+      active_session_id: string;
+      active_session_token: string;
+      expires_at: number;
+    }>(session, `/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps/${encodeURIComponent(appId)}/active-session`, {
+      method: "POST",
+      body: JSON.stringify({ active_session_id: activeSessionId }),
     });
   },
   getCalorieOverview(session: MobileSession, date?: string) {

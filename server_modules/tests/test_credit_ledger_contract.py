@@ -83,6 +83,19 @@ def test_connector_read_usage_maps_to_read_line_item() -> None:
     assert item["connector_kind"] == "google_sheets"
 
 
+def test_generic_tool_execution_maps_to_tool_line_item() -> None:
+    item = credit_ledger_contract.build_credit_ledger_line_item(
+        metadata={"credit_item_type": "tool_execution", "action_count": 4, "tool_id": "browser.click"},
+        billing_source="empyralis_credits",
+    )
+
+    assert item["credit_item_type"] == "tool_execution"
+    assert item["credit_type"] == "tool_execution"
+    assert item["quantity"] == 4.0
+    assert item["quantity_unit"] == "actions"
+    assert item["tool_id"] == "browser.click"
+
+
 def test_mini_app_action_usage_maps_to_action_line_item() -> None:
     item = credit_ledger_contract.build_credit_ledger_line_item(
         metadata={"credit_item_type": "mini_app_action", "action_count": 2, "app_id": "flashcards"},

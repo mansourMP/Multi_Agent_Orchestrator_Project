@@ -545,6 +545,8 @@ def stream_provider_backed_direct_chat(
                             step_id = f"tool:{thinking_iteration}:{tool_index}"
                             tool_item_id = uuid.uuid4().hex
                             tool_call_id = str(tool_call.get("id") or "").strip() or f"toolcall_{uuid.uuid4().hex}"
+                            if isinstance(tool_call, dict) and not str(tool_call.get("id") or "").strip():
+                                tool_call["id"] = tool_call_id
                             tool_name = str(tool_call.get("name") or f"{connector_id}__{action_id}").strip()
                             tool_trace_metadata = direct_tool_execution_service.build_direct_tool_trace_metadata(
                                 connector_id,

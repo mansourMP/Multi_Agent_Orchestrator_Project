@@ -28,6 +28,15 @@ def test_chunk_text_preserves_offsets_and_token_estimates() -> None:
     assert "Refund policy" in chunks[0]["chunk_text"]
 
 
+def test_read_supported_text_file_rejects_oversized_files_before_loading(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "huge.json"
+    source.write_text('{"body":"' + ("x" * 64) + '"}', encoding="utf-8")
+    monkeypatch.setenv("EMPYRALIS_RAG_MAX_SOURCE_FILE_BYTES", "32")
+
+    with pytest.raises(knowledge_rag_service.KnowledgeSourceTooLargeError):
+        knowledge_rag_service._read_supported_text_file(source)
+
+
 @pytest.mark.asyncio
 async def test_ingest_workspace_knowledge_files_chunks_and_records(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     knowledge_dir = tmp_path / "knowledge"
@@ -65,6 +74,32 @@ async def test_ingest_workspace_knowledge_files_chunks_and_records(tmp_path, mon
     assert first_chunk["embedding"]
     assert first_chunk["embedding_model"] == knowledge_rag_service.HASH_EMBEDDING_MODEL
     assert first_chunk["citation"]["path"] == "knowledge/refunds.md"
+
+
+@pytest.mark.asyncio
+async def test_ingest_workspace_knowledge_files_skips_oversized_sources(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    (knowledge_dir / "huge.csv").write_text("name,notes\nalice," + ("x" * 128), encoding="utf-8")
+    monkeypatch.setenv("EMPYRALIS_RAG_MAX_SOURCE_FILE_BYTES", "32")
+    monkeypatch.setattr(knowledge_rag_service.workspace_context, "workspace_knowledge_dir", lambda **_: knowledge_dir)
+
+    result = await knowledge_rag_service.ingest_workspace_knowledge_files(
+        tenant_id="tenant-1",
+        workspace_id="ws-1",
+        agent_id="agent-1",
+        user_id="user-1",
+    )
+
+    assert result["source_count"] == 0
+    assert result["skipped"] == [
+        {
+            "path": "knowledge/huge.csv",
+            "reason": "file_too_large",
+            "error": "knowledge source file exceeds max size (145 bytes > 32 bytes)",
+            "max_bytes": 32,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -107,9 +142,14 @@ async def test_hybrid_retrieval_ranks_exact_keyword_hit_and_writes_ledger(monkey
         events["credit"] = kwargs
         return {"id": "cled-1"}
 
+    async def fake_action_event(**kwargs):
+        events["action"] = kwargs
+        return {"id": "aact-1"}
+
     monkeypatch.setattr(knowledge_rag_service.control_plane_repository, "list_knowledge_chunks", fake_chunks)
     monkeypatch.setattr(knowledge_rag_service.control_plane_repository, "record_knowledge_retrieval_event", fake_retrieval_event)
     monkeypatch.setattr(knowledge_rag_service.control_plane_repository, "record_credit_ledger_event", fake_credit_event)
+    monkeypatch.setattr(knowledge_rag_service.agent_action_metering_service, "record_completed", fake_action_event)
 
     result = await knowledge_rag_service.retrieve_knowledge(
         tenant_id="tenant-1",
@@ -128,6 +168,8 @@ async def test_hybrid_retrieval_ranks_exact_keyword_hit_and_writes_ledger(monkey
     assert events["retrieval"]["retrieved_chunk_ids"] == ["chunk-refund"]
     assert events["credit"]["event"]["credit_type"] == "knowledge_retrieval"
     assert events["credit"]["event"]["credits_debited"] == 0.0
+    assert events["action"]["action_domain"] == "rag"
+    assert events["action"]["usage_ref"]["source_event_id"] == "kret-1"
 
 
 @pytest.mark.asyncio
@@ -141,9 +183,13 @@ async def test_retrieval_reports_index_missing_for_unindexed_source_scope(monkey
     async def fake_credit_event(**kwargs):
         return {"id": "cled-1"}
 
+    async def fake_action_event(**kwargs):
+        return {"id": "aact-1"}
+
     monkeypatch.setattr(knowledge_rag_service.control_plane_repository, "list_knowledge_chunks", fake_chunks)
     monkeypatch.setattr(knowledge_rag_service.control_plane_repository, "record_knowledge_retrieval_event", fake_retrieval_event)
     monkeypatch.setattr(knowledge_rag_service.control_plane_repository, "record_credit_ledger_event", fake_credit_event)
+    monkeypatch.setattr(knowledge_rag_service.agent_action_metering_service, "record_completed", fake_action_event)
 
     result = await knowledge_rag_service.retrieve_knowledge(
         tenant_id="tenant-1",

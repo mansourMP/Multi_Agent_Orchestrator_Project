@@ -10,7 +10,7 @@ import re
 import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from server_modules import control_plane_repository
+from server_modules import agent_action_metering_service, control_plane_repository
 from server_modules import workspace_context
 
 
@@ -22,8 +22,13 @@ RRF_K = 60.0
 DEFAULT_CHUNK_MAX_CHARS = 1800
 DEFAULT_CHUNK_OVERLAP_CHARS = 180
 DEFAULT_TOP_K = 5
+DEFAULT_MAX_SOURCE_FILE_BYTES = 25 * 1024 * 1024
 
 _SENTENCE_MODEL: Any = None
+
+
+class KnowledgeSourceTooLargeError(ValueError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,9 +99,30 @@ def _json_normalize_if_needed(path: Path, raw_text: str) -> str:
     return json.dumps(parsed, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+def _max_source_file_bytes() -> int:
+    raw_value = os.getenv("EMPYRALIS_RAG_MAX_SOURCE_FILE_BYTES", "").strip()
+    if raw_value:
+        try:
+            parsed = int(raw_value)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+    return DEFAULT_MAX_SOURCE_FILE_BYTES
+
+
 def _read_supported_text_file(path: Path) -> str:
     if path.suffix.lower() not in SUPPORTED_KNOWLEDGE_EXTENSIONS:
         return ""
+    max_bytes = _max_source_file_bytes()
+    try:
+        file_size = path.stat().st_size
+    except OSError:
+        return ""
+    if file_size > max_bytes:
+        raise KnowledgeSourceTooLargeError(
+            f"knowledge source file exceeds max size ({file_size} bytes > {max_bytes} bytes)"
+        )
     try:
         raw_text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -383,8 +409,19 @@ async def ingest_workspace_knowledge_files(
     ingested_sources: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
     for path in files:
-        text = _read_supported_text_file(path)
         rel_path = path.relative_to(root).as_posix()
+        try:
+            text = _read_supported_text_file(path)
+        except KnowledgeSourceTooLargeError as exc:
+            skipped.append(
+                {
+                    "path": f"knowledge/{rel_path}",
+                    "reason": "file_too_large",
+                    "error": str(exc),
+                    "max_bytes": _max_source_file_bytes(),
+                }
+            )
+            continue
         if not text:
             skipped.append({"path": f"knowledge/{rel_path}", "reason": "empty_or_unsupported"})
             continue
@@ -569,6 +606,39 @@ async def retrieve_knowledge(
                 "source_ids": source_ids,
                 "retrieved_chunk_ids": retrieved_chunk_ids,
             },
+        },
+    )
+    await agent_action_metering_service.record_completed(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        surface=surface,
+        source_surface=source_surface or surface,
+        action_domain="rag",
+        action_type="retrieve",
+        action_name="knowledge.retrieve",
+        tool_kind="rag_retrieval",
+        payer=payer,
+        billing_mode="transparency",
+        credit_type="knowledge_retrieval",
+        credits_debited=0.0,
+        platform_cost_usd=0.0,
+        usage_ref={"credit_ledger_source_table": "knowledge_retrieval_events", "source_event_id": retrieval_event_id},
+        user_id=user_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        agent_id=agent_id,
+        app_id=app_id,
+        input_summary=normalized_query,
+        output_summary=status,
+        source_table="knowledge_retrieval_events",
+        source_event_id=retrieval_event_id,
+        metadata={
+            "query_hash": query_hash,
+            "status": status,
+            "latency_ms": latency_ms,
+            "source_ids": source_ids,
+            "retrieved_chunk_ids": retrieved_chunk_ids,
+            "retrieved_chunk_count": len(ranked),
         },
     )
     return {

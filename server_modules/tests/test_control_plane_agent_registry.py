@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 from server_modules import control_plane_repository, thread_service
 from server_modules.agent_registry_models import (
     ActivityLedgerEventModel,
+    AgentActionEventModel,
     AgentChannelExecutionLeaseModel,
     AgentChannelEventModel,
     CreditLedgerEventModel,
@@ -44,6 +45,7 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             "CREATE TABLE IF NOT EXISTS security_control_events",
             "CREATE TABLE IF NOT EXISTS activity_ledger_events",
             "CREATE TABLE IF NOT EXISTS credit_ledger_events",
+            "CREATE TABLE IF NOT EXISTS agent_action_events",
             "compiled_workflow_version_id TEXT NULL REFERENCES workflow_versions(id) ON DELETE SET NULL",
             "ALTER TABLE workspace_agent_installs\n    ADD COLUMN IF NOT EXISTS compiled_workflow_version_id TEXT NULL;",
             "ALTER TABLE agent_threads\n    ADD COLUMN IF NOT EXISTS master_agent_install_id TEXT NULL;",
@@ -71,6 +73,9 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             "CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_credit_type",
             "CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_payer",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_ledger_events_source",
+            "CREATE INDEX IF NOT EXISTS idx_agent_action_events_scope_created",
+            "CREATE INDEX IF NOT EXISTS idx_agent_action_events_domain",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_action_events_source",
             "CREATE INDEX IF NOT EXISTS idx_governance_holds_scope",
         ):
             self.assertIn(fragment, schema)
@@ -92,6 +97,7 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             SecurityControlEventModel,
             ActivityLedgerEventModel,
             CreditLedgerEventModel,
+            AgentActionEventModel,
         ):
             table = model.__table__
             self.assertIn("tenant_id", table.c)
@@ -318,6 +324,132 @@ class ControlPlaneInstallIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("credit_type = $4", query)
         self.assertIn("payer = $5", query)
         self.assertIn("app_id = $6", query)
+
+    async def test_record_agent_action_event_inserts_operation_row(self):
+        connection = AsyncMock()
+        connection.fetchrow = AsyncMock(
+            side_effect=[
+                None,
+                {
+                    "id": "aact-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "workspace-1",
+                    "surface": "sage",
+                    "source_surface": "sage_direct_tool",
+                    "action_domain": "tool",
+                    "action_type": "execute",
+                    "action_name": "browser.click",
+                    "tool_kind": "direct_tool",
+                    "tool_id": "browser__click",
+                    "connector_id": "browser",
+                    "skill_id": None,
+                    "mcp_server_id": None,
+                    "mcp_tool_id": None,
+                    "runtime_target": None,
+                    "capability_id": "browser.click",
+                    "risk_level": "high",
+                    "approval_required": True,
+                    "approval_id": "approval-1",
+                    "approval_status": "approved",
+                    "policy_decision": "allowed",
+                    "status": "completed",
+                    "error_code": None,
+                    "payer": "platform_credits",
+                    "billing_mode": "metered",
+                    "credit_type": "tool_execution",
+                    "credits_debited": 1,
+                    "platform_cost_usd": 0.0001,
+                    "usage_ref": {},
+                    "trace_id": "trace-1",
+                    "user_id": "user-1",
+                    "thread_id": "thread-1",
+                    "run_id": "run-1",
+                    "agent_id": None,
+                    "app_id": None,
+                    "input_summary": "click submit",
+                    "output_summary": "clicked",
+                    "source_table": "direct_tool_calls",
+                    "source_event_id": "run-1:browser-click",
+                    "idempotency_key": "run-1:browser-click",
+                    "metadata": {},
+                    "created_at": "2026-05-21T00:00:00Z",
+                    "updated_at": "2026-05-21T00:00:00Z",
+                },
+            ]
+        )
+
+        @asynccontextmanager
+        async def fake_scoped_connection(**_kwargs):
+            yield connection
+
+        with patch("server_modules.control_plane_repository._scoped_connection", new=fake_scoped_connection):
+            row = await control_plane_repository.record_agent_action_event(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                source_table="direct_tool_calls",
+                source_event_id="run-1:browser-click",
+                idempotency_key="run-1:browser-click",
+                event={
+                    "surface": "sage",
+                    "source_surface": "sage_direct_tool",
+                    "action_domain": "tool",
+                    "action_type": "execute",
+                    "action_name": "browser.click",
+                    "tool_kind": "direct_tool",
+                    "tool_id": "browser__click",
+                    "connector_id": "browser",
+                    "capability_id": "browser.click",
+                    "risk_level": "high",
+                    "approval_required": True,
+                    "approval_id": "approval-1",
+                    "approval_status": "approved",
+                    "policy_decision": "allowed",
+                    "status": "completed",
+                    "payer": "platform_credits",
+                    "billing_mode": "metered",
+                    "credit_type": "tool_execution",
+                    "credits_debited": 1,
+                    "platform_cost_usd": 0.0001,
+                    "trace_id": "trace-1",
+                    "user_id": "user-1",
+                    "thread_id": "thread-1",
+                    "run_id": "run-1",
+                    "input_summary": "click submit",
+                    "output_summary": "clicked",
+                },
+            )
+
+        query = connection.fetchrow.await_args_list[1].args[0]
+        self.assertIn("INSERT INTO agent_action_events", query)
+        self.assertEqual(row["action_domain"], "tool")
+        self.assertEqual(row["credit_type"], "tool_execution")
+        self.assertEqual(row["status"], "completed")
+
+    async def test_list_agent_action_events_supports_filters(self):
+        connection = AsyncMock()
+        connection.fetch = AsyncMock(return_value=[])
+
+        @asynccontextmanager
+        async def fake_scoped_connection(**_kwargs):
+            yield connection
+
+        with patch("server_modules.control_plane_repository._scoped_connection", new=fake_scoped_connection):
+            await control_plane_repository.list_agent_action_events(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                surface="sage",
+                action_domain="tool",
+                status="completed",
+                run_id="run-1",
+                limit=25,
+            )
+
+        query = connection.fetch.await_args.args[0]
+        self.assertIn("FROM agent_action_events", query)
+        self.assertIn("surface = $3", query)
+        self.assertIn("action_domain = $4", query)
+        self.assertIn("status = $5", query)
+        self.assertIn("run_id = $6", query)
 
     async def test_upsert_agent_turn_returns_minimal_write_payload_without_thread_reread(self):
         connection = AsyncMock()

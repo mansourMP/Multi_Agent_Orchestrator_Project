@@ -85,6 +85,7 @@ from server_modules.connectors.s3_connector import (
     list_objects as s3_list_objects,
     upload_file as s3_upload_file,
 )
+from server_modules import agent_action_metering_service
 from server_modules import runtime_config as config
 from server_modules import run_service as run_service
 from server_modules.capability_registry import workflow_node_capability_id
@@ -4401,6 +4402,40 @@ def _execute_workflow_graph(
                         detail={"tool_id": tool_id or "http", "url": url, "method": method},
                     )
                 elif variant == "connector_action":
+                    requested_connector_for_meter = str(config.get("connector") or "").strip().lower() or "connector"
+                    action_id_for_meter = normalize_action_id(config.get("action_id")) or "action"
+                    action_type_for_meter = (
+                        "read"
+                        if action_id_for_meter.startswith(("get_", "list_", "read_", "fetch_", "search_", "download_"))
+                        or action_id_for_meter in {"get", "list", "read", "fetch", "search", "download"}
+                        else "write"
+                    )
+                    connector_meter_event = {
+                        "tenant_id": _workflow_tool_tenant_id(context) or "default",
+                        "workspace_id": _workflow_tool_workspace_id(context) or "default",
+                        "surface": "studio",
+                        "source_surface": "workflow_connector_action",
+                        "action_domain": "connector",
+                        "action_type": action_type_for_meter,
+                        "action_name": f"{requested_connector_for_meter}.{action_id_for_meter}",
+                        "tool_kind": "workflow_connector_action",
+                        "tool_id": tool_id or "connector_action",
+                        "connector_id": requested_connector_for_meter,
+                        "payer": "platform_credits",
+                        "billing_mode": "transparency",
+                        "run_id": run_id,
+                        "agent_id": str(context.get("agent_id") or context.get("deployed_agent_id") or "").strip() or None,
+                        "input_summary": label,
+                        "source_table": "workflow_connector_actions",
+                        "source_event_id": agent_action_metering_service.build_source_event_id(
+                            source_surface="workflow_connector_action",
+                            run_id=run_id,
+                            node_id=node_id,
+                            action_name=f"{requested_connector_for_meter}.{action_id_for_meter}",
+                        ),
+                        "metadata": {"node_id": node_id, "variant": variant},
+                    }
+                    agent_action_metering_service.record_started_sync(**connector_meter_event)
                     try:
                         tool_result = _workflow_execute_connector_action(
                             run_id,
@@ -4410,16 +4445,19 @@ def _execute_workflow_graph(
                             current_text=current_text,
                         )
                     except RuntimeError as error:
-                        requested_connector = str(config.get("connector") or "").strip().lower() or "connector"
-                        action_id = normalize_action_id(config.get("action_id")) or "action"
                         if not _workflow_is_retryable_connector_outage(error):
+                            agent_action_metering_service.record_failed_sync(
+                                **connector_meter_event,
+                                error_code=type(error).__name__,
+                                output_summary=str(error),
+                            )
                             raise
                         detail = str(error or "").strip() or "Connector temporarily unavailable."
                         _workflow_emit_connector_reliability_event(
                             run_id=run_id,
                             context=context,
-                            connector_id=requested_connector,
-                            action_id=action_id,
+                            connector_id=requested_connector_for_meter,
+                            action_id=action_id_for_meter,
                             node_id=node_id,
                             payload={
                                 "reason": detail,
@@ -4427,9 +4465,9 @@ def _execute_workflow_graph(
                             },
                         )
                         tool_result = _workflow_connector_degraded_result(
-                            connector_id=requested_connector,
+                            connector_id=requested_connector_for_meter,
                             credential_id=None,
-                            action_id=action_id,
+                            action_id=action_id_for_meter,
                             reason=detail,
                             retryable_outage=True,
                         )
@@ -4439,6 +4477,18 @@ def _execute_workflow_graph(
                         else {}
                     )
                     degraded = bool((connector_action or {}).get("degraded"))
+                    connector_meter_completed = {
+                        **connector_meter_event,
+                        "metadata": {
+                            **connector_meter_event["metadata"],
+                            "degraded": degraded,
+                            "credential_id": (connector_action or {}).get("credential_id"),
+                        },
+                    }
+                    agent_action_metering_service.record_completed_sync(
+                        **connector_meter_completed,
+                        output_summary=tool_result.get("summary") or current_text,
+                    )
                     current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
                     state["last_text"] = current_text
                     state["last_data"] = {

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from fastapi import HTTPException
-from server_modules import browser_checkpoint_service
+from server_modules import agent_action_metering_service, browser_checkpoint_service
 from server_modules import machine_lease_service, usage_accounting_service
 
 
@@ -210,6 +210,57 @@ def complete_local_run(
     metadata.pop("manual_takeover", None)
     context["metadata"] = metadata
     run["context"] = context
+    if isinstance(result_data, dict):
+        outputs = result_data.get("outputs") if isinstance(result_data.get("outputs"), dict) else {}
+        actions = outputs.get("actions") if isinstance(outputs.get("actions"), list) else []
+        tenant_id = str(context.get("tenant_id") or metadata.get("tenant_id") or "default").strip() or "default"
+        workspace_id = str(context.get("workspace_id") or metadata.get("workspace_id") or "default").strip() or "default"
+        for index, action in enumerate(actions):
+            if not isinstance(action, dict):
+                continue
+            tool_id = str(action.get("tool") or action.get("action") or "local_worker").strip() or "local_worker"
+            status_token = str(action.get("status") or "completed").strip().lower() or "completed"
+            if status_token not in {"completed", "failed", "blocked", "approval_required"}:
+                status_token = "completed"
+            record_fn = (
+                agent_action_metering_service.record_failed_sync
+                if status_token == "failed"
+                else agent_action_metering_service.record_blocked_sync
+                if status_token == "blocked"
+                else agent_action_metering_service.record_approval_required_sync
+                if status_token == "approval_required"
+                else agent_action_metering_service.record_completed_sync
+            )
+            record_fn(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                surface=str(metadata.get("surface") or "sage").strip().lower() or "sage",
+                source_surface="local_worker",
+                action_domain="runtime",
+                action_type="execute",
+                action_name=tool_id,
+                tool_kind="local_worker_tool",
+                tool_id=tool_id,
+                runtime_target="local_companion",
+                capability_id=str(action.get("capability_id") or tool_id).strip() or tool_id,
+                risk_level=str(action.get("risk_level") or "").strip() or None,
+                payer="local",
+                billing_mode="transparency",
+                thread_id=str(context.get("thread_id") or metadata.get("thread_id") or "").strip() or None,
+                run_id=run_id,
+                agent_id=str(context.get("agent_id") or metadata.get("agent_id") or "").strip() or None,
+                input_summary=str(action.get("summary") or action.get("label") or tool_id).strip(),
+                output_summary=str(action.get("summary") or action.get("status") or "").strip(),
+                error_code=str(action.get("error_code") or "").strip() or None,
+                source_table="local_worker_actions",
+                source_event_id=agent_action_metering_service.build_source_event_id(
+                    source_surface="local_worker",
+                    run_id=run_id,
+                    node_id=index,
+                    action_name=tool_id,
+                ),
+                metadata={"worker_id": resolved_worker, "step_index": index},
+            )
     if isinstance(usage_masked, dict):
         run["usage_masked"] = usage_masked
         usage_accounting = usage_accounting_service.accounting_record_from_snapshot(

@@ -234,7 +234,11 @@ class McpRegistryServiceTests(unittest.TestCase):
             mcp_registry_service,
             "_call_streamable_http_tool_async",
             new=AsyncMock(return_value={"reply": "SKU-1 is in stock.", "sku": "SKU-1"}),
-        ):
+        ), patch(
+            "server_modules.mcp_registry_service.agent_action_metering_service.record_started_sync"
+        ) as record_started, patch(
+            "server_modules.mcp_registry_service.agent_action_metering_service.record_completed_sync"
+        ) as record_completed:
             result = mcp_registry_service.invoke_workspace_mcp_skill(
                 workspace_id="workspace-1",
                 skill_id="mcp:inventory-feed:lookup_stock",
@@ -246,6 +250,10 @@ class McpRegistryServiceTests(unittest.TestCase):
         self.assertEqual(result["reply"], "SKU-1 is in stock.")
         self.assertEqual(result["mcp"]["arguments"], {"sku": "SKU-1"})
         self.assertEqual(result["mcp"]["server_id"], "inventory-feed")
+        record_started.assert_called_once()
+        record_completed.assert_called_once()
+        self.assertEqual(record_completed.call_args.kwargs["action_domain"], "mcp")
+        self.assertEqual(record_completed.call_args.kwargs["mcp_server_id"], "inventory-feed")
 
     def test_invoke_workspace_mcp_skill_rejects_unapproved_direct_skill_id(self) -> None:
         mcp_registry_service.upsert_workspace_mcp_server(
@@ -276,7 +284,9 @@ class McpRegistryServiceTests(unittest.TestCase):
             mcp_registry_service,
             "_call_streamable_http_tool_async",
             new=AsyncMock(return_value={"reply": "should not be called"}),
-        ) as call_mock:
+        ) as call_mock, patch(
+            "server_modules.mcp_registry_service.agent_action_metering_service.record_blocked_sync"
+        ) as record_blocked:
             with self.assertRaises(PermissionError):
                 mcp_registry_service.invoke_workspace_mcp_skill(
                     workspace_id="workspace-1",
@@ -286,6 +296,8 @@ class McpRegistryServiceTests(unittest.TestCase):
                 )
 
         call_mock.assert_not_awaited()
+        record_blocked.assert_called_once()
+        self.assertEqual(record_blocked.call_args.kwargs["policy_decision"], "blocked")
 
     def test_upsert_exposes_trust_metadata_for_execute_tools(self) -> None:
         record = mcp_registry_service.upsert_workspace_mcp_server(

@@ -398,6 +398,52 @@ class CreditLedgerEventModel(_WorkspaceScoped, AgentRegistryBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class AgentActionEventModel(_WorkspaceScoped, AgentRegistryBase):
+    __tablename__ = "agent_action_events"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    surface: Mapped[str] = mapped_column(Text, nullable=False)
+    source_surface: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    action_domain: Mapped[str] = mapped_column(Text, nullable=False)
+    action_type: Mapped[str] = mapped_column(Text, nullable=False)
+    action_name: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_kind: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tool_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    connector_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    skill_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    mcp_server_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    mcp_tool_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    runtime_target: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    capability_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    risk_level: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    approval_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    approval_status: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    policy_decision: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    payer: Mapped[str] = mapped_column(Text, nullable=False)
+    billing_mode: Mapped[str] = mapped_column(Text, nullable=False, default="none")
+    credit_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    credits_debited: Mapped[float] = mapped_column(Numeric, nullable=False, default=0)
+    platform_cost_usd: Mapped[float] = mapped_column(Numeric, nullable=False, default=0)
+    usage_ref: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    trace_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    user_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    thread_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    run_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    agent_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    app_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    input_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    output_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_table: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_event_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    event_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class KnowledgeSourceModel(_WorkspaceScoped, AgentRegistryBase):
     __tablename__ = "knowledge_sources"
 

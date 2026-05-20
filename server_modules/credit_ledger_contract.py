@@ -21,6 +21,7 @@ CREDIT_LEDGER_ITEM_TYPES: tuple[str, ...] = (
     "gateway_relay",
     "channel_message",
     "connector_read",
+    "tool_execution",
     "mini_app_action",
 )
 
@@ -32,6 +33,7 @@ CREDIT_LEDGER_TYPES: tuple[str, ...] = (
     "gateway_relay",
     "channel",
     "connector_read",
+    "tool_execution",
     "mini_app_action",
     "custom_api_key_usage",
 )
@@ -152,6 +154,8 @@ def _credit_type_for_item_type(item_type: str) -> str:
         return "channel"
     if item_type == "connector_read":
         return "connector_read"
+    if item_type == "tool_execution":
+        return "tool_execution"
     if item_type == "mini_app_action":
         return "mini_app_action"
     if item_type == "custom_api_key_usage":
@@ -210,6 +214,8 @@ def build_credit_ledger_line_item(
             quantity = float(max(1, _token_count(payload.get("message_count"))))
         elif item_type == "connector_read":
             quantity = float(max(1, _token_count(payload.get("read_count"))))
+        elif item_type == "tool_execution":
+            quantity = float(max(1, _token_count(payload.get("action_count") or payload.get("execution_count"))))
         elif item_type == "gateway_relay":
             quantity = _float_count(payload.get("relay_events") or 1.0)
         elif item_type == "mini_app_action":
@@ -229,6 +235,8 @@ def build_credit_ledger_line_item(
         quantity_unit = "messages"
     elif item_type == "connector_read":
         quantity_unit = "reads"
+    elif item_type == "tool_execution":
+        quantity_unit = "actions"
     elif item_type == "gateway_relay":
         quantity_unit = "relay_events"
     elif item_type == "mini_app_action":

@@ -6,12 +6,14 @@ import logging
 import os
 import re
 import threading
+import uuid
 from datetime import datetime, timezone
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlparse
 
+from server_modules import agent_action_metering_service
 from server_modules.config_loader import config_str
 from server_modules.url_security import assert_safe_outbound_url
 
@@ -827,6 +829,14 @@ def invoke_workspace_mcp_skill(
     skill_id: str,
     goal: str,
     agent_label: str,
+    tenant_id: str = "default",
+    surface: str = "sage",
+    source_surface: str = "mcp_skill",
+    user_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
     client_session_cls: Any = ClientSession,
     streamable_http_client_fn: Any = streamable_http_client,
 ) -> Dict[str, Any]:
@@ -841,22 +851,101 @@ def invoke_workspace_mcp_skill(
     tool_payload = _tool_from_server(server, parsed["tool_name"])
     if tool_payload is None or not bool(tool_payload.get("enabled", True)):
         raise FileNotFoundError(f"MCP tool '{parsed['tool_name']}' is not available on server '{parsed['server_id']}'.")
-    _assert_tool_approved_for_execution(
-        tool_payload,
-        server_id=parsed["server_id"],
-        tool_name=parsed["tool_name"],
+    execution_call_id = run_id or thread_id or f"mcp_{uuid.uuid4().hex}"
+    source_event_id = agent_action_metering_service.build_source_event_id(
+        source_surface=source_surface,
+        run_id=run_id,
+        thread_id=thread_id,
+        tool_call_id=execution_call_id,
+        action_name=parsed["tool_name"],
     )
-    arguments = _parse_goal_arguments(goal, tool_payload)
-    result = asyncio.run(
-        _call_streamable_http_tool_async(
-            endpoint=str(server.get("endpoint") or "").strip(),
+    try:
+        _assert_tool_approved_for_execution(
+            tool_payload,
+            server_id=parsed["server_id"],
             tool_name=parsed["tool_name"],
-            arguments=arguments,
-            client_session_cls=client_session_cls,
-            streamable_http_client_fn=streamable_http_client_fn,
         )
-    )
+    except Exception as exc:
+        agent_action_metering_service.record_blocked_sync(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            surface=surface,
+            source_surface=source_surface,
+            action_domain="mcp",
+            action_type=_normalize_action_class(tool_payload.get("action_class")),
+            action_name=parsed["tool_name"],
+            tool_kind="mcp_tool",
+            mcp_server_id=parsed["server_id"],
+            mcp_tool_id=parsed["tool_name"],
+            connector_id=f"mcp:{parsed['server_id']}",
+            skill_id=skill_id,
+            risk_level=str(tool_payload.get("risk_level") or "").strip() or None,
+            policy_decision="blocked",
+            error_code=type(exc).__name__,
+            payer="platform_credits",
+            billing_mode="none",
+            user_id=user_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            agent_id=agent_id,
+            app_id=app_id,
+            input_summary=goal,
+            output_summary=str(exc),
+            source_table="mcp_tool_calls",
+            source_event_id=source_event_id,
+        )
+        raise
+    arguments = _parse_goal_arguments(goal, tool_payload)
+    common_event = {
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "surface": surface,
+        "source_surface": source_surface,
+        "action_domain": "mcp",
+        "action_type": _normalize_action_class(tool_payload.get("action_class")),
+        "action_name": parsed["tool_name"],
+        "tool_kind": "mcp_tool",
+        "mcp_server_id": parsed["server_id"],
+        "mcp_tool_id": parsed["tool_name"],
+        "connector_id": f"mcp:{parsed['server_id']}",
+        "skill_id": skill_id,
+        "risk_level": str(tool_payload.get("risk_level") or "").strip() or None,
+        "policy_decision": "allowed",
+        "payer": "platform_credits",
+        "billing_mode": "transparency",
+        "user_id": user_id,
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "agent_id": agent_id,
+        "app_id": app_id,
+        "input_summary": goal,
+        "source_table": "mcp_tool_calls",
+        "source_event_id": source_event_id,
+        "metadata": {"server_label": server.get("label"), "argument_keys": sorted(arguments.keys())},
+    }
+    agent_action_metering_service.record_started_sync(**common_event)
+    try:
+        result = asyncio.run(
+            _call_streamable_http_tool_async(
+                endpoint=str(server.get("endpoint") or "").strip(),
+                tool_name=parsed["tool_name"],
+                arguments=arguments,
+                client_session_cls=client_session_cls,
+                streamable_http_client_fn=streamable_http_client_fn,
+            )
+        )
+    except Exception as exc:
+        agent_action_metering_service.record_failed_sync(
+            **common_event,
+            error_code=type(exc).__name__,
+            output_summary=str(exc),
+        )
+        raise
     payload = _mcp_result_payload(result)
+    agent_action_metering_service.record_completed_sync(
+        **common_event,
+        output_summary=_mcp_reply(payload, agent_label=agent_label, tool_name=parsed["tool_name"]),
+    )
     return {
         "status": "ok",
         "reply": _mcp_reply(payload, agent_label=agent_label, tool_name=parsed["tool_name"]),
@@ -895,6 +984,14 @@ async def invoke_workspace_mcp_skill_async(
     skill_id: str,
     goal: str,
     agent_label: str,
+    tenant_id: str = "default",
+    surface: str = "sage",
+    source_surface: str = "mcp_skill",
+    user_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
     client_session_cls: Any = ClientSession,
     streamable_http_client_fn: Any = streamable_http_client,
 ) -> Dict[str, Any]:
@@ -909,20 +1006,99 @@ async def invoke_workspace_mcp_skill_async(
     tool_payload = _tool_from_server(server, parsed["tool_name"])
     if tool_payload is None or not bool(tool_payload.get("enabled", True)):
         raise FileNotFoundError(f"MCP tool '{parsed['tool_name']}' is not available on server '{parsed['server_id']}'.")
-    _assert_tool_approved_for_execution(
-        tool_payload,
-        server_id=parsed["server_id"],
-        tool_name=parsed["tool_name"],
+    execution_call_id = run_id or thread_id or f"mcp_{uuid.uuid4().hex}"
+    source_event_id = agent_action_metering_service.build_source_event_id(
+        source_surface=source_surface,
+        run_id=run_id,
+        thread_id=thread_id,
+        tool_call_id=execution_call_id,
+        action_name=parsed["tool_name"],
     )
+    try:
+        _assert_tool_approved_for_execution(
+            tool_payload,
+            server_id=parsed["server_id"],
+            tool_name=parsed["tool_name"],
+        )
+    except Exception as exc:
+        await agent_action_metering_service.record_blocked(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            surface=surface,
+            source_surface=source_surface,
+            action_domain="mcp",
+            action_type=_normalize_action_class(tool_payload.get("action_class")),
+            action_name=parsed["tool_name"],
+            tool_kind="mcp_tool",
+            mcp_server_id=parsed["server_id"],
+            mcp_tool_id=parsed["tool_name"],
+            connector_id=f"mcp:{parsed['server_id']}",
+            skill_id=skill_id,
+            risk_level=str(tool_payload.get("risk_level") or "").strip() or None,
+            policy_decision="blocked",
+            error_code=type(exc).__name__,
+            payer="platform_credits",
+            billing_mode="none",
+            user_id=user_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            agent_id=agent_id,
+            app_id=app_id,
+            input_summary=goal,
+            output_summary=str(exc),
+            source_table="mcp_tool_calls",
+            source_event_id=source_event_id,
+        )
+        raise
     arguments = _parse_goal_arguments(goal, tool_payload)
-    result = await _call_streamable_http_tool_async(
-        endpoint=str(server.get("endpoint") or "").strip(),
-        tool_name=parsed["tool_name"],
-        arguments=arguments,
-        client_session_cls=client_session_cls,
-        streamable_http_client_fn=streamable_http_client_fn,
-    )
+    common_event = {
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "surface": surface,
+        "source_surface": source_surface,
+        "action_domain": "mcp",
+        "action_type": _normalize_action_class(tool_payload.get("action_class")),
+        "action_name": parsed["tool_name"],
+        "tool_kind": "mcp_tool",
+        "mcp_server_id": parsed["server_id"],
+        "mcp_tool_id": parsed["tool_name"],
+        "connector_id": f"mcp:{parsed['server_id']}",
+        "skill_id": skill_id,
+        "risk_level": str(tool_payload.get("risk_level") or "").strip() or None,
+        "policy_decision": "allowed",
+        "payer": "platform_credits",
+        "billing_mode": "transparency",
+        "user_id": user_id,
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "agent_id": agent_id,
+        "app_id": app_id,
+        "input_summary": goal,
+        "source_table": "mcp_tool_calls",
+        "source_event_id": source_event_id,
+        "metadata": {"server_label": server.get("label"), "argument_keys": sorted(arguments.keys())},
+    }
+    await agent_action_metering_service.record_started(**common_event)
+    try:
+        result = await _call_streamable_http_tool_async(
+            endpoint=str(server.get("endpoint") or "").strip(),
+            tool_name=parsed["tool_name"],
+            arguments=arguments,
+            client_session_cls=client_session_cls,
+            streamable_http_client_fn=streamable_http_client_fn,
+        )
+    except Exception as exc:
+        await agent_action_metering_service.record_failed(
+            **common_event,
+            error_code=type(exc).__name__,
+            output_summary=str(exc),
+        )
+        raise
     payload = _mcp_result_payload(result)
+    await agent_action_metering_service.record_completed(
+        **common_event,
+        output_summary=_mcp_reply(payload, agent_label=agent_label, tool_name=parsed["tool_name"]),
+    )
     return {
         "status": "ok",
         "reply": _mcp_reply(payload, agent_label=agent_label, tool_name=parsed["tool_name"]),

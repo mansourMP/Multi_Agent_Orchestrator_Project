@@ -7,11 +7,12 @@ import json
 import os
 import secrets
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Literal
 
 from server_modules.agent_manifest import AgentManifest, manifest_skill_ids
-from server_modules import egress_policy, safe_mode_service, skill_registry, tool_broker_guard_service
+from server_modules import agent_action_metering_service, egress_policy, safe_mode_service, skill_registry, tool_broker_guard_service
 
 
 ToolActionClass = Literal["read", "write", "execute"]
@@ -384,8 +385,40 @@ async def execute_skill(
     operational_policy: str,
     seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
+    source_event_id = agent_action_metering_service.build_source_event_id(
+        source_surface="tool_broker_skill",
+        run_id=manifest_id,
+        tool_call_id=f"{skill_id}:{uuid.uuid4().hex}",
+        action_name=skill_id,
+    )
+    common_event = {
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "surface": "sage",
+        "source_surface": "tool_broker_skill",
+        "action_domain": "skill",
+        "action_name": skill_id,
+        "tool_kind": "skill",
+        "skill_id": skill_id,
+        "payer": "platform_credits",
+        "billing_mode": "transparency",
+        "input_summary": goal,
+        "source_table": "tool_broker_skill_calls",
+        "source_event_id": source_event_id,
+        "metadata": {
+            "manifest_id": manifest_id,
+            "runtime_mode": runtime_mode,
+            "agent_label": agent_label,
+        },
+    }
     definition = skill_registry.get_skill_definition(skill_id, workspace_id=workspace_id, include_disabled=True)
     if definition is None:
+        await agent_action_metering_service.record_failed(
+            **common_event,
+            action_type="invoke",
+            error_code="skill_missing",
+            output_summary=f"The requested skill {skill_id} is not registered.",
+        )
         return {
             "status": "missing",
             "reply": f"The requested skill {skill_id} is not registered in the universal harness.",
@@ -395,38 +428,58 @@ async def execute_skill(
             ],
         }
     if not definition.enabled:
+        await agent_action_metering_service.record_blocked(
+            **common_event,
+            action_type="invoke",
+            error_code="skill_disabled",
+            policy_decision="blocked",
+            output_summary=f"The {definition.label} skill is disabled for this workspace.",
+        )
         raise ToolExecutionDeniedError(
             "skill_disabled",
             f"The {definition.label} skill is disabled for this workspace.",
         )
 
-    claims = verify_capability_token(
-        capability_token,
-        expected_manifest_id=manifest_id,
-        expected_tenant_id=tenant_id,
-        expected_workspace_id=workspace_id,
-        runtime_mode=runtime_mode,
-    )
-    _require_runtime_security_controls(claims)
-    allowed_skills = set(_ordered_unique([str(item) for item in list(claims.get("allowed_skills") or [])]))
-    if skill_id not in allowed_skills:
-        raise ToolExecutionDeniedError(
-            "skill_not_granted",
-            f"The current capability token does not allow the {definition.label} skill.",
+    try:
+        claims = verify_capability_token(
+            capability_token,
+            expected_manifest_id=manifest_id,
+            expected_tenant_id=tenant_id,
+            expected_workspace_id=workspace_id,
+            runtime_mode=runtime_mode,
         )
+        _require_runtime_security_controls(claims)
+        allowed_skills = set(_ordered_unique([str(item) for item in list(claims.get("allowed_skills") or [])]))
+        if skill_id not in allowed_skills:
+            raise ToolExecutionDeniedError(
+                "skill_not_granted",
+                f"The current capability token does not allow the {definition.label} skill.",
+            )
 
-    _require_action_class(claims, definition.action_class)
-    _require_connector_scopes(claims, definition.connector_scopes)
-    _require_broker_guard(
-        claims=claims,
-        tool_key=skill_id,
-        action_class=definition.action_class,
-        connector_scope=",".join(definition.connector_scopes),
-        surface="skill",
-    )
-    if definition.executor is not None:
-        _require_runtime_allowed(definition, runtime_mode)
-        _require_approval_if_needed(claims, definition)
+        _require_action_class(claims, definition.action_class)
+        _require_connector_scopes(claims, definition.connector_scopes)
+        _require_broker_guard(
+            claims=claims,
+            tool_key=skill_id,
+            action_class=definition.action_class,
+            connector_scope=",".join(definition.connector_scopes),
+            surface="skill",
+        )
+        if definition.executor is not None:
+            _require_runtime_allowed(definition, runtime_mode)
+            _require_approval_if_needed(claims, definition)
+    except ToolExecutionDeniedError as exc:
+        await agent_action_metering_service.record_blocked(
+            **common_event,
+            action_type=definition.action_class,
+            connector_id=",".join(definition.connector_scopes) or None,
+            risk_level="high" if definition.requires_approval else None,
+            approval_required=definition.requires_approval,
+            policy_decision="blocked",
+            error_code=exc.code,
+            output_summary=exc.detail,
+        )
+        raise
 
     skill_egress_policy = egress_policy.build_egress_policy(
         tenant_id=tenant_id,
@@ -443,7 +496,15 @@ async def execute_skill(
     )
     with egress_policy.activate_egress_policy(skill_egress_policy, merge_with_current=True):
         try:
-            return await skill_registry.execute_skill(
+            await agent_action_metering_service.record_started(
+                **common_event,
+                action_type=definition.action_class,
+                connector_id=",".join(definition.connector_scopes) or None,
+                risk_level="high" if definition.requires_approval else None,
+                approval_required=definition.requires_approval,
+                policy_decision="allowed",
+            )
+            result = await skill_registry.execute_skill(
                 skill_id=skill_id,
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
@@ -453,8 +514,40 @@ async def execute_skill(
                 operational_policy=operational_policy,
                 seed_demo_if_empty=seed_demo_if_empty,
             )
+            await agent_action_metering_service.record_completed(
+                **common_event,
+                action_type=definition.action_class,
+                connector_id=",".join(definition.connector_scopes) or None,
+                risk_level="high" if definition.requires_approval else None,
+                approval_required=definition.requires_approval,
+                policy_decision="allowed",
+                output_summary=(result.get("reply") if isinstance(result, dict) else ""),
+            )
+            return result
         except egress_policy.EgressPolicyDeniedError as error:
+            await agent_action_metering_service.record_blocked(
+                **common_event,
+                action_type=definition.action_class,
+                connector_id=",".join(definition.connector_scopes) or None,
+                risk_level="high" if definition.requires_approval else None,
+                approval_required=definition.requires_approval,
+                policy_decision="blocked",
+                error_code="egress_denied",
+                output_summary=error.detail,
+            )
             raise ToolExecutionDeniedError("egress_denied", error.detail) from error
+        except Exception as error:
+            await agent_action_metering_service.record_failed(
+                **common_event,
+                action_type=definition.action_class,
+                connector_id=",".join(definition.connector_scopes) or None,
+                risk_level="high" if definition.requires_approval else None,
+                approval_required=definition.requires_approval,
+                policy_decision="allowed",
+                error_code=type(error).__name__,
+                output_summary=str(error),
+            )
+            raise
 
 
 def authorize_connector_action(

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from server_modules import (
+    agent_action_metering_service,
     activity_ledger_service,
     artifact_service,
     control_plane_repository,
@@ -2110,6 +2111,36 @@ async def _record_bound_cloud_runtime_usage_event(
             event=unified_event,
             source_table="activity_ledger_events",
             source_event_id=_text((activity or {}).get("id")) or runtime_session_id,
+        )
+        await agent_action_metering_service.record_completed(
+            tenant_id=tenant_token,
+            workspace_id=workspace_token,
+            surface="studio",
+            source_surface="studio_runtime_session",
+            action_domain="runtime",
+            action_type="meter",
+            action_name="runtime.session_terminated",
+            tool_kind="computer_runtime",
+            runtime_target=runtime_target,
+            payer=unified_event.get("payer") or "platform_credits",
+            billing_mode="transparency",
+            credit_type=unified_event.get("credit_type") or "computer_runtime",
+            credits_debited=0.0,
+            platform_cost_usd=0.0,
+            usage_ref={"credit_ledger_source_table": "activity_ledger_events", "source_event_id": _text((activity or {}).get("id")) or runtime_session_id},
+            thread_id=_text(metadata.get("thread_id")) or _text(session_record.get("thread_id")) or runtime_session_id,
+            run_id=_text(metadata.get("run_id")) or _text(session_record.get("run_id")) or runtime_session_id,
+            agent_id=_text(metadata.get("deployed_agent_id")) or None,
+            input_summary=runtime_session_id,
+            output_summary="Computer runtime usage was metered when the session ended.",
+            source_table="runtime_sessions",
+            source_event_id=runtime_session_id,
+            project_activity=False,
+            metadata={
+                "active_seconds": active_seconds,
+                "billable_seconds": billable_seconds,
+                "estimated_cost_usd": estimated_cost_usd,
+            },
         )
     await session_service.extend_session(
         _text(session_record.get("session_id")) or runtime_session_id,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -7,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 from server_modules import security_audit_service
 from server_modules import deployed_agent_virtual_runtime_service
 from server_modules import skills_service
-from server_modules import tool_broker_guard_service
+from server_modules import agent_action_metering_service, tool_broker_guard_service
 
 _BROWSER_CAPTURE_ACTIONS = {"screenshot", "pdf"}
 _BROWSER_MUTATION_ACTIONS = {"click", "fill", "execute_js", "download_file"}
@@ -583,6 +584,12 @@ def execute_single_direct_tool_call(
         else {}
     )
     tool_name = str(tool_call.get("name") or "").strip()
+    tool_call_id = str(
+        tool_call.get("id")
+        or tool_call.get("tool_call_id")
+        or tool_call.get("call_id")
+        or ""
+    ).strip() or f"direct_tool_{uuid.uuid4().hex}"
     try:
         connector_id, action_id = callbacks.parse_tool_name(tool_name)
     except Exception:
@@ -604,8 +611,24 @@ def execute_single_direct_tool_call(
     run_id = str(
         session_metadata.get("request_id")
         or session_metadata.get("client_request_id")
+        or session_metadata.get("run_id")
         or ""
     ).strip() or None
+    surface = str(session_metadata.get("surface") or session_metadata.get("product_surface") or "sage").strip().lower() or "sage"
+    if surface not in {"sage", "studio", "mini_app"}:
+        surface = "sage"
+    source_surface = str(session_metadata.get("source_surface") or "sage_direct_tool").strip().lower() or "sage_direct_tool"
+    user_id = str(session_metadata.get("user_id") or "").strip() or None
+    agent_id = str(
+        context_metadata_payload.get("deployed_agent_id")
+        or session_metadata.get("deployed_agent_id")
+        or session_metadata.get("agent_id")
+        or session_metadata.get("agent_install_id")
+        or session_metadata.get("active_agent_install_id")
+        or ""
+    ).strip() or None
+    app_id = str(session_metadata.get("app_id") or "").strip() or None
+    trace_id = str(session_metadata.get("trace_id") or "").strip() or None
     governance_metadata = _direct_tool_governance_metadata(connector_id, action_id, argument_payload)
     audit_metadata = {
         "tool_name": tool_name or None,
@@ -641,6 +664,40 @@ def execute_single_direct_tool_call(
         surface="connector" if str(connector_id or "").strip().lower() in _CHANNEL_CONNECTORS else "direct_tool",
     )
     if not broker_decision.allowed:
+        agent_action_metering_service.record_blocked_sync(
+            tenant_id=tenant_id or "default",
+            workspace_id=workspace_id,
+            surface=surface,
+            source_surface=source_surface,
+            action_domain="tool",
+            action_type=_broker_action_class_for_direct_tool(governance_metadata),
+            action_name=tool_name or _infer_trace_capability_id(connector_id, action_id),
+            tool_kind="direct_tool",
+            tool_id=tool_name or None,
+            connector_id=str(connector_id or "").strip() or None,
+            capability_id=_infer_trace_capability_id(connector_id, action_id),
+            risk_level=str(governance_metadata.get("risk_level") or "").strip() or None,
+            policy_decision="blocked",
+            error_code=broker_decision.code,
+            payer=str(session_metadata.get("payer") or "platform_credits").strip() or "platform_credits",
+            billing_mode="none",
+            user_id=user_id,
+            thread_id=str(thread_id or "").strip() or None,
+            run_id=run_id,
+            agent_id=agent_id,
+            app_id=app_id,
+            trace_id=trace_id,
+            input_summary=audit_metadata.get("argument_summary") or tool_name,
+            metadata={"broker_guard": broker_decision.snapshot, "broker_code": broker_decision.code},
+            source_table="direct_tool_calls",
+            source_event_id=agent_action_metering_service.build_source_event_id(
+                source_surface=source_surface,
+                run_id=run_id,
+                thread_id=thread_id,
+                tool_call_id=tool_call_id or index,
+                action_name=tool_name,
+            ),
+        )
         security_audit_service.emit_security_audit_event(
             action="direct_tool.blocked",
             status="blocked",
@@ -662,6 +719,44 @@ def execute_single_direct_tool_call(
         metadata=audit_metadata,
         idempotency_key=f"direct_tool.started:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}",
     )
+    source_event_id = agent_action_metering_service.build_source_event_id(
+        source_surface=source_surface,
+        run_id=run_id,
+        thread_id=thread_id,
+        tool_call_id=tool_call_id or index,
+        action_name=tool_name,
+    )
+    common_action_metering = {
+        "tenant_id": tenant_id or "default",
+        "workspace_id": workspace_id,
+        "surface": surface,
+        "source_surface": source_surface,
+        "action_domain": "tool",
+        "action_type": _broker_action_class_for_direct_tool(governance_metadata),
+        "action_name": tool_name or _infer_trace_capability_id(connector_id, action_id),
+        "tool_kind": "direct_tool",
+        "tool_id": tool_name or None,
+        "connector_id": str(connector_id or "").strip() or None,
+        "capability_id": _infer_trace_capability_id(connector_id, action_id),
+        "risk_level": str(governance_metadata.get("risk_level") or "").strip() or None,
+        "policy_decision": "allowed",
+        "payer": str(session_metadata.get("payer") or "platform_credits").strip() or "platform_credits",
+        "billing_mode": "transparency",
+        "user_id": user_id,
+        "thread_id": str(thread_id or "").strip() or None,
+        "run_id": run_id,
+        "agent_id": agent_id,
+        "app_id": app_id,
+        "trace_id": trace_id,
+        "input_summary": audit_metadata.get("argument_summary") or tool_name,
+        "source_table": "direct_tool_calls",
+        "source_event_id": source_event_id,
+        "metadata": {
+            "argument_keys": audit_metadata.get("argument_keys") or [],
+            "broker_guard": broker_decision.snapshot,
+        },
+    }
+    agent_action_metering_service.record_started_sync(**common_action_metering)
     try:
         result: Optional[str] = None
         if connector_id in _CLOUD_COMPUTER_RUNTIME_CONNECTORS:
@@ -720,6 +815,11 @@ def execute_single_direct_tool_call(
                 callbacks=callbacks,
             )
     except Exception as exc:
+        agent_action_metering_service.record_failed_sync(
+            **common_action_metering,
+            error_code=type(exc).__name__,
+            output_summary=str(exc),
+        )
         security_audit_service.emit_security_audit_event(
             action="direct_tool.failed",
             status="failed",
@@ -740,6 +840,10 @@ def execute_single_direct_tool_call(
         detail=tool_name or None,
         metadata={**audit_metadata, "result_summary": _redact_audit_summary(result)},
         idempotency_key=f"direct_tool.completed:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}",
+    )
+    agent_action_metering_service.record_completed_sync(
+        **common_action_metering,
+        output_summary=_redact_audit_summary(result),
     )
     return result
 

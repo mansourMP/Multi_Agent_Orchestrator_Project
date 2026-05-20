@@ -642,6 +642,52 @@ CREATE TABLE IF NOT EXISTS credit_ledger_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS agent_action_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    source_surface TEXT NOT NULL DEFAULT '',
+    action_domain TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    action_name TEXT NOT NULL,
+    tool_kind TEXT NULL,
+    tool_id TEXT NULL,
+    connector_id TEXT NULL,
+    skill_id TEXT NULL,
+    mcp_server_id TEXT NULL,
+    mcp_tool_id TEXT NULL,
+    runtime_target TEXT NULL,
+    capability_id TEXT NULL,
+    risk_level TEXT NULL,
+    approval_required BOOLEAN NOT NULL DEFAULT FALSE,
+    approval_id TEXT NULL,
+    approval_status TEXT NULL,
+    policy_decision TEXT NULL,
+    status TEXT NOT NULL,
+    error_code TEXT NULL,
+    payer TEXT NOT NULL,
+    billing_mode TEXT NOT NULL DEFAULT 'none',
+    credit_type TEXT NULL,
+    credits_debited DOUBLE PRECISION NOT NULL DEFAULT 0,
+    platform_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    usage_ref JSONB NOT NULL DEFAULT '{}'::jsonb,
+    trace_id TEXT NULL,
+    user_id TEXT NULL,
+    thread_id TEXT NULL,
+    run_id TEXT NULL,
+    agent_id TEXT NULL,
+    app_id TEXT NULL,
+    input_summary TEXT NOT NULL DEFAULT '',
+    output_summary TEXT NOT NULL DEFAULT '',
+    source_table TEXT NULL,
+    source_event_id TEXT NULL,
+    idempotency_key TEXT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS knowledge_sources (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -1207,6 +1253,20 @@ CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_run ON credit_ledger_events(
 CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_ledger_events_source
     ON credit_ledger_events(tenant_id, workspace_id, source_table, source_event_id)
     WHERE source_table IS NOT NULL AND source_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_action_events_scope_created ON agent_action_events(tenant_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_action_events_surface ON agent_action_events(tenant_id, workspace_id, surface, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_action_events_domain ON agent_action_events(tenant_id, workspace_id, action_domain, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_action_events_status ON agent_action_events(tenant_id, workspace_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_action_events_run ON agent_action_events(tenant_id, workspace_id, run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_action_events_trace ON agent_action_events(tenant_id, workspace_id, trace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_action_events_agent ON agent_action_events(tenant_id, workspace_id, agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_action_events_app ON agent_action_events(tenant_id, workspace_id, app_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_action_events_source
+    ON agent_action_events(tenant_id, workspace_id, source_table, source_event_id)
+    WHERE source_table IS NOT NULL AND source_event_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_action_events_idempotency
+    ON agent_action_events(tenant_id, workspace_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_knowledge_sources_scope ON knowledge_sources(tenant_id, workspace_id, agent_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_knowledge_sources_uri ON knowledge_sources(tenant_id, workspace_id, source_uri);
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_scope ON knowledge_chunks(tenant_id, workspace_id, agent_id, updated_at DESC);
@@ -1699,6 +1759,57 @@ def _row_to_credit_ledger_event(row: Any) -> Optional[Dict[str, Any]]:
         "source_event_id": str(payload.get("source_event_id") or "").strip() or None,
         "metadata": _decode_json_object(payload.get("metadata")),
         "created_at": _iso(payload.get("created_at")),
+    }
+
+
+def _row_to_agent_action_event(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "surface": str(payload.get("surface") or "").strip().lower() or None,
+        "source_surface": str(payload.get("source_surface") or "").strip().lower() or None,
+        "action_domain": str(payload.get("action_domain") or "").strip().lower() or None,
+        "action_type": str(payload.get("action_type") or "").strip().lower() or None,
+        "action_name": str(payload.get("action_name") or "").strip() or None,
+        "tool_kind": str(payload.get("tool_kind") or "").strip().lower() or None,
+        "tool_id": str(payload.get("tool_id") or "").strip() or None,
+        "connector_id": str(payload.get("connector_id") or "").strip() or None,
+        "skill_id": str(payload.get("skill_id") or "").strip() or None,
+        "mcp_server_id": str(payload.get("mcp_server_id") or "").strip() or None,
+        "mcp_tool_id": str(payload.get("mcp_tool_id") or "").strip() or None,
+        "runtime_target": str(payload.get("runtime_target") or "").strip() or None,
+        "capability_id": str(payload.get("capability_id") or "").strip() or None,
+        "risk_level": str(payload.get("risk_level") or "").strip().lower() or None,
+        "approval_required": bool(payload.get("approval_required")),
+        "approval_id": str(payload.get("approval_id") or "").strip() or None,
+        "approval_status": str(payload.get("approval_status") or "").strip().lower() or None,
+        "policy_decision": str(payload.get("policy_decision") or "").strip().lower() or None,
+        "status": str(payload.get("status") or "").strip().lower() or None,
+        "error_code": str(payload.get("error_code") or "").strip() or None,
+        "payer": str(payload.get("payer") or "").strip() or None,
+        "billing_mode": str(payload.get("billing_mode") or "").strip().lower() or None,
+        "credit_type": str(payload.get("credit_type") or "").strip().lower() or None,
+        "credits_debited": round(float(payload.get("credits_debited") or 0.0), 6),
+        "platform_cost_usd": round(float(payload.get("platform_cost_usd") or 0.0), 6),
+        "usage_ref": _decode_json_object(payload.get("usage_ref")),
+        "trace_id": str(payload.get("trace_id") or "").strip() or None,
+        "user_id": str(payload.get("user_id") or "").strip() or None,
+        "thread_id": str(payload.get("thread_id") or "").strip() or None,
+        "run_id": str(payload.get("run_id") or "").strip() or None,
+        "agent_id": str(payload.get("agent_id") or "").strip() or None,
+        "app_id": str(payload.get("app_id") or "").strip() or None,
+        "input_summary": str(payload.get("input_summary") or "").strip(),
+        "output_summary": str(payload.get("output_summary") or "").strip(),
+        "source_table": str(payload.get("source_table") or "").strip() or None,
+        "source_event_id": str(payload.get("source_event_id") or "").strip() or None,
+        "idempotency_key": str(payload.get("idempotency_key") or "").strip() or None,
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
     }
 
 
@@ -5533,6 +5644,255 @@ async def summarize_credit_ledger_events(
         "by_surface": by_surface,
         "by_credit_type": by_credit_type,
         "by_payer": by_payer,
+    }
+
+
+async def record_agent_action_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    event: Dict[str, Any],
+    source_table: Optional[str] = None,
+    source_event_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    if not isinstance(event, dict):
+        raise ValueError("event must be an agent action event dictionary.")
+    record_id = str(event_id or event.get("id") or f"aact_{uuid.uuid4().hex[:16]}").strip()
+    source_table_token = str(source_table or event.get("source_table") or "").strip().lower() or None
+    source_event_token = str(source_event_id or event.get("source_event_id") or "").strip() or None
+    idempotency_token = str(idempotency_key or event.get("idempotency_key") or "").strip() or None
+    now_created_at = _coerce_timestamptz(event.get("created_at")) or _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        if source_table_token and source_event_token:
+            existing = await connection.fetchrow(
+                """
+                SELECT id
+                FROM agent_action_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND source_table = $3
+                  AND source_event_id = $4
+                LIMIT 1
+                """,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                source_table_token,
+                source_event_token,
+            )
+            if existing is not None:
+                record_id = str(dict(existing).get("id") or record_id).strip()
+        elif idempotency_token:
+            existing = await connection.fetchrow(
+                """
+                SELECT id
+                FROM agent_action_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND idempotency_key = $3
+                LIMIT 1
+                """,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                idempotency_token,
+            )
+            if existing is not None:
+                record_id = str(dict(existing).get("id") or record_id).strip()
+        row = await connection.fetchrow(
+            """
+            INSERT INTO agent_action_events (
+                id, tenant_id, workspace_id, surface, source_surface, action_domain, action_type, action_name,
+                tool_kind, tool_id, connector_id, skill_id, mcp_server_id, mcp_tool_id, runtime_target,
+                capability_id, risk_level, approval_required, approval_id, approval_status, policy_decision,
+                status, error_code, payer, billing_mode, credit_type, credits_debited, platform_cost_usd,
+                usage_ref, trace_id, user_id, thread_id, run_id, agent_id, app_id,
+                input_summary, output_summary, source_table, source_event_id, idempotency_key, metadata,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8,
+                $9, $10, $11, $12, $13, $14, $15,
+                $16, $17, $18, $19, $20, $21,
+                $22, $23, $24, $25, $26, $27, $28,
+                $29::jsonb, $30, $31, $32, $33, $34, $35,
+                $36, $37, $38, $39, $40, $41::jsonb,
+                $42::timestamptz, NOW()
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                surface = EXCLUDED.surface,
+                source_surface = EXCLUDED.source_surface,
+                action_domain = EXCLUDED.action_domain,
+                action_type = EXCLUDED.action_type,
+                action_name = EXCLUDED.action_name,
+                tool_kind = EXCLUDED.tool_kind,
+                tool_id = EXCLUDED.tool_id,
+                connector_id = EXCLUDED.connector_id,
+                skill_id = EXCLUDED.skill_id,
+                mcp_server_id = EXCLUDED.mcp_server_id,
+                mcp_tool_id = EXCLUDED.mcp_tool_id,
+                runtime_target = EXCLUDED.runtime_target,
+                capability_id = EXCLUDED.capability_id,
+                risk_level = EXCLUDED.risk_level,
+                approval_required = EXCLUDED.approval_required,
+                approval_id = EXCLUDED.approval_id,
+                approval_status = EXCLUDED.approval_status,
+                policy_decision = EXCLUDED.policy_decision,
+                status = EXCLUDED.status,
+                error_code = EXCLUDED.error_code,
+                payer = EXCLUDED.payer,
+                billing_mode = EXCLUDED.billing_mode,
+                credit_type = EXCLUDED.credit_type,
+                credits_debited = EXCLUDED.credits_debited,
+                platform_cost_usd = EXCLUDED.platform_cost_usd,
+                usage_ref = EXCLUDED.usage_ref,
+                trace_id = EXCLUDED.trace_id,
+                user_id = EXCLUDED.user_id,
+                thread_id = EXCLUDED.thread_id,
+                run_id = EXCLUDED.run_id,
+                agent_id = EXCLUDED.agent_id,
+                app_id = EXCLUDED.app_id,
+                input_summary = EXCLUDED.input_summary,
+                output_summary = EXCLUDED.output_summary,
+                source_table = EXCLUDED.source_table,
+                source_event_id = EXCLUDED.source_event_id,
+                idempotency_key = EXCLUDED.idempotency_key,
+                metadata = agent_action_events.metadata || EXCLUDED.metadata,
+                updated_at = NOW()
+            RETURNING *
+            """,
+            record_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            str(event.get("surface") or "").strip().lower(),
+            str(event.get("source_surface") or "").strip().lower(),
+            str(event.get("action_domain") or "").strip().lower(),
+            str(event.get("action_type") or "").strip().lower(),
+            str(event.get("action_name") or "").strip(),
+            str(event.get("tool_kind") or "").strip().lower() or None,
+            str(event.get("tool_id") or "").strip() or None,
+            str(event.get("connector_id") or "").strip() or None,
+            str(event.get("skill_id") or "").strip() or None,
+            str(event.get("mcp_server_id") or "").strip() or None,
+            str(event.get("mcp_tool_id") or "").strip() or None,
+            str(event.get("runtime_target") or "").strip() or None,
+            str(event.get("capability_id") or "").strip() or None,
+            str(event.get("risk_level") or "").strip().lower() or None,
+            bool(event.get("approval_required")),
+            str(event.get("approval_id") or "").strip() or None,
+            str(event.get("approval_status") or "").strip().lower() or None,
+            str(event.get("policy_decision") or "").strip().lower() or None,
+            str(event.get("status") or "").strip().lower(),
+            str(event.get("error_code") or "").strip() or None,
+            str(event.get("payer") or "").strip() or "platform_credits",
+            str(event.get("billing_mode") or "none").strip().lower() or "none",
+            str(event.get("credit_type") or "").strip().lower() or None,
+            round(float(event.get("credits_debited") or 0.0), 6),
+            round(float(event.get("platform_cost_usd") or 0.0), 6),
+            _to_json(event.get("usage_ref"), default={}),
+            str(event.get("trace_id") or "").strip() or None,
+            str(event.get("user_id") or "").strip() or None,
+            str(event.get("thread_id") or "").strip() or None,
+            str(event.get("run_id") or "").strip() or None,
+            str(event.get("agent_id") or "").strip() or None,
+            str(event.get("app_id") or "").strip() or None,
+            str(event.get("input_summary") or "").strip()[:1000],
+            str(event.get("output_summary") or "").strip()[:1000],
+            source_table_token,
+            source_event_token,
+            idempotency_token,
+            _to_json(event.get("metadata"), default={}),
+            now_created_at,
+        )
+    return _row_to_agent_action_event(row)
+
+
+async def list_agent_action_events(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    surface: Optional[str] = None,
+    action_domain: Optional[str] = None,
+    status: Optional[str] = None,
+    run_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+    since_created_at: Any = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    conditions = ["tenant_id = $1", "workspace_id = $2"]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    for column, value in (
+        ("surface", surface),
+        ("action_domain", action_domain),
+        ("status", status),
+        ("run_id", run_id),
+        ("trace_id", trace_id),
+        ("agent_id", agent_id),
+        ("app_id", app_id),
+    ):
+        token = str(value or "").strip()
+        if not token:
+            continue
+        params.append(token.lower() if column in {"surface", "action_domain", "status"} else token)
+        conditions.append(f"{column} = ${len(params)}")
+    resolved_since_created_at = _coerce_timestamptz(since_created_at)
+    if resolved_since_created_at is not None:
+        params.append(resolved_since_created_at)
+        conditions.append(f"created_at >= ${len(params)}::timestamptz")
+    params.append(max(1, min(int(limit or 100), 1000)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM agent_action_events
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [
+        payload
+        for payload in (_row_to_agent_action_event(row) for row in rows)
+        if isinstance(payload, dict)
+    ]
+
+
+async def summarize_agent_action_events(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    limit: int = 1000,
+) -> Dict[str, Any]:
+    rows = await list_agent_action_events(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        limit=limit,
+    )
+    by_domain: Dict[str, int] = {}
+    by_status: Dict[str, int] = {}
+    by_surface: Dict[str, int] = {}
+    for row in rows:
+        for bucket, key in (
+            (by_domain, str(row.get("action_domain") or "unknown")),
+            (by_status, str(row.get("status") or "unknown")),
+            (by_surface, str(row.get("surface") or "unknown")),
+        ):
+            bucket[key] = int(bucket.get(key, 0)) + 1
+    return {
+        "count": len(rows),
+        "by_domain": by_domain,
+        "by_status": by_status,
+        "by_surface": by_surface,
     }
 
 

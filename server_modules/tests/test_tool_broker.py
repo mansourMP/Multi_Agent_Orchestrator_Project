@@ -164,21 +164,27 @@ class ToolBrokerTests(unittest.TestCase):
                 runtime_mode="hosted_secure",
                 runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
             )
-            result = await tool_broker.execute_skill(
-                capability_token=grant.token,
-                manifest_id="manifest-parts-pro",
-                tenant_id="tenant-1",
-                workspace_id="workspace-1",
-                runtime_mode="hosted_secure",
-                skill_id="inventory-tool",
-                goal="Do you have Tesla Model 3 wipers?",
-                agent_label="Parts Pro",
-                hard_context="Use inventory only.",
-                operational_policy="Never invent stock.",
-                seed_demo_if_empty=True,
-            )
+            with patch("server_modules.tool_broker.agent_action_metering_service.record_started") as record_started, patch(
+                "server_modules.tool_broker.agent_action_metering_service.record_completed"
+            ) as record_completed:
+                result = await tool_broker.execute_skill(
+                    capability_token=grant.token,
+                    manifest_id="manifest-parts-pro",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    runtime_mode="hosted_secure",
+                    skill_id="inventory-tool",
+                    goal="Do you have Tesla Model 3 wipers?",
+                    agent_label="Parts Pro",
+                    hard_context="Use inventory only.",
+                    operational_policy="Never invent stock.",
+                    seed_demo_if_empty=True,
+                )
             self.assertIn(result["status"], {"ok", "no_match"})
             self.assertIn("steps", result)
+            record_started.assert_awaited_once()
+            record_completed.assert_awaited_once()
+            self.assertEqual(record_completed.await_args.kwargs["action_domain"], "skill")
 
         asyncio.run(_run())
 

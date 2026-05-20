@@ -238,7 +238,11 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
 
         with patch(
             "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
-        ) as emit_audit:
+        ) as emit_audit, patch(
+            "server_modules.direct_tool_execution_service.agent_action_metering_service.record_started_sync"
+        ) as record_started, patch(
+            "server_modules.direct_tool_execution_service.agent_action_metering_service.record_completed_sync"
+        ) as record_completed:
             raw = service.execute_single_direct_tool_call(
                 tool_call={"name": "memory_search", "arguments": {"query": "timezone", "max_results": 3}},
                 workspace_id="workspace-1",
@@ -258,6 +262,10 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertEqual(started["tenant_id"], "tenant-1")
         self.assertEqual(started["workspace_id"], "workspace-1")
         self.assertEqual(started["run_id"], "req-1")
+        record_started.assert_called_once()
+        record_completed.assert_called_once()
+        self.assertEqual(record_completed.call_args.kwargs["action_domain"], "tool")
+        self.assertEqual(record_completed.call_args.kwargs["source_table"], "direct_tool_calls")
         self.assertEqual(started["metadata"]["connector_id"], "memory")
         self.assertEqual(started["metadata"]["action_id"], "search")
         self.assertEqual(started["metadata"]["provider"], "deepseek")
@@ -562,6 +570,8 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         with patch.dict(os.environ, {"EMPYRALIS_TOOL_BROKER_EXECUTE_LIMIT": "1"}, clear=False), patch(
             "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
         ) as emit_audit, patch(
+            "server_modules.direct_tool_execution_service.agent_action_metering_service.record_blocked_sync"
+        ) as record_blocked, patch(
             "server_modules.skills_service._execute_safe_direct_local_tool_call",
             return_value="ok",
         ):
@@ -583,13 +593,17 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
                 )
 
         self.assertIn("direct_tool.blocked", [call.kwargs["action"] for call in emit_audit.call_args_list])
+        record_blocked.assert_called_once()
+        self.assertEqual(record_blocked.call_args.kwargs["policy_decision"], "blocked")
 
     def test_execute_single_direct_tool_call_emits_failed_audit_event(self) -> None:
         callbacks = _callbacks()
 
         with patch(
             "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
-        ) as emit_audit:
+        ) as emit_audit, patch(
+            "server_modules.direct_tool_execution_service.agent_action_metering_service.record_failed_sync"
+        ) as record_failed:
             with self.assertRaises(RuntimeError):
                 service.execute_single_direct_tool_call(
                     tool_call={"name": "http_request", "arguments": {"url": "https://example.com"}},
@@ -604,6 +618,8 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
             "direct_tool.failed",
         ])
         self.assertEqual(emit_audit.call_args_list[1].kwargs["metadata"]["error_type"], "RuntimeError")
+        record_failed.assert_called_once()
+        self.assertEqual(record_failed.call_args.kwargs["error_code"], "RuntimeError")
 
     def test_execute_single_direct_tool_call_handles_sage_service_tools(self) -> None:
         callbacks = _callbacks()

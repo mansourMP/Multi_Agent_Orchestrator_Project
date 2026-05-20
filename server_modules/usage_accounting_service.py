@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 import uuid
 
+from server_modules import billing_credit_config
 from server_modules import pricing_registry_service
 
 
@@ -238,6 +239,18 @@ def build_usage_accounting_record(
             pricing_known = False
     resolved_source_surface = _derive_source_surface(explicit=source_surface or surface)
     resolved_surface = _derive_surface(surface or resolved_source_surface)
+    metadata_payload = _coerce_dict(metadata)
+    payer_token = _normalize_optional_text(payer)
+    resolved_retail_credits = _safe_float(retail_credits_charged)
+    if resolved_retail_credits is None and resolved_cost is not None:
+        billing_source = _normalize_text(metadata_payload.get("billing_source")).lower()
+        credential_plane = _normalize_text(metadata_payload.get("credential_plane")).lower()
+        if (
+            is_platform_paid_usage_value(payer_token)
+            or is_platform_paid_usage_value(billing_source)
+            or credential_plane == "platform_runtime"
+        ):
+            resolved_retail_credits = billing_credit_config.display_credit_float_for_usd(resolved_cost)
     record = UsageAccountingRecord(
         usage_record_id=f"uacct_{_normalize_text(run_id) or uuid.uuid4().hex[:16]}",
         run_id=_normalize_optional_text(run_id),
@@ -259,12 +272,12 @@ def build_usage_accounting_record(
         pricing_source=_normalize_optional_text(pricing_source),
         estimation_mode=_normalize_text(estimation_mode).lower() or "reconstructed",
         completed_at=_normalize_optional_text(completed_at) or _utc_now_iso(),
-        metadata=_coerce_dict(metadata),
+        metadata=metadata_payload,
         user_id=_normalize_optional_text(user_id),
         app_id=_normalize_optional_text(app_id),
         thread_id=_normalize_optional_text(thread_id),
         agent_id=_normalize_optional_text(agent_id or deployed_agent_id),
-        payer=_normalize_optional_text(payer),
+        payer=payer_token,
         cached_input_tokens=cached_value,
         cache_write_tokens=cache_write_value,
         cache_read_tokens=cache_read_value,
@@ -272,7 +285,7 @@ def build_usage_accounting_record(
         reasoning_tokens=reasoning_value,
         thinking_tokens=thinking_value,
         provider_cost_usd=resolved_cost,
-        retail_credits_charged=_safe_float(retail_credits_charged),
+        retail_credits_charged=resolved_retail_credits,
         success=bool(success),
         error_code=_normalize_optional_text(error_code),
         fallback_attempt=bool(fallback_attempt),
@@ -335,6 +348,7 @@ PLATFORM_PAID_USAGE_VALUES = {"platform_credits", "empyralis_credits", "empyrali
 _NON_EXACT_ESTIMATION_MODES = {
     "provider_usage_missing",
     "masked_text_estimate",
+    "heuristic_blackbox",
     "heuristic",
     "heuristic_estimate",
 }
@@ -342,6 +356,19 @@ _NON_EXACT_ESTIMATION_MODES = {
 
 def is_platform_paid_usage_value(value: Any) -> bool:
     return _normalize_text(value).lower() in PLATFORM_PAID_USAGE_VALUES
+
+
+def require_known_payer_value(value: Any, *, field_name: str = "payer") -> str:
+    token = _normalize_text(value).lower()
+    if token in PLATFORM_PAID_USAGE_VALUES:
+        return "platform_credits"
+    if token in {"byok", "workspace_api_key", "workspace_connection"}:
+        return "BYOK"
+    if token in {"local", "local_model", "local_companion"}:
+        return "local"
+    if token in {"subscription_passthrough", "subscription", "codex_cli", "claude_code_cli"}:
+        return "subscription_passthrough"
+    raise ValueError(f"Unknown or missing {field_name}.")
 
 
 def platform_paid_usage_validation_error(row_or_record: Dict[str, Any]) -> Optional[str]:

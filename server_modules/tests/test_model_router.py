@@ -147,6 +147,48 @@ class ModelRouterTests(unittest.TestCase):
         self.assertEqual(usage["reasoning_tokens"], 12)
         self.assertEqual(usage["completion_tokens"], 40)
 
+    def test_call_model_sync_preserves_openai_compatible_usage_for_deepseek(self):
+        http_json_request_patcher = patch.object(model_router, "http_json_request")
+        http_json_request_mock = http_json_request_patcher.start()
+        self.addCleanup(http_json_request_patcher.stop)
+        http_json_request_mock.return_value = {
+            "status": 200,
+            "json": {
+                "choices": [{"message": {"content": "deepseek ok"}}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 25,
+                    "total_tokens": 125,
+                    "prompt_tokens_details": {"cached_tokens": 40},
+                    "completion_tokens_details": {"reasoning_tokens": 8},
+                },
+            },
+            "text": "",
+            "headers": {},
+        }
+
+        result = model_router.call_model_sync(
+            messages=[{"role": "user", "content": "Say hello"}],
+            model="deepseek-v4-flash",
+            provider="deepseek",
+            credentials={"api_key": "deepseek-key"},
+            max_tokens=100,
+            temperature=0.2,
+            source_surface="durable_run",
+        )
+
+        self.assertEqual(result["content"], "deepseek ok")
+        self.assertEqual(result["provider"], "deepseek")
+        self.assertEqual(result["model"], "deepseek-v4-flash")
+        usage = result["usage"]
+        self.assertEqual(usage["prompt_tokens"], 60)
+        self.assertEqual(usage["cached_input_tokens"], 40)
+        self.assertEqual(usage["reasoning_tokens"], 8)
+        self.assertEqual(usage["total_tokens"], 125)
+        self.assertEqual(usage["source_surface"], "durable_run")
+        _, kwargs = http_json_request_mock.call_args
+        self.assertEqual(kwargs["payload"]["model"], "deepseek-v4-flash")
+
     def test_vertex_current_credential_shape_uses_compatibility_fallback(self):
         resolve_provider_adapter_patcher = patch.object(model_router, "resolve_provider_adapter")
         resolve_provider_adapter_mock = resolve_provider_adapter_patcher.start()

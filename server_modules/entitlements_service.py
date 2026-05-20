@@ -5,6 +5,7 @@ import os
 import time
 from typing import Any, Callable, Dict, Optional
 
+from server_modules import billing_credit_config
 from server_modules import billing_service
 from server_modules import control_plane_repository
 from server_modules import deployed_agent_runtime_contract_service
@@ -38,24 +39,10 @@ NON_GATED_CAPABILITIES: Dict[str, bool] = {
 
 HOSTED_SAGE_AI_POLICIES = {"disabled", "owner_opt_in", "enabled_with_cap"}
 DEFAULT_HOSTED_SAGE_AI_POLICY = "enabled_with_cap"
-HOSTED_SAGE_AI_CREDITS_PER_USD = 1000
+HOSTED_SAGE_AI_CREDITS_PER_USD = billing_credit_config.HOSTED_SAGE_AI_CREDITS_PER_USD
 
 
-def _env_non_negative_float(name: str, fallback: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return float(fallback)
-    try:
-        parsed = float(raw)
-    except (TypeError, ValueError):
-        return float(fallback)
-    return max(0.0, parsed)
-
-
-DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = _env_non_negative_float(
-    "EMPYRALIS_DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD",
-    0.50,
-)
+DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = billing_credit_config.DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD
 
 PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "free": {

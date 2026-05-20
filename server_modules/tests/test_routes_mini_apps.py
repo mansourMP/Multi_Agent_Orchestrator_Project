@@ -330,7 +330,7 @@ async def test_mini_app_invoke_route_returns_thin_app_response(monkeypatch: pyte
     assert activity_metadata["ai_payer"] == "platform_credits"
     assert activity_metadata["monthly_credit_cap"] == 500
     assert activity_metadata["per_invocation_credit_cap"] == 50
-    assert activity_metadata["retail_credits_charged"] == 42.0
+    assert activity_metadata["retail_credits_charged"] == 20.0
     assert activity_metadata["resolved_provider"] == "deepseek"
     assert activity_metadata["resolved_model"] == "deepseek-chat"
     assert activity_metadata["active_session_id"] == "miniapp-session-1"
@@ -650,7 +650,7 @@ async def test_mini_app_invoke_route_blocks_monthly_cap_overspend(monkeypatch: p
                 "completed_at": "2026-05-10T00:00:00Z",
                 "metadata": {
                     "app_id": "writing",
-                    "usage_accounting": {"total_tokens": 498},
+                    "usage_accounting": {"retail_credits_charged": 498},
                 },
             }
         ],

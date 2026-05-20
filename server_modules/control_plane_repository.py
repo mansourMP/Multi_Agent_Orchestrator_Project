@@ -4466,6 +4466,199 @@ async def update_workspace_admin_defaults_metadata(
     )
 
 
+def _billing_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _workspace_admin_defaults_payload(metadata: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+    admin_defaults = _coerce_dict(_coerce_dict(metadata).get("admin_defaults"))
+    if isinstance(admin_defaults.get("payload"), dict):
+        return _coerce_dict(admin_defaults.get("payload")), True
+    return admin_defaults, False
+
+
+def _with_workspace_admin_defaults_payload(
+    metadata: Dict[str, Any],
+    payload: Dict[str, Any],
+    *,
+    wrapped: bool,
+) -> Dict[str, Any]:
+    next_metadata = _coerce_dict(metadata)
+    next_metadata["admin_defaults"] = {"payload": payload} if wrapped else payload
+    return next_metadata
+
+
+def _workspace_credit_transactions(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    transactions = _coerce_dict(payload).get("credit_transactions")
+    if isinstance(transactions, list):
+        return [dict(item) for item in transactions if isinstance(item, dict)]
+    return []
+
+
+def _workspace_credit_debits_for_month(payload: Dict[str, Any], usage_month: str) -> float:
+    total = 0.0
+    for transaction in _workspace_credit_transactions(payload):
+        if str(transaction.get("kind") or "").strip().lower() != "usage_debit":
+            continue
+        if str(transaction.get("usage_month") or "").strip() != usage_month:
+            continue
+        total += abs(_billing_float(transaction.get("amount_usd"), 0.0))
+    return round(total, 6)
+
+
+def _build_workspace_credit_debit_result(
+    *,
+    metadata: Dict[str, Any],
+    request_id: str,
+    usage_month: str,
+    monthly_cost_usd: float,
+    monthly_cap_usd: float,
+    credits_per_usd: int,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    payload, wrapped = _workspace_admin_defaults_payload(metadata)
+    transactions = _workspace_credit_transactions(payload)
+    if any(str(item.get("request_id") or "").strip() == request_id for item in transactions):
+        return _with_workspace_admin_defaults_payload(metadata, payload, wrapped=wrapped), {
+            "ok": True,
+            "debited_usd": 0.0,
+            "reason": "already_recorded",
+        }
+    current_balance_usd = max(0.0, round(_billing_float(payload.get("credit_balance_usd"), 0.0), 6))
+    cap_usd = max(
+        0.0,
+        round(_billing_float(payload.get("hosted_sage_ai_monthly_cap_usd"), monthly_cap_usd), 6),
+    )
+    monthly_cost = max(0.0, round(float(monthly_cost_usd or 0.0), 6))
+    overage_usd = max(0.0, round(monthly_cost - cap_usd, 6))
+    already_debited_usd = _workspace_credit_debits_for_month(payload, usage_month)
+    debit_needed_usd = max(0.0, round(overage_usd - already_debited_usd, 6))
+    debit_usd = min(current_balance_usd, debit_needed_usd)
+    if debit_usd <= 0:
+        return _with_workspace_admin_defaults_payload(metadata, payload, wrapped=wrapped), {
+            "ok": True,
+            "debited_usd": 0.0,
+            "reason": "no_debit_needed",
+            "credit_balance_usd": current_balance_usd,
+            "monthly_overage_usd": overage_usd,
+        }
+    next_balance_usd = max(0.0, round(current_balance_usd - debit_usd, 6))
+    transactions.append(
+        {
+            "kind": "usage_debit",
+            "amount_usd": -debit_usd,
+            "credits": -int(round(debit_usd * max(0, int(credits_per_usd or 0)))),
+            "request_id": request_id,
+            "usage_month": usage_month,
+            "source": "hosted_sage_ai",
+            "created_at": int(time.time()),
+        }
+    )
+    next_payload = {
+        **payload,
+        "credit_balance_usd": next_balance_usd,
+        "credit_transactions": transactions,
+    }
+    return _with_workspace_admin_defaults_payload(metadata, next_payload, wrapped=wrapped), {
+        "ok": True,
+        "debited_usd": debit_usd,
+        "credit_balance_usd": next_balance_usd,
+        "monthly_overage_usd": overage_usd,
+    }
+
+
+async def debit_workspace_credit_balance_for_hosted_usage_atomic(
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    request_id: str,
+    usage_month: str,
+    monthly_cost_usd: float,
+    monthly_cap_usd: float,
+    credits_per_usd: int,
+) -> Dict[str, Any]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    clean_tenant_id = str(tenant_id or "").strip()
+    clean_request_id = str(request_id or "").strip()
+    clean_usage_month = str(usage_month or "").strip()
+    if not clean_workspace_id or not clean_tenant_id or not clean_request_id or not clean_usage_month:
+        return {"ok": False, "debited_usd": 0.0, "reason": "missing_scope"}
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    row = fallback.execute(
+                        """
+                        SELECT workspace_id, tenant_id, name, workspace_type, metadata_json, created_at, updated_at
+                        FROM workspace_registry
+                        WHERE workspace_id = ?
+                        LIMIT 1
+                        """,
+                        (clean_workspace_id,),
+                    ).fetchone()
+                    existing_record = _local_workspace_record_from_row(row)
+                    if existing_record is None:
+                        return {"ok": False, "debited_usd": 0.0, "reason": "workspace_not_found"}
+                    if str(existing_record.get("tenant_id") or "").strip() != clean_tenant_id:
+                        return {"ok": False, "debited_usd": 0.0, "reason": "tenant_mismatch"}
+                    next_metadata, result = _build_workspace_credit_debit_result(
+                        metadata=_coerce_dict(existing_record.get("metadata")),
+                        request_id=clean_request_id,
+                        usage_month=clean_usage_month,
+                        monthly_cost_usd=monthly_cost_usd,
+                        monthly_cap_usd=monthly_cap_usd,
+                        credits_per_usd=credits_per_usd,
+                    )
+                    _upsert_local_workspace_registry(
+                        fallback,
+                        workspace_id=clean_workspace_id,
+                        tenant_id=clean_tenant_id,
+                        name=str(existing_record.get("name") or "").strip() or clean_workspace_id,
+                        workspace_type=existing_record.get("workspace_type") or "personal",
+                        metadata=next_metadata,
+                        created_at_ts=int(existing_record.get("created_at") or time.time()),
+                    )
+                    fallback.commit()
+            _workspace_lookup_cache_drop(clean_workspace_id)
+            return result
+        async with connection.transaction():
+            row = await connection.fetchrow(
+                """
+                SELECT id, tenant_id, workspace_id, metadata
+                FROM workspaces
+                WHERE workspace_id = $1
+                FOR UPDATE
+                """,
+                clean_workspace_id,
+            )
+            if row is None:
+                return {"ok": False, "debited_usd": 0.0, "reason": "workspace_not_found"}
+            if str(dict(row).get("tenant_id") or "").strip() != clean_tenant_id:
+                return {"ok": False, "debited_usd": 0.0, "reason": "tenant_mismatch"}
+            next_metadata, result = _build_workspace_credit_debit_result(
+                metadata=_decode_json_object(dict(row).get("metadata")),
+                request_id=clean_request_id,
+                usage_month=clean_usage_month,
+                monthly_cost_usd=monthly_cost_usd,
+                monthly_cap_usd=monthly_cap_usd,
+                credits_per_usd=credits_per_usd,
+            )
+            await connection.execute(
+                """
+                UPDATE workspaces
+                SET metadata = $2::jsonb,
+                    updated_at = NOW()
+                WHERE workspace_id = $1
+                """,
+                clean_workspace_id,
+                _to_json(next_metadata, default={}),
+            )
+    _workspace_lookup_cache_drop(clean_workspace_id)
+    return result
+
+
 async def ensure_workspace_billing_defaults(
     workspace_id: str,
     *,

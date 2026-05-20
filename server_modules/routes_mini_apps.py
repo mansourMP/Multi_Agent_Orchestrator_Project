@@ -19,6 +19,7 @@ from server_modules import mini_app_host_service
 from server_modules import activity_ledger_service
 from server_modules import control_plane_repository
 from server_modules import credit_ledger_contract
+from server_modules import billing_credit_config
 from server_modules import calorie_tracking_service
 from server_modules import flashcards_tracking_service
 from server_modules import mini_app_invoke_service
@@ -518,9 +519,12 @@ def _mini_app_usage_credits(usage: Any) -> float:
     payload = _coerce_dict(usage)
     accounting = _coerce_dict(payload.get("usage_accounting"))
     source = accounting or payload
-    for key in ("retail_credits_charged", "credits_charged", "credit_quantity", "total_tokens"):
+    for key in ("retail_credits_charged", "credits_charged", "credit_quantity"):
         if key in source:
             return max(0.0, _safe_float(source.get(key)))
+    for key in ("estimated_cost_usd", "provider_cost_usd", "platform_cost_usd"):
+        if key in source:
+            return billing_credit_config.display_credit_float_for_usd(source.get(key))
     return 0.0
 
 
@@ -600,6 +604,39 @@ async def _assert_mini_app_ai_budget_available(
     )
     if used_this_month + (credits if include_current_invocation else 0.0) > monthly_cap:
         raise PermissionError("Mini app AI invoke exceeded its monthly credit cap.")
+
+
+async def _assert_mini_app_ai_budget_preflight(
+    *,
+    ai_policy: Dict[str, Any],
+    tenant_id: str,
+    workspace_id: str,
+    app_id: str,
+) -> None:
+    await _assert_mini_app_ai_budget_available(
+        ai_policy=ai_policy,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        app_id=app_id,
+    )
+
+
+async def _assert_mini_app_ai_budget_settlement(
+    *,
+    ai_policy: Dict[str, Any],
+    tenant_id: str,
+    workspace_id: str,
+    app_id: str,
+    invocation_credits: float,
+) -> None:
+    await _assert_mini_app_ai_budget_available(
+        ai_policy=ai_policy,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        app_id=app_id,
+        invocation_credits=invocation_credits,
+        include_current_invocation=True,
+    )
 
 
 def _mini_app_accounting_snapshot(
@@ -718,6 +755,10 @@ def _prepare_mini_app_hosted_ai_usage(
                 "Mini app hosted AI usage is not exact enough for platform credit accounting "
                 f"({validation_error})."
             )
+        if _safe_float(row.get("retail_credits_charged")) <= 0 and _safe_float(row.get("estimated_cost_usd")) > 0:
+            row["retail_credits_charged"] = billing_credit_config.display_credit_float_for_usd(
+                row.get("estimated_cost_usd")
+            )
     line_item_metadata = credit_ledger_contract.build_credit_ledger_line_item(
         metadata={
             **_coerce_dict(row.get("metadata")),
@@ -732,7 +773,7 @@ def _prepare_mini_app_hosted_ai_usage(
     )
     invocation_credits = max(
         _mini_app_usage_credits(usage),
-        _safe_float(line_item_metadata.get("quantity")),
+        _mini_app_usage_credits(row),
     )
     return row, line_item_metadata, invocation_credits, request_id, platform_paid
 
@@ -1087,7 +1128,7 @@ async def invoke_mini_app(
             background_invoke=body.background_invoke,
         )
         tenant_id = _workspace_tenant_id(current_user, resolved_workspace_id)
-        await _assert_mini_app_ai_budget_available(
+        await _assert_mini_app_ai_budget_preflight(
             ai_policy=ai_policy,
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
@@ -1108,13 +1149,12 @@ async def invoke_mini_app(
             result=result,
             session_metadata=session_metadata,
         )
-        await _assert_mini_app_ai_budget_available(
+        await _assert_mini_app_ai_budget_settlement(
             ai_policy=ai_policy,
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
             app_id=app_id,
             invocation_credits=invocation_credits,
-            include_current_invocation=True,
         )
         await _persist_mini_app_hosted_ai_usage(
             tenant_id=tenant_id,

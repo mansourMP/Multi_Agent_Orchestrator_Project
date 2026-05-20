@@ -206,7 +206,7 @@ class BillingWebhookTests(unittest.TestCase):
         self.assertEqual(result["purchase_kind"], "credits")
         self.assertEqual(result["amount_usd"], 15.0)
         self.assertEqual(balance["credit_balance_usd"], 15.0)
-        self.assertEqual(balance["credit_balance_credits"], 15000)
+        self.assertEqual(balance["credit_balance_credits"], 300000)
         self.assertEqual(len(balance["transactions"]), 1)
         self.assertEqual(balance["transactions"][0]["kind"], "purchase")
         self.assertEqual(balance["transactions"][0]["amount_usd"], 15.0)

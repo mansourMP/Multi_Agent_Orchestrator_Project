@@ -593,6 +593,73 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(payload["interventions"][0]["title"], "Anthropic is not available")
         self.assertEqual(payload["suggestions"], ["Connect Anthropic"])
 
+    def test_build_direct_operator_reply_locks_default_hosted_provider(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="hello",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="",
+            normalized_requested_model="",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={
+                "ai_ready": True,
+                "credential_plane": "platform_runtime",
+                "platform_runtime_allowed": True,
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+            },
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.supported_providers = ["openai", "deepseek"]
+        services.resolve_provider_for_direct_chat_message = (
+            lambda workspace_id, requested_provider, message, tools_present=False: ("deepseek", {"api_key": "sk-test"})
+        )
+        services.supports_direct_message_native_chat = lambda provider, credentials: provider == "deepseek" and bool(credentials)
+        captured: dict[str, object] = {}
+
+        def _provider_stream(**kwargs):
+            captured["context"] = kwargs.get("context")
+            captured["metadata"] = kwargs.get("metadata")
+            yield {
+                "type": "result",
+                "reply": "ok",
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "tool_calls": [],
+                "attempted_providers": "deepseek",
+                "error": "",
+                "usage_masked": {},
+            }
+
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = _provider_stream
+
+        list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message="hello",
+                workspace_id="default",
+                requested_model="",
+                requested_provider="",
+            )
+        )
+
+        self.assertTrue((captured["context"] or {}).get("disable_provider_fallback"))
+        self.assertTrue((captured["metadata"] or {}).get("disable_provider_fallback"))
+        self.assertEqual((captured["context"] or {}).get("provider"), "deepseek")
+        self.assertEqual((captured["context"] or {}).get("model"), "deepseek-v4-flash")
+
     def test_build_direct_operator_reply_keeps_obvious_tool_intent_provider_backed_when_provider_ready(self) -> None:
         prepared = SimpleNamespace(
             normalized_message="List the files on my desktop.",

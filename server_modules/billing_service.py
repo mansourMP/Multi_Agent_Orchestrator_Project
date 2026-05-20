@@ -13,6 +13,7 @@ from urllib import request as urlrequest
 
 from fastapi import HTTPException
 
+from server_modules import billing_credit_config
 from server_modules import control_plane_repository
 from server_modules import run_state_repository
 from server_modules.direct_tool_config_service import run_async_tool_call
@@ -22,8 +23,8 @@ DEFAULT_BILLING_PLAN_ID = "free"
 STRIPE_PROVIDER = "stripe"
 STRIPE_API_BASE = "https://api.stripe.com/v1"
 STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300
-HOSTED_SAGE_AI_CREDITS_PER_USD = 1000
-DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = 0.5
+HOSTED_SAGE_AI_CREDITS_PER_USD = billing_credit_config.HOSTED_SAGE_AI_CREDITS_PER_USD
+DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD = billing_credit_config.DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD
 
 PLAN_LABELS: Dict[str, str] = {
     "free": "Free",
@@ -352,10 +353,6 @@ def debit_workspace_credit_balance_for_hosted_usage(
 
     workspace = run_async_tool_call(control_plane_repository.get_workspace_by_id(clean_workspace_id)) or {}
     metadata = _workspace_billing_metadata(workspace)
-    transactions = _credit_transactions_from_metadata(metadata)
-    if any(str(item.get("request_id") or "").strip() == clean_request_id for item in transactions):
-        return {"ok": True, "debited_usd": 0.0, "reason": "already_recorded"}
-
     usage = run_async_tool_call(
         control_plane_repository.summarize_workspace_billing_usage(
             tenant_id=clean_tenant_id,
@@ -368,47 +365,20 @@ def debit_workspace_credit_balance_for_hosted_usage(
     if monthly_cap_usd is None:
         monthly_cap_usd = DEFAULT_HOSTED_SAGE_AI_MONTHLY_CAP_USD
     monthly_cap_usd = max(0.0, round(float(monthly_cap_usd), 6))
-    overage_usd = max(0.0, round(monthly_cost_usd - monthly_cap_usd, 6))
-    already_debited_usd = _credit_debits_for_month(metadata, usage_month)
-    debit_needed_usd = max(0.0, round(overage_usd - already_debited_usd, 6))
-    current_balance_usd = _credit_balance_from_metadata(metadata)
-    debit_usd = min(current_balance_usd, debit_needed_usd)
-    if debit_usd <= 0:
-        return {
-            "ok": True,
-            "debited_usd": 0.0,
-            "reason": "no_debit_needed",
-            "credit_balance_usd": current_balance_usd,
-            "monthly_overage_usd": overage_usd,
-        }
-
-    next_balance_usd = max(0.0, round(current_balance_usd - debit_usd, 6))
-    transactions.append(
-        {
-            "kind": "usage_debit",
-            "amount_usd": -debit_usd,
-            "credits": -int(round(debit_usd * HOSTED_SAGE_AI_CREDITS_PER_USD)),
-            "request_id": clean_request_id,
-            "usage_month": usage_month,
-            "source": "hosted_sage_ai",
-            "created_at": int(time.time()),
-        }
-    )
-    run_async_tool_call(
-        control_plane_repository.update_workspace_admin_defaults_metadata(
-            clean_workspace_id,
-            metadata={
-                **metadata,
-                "credit_balance_usd": next_balance_usd,
-                "credit_transactions": transactions,
-            },
+    return run_async_tool_call(
+        control_plane_repository.debit_workspace_credit_balance_for_hosted_usage_atomic(
+            workspace_id=clean_workspace_id,
+            tenant_id=clean_tenant_id,
+            request_id=clean_request_id,
+            usage_month=usage_month,
+            monthly_cost_usd=monthly_cost_usd,
+            monthly_cap_usd=monthly_cap_usd,
+            credits_per_usd=HOSTED_SAGE_AI_CREDITS_PER_USD,
         )
-    )
-    return {
-        "ok": True,
-        "debited_usd": debit_usd,
-        "credit_balance_usd": next_balance_usd,
-        "monthly_overage_usd": overage_usd,
+    ) or {
+        "ok": False,
+        "debited_usd": 0.0,
+        "reason": "credit_debit_unavailable",
     }
 
 

@@ -73,8 +73,8 @@ def _usage_masked(*, reply: str) -> Dict[str, Any]:
         "usage_completion_tokens": completion_tokens,
         "usage_total_tokens": total_tokens,
         "usage_estimated_cost_usd": round(total_tokens * 0.000002, 6),
-        "pricing_known": True,
-        "estimation_mode": "provider_reported",
+        "pricing_known": False,
+        "estimation_mode": "heuristic_blackbox",
     }
 
 

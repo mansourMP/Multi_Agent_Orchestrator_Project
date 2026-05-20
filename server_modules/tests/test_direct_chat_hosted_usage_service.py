@@ -77,6 +77,7 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
         self.assertEqual(unified["provider"], "deepseek")
         self.assertEqual(unified["model"], "deepseek-chat")
         self.assertEqual(unified["run_id"], "req-1")
+        self.assertEqual(unified["credits_debited"], 22.0)
         credit_kwargs = record_credit_ledger.await_args.kwargs
         self.assertEqual(credit_kwargs["source_table"], "workspace_hosted_ai_monthly_cost_ledger")
         self.assertEqual(credit_kwargs["source_event_id"], "shost_1")
@@ -190,6 +191,55 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
                     "platform_runtime_allowed": True,
                 },
                 usage_masked=None,
+                requested_provider="deepseek",
+                effective_provider="deepseek",
+                requested_model="deepseek-chat",
+                effective_model="deepseek-chat",
+            )
+
+    def test_persist_direct_chat_hosted_usage_best_effort_fails_closed_on_missing_availability(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "known AI source"):
+            direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                workspace_id="ws-1",
+                thread_id="thread-1",
+                session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                availability_payload=None,
+                usage_masked={
+                    "usage_accounting": {
+                        "input_tokens": 10,
+                        "output_tokens": 6,
+                        "total_tokens": 16,
+                        "estimated_cost_usd": 0.0011,
+                        "effective_provider": "openai",
+                        "effective_model": "gpt-4o",
+                    }
+                },
+                requested_provider="openai",
+                effective_provider="openai",
+                requested_model="gpt-4o",
+                effective_model="gpt-4o",
+            )
+
+    def test_persist_direct_chat_hosted_usage_best_effort_fails_closed_when_platform_runtime_not_allowed(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "not allowed"):
+            direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                workspace_id="ws-1",
+                thread_id="thread-1",
+                session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                availability_payload={
+                    "credential_plane": "platform_runtime",
+                    "platform_runtime_allowed": False,
+                },
+                usage_masked={
+                    "usage_accounting": {
+                        "input_tokens": 10,
+                        "output_tokens": 6,
+                        "total_tokens": 16,
+                        "estimated_cost_usd": 0.0011,
+                        "effective_provider": "deepseek",
+                        "effective_model": "deepseek-chat",
+                    }
+                },
                 requested_provider="deepseek",
                 effective_provider="deepseek",
                 requested_model="deepseek-chat",

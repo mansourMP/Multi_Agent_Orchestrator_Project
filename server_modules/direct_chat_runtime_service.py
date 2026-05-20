@@ -988,8 +988,22 @@ def build_direct_operator_reply(
         provider,
         direct_chat_credentials,
     )
-    lock_selected_provider = bool(normalized_requested_provider or normalized_requested_model)
-    selected_model = normalized_requested_model if lock_selected_provider else ""
+    hosted_platform_runtime = str(availability_payload.get("credential_plane") or "").strip().lower() == "platform_runtime"
+    lock_selected_provider = bool(normalized_requested_provider or normalized_requested_model or hosted_platform_runtime)
+    selected_model = (
+        normalized_requested_model
+        or (
+            str(
+                availability_payload.get("model")
+                or availability_payload.get("effective_model")
+                or availability_payload.get("selected_model")
+                or availability_payload.get("default_model")
+                or ""
+            ).strip()
+            if lock_selected_provider
+            else ""
+        )
+    )
     explicit_provider_tool_calls = _explicit_provider_parity_tool_calls(
         normalized_message,
         tools,

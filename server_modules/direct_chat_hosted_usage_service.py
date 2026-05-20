@@ -60,13 +60,21 @@ def _session_turn_metadata(session_ctx: Optional[Dict[str, Any]]) -> Dict[str, A
 
 
 def _non_platform_direct_chat_payer(availability: Dict[str, Any], provider: Optional[str]) -> str:
+    if not isinstance(availability, dict):
+        raise RuntimeError("Direct chat non-platform usage requires an AI source payload.")
     plane = _text(availability.get("credential_plane")).lower()
     source = _text(availability.get("billing_source") or availability.get("ai_source_kind")).lower()
     provider_token = _text(provider).lower()
+    if not plane and not source:
+        raise RuntimeError("Direct chat non-platform usage requires a known AI source.")
+    if plane == "platform_runtime":
+        raise RuntimeError("Direct chat platform runtime usage cannot be recorded as non-platform usage.")
     if provider_token in {"codex_cli", "claude_code_cli"} or "subscription" in plane or "subscription" in source:
         return "subscription_passthrough"
     if provider_token in {"ollama", "local", "local_model"} or "local" in plane or "local" in source:
         return "local"
+    if "workspace" not in plane and "byok" not in plane and "api_key" not in source and "workspace_api_key" not in source:
+        raise RuntimeError("Direct chat non-platform usage requires BYOK, local, or subscription source.")
     return "BYOK"
 
 
@@ -187,7 +195,7 @@ def persist_direct_chat_hosted_usage_best_effort(
         )
         return
     if not bool(availability.get("platform_runtime_allowed")):
-        return
+        raise RuntimeError("Hosted AI platform runtime usage was not allowed for credit accounting.")
     if not usage:
         raise RuntimeError("Hosted AI usage is missing for platform credit accounting.")
 

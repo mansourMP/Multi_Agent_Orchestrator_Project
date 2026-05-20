@@ -35,6 +35,17 @@ MODEL_ALIASES = {
     "vertex-gemini-pro": "vertex_ai/gemini-1.5-pro",
 }
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
+OPENAI_COMPATIBLE_COMPLETION_PROVIDERS = {
+    "azure_openai",
+    "custom_openai_compatible",
+    "deepseek",
+    "groq",
+    "mistral",
+    "ollama",
+    "openrouter",
+    "qwen",
+    "xai",
+}
 
 
 def _profile_record(profile_id: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -256,18 +267,7 @@ def _use_adapter_compat_fallback(provider: str, credentials: Optional[Dict[str, 
         return False
     if provider == "vertex":
         return bool(str(credentials.get("access_token") or "").strip())
-    return provider in {
-        "azure_openai",
-        "custom_openai_compatible",
-        "deepseek",
-        "groq",
-        "mistral",
-        "ollama",
-        "ollama_cloud",
-        "openrouter",
-        "qwen",
-        "xai",
-    }
+    return provider == "ollama_cloud"
 
 
 def _legacy_adapter_call(
@@ -437,6 +437,14 @@ def _provider_messages_for_openai(messages: List[Dict[str, Any]]) -> List[Dict[s
     return normalize_messages(messages)
 
 
+def _adapter_model_id(provider: str, model: str) -> str:
+    token = str(model or "").strip()
+    prefix = f"{provider}/"
+    if token.lower().startswith(prefix):
+        return token.split("/", 1)[1]
+    return token
+
+
 def _provider_messages_for_anthropic(messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
     normalized = normalize_messages(messages)
     system_parts: List[str] = []
@@ -487,6 +495,7 @@ def _sync_provider_completion(
     credentials: Optional[Dict[str, Any]],
     max_tokens: int,
     temperature: float,
+    source_surface: str = "direct_model_router",
 ) -> Dict[str, Any]:
     normalized = normalize_messages(messages)
     if resolved_provider == "openai":
@@ -517,6 +526,7 @@ def _sync_provider_completion(
                 body.get("usage") if isinstance(body.get("usage"), dict) else {},
                 provider=resolved_provider,
                 model=resolved_model,
+                source_surface=source_surface,
             ),
         }
 
@@ -554,6 +564,7 @@ def _sync_provider_completion(
                 body.get("usage") if isinstance(body.get("usage"), dict) else {},
                 provider=resolved_provider,
                 model=resolved_model,
+                source_surface=source_surface,
             ),
         }
 
@@ -601,6 +612,42 @@ def _sync_provider_completion(
                 body.get("usageMetadata") if isinstance(body.get("usageMetadata"), dict) else {},
                 provider=resolved_provider,
                 model=resolved_model,
+                source_surface=source_surface,
+            ),
+        }
+
+    if resolved_provider in OPENAI_COMPATIBLE_COMPLETION_PROVIDERS:
+        if not isinstance(credentials, dict):
+            raise RuntimeError(f"No credential available for provider '{resolved_provider}'.")
+        _, _, adapter = resolve_provider_adapter(resolved_provider, credentials=credentials)
+        adapter_model = _adapter_model_id(resolved_provider, resolved_model)
+        payload = {
+            "model": adapter_model,
+            "messages": _provider_messages_for_openai(normalized),
+            "max_tokens": int(max_tokens),
+            "temperature": float(temperature),
+        }
+        response = http_json_request(
+            adapter._chat_completions_url(credentials, model=adapter_model),
+            method="POST",
+            headers=adapter._headers(credentials, include_content_type=True),
+            payload=payload,
+            timeout=60,
+        )
+        if int(response.get("status") or 500) >= 400:
+            _raise_provider_error(resolved_provider, resolved_model, response)
+        body = response.get("json")
+        if not isinstance(body, dict):
+            raise RuntimeError(f"Model call failed [{resolved_model}]: {resolved_provider} returned invalid JSON.")
+        return {
+            "content": _extract_text(body),
+            "model": resolved_model,
+            "provider": resolved_provider,
+            "usage": _normalize_usage_from_dict(
+                body.get("usage") if isinstance(body.get("usage"), dict) else {},
+                provider=resolved_provider,
+                model=resolved_model,
+                source_surface=source_surface,
             ),
         }
 
@@ -651,6 +698,7 @@ async def call_model(
     max_tokens: int = 2000,
     temperature: float = 0.7,
     stream: bool = False,
+    source_surface: str = "direct_model_router",
 ) -> Union[Dict[str, Any], AsyncGenerator[str, None]]:
     resolved_provider = infer_provider(model, provider=provider, profile_id=profile_id)
     resolved_model = resolve_model(model, provider=resolved_provider, profile_id=profile_id)
@@ -673,6 +721,7 @@ async def call_model(
         credentials=credentials,
         max_tokens=max_tokens,
         temperature=temperature,
+        source_surface=source_surface,
     )
     if stream:
         return _yield_text_once(str(result.get("content") or ""))
@@ -688,6 +737,7 @@ def call_model_sync(
     credentials: Optional[Dict[str, Any]] = None,
     max_tokens: int = 2000,
     temperature: float = 0.7,
+    source_surface: str = "direct_model_router",
 ) -> Dict[str, Any]:
     resolved_provider = infer_provider(model, provider=provider, profile_id=profile_id)
     resolved_model = resolve_model(model, provider=resolved_provider, profile_id=profile_id)
@@ -705,4 +755,5 @@ def call_model_sync(
         credentials=credentials,
         max_tokens=max_tokens,
         temperature=temperature,
+        source_surface=source_surface,
     )

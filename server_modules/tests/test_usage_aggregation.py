@@ -119,6 +119,28 @@ class UsageAggregationTests(unittest.TestCase):
         self.assertEqual(pro_pricing["reasoning_output"], 0.87)
         self.assertEqual(pro_pricing["thinking_output"], 0.87)
 
+    def test_openai_and_anthropic_pricing_include_prompt_cache_rates(self):
+        openai_pricing = pricing_registry_service.lookup_model_pricing("openai", "gpt-4o-mini")
+        self.assertIsNotNone(openai_pricing)
+        self.assertEqual(openai_pricing["cached_input"], 0.075)
+        self.assertEqual(openai_pricing["cache_read"], 0.075)
+        self.assertEqual(openai_pricing["cache_write"], 0.15)
+
+        anthropic_pricing = pricing_registry_service.lookup_model_pricing("anthropic", "claude-sonnet-4")
+        self.assertIsNotNone(anthropic_pricing)
+        self.assertEqual(anthropic_pricing["cache_read"], 0.3)
+        self.assertEqual(anthropic_pricing["cache_write"], 3.75)
+
+        uncached = pricing_registry_service.estimate_cost_usd("openai", "gpt-4o-mini", 1_000_000, 0)
+        cached = pricing_registry_service.estimate_cost_usd(
+            "openai",
+            "gpt-4o-mini",
+            0,
+            0,
+            cache_read_tokens=1_000_000,
+        )
+        self.assertLess(float(cached or 0.0), float(uncached or 0.0))
+
     def test_usage_accounting_projects_surface_and_source_surface(self):
         record = usage_accounting_service.build_usage_accounting_record(
             run_id="run-mini-app",
@@ -274,6 +296,36 @@ class UsageAggregationTests(unittest.TestCase):
         }
 
         self.assertIsNone(usage_accounting_service.platform_paid_usage_validation_error(row))
+
+    def test_platform_paid_usage_validation_rejects_blackbox_heuristic_usage(self):
+        row = {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "total_tokens": 10,
+            "estimated_cost_usd": 0.001,
+            "pricing_known": False,
+            "estimation_mode": "heuristic_blackbox",
+        }
+
+        self.assertEqual(
+            usage_accounting_service.platform_paid_usage_validation_error(row),
+            "unknown_pricing",
+        )
+
+    def test_platform_paid_usage_populates_retail_credits_from_cost(self):
+        record = usage_accounting_service.build_usage_accounting_record(
+            run_id="run-credit-display",
+            requested_provider="deepseek",
+            effective_provider="deepseek",
+            requested_model="deepseek-v4-flash",
+            effective_model="deepseek-v4-flash",
+            input_tokens=10,
+            output_tokens=5,
+            provider_cost_usd=0.001,
+            payer="platform_credits",
+        )
+
+        self.assertEqual(record["retail_credits_charged"], 20.0)
 
 
 if __name__ == "__main__":

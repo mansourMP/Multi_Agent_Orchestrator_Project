@@ -48,7 +48,7 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(summary["usage"]["specialists_in_use"], 0)
         self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
         self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 0.5)
-        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 500)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 10000)
         self.assertTrue(summary["hosted_sage_ai"]["allowed"])
         self.assertEqual(summary["hosted_sage_ai"]["reason"], None)
 
@@ -78,7 +78,7 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(summary["subscription"]["effective_plan_id"], "pro")
         self.assertTrue(summary["hosted_sage_ai"]["allowed"])
         self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
-        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 500)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 10000)
 
     def test_pilot_plan_is_recognized_as_hosted_ai_plan(self):
         self.assertEqual(billing_service.normalize_billing_plan_id("pilot"), "pilot")
@@ -120,8 +120,8 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
         self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 8.0)
         self.assertEqual(summary["hosted_sage_ai"]["monthly_remaining_usd"], 8.0)
-        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 8000)
-        self.assertEqual(summary["hosted_sage_ai"]["monthly_credits_remaining"], 8000)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 160000)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credits_remaining"], 160000)
 
     def test_billing_summary_honors_admin_defaults_billing_plan(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -156,7 +156,7 @@ class BillingServiceTests(unittest.TestCase):
         self.assertTrue(summary["hosted_sage_ai"]["allowed"])
         self.assertEqual(summary["hosted_sage_ai"]["policy"], "enabled_with_cap")
         self.assertEqual(summary["hosted_sage_ai"]["monthly_cap_usd"], 12.0)
-        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 12000)
+        self.assertEqual(summary["hosted_sage_ai"]["monthly_credit_cap"], 240000)
 
     def test_checkout_session_uses_configured_plan_price_and_records_pending_state(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -228,7 +228,7 @@ class BillingServiceTests(unittest.TestCase):
 
         self.assertEqual(payload["purchase_kind"], "credits")
         self.assertEqual(payload["amount_usd"], 10.0)
-        self.assertEqual(payload["credits"], 10000)
+        self.assertEqual(payload["credits"], 200000)
         self.assertEqual(payload["checkout_session_id"], "cs_credit_123")
         self.assertEqual(request_args[0], "/checkout/sessions")
         self.assertEqual(request_args[1]["mode"], "payment")
@@ -273,7 +273,7 @@ class BillingServiceTests(unittest.TestCase):
                         metadata={
                             "credit_balance_usd": 5.0,
                             "credit_transactions": [
-                                {"kind": "purchase", "amount_usd": 5.0, "credits": 5000}
+                                {"kind": "purchase", "amount_usd": 5.0, "credits": 100000}
                             ],
                         },
                     )
@@ -281,9 +281,9 @@ class BillingServiceTests(unittest.TestCase):
                 summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
 
         self.assertEqual(summary["hosted_sage_ai"]["credit_balance_usd"], 5.0)
-        self.assertEqual(summary["hosted_sage_ai"]["credit_balance_credits"], 5000)
+        self.assertEqual(summary["hosted_sage_ai"]["credit_balance_credits"], 100000)
         self.assertEqual(summary["hosted_sage_ai"]["total_available_usd"], 5.5)
-        self.assertEqual(summary["hosted_sage_ai"]["total_available_credits"], 5500)
+        self.assertEqual(summary["hosted_sage_ai"]["total_available_credits"], 110000)
 
     def test_credit_balance_allows_usage_when_monthly_cap_reached(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -341,19 +341,21 @@ class BillingServiceTests(unittest.TestCase):
                             "hosted_sage_ai_monthly_cap_usd": 0.5,
                             "hosted_sage_ai_policy": "enabled_with_cap",
                             "credit_transactions": [
-                                {"kind": "purchase", "amount_usd": 3.0, "credits": 3000}
+                                {"kind": "purchase", "amount_usd": 3.0, "credits": 60000}
                             ],
                         },
                     )
                 )
+                workspace = asyncio.run(control_plane_repository.get_workspace_by_id(workspace_id)) or {}
+                tenant_id = str(workspace.get("tenant_id") or "").strip()
                 first = billing_service.debit_workspace_credit_balance_for_hosted_usage(
                     workspace_id=workspace_id,
-                    tenant_id="tenant_user-billing-1",
+                    tenant_id=tenant_id,
                     request_id="req-usage-1",
                 )
                 second = billing_service.debit_workspace_credit_balance_for_hosted_usage(
                     workspace_id=workspace_id,
-                    tenant_id="tenant_user-billing-1",
+                    tenant_id=tenant_id,
                     request_id="req-usage-1",
                 )
                 balance = billing_service.credit_balance_for_workspace(workspace_id)
@@ -375,7 +377,7 @@ class BillingServiceTests(unittest.TestCase):
                 "billing": {
                     "credit_balance_usd": 1.0,
                     "credit_transactions": [
-                        {"kind": "purchase", "amount_usd": 1.0, "credits": 1000, "created_at": 1779000000}
+                        {"kind": "purchase", "amount_usd": 1.0, "credits": 20000, "created_at": 1779000000}
                     ],
                 }
             },
@@ -390,9 +392,9 @@ class BillingServiceTests(unittest.TestCase):
             return_value={
                 "subscription": {"label": "Free"},
                 "hosted_sage_ai": {
-                    "monthly_credit_cap": 500,
-                    "monthly_credits_remaining": 420,
-                    "total_available_credits": 1420,
+                    "monthly_credit_cap": 10000,
+                    "monthly_credits_remaining": 8400,
+                    "total_available_credits": 28400,
                 },
             },
         ), patch.object(
@@ -421,11 +423,11 @@ class BillingServiceTests(unittest.TestCase):
             history = billing_service.credit_usage_history_for_workspace("ws_usage_history")
 
         self.assertTrue(history["per_chat_available"])
-        self.assertEqual(history["hosted_sage_ai"]["total_available_credits"], 1420)
+        self.assertEqual(history["hosted_sage_ai"]["total_available_credits"], 28400)
         self.assertEqual(history["items"][0]["label"], "Hello")
         self.assertEqual(history["items"][0]["thread_id"], "thread_alpha")
-        self.assertEqual(history["items"][0]["credits"], -140)
-        self.assertEqual(history["items"][1]["credits"], 1000)
+        self.assertEqual(history["items"][0]["credits"], -2800)
+        self.assertEqual(history["items"][1]["credits"], 20000)
 
     def test_unified_credit_usage_merges_ai_and_runtime_ledger_rows(self):
         workspace = {

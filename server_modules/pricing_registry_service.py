@@ -205,6 +205,27 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
 }
 
 
+def _apply_prompt_cache_pricing_defaults() -> None:
+    for payload in MODEL_PRICING_USD_PER_MILLION.get("openai", {}).values():
+        input_rate = payload.get("input")
+        if input_rate is None:
+            continue
+        cached_rate = round(float(input_rate) * 0.5, 6)
+        payload.setdefault("cached_input", cached_rate)
+        payload.setdefault("cache_read", cached_rate)
+        payload.setdefault("cache_write", float(input_rate))
+    for payload in MODEL_PRICING_USD_PER_MILLION.get("anthropic", {}).values():
+        input_rate = payload.get("input")
+        if input_rate is None:
+            continue
+        payload.setdefault("cached_input", round(float(input_rate) * 0.1, 6))
+        payload.setdefault("cache_read", round(float(input_rate) * 0.1, 6))
+        payload.setdefault("cache_write", round(float(input_rate) * 1.25, 6))
+
+
+_apply_prompt_cache_pricing_defaults()
+
+
 PROVIDER_FALLBACK_USD_PER_1K: Dict[str, Dict[str, Any]] = {
     "openai": {"input": 0.0050, "output": 0.0150, "source": "https://platform.openai.com/pricing"},
     "openai-codex": {"input": 0.0, "output": 0.0, "source": "subscription_cli"},

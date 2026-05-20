@@ -230,7 +230,7 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertTrue(hosted["allowed"])
         self.assertEqual(hosted["policy"], "enabled_with_cap")
         self.assertEqual(hosted["reason"], None)
-        self.assertEqual(hosted["monthly_credit_cap"], 500)
+        self.assertEqual(hosted["monthly_credit_cap"], 10000)
 
     def test_hosted_sage_ai_enabled_with_cap_allows_when_under_cap(self) -> None:
         state = entitlements_service.resolve_workspace_entitlement_state(
@@ -250,9 +250,9 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertTrue(hosted["allowed"])
         self.assertEqual(hosted["policy"], "enabled_with_cap")
         self.assertEqual(hosted["reason"], None)
-        self.assertEqual(hosted["monthly_credit_cap"], 10000)
-        self.assertEqual(hosted["monthly_credits_used"], 2500)
-        self.assertEqual(hosted["monthly_credits_remaining"], 7500)
+        self.assertEqual(hosted["monthly_credit_cap"], 200000)
+        self.assertEqual(hosted["monthly_credits_used"], 50000)
+        self.assertEqual(hosted["monthly_credits_remaining"], 150000)
 
     def test_hosted_sage_ai_purchased_credits_allow_after_monthly_cap_reached(self) -> None:
         state = entitlements_service.resolve_workspace_entitlement_state(
@@ -277,7 +277,7 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertEqual(hosted["monthly_remaining_usd"], 0.0)
         self.assertEqual(hosted["credit_balance_usd"], 5.0)
         self.assertEqual(hosted["total_available_usd"], 5.0)
-        self.assertEqual(hosted["total_available_credits"], 5000)
+        self.assertEqual(hosted["total_available_credits"], 100000)
 
     def test_hosted_sage_ai_respects_admin_defaults_billing_plan(self) -> None:
         state = entitlements_service.resolve_workspace_entitlement_state(
@@ -298,7 +298,7 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertEqual(state.plan_id, "pro")
         self.assertTrue(hosted["allowed"])
         self.assertEqual(hosted["policy"], "enabled_with_cap")
-        self.assertEqual(hosted["monthly_credit_cap"], 5000)
+        self.assertEqual(hosted["monthly_credit_cap"], 100000)
 
     def test_enforce_hosted_ai_access_rejects_when_cap_reached(self) -> None:
         with self.assertRaises(entitlements_service.EntitlementDeniedError) as ctx:

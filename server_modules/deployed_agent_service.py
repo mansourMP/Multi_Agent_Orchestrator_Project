@@ -1490,6 +1490,118 @@ def _knowledge_reference_summary(item: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _knowledge_query_tokens(query: Any) -> List[str]:
+    normalized = _normalize_text(query).lower()
+    tokens: List[str] = []
+    current: List[str] = []
+    for char in normalized:
+        if char.isalnum():
+            current.append(char)
+            continue
+        if current:
+            token = "".join(current)
+            if len(token) >= 2 and token not in tokens:
+                tokens.append(token)
+            current = []
+    if current:
+        token = "".join(current)
+        if len(token) >= 2 and token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _knowledge_reference_search_text(source: Dict[str, Any]) -> str:
+    parts = [
+        source.get("id"),
+        source.get("label"),
+        source.get("source_kind"),
+        source.get("uri"),
+        source.get("path"),
+    ]
+    return " ".join(_normalize_text(part).lower() for part in parts if _normalize_text(part))
+
+
+def _score_knowledge_reference(source: Dict[str, Any], query_tokens: List[str]) -> int:
+    search_text = _knowledge_reference_search_text(source)
+    if not search_text:
+        return 0
+    return sum(1 for token in query_tokens if token in search_text)
+
+
+async def verify_deployed_agent_knowledge_retrieval(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    query: str,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    normalized_query = _normalize_text(query)
+    if not normalized_query:
+        raise ValueError("query is required.")
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        raise ValueError("Deployed agent not found.")
+    config = _config_from_record(deployed_agent)
+    sources = [
+        summary
+        for summary in (
+            _knowledge_reference_summary(item)
+            for item in list(config.knowledge_sources or [])
+        )
+        if isinstance(summary, dict)
+    ]
+    query_tokens = _knowledge_query_tokens(normalized_query)
+    scored_sources = [
+        {**source, "score": score}
+        for source in sources
+        for score in [_score_knowledge_reference(source, query_tokens)]
+        if score > 0
+    ]
+    scored_sources.sort(
+        key=lambda source: (
+            -int(source.get("score") or 0),
+            _normalize_text(source.get("label")).lower(),
+        )
+    )
+    bounded_limit = max(1, min(int(limit or 5), 10))
+    matched_sources = scored_sources[:bounded_limit]
+    if not sources:
+        status = "no_sources"
+        message = "No trusted knowledge source references are configured for this agent."
+    elif matched_sources:
+        status = "reference_match"
+        message = "Matched saved knowledge source references. Content-level citation retrieval is not wired yet."
+    else:
+        status = "no_reference_match"
+        message = "No saved knowledge source reference matched this query. Content-level citation retrieval is not wired yet."
+    return {
+        "workspace_id": resolved_workspace_id,
+        "tenant_id": tenant_id,
+        "deployed_agent_id": deployed_agent_id,
+        "query": normalized_query,
+        "status": status,
+        "message": message,
+        "verification_kind": "source_reference",
+        "content_retrieval_available": False,
+        "source_count": len(sources),
+        "matched_sources": matched_sources,
+        "checked_at": _utc_now_iso(),
+    }
+
+
 def _derive_studio_specialist_profile(
     *,
     deployed_agent: Optional[Dict[str, Any]],

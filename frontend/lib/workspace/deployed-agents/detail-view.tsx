@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 
 import { ListDetailPanel } from '@/lib/ui/list-detail';
 import { AnimatePresence, MotionTabPanel } from '@/lib/ui/motion';
@@ -135,6 +135,18 @@ export const AgentDetailView = memo(({
   onOpenCreateWizard,
 }: AgentDetailViewProps) => {
   const selectedAgentId = readString(selectedAgent?.id);
+  const [knowledgeVerificationQuery, setKnowledgeVerificationQuery] = useState('');
+  const [knowledgeVerificationResult, setKnowledgeVerificationResult] = useState<Record<string, unknown> | null>(null);
+  const [knowledgeVerificationError, setKnowledgeVerificationError] = useState<string | null>(null);
+  const [isVerifyingKnowledge, setIsVerifyingKnowledge] = useState(false);
+
+  useEffect(() => {
+    setKnowledgeVerificationQuery('');
+    setKnowledgeVerificationResult(null);
+    setKnowledgeVerificationError(null);
+    setIsVerifyingKnowledge(false);
+  }, [selectedAgentId]);
+
   const selectedAgentRuntimePlacement = useMemo(() => {
     const config = readRecord(selectedAgent?.config);
     const metadata = readRecord(selectedAgent?.metadata);
@@ -336,6 +348,39 @@ export const AgentDetailView = memo(({
       tab: 'analytics' as SpecialistOverlayTabId,
     },
   ];
+  const knowledgeVerificationRecord = readRecord(knowledgeVerificationResult);
+  const knowledgeVerificationStatus = readString(knowledgeVerificationRecord.status);
+  const knowledgeVerificationMessage = readString(knowledgeVerificationRecord.message);
+  const knowledgeVerificationMatches = Array.isArray(knowledgeVerificationRecord.matched_sources)
+    ? knowledgeVerificationRecord.matched_sources
+    : [];
+  const knowledgeVerificationAvailable = knowledgeVerificationRecord.content_retrieval_available === true;
+  const canVerifyKnowledge = Boolean(
+    selectedAgentId &&
+    knowledgeSourceCount > 0 &&
+    knowledgeVerificationQuery.trim() &&
+    !isVerifyingKnowledge,
+  );
+  const handleVerifyKnowledge = async () => {
+    if (!selectedAgentId || !knowledgeVerificationQuery.trim() || isVerifyingKnowledge) {
+      return;
+    }
+    setIsVerifyingKnowledge(true);
+    setKnowledgeVerificationError(null);
+    try {
+      const result = await services.client.verifyDeployedAgentKnowledge({
+        deployedAgentId: selectedAgentId,
+        query: knowledgeVerificationQuery.trim(),
+        limit: 5,
+      });
+      setKnowledgeVerificationResult(result ?? null);
+    } catch (error: unknown) {
+      setKnowledgeVerificationResult(null);
+      setKnowledgeVerificationError(error instanceof Error ? error.message : 'Knowledge verification failed.');
+    } finally {
+      setIsVerifyingKnowledge(false);
+    }
+  };
 
   if (!selectedAgent) {
     return (
@@ -408,7 +453,7 @@ export const AgentDetailView = memo(({
                   <strong>Trusted Data</strong>
                 </div>
                 <div className="studio-agent-knowledge__status-pill">
-                  {knowledgeSourceCount > 0 ? 'Indexed' : 'No data'}
+                  {knowledgeSourceCount > 0 ? 'Sources listed' : 'No data'}
                 </div>
               </div>
 
@@ -423,8 +468,8 @@ export const AgentDetailView = memo(({
                 </div>
                 <div>
                   <span>Retrieval health</span>
-                  <strong className={knowledgeSourceCount > 0 ? 'text-live' : ''}>
-                    {knowledgeSourceCount > 0 ? 'Optimal' : 'Needs data'}
+                  <strong>
+                    {knowledgeSourceCount > 0 ? 'Reference check ready' : 'Needs data'}
                   </strong>
                 </div>
               </div>
@@ -458,27 +503,62 @@ export const AgentDetailView = memo(({
               <div className="studio-agent-knowledge__test-box">
                 <p>
                   {knowledgeSourceCount > 0
-                    ? "Verify that the assistant correctly cites your trusted sources. This opens the private test chat."
+                    ? "Run a reference check against saved knowledge sources. Content-level citation retrieval will report as unavailable until indexing is connected."
                     : "Add at least one trusted source to enable retrieval testing."}
                 </p>
                 <div className="studio-agent-knowledge__test-input">
                   <input
                     type="text"
-                    readOnly
-                    value=""
-                    disabled={knowledgeSourceCount === 0}
+                    value={knowledgeVerificationQuery}
+                    disabled={knowledgeSourceCount === 0 || isVerifyingKnowledge}
                     placeholder={knowledgeSourceCount > 0 ? "Example: What is the refund policy?" : "Add sources first..."}
                     aria-label="Knowledge retrieval test prompt"
+                    onChange={(event) => setKnowledgeVerificationQuery(event.currentTarget.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        void handleVerifyKnowledge();
+                      }
+                    }}
                   />
                   <AppButton
                     type="button"
                     tone="secondary"
-                    disabled={knowledgeSourceCount === 0}
-                    onClick={() => onSelectTab('chat')}
+                    disabled={!canVerifyKnowledge}
+                    onClick={() => void handleVerifyKnowledge()}
                   >
-                    Test in chat
+                    {isVerifyingKnowledge ? 'Checking...' : 'Verify'}
                   </AppButton>
                 </div>
+                {knowledgeVerificationError ? (
+                  <small role="alert">{knowledgeVerificationError}</small>
+                ) : null}
+                {knowledgeVerificationResult ? (
+                  <div className="studio-agent-knowledge__sources" aria-label="Knowledge verification result">
+                    <div className="studio-agent-knowledge__source">
+                      <div className="studio-agent-knowledge__source-main">
+                        <strong>{humanizeToken(knowledgeVerificationStatus, 'Verification result')}</strong>
+                        <span>{knowledgeVerificationMessage || 'Knowledge verification completed.'}</span>
+                      </div>
+                      <DataBadge tone={knowledgeVerificationStatus === 'reference_match' ? 'success' : 'warning'}>
+                        {knowledgeVerificationAvailable ? 'Content retrieval' : 'Reference only'}
+                      </DataBadge>
+                    </div>
+                    {knowledgeVerificationMatches.length > 0 ? knowledgeVerificationMatches.map((source, index) => {
+                      const match = readRecord(source);
+                      const label = readString(match.label ?? match.uri ?? match.path ?? match.id, `Matched source ${index + 1}`);
+                      return (
+                        <div key={`${label}-${index}`} className="studio-agent-knowledge__source">
+                          <div className="studio-agent-knowledge__source-main">
+                            <strong>{label}</strong>
+                            <span>{readString(match.source_kind, 'Source reference')}</span>
+                          </div>
+                          <DataBadge tone="success">Matched</DataBadge>
+                        </div>
+                      );
+                    }) : null}
+                  </div>
+                ) : null}
               </div>
             </section>
 
@@ -808,13 +888,13 @@ export const AgentDetailView = memo(({
                   </div>
                   <div className="studio-agent-overview__card">
                     <span>Retrieval health</span>
-                    <strong className={knowledgeSourceCount > 0 ? 'text-live' : ''}>
-                      {knowledgeSourceCount > 0 ? 'Optimal' : 'Needs data'}
+                    <strong>
+                      {knowledgeSourceCount > 0 ? 'Reference check ready' : 'Needs data'}
                     </strong>
                   </div>
                   <div className="studio-agent-overview__card studio-agent-overview__card--wide">
                     <span>Status</span>
-                    <p>{knowledgeSourceCount > 0 ? 'Trusted sources are indexed and available for the agent to cite in customer replies.' : 'Agent will answer based on general instructions only.'}</p>
+                    <p>{knowledgeSourceCount > 0 ? 'Saved source references can be verified by name, kind, URI, or path. Content citation indexing is still reported separately.' : 'Agent will answer based on general instructions only.'}</p>
                   </div>
                 </section>
 

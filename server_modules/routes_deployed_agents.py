@@ -86,6 +86,12 @@ class ShopAssistantEvaluateRequest(BaseModel):
     connector_id: Optional[str] = None
 
 
+class DeployedAgentKnowledgeVerifyRequest(BaseModel):
+    workspace_id: str
+    query: str
+    limit: int = Field(default=5, ge=1, le=10)
+
+
 def _raise_for_value_error(error: ValueError, *, default_status: int = 400) -> None:
     message = str(error)
     if "transition" in message.lower() or "live deployment" in message.lower():
@@ -360,6 +366,29 @@ async def get_deployed_agent(
     )
     if not isinstance(payload, dict):
         raise HTTPException(status_code=404, detail="Deployed agent not found.")
+    return payload
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/knowledge/verify")
+async def verify_deployed_agent_knowledge(
+    deployed_agent_id: str,
+    body: DeployedAgentKnowledgeVerifyRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    try:
+        payload = await deployed_agent_service.verify_deployed_agent_knowledge_retrieval(
+            deployed_agent_id=deployed_agent_id,
+            current_user=current_user,
+            owner_workspace_id=body.workspace_id,
+            query=body.query,
+            limit=body.limit,
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        _raise_for_value_error(error)
     return payload
 
 

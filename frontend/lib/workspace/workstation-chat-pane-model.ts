@@ -1150,6 +1150,8 @@ export type ChatHostedCreditState = {
   monthlyCreditCap: number;
   monthlyCreditsUsed: number;
   monthlyCreditsRemaining: number;
+  creditBalanceCredits: number;
+  totalAvailableCredits: number;
 };
 
 export function chatProviderPriority(provider: ProviderCatalogRecord): number {
@@ -1661,6 +1663,8 @@ export function normalizeHostedCreditStateForChat(summary: Record<string, unknow
     monthlyCreditCap: normalizeHostedCreditValueForChat(hosted, 'monthly_cap_usd', 'monthly_credit_cap'),
     monthlyCreditsUsed: normalizeHostedCreditValueForChat(hosted, 'monthly_cost_usd', 'monthly_credits_used'),
     monthlyCreditsRemaining: normalizeHostedCreditValueForChat(hosted, 'monthly_remaining_usd', 'monthly_credits_remaining'),
+    creditBalanceCredits: normalizeHostedCreditValueForChat(hosted, 'credit_balance_usd', 'credit_balance_credits'),
+    totalAvailableCredits: normalizeHostedCreditValueForChat(hosted, 'total_available_usd', 'total_available_credits'),
   };
 }
 

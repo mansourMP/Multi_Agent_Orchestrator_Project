@@ -5038,6 +5038,38 @@ async def record_workspace_hosted_ai_monthly_cost_ledger_entry(
     return _row_to_workspace_hosted_ai_monthly_cost_ledger_entry(row)
 
 
+async def list_workspace_hosted_ai_monthly_cost_ledger_entries(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    safe_limit = max(1, min(int(limit or 50), 200))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM workspace_hosted_ai_monthly_cost_ledger
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+            ORDER BY COALESCE(completed_at, updated_at, created_at) DESC, id DESC
+            LIMIT $3
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            safe_limit,
+        )
+    return [
+        payload
+        for payload in (_row_to_workspace_hosted_ai_monthly_cost_ledger_entry(row) for row in rows)
+        if isinstance(payload, dict)
+    ]
+
+
 async def upsert_channel_user_acquisition_touch(
     *,
     tenant_id: str,

@@ -366,6 +366,63 @@ class BillingServiceTests(unittest.TestCase):
             1,
         )
 
+    def test_credit_usage_history_includes_real_chat_ledger_rows(self):
+        workspace = {
+            "workspace_id": "ws_usage_history",
+            "tenant_id": "tenant_usage_history",
+            "name": "Usage History",
+            "metadata": {
+                "billing": {
+                    "credit_balance_usd": 1.0,
+                    "credit_transactions": [
+                        {"kind": "purchase", "amount_usd": 1.0, "credits": 1000, "created_at": 1779000000}
+                    ],
+                }
+            },
+        }
+        with patch.object(
+            control_plane_repository,
+            "get_workspace_by_id",
+            new=AsyncMock(return_value=workspace),
+        ), patch.object(
+            billing_service,
+            "workspace_billing_summary_for_workspace_id",
+            return_value={
+                "subscription": {"label": "Free"},
+                "hosted_sage_ai": {
+                    "monthly_credit_cap": 500,
+                    "monthly_credits_remaining": 420,
+                    "total_available_credits": 1420,
+                },
+            },
+        ), patch.object(
+            control_plane_repository,
+            "list_workspace_hosted_ai_monthly_cost_ledger_entries",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "ledger_1",
+                        "request_id": "req_1",
+                        "thread_id": "thread_alpha",
+                        "provider": "openai",
+                        "model": "gpt-test",
+                        "total_tokens": 1234,
+                        "estimated_cost_usd": 0.14,
+                        "completed_at": "2026-05-19T08:00:00Z",
+                        "metadata": {"thread_title": "Hello", "public_tier": "medium"},
+                    }
+                ]
+            ),
+        ):
+            history = billing_service.credit_usage_history_for_workspace("ws_usage_history")
+
+        self.assertTrue(history["per_chat_available"])
+        self.assertEqual(history["hosted_sage_ai"]["total_available_credits"], 1420)
+        self.assertEqual(history["items"][0]["label"], "Hello")
+        self.assertEqual(history["items"][0]["thread_id"], "thread_alpha")
+        self.assertEqual(history["items"][0]["credits"], -140)
+        self.assertEqual(history["items"][1]["credits"], 1000)
+
 
 if __name__ == "__main__":
     unittest.main()

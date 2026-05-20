@@ -881,6 +881,112 @@ def credit_balance_for_workspace(workspace_id: str) -> Dict[str, Any]:
     }
 
 
+def _credit_history_timestamp(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        except Exception:
+            return None
+    text = str(value or "").strip()
+    return text or None
+
+
+def _credit_history_usage_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = _coerce_dict(entry.get("metadata"))
+    thread_id = str(entry.get("thread_id") or metadata.get("thread_id") or "").strip()
+    request_id = str(entry.get("request_id") or metadata.get("request_id") or "").strip()
+    estimated_cost_usd = max(0.0, round(float(entry.get("estimated_cost_usd") or 0.0), 6))
+    credits = -int(round(estimated_cost_usd * HOSTED_SAGE_AI_CREDITS_PER_USD))
+    public_tier = str(metadata.get("public_tier") or "").strip()
+    label = str(metadata.get("chat_title") or metadata.get("thread_title") or "").strip()
+    if not label:
+        label = "Sage" if thread_id in {"", "primary"} else f"Sage chat {thread_id[:8]}"
+    return {
+        "id": str(entry.get("id") or request_id or thread_id or f"usage-{time.time()}").strip(),
+        "kind": "usage",
+        "source": "sage_direct_chat",
+        "label": label,
+        "thread_id": thread_id or None,
+        "request_id": request_id or None,
+        "credits": credits,
+        "amount_usd": -estimated_cost_usd,
+        "provider": str(entry.get("provider") or "").strip().lower() or None,
+        "model": str(entry.get("model") or "").strip() or None,
+        "public_tier": public_tier or None,
+        "total_tokens": int(entry.get("total_tokens") or 0),
+        "created_at": _credit_history_timestamp(entry.get("completed_at") or entry.get("updated_at") or entry.get("created_at")),
+    }
+
+
+def _credit_history_transaction_entry(transaction: Dict[str, Any], index: int) -> Dict[str, Any]:
+    kind = str(transaction.get("kind") or "").strip().lower() or "transaction"
+    credits = int(round(float(transaction.get("credits") or 0)))
+    amount_usd = _coerce_float(transaction.get("amount_usd"))
+    if amount_usd is None:
+        amount_usd = round(credits / HOSTED_SAGE_AI_CREDITS_PER_USD, 6) if credits else 0.0
+    label = "Bonus for new users" if kind == "bonus" else "Credit purchase" if kind == "purchase" else "Credit adjustment"
+    if kind == "usage_debit":
+        label = "Hosted Sage overage"
+    return {
+        "id": str(transaction.get("id") or transaction.get("request_id") or f"transaction-{index}").strip(),
+        "kind": kind,
+        "source": str(transaction.get("source") or "credits").strip() or "credits",
+        "label": label,
+        "thread_id": None,
+        "request_id": str(transaction.get("request_id") or "").strip() or None,
+        "credits": credits,
+        "amount_usd": round(float(amount_usd or 0.0), 6),
+        "provider": None,
+        "model": None,
+        "public_tier": None,
+        "total_tokens": 0,
+        "created_at": _credit_history_timestamp(transaction.get("created_at")),
+    }
+
+
+def credit_usage_history_for_workspace(workspace_id: str, *, limit: int = 50) -> Dict[str, Any]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    safe_limit = max(1, min(int(limit or 50), 200))
+    workspace = run_async_tool_call(control_plane_repository.get_workspace_by_id(clean_workspace_id)) or {}
+    if not isinstance(workspace, dict) or not str(workspace.get("workspace_id") or "").strip():
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    tenant_id = str(workspace.get("tenant_id") or "").strip()
+    if not tenant_id:
+        raise HTTPException(status_code=404, detail="Workspace tenant not found.")
+    summary = workspace_billing_summary_for_workspace_id(clean_workspace_id, workspace=workspace)
+    metadata = _workspace_billing_metadata(workspace)
+    usage_entries = run_async_tool_call(
+        control_plane_repository.list_workspace_hosted_ai_monthly_cost_ledger_entries(
+            tenant_id=tenant_id,
+            workspace_id=clean_workspace_id,
+            limit=safe_limit,
+        )
+    ) or []
+    rows = [
+        _credit_history_usage_entry(entry)
+        for entry in usage_entries
+        if isinstance(entry, dict)
+    ]
+    rows.extend(
+        _credit_history_transaction_entry(transaction, index)
+        for index, transaction in enumerate(_credit_transactions_from_metadata(metadata))
+        if isinstance(transaction, dict)
+    )
+    rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return {
+        "ok": True,
+        "workspace_id": clean_workspace_id,
+        "tenant_id": tenant_id,
+        "plan": _coerce_dict(summary.get("subscription")),
+        "hosted_sage_ai": _coerce_dict(summary.get("hosted_sage_ai")),
+        "items": rows[:safe_limit],
+        "history_source": "workspace_hosted_ai_monthly_cost_ledger",
+        "per_chat_available": bool(usage_entries),
+    }
+
+
 def _stripe_signature_payload(timestamp: str, body: bytes) -> bytes:
     return f"{timestamp}.{body.decode('utf-8')}".encode("utf-8")
 

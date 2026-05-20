@@ -614,6 +614,34 @@ CREATE TABLE IF NOT EXISTS workspace_hosted_ai_monthly_cost_ledger (
     UNIQUE(tenant_id, workspace_id, request_id)
 );
 
+CREATE TABLE IF NOT EXISTS credit_ledger_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    source_surface TEXT NOT NULL DEFAULT '',
+    payer TEXT NOT NULL,
+    credit_type TEXT NOT NULL,
+    provider TEXT NULL,
+    model TEXT NULL,
+    runtime_target TEXT NULL,
+    user_id TEXT NULL,
+    thread_id TEXT NULL,
+    run_id TEXT NULL,
+    agent_id TEXT NULL,
+    app_id TEXT NULL,
+    provider_usage JSONB NOT NULL DEFAULT '{}'::jsonb,
+    platform_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    provider_reported_cost DOUBLE PRECISION NULL,
+    provider_reported_currency TEXT NULL,
+    credits_debited DOUBLE PRECISION NOT NULL DEFAULT 0,
+    estimation_mode TEXT NULL,
+    source_table TEXT NULL,
+    source_event_id TEXT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS channel_user_acquisition_touches (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -1095,6 +1123,17 @@ CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_install ON activity_ledger
 CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_app ON activity_ledger_events(tenant_id, workspace_id, app_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_feed_query ON activity_ledger_events(tenant_id, workspace_id, detail_level, action, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_session ON activity_ledger_events(tenant_id, workspace_id, channel, session_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_scope_created ON credit_ledger_events(tenant_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_surface ON credit_ledger_events(tenant_id, workspace_id, surface, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_credit_type ON credit_ledger_events(tenant_id, workspace_id, credit_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_payer ON credit_ledger_events(tenant_id, workspace_id, payer, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_agent ON credit_ledger_events(tenant_id, workspace_id, agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_app ON credit_ledger_events(tenant_id, workspace_id, app_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_thread ON credit_ledger_events(tenant_id, workspace_id, thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_run ON credit_ledger_events(tenant_id, workspace_id, run_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_ledger_events_source
+    ON credit_ledger_events(tenant_id, workspace_id, source_table, source_event_id)
+    WHERE source_table IS NOT NULL AND source_event_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_governance_holds_scope ON governance_holds(tenant_id, workspace_id, scope_type, status, updated_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_channel_execution_leases_active_thread
     ON agent_channel_execution_leases(tenant_id, workspace_id, thread_id);
@@ -1541,6 +1580,43 @@ def _row_to_workspace_hosted_ai_monthly_cost_ledger_entry(row: Any) -> Optional[
         "metadata": _decode_json_object(payload.get("metadata")),
         "created_at": _iso(payload.get("created_at")),
         "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_credit_ledger_event(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "surface": str(payload.get("surface") or "").strip().lower() or None,
+        "source_surface": str(payload.get("source_surface") or "").strip().lower() or None,
+        "payer": str(payload.get("payer") or "").strip() or None,
+        "credit_type": str(payload.get("credit_type") or "").strip().lower() or None,
+        "provider": str(payload.get("provider") or "").strip().lower() or None,
+        "model": str(payload.get("model") or "").strip() or None,
+        "runtime_target": str(payload.get("runtime_target") or "").strip() or None,
+        "user_id": str(payload.get("user_id") or "").strip() or None,
+        "thread_id": str(payload.get("thread_id") or "").strip() or None,
+        "run_id": str(payload.get("run_id") or "").strip() or None,
+        "agent_id": str(payload.get("agent_id") or "").strip() or None,
+        "app_id": str(payload.get("app_id") or "").strip() or None,
+        "provider_usage": _decode_json_object(payload.get("provider_usage")),
+        "platform_cost_usd": round(float(payload.get("platform_cost_usd") or 0.0), 6),
+        "provider_reported_cost": (
+            round(float(payload.get("provider_reported_cost")), 6)
+            if payload.get("provider_reported_cost") is not None
+            else None
+        ),
+        "provider_reported_currency": str(payload.get("provider_reported_currency") or "").strip() or None,
+        "credits_debited": round(float(payload.get("credits_debited") or 0.0), 6),
+        "estimation_mode": str(payload.get("estimation_mode") or "").strip() or None,
+        "source_table": str(payload.get("source_table") or "").strip() or None,
+        "source_event_id": str(payload.get("source_event_id") or "").strip() or None,
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "created_at": _iso(payload.get("created_at")),
     }
 
 
@@ -5068,6 +5144,235 @@ async def list_workspace_hosted_ai_monthly_cost_ledger_entries(
         for payload in (_row_to_workspace_hosted_ai_monthly_cost_ledger_entry(row) for row in rows)
         if isinstance(payload, dict)
     ]
+
+
+async def record_credit_ledger_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    event: Dict[str, Any],
+    source_table: Optional[str] = None,
+    source_event_id: Optional[str] = None,
+    ledger_event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    if not isinstance(event, dict):
+        raise ValueError("event must be a credit ledger event dictionary.")
+    normalized = credit_ledger_contract.build_unified_credit_ledger_event(
+        surface=event.get("surface"),
+        source_surface=event.get("source_surface"),
+        payer=event.get("payer"),
+        credit_type=event.get("credit_type"),
+        provider=event.get("provider"),
+        model=event.get("model"),
+        runtime_target=event.get("runtime_target"),
+        workspace_id=event.get("workspace_id") or resolved_workspace_id,
+        user_id=event.get("user_id"),
+        thread_id=event.get("thread_id"),
+        run_id=event.get("run_id"),
+        agent_id=event.get("agent_id"),
+        app_id=event.get("app_id"),
+        provider_usage=event.get("provider_usage"),
+        platform_cost_usd=event.get("platform_cost_usd"),
+        provider_reported_cost=event.get("provider_reported_cost"),
+        provider_reported_currency=event.get("provider_reported_currency"),
+        credits_debited=event.get("credits_debited"),
+        estimation_mode=event.get("estimation_mode"),
+        created_at=event.get("created_at"),
+        metadata=event.get("metadata") if isinstance(event.get("metadata"), dict) else {},
+    )
+    if str(normalized.get("workspace_id") or "").strip() != resolved_workspace_id:
+        raise ValueError("credit ledger event workspace_id does not match repository scope.")
+    normalized["workspace_id"] = resolved_workspace_id
+    source_table_token = str(source_table or event.get("source_table") or "").strip().lower() or None
+    source_event_token = str(source_event_id or event.get("source_event_id") or "").strip() or None
+    record_id = str(ledger_event_id or event.get("id") or f"cled_{uuid.uuid4().hex[:16]}").strip()
+    now_created_at = _coerce_timestamptz(normalized.get("created_at")) or _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        if source_table_token and source_event_token:
+            existing = await connection.fetchrow(
+                """
+                SELECT id
+                FROM credit_ledger_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND source_table = $3
+                  AND source_event_id = $4
+                LIMIT 1
+                """,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                source_table_token,
+                source_event_token,
+            )
+            if existing is not None:
+                record_id = str(dict(existing).get("id") or record_id).strip()
+        row = await connection.fetchrow(
+            """
+            INSERT INTO credit_ledger_events (
+                id, tenant_id, workspace_id, surface, source_surface, payer, credit_type,
+                provider, model, runtime_target, user_id, thread_id, run_id, agent_id, app_id,
+                provider_usage, platform_cost_usd, provider_reported_cost, provider_reported_currency,
+                credits_debited, estimation_mode, source_table, source_event_id, metadata, created_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13, $14, $15,
+                $16::jsonb, $17, $18, $19,
+                $20, $21, $22, $23, $24::jsonb, $25::timestamptz
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                surface = EXCLUDED.surface,
+                source_surface = EXCLUDED.source_surface,
+                payer = EXCLUDED.payer,
+                credit_type = EXCLUDED.credit_type,
+                provider = EXCLUDED.provider,
+                model = EXCLUDED.model,
+                runtime_target = EXCLUDED.runtime_target,
+                user_id = EXCLUDED.user_id,
+                thread_id = EXCLUDED.thread_id,
+                run_id = EXCLUDED.run_id,
+                agent_id = EXCLUDED.agent_id,
+                app_id = EXCLUDED.app_id,
+                provider_usage = EXCLUDED.provider_usage,
+                platform_cost_usd = EXCLUDED.platform_cost_usd,
+                provider_reported_cost = EXCLUDED.provider_reported_cost,
+                provider_reported_currency = EXCLUDED.provider_reported_currency,
+                credits_debited = EXCLUDED.credits_debited,
+                estimation_mode = EXCLUDED.estimation_mode,
+                source_table = EXCLUDED.source_table,
+                source_event_id = EXCLUDED.source_event_id,
+                metadata = credit_ledger_events.metadata || EXCLUDED.metadata
+            RETURNING *
+            """,
+            record_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            normalized.get("surface"),
+            normalized.get("source_surface"),
+            normalized.get("payer"),
+            normalized.get("credit_type"),
+            normalized.get("provider"),
+            normalized.get("model"),
+            normalized.get("runtime_target"),
+            normalized.get("user_id"),
+            normalized.get("thread_id"),
+            normalized.get("run_id"),
+            normalized.get("agent_id"),
+            normalized.get("app_id"),
+            _to_json(normalized.get("provider_usage"), default={}),
+            round(float(normalized.get("platform_cost_usd") or 0.0), 6),
+            normalized.get("provider_reported_cost"),
+            normalized.get("provider_reported_currency"),
+            round(float(normalized.get("credits_debited") or 0.0), 6),
+            normalized.get("estimation_mode"),
+            source_table_token,
+            source_event_token,
+            _to_json(normalized.get("metadata"), default={}),
+            now_created_at,
+        )
+    return _row_to_credit_ledger_event(row)
+
+
+async def list_credit_ledger_events(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    surface: Optional[str] = None,
+    credit_type: Optional[str] = None,
+    payer: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    since_created_at: Any = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    conditions = ["tenant_id = $1", "workspace_id = $2"]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    for column, value, lower in (
+        ("surface", surface, True),
+        ("credit_type", credit_type, True),
+        ("payer", payer, False),
+        ("agent_id", agent_id, False),
+        ("app_id", app_id, False),
+        ("thread_id", thread_id, False),
+        ("run_id", run_id, False),
+    ):
+        token = str(value or "").strip()
+        if not token:
+            continue
+        if column == "payer" and token.lower() == "byok":
+            token = "BYOK"
+        params.append(token.lower() if lower else token)
+        conditions.append(f"{column} = ${len(params)}")
+    resolved_since_created_at = _coerce_timestamptz(since_created_at)
+    if resolved_since_created_at is not None:
+        params.append(resolved_since_created_at)
+        conditions.append(f"created_at >= ${len(params)}::timestamptz")
+    params.append(max(1, min(int(limit or 100), 1000)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM credit_ledger_events
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [
+        payload
+        for payload in (_row_to_credit_ledger_event(row) for row in rows)
+        if isinstance(payload, dict)
+    ]
+
+
+async def summarize_credit_ledger_events(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    limit: int = 1000,
+) -> Dict[str, Any]:
+    rows = await list_credit_ledger_events(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        limit=limit,
+    )
+    by_surface: Dict[str, Dict[str, Any]] = {}
+    by_credit_type: Dict[str, Dict[str, Any]] = {}
+    by_payer: Dict[str, Dict[str, Any]] = {}
+    total_platform_cost_usd = 0.0
+    total_credits_debited = 0.0
+    for row in rows:
+        platform_cost = float(row.get("platform_cost_usd") or 0.0)
+        credits = float(row.get("credits_debited") or 0.0)
+        total_platform_cost_usd += platform_cost
+        total_credits_debited += credits
+        for bucket, key in (
+            (by_surface, str(row.get("surface") or "unknown")),
+            (by_credit_type, str(row.get("credit_type") or "unknown")),
+            (by_payer, str(row.get("payer") or "unknown")),
+        ):
+            current = bucket.setdefault(key, {"count": 0, "platform_cost_usd": 0.0, "credits_debited": 0.0})
+            current["count"] += 1
+            current["platform_cost_usd"] = round(float(current["platform_cost_usd"]) + platform_cost, 6)
+            current["credits_debited"] = round(float(current["credits_debited"]) + credits, 6)
+    return {
+        "count": len(rows),
+        "total_platform_cost_usd": round(total_platform_cost_usd, 6),
+        "total_credits_debited": round(total_credits_debited, 6),
+        "by_surface": by_surface,
+        "by_credit_type": by_credit_type,
+        "by_payer": by_payer,
+    }
 
 
 async def upsert_channel_user_acquisition_touch(

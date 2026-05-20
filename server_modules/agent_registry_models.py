@@ -368,3 +368,31 @@ class ActivityLedgerEventModel(_WorkspaceScoped, AgentRegistryBase):
     ledger_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CreditLedgerEventModel(_WorkspaceScoped, AgentRegistryBase):
+    __tablename__ = "credit_ledger_events"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    surface: Mapped[str] = mapped_column(Text, nullable=False)
+    source_surface: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    payer: Mapped[str] = mapped_column(Text, nullable=False)
+    credit_type: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    runtime_target: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    user_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    thread_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    run_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    agent_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    app_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    provider_usage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    platform_cost_usd: Mapped[float] = mapped_column(Numeric, nullable=False, default=0)
+    provider_reported_cost: Mapped[Optional[float]] = mapped_column(Numeric, nullable=True)
+    provider_reported_currency: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    credits_debited: Mapped[float] = mapped_column(Numeric, nullable=False, default=0)
+    estimation_mode: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_table: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_event_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ledger_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

@@ -59,6 +59,106 @@ def _session_turn_metadata(session_ctx: Optional[Dict[str, Any]]) -> Dict[str, A
     return _coerce_dict(payload.get("metadata"))
 
 
+def _non_platform_direct_chat_payer(availability: Dict[str, Any], provider: Optional[str]) -> str:
+    plane = _text(availability.get("credential_plane")).lower()
+    source = _text(availability.get("billing_source") or availability.get("ai_source_kind")).lower()
+    provider_token = _text(provider).lower()
+    if provider_token in {"codex_cli", "claude_code_cli"} or "subscription" in plane or "subscription" in source:
+        return "subscription_passthrough"
+    if provider_token in {"ollama", "local", "local_model"} or "local" in plane or "local" in source:
+        return "local"
+    return "BYOK"
+
+
+def _record_direct_chat_transparency_usage(
+    *,
+    workspace_id: str,
+    thread_id: str,
+    session_ctx: Optional[Dict[str, Any]],
+    availability: Dict[str, Any],
+    usage: Dict[str, Any],
+    requested_provider: Optional[str],
+    effective_provider: Optional[str],
+    requested_model: Optional[str],
+    effective_model: Optional[str],
+) -> None:
+    workspace_token = _text(workspace_id)
+    if not workspace_token:
+        return
+    raw_thread_token = _text(thread_id)
+    request_id = _session_request_id(session_ctx, raw_thread_token)
+    if not request_id:
+        return
+    tenant_id = _session_tenant_id(session_ctx, workspace_token)
+    if not tenant_id:
+        return
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    provider = _text(effective_provider) or _text(requested_provider) or _text(usage.get("provider"))
+    model = _text(effective_model) or _text(requested_model) or _text(usage.get("model"))
+    snapshot = {
+        "usage_masked": {
+            **usage,
+            "provider": provider,
+            "model": model,
+            "requested_provider": _text(requested_provider) or None,
+            "requested_model": _text(requested_model) or None,
+            "surface": "sage",
+            "source_surface": "sage_direct_chat",
+            "payer": _non_platform_direct_chat_payer(availability, provider),
+            "timestamp": timestamp,
+            "metadata": {
+                **_coerce_dict(usage.get("metadata")),
+                "thread_id": raw_thread_token or "direct-chat",
+                "request_id": request_id,
+                "credential_plane": _text(availability.get("credential_plane")) or None,
+                "billing_source": _text(availability.get("billing_source")) or None,
+                "transparency_only": True,
+            },
+        }
+    }
+    row = usage_accounting_service.usage_row_from_snapshot(snapshot) if usage else None
+    payer = _non_platform_direct_chat_payer(availability, provider)
+    unified_ledger_event = credit_ledger_contract.build_unified_credit_ledger_event(
+        surface="sage",
+        source_surface="sage_direct_chat",
+        payer=payer,
+        credit_type="ai_tokens",
+        provider=provider,
+        model=model,
+        runtime_target="local_companion" if payer in {"local", "subscription_passthrough"} else "cloud_default",
+        workspace_id=workspace_token,
+        user_id=_text(_session_turn_metadata(session_ctx).get("user_id")),
+        thread_id=raw_thread_token or "direct-chat",
+        run_id=request_id,
+        provider_usage=(row.get("usage_accounting") if isinstance(row, dict) and isinstance(row.get("usage_accounting"), dict) else row) or {},
+        platform_cost_usd=0,
+        provider_reported_cost=(row or {}).get("provider_cost_usd") if isinstance(row, dict) else None,
+        provider_reported_currency="USD" if isinstance(row, dict) and (row.get("provider_cost_usd") is not None) else None,
+        credits_debited=0,
+        estimation_mode=(row or {}).get("estimation_mode") if isinstance(row, dict) else "provider_usage_missing",
+        created_at=(row or {}).get("completed_at") if isinstance(row, dict) else timestamp,
+        metadata={
+            "requested_provider": _text(requested_provider) or None,
+            "requested_model": _text(requested_model) or None,
+            "credential_plane": _text(availability.get("credential_plane")) or None,
+            "billing_source": _text(availability.get("billing_source")) or None,
+            "transparency_only": True,
+            "label": "Used your AI source" if payer == "BYOK" else "Used non-Empyralis AI source",
+        },
+    )
+    durable_event = run_async_tool_call(
+        control_plane_repository.record_credit_ledger_event(
+            tenant_id=tenant_id,
+            workspace_id=workspace_token,
+            event=unified_ledger_event,
+            source_table="direct_chat_transparency",
+            source_event_id=request_id,
+        )
+    )
+    if not isinstance(durable_event, dict):
+        raise RuntimeError("Direct chat transparency credit ledger persistence failed.")
+
+
 def persist_direct_chat_hosted_usage_best_effort(
     *,
     workspace_id: str,
@@ -74,6 +174,17 @@ def persist_direct_chat_hosted_usage_best_effort(
     availability = _coerce_dict(availability_payload)
     usage = _coerce_dict(usage_masked)
     if _text(availability.get("credential_plane")).lower() != "platform_runtime":
+        _record_direct_chat_transparency_usage(
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            session_ctx=session_ctx,
+            availability=availability,
+            usage=usage,
+            requested_provider=requested_provider,
+            effective_provider=effective_provider,
+            requested_model=requested_model,
+            effective_model=effective_model,
+        )
         return
     if not bool(availability.get("platform_runtime_allowed")):
         return
@@ -246,6 +357,20 @@ def persist_direct_chat_hosted_usage_best_effort(
         raise RuntimeError("Hosted AI usage cost ledger persistence failed.")
     if not isinstance(ledger_entry, dict):
         raise RuntimeError("Hosted AI usage cost ledger persistence failed.")
+    try:
+        durable_event = run_async_tool_call(
+            control_plane_repository.record_credit_ledger_event(
+                tenant_id=tenant_id,
+                workspace_id=workspace_token,
+                event=unified_ledger_event,
+                source_table="workspace_hosted_ai_monthly_cost_ledger",
+                source_event_id=_text(ledger_entry.get("id")) or request_id,
+            )
+        )
+    except Exception:
+        raise RuntimeError("Hosted AI unified credit ledger persistence failed.")
+    if not isinstance(durable_event, dict):
+        raise RuntimeError("Hosted AI unified credit ledger persistence failed.")
     try:
         from server_modules import billing_service
 

@@ -64,8 +64,15 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(return_value={"workspace_id": "ws-1", "tenant_id": "tenant-1"}),
         )
         self.workspace_patcher.start()
+        self.credit_ledger_mock = AsyncMock(return_value={"id": "cled_1"})
+        self.credit_ledger_patcher = patch(
+            "server_modules.deployed_agent_cost_cap_service.control_plane_repository.record_credit_ledger_event",
+            new=self.credit_ledger_mock,
+        )
+        self.credit_ledger_patcher.start()
 
     def tearDown(self) -> None:
+        self.credit_ledger_patcher.stop()
         self.workspace_patcher.stop()
 
     async def test_settle_records_80_percent_notification_once(self) -> None:
@@ -144,6 +151,9 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unified["payer"], "platform_credits")
         self.assertEqual(unified["credit_type"], "ai_tokens")
         self.assertEqual(unified["agent_id"], "dagent_1")
+        self.credit_ledger_mock.assert_awaited()
+        self.assertEqual(self.credit_ledger_mock.await_args.kwargs["source_table"], "deployed_agent_monthly_cost_ledger")
+        self.assertEqual(self.credit_ledger_mock.await_args.kwargs["source_event_id"], "dcost_1")
         budget_cycle = update_mock.await_args.kwargs["updates"]["operational_state"]["current_budget_cycle"]
         self.assertEqual(budget_cycle["current_burn_usd"], 8.0)
         self.assertEqual(budget_cycle["percent_used"], 80.0)

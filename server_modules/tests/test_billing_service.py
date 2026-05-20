@@ -397,6 +397,10 @@ class BillingServiceTests(unittest.TestCase):
             },
         ), patch.object(
             control_plane_repository,
+            "list_credit_ledger_events",
+            new=AsyncMock(return_value=[]),
+        ), patch.object(
+            control_plane_repository,
             "list_workspace_hosted_ai_monthly_cost_ledger_entries",
             new=AsyncMock(
                 return_value=[
@@ -519,6 +523,65 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["credit_type"], "computer_runtime")
         self.assertEqual(payload["items"][1]["credit_type"], "ai_tokens")
         self.assertTrue(payload["items"][1]["empyralis_credits_used"])
+
+    def test_unified_credit_usage_prefers_dedicated_credit_ledger_events(self):
+        workspace = {
+            "workspace_id": "ws_unified_usage",
+            "tenant_id": "tenant-usage",
+            "name": "Unified Usage",
+            "metadata": {"billing": {}},
+        }
+        with patch.object(
+            control_plane_repository,
+            "get_workspace_by_id",
+            new=AsyncMock(return_value=workspace),
+        ), patch.object(
+            control_plane_repository,
+            "list_credit_ledger_events",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "cled-byok-1",
+                        "surface": "sage",
+                        "source_surface": "sage_direct_chat",
+                        "payer": "BYOK",
+                        "credit_type": "ai_tokens",
+                        "provider": "openrouter",
+                        "model": "anthropic/claude-sonnet",
+                        "workspace_id": "ws_unified_usage",
+                        "thread_id": "thread-1",
+                        "provider_usage": {"total_tokens": 120},
+                        "platform_cost_usd": 0,
+                        "provider_reported_cost": 0.003,
+                        "provider_reported_currency": "USD",
+                        "credits_debited": 0,
+                        "estimation_mode": "provider_usage_exact",
+                        "metadata": {"label": "Used your API key"},
+                        "created_at": "2026-05-19T08:10:00Z",
+                        "source_table": "direct_chat_transparency",
+                        "source_event_id": "req-byok-1",
+                    }
+                ]
+            ),
+        ), patch.object(
+            control_plane_repository,
+            "list_workspace_hosted_ai_monthly_cost_ledger_entries",
+            new=AsyncMock(return_value=[]),
+        ), patch.object(
+            control_plane_repository,
+            "list_activity_ledger_events",
+            new=AsyncMock(return_value=[]),
+        ):
+            payload = billing_service.unified_credit_usage_for_workspace(
+                "ws_unified_usage",
+                payer="BYOK",
+            )
+
+        self.assertEqual(payload["history_sources"][0], "credit_ledger_events")
+        self.assertEqual(payload["summary"]["count"], 1)
+        self.assertEqual(payload["summary"]["total_credits_debited"], 0)
+        self.assertFalse(payload["items"][0]["empyralis_credits_used"])
+        self.assertEqual(payload["items"][0]["label"], "Used your API key")
 
 
 if __name__ == "__main__":

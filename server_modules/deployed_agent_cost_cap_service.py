@@ -497,7 +497,7 @@ async def settle_deployed_agent_monthly_cost_cap(
         created_at=_normalize_optional_text(usage_row.get("completed_at") or now_iso),
     )
     try:
-        await control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry(
+        ledger_entry = await control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
             deployed_agent_id=deployed_agent_id,
@@ -532,6 +532,17 @@ async def settle_deployed_agent_monthly_cost_cap(
                 "unified_credit_ledger_event": unified_ledger_event,
             },
         )
+        if not isinstance(ledger_entry, dict):
+            raise RuntimeError("deployed-agent monthly cost ledger persistence returned no row")
+        durable_event = await control_plane_repository.record_credit_ledger_event(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            event=unified_ledger_event,
+            source_table="deployed_agent_monthly_cost_ledger",
+            source_event_id=_normalize_optional_text(ledger_entry.get("id")) or run_id,
+        )
+        if not isinstance(durable_event, dict):
+            raise RuntimeError("deployed-agent unified credit ledger persistence returned no row")
         summary = await control_plane_repository.summarize_deployed_agent_monthly_cost_ledger(
             tenant_id=tenant_id,
             workspace_id=workspace_id,

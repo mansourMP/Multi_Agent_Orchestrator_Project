@@ -152,6 +152,13 @@ async def billing_credit_usage_history(
 async def billing_credit_usage(
     workspace_id: str,
     limit: int = 50,
+    surface: Optional[str] = None,
+    credit_type: Optional[str] = None,
+    payer: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
     current_user=Depends(get_current_user),
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(
@@ -163,6 +170,13 @@ async def billing_credit_usage(
         billing_service.unified_credit_usage_for_workspace,
         resolved_workspace_id,
         limit=limit,
+        surface=surface,
+        credit_type=credit_type,
+        payer=payer,
+        agent_id=agent_id,
+        app_id=app_id,
+        thread_id=thread_id,
+        run_id=run_id,
     )
 
 

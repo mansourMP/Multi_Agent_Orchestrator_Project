@@ -537,6 +537,21 @@ async def _mini_app_monthly_credits_used(
     if pool is None:
         raise RuntimeError("Mini app AI monthly cap cannot be enforced without the control-plane ledger.")
     month_start = _current_month_start_iso()
+    durable_rows = await control_plane_repository.list_credit_ledger_events(
+        tenant_id=tenant_token,
+        workspace_id=workspace_id,
+        surface="mini_app",
+        credit_type="ai_tokens",
+        app_id=app_id,
+        since_created_at=month_start,
+        limit=1000,
+    )
+    durable_list = list(durable_rows or [])
+    if len(durable_list) >= 1000:
+        raise RuntimeError("Mini app AI monthly cap cannot be enforced because credit ledger history is truncated.")
+    if durable_list:
+        return round(sum(max(0.0, _safe_float(row.get("credits_debited"))) for row in durable_list), 6)
+
     rows = await control_plane_repository.list_workspace_hosted_ai_monthly_cost_ledger_entries(
         tenant_id=tenant_token,
         workspace_id=workspace_id,
@@ -788,6 +803,18 @@ async def _persist_mini_app_hosted_ai_usage(
         raise RuntimeError("Mini app hosted AI usage cost ledger persistence failed.") from exc
     if not isinstance(ledger_entry, dict):
         raise RuntimeError("Mini app hosted AI usage cost ledger persistence failed.")
+    try:
+        durable_event = await control_plane_repository.record_credit_ledger_event(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            event=unified_ledger_event,
+            source_table="workspace_hosted_ai_monthly_cost_ledger",
+            source_event_id=str(ledger_entry.get("id") or request_id),
+        )
+    except Exception as exc:
+        raise RuntimeError("Mini app unified credit ledger persistence failed.") from exc
+    if not isinstance(durable_event, dict):
+        raise RuntimeError("Mini app unified credit ledger persistence failed.")
 
 
 def _write_authorization(current_user: Dict[str, Any], *, explicit_user_intent: bool) -> Dict[str, Any]:

@@ -2199,6 +2199,7 @@ class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
             registry = Mock()
             registry.resolve.return_value = runtime
             append_activity = AsyncMock(return_value={"id": "activity-1"})
+            record_credit = AsyncMock(return_value={"id": "cled_runtime_1"})
             extend_session = AsyncMock()
             with (
                 patch.object(
@@ -2239,6 +2240,11 @@ class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
                     new=append_activity,
                 ),
                 patch.object(
+                    deployed_agent_virtual_runtime_service.control_plane_repository,
+                    "record_credit_ledger_event",
+                    new=record_credit,
+                ),
+                patch.object(
                     deployed_agent_virtual_runtime_service.session_service,
                     "extend_session",
                     new=extend_session,
@@ -2248,11 +2254,11 @@ class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
                     session_id="sess-1",
                     tenant_id="tenant-1",
                     workspace_id="ws-1",
-                ), append_activity, extend_session
+                ), append_activity, record_credit, extend_session
 
         import asyncio
 
-        result, append_activity, extend_session = asyncio.run(_run())
+        result, append_activity, record_credit, extend_session = asyncio.run(_run())
         self.assertEqual(result["status"], "terminated")
         append_activity.assert_awaited_once()
         kwargs = append_activity.await_args.kwargs
@@ -2260,6 +2266,9 @@ class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(kwargs["metadata"]["unified_credit_ledger_event"]["credit_type"], "computer_runtime")
         self.assertEqual(kwargs["metadata"]["unified_credit_ledger_event"]["runtime_target"], "sage_cloud_computer")
         self.assertEqual(kwargs["metadata"]["unified_credit_ledger_event"]["provider_usage"]["billable_seconds"], 300.0)
+        record_credit.assert_awaited_once()
+        self.assertEqual(record_credit.await_args.kwargs["source_table"], "activity_ledger_events")
+        self.assertEqual(record_credit.await_args.kwargs["source_event_id"], "activity-1")
         extend_session.assert_awaited_once()
         self.assertEqual(extend_session.await_args.kwargs["metadata_updates"]["runtime_metered_event_id"], "activity-1")
 

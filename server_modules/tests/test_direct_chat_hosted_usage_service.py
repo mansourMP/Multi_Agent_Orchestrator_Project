@@ -17,6 +17,9 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
             "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry",
             new=AsyncMock(return_value={"id": "shost_1"}),
         ) as record_ledger, patch(
+            "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_credit_ledger_event",
+            new=AsyncMock(return_value={"id": "cled_1"}),
+        ) as record_credit_ledger, patch(
             "server_modules.billing_service.debit_workspace_credit_balance_for_hosted_usage",
             return_value={"ok": True, "debited_usd": 0.0},
         ) as debit_credits:
@@ -45,6 +48,7 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
             )
 
         record_ledger.assert_awaited_once()
+        record_credit_ledger.assert_awaited_once()
         debit_credits.assert_called_once_with(
             workspace_id="ws-1",
             tenant_id="tenant-1",
@@ -73,12 +77,18 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
         self.assertEqual(unified["provider"], "deepseek")
         self.assertEqual(unified["model"], "deepseek-chat")
         self.assertEqual(unified["run_id"], "req-1")
+        credit_kwargs = record_credit_ledger.await_args.kwargs
+        self.assertEqual(credit_kwargs["source_table"], "workspace_hosted_ai_monthly_cost_ledger")
+        self.assertEqual(credit_kwargs["source_event_id"], "shost_1")
 
-    def test_persist_direct_chat_hosted_usage_best_effort_ignores_non_platform_runtime(self) -> None:
+    def test_persist_direct_chat_hosted_usage_best_effort_records_byok_transparency_row(self) -> None:
         with patch(
             "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry",
             new=AsyncMock(return_value={"id": "shost_1"}),
-        ) as record_ledger:
+        ) as record_ledger, patch(
+            "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_credit_ledger_event",
+            new=AsyncMock(return_value={"id": "cled_byok"}),
+        ) as record_credit_ledger:
             direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
                 workspace_id="ws-1",
                 thread_id="thread-1",
@@ -104,6 +114,16 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
             )
 
         record_ledger.assert_not_awaited()
+        record_credit_ledger.assert_awaited_once()
+        kwargs = record_credit_ledger.await_args.kwargs
+        event = kwargs["event"]
+        self.assertEqual(kwargs["source_table"], "direct_chat_transparency")
+        self.assertEqual(kwargs["source_event_id"], "req-1")
+        self.assertEqual(event["surface"], "sage")
+        self.assertEqual(event["payer"], "BYOK")
+        self.assertEqual(event["credits_debited"], 0.0)
+        self.assertEqual(event["provider"], "openai")
+        self.assertEqual(event["model"], "gpt-4o")
 
     def test_persist_direct_chat_hosted_usage_best_effort_fails_closed_on_unknown_pricing(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unknown pricing"):
@@ -207,6 +227,9 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
         with patch(
             "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry",
             new=AsyncMock(return_value={"id": "shost_1"}),
+        ), patch(
+            "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_credit_ledger_event",
+            new=AsyncMock(return_value={"id": "cled_1"}),
         ), patch(
             "server_modules.billing_service.debit_workspace_credit_balance_for_hosted_usage",
             side_effect=RuntimeError("ledger unavailable"),

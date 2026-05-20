@@ -2102,6 +2102,15 @@ async def _record_bound_cloud_runtime_usage_event(
         run_id=_text(metadata.get("run_id")) or _text(session_record.get("run_id")) or runtime_session_id,
         session_key=runtime_session_id,
     )
+    unified_event = _coerce_dict(_coerce_dict(event.get("metadata")).get("unified_credit_ledger_event"))
+    if unified_event:
+        await control_plane_repository.record_credit_ledger_event(
+            tenant_id=tenant_token,
+            workspace_id=workspace_token,
+            event=unified_event,
+            source_table="activity_ledger_events",
+            source_event_id=_text((activity or {}).get("id")) or runtime_session_id,
+        )
     await session_service.extend_session(
         _text(session_record.get("session_id")) or runtime_session_id,
         metadata_updates={

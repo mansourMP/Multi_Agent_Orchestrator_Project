@@ -8,6 +8,7 @@ from server_modules.agent_registry_models import (
     ActivityLedgerEventModel,
     AgentChannelExecutionLeaseModel,
     AgentChannelEventModel,
+    CreditLedgerEventModel,
     AgentEgressEventModel,
     AgentSchedulerWakeRequestModel,
     AgentSecretAccessEventModel,
@@ -42,6 +43,7 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             "CREATE TABLE IF NOT EXISTS security_control_states",
             "CREATE TABLE IF NOT EXISTS security_control_events",
             "CREATE TABLE IF NOT EXISTS activity_ledger_events",
+            "CREATE TABLE IF NOT EXISTS credit_ledger_events",
             "compiled_workflow_version_id TEXT NULL REFERENCES workflow_versions(id) ON DELETE SET NULL",
             "ALTER TABLE workspace_agent_installs\n    ADD COLUMN IF NOT EXISTS compiled_workflow_version_id TEXT NULL;",
             "ALTER TABLE agent_threads\n    ADD COLUMN IF NOT EXISTS master_agent_install_id TEXT NULL;",
@@ -65,6 +67,10 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             "CREATE INDEX IF NOT EXISTS idx_security_control_events_scope",
             "CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_scope_created",
             "CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_actor",
+            "CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_scope_created",
+            "CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_credit_type",
+            "CREATE INDEX IF NOT EXISTS idx_credit_ledger_events_payer",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_ledger_events_source",
             "CREATE INDEX IF NOT EXISTS idx_governance_holds_scope",
         ):
             self.assertIn(fragment, schema)
@@ -85,6 +91,7 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             SecurityControlStateModel,
             SecurityControlEventModel,
             ActivityLedgerEventModel,
+            CreditLedgerEventModel,
         ):
             table = model.__table__
             self.assertIn("tenant_id", table.c)
@@ -212,6 +219,105 @@ class ControlPlaneInstallIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("scope_type = ANY($3::text[])", query)
         self.assertIn("control_kind = $4", query)
         self.assertIn("enabled = TRUE", query)
+
+    async def test_record_credit_ledger_event_inserts_durable_unified_row(self):
+        connection = AsyncMock()
+        connection.fetchrow = AsyncMock(
+            side_effect=[
+                None,
+                {
+                    "id": "cled-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "workspace-1",
+                    "surface": "sage",
+                    "source_surface": "sage_direct_chat",
+                    "payer": "platform_credits",
+                    "credit_type": "ai_tokens",
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "runtime_target": "cloud_default",
+                    "user_id": "user-1",
+                    "thread_id": "thread-1",
+                    "run_id": "req-1",
+                    "agent_id": None,
+                    "app_id": None,
+                    "provider_usage": {"total_tokens": 42},
+                    "platform_cost_usd": 0.001,
+                    "provider_reported_cost": 0.001,
+                    "provider_reported_currency": "USD",
+                    "credits_debited": 1,
+                    "estimation_mode": "provider_usage_exact",
+                    "source_table": "workspace_hosted_ai_monthly_cost_ledger",
+                    "source_event_id": "shost-1",
+                    "metadata": {"request_id": "req-1"},
+                    "created_at": "2026-05-21T00:00:00Z",
+                },
+            ]
+        )
+
+        @asynccontextmanager
+        async def fake_scoped_connection(**_kwargs):
+            yield connection
+
+        with patch("server_modules.control_plane_repository._scoped_connection", new=fake_scoped_connection):
+            row = await control_plane_repository.record_credit_ledger_event(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                source_table="workspace_hosted_ai_monthly_cost_ledger",
+                source_event_id="shost-1",
+                event={
+                    "surface": "sage",
+                    "source_surface": "sage_direct_chat",
+                    "payer": "platform_credits",
+                    "credit_type": "ai_tokens",
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "runtime_target": "cloud_default",
+                    "workspace_id": "workspace-1",
+                    "user_id": "user-1",
+                    "thread_id": "thread-1",
+                    "run_id": "req-1",
+                    "provider_usage": {"total_tokens": 42},
+                    "platform_cost_usd": 0.001,
+                    "provider_reported_cost": 0.001,
+                    "provider_reported_currency": "USD",
+                    "credits_debited": 1,
+                    "estimation_mode": "provider_usage_exact",
+                    "metadata": {"request_id": "req-1"},
+                },
+            )
+
+        query = connection.fetchrow.await_args_list[1].args[0]
+        self.assertIn("INSERT INTO credit_ledger_events", query)
+        self.assertEqual(row["surface"], "sage")
+        self.assertEqual(row["credit_type"], "ai_tokens")
+        self.assertEqual(row["source_table"], "workspace_hosted_ai_monthly_cost_ledger")
+
+    async def test_list_credit_ledger_events_supports_usage_filters(self):
+        connection = AsyncMock()
+        connection.fetch = AsyncMock(return_value=[])
+
+        @asynccontextmanager
+        async def fake_scoped_connection(**_kwargs):
+            yield connection
+
+        with patch("server_modules.control_plane_repository._scoped_connection", new=fake_scoped_connection):
+            await control_plane_repository.list_credit_ledger_events(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                surface="mini_app",
+                credit_type="ai_tokens",
+                payer="platform_credits",
+                app_id="flashcards",
+                limit=25,
+            )
+
+        query = connection.fetch.await_args.args[0]
+        self.assertIn("FROM credit_ledger_events", query)
+        self.assertIn("surface = $3", query)
+        self.assertIn("credit_type = $4", query)
+        self.assertIn("payer = $5", query)
+        self.assertIn("app_id = $6", query)
 
     async def test_upsert_agent_turn_returns_minimal_write_payload_without_thread_reread(self):
         connection = AsyncMock()

@@ -1129,7 +1129,32 @@ def _usage_api_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def unified_credit_usage_for_workspace(workspace_id: str, *, limit: int = 50) -> Dict[str, Any]:
+def _usage_api_item_matches_filters(item: Dict[str, Any], filters: Dict[str, Optional[str]]) -> bool:
+    for key, raw_value in filters.items():
+        value = str(raw_value or "").strip()
+        if not value:
+            continue
+        item_value = str(item.get(key) or "").strip()
+        if key in {"surface", "credit_type", "payer"}:
+            item_value = item_value.lower()
+            value = value.lower()
+        if item_value != value:
+            return False
+    return True
+
+
+def unified_credit_usage_for_workspace(
+    workspace_id: str,
+    *,
+    limit: int = 50,
+    surface: Optional[str] = None,
+    credit_type: Optional[str] = None,
+    payer: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
     clean_workspace_id = str(workspace_id or "").strip()
     safe_limit = max(1, min(int(limit or 50), 200))
     workspace = run_async_tool_call(control_plane_repository.get_workspace_by_id(clean_workspace_id)) or {}
@@ -1138,6 +1163,20 @@ def unified_credit_usage_for_workspace(workspace_id: str, *, limit: int = 50) ->
     tenant_id = str(workspace.get("tenant_id") or "").strip()
     if not tenant_id:
         raise HTTPException(status_code=404, detail="Workspace tenant not found.")
+    credit_ledger_entries = run_async_tool_call(
+        control_plane_repository.list_credit_ledger_events(
+            tenant_id=tenant_id,
+            workspace_id=clean_workspace_id,
+            surface=surface,
+            credit_type=credit_type,
+            payer=payer,
+            agent_id=agent_id,
+            app_id=app_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            limit=safe_limit,
+        )
+    ) or []
     usage_entries = run_async_tool_call(
         control_plane_repository.list_workspace_hosted_ai_monthly_cost_ledger_entries(
             tenant_id=tenant_id,
@@ -1154,8 +1193,38 @@ def unified_credit_usage_for_workspace(workspace_id: str, *, limit: int = 50) ->
     ) or []
     items: List[Dict[str, Any]] = []
     seen_ids: set[str] = set()
+    seen_sources: set[tuple[str, str]] = set()
+    active_filters = {
+        "surface": str(surface or "").strip().lower() or None,
+        "credit_type": str(credit_type or "").strip().lower() or None,
+        "payer": str(payer or "").strip() or None,
+        "agent_id": str(agent_id or "").strip() or None,
+        "app_id": str(app_id or "").strip() or None,
+        "thread_id": str(thread_id or "").strip() or None,
+        "run_id": str(run_id or "").strip() or None,
+    }
+    for row in credit_ledger_entries:
+        if not isinstance(row, dict):
+            continue
+        item = _usage_api_item_from_event(
+            row,
+            item_id=row.get("id"),
+            created_at=row.get("created_at"),
+            fallback_label=str(_coerce_dict(row.get("metadata")).get("label") or "").strip() or None,
+            ledger_source="credit_ledger_events",
+        )
+        if not _usage_api_item_matches_filters(item, active_filters):
+            continue
+        source_key = (str(row.get("source_table") or "").strip(), str(row.get("source_event_id") or "").strip())
+        if all(source_key):
+            seen_sources.add(source_key)
+        seen_ids.add(str(item.get("id") or ""))
+        items.append(item)
     for entry in usage_entries:
         if not isinstance(entry, dict):
+            continue
+        source_key = ("workspace_hosted_ai_monthly_cost_ledger", str(entry.get("id") or entry.get("request_id") or "").strip())
+        if all(source_key) and source_key in seen_sources:
             continue
         event = _usage_api_event_from_hosted_ledger_entry(entry)
         item = _usage_api_item_from_event(
@@ -1165,10 +1234,17 @@ def unified_credit_usage_for_workspace(workspace_id: str, *, limit: int = 50) ->
             fallback_label=str(_coerce_dict(entry.get("metadata")).get("thread_title") or "").strip() or None,
             ledger_source="workspace_hosted_ai_monthly_cost_ledger",
         )
+        if not _usage_api_item_matches_filters(item, active_filters):
+            continue
         seen_ids.add(str(item.get("id") or ""))
+        if all(source_key):
+            seen_sources.add(source_key)
         items.append(item)
     for row in activity_entries:
         if not isinstance(row, dict):
+            continue
+        source_key = ("activity_ledger_events", str(row.get("id") or "").strip())
+        if all(source_key) and source_key in seen_sources:
             continue
         metadata = _coerce_dict(row.get("metadata"))
         event = _coerce_dict(metadata.get("unified_credit_ledger_event"))
@@ -1183,9 +1259,13 @@ def unified_credit_usage_for_workspace(workspace_id: str, *, limit: int = 50) ->
             fallback_label=str(row.get("title") or row.get("summary") or "").strip() or None,
             ledger_source="activity_ledger_events",
         )
+        if not _usage_api_item_matches_filters(item, active_filters):
+            continue
         item_id = str(item.get("id") or "")
         if item_id in seen_ids:
             continue
+        if all(source_key):
+            seen_sources.add(source_key)
         seen_ids.add(item_id)
         items.append(item)
     items.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
@@ -1196,7 +1276,8 @@ def unified_credit_usage_for_workspace(workspace_id: str, *, limit: int = 50) ->
         "tenant_id": tenant_id,
         "items": items,
         "summary": _usage_api_summary(items),
-        "history_sources": ["workspace_hosted_ai_monthly_cost_ledger", "activity_ledger_events"],
+        "filters": active_filters,
+        "history_sources": ["credit_ledger_events", "workspace_hosted_ai_monthly_cost_ledger", "activity_ledger_events"],
     }
 
 

@@ -69,12 +69,24 @@ def _patch_mini_app_billing(monkeypatch: pytest.MonkeyPatch, *, monthly_rows: li
         "list_workspace_hosted_ai_monthly_cost_ledger_entries",
         AsyncMock(return_value=list(monthly_rows or [])),
     )
+    monkeypatch.setattr(
+        routes_mini_apps.control_plane_repository,
+        "list_credit_ledger_events",
+        AsyncMock(return_value=[]),
+    )
     ledger_mock = AsyncMock(return_value={"id": "shost_mini_app_1"})
     monkeypatch.setattr(
         routes_mini_apps.control_plane_repository,
         "record_workspace_hosted_ai_monthly_cost_ledger_entry",
         ledger_mock,
     )
+    credit_ledger_mock = AsyncMock(return_value={"id": "cled_mini_app_1"})
+    monkeypatch.setattr(
+        routes_mini_apps.control_plane_repository,
+        "record_credit_ledger_event",
+        credit_ledger_mock,
+    )
+    ledger_mock.credit_ledger_mock = credit_ledger_mock
     return ledger_mock
 
 

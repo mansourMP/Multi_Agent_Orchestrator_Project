@@ -16783,17 +16783,20 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 .marketplace-pane {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(390px, 430px);
-  gap: 0;
+  display: block;
   min-height: 0;
   height: 100%;
   overflow: hidden;
   background: var(--app-bg-page);
 }
 
-.marketplace-pane[data-marketplace-layout='split'] {
-  grid-template-columns: minmax(0, 1fr) minmax(390px, 430px) !important;
+.marketplace-pane__split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(390px, 430px);
+  gap: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   align-items: stretch;
 }
 
@@ -18001,7 +18004,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 @media (max-width: 1180px) {
-  .marketplace-pane {
+  .marketplace-pane__split {
     grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
   }
 
@@ -18020,7 +18023,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 @media (max-width: 1040px) {
-  .marketplace-pane {
+  .marketplace-pane__split {
     grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
   }
 
@@ -18040,6 +18043,11 @@ body.theme-light .sage-integrations-nav__bucket--active {
 
 @media (max-width: 860px) {
   .marketplace-pane {
+    height: auto;
+    overflow: visible;
+  }
+
+  .marketplace-pane__split {
     height: auto;
     overflow: visible;
     grid-template-columns: minmax(0, 1fr);
@@ -18638,12 +18646,12 @@ body.theme-light .sage-integrations-nav__bucket--active {
   grid-template-columns: minmax(760px, 1fr) minmax(300px, 360px) !important;
 }
 
-.marketplace-pane {
+.marketplace-pane__split {
   grid-template-columns: minmax(0, 1fr) minmax(390px, 430px) !important;
 }
 
 .marketplace-pane[data-marketplace-layout='split'] {
-  grid-template-columns: minmax(0, 1fr) minmax(390px, 430px) !important;
+  display: block !important;
 }
 
 .marketplace-pane__layout {
@@ -18670,12 +18678,12 @@ body.theme-light .sage-integrations-nav__bucket--active {
 }
 
 @media (max-width: 1040px) {
-  .marketplace-pane {
+  .marketplace-pane__split {
     grid-template-columns: minmax(0, 1fr) minmax(280px, 320px) !important;
   }
 
   .marketplace-pane[data-marketplace-layout='split'] {
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 320px) !important;
+    display: block !important;
   }
 
   .marketplace-pane__layout {
@@ -18693,6 +18701,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
 
 @media (max-width: 860px) {
   .marketplace-pane,
+  .marketplace-pane__split,
   .marketplace-pane__layout,
   .marketplace-workbench,
   .marketplace-pane__grid {

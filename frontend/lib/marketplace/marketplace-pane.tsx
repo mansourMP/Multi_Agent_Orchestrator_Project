@@ -1092,17 +1092,17 @@ export function MarketplacePane() {
 
   return (
     <WorkstationSurfaceRoot surface="marketplace">
-      <section className="marketplace-pane" aria-label="Discover">
+      <section className="marketplace-pane" data-marketplace-layout="split" aria-label="Discover">
         <div className="marketplace-pane__catalog-scroll" aria-label="Discover catalog">
-            <div className="marketplace-pane__catalog-stack">
-              <div className="marketplace-pane__catalog-head">
-                <div className="marketplace-pane__catalog-title-group">
-                  <h1 className="marketplace-pane__catalog-title">Discover</h1>
-                  <p className="marketplace-pane__catalog-subtitle">
-                    Browse ready-made templates, apps, and rooms for this workspace.
-                  </p>
-                </div>
+          <div className="marketplace-pane__catalog-stack">
+            <div className="marketplace-pane__catalog-head">
+              <div className="marketplace-pane__catalog-title-group">
+                <h1 className="marketplace-pane__catalog-title">Discover</h1>
+                <p className="marketplace-pane__catalog-subtitle">
+                  Browse ready-made templates, apps, and rooms for this workspace.
+                </p>
               </div>
+            </div>
             <div className="marketplace-pane__browse-panel">
               {error && !loading ? (
                 <div className="marketplace-pane__error">
@@ -1208,10 +1208,10 @@ export function MarketplacePane() {
                   })}
                 </div>
               )}
-            </div>
-            </div>
           </div>
-          <aside className="marketplace-pane__detail-scroll" aria-label="Discover item details">
+        </div>
+        </div>
+        <aside className="marketplace-pane__detail-scroll" aria-label="Discover item details">
             <div className="marketplace-pane__secondary-stack">
               <div className="marketplace-pane__detail-panel">
                 {selectedPackage && selectedDetails ? (
@@ -1777,7 +1777,7 @@ export function MarketplacePane() {
               </ListDetailPanel>
               ) : null}
             </div>
-          </aside>
+        </aside>
       </section>
     </WorkstationSurfaceRoot>
   );

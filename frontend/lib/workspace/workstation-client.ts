@@ -723,6 +723,7 @@ export type WorkstationClientPaths = {
   deployedAgentRuntimeKill: (deployedAgentId: string, sessionId: string) => string;
   deployedAgentAuditExport: (deployedAgentId: string, limit?: number) => string;
   deployedAgentTestTurn: (deployedAgentId: string) => string;
+  deployedAgentKnowledgeVerify: (deployedAgentId: string) => string;
   deployedAgentAnalyticsRoster: string;
   deployedAgentAnalyticsDetail: (deployedAgentId: string) => string;
   deployedAgentAdminDashboard: (deployedAgentId: string, limit?: number, offset?: number) => string;
@@ -755,6 +756,7 @@ export type WorkstationClientPaths = {
   billingPortal: string;
   billingCreditPurchase: string;
   billingCreditBalance: string;
+  billingCreditUsageHistory: (limit?: number) => string;
   notificationsStream: (options?: WorkstationClientStreamOptions) => string;
   channelEventsStream: (options?: WorkstationClientStreamOptions) => string;
 };
@@ -1035,6 +1037,7 @@ export type WorkstationClient = {
   deployDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
   pauseDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
   testTurnDeployedAgent: (options: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
+  verifyDeployedAgentKnowledge: (options: { deployedAgentId: string; query: string; limit?: number }) => Promise<Record<string, unknown> | null>;
   listDeployedAgentAnalytics: () => Promise<Record<string, unknown>>;
   getDeployedAgentAnalytics: (options: {
     deployedAgentId: string;
@@ -1123,6 +1126,7 @@ export type WorkstationClient = {
     cancelUrl?: string | null;
   }) => Promise<Record<string, unknown> | null>;
   getCreditBalance: () => Promise<Record<string, unknown>>;
+  getCreditUsageHistory: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
   createSession: (options: {
     actor: WorkstationSessionActor;
     threadId: string;
@@ -1397,6 +1401,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       })}`,
     deployedAgentTestTurn: (deployedAgentId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/test-turn`,
+    deployedAgentKnowledgeVerify: (deployedAgentId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/knowledge/verify`,
     deployedAgentAnalyticsRoster:
       `/api/deployed-agents/analytics${buildQueryString({ workspace_id: workspaceId })}`,
     deployedAgentAnalyticsDetail: (deployedAgentId) =>
@@ -1467,6 +1473,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     billingPortal: '/api/billing/portal',
     billingCreditPurchase: '/api/billing/credits/purchase',
     billingCreditBalance: `/api/billing/credits/balance${buildQueryString({ workspace_id: workspaceId })}`,
+    billingCreditUsageHistory: (limit = 50) =>
+      `/api/billing/credits/usage-history${buildQueryString({ workspace_id: workspaceId, limit })}`,
     notificationsStream: (options = {}) =>
       `/api/notifications${buildQueryString({
         workspace_id: workspaceId,
@@ -3081,6 +3089,20 @@ export function createWorkstationClient(
         },
         policy: WRITE_REQUEST_POLICY,
       }),
+    verifyDeployedAgentKnowledge: ({ deployedAgentId, query, limit = 5 }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentKnowledgeVerify(deployedAgentId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            query,
+            limit,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     listDeployedAgentAnalytics: () =>
       requestJson<Record<string, unknown>>({
         path: paths.deployedAgentAnalyticsRoster,
@@ -3331,6 +3353,11 @@ export function createWorkstationClient(
     getCreditBalance: () =>
       requestJson<Record<string, unknown>>({
         path: paths.billingCreditBalance,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getCreditUsageHistory: ({ limit } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.billingCreditUsageHistory(limit),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     createSession,

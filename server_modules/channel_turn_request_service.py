@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Any, Dict, Optional
 
 from server_modules.agent_turn import build_inbound_agent_turn_request
+from server_modules import deployed_agent_config_schema
 from server_modules.channel_identity_service import (
     build_inbound_identity,
     normalize_channel_key,
@@ -162,18 +163,23 @@ def build_channel_turn_request(
     runtime_profile = coerce_dict(install.get("runtime_profile"))
     install_metadata = coerce_dict(install.get("metadata"))
     deployed_agent_metadata = coerce_dict(install_metadata.get("deployed_agent"))
-    selected_provider = (
-        str(shared_metadata.get("provider") or "").strip()
-        or str(deployed_agent_metadata.get("provider") or "").strip()
-        or str(install_metadata.get("provider") or "").strip()
-        or None
-    )
-    selected_model = (
-        str(shared_metadata.get("model") or "").strip()
-        or str(deployed_agent_metadata.get("model") or "").strip()
-        or str(install_metadata.get("model") or "").strip()
-        or None
-    )
+    source_authority = str(shared_metadata.get("ai_source_authority") or "").strip().lower()
+    if source_authority == "deployed_agent_record":
+        selected_provider = str(shared_metadata.get("provider") or "").strip() or None
+        selected_model = str(shared_metadata.get("model") or "").strip() or None
+    else:
+        selected_provider = (
+            str(shared_metadata.get("provider") or "").strip()
+            or str(deployed_agent_metadata.get("provider") or "").strip()
+            or str(install_metadata.get("provider") or "").strip()
+            or None
+        )
+        selected_model = (
+            str(shared_metadata.get("model") or "").strip()
+            or str(deployed_agent_metadata.get("model") or "").strip()
+            or str(install_metadata.get("model") or "").strip()
+            or None
+        )
     selected_tool_ids = _normalize_tool_ids(
         shared_metadata.get("selected_tool_ids")
         or deployed_agent_metadata.get("selected_tool_ids")
@@ -358,6 +364,57 @@ def build_routing_context(
         allow_master_fallback=bool(allow_master_fallback),
         privileged_runtime_approved=bool(privileged_runtime_approved),
         seed_demo_if_empty=bool(seed_demo_if_empty),
+    )
+
+
+def _deployed_agent_source_policy(deployed_agent: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    config = deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent)
+    runtime_supply = coerce_dict(config.runtime_supply)
+    ai_source = coerce_dict(runtime_supply.get("ai_source"))
+    return {
+        "provider": str(config.provider or "").strip() or None,
+        "model": str(config.model or "").strip() or None,
+        "runtime_target": str(config.runtime_target or "").strip() or None,
+        "runtime_placement": str(config.runtime_placement or "").strip() or None,
+        "runtime_supply": runtime_supply or None,
+        "ai_source": ai_source or None,
+        "payer": str(ai_source.get("payer") or "").strip() or None,
+    }
+
+
+def bind_deployed_agent_source_to_context(
+    context: ChannelRoutingContext,
+    *,
+    deployed_agent: Dict[str, Any],
+    request_id: Optional[str] = None,
+) -> ChannelRoutingContext:
+    policy = _deployed_agent_source_policy(deployed_agent)
+    next_shared_metadata = dict(context.shared_metadata or {})
+    for spoofable_key in ("provider", "model", "payer", "ai_source"):
+        next_shared_metadata.pop(spoofable_key, None)
+    next_shared_metadata.update(
+        {
+            "deployed_agent_id": str(deployed_agent.get("id") or context.deployed_agent_id or "").strip() or None,
+            "deployment_state": str(deployed_agent.get("deployment_state") or context.deployed_agent_state or "").strip().lower() or None,
+            "provider": policy.get("provider"),
+            "model": policy.get("model"),
+            "runtime_target": policy.get("runtime_target"),
+            "runtime_placement": policy.get("runtime_placement"),
+            "runtime_supply": policy.get("runtime_supply"),
+            "ai_source": policy.get("ai_source"),
+            "payer": policy.get("payer"),
+            "ai_source_authority": "deployed_agent_record",
+        }
+    )
+    next_shared_metadata = {
+        key: value
+        for key, value in next_shared_metadata.items()
+        if value not in (None, "", [], {})
+    }
+    return rebuild_turn_request(
+        context,
+        request_id=request_id,
+        shared_metadata=next_shared_metadata,
     )
 
 

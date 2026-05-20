@@ -736,6 +736,26 @@ async def _persist_mini_app_hosted_ai_usage(
     if not platform_paid:
         return
     payer = str(ai_policy.get("payer") or row.get("payer") or "platform_credits").strip()
+    unified_ledger_event = credit_ledger_contract.build_unified_credit_ledger_event(
+        surface="mini_app",
+        source_surface="mini_app_invoke",
+        payer="platform_credits",
+        credit_type=line_item_metadata.get("credit_type") or "ai_tokens",
+        provider=row.get("provider"),
+        model=row.get("model"),
+        runtime_target="cloud_default",
+        workspace_id=workspace_id,
+        thread_id=f"mini-app:{app_id}",
+        run_id=request_id,
+        app_id=app_id,
+        provider_usage=row.get("usage_accounting") if isinstance(row.get("usage_accounting"), dict) else row,
+        platform_cost_usd=row.get("estimated_cost_usd"),
+        provider_reported_cost=row.get("provider_cost_usd") or row.get("estimated_cost_usd"),
+        provider_reported_currency="USD",
+        credits_debited=row.get("retail_credits_charged"),
+        estimation_mode=row.get("estimation_mode"),
+        created_at=row.get("completed_at") or row.get("timestamp"),
+    )
     try:
         ledger_entry = await control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry(
             tenant_id=tenant_id,
@@ -761,6 +781,7 @@ async def _persist_mini_app_hosted_ai_usage(
                 "usage_accounting": row,
                 "monthly_credit_cap": ai_policy.get("monthly_credit_cap"),
                 "per_invocation_credit_cap": ai_policy.get("per_invocation_credit_cap"),
+                "unified_credit_ledger_event": unified_ledger_event,
             },
         )
     except Exception as exc:

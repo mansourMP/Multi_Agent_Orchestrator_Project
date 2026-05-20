@@ -190,6 +190,26 @@ def persist_direct_chat_hosted_usage_best_effort(
             "Hosted AI usage is not exact enough for platform credit accounting "
             f"({reason}) for {row.get('provider') or 'unknown'}:{row.get('model') or 'unknown'}."
         )
+    unified_ledger_event = credit_ledger_contract.build_unified_credit_ledger_event(
+        surface="sage",
+        source_surface="sage_direct_chat",
+        payer="platform_credits",
+        credit_type=line_item_metadata.get("credit_type") or "ai_tokens",
+        provider=row.get("provider"),
+        model=row.get("model"),
+        runtime_target="cloud_default",
+        workspace_id=workspace_token,
+        user_id=_text(_session_turn_metadata(session_ctx).get("user_id")),
+        thread_id=thread_token,
+        run_id=request_id,
+        provider_usage=row.get("usage_accounting") if isinstance(row.get("usage_accounting"), dict) else row,
+        platform_cost_usd=row.get("estimated_cost_usd"),
+        provider_reported_cost=row.get("provider_cost_usd") or row.get("estimated_cost_usd"),
+        provider_reported_currency="USD",
+        credits_debited=row.get("retail_credits_charged"),
+        estimation_mode=row.get("estimation_mode"),
+        created_at=row.get("completed_at") or timestamp,
+    )
 
     try:
         ledger_entry = run_async_tool_call(
@@ -218,6 +238,7 @@ def persist_direct_chat_hosted_usage_best_effort(
                     "credit_quantity": line_item_metadata.get("quantity"),
                     "credit_quantity_unit": line_item_metadata.get("quantity_unit"),
                     "credit_multiplier": line_item_metadata.get("credit_multiplier"),
+                    "unified_credit_ledger_event": unified_ledger_event,
                 },
             )
         )

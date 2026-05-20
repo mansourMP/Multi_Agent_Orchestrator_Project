@@ -9,6 +9,7 @@ from server_modules import (
 )
 from server_modules.channel_errors import ChannelOwnerNotFoundError
 from server_modules.channel_turn_request_service import (
+    bind_deployed_agent_source_to_context,
     build_routing_context,
     coerce_dict,
     install_declares_deployed_agent_source,
@@ -125,5 +126,14 @@ async def resolve_public_channel_owner(
     context.deployed_agent = deployed_agent
     context.deployed_agent_id = deployed_agent_id
     context.deployed_agent_state = deployed_agent_state
+    if isinstance(deployed_agent, dict):
+        context = bind_deployed_agent_source_to_context(
+            context,
+            deployed_agent=deployed_agent,
+            request_id=str(request_metadata.get("request_id") or "").strip() or None,
+        )
+        context.deployed_agent = deployed_agent
+        context.deployed_agent_id = deployed_agent_id
+        context.deployed_agent_state = deployed_agent_state
     context.allow_master_fallback = allow_master_fallback
     return context

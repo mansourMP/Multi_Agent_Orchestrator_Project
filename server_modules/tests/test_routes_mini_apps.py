@@ -313,6 +313,13 @@ async def test_mini_app_invoke_route_returns_thin_app_response(monkeypatch: pyte
     assert ledger_mock.await_args.kwargs["metadata"]["credit_type"] == "ai_tokens"
     assert ledger_mock.await_args.kwargs["metadata"]["app_id"] == "writing"
     assert ledger_mock.await_args.kwargs["metadata"]["active_session_id"] == "miniapp-session-1"
+    unified = ledger_mock.await_args.kwargs["metadata"]["unified_credit_ledger_event"]
+    assert unified["surface"] == "mini_app"
+    assert unified["source_surface"] == "mini_app_invoke"
+    assert unified["payer"] == "platform_credits"
+    assert unified["app_id"] == "writing"
+    assert unified["provider"] == "deepseek"
+    assert unified["model"] == "deepseek-chat"
 
 
 @pytest.mark.anyio

@@ -255,6 +255,32 @@ def build_runtime_usage_credit_event(
         },
         runtime_minutes=billable_minutes,
     )
+    billing_source = str(line_item.get("billing_source") or "").strip()
+    payer = "platform_credits" if billing_source == "empyralis_credits" else "local"
+    unified_ledger_event = credit_ledger_contract.build_unified_credit_ledger_event(
+        surface=surface_token,
+        source_surface=_coerce_dict(metadata).get("source_surface") or surface_token,
+        payer=payer,
+        credit_type=line_item.get("credit_type") or "computer_runtime",
+        runtime_target=target_token,
+        workspace_id=workspace_token,
+        thread_id=thread_id,
+        run_id=run_id,
+        agent_id=deployed_agent_id,
+        app_id=app_id,
+        provider_usage={
+            "session_id": session_token,
+            "active_seconds": active,
+            "billable_seconds": billable,
+            "billable_minutes": billable_minutes,
+        },
+        platform_cost_usd=cost if payer == "platform_credits" else 0,
+        provider_reported_cost=cost,
+        provider_reported_currency="USD",
+        credits_debited=line_item.get("quantity") if payer == "platform_credits" else 0,
+        estimation_mode="runtime_metered",
+        created_at=ended_token,
+    )
     event_metadata = {
         **_coerce_dict(metadata),
         "runtime_target": target_token,
@@ -263,6 +289,7 @@ def build_runtime_usage_credit_event(
         "requires_explicit_selection": bool(target_definition.get("product_default") is False),
         "sensitive_actions_require_confirmation": list(RUNTIME_SENSITIVE_ACTIONS),
         "credit_ledger_line_item": line_item,
+        "unified_credit_ledger_event": unified_ledger_event,
     }
     return {
         "tenant_id": tenant_token,

@@ -471,6 +471,31 @@ async def settle_deployed_agent_monthly_cost_cap(
         ),
         total_tokens=int(usage_row.get("total_tokens") or 0),
     )
+    unified_ledger_event = credit_ledger_contract.build_unified_credit_ledger_event(
+        surface="studio",
+        source_surface=_normalize_optional_text(usage_row.get("source_surface")) or "deployed_agent_channel",
+        payer=ai_payer or ("platform_credits" if platform_paid_ai else "BYOK"),
+        credit_type=line_item_metadata.get("credit_type") or "ai_tokens",
+        provider=_normalize_optional_text(usage_row.get("provider")),
+        model=_normalize_optional_text(usage_row.get("model")),
+        runtime_target=_normalize_optional_text(
+            usage_metadata.get("runtime_target")
+            or _coerce_dict(deployed_agent.get("metadata")).get("runtime_target")
+            or deployed_agent.get("runtime_target")
+        ),
+        workspace_id=workspace_id,
+        user_id=_normalize_optional_text(usage_row.get("user_id")),
+        thread_id=_normalize_optional_text(usage_row.get("thread_id")),
+        run_id=run_id,
+        agent_id=deployed_agent_id,
+        provider_usage=usage_row.get("usage_accounting") if isinstance(usage_row.get("usage_accounting"), dict) else usage_row,
+        platform_cost_usd=usage_row.get("estimated_cost_usd") if platform_paid_ai else 0,
+        provider_reported_cost=usage_row.get("provider_cost_usd") or usage_row.get("estimated_cost_usd"),
+        provider_reported_currency="USD",
+        credits_debited=usage_row.get("retail_credits_charged") if platform_paid_ai else 0,
+        estimation_mode=_normalize_optional_text(usage_row.get("estimation_mode")),
+        created_at=_normalize_optional_text(usage_row.get("completed_at") or now_iso),
+    )
     try:
         await control_plane_repository.record_deployed_agent_monthly_cost_ledger_entry(
             tenant_id=tenant_id,
@@ -504,6 +529,7 @@ async def settle_deployed_agent_monthly_cost_cap(
                 "credit_quantity": line_item_metadata.get("quantity"),
                 "credit_quantity_unit": line_item_metadata.get("quantity_unit"),
                 "credit_multiplier": line_item_metadata.get("credit_multiplier"),
+                "unified_credit_ledger_event": unified_ledger_event,
             },
         )
         summary = await control_plane_repository.summarize_deployed_agent_monthly_cost_ledger(

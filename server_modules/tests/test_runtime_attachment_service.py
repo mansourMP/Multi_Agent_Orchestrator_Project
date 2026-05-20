@@ -468,6 +468,12 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(event["surface"], "sage")
         self.assertEqual(event["thread_id"], "thread-1")
         self.assertEqual(event["metadata"]["runtime_type"], "cloud_computer")
+        unified = event["metadata"]["unified_credit_ledger_event"]
+        self.assertEqual(unified["surface"], "sage")
+        self.assertEqual(unified["credit_type"], "computer_runtime")
+        self.assertEqual(unified["runtime_target"], "sage_cloud_computer")
+        self.assertEqual(unified["payer"], "platform_credits")
+        self.assertEqual(unified["thread_id"], "thread-1")
         self.assertIn("payments", event["metadata"]["sensitive_actions_require_confirmation"])
 
     def test_runtime_usage_credit_event_requires_session_and_valid_billable_seconds(self) -> None:

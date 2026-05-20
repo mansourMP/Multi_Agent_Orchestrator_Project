@@ -13,7 +13,7 @@ from server_modules import run_state_repository
 from server_modules import studio_proof_agent_seed_service
 from server_modules import usage_accounting_service
 from server_modules.channel_routing_models import ChannelRoutingContext
-from server_modules.channel_turn_request_service import build_routing_context
+from server_modules.channel_turn_request_service import build_routing_context, bind_deployed_agent_source_to_context
 
 
 class _QuotaSnapshot:
@@ -200,6 +200,61 @@ def test_build_routing_context_extracts_connector_id_from_metadata() -> None:
     )
 
     assert context.connector_id == "gsheet-products-1"
+
+
+def test_deployed_agent_channel_source_uses_stored_record_over_request_metadata() -> None:
+    context = build_routing_context(
+        tenant_id="tenant-1",
+        workspace_id="ws-1",
+        channel_key="telegram",
+        endpoint_key="@shop_bot",
+        customer_message="Do you have Nike Air Max 90?",
+        install={
+            "id": "install-1",
+            "owner_user_id": "owner-1",
+            "metadata": {
+                "source": "deployed_agent",
+                "provider": "openai",
+                "model": "gpt-4.1",
+            },
+        },
+        metadata={
+            "provider": "openrouter",
+            "model": "malicious/model",
+            "payer": "BYOK",
+        },
+        validate_preflight=False,
+    )
+    context.deployed_agent_id = "dagent-1"
+    context.deployed_agent_state = "live"
+
+    bound = bind_deployed_agent_source_to_context(
+        context,
+        deployed_agent={
+            "id": "dagent-1",
+            "deployment_state": "live",
+            "runtime_target": "cloud",
+            "metadata": {
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "runtime_supply": {
+                    "ai_source": {
+                        "kind": "empyralis_credits",
+                        "payer": "platform_credits",
+                    }
+                },
+            },
+        },
+        request_id="req-1",
+    )
+
+    assert bound.shared_metadata["provider"] == "deepseek"
+    assert bound.shared_metadata["model"] == "deepseek-v4-flash"
+    assert bound.shared_metadata["payer"] == "platform_credits"
+    assert bound.shared_metadata["ai_source_authority"] == "deployed_agent_record"
+    assert bound.turn_request.context_hints["provider"] == "deepseek"
+    assert bound.turn_request.context_hints["model"] == "deepseek-v4-flash"
+    assert bound.turn_request.context_hints["metadata"]["ai_source"]["kind"] == "empyralis_credits"
 
 
 @pytest.mark.anyio

@@ -126,7 +126,15 @@ class AgentChannelRouterTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch(
                 "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
-                new=AsyncMock(return_value=_deployed_agent_row(deployment_state="live")),
+                new=AsyncMock(
+                    return_value=_deployed_agent_row(
+                        deployment_state="live",
+                        metadata={
+                            "provider": "deepseek",
+                            "model": "deepseek-reasoner",
+                        },
+                    )
+                ),
             ),
             patch(
                 "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",

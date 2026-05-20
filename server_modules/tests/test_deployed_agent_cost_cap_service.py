@@ -138,6 +138,12 @@ class DeployedAgentCostCapServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ledger_metadata["credit_quantity"], 2000.0)
         self.assertEqual(ledger_metadata["credit_quantity_unit"], "tokens")
         self.assertEqual(ledger_metadata["billing_source"], "empyralis_credits")
+        unified = ledger_metadata["unified_credit_ledger_event"]
+        self.assertEqual(unified["surface"], "studio")
+        self.assertEqual(unified["source_surface"], "deployed_agent_channel")
+        self.assertEqual(unified["payer"], "platform_credits")
+        self.assertEqual(unified["credit_type"], "ai_tokens")
+        self.assertEqual(unified["agent_id"], "dagent_1")
         budget_cycle = update_mock.await_args.kwargs["updates"]["operational_state"]["current_budget_cycle"]
         self.assertEqual(budget_cycle["current_burn_usd"], 8.0)
         self.assertEqual(budget_cycle["percent_used"], 80.0)

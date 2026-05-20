@@ -90,7 +90,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="chats" options={{ title: "Chat" }} />
       <Tabs.Screen name="kin" options={{ title: "Build" }} />
-      <Tabs.Screen name="apps/index" options={{ title: "Discover" }} />
+      <Tabs.Screen name="apps/index" options={{ href: null }} />
       <Tabs.Screen name="inbox/index" options={{ title: "Activity" }} />
       <Tabs.Screen name="profile/index" options={{ title: "Settings" }} />
     </Tabs>

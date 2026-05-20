@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { HubShell } from '../Hub/HubShell';
 import { MetricRing, StatusCard } from '../system';
 

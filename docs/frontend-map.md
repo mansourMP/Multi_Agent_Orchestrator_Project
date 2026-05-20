@@ -10,9 +10,10 @@ It replaces older maps that still referenced deleted roots such as `frontend/com
 Mobile stays the daily-use surface with the current mounted Expo tab contract:
 - Chat
 - Build
-- Discover
 - Activity
 - Settings
+
+Internal `/apps/...` routes are hidden tool/runtime routes, not a visible mobile inventory tab.
 
 ### Channel Shells
 

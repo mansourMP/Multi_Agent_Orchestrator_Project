@@ -217,9 +217,9 @@ def test_frontend_map_keeps_dumb_ui_and_contract_shared_surfaces() -> None:
     assert "Mobile stays the daily-use surface with the current mounted Expo tab contract:" in text
     assert "- Chat" in text
     assert "- Build" in text
-    assert "- Discover" in text
     assert "- Activity" in text
     assert "- Settings" in text
+    assert "Internal `/apps/...` routes are hidden tool/runtime routes" in text
     assert "### Channel Shells" in text
     assert "- Telegram" in text
     assert "- WhatsApp" in text
@@ -359,13 +359,13 @@ def test_product_surface_map_and_mobile_tabs_align_with_surface_truth() -> None:
     assert payload["mobile_first"]["bottom_tabs"] == [
         "Chat",
         "Build",
-        "Discover",
         "Activity",
         "Settings",
     ]
     assert 'options={{ title: "Chat" }}' in mobile_tabs_layout
     assert 'options={{ title: "Build" }}' in mobile_tabs_layout
-    assert 'options={{ title: "Discover" }}' in mobile_tabs_layout
+    assert 'options={{ title: "Discover" }}' not in mobile_tabs_layout
+    assert '<Tabs.Screen name="apps/index" options={{ href: null }} />' in mobile_tabs_layout
     assert 'options={{ title: "Activity" }}' in mobile_tabs_layout
     assert 'options={{ title: "Settings" }}' in mobile_tabs_layout
 

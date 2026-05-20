@@ -4,13 +4,10 @@ import {
   Text, 
   StyleSheet, 
   ScrollView, 
-  TouchableOpacity, 
-  Dimensions 
+  TouchableOpacity
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppTheme } from '../../theme/useAppTheme';
-
-const { width } = Dimensions.get('window');
 
 interface QuickAction {
   id: string;

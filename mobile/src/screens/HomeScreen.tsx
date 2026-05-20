@@ -3,12 +3,8 @@ import { ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
-import { BrandedAppIcon } from "@/src/components/apps/BrandedAppIcon";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { getPrimaryAgent } from "@/src/lib/agents";
-import { getPreviewAppRecord, normalizeAppRecord } from "@/src/lib/appRegistry";
-import { appRegistryApi } from "@/src/lib/appRegistryApi";
-import { useKinPreferences } from "@/src/lib/kin-preferences";
 import {
   formatRelativeTime,
   formatRunStatus,
@@ -18,31 +14,23 @@ import {
 } from "@/src/lib/kin-surface";
 import { useMobileChatContext, useMobileOverviewData } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
-import type { ActivitySummary, AppRecord, RuntimeAttachmentSummary, UnifiedMemorySummary } from "@/src/lib/types";
+import type { ActivitySummary, RuntimeAttachmentSummary, UnifiedMemorySummary } from "@/src/lib/types";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
-
-const DEFAULT_ACTIVE_APP_IDS = ["study", "health", "finance", "travel"];
 
 export default function HomeScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { session } = useSessionState();
-  const { preferences } = useKinPreferences();
   const { runs, approvals, artifacts, loading } = useMobileOverviewData();
   const chatContextQuery = useMobileChatContext();
   const ensureSessionForAgent = useChatStore((state) => state.ensureSessionForAgent);
-  const [featuredApps, setFeaturedApps] = React.useState<AppRecord[]>([]);
   const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
   const kin = getPrimaryAgent();
   const runtimeAttachments = chatContextQuery.data?.runtimeAttachments;
   const recentActivity = chatContextQuery.data?.recentActivity;
   const unifiedMemory = chatContextQuery.data?.unifiedMemory;
   const scheduler = chatContextQuery.data?.scheduler;
-  const selectedAppIds = React.useMemo(
-    () => (preferences.activeAppIds.length ? preferences.activeAppIds : DEFAULT_ACTIVE_APP_IDS),
-    [preferences.activeAppIds],
-  );
 
   const dateLabel = React.useMemo(
     () =>
@@ -53,51 +41,6 @@ export default function HomeScreen() {
       }),
     [],
   );
-
-  React.useEffect(() => {
-    let active = true;
-
-    async function loadApps() {
-      const fallbackApps = selectedAppIds
-        .map((id) => getPreviewAppRecord(id))
-        .filter((item): item is AppRecord => Boolean(item));
-
-      if (!connected || !session?.runtimeUrl || !session?.runtimeKey) {
-        if (active) {
-          setFeaturedApps(fallbackApps);
-        }
-        return;
-      }
-
-      try {
-        const installedRes = await appRegistryApi.getInstalledApps(session);
-        const installedById = new Map(
-          (installedRes.items ?? [])
-            .map((app: any) => normalizeAppRecord(app, "core"))
-            .filter((item): item is AppRecord => Boolean(item))
-            .map((app) => [app.id, app] as const),
-        );
-
-        if (active) {
-          setFeaturedApps(
-            selectedAppIds
-              .map((id) => installedById.get(id) || getPreviewAppRecord(id))
-              .filter((item): item is AppRecord => Boolean(item)),
-          );
-        }
-      } catch {
-        if (active) {
-          setFeaturedApps(fallbackApps);
-        }
-      }
-    }
-
-    void loadApps();
-
-    return () => {
-      active = false;
-    };
-  }, [connected, selectedAppIds, session]);
 
   const approvalQueue = React.useMemo(
     () =>
@@ -503,46 +446,6 @@ export default function HomeScreen() {
         </>
       ) : null}
 
-      <SectionTitle title="Pinned Tools" />
-      <View style={{ marginTop: 10, flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-        {featuredApps.map((app) => {
-          const needsUpdate = Boolean(app.latestVersion && app.latestVersion !== app.version);
-          return (
-            <TouchableOpacity
-              key={app.id}
-              activeOpacity={0.86}
-              onPress={() => {
-                if (connected && app.status === "installed" && !needsUpdate) {
-                  router.push(`/apps/${app.id}/home`);
-                  return;
-                }
-                router.push(`/apps/${app.id}`);
-              }}
-              style={{
-                width: "47%",
-                borderRadius: 16,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                backgroundColor: theme.colors.surface,
-                padding: 14,
-              }}
-            >
-              <BrandedAppIcon appId={app.id} icon={app.icon ?? "apps-outline"} size={54} />
-              <Text style={{ marginTop: 14, fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-                {app.name}
-              </Text>
-              <Text style={{ marginTop: 4, fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
-                {app.status === "installed" && !needsUpdate
-                  ? "Ready in Sage"
-                  : needsUpdate
-                    ? "Update available"
-                    : "Available to activate"}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-        {!featuredApps.length ? <EmptyCard label="Pick active tools in Settings to pin them here." /> : null}
-      </View>
     </ScrollView>
   );
 }

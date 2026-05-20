@@ -12,14 +12,13 @@
     "bottom_tabs": [
       "Chat",
       "Build",
-      "Discover",
       "Activity",
       "Settings"
     ],
     "primary_responsibilities": [
       "chat",
       "notifications",
-      "applications",
+      "hidden_tool_sessions",
       "quick_actions",
       "daily_context",
       "pairing",

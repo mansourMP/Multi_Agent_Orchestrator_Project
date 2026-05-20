@@ -45,14 +45,6 @@ const RESEARCH_CAPABILITY: KinCapability = {
   color: "#F97316",
 };
 
-const CAPABILITIES: KinCapability[] = [
-  FINANCE_CAPABILITY,
-  HEALTH_CAPABILITY,
-  STUDY_CAPABILITY,
-  TRAVEL_CAPABILITY,
-  RESEARCH_CAPABILITY,
-];
-
 const GENERAL_CAPABILITY: KinCapability = {
   id: "general",
   label: "General",

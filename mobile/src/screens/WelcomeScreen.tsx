@@ -1,8 +1,7 @@
-import { Text, View } from "react-native";
+import { Text, TouchableOpacity, View } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { MotionPressable } from "@/src/components/system/MotionPressable";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
 export default function WelcomeScreen() {
@@ -44,7 +43,9 @@ export default function WelcomeScreen() {
           </Text>
 
           <View style={{ gap: 12 }}>
-            <MotionPressable
+            <TouchableOpacity
+              activeOpacity={0.86}
+              accessibilityRole="button"
               onPress={() => router.push("/login")}
               style={{
                 minHeight: 52,
@@ -58,20 +59,7 @@ export default function WelcomeScreen() {
               <Text style={{ color: theme.colors.accentText, fontSize: 15, fontFamily: "DMSans_700Bold" }}>
                 Set up Sage
               </Text>
-            </MotionPressable>
-
-            <MotionPressable
-              onPress={() => router.push("/apps")}
-              style={{
-                alignItems: "center",
-                justifyContent: "center",
-                paddingVertical: 6,
-              }}
-            >
-              <Text style={{ color: theme.colors.textSecondary, fontSize: 14, lineHeight: 20 }}>
-                Or open Discover
-              </Text>
-            </MotionPressable>
+            </TouchableOpacity>
           </View>
         </View>
       </View>

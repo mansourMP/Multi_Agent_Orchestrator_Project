@@ -277,7 +277,7 @@ function getRouteKeyFromSegments(segments: string[]) {
   const first = String(visible[0] || "home").toLowerCase();
   if (first === "index") return "home";
   if (first === "chats") return "chats";
-  if (first === "apps") return "applications";
+  if (first === "apps") return "workspace_tool";
   if (first === "inbox" || first === "notifications") return "notifications";
   if (first === "profile") return "profile";
   if (first === "home") return "home";

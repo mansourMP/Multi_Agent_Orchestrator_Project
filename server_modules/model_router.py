@@ -14,6 +14,7 @@ from server_modules.provider_profiles import (
     normalize_provider_id,
     resolve_provider_adapter,
 )
+from server_modules import usage_accounting_service
 from server_modules.shared import PROFILES_LOCK, PROVIDER_PROFILES
 
 
@@ -361,7 +362,21 @@ def _raise_provider_error(provider: str, model: str, response: Dict[str, Any]) -
     raise RuntimeError(f"Model call failed [{model}] ({status}). {detail}".strip())
 
 
-def _normalize_usage_from_dict(usage: Optional[Dict[str, Any]]) -> Dict[str, int]:
+def _normalize_usage_from_dict(
+    usage: Optional[Dict[str, Any]],
+    *,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    source_surface: str = "direct_model_router",
+) -> Dict[str, Any]:
+    if provider and model:
+        record = usage_accounting_service.normalize_provider_usage(
+            provider=provider,
+            model=model,
+            usage=usage,
+            source_surface=source_surface,
+        )
+        return usage_accounting_service.usage_projection_from_record(record)
     usage = usage or {}
     prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or usage.get("promptTokenCount") or usage.get("inputTokenCount") or 0)
     completion_tokens = int(
@@ -496,7 +511,11 @@ def _sync_provider_completion(
             "content": _extract_text(body),
             "model": resolved_model,
             "provider": resolved_provider,
-            "usage": _normalize_usage_from_dict(body.get("usage") if isinstance(body.get("usage"), dict) else {}),
+            "usage": _normalize_usage_from_dict(
+                body.get("usage") if isinstance(body.get("usage"), dict) else {},
+                provider=resolved_provider,
+                model=resolved_model,
+            ),
         }
 
     if resolved_provider == "anthropic":
@@ -529,7 +548,11 @@ def _sync_provider_completion(
             "content": _anthropic_text_from_body(body),
             "model": resolved_model,
             "provider": resolved_provider,
-            "usage": _normalize_usage_from_dict(body.get("usage") if isinstance(body.get("usage"), dict) else {}),
+            "usage": _normalize_usage_from_dict(
+                body.get("usage") if isinstance(body.get("usage"), dict) else {},
+                provider=resolved_provider,
+                model=resolved_model,
+            ),
         }
 
     if resolved_provider == "gemini":
@@ -572,7 +595,11 @@ def _sync_provider_completion(
             "content": _gemini_text_from_body(body),
             "model": resolved_model,
             "provider": resolved_provider,
-            "usage": _normalize_usage_from_dict(body.get("usageMetadata") if isinstance(body.get("usageMetadata"), dict) else {}),
+            "usage": _normalize_usage_from_dict(
+                body.get("usageMetadata") if isinstance(body.get("usageMetadata"), dict) else {},
+                provider=resolved_provider,
+                model=resolved_model,
+            ),
         }
 
     raise RuntimeError(f"Unsupported provider '{resolved_provider}'.")

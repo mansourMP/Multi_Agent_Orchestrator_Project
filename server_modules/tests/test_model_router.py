@@ -98,14 +98,54 @@ class ModelRouterTests(unittest.TestCase):
         self.assertEqual(result["content"], "hello")
         self.assertEqual(result["provider"], "openai")
         self.assertEqual(result["model"], "gpt-4o-mini")
-        self.assertEqual(
-            result["usage"],
-            {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8},
-        )
+        usage = result["usage"]
+        self.assertEqual(usage["prompt_tokens"], 3)
+        self.assertEqual(usage["completion_tokens"], 5)
+        self.assertEqual(usage["total_tokens"], 8)
+        self.assertEqual(usage["estimation_mode"], "provider_usage_exact")
+        self.assertEqual(usage["source_surface"], "direct_model_router")
+        self.assertIn("usage_accounting", usage)
         _, kwargs = http_json_request_mock.call_args
         self.assertEqual(kwargs["payload"]["model"], "gpt-4o-mini")
         self.assertEqual(kwargs["payload"]["messages"], [{"role": "user", "content": "Say hello"}])
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test-key")
+
+    def test_call_model_sync_preserves_openai_cached_and_reasoning_tokens(self):
+        http_json_request_patcher = patch.object(model_router, "http_json_request")
+        http_json_request_mock = http_json_request_patcher.start()
+        self.addCleanup(http_json_request_patcher.stop)
+        http_json_request_mock.return_value = {
+            "status": 200,
+            "json": {
+                "choices": [{"message": {"content": "hello"}}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 40,
+                    "total_tokens": 140,
+                    "prompt_tokens_details": {"cached_tokens": 30},
+                    "completion_tokens_details": {"reasoning_tokens": 12},
+                },
+            },
+            "text": "",
+            "headers": {},
+        }
+
+        result = model_router.call_model_sync(
+            messages=[{"role": "user", "content": "Say hello"}],
+            model="gpt-4o-mini",
+            provider="openai",
+            credentials={"api_key": "test-key"},
+            max_tokens=100,
+            temperature=0.2,
+        )
+
+        usage = result["usage"]
+        self.assertEqual(usage["prompt_tokens"], 70)
+        self.assertEqual(usage["cached_input_tokens"], 30)
+        self.assertEqual(usage["cache_read_tokens"], 30)
+        self.assertEqual(usage["visible_output_tokens"], 28)
+        self.assertEqual(usage["reasoning_tokens"], 12)
+        self.assertEqual(usage["completion_tokens"], 40)
 
     def test_vertex_current_credential_shape_uses_compatibility_fallback(self):
         resolve_provider_adapter_patcher = patch.object(model_router, "resolve_provider_adapter")

@@ -1273,8 +1273,8 @@ PROVIDER_MODEL_CATALOG = {
         "deepseek-v4-flash": {
             "label": "DeepSeek V4 Flash",
             "context_window_tokens": 1000000,
-            "input_cost_per_1k_usd": 0.00028,
-            "output_cost_per_1k_usd": 0.00042,
+            "input_cost_per_1k_usd": 0.00014,
+            "output_cost_per_1k_usd": 0.00028,
             "supports_tools": True,
             "supports_reasoning": False,
             "capability_labels": ["Low cost", "Fast", "Long context", "Hosted API"],
@@ -1282,8 +1282,8 @@ PROVIDER_MODEL_CATALOG = {
         "deepseek-v4-pro": {
             "label": "DeepSeek V4 Pro",
             "context_window_tokens": 1000000,
-            "input_cost_per_1k_usd": 0.00028,
-            "output_cost_per_1k_usd": 0.00042,
+            "input_cost_per_1k_usd": 0.000435,
+            "output_cost_per_1k_usd": 0.00087,
             "supports_tools": True,
             "supports_reasoning": True,
             "reasoning_levels": ["high", "max"],
@@ -1292,8 +1292,8 @@ PROVIDER_MODEL_CATALOG = {
         "deepseek-chat": {
             "label": "DeepSeek Chat",
             "context_window_tokens": 128000,
-            "input_cost_per_1k_usd": 0.00028,
-            "output_cost_per_1k_usd": 0.00042,
+            "input_cost_per_1k_usd": 0.00014,
+            "output_cost_per_1k_usd": 0.00028,
             "supports_tools": True,
             "supports_reasoning": False,
             "capability_labels": ["Low cost", "Fast", "Hosted API"],
@@ -1301,8 +1301,8 @@ PROVIDER_MODEL_CATALOG = {
         "deepseek-reasoner": {
             "label": "DeepSeek Reasoner",
             "context_window_tokens": 128000,
-            "input_cost_per_1k_usd": 0.00028,
-            "output_cost_per_1k_usd": 0.00042,
+            "input_cost_per_1k_usd": 0.00014,
+            "output_cost_per_1k_usd": 0.00028,
             "supports_tools": True,
             "supports_reasoning": True,
             "capability_labels": ["Reasoning", "Low cost", "Hosted API"],

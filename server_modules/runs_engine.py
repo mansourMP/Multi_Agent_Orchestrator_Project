@@ -114,7 +114,21 @@ def generate_with_candidate_failover(
         initial_model = str(candidate.get("model") or default_model).strip() or default_model
         profile_id = str(candidate.get("profile_id") or "").strip() or None
         source = str(candidate.get("source") or "unknown").strip()
-        model_attempts = _candidate_model_attempts(provider, initial_model)
+        fallback_models = candidate.get("fallback_models")
+        if not isinstance(fallback_models, list):
+            fallback_models = context.get("fallback_models") if isinstance(context.get("fallback_models"), list) else []
+        allow_model_fallback = str(
+            candidate.get("allow_model_fallback")
+            or context.get("allow_model_fallback")
+            or context.get("explicit_model_fallback")
+            or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        model_attempts = _candidate_model_attempts(
+            provider,
+            initial_model,
+            allow_fallback=allow_model_fallback,
+            fallback_models=fallback_models,
+        )
         candidate_error: Optional[Exception] = None
         for model_attempt_index, model in enumerate(model_attempts):
             try:
@@ -205,11 +219,17 @@ def _is_rate_limit_runtime_error(exc: Exception) -> bool:
     return "429" in lowered or "rate limit" in lowered
 
 
-def _candidate_model_attempts(provider: str, preferred_model: str) -> List[str]:
+def _candidate_model_attempts(
+    provider: str,
+    preferred_model: str,
+    *,
+    allow_fallback: bool = False,
+    fallback_models: Optional[List[Any]] = None,
+) -> List[str]:
     model = str(preferred_model or "").strip()
     attempts: List[str] = [model] if model else []
-    if normalize_provider_id(provider) == "openai":
-        for fallback in ("gpt-4o-mini", "gpt-4.1-mini", "gpt-4o", "gpt-4.1"):
+    if allow_fallback:
+        for fallback in list(fallback_models or []):
             token = str(fallback).strip()
             if token and token not in attempts:
                 attempts.append(token)

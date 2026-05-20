@@ -1,4 +1,5 @@
 import threading
+from datetime import datetime, timezone
 
 from server_modules import runtime_config as config
 from server_modules import run_service as run_service
@@ -88,7 +89,7 @@ OUTCOME_PACK_AGENT_ROLE_MAP: Dict[str, str] = {
 def emit_log(log_queue, level: str, message: str, event: str = "runtime", data: Optional[dict] = None):
     payload = {
         "event_id": str(uuid.uuid4()),
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "level": level,
         "event": event,
         "message": message,
@@ -361,7 +362,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
             agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
             local_execution_target=EXECUTION_TARGET_LOCAL_COMPANION,
             local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
-            now_iso=lambda: datetime.utcnow().isoformat() + "Z",
+            now_iso=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             compute_tool_policy_precheck_fallback=lambda: __import__(
                 "server_modules.runs_execution",
                 fromlist=["_compute_tool_policy_precheck"],

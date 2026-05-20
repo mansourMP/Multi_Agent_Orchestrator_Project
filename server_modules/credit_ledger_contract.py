@@ -20,6 +20,18 @@ CREDIT_LEDGER_ITEM_TYPES: tuple[str, ...] = (
     "gateway_relay",
     "channel_message",
     "connector_read",
+    "mini_app_action",
+)
+
+CREDIT_LEDGER_TYPES: tuple[str, ...] = (
+    "ai_tokens",
+    "computer_runtime",
+    "storage",
+    "gateway_relay",
+    "channel",
+    "connector_read",
+    "mini_app_action",
+    "custom_api_key_usage",
 )
 
 _TOKEN_ITEM_TYPES = {"ai_light_tokens", "ai_pro_tokens", "ai_max_tokens", "local_ai_tokens"}
@@ -28,6 +40,7 @@ _MINUTE_ITEM_TYPES = {"virtual_browser_minutes", "virtual_desktop_minutes", "vir
 
 @dataclass(frozen=True)
 class CreditLedgerLineItem:
+    credit_type: str
     credit_item_type: str
     quantity: float
     quantity_unit: str
@@ -104,6 +117,26 @@ def _default_multiplier_for_item_type(item_type: str) -> float:
     return 0.0
 
 
+def _credit_type_for_item_type(item_type: str) -> str:
+    if item_type in _TOKEN_ITEM_TYPES:
+        return "ai_tokens"
+    if item_type in _MINUTE_ITEM_TYPES:
+        return "computer_runtime"
+    if item_type in {"artifact_storage", "snapshot_storage"}:
+        return "storage"
+    if item_type == "gateway_relay":
+        return "gateway_relay"
+    if item_type == "channel_message":
+        return "channel"
+    if item_type == "connector_read":
+        return "connector_read"
+    if item_type == "mini_app_action":
+        return "mini_app_action"
+    if item_type == "custom_api_key_usage":
+        return "custom_api_key_usage"
+    return "ai_tokens"
+
+
 def build_credit_ledger_line_item(
     *,
     metadata: Optional[Dict[str, Any]] = None,
@@ -157,6 +190,8 @@ def build_credit_ledger_line_item(
             quantity = float(max(1, _token_count(payload.get("read_count"))))
         elif item_type == "gateway_relay":
             quantity = _float_count(payload.get("relay_events") or 1.0)
+        elif item_type == "mini_app_action":
+            quantity = float(max(1, _token_count(payload.get("action_count"))))
         elif item_type in {"artifact_storage", "snapshot_storage"}:
             quantity = _float_count(payload.get("storage_mb"))
         else:
@@ -174,10 +209,13 @@ def build_credit_ledger_line_item(
         quantity_unit = "reads"
     elif item_type == "gateway_relay":
         quantity_unit = "relay_events"
+    elif item_type == "mini_app_action":
+        quantity_unit = "actions"
     else:
         quantity_unit = "events"
 
     line_item = CreditLedgerLineItem(
+        credit_type=_credit_type_for_item_type(item_type),
         credit_item_type=item_type,
         quantity=quantity,
         quantity_unit=quantity_unit,

@@ -11,6 +11,7 @@ def test_hosted_light_tier_maps_to_light_token_line_item() -> None:
     )
 
     assert item["credit_item_type"] == "ai_light_tokens"
+    assert item["credit_type"] == "ai_tokens"
     assert item["quantity"] == 2400.0
     assert item["quantity_unit"] == "tokens"
     assert item["billing_source"] == "empyralis_credits"
@@ -37,6 +38,7 @@ def test_local_ai_maps_without_hosted_credit_spend() -> None:
     )
 
     assert item["credit_item_type"] == "local_ai_tokens"
+    assert item["credit_type"] == "ai_tokens"
     assert item["billing_source"] == "local_runtime"
     assert item["credit_multiplier"] == 0.0
 
@@ -49,6 +51,7 @@ def test_my_api_key_maps_to_custom_usage_item() -> None:
     )
 
     assert item["credit_item_type"] == "custom_api_key_usage"
+    assert item["credit_type"] == "custom_api_key_usage"
     assert item["billing_source"] == "user_api_key"
     assert item["quantity_unit"] == "events"
 
@@ -61,6 +64,7 @@ def test_virtual_runtime_minutes_use_runtime_line_items() -> None:
     )
 
     assert item["credit_item_type"] == "virtual_browser_minutes"
+    assert item["credit_type"] == "computer_runtime"
     assert item["quantity"] == 17.5
     assert item["quantity_unit"] == "minutes"
     assert item["billing_source"] == "virtual_runtime_credits"
@@ -73,9 +77,23 @@ def test_connector_read_usage_maps_to_read_line_item() -> None:
     )
 
     assert item["credit_item_type"] == "connector_read"
+    assert item["credit_type"] == "connector_read"
     assert item["quantity"] == 3.0
     assert item["quantity_unit"] == "reads"
     assert item["connector_kind"] == "google_sheets"
+
+
+def test_mini_app_action_usage_maps_to_action_line_item() -> None:
+    item = credit_ledger_contract.build_credit_ledger_line_item(
+        metadata={"credit_item_type": "mini_app_action", "action_count": 2, "app_id": "flashcards"},
+        billing_source="empyralis_credits",
+    )
+
+    assert item["credit_item_type"] == "mini_app_action"
+    assert item["credit_type"] == "mini_app_action"
+    assert item["quantity"] == 2.0
+    assert item["quantity_unit"] == "actions"
+    assert item["app_id"] == "flashcards"
 
 
 def test_unknown_hosted_tier_defaults_to_ai_pro_tokens() -> None:

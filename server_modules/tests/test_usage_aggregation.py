@@ -7,6 +7,7 @@ from server_modules.usage_reporting import (
     estimate_cost_usd,
     usage_row_from_snapshot,
 )
+from server_modules import pricing_registry_service, usage_accounting_service
 
 
 class UsageAggregationTests(unittest.TestCase):
@@ -97,6 +98,153 @@ class UsageAggregationTests(unittest.TestCase):
         row = usage_row_from_snapshot(snapshot)
         self.assertIsNotNone(row)
         self.assertIsNone(row["estimated_cost_usd"])
+
+    def test_deepseek_v4_pricing_includes_cache_and_reasoning_rates(self):
+        pricing = pricing_registry_service.lookup_model_pricing("deepseek", "deepseek-v4-flash")
+
+        self.assertIsNotNone(pricing)
+        self.assertEqual(pricing["input"], 0.14)
+        self.assertEqual(pricing["cached_input"], 0.0028)
+        self.assertEqual(pricing["cache_read"], 0.0028)
+        self.assertEqual(pricing["cache_write"], 0.14)
+        self.assertEqual(pricing["output"], 0.28)
+        self.assertEqual(pricing["reasoning_output"], 0.28)
+        self.assertEqual(pricing["thinking_output"], 0.28)
+
+        pro_pricing = pricing_registry_service.lookup_model_pricing("deepseek", "deepseek-v4-pro")
+        self.assertIsNotNone(pro_pricing)
+        self.assertEqual(pro_pricing["cached_input"], 0.003625)
+        self.assertEqual(pro_pricing["cache_read"], 0.003625)
+        self.assertEqual(pro_pricing["cache_write"], 0.435)
+        self.assertEqual(pro_pricing["reasoning_output"], 0.87)
+        self.assertEqual(pro_pricing["thinking_output"], 0.87)
+
+    def test_usage_accounting_projects_surface_and_source_surface(self):
+        record = usage_accounting_service.build_usage_accounting_record(
+            run_id="run-mini-app",
+            workspace_id="ws-1",
+            app_id="writing",
+            surface="mini_app",
+            source_surface="mini_app_invoke",
+            requested_provider="deepseek",
+            effective_provider="deepseek",
+            requested_model="deepseek-v4-flash",
+            effective_model="deepseek-v4-flash",
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+        projection = usage_accounting_service.usage_projection_from_record(record)
+        row = usage_accounting_service.usage_row_from_record(record)
+
+        self.assertEqual(record["surface"], "mini_app")
+        self.assertEqual(record["source_surface"], "mini_app_invoke")
+        self.assertEqual(projection["surface"], "mini_app")
+        self.assertEqual(projection["source_surface"], "mini_app_invoke")
+        self.assertEqual(row["surface"], "mini_app")
+        self.assertEqual(row["source_surface"], "mini_app_invoke")
+
+        restored = usage_accounting_service.accounting_record_from_snapshot(
+            {
+                "run_id": "run-sage",
+                "usage_accounting": {
+                    "surface": "sage",
+                    "effective_provider": "deepseek",
+                    "effective_model": "deepseek-v4-flash",
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "total_tokens": 2,
+                },
+            }
+        )
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored["surface"], "sage")
+        self.assertEqual(restored["source_surface"], "sage")
+
+    def test_openai_usage_normalizer_captures_cache_and_reasoning_tokens(self):
+        record = usage_accounting_service.normalize_provider_usage(
+            provider="openai",
+            model="gpt-4o-mini",
+            usage={
+                "prompt_tokens": 100,
+                "completion_tokens": 25,
+                "total_tokens": 125,
+                "prompt_tokens_details": {"cached_tokens": 40},
+                "completion_tokens_details": {"reasoning_tokens": 8},
+            },
+            run_id="run-openai",
+        )
+
+        usage = usage_accounting_service.usage_projection_from_record(record)
+        self.assertEqual(usage["prompt_tokens"], 60)
+        self.assertEqual(usage["cached_input_tokens"], 40)
+        self.assertEqual(usage["cache_read_tokens"], 40)
+        self.assertEqual(usage["visible_output_tokens"], 17)
+        self.assertEqual(usage["reasoning_tokens"], 8)
+        self.assertEqual(usage["completion_tokens"], 25)
+        self.assertEqual(usage["estimation_mode"], "provider_usage_exact")
+
+    def test_gemini_usage_normalizer_captures_cached_and_thinking_tokens(self):
+        record = usage_accounting_service.normalize_provider_usage(
+            provider="gemini",
+            model="gemini-2.5-flash",
+            usage={
+                "promptTokenCount": 100,
+                "cachedContentTokenCount": 25,
+                "candidatesTokenCount": 10,
+                "thoughtsTokenCount": 5,
+                "totalTokenCount": 115,
+            },
+            run_id="run-gemini",
+        )
+
+        usage = usage_accounting_service.usage_projection_from_record(record)
+        self.assertEqual(usage["prompt_tokens"], 75)
+        self.assertEqual(usage["cache_read_tokens"], 25)
+        self.assertEqual(usage["visible_output_tokens"], 10)
+        self.assertEqual(usage["thinking_tokens"], 5)
+        self.assertEqual(usage["completion_tokens"], 15)
+
+    def test_platform_paid_usage_requires_known_pricing(self):
+        with self.assertRaisesRegex(ValueError, "Known pricing is required"):
+            usage_accounting_service.build_usage_accounting_record(
+                run_id="run-unknown",
+                requested_provider="openai",
+                effective_provider="openai",
+                requested_model="unknown-frontier-model",
+                effective_model="unknown-frontier-model",
+                input_tokens=10,
+                output_tokens=5,
+                payer="platform_credits",
+                require_known_pricing=True,
+            )
+
+    def test_platform_paid_usage_validation_rejects_missing_provider_usage(self):
+        row = {
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "total_tokens": 0,
+            "estimated_cost_usd": 0.001,
+            "pricing_known": True,
+            "estimation_mode": "provider_usage_missing",
+        }
+
+        self.assertEqual(
+            usage_accounting_service.platform_paid_usage_validation_error(row),
+            "missing_provider_token_usage",
+        )
+
+    def test_platform_paid_usage_validation_accepts_exact_priced_usage(self):
+        row = {
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "total_tokens": 10,
+            "estimated_cost_usd": 0.001,
+            "pricing_known": True,
+            "estimation_mode": "provider_usage_exact",
+        }
+
+        self.assertIsNone(usage_accounting_service.platform_paid_usage_validation_error(row))
 
 
 if __name__ == "__main__":

@@ -309,7 +309,14 @@ class OperatorChatTests(unittest.TestCase):
                 yield {
                     "type": "result",
                     "reply": "Hello",
-                    "usage_masked": {"provider": "openai", "model": "gpt-5.4"},
+                    "usage_masked": {
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                        "estimation_mode": "provider_usage_exact",
+                    },
                     "provider": "openai",
                     "model": "gpt-5.4",
                     "attempted_providers": "openai",
@@ -318,7 +325,11 @@ class OperatorChatTests(unittest.TestCase):
                 }
             return _iterator()
 
-        with patch("operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback", side_effect=fake_stream):
+        with (
+            patch("operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback", side_effect=fake_stream),
+            patch("operator_chat_under_test._persist_direct_chat_hosted_usage_best_effort", lambda **_kwargs: None),
+            patch("server_modules.direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort", lambda **_kwargs: None),
+        ):
             payload = build_direct_operator_reply(
                 message="hello",
                 workspace_id="default",
@@ -341,7 +352,14 @@ class OperatorChatTests(unittest.TestCase):
                 yield {
                     "type": "result",
                     "reply": "Hello",
-                    "usage_masked": {"provider": "openai", "model": "gpt-5.4"},
+                    "usage_masked": {
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                        "estimation_mode": "provider_usage_exact",
+                    },
                     "provider": "openai",
                     "model": "gpt-5.4",
                     "attempted_providers": "openai",
@@ -350,7 +368,11 @@ class OperatorChatTests(unittest.TestCase):
                 }
             return _iterator()
 
-        with patch("operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback", side_effect=fake_stream):
+        with (
+            patch("operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback", side_effect=fake_stream),
+            patch("operator_chat_under_test._persist_direct_chat_hosted_usage_best_effort", lambda **_kwargs: None),
+            patch("server_modules.direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort", lambda **_kwargs: None),
+        ):
             events = list(stream_direct_operator_reply(
                 message="hello",
                 workspace_id="default",

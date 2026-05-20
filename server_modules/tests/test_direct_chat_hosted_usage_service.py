@@ -60,6 +60,7 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
         self.assertEqual(kwargs["prompt_tokens"], 10)
         self.assertEqual(kwargs["completion_tokens"], 6)
         self.assertEqual(kwargs["total_tokens"], 16)
+        self.assertEqual(kwargs["metadata"]["credit_type"], "ai_tokens")
         self.assertEqual(kwargs["metadata"]["credit_item_type"], "ai_pro_tokens")
         self.assertEqual(kwargs["metadata"]["credit_quantity"], 16.0)
         self.assertEqual(kwargs["metadata"]["credit_quantity_unit"], "tokens")
@@ -95,3 +96,164 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
             )
 
         record_ledger.assert_not_awaited()
+
+    def test_persist_direct_chat_hosted_usage_best_effort_fails_closed_on_unknown_pricing(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "unknown pricing"):
+            direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                workspace_id="ws-1",
+                thread_id="thread-1",
+                session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                availability_payload={
+                    "credential_plane": "platform_runtime",
+                    "platform_runtime_allowed": True,
+                },
+                usage_masked={
+                    "usage_accounting": {
+                        "input_tokens": 10,
+                        "output_tokens": 6,
+                        "total_tokens": 16,
+                        "effective_provider": "openai",
+                        "effective_model": "unknown-frontier-model",
+                    }
+                },
+                requested_provider="openai",
+                effective_provider="openai",
+                requested_model="unknown-frontier-model",
+                effective_model="unknown-frontier-model",
+            )
+
+    def test_persist_direct_chat_hosted_usage_best_effort_fails_closed_on_missing_usage(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "usage is missing"):
+            direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                workspace_id="ws-1",
+                thread_id="thread-1",
+                session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                availability_payload={
+                    "credential_plane": "platform_runtime",
+                    "platform_runtime_allowed": True,
+                },
+                usage_masked=None,
+                requested_provider="deepseek",
+                effective_provider="deepseek",
+                requested_model="deepseek-chat",
+                effective_model="deepseek-chat",
+            )
+
+    def test_persist_direct_chat_hosted_usage_best_effort_fails_closed_on_missing_tenant(self) -> None:
+        with patch(
+            "server_modules.direct_chat_hosted_usage_service.control_plane_repository.get_workspace_by_id",
+            new=AsyncMock(return_value={}),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "tenant scope"):
+                direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                    workspace_id="ws-1",
+                    thread_id="thread-1",
+                    session_ctx={"request_id": "req-1"},
+                    availability_payload={
+                        "credential_plane": "platform_runtime",
+                        "platform_runtime_allowed": True,
+                    },
+                    usage_masked={
+                        "usage_accounting": {
+                            "input_tokens": 10,
+                            "output_tokens": 6,
+                            "total_tokens": 16,
+                            "estimated_cost_usd": 0.0011,
+                            "effective_provider": "deepseek",
+                            "effective_model": "deepseek-chat",
+                        }
+                    },
+                    requested_provider="deepseek",
+                    effective_provider="deepseek",
+                    requested_model="deepseek-chat",
+                    effective_model="deepseek-chat",
+                )
+
+    def test_persist_direct_chat_hosted_usage_best_effort_fails_closed_on_missing_request_id(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "request id"):
+            direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                workspace_id="ws-1",
+                thread_id="",
+                session_ctx={"tenant_id": "tenant-1"},
+                availability_payload={
+                    "credential_plane": "platform_runtime",
+                    "platform_runtime_allowed": True,
+                },
+                usage_masked={
+                    "usage_accounting": {
+                        "input_tokens": 10,
+                        "output_tokens": 6,
+                        "total_tokens": 16,
+                        "estimated_cost_usd": 0.0011,
+                        "effective_provider": "deepseek",
+                        "effective_model": "deepseek-chat",
+                    }
+                },
+                requested_provider="deepseek",
+                effective_provider="deepseek",
+                requested_model="deepseek-chat",
+                effective_model="deepseek-chat",
+            )
+
+    def test_persist_direct_chat_hosted_usage_best_effort_surfaces_debit_failure(self) -> None:
+        with patch(
+            "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry",
+            new=AsyncMock(return_value={"id": "shost_1"}),
+        ), patch(
+            "server_modules.billing_service.debit_workspace_credit_balance_for_hosted_usage",
+            side_effect=RuntimeError("ledger unavailable"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "credit debit failed"):
+                direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                    workspace_id="ws-1",
+                    thread_id="thread-1",
+                    session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                    availability_payload={
+                        "credential_plane": "platform_runtime",
+                        "platform_runtime_allowed": True,
+                    },
+                    usage_masked={
+                        "usage_accounting": {
+                            "input_tokens": 10,
+                            "output_tokens": 6,
+                            "total_tokens": 16,
+                            "estimated_cost_usd": 0.0011,
+                            "effective_provider": "deepseek",
+                            "effective_model": "deepseek-chat",
+                        }
+                    },
+                    requested_provider="deepseek",
+                    effective_provider="deepseek",
+                    requested_model="deepseek-chat",
+                    effective_model="deepseek-chat",
+                )
+
+    def test_persist_direct_chat_hosted_usage_best_effort_surfaces_ledger_none(self) -> None:
+        with patch(
+            "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry",
+            new=AsyncMock(return_value=None),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cost ledger persistence failed"):
+                direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                    workspace_id="ws-1",
+                    thread_id="thread-1",
+                    session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                    availability_payload={
+                        "credential_plane": "platform_runtime",
+                        "platform_runtime_allowed": True,
+                    },
+                    usage_masked={
+                        "usage_accounting": {
+                            "input_tokens": 10,
+                            "output_tokens": 6,
+                            "total_tokens": 16,
+                            "estimated_cost_usd": 0.0011,
+                            "effective_provider": "deepseek",
+                            "effective_model": "deepseek-chat",
+                        }
+                    },
+                    requested_provider="deepseek",
+                    effective_provider="deepseek",
+                    requested_model="deepseek-chat",
+                    effective_model="deepseek-chat",
+                )

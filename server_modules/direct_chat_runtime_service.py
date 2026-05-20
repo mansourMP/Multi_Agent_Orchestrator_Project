@@ -863,6 +863,16 @@ def build_direct_operator_reply(
     normalized_message = prepared.normalized_message
     normalized_workspace_id = prepared.normalized_workspace_id
     normalized_thread_id = prepared.normalized_thread_id
+    if not normalized_thread_id:
+        normalized_thread_id = (
+            str((session_ctx or {}).get("request_id") or "").strip()
+            or str((session_ctx or {}).get("client_request_id") or "").strip()
+            or f"direct-{uuid.uuid4().hex}"
+        )
+    generation_session_ctx = dict(session_ctx or {})
+    generation_session_ctx.setdefault("request_id", normalized_thread_id)
+    generation_session_ctx.setdefault("tenant_id", normalized_workspace_id)
+    generation_session_ctx.setdefault("workspace_id", normalized_workspace_id)
     normalized_requested_provider = prepared.normalized_requested_provider
     normalized_requested_model = prepared.normalized_requested_model
     normalized_reasoning_effort = prepared.normalized_reasoning_effort
@@ -1238,7 +1248,7 @@ def build_direct_operator_reply(
         proactive_suggestions=proactive_suggestions,
         tool_loop_session_key=tool_loop_session_key,
         fallback_reason=fallback_reason,
-        session_ctx=session_ctx,
+        session_ctx=generation_session_ctx,
         trace_context=resolved_trace_context,
         resolved_chat_max_iterations=resolved_chat_max_iterations,
         direct_tool_result_summary_system_message="You have the results from the direct tool calls. Summarize them for the user or continue if another tool is required.",

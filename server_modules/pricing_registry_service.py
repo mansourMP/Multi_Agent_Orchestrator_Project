@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
 
 
-PRICING_REGISTRY_VERSION = "2026-05-15"
+PRICING_REGISTRY_VERSION = "2026-05-20"
 QWEN_CNY_PER_USD = 7.108
 QWEN_USD_PER_CNY = 1.0 / QWEN_CNY_PER_USD
 
@@ -14,6 +14,11 @@ class PricingRate:
     input_usd_per_million: Optional[float]
     output_usd_per_million: Optional[float]
     source: str
+    cached_input_usd_per_million: Optional[float] = None
+    cache_write_usd_per_million: Optional[float] = None
+    cache_read_usd_per_million: Optional[float] = None
+    reasoning_output_usd_per_million: Optional[float] = None
+    thinking_output_usd_per_million: Optional[float] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -31,6 +36,11 @@ class PricingRegistryEntry:
         payload["source"] = self.rate.source
         payload["input"] = self.rate.input_usd_per_million
         payload["output"] = self.rate.output_usd_per_million
+        payload["cached_input"] = self.rate.cached_input_usd_per_million
+        payload["cache_write"] = self.rate.cache_write_usd_per_million
+        payload["cache_read"] = self.rate.cache_read_usd_per_million
+        payload["reasoning_output"] = self.rate.reasoning_output_usd_per_million
+        payload["thinking_output"] = self.rate.thinking_output_usd_per_million
         return payload
 
 
@@ -141,8 +151,42 @@ MODEL_PRICING_USD_PER_MILLION: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
     },
     "deepseek": {
-        "deepseek-chat": {"input": 0.28, "output": 0.42, "source": "https://api-docs.deepseek.com/quick_start/pricing/"},
-        "deepseek-reasoner": {"input": 0.28, "output": 0.42, "source": "https://api-docs.deepseek.com/quick_start/pricing/"},
+        "deepseek-v4-flash": {
+            "input": 0.14,
+            "cached_input": 0.0028,
+            "cache_read": 0.0028,
+            "cache_write": 0.14,
+            "output": 0.28,
+            "reasoning_output": 0.28,
+            "thinking_output": 0.28,
+            "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+        },
+        "deepseek-v4-pro": {
+            "input": 0.435,
+            "cached_input": 0.003625,
+            "cache_read": 0.003625,
+            "cache_write": 0.435,
+            "output": 0.87,
+            "reasoning_output": 0.87,
+            "thinking_output": 0.87,
+            "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+        },
+        "deepseek-chat": {
+            "input": 0.14,
+            "cached_input": 0.0028,
+            "cache_read": 0.0028,
+            "output": 0.28,
+            "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+        },
+        "deepseek-reasoner": {
+            "input": 0.14,
+            "cached_input": 0.0028,
+            "cache_read": 0.0028,
+            "output": 0.28,
+            "reasoning_output": 0.28,
+            "thinking_output": 0.28,
+            "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+        },
     },
     "mistral": {
         "mistral-small-latest": {"input": 0.10, "output": 0.30, "source": "https://docs.mistral.ai/models/mistral-small-3-2-25-06"},
@@ -169,7 +213,7 @@ PROVIDER_FALLBACK_USD_PER_1K: Dict[str, Dict[str, Any]] = {
     "gemini": {"input": 0.0003, "output": 0.0025, "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     "vertex": {"input": 0.0010, "output": 0.0030, "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"},
     "qwen": {"input": 0.0, "output": 0.0, "source": "https://help.aliyun.com/zh/model-studio/getting-started/models"},
-    "deepseek": {"input": 0.00028, "output": 0.00042, "source": "https://api-docs.deepseek.com/quick_start/pricing/"},
+    "deepseek": {"input": 0.00014, "output": 0.00028, "source": "https://api-docs.deepseek.com/quick_start/pricing/"},
     "mistral": {"input": 0.0, "output": 0.0, "source": "https://docs.mistral.ai/models/"},
     "ollama": {"input": 0.0, "output": 0.0, "source": "local_runtime"},
     "ollama_cloud": {"input": 0.0, "output": 0.0, "source": "https://docs.ollama.com/cloud"},
@@ -205,6 +249,11 @@ def lookup_pricing_entry(provider: Any, model: Any) -> Optional[PricingRegistryE
             input_usd_per_million=raw_entry.get("input"),
             output_usd_per_million=raw_entry.get("output"),
             source=str(raw_entry.get("source") or "").strip() or "pricing_registry",
+            cached_input_usd_per_million=raw_entry.get("cached_input"),
+            cache_write_usd_per_million=raw_entry.get("cache_write"),
+            cache_read_usd_per_million=raw_entry.get("cache_read"),
+            reasoning_output_usd_per_million=raw_entry.get("reasoning_output"),
+            thinking_output_usd_per_million=raw_entry.get("thinking_output"),
         ),
     )
 
@@ -214,18 +263,45 @@ def lookup_model_pricing(provider: Any, model: Any) -> Optional[Dict[str, Any]]:
     return entry.as_dict() if entry is not None else None
 
 
-def estimate_cost_usd(provider: Any, model: Any, input_tokens: int, output_tokens: int) -> Optional[float]:
+def _token_cost(tokens: int, rate: Optional[float]) -> Optional[float]:
+    if rate is None:
+        return None
+    return max(0, int(tokens or 0)) * float(rate) / 1_000_000.0
+
+
+def estimate_cost_usd(
+    provider: Any,
+    model: Any,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cached_input_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    reasoning_tokens: int = 0,
+    thinking_tokens: int = 0,
+) -> Optional[float]:
     entry = lookup_pricing_entry(provider, model)
     if entry is None:
         return None
-    input_price = entry.rate.input_usd_per_million
-    output_price = entry.rate.output_usd_per_million
-    if input_price is None or output_price is None:
+    rate = entry.rate
+    input_cost = _token_cost(input_tokens, rate.input_usd_per_million)
+    output_cost = _token_cost(output_tokens, rate.output_usd_per_million)
+    if input_cost is None or output_cost is None:
         return None
+    cached_rate = rate.cached_input_usd_per_million or rate.cache_read_usd_per_million or rate.input_usd_per_million
+    cache_write_rate = rate.cache_write_usd_per_million or rate.input_usd_per_million
+    cache_read_rate = rate.cache_read_usd_per_million or rate.cached_input_usd_per_million or rate.input_usd_per_million
+    reasoning_rate = rate.reasoning_output_usd_per_million or rate.output_usd_per_million
+    thinking_rate = rate.thinking_output_usd_per_million or rate.output_usd_per_million
     total = (
-        max(0, int(input_tokens or 0)) * float(input_price) / 1_000_000.0
-    ) + (
-        max(0, int(output_tokens or 0)) * float(output_price) / 1_000_000.0
+        input_cost
+        + output_cost
+        + (_token_cost(cached_input_tokens, cached_rate) or 0.0)
+        + (_token_cost(cache_write_tokens, cache_write_rate) or 0.0)
+        + (_token_cost(cache_read_tokens, cache_read_rate) or 0.0)
+        + (_token_cost(reasoning_tokens, reasoning_rate) or 0.0)
+        + (_token_cost(thinking_tokens, thinking_rate) or 0.0)
     )
     return round(total, 6)
 

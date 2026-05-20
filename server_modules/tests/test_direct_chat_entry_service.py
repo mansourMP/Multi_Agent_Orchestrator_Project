@@ -258,7 +258,7 @@ class DirectChatEntryServiceTests(unittest.TestCase):
         load_transcript.assert_called_once_with(
             workspace_id="default",
             thread_id="thread-1",
-            limit=12,
+            limit=22,
         )
         self.assertEqual(
             prepared.compacted_prior_messages,

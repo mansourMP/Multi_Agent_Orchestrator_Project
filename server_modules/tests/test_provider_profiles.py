@@ -59,8 +59,8 @@ class ProviderProfilesTests(unittest.TestCase):
     def test_deepseek_provider_cost_table_uses_non_zero_official_rates(self) -> None:
         rates = provider_profiles.PROVIDER_COST_PER_1K["deepseek"]
 
-        self.assertAlmostEqual(rates["input"], 0.00028, places=8)
-        self.assertAlmostEqual(rates["output"], 0.00042, places=8)
+        self.assertAlmostEqual(rates["input"], 0.00014, places=8)
+        self.assertAlmostEqual(rates["output"], 0.00028, places=8)
 
     def test_deepseek_governance_metadata_includes_privacy_and_jurisdiction(self) -> None:
         governance = provider_profiles.provider_governance_entry("deepseek")
@@ -76,10 +76,10 @@ class ProviderProfilesTests(unittest.TestCase):
             for item in provider_profiles.provider_model_catalog("deepseek")
         }
 
-        self.assertAlmostEqual(models["deepseek-chat"]["input_cost_per_1k_usd"], 0.00028, places=8)
-        self.assertAlmostEqual(models["deepseek-chat"]["output_cost_per_1k_usd"], 0.00042, places=8)
-        self.assertAlmostEqual(models["deepseek-reasoner"]["input_cost_per_1k_usd"], 0.00028, places=8)
-        self.assertAlmostEqual(models["deepseek-reasoner"]["output_cost_per_1k_usd"], 0.00042, places=8)
+        self.assertAlmostEqual(models["deepseek-chat"]["input_cost_per_1k_usd"], 0.00014, places=8)
+        self.assertAlmostEqual(models["deepseek-chat"]["output_cost_per_1k_usd"], 0.00028, places=8)
+        self.assertAlmostEqual(models["deepseek-reasoner"]["input_cost_per_1k_usd"], 0.00014, places=8)
+        self.assertAlmostEqual(models["deepseek-reasoner"]["output_cost_per_1k_usd"], 0.00028, places=8)
 
     def test_ollama_model_catalog_marks_local_models_as_tool_capable(self) -> None:
         models = {
@@ -174,7 +174,7 @@ class ProviderProfilesTests(unittest.TestCase):
             "b" * 4000,
         )
 
-        self.assertAlmostEqual(float(usage["estimated_cost_usd"] or 0.0), 0.0007, places=6)
+        self.assertAlmostEqual(float(usage["estimated_cost_usd"] or 0.0), 0.00042, places=6)
         self.assertEqual(usage["cost_band"], "< $0.001")
 
     def test_usage_reporting_uses_current_deepseek_pricing(self) -> None:
@@ -183,9 +183,9 @@ class ProviderProfilesTests(unittest.TestCase):
 
         self.assertIsNotNone(pricing)
         self.assertEqual(pricing["source"], "https://api-docs.deepseek.com/quick_start/pricing/")
-        self.assertAlmostEqual(float(pricing["input"]), 0.28, places=6)
-        self.assertAlmostEqual(float(pricing["output"]), 0.42, places=6)
-        self.assertAlmostEqual(float(cost or 0.0), 0.70, places=6)
+        self.assertAlmostEqual(float(pricing["input"]), 0.14, places=6)
+        self.assertAlmostEqual(float(pricing["output"]), 0.28, places=6)
+        self.assertAlmostEqual(float(cost or 0.0), 0.42, places=6)
 
 
 class ProviderCatalogProjectionTests(unittest.IsolatedAsyncioTestCase):

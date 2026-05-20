@@ -26,6 +26,7 @@ from server_modules.agent_turn import (
     bind_agent_turn_metadata,
     resolve_agent_turn_request,
 )
+from server_modules import usage_accounting_service
 from server_modules.usage_reporting import build_usage_record
 
 SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama", "ollama_cloud", "qwen", "deepseek", "mistral")
@@ -3163,6 +3164,16 @@ def build_usage_masked(provider: str, model: str, input_tokens: int, output_toke
 def build_usage_masked_from_provider(provider: str, usage: Optional[Dict[str, Any]], model: str) -> Dict[str, Any]:
     pid = str(provider or "").strip().lower()
     source = usage or {}
+    if pid not in {"claude_code_cli"}:
+        try:
+            record = usage_accounting_service.normalize_provider_usage(
+                provider=pid or "local_companion",
+                model=model or resolve_requested_model({}, {}, pid),
+                usage=source,
+            )
+            return usage_accounting_service.usage_projection_from_record(record)
+        except Exception:
+            pass
     if pid == "codex_cli":
         prompt_tokens = to_int(source.get("prompt_tokens"), 0)
         completion_tokens = to_int(source.get("completion_tokens"), 0)

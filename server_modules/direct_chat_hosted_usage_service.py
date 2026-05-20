@@ -29,7 +29,6 @@ def _session_request_id(session_ctx: Optional[Dict[str, Any]], thread_id: str) -
         or _text(payload.get("client_request_id"))
         or _text(context_hints.get("request_id"))
         or _text(thread_id)
-        or f"direct-chat-{datetime.now(timezone.utc).timestamp():.6f}"
     )
 
 
@@ -79,14 +78,19 @@ def persist_direct_chat_hosted_usage_best_effort(
     if not bool(availability.get("platform_runtime_allowed")):
         return
     if not usage:
-        return
+        raise RuntimeError("Hosted AI usage is missing for platform credit accounting.")
 
     workspace_token = _text(workspace_id)
-    thread_token = _text(thread_id) or "direct-chat"
-    request_id = _session_request_id(session_ctx, thread_token)
+    if not workspace_token:
+        raise RuntimeError("Hosted AI usage is missing workspace scope for credit accounting.")
+    raw_thread_token = _text(thread_id)
+    request_id = _session_request_id(session_ctx, raw_thread_token)
+    if not request_id:
+        raise RuntimeError("Hosted AI usage is missing request id for credit accounting.")
+    thread_token = raw_thread_token or "direct-chat"
     tenant_id = _session_tenant_id(session_ctx, workspace_token)
-    if not workspace_token or not tenant_id or not request_id:
-        return
+    if not tenant_id:
+        raise RuntimeError("Hosted AI usage is missing tenant scope for credit accounting.")
 
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     turn_metadata = _session_turn_metadata(session_ctx)
@@ -121,6 +125,7 @@ def persist_direct_chat_hosted_usage_best_effort(
                 "thread_id": thread_token,
                 "request_id": request_id,
                 "credential_plane": "platform_runtime",
+                "surface": "sage",
                 "source_surface": "sage_direct_chat",
             },
         },
@@ -131,6 +136,7 @@ def persist_direct_chat_hosted_usage_best_effort(
             "run_id": request_id,
             "tenant_id": tenant_id,
             "workspace_id": workspace_token,
+            "surface": "sage",
             "source_surface": "sage_direct_chat",
             "requested_provider": _text(requested_provider) or _coerce_dict(usage.get("usage_accounting")).get("requested_provider"),
             "effective_provider": _text(effective_provider) or _coerce_dict(usage.get("usage_accounting")).get("effective_provider"),
@@ -157,6 +163,7 @@ def persist_direct_chat_hosted_usage_best_effort(
             "model": _text(effective_model) or usage.get("model"),
             "requested_provider": _text(requested_provider) or usage.get("requested_provider"),
             "requested_model": _text(requested_model) or usage.get("requested_model"),
+            "surface": "sage",
             "source_surface": "sage_direct_chat",
             "timestamp": timestamp,
             "metadata": {
@@ -175,10 +182,17 @@ def persist_direct_chat_hosted_usage_best_effort(
 
     row = usage_accounting_service.usage_row_from_snapshot(snapshot)
     if not isinstance(row, dict):
-        return
+        raise RuntimeError("Hosted AI usage could not be normalized for credit accounting.")
+    validation_error = usage_accounting_service.platform_paid_usage_validation_error(row)
+    if validation_error:
+        reason = "unknown pricing" if validation_error == "unknown_pricing" else validation_error
+        raise RuntimeError(
+            "Hosted AI usage is not exact enough for platform credit accounting "
+            f"({reason}) for {row.get('provider') or 'unknown'}:{row.get('model') or 'unknown'}."
+        )
 
     try:
-        run_async_tool_call(
+        ledger_entry = run_async_tool_call(
             control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry(
                 tenant_id=tenant_id,
                 workspace_id=workspace_token,
@@ -198,6 +212,7 @@ def persist_direct_chat_hosted_usage_best_effort(
                     "requested_provider": _text(requested_provider) or None,
                     "requested_model": _text(requested_model) or None,
                     "billing_source": line_item_metadata.get("billing_source"),
+                    "credit_type": line_item_metadata.get("credit_type"),
                     "public_tier": line_item_metadata.get("public_tier"),
                     "credit_item_type": line_item_metadata.get("credit_item_type"),
                     "credit_quantity": line_item_metadata.get("quantity"),
@@ -207,7 +222,9 @@ def persist_direct_chat_hosted_usage_best_effort(
             )
         )
     except Exception:
-        return
+        raise RuntimeError("Hosted AI usage cost ledger persistence failed.")
+    if not isinstance(ledger_entry, dict):
+        raise RuntimeError("Hosted AI usage cost ledger persistence failed.")
     try:
         from server_modules import billing_service
 
@@ -217,4 +234,4 @@ def persist_direct_chat_hosted_usage_best_effort(
             request_id=request_id,
         )
     except Exception:
-        return
+        raise RuntimeError("Hosted AI credit debit failed.")

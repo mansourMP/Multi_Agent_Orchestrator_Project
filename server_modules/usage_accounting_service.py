@@ -15,6 +15,7 @@ class UsageAccountingRecord:
     tenant_id: Optional[str]
     workspace_id: Optional[str]
     deployed_agent_id: Optional[str]
+    surface: str
     source_surface: str
     requested_provider: Optional[str]
     effective_provider: Optional[str]
@@ -30,6 +31,23 @@ class UsageAccountingRecord:
     estimation_mode: str
     completed_at: str
     metadata: Dict[str, Any]
+    user_id: Optional[str] = None
+    app_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    payer: Optional[str] = None
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
+    visible_output_tokens: int = 0
+    reasoning_tokens: int = 0
+    thinking_tokens: int = 0
+    provider_cost_usd: Optional[float] = None
+    retail_credits_charged: Optional[float] = None
+    success: bool = True
+    error_code: Optional[str] = None
+    fallback_attempt: bool = False
+    created_at: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -60,6 +78,10 @@ def _safe_float(value: Any) -> Optional[float]:
         return round(float(value), 6)
     except Exception:
         return None
+
+
+def _nonnegative_int(value: Any) -> int:
+    return max(0, _safe_int(value, 0))
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
@@ -104,12 +126,26 @@ def _derive_source_surface(
     return "durable_run"
 
 
+def _derive_surface(value: Any) -> str:
+    token = _normalize_text(value).lower()
+    if token in {"sage", "studio", "mini_app"}:
+        return token
+    if token in {"sage_direct_chat", "direct_chat", "chat_direct"}:
+        return "sage"
+    if token in {"deployed_agent_channel", "studio_agent", "studio_test", "workflow_graph"}:
+        return "studio"
+    if token in {"mini_app_invoke", "application_activity"}:
+        return "mini_app"
+    return token or "durable_run"
+
+
 def build_usage_accounting_record(
     *,
     run_id: Optional[str],
     tenant_id: Optional[str] = None,
     workspace_id: Optional[str] = None,
     deployed_agent_id: Optional[str] = None,
+    surface: Optional[str] = None,
     source_surface: Optional[str] = None,
     requested_provider: Optional[str] = None,
     effective_provider: Optional[str] = None,
@@ -118,11 +154,29 @@ def build_usage_accounting_record(
     input_tokens: int,
     output_tokens: int,
     total_tokens: Optional[int] = None,
+    cached_input_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    visible_output_tokens: Optional[int] = None,
+    reasoning_tokens: int = 0,
+    thinking_tokens: int = 0,
     estimated_cost_usd: Optional[float] = None,
+    provider_cost_usd: Optional[float] = None,
+    retail_credits_charged: Optional[float] = None,
+    payer: Optional[str] = None,
+    user_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    success: bool = True,
+    error_code: Optional[str] = None,
+    fallback_attempt: bool = False,
     estimation_mode: str = "reconstructed",
     completed_at: Optional[str] = None,
+    created_at: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     allow_provider_fallback: bool = False,
+    require_known_pricing: bool = False,
 ) -> Dict[str, Any]:
     provider = pricing_registry_service.normalize_provider_id(
         effective_provider or requested_provider or "local_companion"
@@ -135,13 +189,23 @@ def build_usage_accounting_record(
         requested_provider or provider
     ) or None
     normalized_requested_model = _normalize_optional_text(requested_model or model)
-    input_value = max(0, _safe_int(input_tokens, 0))
-    output_value = max(0, _safe_int(output_tokens, 0))
-    total_value = max(input_value + output_value, _safe_int(total_tokens, input_value + output_value))
+    input_value = _nonnegative_int(input_tokens)
+    output_value = _nonnegative_int(output_tokens)
+    cached_value = _nonnegative_int(cached_input_tokens)
+    cache_write_value = _nonnegative_int(cache_write_tokens)
+    cache_read_value = _nonnegative_int(cache_read_tokens)
+    visible_output_value = _nonnegative_int(output_value if visible_output_tokens is None else visible_output_tokens)
+    reasoning_value = _nonnegative_int(reasoning_tokens)
+    thinking_value = _nonnegative_int(thinking_tokens)
+    cached_charge_value = cache_read_value or cached_value
+    token_floor = input_value + cache_write_value + cached_charge_value + visible_output_value + reasoning_value + thinking_value
+    total_value = max(token_floor, _safe_int(total_tokens, token_floor))
     pricing_entry = pricing_registry_service.lookup_pricing_entry(provider, model)
     pricing_source = None
     pricing_known = False
-    resolved_cost = _safe_float(estimated_cost_usd)
+    resolved_cost = _safe_float(provider_cost_usd)
+    if resolved_cost is None:
+        resolved_cost = _safe_float(estimated_cost_usd)
     if pricing_entry is not None:
         pricing_source = pricing_entry.rate.source
         if pricing_entry.rate.input_usd_per_million is not None and pricing_entry.rate.output_usd_per_million is not None:
@@ -151,8 +215,15 @@ def build_usage_accounting_record(
                     provider,
                     model,
                     input_value,
-                    output_value,
+                    visible_output_value,
+                    cached_input_tokens=0 if cache_read_value else cached_value,
+                    cache_write_tokens=cache_write_value,
+                    cache_read_tokens=cache_read_value,
+                    reasoning_tokens=reasoning_value,
+                    thinking_tokens=thinking_value,
                 )
+    if require_known_pricing and (pricing_entry is None or resolved_cost is None or not pricing_known):
+        raise ValueError(f"Known pricing is required for platform-paid usage: {provider}:{model}.")
     if resolved_cost is None and allow_provider_fallback:
         fallback = pricing_registry_service.provider_fallback_rate_per_1k(provider)
         fallback_source = str(fallback.get("source") or "").strip()
@@ -165,13 +236,16 @@ def build_usage_accounting_record(
             )
             pricing_source = fallback_source or pricing_source
             pricing_known = False
+    resolved_source_surface = _derive_source_surface(explicit=source_surface or surface)
+    resolved_surface = _derive_surface(surface or resolved_source_surface)
     record = UsageAccountingRecord(
         usage_record_id=f"uacct_{_normalize_text(run_id) or uuid.uuid4().hex[:16]}",
         run_id=_normalize_optional_text(run_id),
         tenant_id=_normalize_optional_text(tenant_id),
         workspace_id=_normalize_optional_text(workspace_id),
         deployed_agent_id=_normalize_optional_text(deployed_agent_id),
-        source_surface=_derive_source_surface(explicit=source_surface),
+        surface=resolved_surface,
+        source_surface=resolved_source_surface,
         requested_provider=normalized_requested_provider,
         effective_provider=provider,
         requested_model=normalized_requested_model,
@@ -186,6 +260,23 @@ def build_usage_accounting_record(
         estimation_mode=_normalize_text(estimation_mode).lower() or "reconstructed",
         completed_at=_normalize_optional_text(completed_at) or _utc_now_iso(),
         metadata=_coerce_dict(metadata),
+        user_id=_normalize_optional_text(user_id),
+        app_id=_normalize_optional_text(app_id),
+        thread_id=_normalize_optional_text(thread_id),
+        agent_id=_normalize_optional_text(agent_id or deployed_agent_id),
+        payer=_normalize_optional_text(payer),
+        cached_input_tokens=cached_value,
+        cache_write_tokens=cache_write_value,
+        cache_read_tokens=cache_read_value,
+        visible_output_tokens=visible_output_value,
+        reasoning_tokens=reasoning_value,
+        thinking_tokens=thinking_value,
+        provider_cost_usd=resolved_cost,
+        retail_credits_charged=_safe_float(retail_credits_charged),
+        success=bool(success),
+        error_code=_normalize_optional_text(error_code),
+        fallback_attempt=bool(fallback_attempt),
+        created_at=_normalize_optional_text(created_at) or _normalize_optional_text(completed_at) or _utc_now_iso(),
     )
     return record.as_dict()
 
@@ -194,28 +285,99 @@ def usage_projection_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(record or {})
     cost = _safe_float(payload.get("estimated_cost_usd"))
     timestamp = _normalize_optional_text(payload.get("completed_at")) or _utc_now_iso()
+    source_surface = _normalize_optional_text(payload.get("source_surface")) or _derive_source_surface(
+        explicit=_normalize_optional_text(payload.get("surface"))
+    )
+    surface = _derive_surface(payload.get("surface") or source_surface)
     return {
         "provider": _normalize_optional_text(payload.get("effective_provider")),
         "model": _normalize_optional_text(payload.get("effective_model")),
         "prompt_tokens": max(0, _safe_int(payload.get("input_tokens"), 0)),
         "completion_tokens": max(0, _safe_int(payload.get("output_tokens"), 0)),
         "total_tokens": max(0, _safe_int(payload.get("total_tokens"), 0)),
+        "cached_input_tokens": max(0, _safe_int(payload.get("cached_input_tokens"), 0)),
+        "cache_write_tokens": max(0, _safe_int(payload.get("cache_write_tokens"), 0)),
+        "cache_read_tokens": max(0, _safe_int(payload.get("cache_read_tokens"), 0)),
+        "visible_output_tokens": max(0, _safe_int(payload.get("visible_output_tokens"), payload.get("output_tokens") or 0)),
+        "reasoning_tokens": max(0, _safe_int(payload.get("reasoning_tokens"), 0)),
+        "thinking_tokens": max(0, _safe_int(payload.get("thinking_tokens"), 0)),
         "input_tokens_est": max(0, _safe_int(payload.get("input_tokens"), 0)),
         "output_tokens_est": max(0, _safe_int(payload.get("output_tokens"), 0)),
         "total_tokens_est": max(0, _safe_int(payload.get("total_tokens"), 0)),
         "estimated_cost_usd": cost,
+        "provider_cost_usd": _safe_float(payload.get("provider_cost_usd", payload.get("estimated_cost_usd"))),
+        "retail_credits_charged": _safe_float(payload.get("retail_credits_charged")),
+        "payer": _normalize_optional_text(payload.get("payer")),
         "cost_est_usd": cost,
         "cost_band": masked_cost_band(cost),
         "pricing_known": bool(payload.get("pricing_known")),
         "pricing_source": _normalize_optional_text(payload.get("pricing_source")),
         "pricing_registry_version": _normalize_optional_text(payload.get("pricing_registry_version")),
         "estimation_mode": _normalize_optional_text(payload.get("estimation_mode")) or "reconstructed",
-        "source_surface": _normalize_optional_text(payload.get("source_surface")) or "durable_run",
+        "surface": surface,
+        "source_surface": source_surface,
         "usage_record_id": _normalize_optional_text(payload.get("usage_record_id")),
         "run_id": _normalize_optional_text(payload.get("run_id")),
+        "workspace_id": _normalize_optional_text(payload.get("workspace_id")),
+        "user_id": _normalize_optional_text(payload.get("user_id")),
+        "app_id": _normalize_optional_text(payload.get("app_id")),
+        "agent_id": _normalize_optional_text(payload.get("agent_id") or payload.get("deployed_agent_id")),
+        "thread_id": _normalize_optional_text(payload.get("thread_id")),
+        "success": bool(payload.get("success", True)),
+        "error_code": _normalize_optional_text(payload.get("error_code")),
+        "fallback_attempt": bool(payload.get("fallback_attempt")),
         "timestamp": timestamp,
         "usage_accounting": payload,
     }
+
+
+PLATFORM_PAID_USAGE_VALUES = {"platform_credits", "empyralis_credits", "empyralis"}
+_NON_EXACT_ESTIMATION_MODES = {
+    "provider_usage_missing",
+    "masked_text_estimate",
+    "heuristic",
+    "heuristic_estimate",
+}
+
+
+def is_platform_paid_usage_value(value: Any) -> bool:
+    return _normalize_text(value).lower() in PLATFORM_PAID_USAGE_VALUES
+
+
+def platform_paid_usage_validation_error(row_or_record: Dict[str, Any]) -> Optional[str]:
+    payload = dict(row_or_record or {}) if isinstance(row_or_record, dict) else {}
+    provider = _normalize_optional_text(payload.get("provider") or payload.get("effective_provider"))
+    model = _normalize_optional_text(payload.get("model") or payload.get("effective_model"))
+    total_tokens = max(0, _safe_int(payload.get("total_tokens") or payload.get("total_tokens_est"), 0))
+    provider_cost = _safe_float(
+        payload.get("provider_cost_usd", payload.get("estimated_cost_usd", payload.get("cost_est_usd")))
+    )
+    estimation_mode = _normalize_text(payload.get("estimation_mode")).lower()
+    if not provider:
+        return "missing_provider"
+    if not model:
+        return "missing_model"
+    if total_tokens <= 0:
+        return "missing_provider_token_usage"
+    if not bool(payload.get("pricing_known")):
+        return "unknown_pricing"
+    if provider_cost is None:
+        return "missing_provider_cost"
+    if estimation_mode in _NON_EXACT_ESTIMATION_MODES or estimation_mode.startswith("heuristic"):
+        return f"non_exact_usage:{estimation_mode or 'unknown'}"
+    if bool(payload.get("fallback_attempt")):
+        return "fallback_attempt"
+    if payload.get("success") is False:
+        return f"unsuccessful_usage:{_normalize_text(payload.get('error_code')) or 'unknown'}"
+    return None
+
+
+def assert_platform_paid_usage(row_or_record: Dict[str, Any], *, label: str = "Platform-paid AI usage") -> Dict[str, Any]:
+    payload = dict(row_or_record or {}) if isinstance(row_or_record, dict) else {}
+    error = platform_paid_usage_validation_error(payload)
+    if error:
+        raise ValueError(f"{label} requires exact priced provider usage ({error}).")
+    return payload
 
 
 def build_masked_usage(
@@ -257,7 +419,8 @@ def accounting_record_from_snapshot(snapshot: Dict[str, Any]) -> Optional[Dict[s
             tenant_id=_normalize_optional_text(direct.get("tenant_id") or _coerce_dict(snapshot.get("context")).get("tenant_id")),
             workspace_id=_normalize_optional_text(direct.get("workspace_id") or _coerce_dict(snapshot.get("context")).get("workspace_id")),
             deployed_agent_id=_normalize_optional_text(direct.get("deployed_agent_id") or _coerce_dict(_coerce_dict(snapshot.get("context")).get("metadata")).get("deployed_agent_id")),
-            source_surface=_normalize_optional_text(direct.get("source_surface")),
+            surface=_normalize_optional_text(direct.get("surface")),
+            source_surface=_normalize_optional_text(direct.get("source_surface") or direct.get("surface")),
             requested_provider=direct.get("requested_provider"),
             effective_provider=direct.get("effective_provider"),
             requested_model=direct.get("requested_model"),
@@ -265,9 +428,26 @@ def accounting_record_from_snapshot(snapshot: Dict[str, Any]) -> Optional[Dict[s
             input_tokens=_safe_int(direct.get("input_tokens"), 0),
             output_tokens=_safe_int(direct.get("output_tokens"), 0),
             total_tokens=_safe_int(direct.get("total_tokens"), 0),
+            cached_input_tokens=_safe_int(direct.get("cached_input_tokens"), 0),
+            cache_write_tokens=_safe_int(direct.get("cache_write_tokens"), 0),
+            cache_read_tokens=_safe_int(direct.get("cache_read_tokens"), 0),
+            visible_output_tokens=_safe_int(direct.get("visible_output_tokens"), direct.get("output_tokens") or 0),
+            reasoning_tokens=_safe_int(direct.get("reasoning_tokens"), 0),
+            thinking_tokens=_safe_int(direct.get("thinking_tokens"), 0),
             estimated_cost_usd=_safe_float(direct.get("estimated_cost_usd")),
+            provider_cost_usd=_safe_float(direct.get("provider_cost_usd")),
+            retail_credits_charged=_safe_float(direct.get("retail_credits_charged")),
+            payer=_normalize_optional_text(direct.get("payer")),
+            user_id=_normalize_optional_text(direct.get("user_id") or snapshot.get("owner_user_id")),
+            app_id=_normalize_optional_text(direct.get("app_id") or snapshot.get("app_id")),
+            thread_id=_normalize_optional_text(direct.get("thread_id") or snapshot.get("thread_id")),
+            agent_id=_normalize_optional_text(direct.get("agent_id") or direct.get("deployed_agent_id")),
+            success=bool(direct.get("success", True)),
+            error_code=_normalize_optional_text(direct.get("error_code")),
+            fallback_attempt=bool(direct.get("fallback_attempt")),
             estimation_mode=_normalize_optional_text(direct.get("estimation_mode")) or "reconstructed",
             completed_at=_normalize_optional_text(direct.get("completed_at") or snapshot.get("completed_at") or snapshot.get("updated_at") or snapshot.get("created_at")),
+            created_at=_normalize_optional_text(direct.get("created_at") or snapshot.get("created_at")),
             metadata=_coerce_dict(direct.get("metadata")),
         )
     usage = snapshot.get("usage_masked") if isinstance(snapshot.get("usage_masked"), dict) else {}
@@ -289,8 +469,14 @@ def accounting_record_from_snapshot(snapshot: Dict[str, Any]) -> Optional[Dict[s
         tenant_id=_normalize_optional_text(context.get("tenant_id") or snapshot.get("tenant_id")),
         workspace_id=_normalize_optional_text(context.get("workspace_id") or snapshot.get("workspace_id")),
         deployed_agent_id=_normalize_optional_text(metadata.get("deployed_agent_id") or snapshot.get("deployed_agent_id")),
+        surface=_normalize_optional_text(usage.get("surface") or snapshot.get("surface") or metadata.get("surface")),
         source_surface=_derive_source_surface(
-            explicit=_normalize_optional_text(usage.get("source_surface") or snapshot.get("source_surface")),
+            explicit=_normalize_optional_text(
+                usage.get("source_surface")
+                or usage.get("surface")
+                or snapshot.get("source_surface")
+                or snapshot.get("surface")
+            ),
             context=context,
             metadata=metadata,
         ),
@@ -301,9 +487,26 @@ def accounting_record_from_snapshot(snapshot: Dict[str, Any]) -> Optional[Dict[s
         input_tokens=_safe_int(usage.get("prompt_tokens", usage.get("input_tokens_est", 0)), 0),
         output_tokens=_safe_int(usage.get("completion_tokens", usage.get("output_tokens_est", 0)), 0),
         total_tokens=_safe_int(usage.get("total_tokens", usage.get("total_tokens_est", 0)), 0),
+        cached_input_tokens=_safe_int(usage.get("cached_input_tokens"), 0),
+        cache_write_tokens=_safe_int(usage.get("cache_write_tokens"), 0),
+        cache_read_tokens=_safe_int(usage.get("cache_read_tokens"), 0),
+        visible_output_tokens=_safe_int(usage.get("visible_output_tokens", usage.get("completion_tokens", usage.get("output_tokens_est", 0))), 0),
+        reasoning_tokens=_safe_int(usage.get("reasoning_tokens"), 0),
+        thinking_tokens=_safe_int(usage.get("thinking_tokens"), 0),
         estimated_cost_usd=_safe_float(usage.get("estimated_cost_usd", usage.get("cost_est_usd"))),
+        provider_cost_usd=_safe_float(usage.get("provider_cost_usd")),
+        retail_credits_charged=_safe_float(usage.get("retail_credits_charged")),
+        payer=_normalize_optional_text(usage.get("payer")),
+        user_id=_normalize_optional_text(usage.get("user_id") or snapshot.get("owner_user_id")),
+        app_id=_normalize_optional_text(usage.get("app_id") or snapshot.get("app_id")),
+        thread_id=_normalize_optional_text(usage.get("thread_id") or snapshot.get("thread_id")),
+        agent_id=_normalize_optional_text(usage.get("agent_id") or snapshot.get("deployed_agent_id")),
+        success=bool(usage.get("success", True)),
+        error_code=_normalize_optional_text(usage.get("error_code")),
+        fallback_attempt=bool(usage.get("fallback_attempt")),
         estimation_mode=_normalize_optional_text(usage.get("estimation_mode")) or "reconstructed",
         completed_at=_normalize_optional_text(usage.get("timestamp") or snapshot.get("completed_at") or snapshot.get("updated_at") or snapshot.get("created_at")),
+        created_at=_normalize_optional_text(snapshot.get("created_at")),
         metadata={
             **_coerce_dict(usage.get("metadata")),
             "pricing_registry_version": usage.get("pricing_registry_version"),
@@ -316,13 +519,18 @@ def accounting_record_from_snapshot(snapshot: Dict[str, Any]) -> Optional[Dict[s
 def usage_row_from_record(record: Dict[str, Any], *, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = dict(record or {})
     origin = _coerce_dict(snapshot)
+    source_surface = _normalize_optional_text(payload.get("source_surface")) or _derive_source_surface(
+        explicit=_normalize_optional_text(payload.get("surface"))
+    )
+    surface = _derive_surface(payload.get("surface") or source_surface)
     row = {
         "usage_record_id": _normalize_optional_text(payload.get("usage_record_id")),
         "run_id": _normalize_optional_text(payload.get("run_id") or origin.get("run_id")),
         "tenant_id": _normalize_optional_text(payload.get("tenant_id") or origin.get("tenant_id")),
         "workspace_id": _normalize_optional_text(payload.get("workspace_id") or origin.get("workspace_id")),
         "deployed_agent_id": _normalize_optional_text(payload.get("deployed_agent_id") or origin.get("deployed_agent_id")),
-        "source_surface": _normalize_optional_text(payload.get("source_surface")) or "durable_run",
+        "surface": surface,
+        "source_surface": source_surface,
         "requested_provider": _normalize_optional_text(payload.get("requested_provider")),
         "provider": _normalize_optional_text(payload.get("effective_provider")),
         "requested_model": _normalize_optional_text(payload.get("requested_model")),
@@ -330,7 +538,16 @@ def usage_row_from_record(record: Dict[str, Any], *, snapshot: Optional[Dict[str
         "prompt_tokens": max(0, _safe_int(payload.get("input_tokens"), 0)),
         "completion_tokens": max(0, _safe_int(payload.get("output_tokens"), 0)),
         "total_tokens": max(0, _safe_int(payload.get("total_tokens"), 0)),
+        "cached_input_tokens": max(0, _safe_int(payload.get("cached_input_tokens"), 0)),
+        "cache_write_tokens": max(0, _safe_int(payload.get("cache_write_tokens"), 0)),
+        "cache_read_tokens": max(0, _safe_int(payload.get("cache_read_tokens"), 0)),
+        "visible_output_tokens": max(0, _safe_int(payload.get("visible_output_tokens"), payload.get("output_tokens") or 0)),
+        "reasoning_tokens": max(0, _safe_int(payload.get("reasoning_tokens"), 0)),
+        "thinking_tokens": max(0, _safe_int(payload.get("thinking_tokens"), 0)),
         "estimated_cost_usd": _safe_float(payload.get("estimated_cost_usd")),
+        "provider_cost_usd": _safe_float(payload.get("provider_cost_usd", payload.get("estimated_cost_usd"))),
+        "retail_credits_charged": _safe_float(payload.get("retail_credits_charged")),
+        "payer": _normalize_optional_text(payload.get("payer")),
         "cost_est_usd": _safe_float(payload.get("estimated_cost_usd")),
         "cost_band": masked_cost_band(_safe_float(payload.get("estimated_cost_usd"))),
         "pricing_known": bool(payload.get("pricing_known")),
@@ -342,10 +559,101 @@ def usage_row_from_record(record: Dict[str, Any], *, snapshot: Optional[Dict[str
         "completed_at": _normalize_optional_text(origin.get("completed_at") or payload.get("completed_at")),
         "status": _normalize_optional_text(origin.get("status")),
         "owner_user_id": _normalize_optional_text(origin.get("owner_user_id")),
+        "user_id": _normalize_optional_text(payload.get("user_id") or origin.get("owner_user_id")),
+        "app_id": _normalize_optional_text(payload.get("app_id") or origin.get("app_id")),
+        "agent_id": _normalize_optional_text(payload.get("agent_id") or payload.get("deployed_agent_id") or origin.get("deployed_agent_id")),
+        "thread_id": _normalize_optional_text(payload.get("thread_id") or origin.get("thread_id")),
         "run_name": _normalize_optional_text(origin.get("user_goal") or origin.get("result_summary")) or _normalize_optional_text(payload.get("run_id")),
         "metadata": _coerce_dict(payload.get("metadata")),
     }
     return row
+
+
+def normalize_provider_usage(
+    *,
+    provider: Any,
+    model: Any,
+    usage: Optional[Dict[str, Any]],
+    run_id: Optional[str] = None,
+    surface: Optional[str] = None,
+    source_surface: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    payer: Optional[str] = None,
+    require_known_pricing: bool = False,
+) -> Dict[str, Any]:
+    """Normalize provider-specific token usage into the canonical accounting shape."""
+    pid = pricing_registry_service.normalize_provider_id(provider)
+    model_id = pricing_registry_service.normalize_model_id(pid, model)
+    raw = _coerce_dict(usage)
+
+    if pid in {"anthropic", "claude_code_cli"}:
+        input_tokens = _nonnegative_int(raw.get("input_tokens"))
+        cache_read_tokens = _nonnegative_int(raw.get("cache_read_input_tokens"))
+        cache_write_tokens = _nonnegative_int(raw.get("cache_creation_input_tokens"))
+        visible_output_tokens = _nonnegative_int(raw.get("output_tokens"))
+        reasoning_tokens = _nonnegative_int(raw.get("reasoning_output_tokens") or raw.get("thinking_tokens"))
+        thinking_tokens = _nonnegative_int(raw.get("thinking_output_tokens"))
+    elif pid in {"gemini", "vertex"}:
+        prompt_tokens = _nonnegative_int(raw.get("promptTokenCount") or raw.get("prompt_token_count"))
+        cache_read_tokens = _nonnegative_int(raw.get("cachedContentTokenCount") or raw.get("cacheReadTokenCount"))
+        input_tokens = max(0, prompt_tokens - cache_read_tokens)
+        cache_write_tokens = _nonnegative_int(raw.get("cacheWriteTokenCount"))
+        visible_output_tokens = _nonnegative_int(raw.get("candidatesTokenCount") or raw.get("completionTokenCount"))
+        thinking_tokens = _nonnegative_int(raw.get("thoughtsTokenCount") or raw.get("thinkingTokenCount"))
+        reasoning_tokens = _nonnegative_int(raw.get("reasoningTokenCount"))
+    elif pid in {"ollama", "ollama_cloud"}:
+        input_tokens = _nonnegative_int(raw.get("prompt_eval_count"))
+        cache_read_tokens = 0
+        cache_write_tokens = 0
+        visible_output_tokens = _nonnegative_int(raw.get("eval_count"))
+        reasoning_tokens = 0
+        thinking_tokens = 0
+    else:
+        prompt_tokens = _nonnegative_int(raw.get("prompt_tokens") or raw.get("input_tokens"))
+        prompt_details = _coerce_dict(raw.get("prompt_tokens_details"))
+        completion_details = _coerce_dict(raw.get("completion_tokens_details"))
+        cache_read_tokens = _nonnegative_int(
+            raw.get("cached_input_tokens")
+            or prompt_details.get("cached_tokens")
+            or raw.get("cache_read_input_tokens")
+        )
+        input_tokens = max(0, prompt_tokens - cache_read_tokens)
+        cache_write_tokens = _nonnegative_int(raw.get("cache_write_input_tokens") or raw.get("cache_creation_input_tokens"))
+        reasoning_tokens = _nonnegative_int(
+            raw.get("reasoning_tokens")
+            or completion_details.get("reasoning_tokens")
+            or raw.get("reasoning_output_tokens")
+        )
+        thinking_tokens = _nonnegative_int(raw.get("thinking_tokens") or raw.get("thoughts_tokens"))
+        completion_tokens = _nonnegative_int(raw.get("completion_tokens") or raw.get("output_tokens"))
+        visible_output_tokens = max(0, completion_tokens - reasoning_tokens - thinking_tokens)
+
+    output_tokens = visible_output_tokens + reasoning_tokens + thinking_tokens
+    total_tokens = _nonnegative_int(raw.get("total_tokens") or raw.get("totalTokenCount"))
+    if total_tokens <= 0:
+        total_tokens = input_tokens + cache_read_tokens + cache_write_tokens + output_tokens
+    return build_usage_accounting_record(
+        run_id=run_id,
+        surface=surface,
+        source_surface=source_surface,
+        requested_provider=provider,
+        effective_provider=pid,
+        requested_model=model,
+        effective_model=model_id,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cached_input_tokens=cache_read_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        visible_output_tokens=visible_output_tokens,
+        reasoning_tokens=reasoning_tokens,
+        thinking_tokens=thinking_tokens,
+        estimation_mode="provider_usage_exact" if raw else "provider_usage_missing",
+        metadata={**_coerce_dict(metadata), "raw_usage_keys": sorted(str(key) for key in raw.keys())},
+        payer=payer,
+        require_known_pricing=require_known_pricing,
+    )
 
 
 def usage_row_from_snapshot(snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -680,6 +680,7 @@ export type WorkstationClientPaths = {
   sageProfile: string;
   sageHeartbeat: string;
   sageSkills: string;
+  sageCapabilities: string;
   sageProfileBootstrapAnswer: string;
   sageMemoryStoragePolicy: string;
   sageMemoryExport: string;
@@ -851,6 +852,7 @@ export type WorkstationClient = {
   getSageProfile: () => Promise<WorkstationSageProfileRecord>;
   getSageHeartbeat: () => Promise<WorkstationSageHeartbeatRecord>;
   listSageSkills: () => Promise<Record<string, unknown>>;
+  listSageCapabilities: () => Promise<Record<string, unknown>>;
   updateSageProfile: (options: {
     userName?: string | null;
     identitySummary?: string | null;
@@ -1315,6 +1317,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/sage-heartbeat${buildQueryString({ workspace_id: workspaceId })}`,
     sageSkills:
       `/api/sage-skills${buildQueryString({ workspace_id: workspaceId })}`,
+    sageCapabilities:
+      `/api/sage-capabilities${buildQueryString({ workspace_id: workspaceId })}`,
     sageProfileBootstrapAnswer:
       '/api/sage-profile/bootstrap/answer',
     sageMemoryStoragePolicy:
@@ -2443,6 +2447,11 @@ export function createWorkstationClient(
         path: paths.sageSkills,
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    listSageCapabilities: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageCapabilities,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
     updateSageProfile: ({
       userName = null,
       identitySummary = null,
@@ -3110,6 +3119,7 @@ export function createWorkstationClient(
             channel: body.channel ?? 'test',
             runtime_mode: body.runtime_mode ?? 'text_agent',
             customer_profile: body.customer_profile ?? null,
+            recent_messages: Array.isArray(body.recent_messages) ? body.recent_messages : [],
           }),
         },
         policy: WRITE_REQUEST_POLICY,

@@ -7,6 +7,7 @@ from server_modules.deployed_agent_test_turn_service import (
     ALLOWED_TEST_CHANNELS,
     ALLOWED_RUNTIME_MODES,
     TESTABLE_STATES,
+    _build_live_test_messages,
     _build_policy_decisions,
     _evaluate_tool_policy,
     _load_memory_context_for_test,
@@ -21,6 +22,12 @@ class DummyConfig:
         self.runtime_placement = kwargs.get("runtime_placement", "managed_cloud")
         self.studio_agent_mode = kwargs.get("studio_agent_mode", "text_agent")
         self.runtime_target = kwargs.get("runtime_target", "cloud_default")
+        self.runtime_supply = kwargs.get("runtime_supply", {})
+        self.provider = kwargs.get("provider")
+        self.model = kwargs.get("model")
+        self.name = kwargs.get("name", "Test Agent")
+        self.persona = kwargs.get("persona", "")
+        self.system_prompt = kwargs.get("system_prompt", "")
         self.channels = kwargs.get("channels", {})
         self.tool_policy = kwargs.get("tool_policy")
         self.safety_policy = kwargs.get("safety_policy")
@@ -53,6 +60,32 @@ def _make_request(**overrides) -> DeployedAgentTestTurnRequest:
         channel=overrides.get("channel", "test"),
         runtime_mode=overrides.get("runtime_mode", "text_agent"),
         customer_profile=overrides.get("customer_profile"),
+        recent_messages=overrides.get("recent_messages", []),
+    )
+
+
+def _live_reply_patch(reply: str = "Live Studio reply."):
+    return patch(
+        "server_modules.deployed_agent_test_turn_service._generate_live_test_reply",
+        new=AsyncMock(return_value=(
+            reply,
+            {
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "usage": {
+                    "provider": "deepseek",
+                    "model": "deepseek-chat",
+                    "total_tokens": 12,
+                    "retail_credits_charged": 0.01,
+                },
+                "ai_source": {"kind": "empyralis_credits"},
+                "prompt_context": {
+                    "prompt_source": "test_guardrails_only",
+                    "recent_messages_included": 0,
+                    "context_truncated": False,
+                },
+            },
+        )),
     )
 
 
@@ -311,7 +344,7 @@ class TestTurnPolicyTests(unittest.TestCase):
             return_value=[],
         ), patch(
             "server_modules.deployed_agent_test_turn_service.security_audit_service.emit_security_audit_event",
-        ):
+        ), _live_reply_patch("Live reply from DeepSeek."):
             import asyncio
             result = asyncio.run(execute_test_turn(
                 deployed_agent_id="a1",
@@ -322,10 +355,14 @@ class TestTurnPolicyTests(unittest.TestCase):
             ))
 
             self.assertTrue(len(result.reply) > 0)
+            self.assertEqual(result.reply, "Live reply from DeepSeek.")
+            self.assertEqual(result.model_provider, "deepseek")
+            self.assertEqual(result.model, "deepseek-chat")
             self.assertIsInstance(result.policy_decisions, list)
             self.assertIsInstance(result.tools_considered, list)
             self.assertIsInstance(result.tools_used, list)
             self.assertIsInstance(result.memory_context, dict)
+            self.assertIsInstance(result.prompt_context, dict)
             self.assertFalse(result.approval_required)
             self.assertIsInstance(result.audit_events, list)
             self.assertTrue(len(result.trace_id) > 0)
@@ -421,7 +458,7 @@ class TestTurnPolicyTests(unittest.TestCase):
             return_value=[],
         ), patch(
             "server_modules.deployed_agent_test_turn_service.security_audit_service.emit_security_audit_event",
-        ) as mock_audit:
+        ) as mock_audit, _live_reply_patch():
             import asyncio
             result = asyncio.run(execute_test_turn(
                 deployed_agent_id="a1",
@@ -433,6 +470,140 @@ class TestTurnPolicyTests(unittest.TestCase):
 
             mock_audit.assert_called()
             self.assertEqual(result.audit_events[0]["action"], "deployed_agent.test_turn")
+
+    def test_test_turn_uses_live_deepseek_when_safe(self):
+        req = _make_request(
+            message="what were we talking about?",
+            recent_messages=[
+                {"role": "user", "content": "what model are you?"},
+                {"role": "assistant", "content": "I am using DeepSeek for this private test turn."},
+            ],
+        )
+        with patch(
+            "server_modules.deployed_agent_test_turn_service.deployed_agent_service.get_deployed_agent_detail",
+            new=AsyncMock(return_value={"deployed_agent": {"deployment_state": "draft", "id": "a1", "name": "Sales Agent"}}),
+        ), patch(
+            "server_modules.deployed_agent_test_turn_service.deployed_agent_config_schema.deployed_agent_config_from_record",
+            return_value=DummyConfig(
+                deployment_state="draft",
+                channels={"test": MagicMock(enabled=True)},
+                runtime_supply={"ai_source": {"kind": "empyralis_credits"}},
+            ),
+        ), patch(
+            "server_modules.skill_registry.list_skill_definitions",
+            return_value=[],
+        ), patch(
+            "server_modules.deployed_agent_test_turn_service.security_audit_service.emit_security_audit_event",
+        ), patch(
+            "server_modules.deployed_agent_test_turn_service.model_router.resolve_call_credentials",
+            return_value={
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "credentials": {"api_key": "secret", "base_url": "https://api.deepseek.com/v1"},
+            },
+        ) as mock_resolve, patch(
+            "server_modules.deployed_agent_test_turn_service.model_router.call_model",
+            new=AsyncMock(return_value={
+                "content": "Hello there.",
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "usage": {
+                    "provider": "deepseek",
+                    "model": "deepseek-chat",
+                    "prompt_tokens": 8,
+                    "completion_tokens": 4,
+                    "total_tokens": 12,
+                    "usage_accounting": {
+                        "effective_provider": "deepseek",
+                        "effective_model": "deepseek-chat",
+                        "input_tokens": 8,
+                        "output_tokens": 4,
+                        "total_tokens": 12,
+                        "provider_cost_usd": 0.00001,
+                        "retail_credits_charged": 0.2,
+                        "pricing_known": True,
+                        "estimation_mode": "provider_reported",
+                    },
+                },
+            }),
+        ) as mock_call, patch(
+            "server_modules.deployed_agent_test_turn_service._persist_studio_test_turn_usage",
+            new=AsyncMock(return_value={"total_tokens": 12, "retail_credits_charged": 0.2}),
+        ) as mock_persist:
+            import asyncio
+            result = asyncio.run(execute_test_turn(
+                deployed_agent_id="a1",
+                workspace_id="ws-1",
+                tenant_id="t-1",
+                request=req,
+                current_user={"user_id": "u-1"},
+            ))
+
+            self.assertEqual(result.reply, "Hello there.")
+            self.assertEqual(result.model_provider, "deepseek")
+            self.assertEqual(result.model, "deepseek-chat")
+            mock_resolve.assert_called_once_with(
+                provider="deepseek",
+                model="deepseek-chat",
+                workspace_id="ws-1",
+            )
+            self.assertEqual(mock_call.await_args.kwargs["source_surface"], "studio")
+            model_messages = mock_call.await_args.args[0]
+            self.assertEqual([item["role"] for item in model_messages[-3:]], ["user", "assistant", "user"])
+            self.assertIn("what model are you", model_messages[-3]["content"])
+            self.assertIn("DeepSeek", model_messages[-2]["content"])
+            self.assertIn("what were we talking about", model_messages[-1]["content"])
+            mock_persist.assert_awaited_once()
+            persist_kwargs = mock_persist.await_args.kwargs
+            self.assertEqual(persist_kwargs["prompt_context"]["recent_messages_included"], 2)
+            self.assertFalse(persist_kwargs["prompt_context"]["internal_record_name_applied"])
+
+    def test_live_test_prompt_does_not_inject_internal_agent_name(self):
+        messages, prompt_context = _build_live_test_messages(
+            config=DummyConfig(
+                name="Codex Studio Smoke Agent",
+                persona="",
+                system_prompt="",
+            ),
+            agent_record={"name": "Codex Studio Smoke Agent"},
+            message="what model are you?",
+            recent_messages=[],
+        )
+
+        system_message = messages[0]["content"]
+        self.assertIn("configured Studio assistant", system_message)
+        self.assertNotIn("Codex Studio Smoke Agent", system_message)
+        self.assertNotIn("Sage boundary", system_message)
+        self.assertNotIn("serve the signed-in user", system_message)
+        self.assertEqual(prompt_context["prompt_source"], "test_guardrails_only")
+        self.assertFalse(prompt_context["internal_record_name_applied"])
+        self.assertFalse(prompt_context["persona_applied"])
+        self.assertFalse(prompt_context["stored_instructions_applied"])
+
+    def test_live_test_prompt_applies_stored_instructions_and_trims_history(self):
+        recent_messages = [
+            {"role": "user", "content": f"old-{index} " + ("x" * 3000)}
+            for index in range(24)
+        ]
+        messages, prompt_context = _build_live_test_messages(
+            config=DummyConfig(
+                persona="Friendly but concise.",
+                system_prompt="Only answer from approved business information.",
+            ),
+            agent_record={"name": "Internal Record Name"},
+            message="summarize the current test",
+            recent_messages=recent_messages,
+        )
+
+        system_message = messages[0]["content"]
+        self.assertIn("Friendly but concise.", system_message)
+        self.assertIn("Only answer from approved business information.", system_message)
+        self.assertNotIn("Internal Record Name", system_message)
+        self.assertEqual(prompt_context["prompt_source"], "stored_instructions")
+        self.assertTrue(prompt_context["persona_applied"])
+        self.assertTrue(prompt_context["stored_instructions_applied"])
+        self.assertLessEqual(prompt_context["recent_messages_included"], 16)
+        self.assertTrue(prompt_context["context_truncated"])
 
 
 if __name__ == "__main__":

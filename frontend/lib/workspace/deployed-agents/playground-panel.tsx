@@ -1,19 +1,27 @@
 'use client';
 
-import { DeployedAgentTestTurnPane } from '@/lib/workspace/workstation-deployed-agent-test-turn-pane';
+import {
+  DeployedAgentTestTurnPane,
+  type DeployedAgentTestChatSessionState,
+} from '@/lib/workspace/workstation-deployed-agent-test-turn-pane';
+import type { Dispatch, SetStateAction } from 'react';
 
 export function AgentPlaygroundPanel({
   deployedAgentId,
   workspaceId,
   client,
-  agentName,
   runtimeMode,
+  session,
+  onSessionChange,
+  onResetSession,
 }: {
   deployedAgentId: string;
   workspaceId: string;
   client: { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null> };
-  agentName?: string | null;
   runtimeMode?: string;
+  session: DeployedAgentTestChatSessionState;
+  onSessionChange: Dispatch<SetStateAction<DeployedAgentTestChatSessionState>>;
+  onResetSession: () => void;
 }) {
   return (
     <div className="studio-agent-chat">
@@ -21,8 +29,10 @@ export function AgentPlaygroundPanel({
         deployedAgentId={deployedAgentId}
         workspaceId={workspaceId}
         client={client}
-        agentName={agentName}
         runtimeMode={runtimeMode}
+        session={session}
+        onSessionChange={onSessionChange}
+        onResetSession={onResetSession}
       />
     </div>
   );

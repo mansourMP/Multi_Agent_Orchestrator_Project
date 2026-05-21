@@ -36,6 +36,10 @@ import { AgentActionCapabilitySections } from './action-settings';
 import { AgentIntegrationsSections } from './integration-settings';
 import { AgentPlaygroundPanel } from './playground-panel';
 import {
+  createEmptyDeployedAgentTestChatSession,
+  type DeployedAgentTestChatSessionState,
+} from '@/lib/workspace/workstation-deployed-agent-test-turn-pane';
+import {
   readString,
   readRecord,
   readNumber,
@@ -135,17 +139,21 @@ export const AgentDetailView = memo(({
   onOpenCreateWizard,
 }: AgentDetailViewProps) => {
   const selectedAgentId = readString(selectedAgent?.id);
+  const [testChatSession, setTestChatSession] = useState<DeployedAgentTestChatSessionState>(
+    () => createEmptyDeployedAgentTestChatSession(),
+  );
   const [knowledgeVerificationQuery, setKnowledgeVerificationQuery] = useState('');
   const [knowledgeVerificationResult, setKnowledgeVerificationResult] = useState<Record<string, unknown> | null>(null);
   const [knowledgeVerificationError, setKnowledgeVerificationError] = useState<string | null>(null);
   const [isVerifyingKnowledge, setIsVerifyingKnowledge] = useState(false);
 
   useEffect(() => {
+    setTestChatSession(createEmptyDeployedAgentTestChatSession());
     setKnowledgeVerificationQuery('');
     setKnowledgeVerificationResult(null);
     setKnowledgeVerificationError(null);
     setIsVerifyingKnowledge(false);
-  }, [selectedAgentId]);
+  }, [workspaceId, selectedAgentId]);
 
   const selectedAgentRuntimePlacement = useMemo(() => {
     const config = readRecord(selectedAgent?.config);
@@ -169,6 +177,20 @@ export const AgentDetailView = memo(({
   const selectedAgentMemoryEnabled =
     readRecord(readRecord(selectedAgent?.config).memory_policy).memory_enabled === true ||
     readRecord(selectedAgent?.metadata).memory_enabled === true;
+  const selectedAgentConfig = readRecord(selectedAgent?.config);
+  const selectedAgentMetadata = readRecord(selectedAgent?.metadata);
+  const selectedAgentInstructionsText = readString(
+    selectedAgent?.system_prompt ??
+    selectedAgentConfig.system_prompt ??
+    selectedAgentConfig.instructions ??
+    selectedAgentMetadata.system_prompt ??
+    selectedAgentMetadata.instructions,
+  );
+  const selectedAgentPersonaText = readString(
+    selectedAgent?.persona ??
+    selectedAgentConfig.persona ??
+    selectedAgentMetadata.persona,
+  );
 
   const selectedBudgetCycle = readBudgetCycle(selectedAgent);
   const selectedBudgetBurn = selectedAgentAnalytics?.currentBurnUsd ?? readNumber(selectedBudgetCycle.current_burn_usd);
@@ -402,7 +424,7 @@ export const AgentDetailView = memo(({
               {currentStudioSubview === 'agents' && overlayTab === 'chat' && (
         <MotionTabPanel key="chat" className="studio-agent-motion-panel">
         <ListDetailPanel
-          className="studio-panel studio-panel--detail"
+          className="studio-panel studio-panel--detail studio-panel--chat"
           eyebrow="Chat"
           title="Chat"
           subtitle="Private messages for checking the selected agent before live customer traffic."
@@ -412,8 +434,10 @@ export const AgentDetailView = memo(({
               deployedAgentId={selectedAgentId}
               workspaceId={workspaceId}
               client={services.client}
-              agentName={readString(selectedAgent.name, 'agent')}
               runtimeMode={testRuntimeModeForPlacement(selectedAgentRuntimePlacement)}
+              session={testChatSession}
+              onSessionChange={setTestChatSession}
+              onResetSession={() => setTestChatSession(createEmptyDeployedAgentTestChatSession())}
             />
           ) : (
             <EmptyPanel title="Agent is not ready yet" body="Save the agent first, then test it here." />
@@ -444,8 +468,8 @@ export const AgentDetailView = memo(({
                 </div>
               </div>
               <div className="studio-agent-knowledge__block">
-                <p>{readString(selectedAgent.system_prompt, 'No response instructions configured yet.')}</p>
-                <small>{readString(selectedAgent.persona, 'No persona configured yet.')}</small>
+                <p>{selectedAgentInstructionsText || 'No custom instructions configured.'}</p>
+                <small>{selectedAgentPersonaText || 'No persona configured.'}</small>
               </div>
             </section>
 
@@ -453,7 +477,7 @@ export const AgentDetailView = memo(({
               <div className="studio-agent-knowledge__section-head">
                 <div>
                   <span>Knowledge Sources</span>
-                  <strong>Trusted Data</strong>
+                  <strong>Indexed Evidence</strong>
                 </div>
                 <div className="studio-agent-knowledge__status-pill">
                   {knowledgeSourceCount > 0 ? 'Sources listed' : 'No data'}
@@ -466,13 +490,13 @@ export const AgentDetailView = memo(({
                   <strong>{knowledgeSourceCount} connected</strong>
                 </div>
                 <div>
-                  <span>Source depth</span>
+                  <span>Context policy</span>
                   <strong>{selectedContextPresetLabel}</strong>
                 </div>
                 <div>
-                  <span>Retrieval health</span>
+                  <span>Retrieval status</span>
                   <strong>
-                    {knowledgeSourceCount > 0 ? 'Retrieval check ready' : 'Needs data'}
+                    {knowledgeSourceCount > 0 ? 'Ready to verify' : 'Needs source'}
                   </strong>
                 </div>
               </div>
@@ -499,7 +523,7 @@ export const AgentDetailView = memo(({
             <section className="studio-agent-knowledge__section">
               <div className="studio-agent-knowledge__section-head">
                 <div>
-                  <span>Search Test</span>
+                  <span>Evidence test</span>
                   <strong>Verify retrieval</strong>
                 </div>
               </div>

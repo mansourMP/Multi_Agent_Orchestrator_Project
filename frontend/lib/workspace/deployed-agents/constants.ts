@@ -300,7 +300,7 @@ export const CONTEXT_PRESET_OPTIONS: ReadonlyArray<{
   },
   {
     id: 'balanced',
-    label: 'Balanced',
+    label: 'Standard',
     description: 'Recommended',
   },
   {
@@ -428,7 +428,7 @@ export const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     defaultName: 'Restaurant Order Assistant',
     persona: 'Fast, friendly ordering assistant for a restaurant or cafe.',
     systemPrompt: 'Answer menu questions, check availability from connected sheets, confirm orders clearly, and escalate uncertain cases to a human.',
-    knowledgePlaceholder: 'Paste a menu PDF, Google Sheet, or daily specials source here.',
+    knowledgePlaceholder: 'Paste menu notes, Google Sheet references, or daily specials source here.',
     selectedToolIds: ['spreadsheet_read', 'spreadsheet_append'],
     memoryEnabled: true,
     contextBudgetPreset: 'balanced',

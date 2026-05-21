@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useEffect, useRef } from "react";
+import type { Dispatch, KeyboardEvent, SetStateAction } from "react";
 import { ArrowUp, Loader2 } from "lucide-react";
-import { joinClassNames } from "@/lib/ui/primitives";
 import { ChatMessage, type WorkstationChatMessageRecord } from "@/lib/workspace/chat-message";
 
 const CHANNELS: ReadonlyArray<{ value: string; label: string; disabled?: boolean }> = [
@@ -23,9 +22,13 @@ interface TestTurnResult {
   audit_events: Array<Record<string, unknown>>;
   trace_id: string;
   transparency_events?: Array<Record<string, unknown>>;
+  model_provider?: string | null;
+  model?: string | null;
+  usage?: Record<string, unknown> | null;
+  prompt_context?: Record<string, unknown> | null;
 }
 
-type ChatTurn = {
+export type DeployedAgentTestChatTurn = {
   id: string;
   role: "user" | "agent";
   content: string;
@@ -34,7 +37,23 @@ type ChatTurn = {
   createdAt: string | null;
 };
 
-function convertToChatMessage(turn: ChatTurn): WorkstationChatMessageRecord {
+export type DeployedAgentTestChatSessionState = {
+  message: string;
+  channel: string;
+  loading: boolean;
+  turns: DeployedAgentTestChatTurn[];
+};
+
+export function createEmptyDeployedAgentTestChatSession(): DeployedAgentTestChatSessionState {
+  return {
+    message: "",
+    channel: "test",
+    loading: false,
+    turns: [],
+  };
+}
+
+function convertToChatMessage(turn: DeployedAgentTestChatTurn): WorkstationChatMessageRecord {
   if (turn.tone === "loading") {
     return {
       id: turn.id,
@@ -83,24 +102,21 @@ export function DeployedAgentTestTurnPane({
   deployedAgentId,
   workspaceId,
   client,
-  agentName,
   runtimeMode = "text_agent",
+  session,
+  onSessionChange,
+  onResetSession,
 }: {
   deployedAgentId: string;
   workspaceId: string;
   client: { testTurnDeployedAgent: (params: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null> };
-  agentName?: string | null;
   runtimeMode?: string;
+  session: DeployedAgentTestChatSessionState;
+  onSessionChange: Dispatch<SetStateAction<DeployedAgentTestChatSessionState>>;
+  onResetSession: () => void;
 }) {
-  const [message, setMessage] = useState("");
-  const [channel, setChannel] = useState<string>("test");
-  const [loading, setLoading] = useState(false);
-  const [turns, setTurns] = useState<ChatTurn[]>([]);
   const threadRef = useRef<HTMLDivElement | null>(null);
-  const friendlyAgentName = useMemo(() => {
-    const token = String(agentName || "").trim();
-    return token || "this agent";
-  }, [agentName]);
+  const { message, channel, loading, turns } = session;
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -115,13 +131,23 @@ export function DeployedAgentTestTurnPane({
     if (!trimmedMessage || loading) return;
     const turnId = Date.now().toString();
     const responseTurnId = turnId + "-agent";
-    setLoading(true);
-    setMessage("");
-    setTurns((current) => [
+    const recentMessages = turns
+      .filter((turn) => turn.tone !== "loading" && turn.tone !== "error" && turn.content.trim())
+      .map((turn) => ({
+        role: turn.role === "user" ? "user" : "assistant",
+        content: turn.content.trim(),
+      }))
+      .slice(-16);
+    onSessionChange((current) => ({
       ...current,
-      { id: turnId + "-user", role: "user", content: trimmedMessage, createdAt: new Date().toISOString() },
-      { id: responseTurnId, role: "agent", content: "Checking the agent response...", tone: "loading", createdAt: new Date().toISOString() },
-    ]);
+      loading: true,
+      message: "",
+      turns: [
+        ...current.turns,
+        { id: turnId + "-user", role: "user", content: trimmedMessage, createdAt: new Date().toISOString() },
+        { id: responseTurnId, role: "agent", content: "Checking the agent response...", tone: "loading", createdAt: new Date().toISOString() },
+      ],
+    }));
     try {
       const res = await client.testTurnDeployedAgent({
         deployedAgentId,
@@ -130,26 +156,33 @@ export function DeployedAgentTestTurnPane({
           message: trimmedMessage,
           channel,
           runtime_mode: runtimeMode,
+          recent_messages: recentMessages,
         },
       });
       if (!res) {
         throw new Error("Test turn returned an empty response");
       }
       const result = res as unknown as TestTurnResult;
-      setTurns((current) => current.map((turn) => (
-        turn.id === responseTurnId
-          ? { ...turn, content: result.reply || "No reply returned.", tone: "normal", result }
-          : turn
-      )));
+      onSessionChange((current) => ({
+        ...current,
+        turns: current.turns.map((turn) => (
+          turn.id === responseTurnId
+            ? { ...turn, content: result.reply || "No reply returned.", tone: "normal", result }
+            : turn
+        )),
+      }));
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Test turn failed";
-      setTurns((current) => current.map((turn) => (
-        turn.id === responseTurnId
-          ? { ...turn, content: errorMessage, tone: "error" }
-          : turn
-      )));
+      onSessionChange((current) => ({
+        ...current,
+        turns: current.turns.map((turn) => (
+          turn.id === responseTurnId
+            ? { ...turn, content: errorMessage, tone: "error" }
+            : turn
+        )),
+      }));
     } finally {
-      setLoading(false);
+      onSessionChange((current) => ({ ...current, loading: false }));
     }
   };
 
@@ -164,13 +197,6 @@ export function DeployedAgentTestTurnPane({
   return (
     <div className="deployed-agent-chat">
       <div ref={threadRef} className="deployed-agent-chat__thread" aria-live="polite">
-        {turns.length === 0 ? (
-          <div className="deployed-agent-chat__empty">
-            <strong>Private test chat</strong>
-            <span>Test this assistant privately before going live. Your messages here will not be seen by customers.</span>
-          </div>
-        ) : null}
-
         {turns.map((turn) => (
           <div key={turn.id} className="deployed-agent-chat__turn-wrapper">
             <ChatMessage message={convertToChatMessage(turn)} />
@@ -183,17 +209,29 @@ export function DeployedAgentTestTurnPane({
         <textarea
           className="deployed-agent-chat__input"
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => onSessionChange((current) => ({ ...current, message: e.target.value }))}
           onKeyDown={handleComposerKeyDown}
-          placeholder={"Ask " + friendlyAgentName + " a customer question..."}
+          placeholder="Type a private test message..."
           rows={2}
         />
         <div className="deployed-agent-chat__toolbar" aria-label="Private test controls">
           <div className="deployed-agent-chat__controls">
             <span className="deployed-agent-chat__test-pill">Private test</span>
+            <button
+              className="deployed-agent-chat__reset"
+              type="button"
+              onClick={onResetSession}
+              disabled={loading || turns.length === 0}
+            >
+              New test
+            </button>
             <label className="deployed-agent-chat__select-shell">
               <span>Channel</span>
-              <select aria-label="Test channel" value={channel} onChange={(e) => setChannel(e.target.value)}>
+              <select
+                aria-label="Test channel"
+                value={channel}
+                onChange={(e) => onSessionChange((current) => ({ ...current, channel: e.target.value }))}
+              >
                 {CHANNELS.map((c) => (
                   <option key={c.value} value={c.value} disabled={Boolean(c.disabled)}>{c.label}</option>
                 ))}
@@ -217,13 +255,21 @@ export function DeployedAgentTestTurnPane({
 
 function RunMeta({ result }: { result: TestTurnResult }) {
   const toolsUsed = Array.isArray(result.tools_used) ? result.tools_used : [];
-  const memoryApplied = result.memory_context && Object.keys(result.memory_context).length > 0;
+  const memoryApplied = result.memory_context?.applied === true || result.memory_context?.enabled === true;
+  const promptContext = result.prompt_context && typeof result.prompt_context === "object" ? result.prompt_context : {};
   const policies = Array.isArray(result.policy_decisions) ? result.policy_decisions : [];
   const events = Array.isArray(result.transparency_events) ? result.transparency_events : [];
+  const modelLabel = [result.model_provider, result.model].filter(Boolean).join(" / ");
+  const recentCount = typeof promptContext.recent_messages_included === "number"
+    ? promptContext.recent_messages_included
+    : Number(promptContext.recent_messages_included || 0);
+  const personaApplied = promptContext.persona_applied === true;
+  const instructionsApplied = promptContext.stored_instructions_applied === true;
+  const contextTruncated = promptContext.context_truncated === true;
 
   return (
     <details className="deployed-agent-chat__meta-details">
-      <summary>System proof</summary>
+      <summary>Run details</summary>
       <div className="deployed-agent-chat__meta" aria-label="Private test result">
         {result.approval_required ? (
           <span className="deployed-agent-chat__badge--alert">Approval required</span>
@@ -232,6 +278,11 @@ function RunMeta({ result }: { result: TestTurnResult }) {
         )}
         <span>{toolsUsed.length > 0 ? toolsUsed.length.toString() + " tool" + (toolsUsed.length === 1 ? "" : "s") + " used" : "No tools used"}</span>
         <span>{memoryApplied ? "Memory checked" : "Memory off for test"}</span>
+        {modelLabel ? <span>{modelLabel}</span> : null}
+        <span>{instructionsApplied ? "Instructions applied" : "No custom instructions"}</span>
+        <span>{personaApplied ? "Persona applied" : "No persona"}</span>
+        <span>{recentCount > 0 ? recentCount.toString() + " prior message" + (recentCount === 1 ? "" : "s") : "New test context"}</span>
+        {contextTruncated ? <span>Context trimmed</span> : null}
         {policies.length > 0 ? <span>{policies.length.toString()} polic{policies.length === 1 ? "y" : "ies"} applied</span> : null}
         {events.length > 0 ? <span>{events.length.toString()} transparency event{events.length === 1 ? "" : "s"}</span> : null}
         {result.trace_id ? <span title={result.trace_id}>Trace {result.trace_id.slice(0, 8)}</span> : null}

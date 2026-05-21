@@ -603,7 +603,7 @@ export function AgentWizard({
                     rows={6}
                     value={wizardState.knowledgeSourceText}
                     onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
-                    placeholder={'kb://menu-pdf\nsheet://daily-menu'}
+                    placeholder={'kb://menu\nsheet://daily-menu'}
                   />
                   <ContextPresetControl
                     value={wizardState.contextBudgetPreset}
@@ -616,7 +616,7 @@ export function AgentWizard({
 
           {wizardStep.id === 'knowledge' ? (
             <div className="app-stack-3">
-              <FormField label="Knowledge source" hint="Paste a sheet, PDF, document, URL, or leave empty and add it later.">
+              <FormField label="Knowledge source" hint="Paste a sheet, text document, URL, or leave empty and add it later.">
                 <FormTextarea
                   rows={5}
                   value={wizardState.knowledgeSourceText}

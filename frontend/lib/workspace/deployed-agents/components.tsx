@@ -45,8 +45,8 @@ export function ContextPresetControl({
 }) {
   return (
     <div className="deployed-agents-context-presets">
-      <div className="deployed-agents-context-presets__label">Source depth</div>
-      <div className="deployed-agents-context-presets__grid" role="tablist" aria-label="Source depth presets">
+      <div className="deployed-agents-context-presets__label">Context policy</div>
+      <div className="deployed-agents-context-presets__grid" role="tablist" aria-label="Context policy presets">
         {CONTEXT_PRESET_OPTIONS.map((option) => {
           const selected = value === option.id;
           return (

@@ -189,6 +189,32 @@ PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
         },
     },
     {
+        "package_id": "preview-mcp-server",
+        "kind": "connector",
+        "label": "MCP Server",
+        "description": "Connect a reviewed Model Context Protocol server so Sage can use approved external tools.",
+        "category": "MCP",
+        "publisher": {"publisher_id": "empyralis", "label": "Empyralis", "website": "https://empyralis.dev"},
+        "onboarding": {"docs_url": "https://modelcontextprotocol.io/"},
+        "verification_status": "verified",
+        "review_state": "approved",
+        "health_state": "setup_required",
+        "policy_posture": "governed",
+        "billing": {
+            "monetization_kind": "free",
+            "accounting_hook": {"ledger_key": "connector.mcp_server", "hook_kind": "tool_usage"},
+        },
+        "connector": {
+            "connector_id": "mcp_server",
+            "connector_class": "mcp_server",
+            "auth_modes": ["server_token", "none"],
+            "scopes": ["mcp:read", "mcp:write_with_approval"],
+            "actions": ["discover_tools", "approve_tool", "invoke_tool"],
+            "egress_domains": [],
+            "data_classes": ["tool_manifest", "tool_result"],
+        },
+    },
+    {
         "package_id": "preview-deepseek-provider",
         "kind": "provider",
         "label": "DeepSeek Provider",
@@ -955,6 +981,10 @@ def _package_open_href(workspace_id: str, package: Dict[str, Any]) -> Optional[s
             return f"/w/{workspace_id}/mini-apps/{app_id}"
     if package_kind == "provider":
         return f"/w/{workspace_id}/integrations"
+    if package_kind == "connector":
+        return f"/w/{workspace_id}/integrations"
+    if package_kind == "skill":
+        return f"/w/{workspace_id}/sage?tab=work"
     return None
 
 

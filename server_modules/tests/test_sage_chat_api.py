@@ -115,8 +115,10 @@ class SageChatApiContractTests(unittest.TestCase):
             )
 
             system_prompt = mock_generate.call_args[0][3]
-            self.assertIn("personal assistant", system_prompt.lower())
-            self.assertIn("cannot send messages", system_prompt.lower())
+            self.assertIn("ai assistant", system_prompt.lower())
+            self.assertIn("assistant boundary", system_prompt.lower())
+            self.assertIn("request explicit approval", system_prompt.lower())
+            self.assertNotIn("cannot send messages", system_prompt.lower())
 
 
 if __name__ == "__main__":

@@ -294,6 +294,8 @@ _MEMORY_NOTEBOOK_TOOL_NAMES = {
     "memory_search",
     "memory_get",
     "memory_update",
+    "memory_stage_edit",
+    "memory_apply_edit",
     "memory_append_daily_note",
     "memory_stage_consolidation",
     "memory_consolidate_daily_notes",

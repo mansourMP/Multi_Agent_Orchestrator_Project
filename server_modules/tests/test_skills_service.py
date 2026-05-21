@@ -69,6 +69,13 @@ class SkillsServiceTests(unittest.TestCase):
                 "audit_id": "audit-1" if kwargs.get("apply_merge") else None,
                 "compact_mode": kwargs.get("compact_mode") or "none",
             },
+            apply_memory_consolidation_staging=lambda workspace_id, staging_filename, merged_files, **kwargs: {
+                "workspace_id": workspace_id,
+                "staging_filename": staging_filename,
+                "merged_files": dict(merged_files),
+                "audit_id": "audit-apply-1",
+                "user_approved": bool(kwargs.get("user_approved")),
+            },
             list_memory_file_versions=lambda workspace_id, filename, agent_install_id=None, limit=20: [
                 {
                     "version_id": "ver-1",
@@ -426,6 +433,47 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["filename"], "GOALS.md")
 
+    def test_execute_single_direct_tool_call_dispatches_memory_stage_edit_and_apply_edit(self) -> None:
+        stage_raw = skills_service.execute_single_direct_tool_call(
+            tool_call={
+                "name": "memory_stage_edit",
+                "arguments": {
+                    "filename": "IDENTITY.md",
+                    "content": "# Identity\n\n- Be direct and evidence-led.\n",
+                    "reason": "user requested identity update",
+                    "source_refs": ["chat://thread-1#turn-3"],
+                },
+            },
+            workspace_id="default",
+            thread_id="thread-1",
+            callbacks=self._execution_callbacks(),
+        )
+
+        stage_payload = json.loads(stage_raw)
+        self.assertTrue(stage_payload["ok"])
+        self.assertTrue(stage_payload["staged_only"])
+        self.assertTrue(stage_payload["approval_required"])
+        self.assertEqual(stage_payload["target_files"], ["IDENTITY.md"])
+
+        apply_raw = skills_service.execute_single_direct_tool_call(
+            tool_call={
+                "name": "memory_apply_edit",
+                "arguments": {
+                    "staging_filename": stage_payload["filename"],
+                    "merged_files": {"IDENTITY.md": "# Identity\n\n- Be direct and evidence-led.\n"},
+                    "user_approved": True,
+                },
+            },
+            workspace_id="default",
+            thread_id="thread-1",
+            callbacks=self._execution_callbacks(),
+        )
+
+        apply_payload = json.loads(apply_raw)
+        self.assertEqual(apply_payload["audit_id"], "audit-apply-1")
+        self.assertTrue(apply_payload["user_approved"])
+        self.assertEqual(apply_payload["merged_files"]["IDENTITY.md"], "# Identity\n\n- Be direct and evidence-led.\n")
+
     def test_execute_single_direct_tool_call_dispatches_memory_append_daily_note(self) -> None:
         raw = skills_service.execute_single_direct_tool_call(
             tool_call={
@@ -552,6 +600,8 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertIn("sage_service__update_profile", tool_names)
         self.assertIn("sage_service__create_entry", tool_names)
         self.assertIn("memory_update", tool_names)
+        self.assertIn("memory_stage_edit", tool_names)
+        self.assertIn("memory_apply_edit", tool_names)
         self.assertIn("memory_append_daily_note", tool_names)
         self.assertIn("memory_stage_consolidation", tool_names)
         self.assertIn("memory_consolidate_daily_notes", tool_names)

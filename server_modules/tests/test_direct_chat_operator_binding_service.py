@@ -92,6 +92,8 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
     def test_parse_tool_name_handles_builtin_and_connector_tools(self) -> None:
         self.assertEqual(service.parse_tool_name("memory_search"), ("memory", "search"))
         self.assertEqual(service.parse_tool_name("memory_update"), ("memory", "update"))
+        self.assertEqual(service.parse_tool_name("memory_stage_edit"), ("memory", "stage_edit"))
+        self.assertEqual(service.parse_tool_name("memory_apply_edit"), ("memory", "apply_edit"))
         self.assertEqual(service.parse_tool_name("memory_append_daily_note"), ("memory", "append_daily_note"))
         self.assertEqual(service.parse_tool_name("memory_stage_consolidation"), ("memory", "stage_consolidation"))
         self.assertEqual(service.parse_tool_name("memory_consolidate_daily_notes"), ("memory", "consolidate_daily_notes"))
@@ -1024,6 +1026,8 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(bindings.parse_tool_name("memory_search"), ("memory", "search"))
+        self.assertEqual(bindings.parse_tool_name("memory_stage_edit"), ("memory", "stage_edit"))
+        self.assertEqual(bindings.parse_tool_name("memory_apply_edit"), ("memory", "apply_edit"))
         self.assertEqual(bindings.parse_tool_name("memory_append_daily_note"), ("memory", "append_daily_note"))
         self.assertEqual(bindings.parse_tool_name("memory_stage_consolidation"), ("memory", "stage_consolidation"))
         self.assertEqual(bindings.parse_tool_name("memory_consolidate_daily_notes"), ("memory", "consolidate_daily_notes"))

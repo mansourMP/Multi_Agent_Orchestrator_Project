@@ -26,7 +26,7 @@ import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
-const KIND_FILTERS = ['all', 'agent_template', 'app', 'bundle'] as const;
+const KIND_FILTERS = ['all', 'agent_template', 'skill', 'connector', 'provider', 'bundle'] as const;
 const COMPOSER_KINDS = ['app', 'provider'] as const;
 const VERIFICATION_OPTIONS = ['unverified', 'partner', 'verified'] as const;
 const REVIEW_OPTIONS = ['pending', 'approved', 'restricted'] as const;
@@ -39,16 +39,13 @@ type ComposerKind = typeof COMPOSER_KINDS[number];
 
 function isVisibleMarketplaceKind(kind: string): boolean {
   const normalized = kind.trim().toLowerCase();
-  return normalized === 'agent_template' || normalized === 'app' || normalized === 'mini_app' || normalized === 'bundle';
+  return normalized === 'agent_template' || normalized === 'skill' || normalized === 'connector' || normalized === 'provider' || normalized === 'bundle';
 }
 
 function marketplaceKindMatchesFilter(kind: string, filter: KindFilter): boolean {
   const normalized = kind.trim().toLowerCase();
   if (filter === 'all') {
     return isVisibleMarketplaceKind(normalized);
-  }
-  if (filter === 'app') {
-    return normalized === 'app' || normalized === 'mini_app';
   }
   if (filter === 'bundle') {
     return normalized === 'bundle';
@@ -57,7 +54,9 @@ function marketplaceKindMatchesFilter(kind: string, filter: KindFilter): boolean
 }
 
 function marketplaceApiKindForFilter(filter: KindFilter): string | null {
-  return filter === 'agent_template' ? 'agent_template' : null;
+  return filter === 'agent_template' || filter === 'skill' || filter === 'connector' || filter === 'provider'
+    ? filter
+    : null;
 }
 
 function normalizeMarketplaceKindFilter(value: string | null): KindFilter {
@@ -233,6 +232,9 @@ function packageKindLabel(kind: string): string {
   const normalized = kind.trim().toLowerCase();
   if (normalized === 'provider') {
     return 'Model';
+  }
+  if (normalized === 'connector') {
+    return 'MCP';
   }
   if (normalized === 'mini_app') {
     return 'Mini-app';
@@ -997,15 +999,14 @@ export function MarketplacePane() {
             bridge_contracts: parseBridgeContractsInput(appDraft.bridgeContracts),
           },
         };
-        const response = await services.client.registerMarketplaceApp(payload);
-        const packageId = readString(response?.package_id);
-        if (kindFilter !== 'all' && kindFilter !== 'app') {
-          setKindFilter('app');
-          await loadMarketplacePackages('app');
+        await services.client.registerMarketplaceApp(payload);
+        if (kindFilter !== 'all') {
+          setKindFilter('all');
+          await loadMarketplacePackages('all');
         } else {
           await loadMarketplacePackages(kindFilter);
         }
-        setSelectedPackageId(packageId || null);
+        setSelectedPackageId(null);
         setComposerStatus('Governed app package registered. Install it into the shell when you are ready.');
         setAppDraft(DEFAULT_APP_DRAFT);
         return;
@@ -1099,7 +1100,7 @@ export function MarketplacePane() {
                 <div className="marketplace-pane__catalog-title-group">
                   <h1 className="marketplace-pane__catalog-title">Discover</h1>
                   <p className="marketplace-pane__catalog-subtitle">
-                    Browse ready-made templates, apps, and rooms for this workspace.
+                    Browse governed agent templates, tools, MCP connectors, model providers, and bundles for this workspace.
                   </p>
                 </div>
               </div>
@@ -1122,8 +1123,8 @@ export function MarketplacePane() {
                   <EmptyPanel
                     title={kindFilter === 'bundle' ? 'No bundles are available yet.' : 'No catalog items are available yet.'}
                     body={kindFilter === 'bundle'
-                      ? 'Bundles will combine templates, app surfaces, setup steps, and required access into one installable room.'
-                      : 'Discover will show templates and apps that can be added to this workspace.'}
+                      ? 'Bundles will combine templates, tools, MCP connectors, setup steps, and required access into one installable package.'
+                      : 'Discover will show governed capabilities that can be added to this workspace.'}
                   />
                 ) : (
                   <div className="marketplace-pane__grid">

@@ -41,6 +41,33 @@ class SageAgentRuntimeGatingTests(unittest.TestCase):
 
 
 class SageAgentRuntimeContextLoadingTests(unittest.TestCase):
+    def test_load_context_files_includes_extended_context_files_and_memory_manifest(self):
+        with patch(
+            "server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files",
+            return_value={
+                "SOUL.md": "# Sage\n\n- Custom identity.",
+                "GOALS.md": "# Goals\n\n- Ship the phone app.",
+                "memory/files/architecture-notes.md": "# Architecture Notes\n\nReference comparison notes.",
+            },
+        ):
+            text = sage_agent_runtime_service._load_context_files(workspace_id="ws-1")
+
+        self.assertIn("SOUL.md", text)
+        self.assertIn("GOALS.md", text)
+        self.assertIn("Available Memory Files", text)
+        self.assertIn("memory/files/architecture-notes.md", text)
+
+    def test_load_context_files_skips_default_placeholders(self):
+        with patch(
+            "server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files",
+            return_value={
+                "SOUL.md": sage_agent_runtime_service.workspace_context.DEFAULT_CONTEXT_FILE_CONTENTS["SOUL.md"],
+            },
+        ):
+            text = sage_agent_runtime_service._load_context_files(workspace_id="ws-1")
+
+        self.assertEqual(text, "")
+
     def test_loads_profile_context(self):
         with (
             patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile") as mock_profile,

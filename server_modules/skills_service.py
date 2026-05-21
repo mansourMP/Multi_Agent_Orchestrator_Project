@@ -661,6 +661,53 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
                 },
                 "required": ["filename", "content"],
             },
+            requires_approval=True,
+        ),
+        ToolDescriptor(
+            tool_name="memory_stage_edit",
+            label="Memory stage edit",
+            connector_id="memory",
+            action_id="stage_edit",
+            description=(
+                "Stage a proposed root memory file edit under memory/.dreams/. Use when the user asks to "
+                "change durable behavior, identity, goals, procedures, tools, agents, or reflection files."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Root context filename such as IDENTITY.md, GOALS.md, PROCEDURES.md, TOOLS.md, AGENTS.md, REFLECTION.md, or MEMORY.md."},
+                    "content": {"type": "string", "description": "Complete proposed Markdown content for the target file."},
+                    "reason": {"type": "string", "description": "Short reason for staging this memory edit."},
+                    "source_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional source references supporting the edit.",
+                    },
+                },
+                "required": ["filename", "content"],
+            },
+            requires_approval=True,
+        ),
+        ToolDescriptor(
+            tool_name="memory_apply_edit",
+            label="Memory apply edit",
+            connector_id="memory",
+            action_id="apply_edit",
+            description="Apply a staged root memory edit after explicit user approval or policy allowance.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "staging_filename": {"type": "string", "description": "Staging file under memory/.dreams/ created by memory_stage_edit or memory_stage_consolidation."},
+                    "merged_files": {
+                        "type": "object",
+                        "description": "Map of root context filename to complete approved Markdown content.",
+                    },
+                    "user_approved": {"type": "boolean", "description": "Explicit user approval flag."},
+                    "policy_allows": {"type": "boolean", "description": "Policy allowance flag."},
+                },
+                "required": ["staging_filename", "merged_files"],
+            },
+            requires_approval=True,
         ),
         ToolDescriptor(
             tool_name="memory_append_daily_note",
@@ -2191,6 +2238,76 @@ def execute_single_direct_tool_call(
             },
             ensure_ascii=False,
         )
+    if connector_id == "memory" and action_id == "stage_edit":
+        filename = str(argument_payload.get("filename") or argument_payload.get("path") or "").strip()
+        content = str(argument_payload.get("content") or "")
+        reason = str(argument_payload.get("reason") or "root memory edit").strip() or "root memory edit"
+        if not filename:
+            raise RuntimeError("Tool 'memory_stage_edit' requires a filename.")
+        if not content.strip():
+            raise RuntimeError("Tool 'memory_stage_edit' requires non-empty content.")
+        source_refs = argument_payload.get("source_refs")
+        actor = str(
+            session_metadata.get("user_id")
+            or session_metadata.get("actor")
+            or session_metadata.get("agent_install_id")
+            or session_metadata.get("active_agent_install_id")
+            or "direct_tool"
+        ).strip()
+        proposal = (
+            f"Reason: {reason}\n\n"
+            f"Target file: {filename}\n\n"
+            "Complete proposed Markdown:\n\n"
+            f"```markdown\n{content.rstrip()}\n```"
+        )
+        saved = callbacks.create_memory_consolidation_staging_file(
+            workspace_id,
+            proposal,
+            source_refs=source_refs if isinstance(source_refs, list) else None,
+            target_files=[filename],
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+            actor=actor,
+            run_id=str(session_metadata.get("run_id") or session_metadata.get("request_id") or "").strip() or None,
+        )
+        return json.dumps(
+            {
+                "ok": True,
+                "filename": saved.get("filename") if isinstance(saved, dict) else "",
+                "workspace_id": saved.get("workspace_id") if isinstance(saved, dict) else workspace_id,
+                "target_files": saved.get("target_files") if isinstance(saved, dict) else [filename],
+                "staged_only": True,
+                "approval_required": True,
+                "old_hash": saved.get("old_hash") if isinstance(saved, dict) else None,
+                "new_hash": saved.get("new_hash") if isinstance(saved, dict) else None,
+                "version_id": saved.get("version_id") if isinstance(saved, dict) else None,
+            },
+            ensure_ascii=False,
+        )
+    if connector_id == "memory" and action_id == "apply_edit":
+        staging_filename = str(argument_payload.get("staging_filename") or argument_payload.get("path") or "").strip()
+        merged_files = argument_payload.get("merged_files")
+        if not staging_filename:
+            raise RuntimeError("Tool 'memory_apply_edit' requires staging_filename.")
+        if not isinstance(merged_files, dict) or not merged_files:
+            raise RuntimeError("Tool 'memory_apply_edit' requires merged_files.")
+        actor = str(
+            session_metadata.get("user_id")
+            or session_metadata.get("actor")
+            or session_metadata.get("agent_install_id")
+            or session_metadata.get("active_agent_install_id")
+            or "direct_tool"
+        ).strip()
+        result = callbacks.apply_memory_consolidation_staging(
+            workspace_id,
+            staging_filename,
+            {str(key): str(value or "") for key, value in merged_files.items()},
+            user_approved=bool(argument_payload.get("user_approved")),
+            policy_allows=bool(argument_payload.get("policy_allows")),
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+            actor=actor,
+            run_id=str(session_metadata.get("run_id") or session_metadata.get("request_id") or "").strip() or None,
+        )
+        return json.dumps(result if isinstance(result, dict) else {"ok": True}, ensure_ascii=False)
     if connector_id == "memory" and action_id == "append_daily_note":
         note = str(argument_payload.get("note") or argument_payload.get("input") or "")
         if not note.strip():

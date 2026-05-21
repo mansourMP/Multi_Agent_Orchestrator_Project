@@ -245,6 +245,10 @@ def parse_tool_name(tool_name: str) -> tuple[str, str]:
         return "memory", "get"
     if token == "memory_update":
         return "memory", "update"
+    if token == "memory_stage_edit":
+        return "memory", "stage_edit"
+    if token == "memory_apply_edit":
+        return "memory", "apply_edit"
     if token == "memory_append_daily_note":
         return "memory", "append_daily_note"
     if token == "memory_stage_consolidation":

@@ -5,12 +5,13 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { Activity, Bot, Compass, LayoutGrid, Menu, Monitor, Plus, Waypoints } from 'lucide-react';
+import { Activity, Bot, Check, ChevronDown, Compass, LayoutGrid, Menu, Monitor, Plus, Waypoints } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
 import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
 import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
+import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationActivityVersion } from '@/lib/workspace/workspace-services';
 import { emitWorkstationChatThreadSelected } from '@/lib/workspace/workstation-chat-thread-events';
@@ -27,7 +28,7 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'activity', 'memory', 'tasks', 'artifacts'],
+  sage: ['chat', 'activity', 'memory', 'integrations', 'tasks', 'artifacts'],
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
@@ -47,7 +48,9 @@ const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
 const MARKETPLACE_TITLEBAR_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'agent_template', label: 'Agent templates' },
-  { id: 'app', label: 'Apps' },
+  { id: 'skill', label: 'Tools' },
+  { id: 'connector', label: 'MCP' },
+  { id: 'provider', label: 'Models' },
   { id: 'bundle', label: 'Bundles' },
 ] as const;
 
@@ -349,6 +352,117 @@ function MainAgentHistoryPopover({
   );
 }
 
+function WorkspaceTitlebarSwitcher({
+  workspaceId,
+  workspaceLabel,
+}: {
+  workspaceId: string;
+  workspaceLabel: string;
+}) {
+  const router = useRouter();
+  const { state, actions } = useAccountShell();
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const memberships = state.workspaceMemberships;
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (buttonRef.current?.contains(target) || popoverRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  const openWorkspace = (nextWorkspaceId: string) => {
+    const href = actions.resolveWorkspaceHref(nextWorkspaceId) ?? buildWorkspaceRouteHref(nextWorkspaceId, 'chat');
+    setOpen(false);
+    router.push(href);
+  };
+
+  return (
+    <div className="workstation-titlebar__workspace-switcher">
+      <button
+        ref={buttonRef}
+        type="button"
+        className="workstation-titlebar__workspace-trigger"
+        aria-label={`Workspace. Current workspace: ${workspaceLabel}`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title={workspaceLabel}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="workstation-titlebar__workspace-label">Workspace</span>
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div
+          ref={popoverRef}
+          className="workstation-titlebar__workspace-popover"
+          role="dialog"
+          aria-label="Workspaces"
+        >
+          <div className="workstation-titlebar__workspace-current">
+            <span>Current workspace</span>
+            <strong>{workspaceLabel}</strong>
+          </div>
+          <div className="workstation-titlebar__workspace-list">
+            {memberships.length === 0 ? (
+              <div className="workstation-titlebar__workspace-empty">No workspaces available.</div>
+            ) : memberships.map((membership) => {
+              const isActive = membership.workspace.id === workspaceId;
+              return (
+                <button
+                  key={membership.workspace.id}
+                  type="button"
+                  className={joinClassNames(
+                    'workstation-titlebar__workspace-row',
+                    isActive && 'workstation-titlebar__workspace-row--active',
+                  )}
+                  aria-current={isActive ? 'true' : undefined}
+                  onClick={() => openWorkspace(membership.workspace.id)}
+                >
+                  <span className="workstation-titlebar__workspace-row-copy">
+                    <span className="workstation-titlebar__workspace-row-name">{membership.workspace.label}</span>
+                    <span className="workstation-titlebar__workspace-row-meta">
+                      {membership.workspace.kind} / {membership.role}
+                    </span>
+                  </span>
+                  {isActive ? <Check size={16} aria-hidden="true" /> : null}
+                </button>
+              );
+            })}
+          </div>
+          <Link
+            href="/workspaces/new"
+            className="workstation-titlebar__workspace-new"
+            onClick={() => setOpen(false)}
+          >
+            <Plus size={16} aria-hidden="true" />
+            <span>New workspace</span>
+          </Link>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function WorkstationKernelShell({
   children,
 }: PropsWithChildren) {
@@ -526,50 +640,54 @@ export function WorkstationKernelShell({
         activeRouteId === 'chat' && 'workstation-shell--chat',
       )}
     >
-      {activeDestinationId !== 'studio' ? (
-        <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
-          <WorkstationTitlebar
-            surfaceLabel={workspaceLabel}
-            surfaceHref={surfaceHomeHref}
-            diagnosticsVisible={false}
-            onToggleDiagnostics={() => {}}
-            leftAction={(
-              <button
-                type="button"
-                className="workstation-titlebar__mobile-menu-trigger"
-                aria-label="Open sidebar"
-                onClick={() => setIsSidebarOpen(true)}
-              >
-                <Menu size={20} />
-              </button>
-            )}
-            actions={(
-              <>
-                {routeManifest.routeIndex.gateway ? (
-                  <Link
-                    href={routeManifest.routeIndex.gateway.href}
-                    className={joinClassNames(
-                      'workstation-titlebar__link',
-                      computerStatus.onlineCount > 0 && 'workstation-titlebar__link--active',
-                    )}
-                    title={
-                      computerStatus.connectedCount > 0
-                        ? `${computerStatus.onlineCount} of ${computerStatus.connectedCount} connected computers online`
-                        : 'No computer connected'
-                    }
-                  >
-                    <Monitor size={16} aria-hidden="true" />
-                    <span>
-                      {computerStatus.onlineCount > 0 ? 'Computer online' : 'Computer offline'}
-                    </span>
-                  </Link>
-                ) : null}
-              </>
-            )}
-            navigation={titlebarNavigation}
-          />
-        </div>
-      ) : null}
+      <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
+        <WorkstationTitlebar
+          surfaceLabel="Workspace"
+          surfaceHref={surfaceHomeHref}
+          surfaceControl={(
+            <WorkspaceTitlebarSwitcher
+              workspaceId={workspaceId}
+              workspaceLabel={workspaceLabel}
+            />
+          )}
+          diagnosticsVisible={false}
+          onToggleDiagnostics={() => {}}
+          leftAction={(
+            <button
+              type="button"
+              className="workstation-titlebar__mobile-menu-trigger"
+              aria-label="Open sidebar"
+              onClick={() => setIsSidebarOpen(true)}
+            >
+              <Menu size={20} />
+            </button>
+          )}
+          actions={(
+            <>
+              {routeManifest.routeIndex.gateway ? (
+                <Link
+                  href={routeManifest.routeIndex.gateway.href}
+                  className={joinClassNames(
+                    'workstation-titlebar__link',
+                    computerStatus.onlineCount > 0 && 'workstation-titlebar__link--active',
+                  )}
+                  title={
+                    computerStatus.connectedCount > 0
+                      ? `${computerStatus.onlineCount} of ${computerStatus.connectedCount} connected computers online`
+                      : 'No computer connected'
+                  }
+                >
+                  <Monitor size={16} aria-hidden="true" />
+                  <span>
+                    {computerStatus.onlineCount > 0 ? 'Computer online' : 'Computer offline'}
+                  </span>
+                </Link>
+              ) : null}
+            </>
+          )}
+          navigation={titlebarNavigation}
+        />
+      </div>
 
       <AppDrawer
         open={isSidebarOpen}

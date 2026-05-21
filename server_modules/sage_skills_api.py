@@ -6,6 +6,8 @@ from typing import Any, Dict, Optional
 from fastapi import Depends
 
 from server_modules.auth import enforce_workspace_access, workspace_tenant_id
+from server_modules import mcp_registry_service
+from server_modules import skills_service
 from server_modules.installed_skills import (
     current_device_os_label,
     list_installed_skills,
@@ -209,6 +211,245 @@ def _skill_payload(item: Dict[str, Any], curated: CuratedSkillDefinition | None 
     }
 
 
+def _capability_record(
+    *,
+    capability_id: str,
+    label: str,
+    source: str,
+    capability_type: str,
+    status: str,
+    tool_id: str | None = None,
+    connector_id: str | None = None,
+    skill_id: str | None = None,
+    mcp_server_id: str | None = None,
+    mcp_tool_id: str | None = None,
+    action_class: str | None = None,
+    risk_level: str | None = None,
+    requires_approval: bool = False,
+    runtime_requirement: str | None = None,
+    setup_action: str | None = None,
+    description: str | None = None,
+) -> Dict[str, Any]:
+    normalized_status = _coerce_text(status) or "needs_setup"
+    return {
+        "id": _coerce_text(capability_id) or _coerce_text(tool_id) or _coerce_text(label),
+        "label": _coerce_text(label) or _coerce_text(capability_id) or "Capability",
+        "description": _coerce_text(description) or None,
+        "type": _coerce_text(capability_type) or "tool",
+        "source": _coerce_text(source) or "workspace",
+        "status": normalized_status,
+        "active_now": normalized_status == "ready",
+        "tool_id": _coerce_text(tool_id) or None,
+        "connector_id": _coerce_text(connector_id) or None,
+        "skill_id": _coerce_text(skill_id) or None,
+        "mcp_server_id": _coerce_text(mcp_server_id) or None,
+        "mcp_tool_id": _coerce_text(mcp_tool_id) or None,
+        "action_class": _coerce_text(action_class) or None,
+        "risk_level": _coerce_text(risk_level) or None,
+        "requires_approval": bool(requires_approval),
+        "runtime_requirement": _coerce_text(runtime_requirement) or None,
+        "setup_action": _coerce_text(setup_action) or None,
+    }
+
+
+def _builtin_capability_records() -> list[Dict[str, Any]]:
+    records: list[Dict[str, Any]] = []
+    for tool in skills_service.build_builtin_direct_chat_tools():
+        if not isinstance(tool, dict):
+            continue
+        name = _coerce_text(tool.get("name"))
+        if not name:
+            continue
+        connector_id = _coerce_text(tool.get("connector_id"))
+        capability_type = "memory" if connector_id == "memory" else "tool"
+        action_class = _coerce_text(tool.get("action_class"))
+        requires_approval = bool(tool.get("requires_approval"))
+        status = "approval_required" if requires_approval else "ready"
+        records.append(
+            _capability_record(
+                capability_id=_coerce_text(tool.get("capability_id")) or name,
+                label=_coerce_text(tool.get("label")) or name,
+                description=_coerce_text(tool.get("description")),
+                source="builtin",
+                capability_type=capability_type,
+                status=status,
+                tool_id=name,
+                connector_id=connector_id or None,
+                action_class=action_class or None,
+                risk_level=_coerce_text(tool.get("risk_level")) or None,
+                requires_approval=requires_approval,
+                runtime_requirement="cloud",
+                setup_action=None,
+            )
+        )
+    return records
+
+
+def _skill_capability_records(skill_items: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    records: list[Dict[str, Any]] = []
+    for skill in skill_items:
+        skill_id = _coerce_text(skill.get("id"))
+        tools = [token for token in list(skill.get("tools") or []) if _coerce_text(token)]
+        status = _coerce_text(skill.get("status")) or "needs_setup"
+        setup_action = "open_skills" if status != "ready" else None
+        if not tools:
+            records.append(
+                _capability_record(
+                    capability_id=f"skill:{skill_id or _coerce_text(skill.get('name'))}",
+                    label=_coerce_text(skill.get("name")) or "Skill",
+                    description=_coerce_text(skill.get("description")),
+                    source=_coerce_text(skill.get("source")) or "skill",
+                    capability_type="skill",
+                    status=status,
+                    skill_id=skill_id or None,
+                    action_class=_coerce_text(skill.get("action_class")) or None,
+                    requires_approval=bool(skill.get("requires_approval")),
+                    runtime_requirement=_coerce_text(skill.get("execution_mode")) or None,
+                    setup_action=setup_action,
+                )
+            )
+            continue
+        for tool_name in tools:
+            records.append(
+                _capability_record(
+                    capability_id=f"skill:{skill_id}:{tool_name}",
+                    label=f"{_coerce_text(skill.get('name')) or 'Skill'}: {tool_name}",
+                    description=_coerce_text(skill.get("description")),
+                    source=_coerce_text(skill.get("source")) or "skill",
+                    capability_type="skill",
+                    status=status,
+                    tool_id=tool_name,
+                    skill_id=skill_id or None,
+                    action_class=_coerce_text(skill.get("action_class")) or None,
+                    requires_approval=bool(skill.get("requires_approval")),
+                    runtime_requirement=_coerce_text(skill.get("execution_mode")) or None,
+                    setup_action=setup_action,
+                )
+            )
+    return records
+
+
+def _mcp_capability_records(workspace_id: str) -> list[Dict[str, Any]]:
+    records: list[Dict[str, Any]] = []
+    try:
+        servers = mcp_registry_service.list_workspace_mcp_servers(workspace_id)
+    except Exception:
+        servers = []
+    for server in servers:
+        if not isinstance(server, dict):
+            continue
+        server_id = _coerce_text(server.get("server_id") or server.get("id"))
+        server_enabled = server.get("enabled") is not False
+        for tool in list(server.get("tools") or []):
+            if not isinstance(tool, dict):
+                continue
+            tool_name = _coerce_text(tool.get("name"))
+            if not tool_name:
+                continue
+            approved = bool(tool.get("approved"))
+            status = "ready" if server_enabled and approved else "needs_approval"
+            records.append(
+                _capability_record(
+                    capability_id=f"mcp:{server_id}:{tool_name}",
+                    label=_coerce_text(tool.get("label")) or tool_name,
+                    description=_coerce_text(tool.get("description")),
+                    source="mcp",
+                    capability_type="mcp",
+                    status=status,
+                    tool_id=f"mcp__{server_id}__{tool_name}",
+                    connector_id="mcp",
+                    mcp_server_id=server_id or None,
+                    mcp_tool_id=tool_name,
+                    action_class=_coerce_text(tool.get("action_class")) or "read",
+                    risk_level=_coerce_text(tool.get("risk_level")) or None,
+                    requires_approval=bool(tool.get("requires_approval")),
+                    runtime_requirement="mcp_server",
+                    setup_action=None if approved else "approve_mcp_tool",
+                )
+            )
+    return records
+
+
+def _capability_summary(items: list[Dict[str, Any]]) -> Dict[str, int]:
+    return {
+        "total_count": len(items),
+        "ready_count": len([item for item in items if item.get("status") == "ready"]),
+        "needs_setup_count": len([item for item in items if item.get("status") in {"needs_setup", "unsupported_device", "disabled_policy"}]),
+        "needs_approval_count": len([item for item in items if item.get("status") in {"approval_required", "needs_approval"}]),
+        "memory_count": len([item for item in items if item.get("type") == "memory"]),
+        "skill_count": len([item for item in items if item.get("type") == "skill"]),
+        "mcp_count": len([item for item in items if item.get("type") == "mcp"]),
+    }
+
+
+def _health_checks(items: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    has_memory = any(item.get("type") == "memory" and item.get("status") in {"ready", "approval_required"} for item in items)
+    has_skill_scanner = any(item.get("type") == "skill" for item in items)
+    has_mcp = any(item.get("type") == "mcp" for item in items)
+    return [
+        {"id": "model_route", "label": "Model route", "status": "ready", "surface": "sage"},
+        {"id": "memory_retrieval", "label": "Memory retrieval", "status": "ready" if has_memory else "needs_setup", "surface": "sage"},
+        {"id": "memory_write", "label": "Memory writes", "status": "approval_required" if has_memory else "needs_setup", "surface": "sage"},
+        {"id": "skill_scanner", "label": "Skill scanner", "status": "ready" if has_skill_scanner else "needs_setup", "surface": "skills"},
+        {"id": "mcp_endpoint_safety", "label": "MCP endpoint safety", "status": "ready" if has_mcp else "available", "surface": "mcp"},
+        {"id": "local_companion", "label": "Local companion", "status": "setup_required", "surface": "runtime"},
+        {"id": "billing_metering", "label": "Action and credit metering", "status": "ready", "surface": "billing"},
+    ]
+
+
+def _build_sage_skills_payload(*, workspace_id: str, tenant_id: str) -> Dict[str, Any]:
+    installed = list_installed_skills(workspace_id=workspace_id)
+    installed_index: dict[str, Dict[str, Any]] = {}
+    consumed_ids: set[str] = set()
+    for item in installed:
+        installed_index.update(_curated_skill_index(item))
+
+    items = []
+    for curated in _CURATED_SKILL_PACK:
+        matched = None
+        for token in (curated.id, *curated.aliases):
+            normalized = normalize_skill_id(token)
+            if normalized and normalized in installed_index:
+                matched = installed_index[normalized]
+                break
+        if matched is None:
+            matched = {
+                "id": curated.id,
+                "name": curated.name,
+                "description": curated.description,
+                "enabled": True,
+                "available": False,
+                "supported_os": list(curated.supported_os),
+                "availability_reasons": [] if _current_device_supports(curated.supported_os) else [f"Only available on: {', '.join(curated.supported_os)}"],
+                "source": "curated_pack",
+                "runtime_metadata": {},
+            }
+        else:
+            consumed_ids.add(_coerce_text(matched.get("id")))
+        items.append(_skill_payload(matched, curated))
+
+    remainder = [
+        _skill_payload(item)
+        for item in installed
+        if _coerce_text(item.get("id")) not in consumed_ids
+    ]
+    remainder.sort(key=lambda item: (item.get("name") or "").lower())
+    items.extend(remainder)
+    return {
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "curated_pack": [item for item in items if item.get("curated")],
+        "items": items,
+        "summary": {
+            "total_count": len(items),
+            "ready_count": len([item for item in items if item["status"] == "ready"]),
+            "needs_setup_count": len([item for item in items if item["status"] == "needs_setup"]),
+            "unsupported_count": len([item for item in items if item["status"] == "unsupported_device"]),
+            "disabled_count": len([item for item in items if item["status"] == "disabled_policy"]),
+        },
+    }
+
+
 def register_sage_skills_routes(app) -> None:
     import server as _server
 
@@ -230,53 +471,31 @@ def register_sage_skills_routes(app) -> None:
             minimum_role="viewer",
         )
         tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
-        installed = list_installed_skills(workspace_id=resolved_workspace_id)
-        installed_index: dict[str, Dict[str, Any]] = {}
-        consumed_ids: set[str] = set()
-        for item in installed:
-            installed_index.update(_curated_skill_index(item))
+        return _build_sage_skills_payload(workspace_id=resolved_workspace_id, tenant_id=tenant_id)
 
-        items = []
-        for curated in _CURATED_SKILL_PACK:
-            matched = None
-            for token in (curated.id, *curated.aliases):
-                normalized = normalize_skill_id(token)
-                if normalized and normalized in installed_index:
-                    matched = installed_index[normalized]
-                    break
-            if matched is None:
-                matched = {
-                    "id": curated.id,
-                    "name": curated.name,
-                    "description": curated.description,
-                    "enabled": True,
-                    "available": False,
-                    "supported_os": list(curated.supported_os),
-                    "availability_reasons": [] if _current_device_supports(curated.supported_os) else [f"Only available on: {', '.join(curated.supported_os)}"],
-                    "source": "curated_pack",
-                    "runtime_metadata": {},
-                }
-            else:
-                consumed_ids.add(_coerce_text(matched.get("id")))
-            items.append(_skill_payload(matched, curated))
-
-        remainder = [
-            _skill_payload(item)
-            for item in installed
-            if _coerce_text(item.get("id")) not in consumed_ids
+    @app.get("/api/sage-capabilities", dependencies=[Depends(member_dependency)])
+    async def list_workspace_sage_capabilities(
+        workspace_id: Optional[str] = None,
+        current_user=Depends(member_dependency),
+    ):
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id,
+            minimum_role="viewer",
+        )
+        tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
+        skills_payload = _build_sage_skills_payload(workspace_id=resolved_workspace_id, tenant_id=tenant_id)
+        skill_items = [item for item in list(skills_payload.get("items") or []) if isinstance(item, dict)]
+        items = [
+            *_builtin_capability_records(),
+            *_skill_capability_records(skill_items),
+            *_mcp_capability_records(resolved_workspace_id),
         ]
-        remainder.sort(key=lambda item: (item.get("name") or "").lower())
-        items.extend(remainder)
         return {
             "workspace_id": resolved_workspace_id,
             "tenant_id": tenant_id,
-            "curated_pack": [item for item in items if item.get("curated")],
+            "version": 1,
             "items": items,
-            "summary": {
-                "total_count": len(items),
-                "ready_count": len([item for item in items if item["status"] == "ready"]),
-                "needs_setup_count": len([item for item in items if item["status"] == "needs_setup"]),
-                "unsupported_count": len([item for item in items if item["status"] == "unsupported_device"]),
-                "disabled_count": len([item for item in items if item["status"] == "disabled_policy"]),
-            },
+            "summary": _capability_summary(items),
+            "health_checks": _health_checks(items),
         }

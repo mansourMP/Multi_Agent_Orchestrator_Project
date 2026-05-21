@@ -48,6 +48,23 @@ type SageSkillsSummary = {
   disabledCount: number;
 };
 
+type SageCapabilitiesSummary = {
+  totalCount: number;
+  readyCount: number;
+  needsSetupCount: number;
+  needsApprovalCount: number;
+  memoryCount: number;
+  skillCount: number;
+  mcpCount: number;
+};
+
+type SageHealthCheckRecord = {
+  id: string;
+  label: string;
+  status: string;
+  surface: string;
+};
+
 type SkillPreviewMode = 'preview' | 'source';
 
 function readString(value: unknown, fallback = ''): string {
@@ -128,8 +145,53 @@ function normalizeSkillsPayload(payload: unknown): {
   };
 }
 
+function normalizeCapabilitiesSummary(payload: Record<string, unknown>): SageCapabilitiesSummary {
+  const summary = payload.summary && typeof payload.summary === 'object'
+    ? payload.summary as Record<string, unknown>
+    : {};
+  return {
+    totalCount: readNumber(summary.total_count),
+    readyCount: readNumber(summary.ready_count),
+    needsSetupCount: readNumber(summary.needs_setup_count),
+    needsApprovalCount: readNumber(summary.needs_approval_count),
+    memoryCount: readNumber(summary.memory_count),
+    skillCount: readNumber(summary.skill_count),
+    mcpCount: readNumber(summary.mcp_count),
+  };
+}
+
+function normalizeHealthChecks(payload: Record<string, unknown>): SageHealthCheckRecord[] {
+  return Array.isArray(payload.health_checks)
+    ? payload.health_checks.flatMap((item) => {
+      const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      const id = readString(record.id);
+      const label = readString(record.label);
+      if (!id || !label) {
+        return [];
+      }
+      return [{
+        id,
+        label,
+        status: readString(record.status, 'needs_setup'),
+        surface: readString(record.surface),
+      }];
+    })
+    : [];
+}
+
+function normalizeCapabilitiesPayload(payload: unknown): {
+  summary: SageCapabilitiesSummary;
+  healthChecks: SageHealthCheckRecord[];
+} {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  return {
+    summary: normalizeCapabilitiesSummary(record),
+    healthChecks: normalizeHealthChecks(record),
+  };
+}
+
 function statusTone(status: string): 'ready' | 'blocked' | 'neutral' {
-  if (status === 'ready') {
+  if (status === 'ready' || status === 'available') {
     return 'ready';
   }
   if (status === 'unsupported_device' || status === 'disabled_policy') {
@@ -215,6 +277,16 @@ export function WorkstationSageToolsPane() {
     unsupportedCount: 0,
     disabledCount: 0,
   });
+  const [capabilitySummary, setCapabilitySummary] = useState<SageCapabilitiesSummary>({
+    totalCount: 0,
+    readyCount: 0,
+    needsSetupCount: 0,
+    needsApprovalCount: 0,
+    memoryCount: 0,
+    skillCount: 0,
+    mcpCount: 0,
+  });
+  const [healthChecks, setHealthChecks] = useState<SageHealthCheckRecord[]>([]);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState<SkillPreviewMode>('preview');
   const [isLoading, setIsLoading] = useState(true);
@@ -224,14 +296,20 @@ export function WorkstationSageToolsPane() {
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-    void services.client.listSageSkills()
-      .then((payload) => {
+    void Promise.all([
+      services.client.listSageSkills(),
+      services.client.listSageCapabilities(),
+    ])
+      .then(([skillsPayload, capabilitiesPayload]) => {
         if (cancelled) {
           return;
         }
-        const normalized = normalizeSkillsPayload(payload);
+        const normalized = normalizeSkillsPayload(skillsPayload);
+        const capabilities = normalizeCapabilitiesPayload(capabilitiesPayload);
         setSkills(normalized.items);
         setSummary(normalized.summary);
+        setCapabilitySummary(capabilities.summary);
+        setHealthChecks(capabilities.healthChecks);
         setSelectedSkillId((current) => (
           current && normalized.items.some((item) => item.id === current) ? current : null
         ));
@@ -274,6 +352,52 @@ export function WorkstationSageToolsPane() {
       {error ? (
         <AppNotice tone="warning">Skill packages could not load. Try again when the workspace is ready.</AppNotice>
       ) : null}
+
+      <section className="sage-skills-library" aria-label="Sage capability readiness">
+        <header className="sage-skills-library__header">
+          <div>
+            <p className="sage-unified-section__label">Capability readiness</p>
+            <h3>What Sage can use after policy checks.</h3>
+          </div>
+          <div className="sage-skills-library__stats" aria-label="Capability counts">
+            <span>{capabilitySummary.readyCount} ready</span>
+            <span>{capabilitySummary.needsApprovalCount} review</span>
+            <span>{capabilitySummary.totalCount} total</span>
+          </div>
+        </header>
+        <div className="sage-skills-install" aria-label="Capability class counts">
+          <div className="sage-skills-install__copy">
+            <strong>Memory, Skill.md, and MCP stay permissioned</strong>
+            <span>Sage only sees callable capabilities that are enabled for this workspace and session.</span>
+          </div>
+          <div className="sage-skills-install__actions">
+            <span className="sage-skills-install__option">{capabilitySummary.memoryCount} memory</span>
+            <span className="sage-skills-install__option">{capabilitySummary.skillCount} skills</span>
+            <span className="sage-skills-install__option">{capabilitySummary.mcpCount} MCP</span>
+          </div>
+        </div>
+        {healthChecks.length > 0 ? (
+          <div className="sage-skills-install" aria-label="Capability health checks">
+            <div className="sage-skills-install__copy">
+              <strong>Health checks</strong>
+              <span>Setup state is shown here instead of being injected into chat.</span>
+            </div>
+            <div className="sage-skills-install__actions">
+              {healthChecks.map((check) => (
+                <span
+                  key={check.id}
+                  className={joinClassNames(
+                    'sage-skills-install__option',
+                    statusTone(check.status) === 'ready' && 'sage-skills-install__option--ready',
+                  )}
+                >
+                  {check.label}: {check.status.replace(/_/g, ' ')}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       <section className="sage-skills-library" aria-label="Skill.md package library">
         <header className="sage-skills-library__header">

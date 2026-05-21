@@ -12,6 +12,7 @@ from server_modules import (
     secret_redaction_service,
     security_audit_service,
     workspace_context,
+    workspace_context_memory_adapter,
 )
 from server_modules.conversation_memory_facade_service import (
     DIRECT_CHAT_SURFACE,
@@ -125,12 +126,7 @@ def _load_profile_context(*, workspace_id: str) -> str:
 
 def _load_context_files(*, workspace_id: str) -> str:
     files = workspace_context.read_workspace_context_files(workspace_id=workspace_id)
-    ordered = ("SOUL.md", "USER.md", "IDENTITY.md", "HEARTBEAT.md", "MEMORY.md")
-    sections: list[str] = []
-    for filename in ordered:
-        content = _coerce_text(files.get(filename))
-        if content:
-            sections.append(content)
+    sections, _diagnostics = workspace_context_memory_adapter.build_workspace_context_file_blocks(files)
     return "\n\n".join(sections)
 
 
@@ -175,8 +171,7 @@ def _build_system_prompt(
         parts.append(context_files)
     else:
         parts.append(
-            "You are Sage, a calm personal assistant inside the Empyralis platform. "
-            "Your job is to help the user with clear, useful, and thoughtful replies."
+            "You are the signed-in user's AI assistant in Empyralis."
         )
 
     if profile_context:
@@ -195,12 +190,8 @@ def _build_system_prompt(
         parts.append("\n".join(skill_lines))
 
     parts.append(
-        "\nYou are a personal assistant (Sage), not a Studio agent. "
-        "You do not serve external customers. "
-        "You cannot send messages, edit files, execute shell commands, mutate browser state, "
-        "or write to external connectors on your own. "
-        "If the user asks for an action that requires write or execute permissions, "
-        "tell them it requires explicit approval and explain what you would do."
+        "Assistant boundary: serve the signed-in user in this workspace. "
+        "Use only available capabilities, and request explicit approval before any write, execute, or external action."
     )
 
     return "\n\n".join(parts).strip()

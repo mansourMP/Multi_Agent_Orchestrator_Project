@@ -51,6 +51,61 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
         self.assertIn("HEARTBEAT.md", rendered)
         self.assertEqual(payload["diagnostics"]["context_file_count"], 5)
 
+    def test_load_workspace_context_payload_includes_extended_root_context_and_memory_manifest(self):
+        with (
+            patch(
+                "server_modules.workspace_context_memory_adapter.read_workspace_context_files",
+                return_value={
+                    "SOUL.md": "# Empyralis\n\n- Custom identity.\n",
+                    "GOALS.md": "# Goals\n\n- Ship the phone app.\n",
+                    "PROCEDURES.md": "# Procedures\n\n- Verify with screenshots.\n",
+                    "memory/files/research.md": "# Research\n\nArchitecture comparison notes.",
+                },
+            ),
+            patch("server_modules.memory_service.get_recent_logs", return_value=""),
+            patch("server_modules.memory_service.get_memory", return_value=""),
+            patch("server_modules.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_services_service.build_sage_services_memory_block", return_value=""),
+            patch("server_modules.mini_apps_service.build_mini_apps_context_block", return_value=""),
+        ):
+            payload = workspace_context_memory_adapter.load_workspace_context_payload(
+                workspace_id="workspace-1",
+                policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
+            )
+
+        rendered = "\n\n".join(payload["contextual_blocks"])
+        self.assertIn("GOALS.md", rendered)
+        self.assertIn("PROCEDURES.md", rendered)
+        self.assertIn("Available Memory Files", rendered)
+        self.assertIn("memory/files/research.md", rendered)
+        self.assertEqual(payload["diagnostics"]["context_file_count"], 3)
+        self.assertEqual(payload["diagnostics"]["available_memory_file_count"], 1)
+
+    def test_load_workspace_context_payload_skips_default_placeholder_files(self):
+        with (
+            patch(
+                "server_modules.workspace_context_memory_adapter.read_workspace_context_files",
+                return_value={
+                    "SOUL.md": workspace_context_memory_adapter.workspace_context.DEFAULT_CONTEXT_FILE_CONTENTS["SOUL.md"],
+                    "USER.md": "# User\n\n- Real preference.\n",
+                },
+            ),
+            patch("server_modules.memory_service.get_recent_logs", return_value=""),
+            patch("server_modules.memory_service.get_memory", return_value=""),
+            patch("server_modules.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_services_service.build_sage_services_memory_block", return_value=""),
+            patch("server_modules.mini_apps_service.build_mini_apps_context_block", return_value=""),
+        ):
+            payload = workspace_context_memory_adapter.load_workspace_context_payload(
+                workspace_id="workspace-1",
+                policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
+            )
+
+        rendered = "\n\n".join(payload["contextual_blocks"])
+        self.assertIn("Real preference", rendered)
+        self.assertNotIn("Empyralis is a calm mobile-first AI product", rendered)
+        self.assertEqual(payload["diagnostics"]["context_file_count"], 1)
+
     def test_load_workspace_context_payload_includes_sage_memory_block(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir) / "workspace-1"

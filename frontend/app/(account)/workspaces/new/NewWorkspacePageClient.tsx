@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { X } from 'lucide-react';
 
 import {
   createWorkspace,
@@ -18,9 +19,46 @@ const NEW_WORKSPACE_FORM_ID = 'new-workspace';
 
 export function NewWorkspacePageClient() {
   const router = useRouter();
-  const { actions } = useAccountShell();
+  const { state, actions } = useAccountShell();
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  function resolveCloseHref(): string {
+    const fallbackWorkspaceId =
+      state.selectedWorkspaceId
+      ?? state.workspaceMemberships.find(
+        (membership) => membership.setupCompleted && !membership.requiresOnboarding,
+      )?.workspace.id
+      ?? state.workspaceMemberships[0]?.workspace.id
+      ?? null;
+
+    if (!fallbackWorkspaceId) {
+      return '/';
+    }
+
+    return actions.resolveWorkspaceHref(fallbackWorkspaceId)
+      ?? `/w/${encodeURIComponent(fallbackWorkspaceId)}/sage`;
+  }
+
+  function handleClose() {
+    const fallbackHref = resolveCloseHref();
+    if (typeof window !== 'undefined') {
+      try {
+        const referrer = document.referrer ? new URL(document.referrer) : null;
+        if (
+          referrer
+          && referrer.origin === window.location.origin
+          && referrer.pathname !== window.location.pathname
+        ) {
+          router.back();
+          return;
+        }
+      } catch {
+        // Fall through to the workspace-safe route when the browser referrer is unavailable.
+      }
+    }
+    router.push(fallbackHref);
+  }
 
   async function handleSubmit(values: CreateWorkspaceInput) {
     setSubmitting(true);
@@ -41,7 +79,15 @@ export function NewWorkspacePageClient() {
 
   return (
     <main className="app-page-shell">
-      <div className="app-page-shell__content">
+      <div className="app-page-shell__content app-workspace-create-shell">
+        <button
+          type="button"
+          className="app-workspace-create-shell__close"
+          aria-label="Close workspace setup"
+          onClick={handleClose}
+        >
+          <X size={18} aria-hidden="true" />
+        </button>
         <WorkspaceSetupForm
           workspaceId={NEW_WORKSPACE_FORM_ID}
           routeMode="relative"

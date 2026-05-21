@@ -6,13 +6,13 @@ from typing import Any, Dict, List, Optional
 from server_modules import (
     activity_ledger_service,
     kill_switch_gate,
+    sage_instruction_compiler_service,
     sage_heartbeat_service,
     sage_memory_service,
     sage_profile_service,
     secret_redaction_service,
     security_audit_service,
     workspace_context,
-    workspace_context_memory_adapter,
 )
 from server_modules.conversation_memory_facade_service import (
     DIRECT_CHAT_SURFACE,
@@ -55,6 +55,7 @@ from server_modules.sage_approval_service import (
 from server_modules.skill_registry import list_skill_definitions
 from server_modules.sage_transparency_service import emit_sage_turn_transparency_events
 from server_modules.transparency_event_store_service import persist_transparency_events
+from scripts.orion_local_worker_llm import resolve_requested_model
 
 ALLOWED_MODES = {SAGE_MODE}
 CLOUD_PROVIDER_IDS = ("anthropic", "deepseek", "openai", "gemini")
@@ -126,8 +127,13 @@ def _load_profile_context(*, workspace_id: str) -> str:
 
 def _load_context_files(*, workspace_id: str) -> str:
     files = workspace_context.read_workspace_context_files(workspace_id=workspace_id)
-    sections, _diagnostics = workspace_context_memory_adapter.build_workspace_context_file_blocks(files)
+    sections, _diagnostics = sage_instruction_compiler_service.build_root_memory_sections(files)
     return "\n\n".join(sections)
+
+
+def _read_context_files_payload(*, workspace_id: str) -> dict[str, Any]:
+    files = workspace_context.read_workspace_context_files(workspace_id=workspace_id)
+    return files if isinstance(files, dict) else {}
 
 
 def _load_memory_context(*, workspace_id: str) -> str:
@@ -154,47 +160,6 @@ def _load_safe_skill_catalog(*, workspace_id: str) -> list[dict]:
             "execution_mode": skill.execution_mode,
         })
     return safe
-
-
-def _build_system_prompt(
-    *,
-    workspace_id: str,
-    profile_context: str,
-    context_files: str,
-    memory_context: str,
-    heartbeat_context: str,
-    safe_skills: list[dict],
-) -> str:
-    parts: list[str] = []
-
-    if context_files:
-        parts.append(context_files)
-    else:
-        parts.append(
-            "You are the signed-in user's AI assistant in Empyralis."
-        )
-
-    if profile_context:
-        parts.append("## User Profile\n" + profile_context)
-
-    if memory_context:
-        parts.append("## Sage Memory\n" + memory_context)
-
-    if heartbeat_context:
-        parts.append("## Current State\n" + heartbeat_context)
-
-    if safe_skills:
-        skill_lines = ["## Available Capabilities"]
-        for skill in safe_skills:
-            skill_lines.append(f"- {skill['label']}: {skill['description']}")
-        parts.append("\n".join(skill_lines))
-
-    parts.append(
-        "Assistant boundary: serve the signed-in user in this workspace. "
-        "Use only available capabilities, and request explicit approval before any write, execute, or external action."
-    )
-
-    return "\n\n".join(parts).strip()
 
 
 def _build_heartbeat_summary(snapshot: dict) -> str:
@@ -442,9 +407,7 @@ async def handle_sage_chat(
     if profile_context:
         used_context.append("sage_profile")
 
-    context_files = _load_context_files(workspace_id=normalized_workspace_id)
-    if context_files:
-        used_context.append("workspace_context_files")
+    context_files_payload = _read_context_files_payload(workspace_id=normalized_workspace_id)
 
     memory_context = _load_memory_context(workspace_id=normalized_workspace_id)
     if memory_context:
@@ -465,22 +428,6 @@ async def handle_sage_chat(
     if safe_skills:
         used_context.append("sage_skills")
 
-    # --- Build prompt ---
-    system_prompt = _build_system_prompt(
-        workspace_id=normalized_workspace_id,
-        profile_context=profile_context,
-        context_files=context_files,
-        memory_context=memory_context,
-        heartbeat_context=heartbeat_context,
-        safe_skills=safe_skills,
-    )
-
-    envelope = _build_prompt_envelope(
-        workspace_id=normalized_workspace_id,
-        message=normalized_message,
-        system_prompt=system_prompt,
-    )
-
     # --- Call provider ---
     provider, credentials = _resolve_cloud_provider(normalized_workspace_id)
 
@@ -489,7 +436,7 @@ async def handle_sage_chat(
         "provider": provider,
         "source": "sage_chat",
         "surface": normalized_surface,
-        "disable_provider_fallback": False,
+        "disable_provider_fallback": True,
     }
     metadata: dict = {
         "workspace_id": normalized_workspace_id,
@@ -499,6 +446,32 @@ async def handle_sage_chat(
         "credentials": credentials,
         "trace_id": trace_id,
     }
+    requested_model = resolve_requested_model(context, metadata, provider)
+
+    # --- Build prompt ---
+    instruction_bundle = sage_instruction_compiler_service.build_sage_instruction_bundle(
+        workspace_id=normalized_workspace_id,
+        tenant_id=normalized_tenant_id,
+        user_id=actor_user_id,
+        message=normalized_message,
+        provider=provider,
+        model=requested_model,
+        root_context_files=context_files_payload,
+        profile_context=profile_context,
+        memory_context=memory_context,
+        heartbeat_context=heartbeat_context,
+    )
+    prompt_diagnostics = instruction_bundle.diagnostics
+    if prompt_diagnostics.get("included_root_files") or prompt_diagnostics.get("available_memory_file_count"):
+        used_context.append("workspace_context_files")
+    if int(prompt_diagnostics.get("capability_count") or 0) > 0:
+        used_context.append("sage_capabilities")
+
+    envelope = _build_prompt_envelope(
+        workspace_id=normalized_workspace_id,
+        message=normalized_message,
+        system_prompt=instruction_bundle.system_prompt,
+    )
 
     try:
         reply, usage, attempted_providers, last_error = generate_chat_reply_with_provider_fallback(
@@ -506,7 +479,7 @@ async def handle_sage_chat(
             metadata,
             envelope["user_message"],
             envelope["system_prompt"],
-            prior_messages=None,
+            prior_messages=instruction_bundle.prior_messages or None,
         )
     except Exception as exc:
         _emit_failed_audit_event(
@@ -536,7 +509,7 @@ async def handle_sage_chat(
 
     attempted = [p.strip() for p in _coerce_text(attempted_providers).split(",") if p.strip()]
     effective_provider = attempted[-1] if attempted else provider
-    effective_model = _coerce_text((usage or {}).get("model"))
+    effective_model = _coerce_text((usage or {}).get("model")) or requested_model
 
     # --- Persist interaction ---
     memory_subject = ConversationMemorySubject(
@@ -575,6 +548,7 @@ async def handle_sage_chat(
                 "model": effective_model or None,
                 "surface": normalized_surface,
                 "blocked_action_count": len(blocked_actions),
+                "prompt_diagnostics": prompt_diagnostics,
             },
         )
     except Exception:
@@ -598,6 +572,7 @@ async def handle_sage_chat(
                 "model": effective_model or None,
                 "surface": normalized_surface,
                 "blocked_action_count": len(blocked_actions),
+                "prompt_diagnostics": prompt_diagnostics,
             },
             idempotency_key=f"sage_chat:{trace_id}",
         )

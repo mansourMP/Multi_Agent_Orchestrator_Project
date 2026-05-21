@@ -115,9 +115,12 @@ class SageChatApiContractTests(unittest.TestCase):
             )
 
             system_prompt = mock_generate.call_args[0][3]
+            routed_context = mock_generate.call_args[0][0]
             self.assertIn("ai assistant", system_prompt.lower())
-            self.assertIn("assistant boundary", system_prompt.lower())
-            self.assertIn("request explicit approval", system_prompt.lower())
+            self.assertIn("sage surface boundary", system_prompt.lower())
+            self.assertIn("approval rule", system_prompt.lower())
+            self.assertIn("explicit approval", system_prompt.lower())
+            self.assertTrue(routed_context["disable_provider_fallback"])
             self.assertNotIn("cannot send messages", system_prompt.lower())
 
 

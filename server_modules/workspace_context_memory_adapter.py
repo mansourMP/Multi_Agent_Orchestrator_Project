@@ -11,15 +11,15 @@ _ROOT_CONTEXT_FILE_ORDER = (
     "SOUL.md",
     "USER.md",
     "IDENTITY.md",
-    "HEARTBEAT.md",
-    "MEMORY.md",
-    "AGENTS.md",
-    "TOOLS.md",
-    "SELF_MODEL.md",
-    "LIFE_STORY.md",
     "GOALS.md",
     "PROCEDURES.md",
+    "TOOLS.md",
+    "AGENTS.md",
     "REFLECTION.md",
+    "MEMORY.md",
+    "HEARTBEAT.md",
+    "SELF_MODEL.md",
+    "LIFE_STORY.md",
 )
 _CONTEXT_FILE_SECTION_CHAR_LIMIT = 12_000
 _CONTEXT_FILE_TOTAL_CHAR_LIMIT = 48_000

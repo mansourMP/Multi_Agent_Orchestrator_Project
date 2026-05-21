@@ -397,6 +397,24 @@ def _health_checks(items: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     ]
 
 
+def build_sage_capabilities_payload(*, workspace_id: str, tenant_id: str) -> Dict[str, Any]:
+    skills_payload = _build_sage_skills_payload(workspace_id=workspace_id, tenant_id=tenant_id)
+    skill_items = [item for item in list(skills_payload.get("items") or []) if isinstance(item, dict)]
+    items = [
+        *_builtin_capability_records(),
+        *_skill_capability_records(skill_items),
+        *_mcp_capability_records(workspace_id),
+    ]
+    return {
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "version": 1,
+        "items": items,
+        "summary": _capability_summary(items),
+        "health_checks": _health_checks(items),
+    }
+
+
 def _build_sage_skills_payload(*, workspace_id: str, tenant_id: str) -> Dict[str, Any]:
     installed = list_installed_skills(workspace_id=workspace_id)
     installed_index: dict[str, Dict[str, Any]] = {}
@@ -484,18 +502,4 @@ def register_sage_skills_routes(app) -> None:
             minimum_role="viewer",
         )
         tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
-        skills_payload = _build_sage_skills_payload(workspace_id=resolved_workspace_id, tenant_id=tenant_id)
-        skill_items = [item for item in list(skills_payload.get("items") or []) if isinstance(item, dict)]
-        items = [
-            *_builtin_capability_records(),
-            *_skill_capability_records(skill_items),
-            *_mcp_capability_records(resolved_workspace_id),
-        ]
-        return {
-            "workspace_id": resolved_workspace_id,
-            "tenant_id": tenant_id,
-            "version": 1,
-            "items": items,
-            "summary": _capability_summary(items),
-            "health_checks": _health_checks(items),
-        }
+        return build_sage_capabilities_payload(workspace_id=resolved_workspace_id, tenant_id=tenant_id)

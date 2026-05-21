@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 from server_modules import direct_chat_routing_service
 
@@ -46,6 +47,27 @@ class DirectChatRoutingServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(preferred)
+
+    def test_prefer_durable_run_handoff_ignores_pasted_context_words(self) -> None:
+        callbacks = replace(
+            self._policy_callbacks(),
+            message_requests_local_file_tool=lambda _message: False,
+            message_requests_local_shell_tool=lambda _message: False,
+            message_requests_local_screenshot_tool=lambda _message: False,
+            message_requests_local_computer_tool=lambda _message: False,
+        )
+
+        preferred = direct_chat_routing_service.prefer_durable_run_handoff(
+            """
+            Type your message or @path/to/file
+            workspace (/directory) branch sandbox /model
+            /tmp/one.txt /tmp/two.txt
+            """,
+            {"ai_ready": True, "connection_mode": "cloud_default"},
+            callbacks,
+        )
+
+        self.assertFalse(preferred)
 
     def test_connector_preview_disables_builtin_tools_when_connector_tools_are_not_allowed(self) -> None:
         decision = direct_chat_routing_service.plan_direct_chat_route(

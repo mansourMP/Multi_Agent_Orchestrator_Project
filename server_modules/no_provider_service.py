@@ -9,6 +9,8 @@ import shlex
 from pathlib import Path
 from typing import Any, Callable, Dict
 
+from server_modules import direct_chat_tool_catalog_service
+
 
 def count_python_definition_lines(source_text: str, kind: str) -> int:
     if kind == "class":
@@ -393,6 +395,8 @@ def has_obvious_direct_tool_intent(
 ) -> bool:
     compact = compact_text(message)
     if not compact:
+        return False
+    if direct_chat_tool_catalog_service.should_skip_local_tool_prefetch(message, compact):
         return False
     if (
         any(marker in compact for marker in (" then ", " after that ", " next step", " next steps"))

@@ -117,11 +117,134 @@ def looks_like_local_path_request(compact_message: str) -> bool:
     return bool(re.search(r"(^|\s)(/|~/|\./|\.\./|[a-z]:[/\\])", compact_message, flags=re.IGNORECASE))
 
 
+_LOCAL_TOOL_REQUEST_OPENERS = (
+    "append",
+    "capture",
+    "check",
+    "click",
+    "close",
+    "copy",
+    "delete",
+    "execute",
+    "find",
+    "inspect",
+    "launch",
+    "list",
+    "open",
+    "paste",
+    "press",
+    "read",
+    "run",
+    "save",
+    "search",
+    "show",
+    "take",
+    "type",
+    "write",
+)
+
+_GENERIC_LOCAL_FILE_KEYWORDS = {
+    "directory",
+    "file",
+    "folder",
+    "path",
+    "repo",
+    "repository",
+}
+
+_LOCAL_FILE_ACTION_TOKENS = (
+    "append",
+    "check",
+    "count",
+    "delete",
+    "find",
+    "inspect",
+    "list",
+    "open",
+    "read",
+    "save",
+    "search",
+    "show",
+    "write",
+)
+
+
+def starts_like_local_tool_request(compact_message: str) -> bool:
+    compact = str(compact_message or "").strip().lower()
+    if not compact:
+        return False
+    opener_pattern = "|".join(re.escape(item) for item in _LOCAL_TOOL_REQUEST_OPENERS)
+    return bool(
+        re.match(
+            rf"^(?:please\s+|can you\s+|could you\s+|would you\s+)?(?:{opener_pattern})\b",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def looks_like_pasted_chat_context(message: str) -> bool:
+    text = str(message or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if text.count("\n") >= 5:
+        return True
+    if len(text) >= 900:
+        return True
+    paste_markers = (
+        "@path/to/file",
+        "architectural layer audit",
+        "listed directory",
+        "ran command:",
+        "readfile",
+        "type your message",
+        "viewed ",
+        "workspace (/directory)",
+        "│",
+        "┌",
+        "└",
+        "▀",
+        "▄",
+        "✓",
+    )
+    return any(marker in lowered or marker in text for marker in paste_markers)
+
+
+def should_skip_local_tool_prefetch(message: str, compact_message: str) -> bool:
+    return looks_like_pasted_chat_context(message) and not starts_like_local_tool_request(compact_message)
+
+
+def _mentions_explicit_local_file_keyword(compact_message: str, keywords: Sequence[str]) -> bool:
+    for raw_keyword in keywords:
+        keyword = str(raw_keyword or "").strip().lower()
+        if not keyword or keyword in _GENERIC_LOCAL_FILE_KEYWORDS:
+            continue
+        if keyword in compact_message:
+            return True
+    return False
+
+
+def _path_action_requested_near_reference(compact_message: str, path_reference: str) -> bool:
+    path = str(path_reference or "").strip().lower()
+    if not path:
+        return False
+    path_index = compact_message.find(path)
+    if path_index < 0:
+        return starts_like_local_tool_request(compact_message)
+    window_start = max(0, path_index - 80)
+    window_end = min(len(compact_message), path_index + len(path) + 80)
+    window = compact_message[window_start:window_end]
+    return any(re.search(rf"\b{re.escape(token)}\b", window) for token in _LOCAL_FILE_ACTION_TOKENS)
+
+
 def message_requests_local_file_tool(message: str, callbacks: DirectChatToolPolicyCallbacks) -> bool:
     compact = callbacks.compact_text(message)
     if not compact or callbacks.question_like(compact):
         return False
-    if callbacks.mentions_any(compact, callbacks.local_file_keywords):
+    if should_skip_local_tool_prefetch(message, compact):
+        return False
+    if _mentions_explicit_local_file_keyword(compact, callbacks.local_file_keywords):
         return True
     listing_tokens = (
         "list files",
@@ -151,12 +274,17 @@ def message_requests_local_file_tool(message: str, callbacks: DirectChatToolPoli
     )
     if any(token in compact for token in listing_tokens) and any(token in compact for token in location_tokens):
         return True
-    return looks_like_local_path_request(compact) and any(token in compact for token in ("read", "open", "write", "save", "append", "delete"))
+    path_reference = callbacks.extract_first_path_reference(message)
+    if path_reference and _path_action_requested_near_reference(compact, path_reference):
+        return True
+    return looks_like_local_path_request(compact) and starts_like_local_tool_request(compact)
 
 
 def message_requests_local_shell_tool(message: str, callbacks: DirectChatToolPolicyCallbacks) -> bool:
     compact = callbacks.compact_text(message)
     if not compact or callbacks.question_like(compact):
+        return False
+    if should_skip_local_tool_prefetch(message, compact):
         return False
     if callbacks.mentions_any(compact, callbacks.local_shell_keywords):
         return True
@@ -167,6 +295,8 @@ def message_requests_local_screenshot_tool(message: str, callbacks: DirectChatTo
     compact = callbacks.compact_text(message)
     if not compact or callbacks.question_like(compact):
         return False
+    if should_skip_local_tool_prefetch(message, compact):
+        return False
     return callbacks.mentions_any(compact, callbacks.local_screenshot_keywords)
 
 
@@ -174,15 +304,17 @@ def message_requests_local_computer_tool(message: str, callbacks: DirectChatTool
     compact = callbacks.compact_text(message)
     if not compact or callbacks.question_like(compact):
         return False
+    if should_skip_local_tool_prefetch(message, compact):
+        return False
     if callbacks.mentions_any(compact, callbacks.local_computer_control_keywords):
         return True
-    return bool(
-        re.search(
-            r"\b(click|type|press|open|launch|close|clipboard|copy|paste|computer|screen|window)\b",
-            compact,
-            flags=re.IGNORECASE,
-        )
+    has_control_action = bool(
+        re.search(r"\b(click|type|press|open|launch|close|copy|paste|capture)\b", compact, flags=re.IGNORECASE)
     )
+    has_computer_target = bool(
+        re.search(r"\b(screen|window|button|menu|field|clipboard|finder|application|app)\b", compact, flags=re.IGNORECASE)
+    )
+    return has_control_action and has_computer_target
 
 
 def message_can_use_direct_local_tools(message: str, *, provider: str, tools: List[Dict[str, Any]], callbacks: DirectChatToolPolicyCallbacks) -> bool:

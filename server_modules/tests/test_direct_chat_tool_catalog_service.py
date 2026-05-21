@@ -76,6 +76,45 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
 
         self.assertTrue(allowed)
 
+    def test_message_can_use_direct_local_tools_ignores_pasted_terminal_context(self) -> None:
+        pasted_context = """
+        Shift+Tab to accept edits
+        1 GEMINI.md file · 1 skill
+        > Type your message or @path/to/file
+        workspace (/directory)      branch   sandbox    /model
+        quota   memory   tokens
+        ~/Multi_Agent_Orchestrator_Project main untrusted gemini-3.1-pro-preview
+        """
+
+        allowed = service.message_can_use_direct_local_tools(
+            pasted_context,
+            provider="deepseek",
+            tools=[
+                {"name": "computer__click"},
+                {"name": "file__read"},
+                {"name": "shell__exec"},
+            ],
+            callbacks=_callbacks(),
+        )
+
+        self.assertFalse(allowed)
+
+    def test_message_requests_local_computer_tool_requires_actual_control_intent(self) -> None:
+        callbacks = _callbacks()
+
+        self.assertFalse(
+            service.message_requests_local_computer_tool(
+                "Type your message or @path/to/file",
+                callbacks,
+            )
+        )
+        self.assertTrue(
+            service.message_requests_local_computer_tool(
+                "Click the screen button in the active window",
+                callbacks,
+            )
+        )
+
     def test_message_can_use_builtin_direct_tools_detects_browser_and_http_cases(self) -> None:
         callbacks = _callbacks()
         self.assertTrue(

@@ -251,6 +251,28 @@ class NoProviderServiceTests(unittest.TestCase):
             )
         )
 
+    def test_has_obvious_direct_tool_intent_ignores_pasted_terminal_context(self) -> None:
+        pasted_context = """
+        Ran command: `git status`
+        ✓ ReadFile server_modules/model_router.py
+        > Type your message or @path/to/file
+        workspace (/directory)      branch   sandbox    /model
+        quota   memory   tokens
+        ~/Multi_Agent_Orchestrator_Project main untrusted gemini-3.1-pro-preview
+        """
+
+        self.assertFalse(
+            no_provider_service.has_obvious_direct_tool_intent(
+                pasted_context,
+                [],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
+
     def test_build_direct_tool_approval_response_returns_approval_action(self) -> None:
         services = no_provider_service.NoProviderExecutionServices(
             compact_text=_compact_text,

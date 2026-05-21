@@ -118,13 +118,7 @@ def prefer_durable_run_handoff(
     local_file = callbacks.message_requests_local_file_tool(message)
     local_shell = callbacks.message_requests_local_shell_tool(message)
     local_screenshot = callbacks.message_requests_local_screenshot_tool(message)
-    local_computer = callbacks.message_requests_local_computer_tool(message) or bool(
-        re.search(
-            r"\b(click|type|press|open|launch|close|clipboard|copy|paste|computer|screen|window)\b",
-            compact,
-            flags=re.IGNORECASE,
-        )
-    )
+    local_computer = callbacks.message_requests_local_computer_tool(message)
     local_request_count = sum(1 for flag in (local_file, local_shell, local_screenshot, local_computer) if flag)
     sequence_requested = any(marker in compact for marker in callbacks.complex_task_sequence_markers)
     outcome_requested = any(marker in compact for marker in callbacks.complex_task_outcome_markers)

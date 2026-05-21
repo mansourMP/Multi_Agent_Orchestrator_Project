@@ -11,6 +11,7 @@ from server_modules import (
     deployed_agent_runtime_contract_service,
     deployed_agent_service,
     deployed_agent_transparency_service,
+    empyralis_model_tier_routing_service,
     model_router,
     studio_app_boundary_service,
     transparency_event_store_service,
@@ -28,7 +29,7 @@ ALLOWED_RUNTIME_MODES = {
 }
 TESTABLE_STATES = {"draft", "private_test", "ready_for_review"}
 DEFAULT_STUDIO_TEST_PROVIDER = "deepseek"
-DEFAULT_STUDIO_TEST_MODEL = "deepseek-chat"
+DEFAULT_STUDIO_TEST_MODEL = "deepseek-v4-pro"
 MAX_STUDIO_TEST_HISTORY_MESSAGES = 16
 MAX_STUDIO_TEST_HISTORY_CHARS = 12000
 MAX_STUDIO_TEST_HISTORY_ITEM_CHARS = 2500
@@ -231,6 +232,13 @@ def _studio_test_ai_source(config: Any) -> Dict[str, Any]:
     return deployed_agent_runtime_contract_service.normalize_studio_ai_source(payload)
 
 
+def _studio_test_public_tier(config: Any) -> str:
+    runtime_supply = getattr(config, "runtime_supply", None)
+    payload = runtime_supply if isinstance(runtime_supply, dict) else {}
+    model_tier = payload.get("model_tier") if isinstance(payload.get("model_tier"), dict) else {}
+    return _coerce_text(model_tier.get("public_tier")) or "pro"
+
+
 def _resolve_studio_test_model_route(config: Any) -> tuple[str, str, Dict[str, Any]]:
     ai_source = _studio_test_ai_source(config)
     source_kind = _coerce_text(ai_source.get("kind"))
@@ -238,9 +246,17 @@ def _resolve_studio_test_model_route(config: Any) -> tuple[str, str, Dict[str, A
     configured_model = _coerce_text(getattr(config, "model", ""))
 
     if source_kind == deployed_agent_runtime_contract_service.STUDIO_AI_SOURCE_EMPYRALIS_CREDITS:
-        if configured_provider == DEFAULT_STUDIO_TEST_PROVIDER and configured_model:
-            return configured_provider, configured_model, ai_source
-        return DEFAULT_STUDIO_TEST_PROVIDER, DEFAULT_STUDIO_TEST_MODEL, ai_source
+        public_tier = _studio_test_public_tier(config)
+        tier_route = empyralis_model_tier_routing_service.resolve_backend_provider_model_for_tier(
+            public_tier,
+        )
+        provider = _coerce_text(tier_route.get("provider")) or DEFAULT_STUDIO_TEST_PROVIDER
+        model = _coerce_text(tier_route.get("model")) or DEFAULT_STUDIO_TEST_MODEL
+        return provider, model, {
+            **ai_source,
+            "public_tier": tier_route.get("public_tier") or public_tier,
+            "model_tier_route": tier_route,
+        }
 
     if source_kind == deployed_agent_runtime_contract_service.STUDIO_AI_SOURCE_WORKSPACE_API_KEY:
         if not configured_provider or not configured_model:

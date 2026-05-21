@@ -813,6 +813,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 name="Store Assistant",
                 provider="deepseek",
                 model="deepseek-reasoner",
+                config={"runtime_supply": {"ai_source": {"kind": "workspace_api_key"}}},
             )
 
         self.assertEqual(created["provider"], "deepseek")
@@ -849,7 +850,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(error.exception.status_code, 400)
-        self.assertIn("BYOK/workspace-key only", error.exception.detail)
+        self.assertIn("cannot use Empyralis credits", error.exception.detail)
         create_deployed_agent_mock.assert_not_awaited()
 
     async def test_create_draft_deployed_agent_accepts_openrouter_with_workspace_api_key_source(self) -> None:
@@ -2256,6 +2257,9 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 "source": "test",
                 "provider": "openai",
                 "model": "gpt-4o",
+                "runtime_supply": {
+                    "ai_source": {"kind": "workspace_api_key", "payer": "BYOK"},
+                },
             }
         )
         updated_row = _deployed_agent_row(
@@ -2263,6 +2267,9 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 "source": "test",
                 "provider": "anthropic",
                 "model": "claude-3-5-sonnet-20241022",
+                "runtime_supply": {
+                    "ai_source": {"kind": "workspace_api_key", "payer": "BYOK"},
+                },
             }
         )
 
@@ -2295,6 +2302,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 updates={
                     "provider": "anthropic",
                     "model": "claude-3-5-sonnet-20241022",
+                    "config": {"runtime_supply": {"ai_source": {"kind": "workspace_api_key"}}},
                 },
             )
 

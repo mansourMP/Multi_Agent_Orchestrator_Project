@@ -17,6 +17,7 @@ from server_modules import deployed_agent_config_schema
 from server_modules import deployed_agent_runtime_contract_service
 from server_modules import deployed_agent_analytics_service
 from server_modules import deployed_agent_virtual_runtime_service
+from server_modules import empyralis_model_tier_routing_service
 from server_modules import entitlements_service
 from server_modules import external_user_privacy_service
 from server_modules import knowledge_rag_service
@@ -2114,20 +2115,47 @@ def _apply_provider_model_selection_to_config(
     model: Any = None,
     owner_workspace_id: Any = None,
 ) -> deployed_agent_config_schema.DeployedAgentConfig:
-    requested_provider = provider if provider is not None else config.provider
-    resolved = provider_catalog_service.resolve_provider_model_selection(
-        provider=requested_provider,
-        model=model if model is not None else config.model,
-        existing_provider=config.provider,
-        existing_model=config.model,
-        cached_models=provider_catalog_service.cached_provider_model_ids(
-            workspace_id=owner_workspace_id,
-            provider=requested_provider,
-        ),
+    runtime_supply = config.runtime_supply if isinstance(config.runtime_supply, dict) else {}
+    ai_source = deployed_agent_runtime_contract_service.normalize_studio_ai_source(
+        runtime_supply.get("ai_source") if isinstance(runtime_supply.get("ai_source"), dict) else None
     )
+    model_tier = runtime_supply.get("model_tier") if isinstance(runtime_supply.get("model_tier"), dict) else {}
+    if ai_source["kind"] == deployed_agent_runtime_contract_service.STUDIO_AI_SOURCE_EMPYRALIS_CREDITS:
+        tier_route = empyralis_model_tier_routing_service.resolve_backend_provider_model_for_tier(
+            model_tier.get("public_tier") or "pro",
+        )
+        explicit_provider = provider if provider is not None else None
+        explicit_provider_id = provider_catalog_service.provider_profiles.normalize_provider_id(explicit_provider)
+        if explicit_provider_id and explicit_provider_id not in {"deepseek", "empyralis"}:
+            raise ValueError(
+                f"{explicit_provider_id} cannot use Empyralis credits from the Studio platform route; "
+                "choose workspace_api_key for explicit provider routes."
+            )
+        resolved = {
+            "provider": tier_route.get("provider"),
+            "model": tier_route.get("model"),
+        }
+    else:
+        requested_provider = provider if provider is not None else config.provider
+        resolved = provider_catalog_service.resolve_provider_model_selection(
+            provider=requested_provider,
+            model=model if model is not None else config.model,
+            existing_provider=config.provider,
+            existing_model=config.model,
+            cached_models=provider_catalog_service.cached_provider_model_ids(
+                workspace_id=owner_workspace_id,
+                provider=requested_provider,
+            ),
+        )
     next_payload = config.model_dump(exclude_none=True)
     next_payload["provider"] = resolved.get("provider")
     next_payload["model"] = resolved.get("model")
+    next_runtime_supply = dict(next_payload.get("runtime_supply") or {})
+    provider_binding = dict(next_runtime_supply.get("provider_binding") or {})
+    provider_binding["internal_provider"] = resolved.get("provider")
+    provider_binding["internal_model"] = resolved.get("model")
+    next_runtime_supply["provider_binding"] = provider_binding
+    next_payload["runtime_supply"] = next_runtime_supply
     return deployed_agent_config_schema.DeployedAgentConfig.model_validate(next_payload)
 
 
@@ -3202,33 +3230,36 @@ async def create_draft_deployed_agent(
         owner_workspace_id=resolved_workspace_id,
         channels=channels,
     )
-    draft_config = _apply_provider_model_selection_to_config(
-        _apply_workspace_admin_defaults_to_config(
-            _config_from_record(
-                {
-                    "name": normalized_name,
-                    "avatar": avatar,
-                    "persona": persona,
-                    "system_prompt": system_prompt,
-                    "channels": normalized_channels,
-                    "knowledge_sources": _normalize_knowledge_sources(knowledge_sources),
-                    "runtime_target": runtime_target,
-                    "billing_plan": billing_plan,
-                    "metadata": _normalize_deployed_agent_metadata(metadata),
-                    "config": config_payload,
-                },
-                runtime_profile_id=runtime_profile_id,
+    try:
+        draft_config = _apply_provider_model_selection_to_config(
+            _apply_workspace_admin_defaults_to_config(
+                _config_from_record(
+                    {
+                        "name": normalized_name,
+                        "avatar": avatar,
+                        "persona": persona,
+                        "system_prompt": system_prompt,
+                        "channels": normalized_channels,
+                        "knowledge_sources": _normalize_knowledge_sources(knowledge_sources),
+                        "runtime_target": runtime_target,
+                        "billing_plan": billing_plan,
+                        "metadata": _normalize_deployed_agent_metadata(metadata),
+                        "config": config_payload,
+                    },
+                    runtime_profile_id=runtime_profile_id,
+                ),
+                workspace_defaults=workspace_defaults,
+                runtime_target_supplied=runtime_target is not None,
+                billing_plan_supplied=billing_plan is not None,
+                config_payload=config_payload,
+                legacy_metadata=metadata_payload,
             ),
-            workspace_defaults=workspace_defaults,
-            runtime_target_supplied=runtime_target is not None,
-            billing_plan_supplied=billing_plan is not None,
-            config_payload=config_payload,
-            legacy_metadata=metadata_payload,
-        ),
-        provider=provider,
-        model=model,
-        owner_workspace_id=resolved_workspace_id,
-    )
+            provider=provider,
+            model=model,
+            owner_workspace_id=resolved_workspace_id,
+        )
+    except ValueError as error:
+        raise _http_bad_request(str(error)) from error
     explicit_mode = "studio_agent_mode" in config_payload
     effective_mode = (
         draft_config.studio_agent_mode

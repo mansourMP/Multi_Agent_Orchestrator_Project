@@ -498,7 +498,7 @@ class TestTurnPolicyTests(unittest.TestCase):
             "server_modules.deployed_agent_test_turn_service.model_router.resolve_call_credentials",
             return_value={
                 "provider": "deepseek",
-                "model": "deepseek-chat",
+                "model": "deepseek-v4-pro",
                 "credentials": {"api_key": "secret", "base_url": "https://api.deepseek.com/v1"},
             },
         ) as mock_resolve, patch(
@@ -506,16 +506,16 @@ class TestTurnPolicyTests(unittest.TestCase):
             new=AsyncMock(return_value={
                 "content": "Hello there.",
                 "provider": "deepseek",
-                "model": "deepseek-chat",
+                "model": "deepseek-v4-pro",
                 "usage": {
                     "provider": "deepseek",
-                    "model": "deepseek-chat",
+                    "model": "deepseek-v4-pro",
                     "prompt_tokens": 8,
                     "completion_tokens": 4,
                     "total_tokens": 12,
                     "usage_accounting": {
                         "effective_provider": "deepseek",
-                        "effective_model": "deepseek-chat",
+                        "effective_model": "deepseek-v4-pro",
                         "input_tokens": 8,
                         "output_tokens": 4,
                         "total_tokens": 12,
@@ -541,10 +541,10 @@ class TestTurnPolicyTests(unittest.TestCase):
 
             self.assertEqual(result.reply, "Hello there.")
             self.assertEqual(result.model_provider, "deepseek")
-            self.assertEqual(result.model, "deepseek-chat")
+            self.assertEqual(result.model, "deepseek-v4-pro")
             mock_resolve.assert_called_once_with(
                 provider="deepseek",
-                model="deepseek-chat",
+                model="deepseek-v4-pro",
                 workspace_id="ws-1",
             )
             self.assertEqual(mock_call.await_args.kwargs["source_surface"], "studio")

@@ -1042,10 +1042,25 @@ export function providerReadyForStudio(provider: ProviderCatalogSnapshot | null 
   return state === 'ready' || state === 'connected' || state === 'active';
 }
 
+export function resolveEmpyralisProviderModelForTier(
+  tier: WizardState['aiTier'],
+): { providerId: string; modelId: string } {
+  if (tier === 'light') {
+    return { providerId: 'deepseek', modelId: 'deepseek-v4-flash' };
+  }
+  if (tier === 'max') {
+    return { providerId: 'deepseek', modelId: 'deepseek-v4-pro' };
+  }
+  return { providerId: 'deepseek', modelId: 'deepseek-v4-pro' };
+}
+
 export function resolveProviderModelForTier(
   tier: WizardState['aiTier'],
   catalog: ProviderCatalogSnapshot[],
 ): { providerId: string; modelId: string } {
+  if (tier === 'light' || tier === 'pro' || tier === 'max') {
+    return resolveEmpyralisProviderModelForTier(tier);
+  }
   const catalogByProvider = providerCatalogById(catalog);
   const providerOrder = ['gemini', 'openai', 'anthropic', 'openrouter', 'groq', 'xai', 'deepseek', 'mistral', 'qwen', 'azure_openai', 'vertex', 'ollama_cloud', 'custom_openai_compatible'];
   const orderedProviders = providerOrder
@@ -1134,13 +1149,13 @@ export function buildWizardState(agent?: DeployedAgentRecord | null): WizardStat
   const runtimeSupplyModelTier = readRecord(runtimeSupply.model_tier);
   const runtimeSupplyAiSource = readRecord(runtimeSupply.ai_source);
   const runtimeSupplyProviderBinding = readRecord(runtimeSupply.provider_binding);
-  const providerId = readString(agent?.provider ?? metadata.provider ?? runtimeSupplyProviderBinding.internal_provider);
-  const modelId = readString(agent?.model ?? metadata.model ?? runtimeSupplyProviderBinding.internal_model);
+  const rawProviderId = readString(agent?.provider ?? metadata.provider ?? runtimeSupplyProviderBinding.internal_provider);
+  const rawModelId = readString(agent?.model ?? metadata.model ?? runtimeSupplyProviderBinding.internal_model);
   const aiTier = normalizeWizardAiTier(
     metadata.public_tier
     ?? metadata.model_tier
     ?? metadata.empyralis_model_tier
-    ?? inferAiTierFromProviderModel(providerId, modelId),
+    ?? inferAiTierFromProviderModel(rawProviderId, rawModelId),
   );
   const aiSource = normalizeStudioAiSource(
     runtimeSupplyAiSource.kind
@@ -1148,6 +1163,11 @@ export function buildWizardState(agent?: DeployedAgentRecord | null): WizardStat
     ?? runtimeSupplyModelTier.billing_source
     ?? metadata.billing_source,
   );
+  const empyralisRoute = aiSource === 'empyralis_credits'
+    ? resolveEmpyralisProviderModelForTier(aiTier)
+    : null;
+  const providerId = empyralisRoute?.providerId ?? rawProviderId;
+  const modelId = empyralisRoute?.modelId ?? rawModelId;
   const customerChannel = inferCustomerChannel(channels);
   const runtimePlacement = normalizeRuntimePlacement(
     readRecord(runtimeSupply.placement).kind

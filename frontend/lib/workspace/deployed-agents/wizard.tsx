@@ -337,7 +337,9 @@ export function AgentWizard({
 
     const dailyMessageLimit = stateForSave.dailyMessageLimit.trim();
     const monthlyCostCapUsd = stateForSave.monthlyCostCapUsd.trim();
-    const route = resolveProviderModelForTier(stateForSave.aiTier, providerCatalog);
+    const route = stateForSave.aiSource === 'empyralis_credits'
+      ? resolveProviderModelForTier(stateForSave.aiTier, providerCatalog)
+      : { providerId: stateForSave.providerId, modelId: stateForSave.modelId };
     const resolvedProviderId = route.providerId || stateForSave.providerId || null;
     const resolvedModelId = route.modelId || stateForSave.modelId || null;
 
@@ -919,8 +921,8 @@ export function AgentWizard({
                       setWizardState((current) => ({
                         ...current,
                         aiTier: nextTier,
-                        providerId: route.providerId || current.providerId,
-                        modelId: route.modelId || current.modelId,
+                        providerId: current.aiSource === 'empyralis_credits' ? route.providerId || current.providerId : current.providerId,
+                        modelId: current.aiSource === 'empyralis_credits' ? route.modelId || current.modelId : current.modelId,
                       }));
                     }}
                   >

@@ -411,14 +411,14 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["type"], "final")
-        payload = events[0]["payload"]
+        final_events = [event for event in events if event.get("type") == "final"]
+        self.assertEqual(len(final_events), 1)
+        payload = final_events[0]["payload"]
         self.assertEqual(payload["mode"], "connect")
         self.assertEqual(payload["interventions"][0]["title"], "Anthropic is not available")
         self.assertEqual(payload["suggestions"], ["Connect Anthropic"])
 
-    def test_build_direct_operator_reply_returns_local_setup_required_for_offline_my_computer(self) -> None:
+    def test_build_direct_operator_reply_does_not_keyword_block_offline_my_computer_text(self) -> None:
         prepared = SimpleNamespace(
             normalized_message="find this file on my laptop",
             normalized_workspace_id="default",
@@ -461,6 +461,22 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
             resolved_chat_max_iterations=3,
         )
         services = self._runtime_services(prepared)
+        services.resolve_provider_for_direct_chat_message = (
+            lambda workspace_id, requested_provider, message, tools_present=False: ("openai", {"api_key": "sk-test"})
+        )
+
+        def _mock_provider_stream(**kwargs):
+            yield {
+                "type": "result",
+                "reply": "Mock provider reply.",
+                "provider": "openai",
+                "model": "gpt-5.4",
+                "attempted_providers": "openai",
+                "error": "",
+                "usage_masked": {},
+            }
+
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = _mock_provider_stream
 
         events = list(
             direct_chat_runtime_service.build_direct_operator_reply(
@@ -472,13 +488,12 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["type"], "final")
-        payload = events[0]["payload"]
-        self.assertEqual(payload["mode"], "connect")
-        self.assertEqual(payload["interventions"][0]["title"], "My Computer setup required")
-        self.assertIn("connect My Computer", payload["interventions"][0]["detail"])
-        self.assertEqual(payload["actions"][0]["label"], "Connect My Computer")
+        final_events = [event for event in events if event.get("type") == "final"]
+        self.assertEqual(len(final_events), 1)
+        payload = final_events[0]["payload"]
+        self.assertEqual(payload["mode"], "answer")
+        self.assertEqual(payload["reply"], "Mock provider reply.")
+        self.assertFalse(payload.get("interventions"))
 
     def test_collect_direct_operator_reply_answers_capability_question_from_active_catalog(self) -> None:
         prepared = SimpleNamespace(
@@ -717,8 +732,8 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(captured["context_tools"], [{"name": "file__read"}])
-        self.assertEqual(captured["metadata_tools"], [{"name": "file__read"}])
+        self.assertEqual(captured["context_tools"], [{"name": "file__read"}, {"name": "memory_search"}])
+        self.assertEqual(captured["metadata_tools"], [{"name": "file__read"}, {"name": "memory_search"}])
         self.assertFalse(any(event.get("detail") == "Completed" and event.get("id") == "direct-tools:auto" for event in events))
 
     def test_build_direct_operator_reply_forces_explicit_tool_request_even_when_provider_ready(self) -> None:

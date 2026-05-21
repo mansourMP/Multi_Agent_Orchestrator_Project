@@ -587,7 +587,12 @@ export function isConnectorSetupText(message: string): boolean {
     || normalized.includes('email connector unavailable')
     || normalized.includes('smtp capability not verified')
     || normalized.includes('connect smtp before')
-    || normalized.includes('connect email first');
+    || normalized.includes('connect email first')
+    || normalized.includes('connect my computer')
+    || normalized.includes('my computer setup required')
+    || normalized.includes('local computer tools are not ready')
+    || normalized.includes('connected computer is needed')
+    || normalized.includes('this local action needs setup');
 }
 
 export function isConnectorSetupIntervention(intervention: unknown): boolean {
@@ -610,6 +615,7 @@ export function isConnectorSetupIntervention(intervention: unknown): boolean {
     || code.startsWith('slack_')
     || code.startsWith('dropbox_')
     || code.startsWith('s3_')
+    || code === 'local_setup_required'
   ) {
     return true;
   }
@@ -633,6 +639,8 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
 
   if (code.startsWith('google_workspace_') || combinedText.includes('google workspace')) {
     message = 'Connect Google Workspace to let Sage use Gmail, Calendar, or Drive actions. You can keep chatting normally.';
+  } else if (code === 'local_setup_required' || combinedText.includes('my computer') || combinedText.includes('local computer')) {
+    message = 'Connect My Computer in Integrations before Sage uses local computer actions. You can keep chatting normally.';
   } else if (
     code.startsWith('smtp_')
     || code.startsWith('email_connector_')
@@ -682,6 +690,8 @@ export function isProviderRuntimeGateMessage(message: string): boolean {
     || normalized.includes('the selected provider is not ready')
     || normalized.includes('the selected provider is not available right now')
     || normalized.includes('connect a computer, switch to empyralis credits')
+    || normalized.includes('connect my computer')
+    || normalized.includes('local computer tools are not ready')
     || normalized.includes('required local runtime')
     || normalized.includes('no provider configured')
     || normalized.includes('provider setup required')
@@ -785,21 +795,16 @@ export function normalizeCanonicalChatThread(
     if (effectiveModel) {
       nextMetadata.effective_model = effectiveModel;
     }
-    const providerFailureIntervention = findProviderFailureIntervention(interventions);
     const rawContent = String(entry.content ?? '');
-    const content = rawContent.trim()
-      ? rawContent
-      : (
-        String(entry.role ?? 'assistant') === 'assistant'
-        && String(entry.status ?? '').trim().toLowerCase() === 'failed'
-          ? "Sage couldn't complete that turn."
-          : ''
-      );
-    if (!rawContent.trim() && providerFailureIntervention && typeof nextMetadata.display_kind !== 'string') {
-      nextMetadata.display_kind = 'provider_error';
+    const content = rawContent.trim() ? rawContent : '';
+    if (!content) {
+      return [];
     }
-    if (rawContent.trim() && isProviderRuntimeGateMessage(rawContent) && typeof nextMetadata.display_kind !== 'string') {
-      nextMetadata.display_kind = 'provider_error';
+    if (isProviderRuntimeGateMessage(rawContent)) {
+      if (typeof nextMetadata.display_kind !== 'string') {
+        nextMetadata.display_kind = 'provider_error';
+      }
+      return [];
     }
 
     return [{
@@ -1944,20 +1949,15 @@ export function createCanonicalAssistantMessage(
   if (effectiveModel) {
     metadata.effective_model = effectiveModel;
   }
-  const providerFailureIntervention = findProviderFailureIntervention(interventions);
-  const content = reply || (
-    String(response.status ?? '').trim().toLowerCase() === 'failed' || String(response.error ?? '').trim()
-      ? "Sage couldn't complete that turn."
-      : ''
-  );
+  const content = reply;
   if (!content) {
     return null;
   }
-  if (!reply && providerFailureIntervention && typeof metadata.display_kind !== 'string') {
-    metadata.display_kind = 'provider_error';
-  }
-  if (reply && isProviderRuntimeGateMessage(reply) && typeof metadata.display_kind !== 'string') {
-    metadata.display_kind = 'provider_error';
+  if (isProviderRuntimeGateMessage(reply)) {
+    if (typeof metadata.display_kind !== 'string') {
+      metadata.display_kind = 'provider_error';
+    }
+    return null;
   }
 
   return {

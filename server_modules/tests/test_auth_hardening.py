@@ -113,6 +113,41 @@ class AuthHardeningTests(unittest.TestCase):
         self.assertEqual(auth.allowed_workspace_ids(current_user), set())
         self.assertEqual(auth.allowed_tenant_ids(current_user), set())
 
+    def test_restricted_service_key_cannot_access_unscoped_workspace(self):
+        current_user = {
+            "user_id": "service",
+            "auth_type": "api_key",
+            "role": "service",
+            "is_admin": False,
+            "auth_admin": False,
+            "workspace_ids": [],
+            "tenant_ids": [],
+        }
+        with self.assertRaises(HTTPException) as ctx:
+            auth.enforce_workspace_access(current_user, "finance", minimum_role="member")
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_service_key_rejects_cross_tenant_workspace_spoof(self):
+        current_user = {
+            "user_id": "service",
+            "auth_type": "api_key",
+            "role": "service",
+            "is_admin": False,
+            "auth_admin": False,
+            "workspace_access": {
+                "finance": {"workspace_id": "finance", "tenant_id": "tenant-a", "role": "owner"},
+            },
+        }
+        with patch.object(auth, "tenant_id_for_workspace", return_value="tenant-a"):
+            with self.assertRaises(HTTPException) as ctx:
+                auth.enforce_workspace_access(
+                    current_user,
+                    "finance",
+                    tenant_id="tenant-b",
+                    minimum_role="member",
+                )
+        self.assertEqual(ctx.exception.status_code, 403)
+
     def test_explicit_admin_api_key_identity_still_allows_admin_access(self):
         request = _request()
         with patch(

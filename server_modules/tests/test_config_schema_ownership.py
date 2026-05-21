@@ -148,13 +148,32 @@ def test_platform_config_schema_builds_provider_defaults_and_models() -> None:
                 }
             }
         },
+        model_policy_overrides={
+            "openai": {
+                "gpt-4o": {
+                    "enabled": False,
+                    "allowed_surfaces": ["sage"],
+                    "allowed_payers": ["BYOK"],
+                    "platform_paid_allowed": False,
+                    "pricing_version": "test-v1",
+                    "fallback_allowed": False,
+                }
+            }
+        },
     )
 
     provider = config.provider("openai")
     models = config.provider_models("openai")
+    policy = config.provider_model_policy("openai", "gpt-4o")
 
     assert provider is not None
     assert provider.default_model == "gpt-4o"
     assert provider.default_auth_mode == "api_key"
     assert models[0].id == "gpt-4o"
     assert models[0].reasoning_levels == ["low", "medium", "high"]
+    assert policy is not None
+    assert policy.enabled is False
+    assert policy.allowed_surfaces == ["sage"]
+    assert policy.allowed_payers == ["BYOK"]
+    assert policy.platform_paid_allowed is False
+    assert policy.pricing_version == "test-v1"

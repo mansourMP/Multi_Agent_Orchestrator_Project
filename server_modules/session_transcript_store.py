@@ -47,14 +47,63 @@ def _compact_line(text: Any, limit: int = 320) -> str:
     return normalized[: limit - 1].rstrip() + "…"
 
 
+def _extract_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return _compact_line(content, limit=1200)
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "").strip().lower() != "text":
+                continue
+            text = _compact_line(item.get("text"), limit=1200)
+            if text:
+                parts.append(text)
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _is_inter_session_user_message(item: Dict[str, Any]) -> bool:
+    provenance = item.get("provenance")
+    if isinstance(provenance, dict) and str(provenance.get("kind") or "").strip() == "inter_session":
+        return True
+    metadata = item.get("metadata")
+    if isinstance(metadata, dict):
+        provenance = metadata.get("provenance")
+        if isinstance(provenance, dict) and str(provenance.get("kind") or "").strip() == "inter_session":
+            return True
+    return False
+
+
+def _normalized_transcript_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    for item in list(messages or []):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        if role == "user" and _is_inter_session_user_message(item):
+            continue
+        content = _extract_message_text(item.get("content"))
+        if not content:
+            continue
+        if role == "user" and content.lstrip().startswith("/"):
+            continue
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
 def build_transcript_summary(
     *,
     messages: List[Dict[str, Any]],
     user_message: str,
     assistant_reply: str,
 ) -> str:
+    safe_messages = _normalized_transcript_messages(messages)
     return memory_summary_service.build_transcript_summary(
-        messages=messages,
+        messages=safe_messages,
         user_message=user_message,
         assistant_reply=assistant_reply,
     )
@@ -140,7 +189,9 @@ def list_session_transcript_summaries(
                     exc=exc,
                 )
                 continue
-            messages = [dict(item) for item in list(payload.get("messages") or []) if isinstance(item, dict)]
+            messages = _normalized_transcript_messages(
+                [dict(item) for item in list(payload.get("messages") or []) if isinstance(item, dict)]
+            )
             summary = build_transcript_summary(
                 messages=messages,
                 user_message=_latest_message_by_role(messages, "user"),
@@ -217,7 +268,9 @@ def load_latest_session_transcript_messages(
                 continue
             if str(payload.get("thread_id") or "").strip() != normalized_thread_id:
                 continue
-            messages = [dict(item) for item in list(payload.get("messages") or []) if isinstance(item, dict)]
+            messages = _normalized_transcript_messages(
+                [dict(item) for item in list(payload.get("messages") or []) if isinstance(item, dict)]
+            )
             return messages[-safe_limit:]
     return []
 
@@ -243,7 +296,7 @@ def save_session_transcript(
         "thread_id": str(thread_id or "").strip() or None,
         "provider": str(provider or "").strip() or None,
         "model": str(model or "").strip() or None,
-        "messages": [dict(item) for item in messages if isinstance(item, dict)],
+        "messages": _normalized_transcript_messages([dict(item) for item in messages if isinstance(item, dict)]),
     }
     with transcript_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")

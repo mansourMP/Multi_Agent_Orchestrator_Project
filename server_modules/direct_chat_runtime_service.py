@@ -47,172 +47,12 @@ class DirectChatRuntimeServices:
     capture_exception: Callable[[BaseException], None]
 
 
-def _message_targets_local_file_inventory(message: str) -> bool:
-    compact = " ".join(str(message or "").strip().lower().split())
-    if not compact:
-        return False
-    if no_provider_service.looks_like_directory_listing_request(message):
-        return True
-    listing_tokens = (
-        "list files",
-        "show files",
-        "what files",
-        "which files",
-        "files on my",
-        "files in my",
-        "files in the",
-        "contents of",
-        "folder contents",
-        "directory contents",
-        "directory listing",
-        "list the contents",
-    )
-    location_tokens = ("desktop", "downloads", "documents", "folder", "directory", "repo", "repository")
-    return any(token in compact for token in listing_tokens) and any(token in compact for token in location_tokens)
-
-
-def _message_requests_local_machine_action(message: str) -> bool:
-    compact = " ".join(str(message or "").strip().lower().split())
-    if not compact:
-        return False
-    if no_provider_service.looks_like_directory_listing_request(message):
-        return True
-    local_hints = (
-        "my laptop",
-        "my computer",
-        "this computer",
-        "my mac",
-        "my desktop",
-        "desktop",
-        "downloads",
-        "documents",
-        "local file",
-        "local files",
-        "terminal",
-        "shell",
-        "screenshot",
-        "clipboard",
-        "window",
-        "app on my",
-    )
-    action_hints = (
-        "find",
-        "read",
-        "open",
-        "show",
-        "list",
-        "search",
-        "run",
-        "execute",
-        "click",
-        "type",
-        "copy",
-        "paste",
-        "capture",
-    )
-    if any(token in compact for token in local_hints) and any(token in compact for token in action_hints):
-        return True
-    return bool(re.search(r"(^|\s)(/|~/|\./|\.\./|[a-z]:[/\\])", compact, flags=re.IGNORECASE)) and any(
-        token in compact for token in action_hints
-    )
-
-
-def _local_setup_required_payload(
-    *,
-    availability_payload: Dict[str, Any],
-    proactive_suggestions: List[str],
-    base_context_used: Dict[str, Any],
-    services: DirectChatRuntimeServices,
-) -> Dict[str, Any]:
-    capability_truth = (
-        availability_payload.get("capability_truth")
-        if isinstance(availability_payload.get("capability_truth"), dict)
-        else {}
-    )
-    my_computer = capability_truth.get("my_computer") if isinstance(capability_truth.get("my_computer"), dict) else {}
-    setup_actions_raw = (
-        capability_truth.get("required_setup_actions")
-        if isinstance(capability_truth.get("required_setup_actions"), list)
-        else []
-    )
-    actions: List[Dict[str, Any]] = []
-    for item in setup_actions_raw:
-        if not isinstance(item, dict):
-            continue
-        label = str(item.get("label") or "").strip()
-        href = str(item.get("href") or "").strip()
-        if not label or not href:
-            continue
-        actions.append(
-            {
-                "id": str(item.get("id") or f"open:{href}").strip() or f"open:{href}",
-                "kind": "open",
-                "label": label,
-                "href": href,
-                "variant": "primary",
-            }
-        )
-        if len(actions) >= 3:
-            break
-    if not actions:
-        actions.append(
-            {
-                "id": "open:/integrations",
-                "kind": "open",
-                "label": "Open Connected Apps",
-                "href": "/integrations",
-                "variant": "primary",
-            }
-        )
-
-    local_tools_available = bool(my_computer.get("local_tools_available"))
-    online = bool(my_computer.get("online"))
-    runtime_ok = bool(my_computer.get("runtime_ok"))
-    if not online:
-        detail = "I can do that after you connect My Computer. Open Connected Apps to connect this device."
-    elif online and not runtime_ok:
-        detail = "My Computer is connected, but Gateway is not ready. Open Connected Apps and restart Gateway."
-    elif not local_tools_available:
-        detail = "Local computer tools are not ready yet for this workspace. Open Connected Apps to finish setup."
-    else:
-        detail = "This local action needs setup before I can run it. Open Connected Apps to continue."
-
-    return services.with_context_used(
-        {
-            "reply": "",
-            "actions": actions,
-            "mode": "connect",
-            "interventions": [
-                direct_chat_response_service.build_intervention(
-                    "connect_required",
-                    "My Computer setup required",
-                    detail=detail,
-                    severity="warning",
-                    status="waiting",
-                    code="local_setup_required",
-                )
-            ],
-            "suggestions": proactive_suggestions,
-        },
-        base_context_used,
-    )
-
-
 def _provider_chat_tools_for_message(message: str, tools: List[Dict[str, Any]], *, obvious_direct_tool_intent: bool) -> List[Dict[str, Any]]:
     if not obvious_direct_tool_intent:
         return []
     if not tools:
         return []
-    if not _message_targets_local_file_inventory(message):
-        return tools
-    preferred_tool_names = {"file__read", "shell__exec"}
-    local_file_tools = [
-        item
-        for item in tools
-        if isinstance(item, dict)
-        and str(item.get("name") or "").strip() in preferred_tool_names
-    ]
-    return local_file_tools or tools
+    return tools
 
 
 def _message_explicitly_names_direct_tool(message: str, services: DirectChatRuntimeServices) -> bool:
@@ -938,29 +778,6 @@ def build_direct_operator_reply(
         }
         return
 
-    capability_truth = (
-        availability_payload.get("capability_truth")
-        if isinstance(availability_payload.get("capability_truth"), dict)
-        else {}
-    )
-    my_computer = capability_truth.get("my_computer") if isinstance(capability_truth.get("my_computer"), dict) else {}
-    local_tools_available: Optional[bool] = None
-    if "local_tools_available" in my_computer:
-        local_tools_available = bool(my_computer.get("local_tools_available"))
-    elif "local_gateway_online" in availability_payload or "runtime_ok" in availability_payload:
-        local_tools_available = bool(availability_payload.get("local_gateway_online")) and bool(availability_payload.get("runtime_ok"))
-    if _message_requests_local_machine_action(normalized_message) and local_tools_available is False:
-        yield {
-            "type": "final",
-            "payload": _local_setup_required_payload(
-                availability_payload=availability_payload,
-                proactive_suggestions=proactive_suggestions,
-                base_context_used=base_context_used,
-                services=services,
-            ),
-        }
-        return
-
     obvious_direct_tool_intent = services.message_has_obvious_direct_tool_intent(normalized_message, tools)
 
     provider, direct_chat_credentials = services.resolve_provider_for_direct_chat_message(
@@ -1265,7 +1082,7 @@ def build_direct_operator_reply(
         session_ctx=generation_session_ctx,
         trace_context=resolved_trace_context,
         resolved_chat_max_iterations=resolved_chat_max_iterations,
-        direct_tool_result_summary_system_message="You have the results from the direct tool calls. Summarize them for the user or continue if another tool is required.",
+        direct_tool_result_summary_system_message="Use the tool results to answer the user's request.",
     )
 
 

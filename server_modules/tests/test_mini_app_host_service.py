@@ -421,6 +421,39 @@ async def test_hosted_bridge_rejects_nested_connected_computer_target_bypass():
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"target": {"tool_name": "screenshot.capture"}},
+        {"target": {"connector_id": "computer", "action_id": "click"}},
+        {"target": {"connector_id": "shell", "action_id": "run"}},
+        {"target": {"mcp_server_id": "crm", "mcp_tool_id": "mcp.invoke"}},
+        {"target": {"skill_id": "lead_lookup", "action": "skill.execute"}},
+        {"target": {"provider": "codex_cli"}},
+        {"target": {"provider": "claude_code_cli"}},
+        {"context_envelope": {"user_selected_inputs": [{"runtime_target": "local_companion"}]}},
+    ],
+)
+async def test_hosted_bridge_rejects_mini_app_tool_runtime_bypass(payload: dict):
+    with pytest.raises(Exception) as exc_info:
+        await mini_app_host_service.process_hosted_bridge_request(
+            workspace_id="ws-1",
+            tenant_id="tenant-1",
+            current_user={"user_id": "user-1"},
+            app_contract=_hosted_contract(),
+            origin="https://miniapps.example.com",
+            bridge_kind="app_to_sage",
+            bridge_type="summary_request",
+            request_text="Summarize this",
+            target=payload.get("target"),
+            context_envelope=payload.get("context_envelope") or {"user_selected_inputs": [{"id": "doc-1"}]},
+            metadata={"request_id": "req-tool-bypass"},
+        )
+
+    assert "forbidden field" in str(exc_info.value) or "contains forbidden" in str(exc_info.value)
+
+
+@pytest.mark.anyio
 async def test_hosted_bridge_cannot_trigger_sage_by_default_without_verified_enable(monkeypatch: pytest.MonkeyPatch):
     get_master_install = AsyncMock(return_value={"id": "install-sage"})
     execute_turn = AsyncMock(return_value={"run_id": "run-1"})

@@ -101,7 +101,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         self.assertEqual(record["approvals"], [])
         self.assertEqual(record["interventions"], [{"kind": "system_error", "detail": "boom"}])
 
-    def test_assistant_turn_content_falls_back_to_intervention_detail(self):
+    def test_assistant_turn_content_ignores_intervention_detail(self):
         content = runtime_runs_api._assistant_turn_content(
             {
                 "reply": "",
@@ -111,7 +111,24 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(content, "Chat failed: provider blew up")
+        self.assertEqual(content, "")
+
+    def test_assistant_turn_content_does_not_promote_connect_required_notice(self):
+        content = runtime_runs_api._assistant_turn_content(
+            {
+                "reply": "",
+                "interventions": [
+                    {
+                        "kind": "connect_required",
+                        "code": "local_setup_required",
+                        "status": "waiting",
+                        "detail": "Connect My Computer in Integrations before Sage uses local computer actions.",
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(content, "")
 
     def test_register_run_routes_adds_turn_and_runs(self):
         fake_server = types.ModuleType("server")

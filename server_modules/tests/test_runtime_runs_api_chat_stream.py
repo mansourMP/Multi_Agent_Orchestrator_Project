@@ -90,6 +90,48 @@ class RuntimeRunsApiChatStreamTests(unittest.TestCase):
         self.assertEqual(captured["metadata"]["trace_id"], "trace-1")
         self.assertEqual(captured["metadata"]["result_metadata"]["agent_role"], "sage")
 
+    def test_final_stream_event_does_not_persist_notice_as_assistant_content(self):
+        calls = []
+
+        async def _record_assistant_turn(**kwargs):
+            calls.append(kwargs)
+            return {"ok": True}
+
+        session = runtime_runs_api._get_or_create_chat_stream_session(
+            "user:thread:req",
+            thread_id="thread",
+            request_id="req",
+            workspace_id="default",
+        )
+        session["metadata"] = {
+            "assistant_turn": {
+                "tenant_id": "tenant-1",
+                "workspace_id": "default",
+                "thread_id": "thread",
+                "session_id": "thread",
+                "request_id": "req",
+            }
+        }
+
+        with patch.object(runtime_runs_api.thread_service, "record_assistant_turn", _record_assistant_turn):
+            runtime_runs_api._append_chat_stream_event(
+                session,
+                "final",
+                {
+                    "reply": "",
+                    "mode": "connect",
+                    "interventions": [
+                        {
+                            "kind": "connect_required",
+                            "code": "local_setup_required",
+                            "detail": "Connect My Computer in Integrations before Sage uses local computer actions.",
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

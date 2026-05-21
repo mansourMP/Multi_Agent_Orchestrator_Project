@@ -58,6 +58,45 @@ class SessionTranscriptStoreTests(unittest.TestCase):
         self.assertIn("Continue the runtime refactor.", recent_logs)
         self.assertIn("Moved transcript logging behind the memory service.", recent_logs)
 
+    def test_save_session_transcript_filters_non_conversation_entries(self) -> None:
+        result = session_transcript_store.save_session_transcript(
+            workspace_id="default",
+            thread_id="thread-1",
+            provider="openai",
+            model="gpt-test",
+            messages=[
+                {"role": "system", "content": "Sage boundary: internal prompt."},
+                {"role": "user", "content": "/new"},
+                {"type": "tool_use", "tool": "search", "input": "secret"},
+                {"role": "user", "content": "Real user message."},
+                {"role": "assistant", "content": [{"type": "text", "text": "Real assistant reply."}]},
+                {
+                    "role": "user",
+                    "content": "Forwarded internal instruction",
+                    "provenance": {"kind": "inter_session", "sourceTool": "sessions_send"},
+                },
+            ],
+            user_message="Real user message.",
+            assistant_reply="Real assistant reply.",
+        )
+
+        payload = json.loads(Path(result["path"]).read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(
+            payload["messages"],
+            [
+                {"role": "user", "content": "Real user message."},
+                {"role": "assistant", "content": "Real assistant reply."},
+            ],
+        )
+
+        recent_logs = memory_service.get_recent_logs("default", days=7)
+        self.assertIn("Real user message.", recent_logs)
+        self.assertIn("Real assistant reply.", recent_logs)
+        self.assertNotIn("Sage boundary", recent_logs)
+        self.assertNotIn("tool_use", recent_logs)
+        self.assertNotIn("/new", recent_logs)
+        self.assertNotIn("Forwarded internal instruction", recent_logs)
+
     def test_save_session_transcript_isolates_install_namespace(self) -> None:
         result = session_transcript_store.save_session_transcript(
             workspace_id="default",

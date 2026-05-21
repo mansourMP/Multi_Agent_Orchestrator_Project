@@ -12,6 +12,7 @@ import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { AppButton, AppNotice, AppShinyText } from '@/lib/ui/primitives';
+import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { AppSurfaceStat, AppSurfaceStatGrid } from '@/lib/ui/primitives';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
 import {
@@ -2259,6 +2260,14 @@ export function WorkstationChatPane() {
     };
   }, [draft, isSending, stopStreamingResponse]);
 
+  const handleDraftChange = useCallback((nextDraft: string) => {
+    setDraft(nextDraft);
+    if (nextDraft.trim()) {
+      setSendFailureNotice(null);
+      setStatusMessage(null);
+    }
+  }, [setDraft, setSendFailureNotice, setStatusMessage]);
+
   const sendMessage = async () => {
     const outboundMessage = draft.trim();
     if (!outboundMessage || isSending || submitInFlightRef.current) {
@@ -3098,104 +3107,73 @@ export function WorkstationChatPane() {
           </ScrollRegion>
         </section>
 
-        <div className="app-chat-notices">
-          {sendFailureNotice ? (
-            <AppNotice
-              tone="warning"
-              role="status"
-              aria-live="polite"
-              className="app-chat-status-notice"
-            >
-              <div className="app-chat-status-notice__copy">
-                <strong>Action needed</strong>
-                <span>{sendFailureNotice.message}</span>
-              </div>
-              <div className="app-chat-status-notice__actions">
-                {(sendFailureNotice.actions ?? []).map((action) => (
-                  <AppButton
-                    key={`${action.target}:${action.label}`}
-                    type="button"
-                    tone="secondary"
-                    onClick={() => {
-                      setSendFailureNotice(null);
-                      router.push(
-                        action.target === 'gateway'
-                          ? gatewayHref
-                          : action.target === 'approvals'
-                            ? approvalsHref
-                            : integrationsHref,
-                      );
-                    }}
-                  >
-                    {action.label}
-                  </AppButton>
-                ))}
-                {sendFailureNotice.retryable ? (
-                  <AppButton
-                    type="button"
-                    tone="secondary"
-                    onClick={() => {
+        {sendFailureNotice ? (
+          <PlatformNotification
+            tone="warning"
+            title="Action needed"
+            detail={sendFailureNotice.message}
+            action={(sendFailureNotice.actions ?? [])[0]
+              ? {
+                  label: (sendFailureNotice.actions ?? [])[0]?.label ?? 'Open',
+                  onClick: () => {
+                    const action = (sendFailureNotice.actions ?? [])[0];
+                    setSendFailureNotice(null);
+                    router.push(
+                      action?.target === 'gateway'
+                        ? gatewayHref
+                        : action?.target === 'approvals'
+                          ? approvalsHref
+                          : integrationsHref,
+                    );
+                  },
+                }
+              : sendFailureNotice.retryable
+                ? {
+                    label: 'Try again',
+                    onClick: () => {
                       if (sendFailureNotice.retryDraft) {
                         setDraft(sendFailureNotice.retryDraft);
                       }
                       setSendFailureNotice(null);
-                    }}
-                  >
-                    Try again
-                  </AppButton>
-                ) : null}
-                <AppButton
-                  type="button"
-                  tone="ghost"
-                  onClick={() => {
-                    setSendFailureNotice(null);
-                  }}
-                >
-                  Dismiss
-                </AppButton>
-              </div>
-            </AppNotice>
-          ) : null}
+                    },
+                  }
+                : undefined}
+            onClose={() => {
+              setSendFailureNotice(null);
+            }}
+          />
+        ) : null}
 
-          {!sendFailureNotice && statusMessage ? (
-            <AppNotice
-              tone={statusNotice?.tone ?? 'neutral'}
-              role="status"
-              aria-live="polite"
-              className="app-chat-status-notice"
-            >
-              <div className="app-chat-status-notice__copy">
-                <strong>{statusNotice?.title ?? 'Notice'}</strong>
-                <span>{statusNotice?.body ?? statusMessage}</span>
-              </div>
-              <div className="app-chat-status-notice__actions">
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    if (statusNotice?.actionTarget === 'gateway') {
-                      setStatusMessage(null);
-                      router.push(gatewayHref);
-                      return;
-                    }
-                    if (statusNotice?.actionTarget === 'integrations') {
-                      setStatusMessage(null);
-                      router.push(integrationsHref);
-                      return;
-                    }
-                    setStatusMessage(null);
-                  }}
-                >
-                  {statusNotice?.actionLabel ?? (statusNotice?.requiresLocalAccess ? 'Got it' : 'Dismiss')}
-                </AppButton>
-              </div>
-            </AppNotice>
-          ) : null}
-        </div>
+        {!sendFailureNotice && statusMessage ? (
+          <PlatformNotification
+            tone={statusNotice?.tone ?? 'neutral'}
+            title={statusNotice?.title ?? 'Notice'}
+            detail={statusNotice?.body ?? statusMessage}
+            action={{
+              label: statusNotice?.actionLabel ?? (statusNotice?.requiresLocalAccess ? 'Got it' : 'Dismiss'),
+              onClick: () => {
+                if (statusNotice?.actionTarget === 'gateway') {
+                  setStatusMessage(null);
+                  router.push(gatewayHref);
+                  return;
+                }
+                if (statusNotice?.actionTarget === 'integrations') {
+                  setStatusMessage(null);
+                  router.push(integrationsHref);
+                  return;
+                }
+                setStatusMessage(null);
+              },
+            }}
+            onClose={() => {
+              setStatusMessage(null);
+            }}
+          />
+        ) : null}
 
       <ChatComposer
         draft={draft}
-        onDraftChange={setDraft}
+        onDraftChange={handleDraftChange}
         onSubmit={() => {
           void sendMessage();
         }}

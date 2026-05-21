@@ -36,6 +36,51 @@ _FORBIDDEN_BRIDGE_FIELDS = {
     "private_context",
     "captain_memory",
     "specialist_memory",
+    "screenshot",
+    "computer",
+    "shell",
+    "mcp",
+    "skill",
+    "local_companion",
+    "runtime_session_id",
+    "runtime_target",
+    "tool_call",
+    "tool_calls",
+}
+_FORBIDDEN_BRIDGE_ACTION_VALUES = {
+    "screenshot",
+    "screenshot.capture",
+    "computer",
+    "computer.click",
+    "computer_control.click",
+    "shell",
+    "shell.run",
+    "terminal",
+    "terminal.exec",
+    "mcp",
+    "mcp.invoke",
+    "skill",
+    "skill.execute",
+    "codex_cli",
+    "claude_code_cli",
+    "local_companion",
+}
+_BRIDGE_ACTION_VALUE_KEYS = {
+    "action",
+    "action_id",
+    "action_name",
+    "capability",
+    "capability_id",
+    "connector",
+    "connector_id",
+    "mcp_server_id",
+    "mcp_tool_id",
+    "provider",
+    "runtime",
+    "runtime_target",
+    "tool",
+    "tool_id",
+    "tool_name",
 }
 _ENVELOPE_ALIASES = {
     "app_context": "app_owned_history",
@@ -68,6 +113,11 @@ def _find_forbidden_bridge_key_path(payload: Any, *, root_path: str = "") -> Opt
             forbidden = _forbidden_bridge_key(raw_key)
             if forbidden:
                 return forbidden, path
+            normalized_key = key_text.lower()
+            if normalized_key in _BRIDGE_ACTION_VALUE_KEYS:
+                normalized_value = str(raw_value or "").strip().lower()
+                if normalized_value in _FORBIDDEN_BRIDGE_ACTION_VALUES:
+                    return normalized_value, path
             nested = _find_forbidden_bridge_key_path(raw_value, root_path=path)
             if nested:
                 return nested

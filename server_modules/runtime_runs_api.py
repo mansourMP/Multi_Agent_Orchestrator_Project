@@ -165,22 +165,7 @@ def _chat_stream_assistant_status(payload: dict[str, Any]) -> str:
 
 def _assistant_turn_content(payload: dict[str, Any]) -> str:
     reply = str(payload.get("reply") or "").strip()
-    if reply:
-        return reply
-    interventions = payload.get("interventions") if isinstance(payload.get("interventions"), list) else []
-    for item in interventions:
-        if not isinstance(item, dict):
-            continue
-        detail = str(item.get("detail") or item.get("message") or item.get("title") or "").strip()
-        if detail:
-            return detail
-    terminal_error = payload.get("terminal_error") if isinstance(payload.get("terminal_error"), dict) else {}
-    terminal_error_body = terminal_error.get("error") if isinstance(terminal_error.get("error"), dict) else {}
-    return (
-        str(terminal_error_body.get("message") or "").strip()
-        or str(payload.get("message") or "").strip()
-        or str(payload.get("error") or "").strip()
-    )
+    return reply
 
 
 def _persist_final_direct_chat_assistant_turn(session: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -192,6 +177,9 @@ def _persist_final_direct_chat_assistant_turn(session: dict[str, Any], payload: 
     session_id = str(assistant_turn.get("session_id") or "").strip() or None
     request_id = str(assistant_turn.get("request_id") or "").strip() or None
     if not tenant_id or not workspace_id or not thread_id:
+        return
+    content = _assistant_turn_content(payload)
+    if not content:
         return
     result_metadata = _chat_stream_result_metadata(payload)
     trace_id = str(payload.get("trace_id") or result_metadata.get("trace_id") or "").strip() or None
@@ -217,7 +205,7 @@ def _persist_final_direct_chat_assistant_turn(session: dict[str, Any], payload: 
                 "id": actor_id,
                 "display_name": "Empyralis",
             },
-            reply=_assistant_turn_content(payload),
+            reply=content,
             status=_chat_stream_assistant_status(payload),
             run_id=run_id,
             active_agent_install_id=str(assistant_turn.get("active_agent_install_id") or "").strip() or None,

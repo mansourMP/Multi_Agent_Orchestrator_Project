@@ -300,6 +300,7 @@ class DeployedAgentTestTurnRequest(BaseModel):
     channel: str = "test"
     runtime_mode: str = "text_agent"
     customer_profile: Optional[Dict[str, Any]] = None
+    recent_messages: list[Dict[str, Any]] = Field(default_factory=list)
 
 
 class DeployedAgentTestTurnResponse(BaseModel):
@@ -308,7 +309,11 @@ class DeployedAgentTestTurnResponse(BaseModel):
     tools_considered: list[dict] = Field(default_factory=list)
     tools_used: list[str] = Field(default_factory=list)
     memory_context: Dict[str, Any] = Field(default_factory=dict)
+    prompt_context: Dict[str, Any] = Field(default_factory=dict)
     approval_required: bool = False
     audit_events: list[dict] = Field(default_factory=list)
     trace_id: str = ""
     transparency_events: list[dict] = Field(default_factory=list)
+    model_provider: Optional[str] = None
+    model: Optional[str] = None
+    usage: Optional[Dict[str, Any]] = None

@@ -10,6 +10,7 @@ import { useWorkstationDesktopBridge } from '@/lib/workspace/workstation-desktop
 export function WorkstationTitlebar({
   surfaceLabel,
   surfaceHref,
+  surfaceControl,
   diagnosticsVisible: _diagnosticsVisible,
   onToggleDiagnostics: _onToggleDiagnostics,
   navigation,
@@ -18,6 +19,7 @@ export function WorkstationTitlebar({
 }: {
   surfaceLabel: string;
   surfaceHref?: string;
+  surfaceControl?: ReactNode;
   diagnosticsVisible: boolean;
   onToggleDiagnostics: () => void;
   navigation?: ReactNode;
@@ -41,7 +43,7 @@ export function WorkstationTitlebar({
         data-tauri-drag-region={desktop.available ? '' : undefined}
       >
         {leftAction}
-        {surfaceHref ? (
+        {surfaceControl ?? (surfaceHref ? (
           <Link
             href={surfaceHref}
             className="workstation-titlebar__surface-link"
@@ -51,7 +53,7 @@ export function WorkstationTitlebar({
           </Link>
         ) : (
           <span className="workstation-titlebar__surface">{surfaceLabel}</span>
-        )}
+        ))}
         <div className="workstation-titlebar__brand-actions" id="workstation-titlebar-brand-actions-slot" />
       </div>
       {navigation ? (

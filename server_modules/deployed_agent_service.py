@@ -2162,6 +2162,18 @@ def _enforce_ai_source_provider_runtime(
             provider_scopes=provider_entry.get("provider_scopes") if provider_entry else None,
             pricing_known=pricing_known,
         )
+        ai_source = deployed_agent_runtime_contract_service.normalize_studio_ai_source(
+            config.runtime_supply.get("ai_source")
+            if isinstance(config.runtime_supply, dict)
+            else None
+        )
+        if provider and model:
+            provider_catalog_service.assert_model_route_policy(
+                provider=provider,
+                model=model,
+                surface="studio",
+                payer=ai_source.get("payer") or ai_source.get("kind"),
+            )
     except ValueError as error:
         raise _http_bad_request(str(error)) from error
 

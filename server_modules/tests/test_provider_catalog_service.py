@@ -375,6 +375,48 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
                 model="gpt-4o",
             )
 
+    def test_model_policy_overlay_can_disable_model_without_code_catalog_rewrite(self) -> None:
+        overlay = '{"deepseek":{"deepseek-v4-flash":{"enabled":false}}}'
+        with patch.dict("os.environ", {"EMPYRALIS_MODEL_CATALOG_POLICY_JSON": overlay}, clear=False):
+            provider_catalog_service.provider_profiles._platform_provider_catalog_config.cache_clear()
+            self.addCleanup(provider_catalog_service.provider_profiles._platform_provider_catalog_config.cache_clear)
+            models = provider_catalog_service.provider_profiles.provider_model_catalog("deepseek")
+            self.assertNotIn("deepseek-v4-flash", {item["id"] for item in models})
+            with self.assertRaisesRegex(ValueError, "disabled"):
+                provider_catalog_service.resolve_provider_model_selection(
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    surface="sage",
+                    payer="platform_credits",
+                )
+
+    def test_model_route_policy_rejects_byok_first_providers_for_platform_credits(self) -> None:
+        for provider, model in (
+            ("openrouter", "openai/gpt-5.2"),
+            ("groq", "llama-3.3-70b-versatile"),
+            ("azure_openai", "deployment-name"),
+            ("custom_openai_compatible", "custom-model"),
+        ):
+            with self.subTest(provider=provider):
+                with self.assertRaisesRegex(ValueError, "cannot use Empyralis credits"):
+                    provider_catalog_service.assert_model_route_policy(
+                        provider=provider,
+                        model=model,
+                        surface="studio",
+                        payer="platform_credits",
+                    )
+
+    def test_model_route_policy_keeps_deepseek_platform_paid_when_priced(self) -> None:
+        policy = provider_catalog_service.assert_model_route_policy(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            surface="sage",
+            payer="platform_credits",
+        )
+
+        self.assertTrue(policy["platform_paid_allowed"])
+        self.assertTrue(policy["pricing_known"])
+
     def test_resolve_empyralis_model_tier_selection_hides_raw_route_by_default(self) -> None:
         route = provider_catalog_service.resolve_empyralis_model_tier_selection(public_tier="pro")
 

@@ -1489,12 +1489,20 @@ def _platform_provider_catalog_config() -> platform_config_schema.PlatformProvid
         provider_catalog=PROVIDER_CATALOG,
         governance_catalog=PROVIDER_GOVERNANCE_CATALOG,
         model_catalog=PROVIDER_MODEL_CATALOG,
+        model_policy_overrides=platform_config_schema.load_model_catalog_policy_overrides(),
     )
 
 
 def provider_governance_entry(provider: Any) -> Dict[str, Any]:
     provider_id = normalize_provider_id(provider)
     entry = _platform_provider_catalog_config().provider_governance(provider_id)
+    return entry.model_dump(exclude_none=True) if entry is not None else {}
+
+
+def provider_model_policy(provider: Any, model: Any) -> Dict[str, Any]:
+    provider_id = normalize_provider_id(provider)
+    model_id = normalize_provider_model_id(provider_id, model, fallback_to_default=False)
+    entry = _platform_provider_catalog_config().provider_model_policy(provider_id, model_id)
     return entry.model_dump(exclude_none=True) if entry is not None else {}
 
 
@@ -1619,10 +1627,15 @@ def _provider_model_identifier_list(provider: Any) -> List[str]:
     provider_id = normalize_provider_id(provider)
     entry = provider_catalog_entry(provider_id)
     explicit = [str(item).strip() for item in entry.get("models", []) if str(item).strip()]
+    policy_models = [
+        str(model_id or "").strip()
+        for model_id, policy in (_platform_provider_catalog_config().model_policies.get(provider_id) or {}).items()
+        if str(model_id or "").strip() and policy.enabled is not False
+    ]
     if explicit:
-        return explicit
+        return list(dict.fromkeys(explicit + policy_models))
     default_model = str(entry.get("default_model") or "").strip()
-    return [default_model] if default_model else []
+    return list(dict.fromkeys(([default_model] if default_model else []) + policy_models))
 
 
 def provider_model_catalog(provider: Any) -> List[Dict[str, Any]]:
@@ -1635,7 +1648,20 @@ def provider_model_catalog(provider: Any) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for model_id in _provider_model_identifier_list(provider_id):
         metadata = dict(model_entries.get(model_id) or {})
+        policy = provider_model_policy(provider_id, model_id)
+        if policy.get("enabled") is False:
+            continue
+        if policy.get("context_window_tokens") is not None:
+            metadata["context_window_tokens"] = policy.get("context_window_tokens")
+        for flag in ("supports_tools", "supports_vision", "supports_reasoning"):
+            if policy.get(flag) is not None:
+                metadata[flag] = bool(policy.get(flag))
         pricing_projection = pricing_registry_service.catalog_price_projection(provider_id, model_id)
+        pricing_known = bool(
+            policy.get("pricing_known")
+            if policy.get("pricing_known") is not None
+            else pricing_projection.get("pricing_known")
+        )
         supports_tools = bool(metadata.get("supports_tools"))
         supports_reasoning = bool(metadata.get("supports_reasoning"))
         capability_labels = [
@@ -1662,14 +1688,20 @@ def provider_model_catalog(provider: Any) -> List[Dict[str, Any]]:
                 "context_window_tokens": int(metadata.get("context_window_tokens") or 0) or None,
                 "input_cost_per_1k_usd": float(pricing_projection.get("input_cost_per_1k_usd") or 0.0),
                 "output_cost_per_1k_usd": float(pricing_projection.get("output_cost_per_1k_usd") or 0.0),
-                "pricing_known": bool(pricing_projection.get("pricing_known")),
-                "pricing_source": pricing_projection.get("pricing_source"),
-                "pricing_registry_version": pricing_projection.get("pricing_registry_version"),
+                "pricing_known": pricing_known,
+                "pricing_source": policy.get("pricing_source") or pricing_projection.get("pricing_source"),
+                "pricing_registry_version": policy.get("pricing_version") or pricing_projection.get("pricing_registry_version"),
                 "supports_tools": supports_tools,
+                "supports_vision": bool(metadata.get("supports_vision")),
                 "supports_reasoning": supports_reasoning,
                 "reasoning_levels": reasoning_levels,
                 "local_self_hosted_compatible": bool(metadata.get("local_self_hosted_compatible") or governance.get("local_self_hosted_compatible")),
                 "capability_labels": capability_labels,
+                "enabled": policy.get("enabled", True),
+                "allowed_surfaces": list(policy.get("allowed_surfaces") or []),
+                "allowed_payers": list(policy.get("allowed_payers") or []),
+                "platform_paid_allowed": bool(policy.get("platform_paid_allowed", pricing_known)),
+                "fallback_allowed": bool(policy.get("fallback_allowed", False)),
             }
         )
     return items

@@ -18,6 +18,37 @@ MANUAL_MODEL_ID_PROVIDERS = {
     "openrouter",
     "xai",
 }
+BYOK_FIRST_PROVIDERS = {
+    "azure_openai",
+    "custom_openai_compatible",
+    "groq",
+    "openrouter",
+}
+LOCAL_OR_SUBSCRIPTION_PROVIDERS = {"ollama", "openai-codex", "claude_code_cli"}
+
+
+def _canonical_surface(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"sage", "main", "main_agent", "sage_direct_chat"}:
+        return "sage"
+    if token in {"studio", "specialist", "deployed_agent", "deployed_agent_channel"}:
+        return "studio"
+    if token in {"mini_app", "mini-app", "app", "mini_app_invoke"}:
+        return "mini_app"
+    return token
+
+
+def _canonical_payer(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"empyralis_credits", "empyralis", "platform_credits"}:
+        return "platform_credits"
+    if token in {"byok", "workspace_api_key", "workspace_connection"}:
+        return "BYOK"
+    if token in {"local", "local_model", "local_companion"}:
+        return "local"
+    if token in {"subscription", "subscription_passthrough", "codex_cli", "claude_code_cli"}:
+        return "subscription_passthrough"
+    return token
 
 
 def _credential_plane_metadata(
@@ -153,6 +184,72 @@ def cached_provider_model_ids(*, workspace_id: Any = None, provider: Any = None)
     return []
 
 
+def model_route_policy(
+    *,
+    provider: Any,
+    model: Any,
+) -> Dict[str, Any]:
+    provider_id = provider_profiles.normalize_provider_id(provider)
+    model_id = _normalize_model_token(provider_id, model)
+    policy = provider_profiles.provider_model_policy(provider_id, model_id)
+    pricing = provider_profiles.pricing_registry_service.catalog_price_projection(provider_id, model_id)
+    return {
+        "provider": provider_id,
+        "model": model_id,
+        "enabled": policy.get("enabled", True),
+        "allowed_surfaces": list(policy.get("allowed_surfaces") or []),
+        "allowed_payers": list(policy.get("allowed_payers") or []),
+        "platform_paid_allowed": bool(
+            policy.get(
+                "platform_paid_allowed",
+                provider_id not in BYOK_FIRST_PROVIDERS
+                and provider_id not in LOCAL_OR_SUBSCRIPTION_PROVIDERS
+                and bool(pricing.get("pricing_known")),
+            )
+        ),
+        "pricing_known": bool(
+            policy.get("pricing_known")
+            if policy.get("pricing_known") is not None
+            else pricing.get("pricing_known")
+        ),
+        "pricing_source": policy.get("pricing_source") or pricing.get("pricing_source"),
+        "pricing_version": policy.get("pricing_version") or pricing.get("pricing_registry_version"),
+        "fallback_allowed": bool(policy.get("fallback_allowed", False)),
+    }
+
+
+def assert_model_route_policy(
+    *,
+    provider: Any,
+    model: Any,
+    surface: Any = None,
+    payer: Any = None,
+) -> Dict[str, Any]:
+    policy = model_route_policy(provider=provider, model=model)
+    provider_id = policy["provider"]
+    model_id = policy["model"]
+    if policy.get("enabled") is False:
+        raise ValueError(f"Model '{model_id}' is disabled for provider '{provider_id}'.")
+    surface_token = _canonical_surface(surface)
+    if surface_token:
+        allowed_surfaces = {_canonical_surface(item) for item in policy.get("allowed_surfaces") or [] if str(item or "").strip()}
+        if allowed_surfaces and surface_token not in allowed_surfaces:
+            raise ValueError(f"Model '{provider_id}:{model_id}' is not allowed for surface '{surface_token}'.")
+    payer_token = _canonical_payer(payer)
+    if payer_token:
+        allowed_payers = {_canonical_payer(item) for item in policy.get("allowed_payers") or [] if str(item or "").strip()}
+        if allowed_payers and payer_token not in allowed_payers:
+            raise ValueError(f"Model '{provider_id}:{model_id}' is not allowed for payer '{payer_token}'.")
+        if payer_token == "platform_credits":
+            if provider_id in BYOK_FIRST_PROVIDERS:
+                raise ValueError(f"{provider_id} is BYOK/workspace-key only and cannot use Empyralis credits.")
+            if not policy.get("platform_paid_allowed"):
+                raise ValueError(f"Model '{provider_id}:{model_id}' is not approved for Empyralis credits.")
+            if not policy.get("pricing_known"):
+                raise ValueError(f"Empyralis-credit usage requires known pricing for {provider_id}:{model_id}.")
+    return policy
+
+
 def _normalize_model_token(provider_id: str, model_id: Any) -> str:
     token = str(model_id or "").strip()
     if not token:
@@ -179,6 +276,8 @@ def resolve_provider_model_selection(
     existing_provider: Any = None,
     existing_model: Any = None,
     cached_models: Any = None,
+    surface: Any = None,
+    payer: Any = None,
 ) -> Dict[str, Optional[str]]:
     raw_provider = provider_profiles.normalize_provider_id(provider) if str(provider or "").strip() else ""
     raw_model = str(model or "").strip()
@@ -215,8 +314,19 @@ def resolve_provider_model_selection(
             for cached_model in cached_models
             if _normalize_model_token(raw_provider, cached_model.get("id") if isinstance(cached_model, dict) else cached_model)
         )
+    if normalized_model:
+        route_policy = model_route_policy(provider=raw_provider, model=normalized_model)
+        if route_policy.get("enabled") is False:
+            raise ValueError(f"Model '{normalized_model}' is disabled for provider '{raw_provider}'.")
     if normalized_model and supported_models and normalized_model not in supported_models and raw_provider not in MANUAL_MODEL_ID_PROVIDERS:
         raise ValueError(f"Model '{normalized_model}' is not supported for provider '{raw_provider}'.")
+    if normalized_model:
+        assert_model_route_policy(
+            provider=raw_provider,
+            model=normalized_model,
+            surface=surface,
+            payer=payer,
+        )
 
     return {
         "provider": raw_provider or None,

@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from unittest.mock import patch
 import os
 import importlib
@@ -40,6 +41,7 @@ class AuthHardeningTests(unittest.TestCase):
         routes_connectors = importlib.import_module("server_modules.routes_connectors")
         auth.USER_RATE_LIMIT_BUCKETS.clear()
         auth.LOGIN_RATE_LIMIT_BUCKETS.clear()
+        auth.REFRESH_RATE_LIMIT_BUCKETS.clear()
         auth.CSRF_FAILURE_RATE_LIMIT_BUCKETS.clear()
 
     def test_get_current_user_rejects_missing_auth_when_enabled(self):
@@ -67,6 +69,15 @@ class AuthHardeningTests(unittest.TestCase):
             auth.get_current_user(request=request, x_api_key="secret")
             with self.assertRaises(HTTPException) as ctx:
                 auth.get_current_user(request=request, x_api_key="secret")
+        self.assertEqual(ctx.exception.status_code, 429)
+
+    def test_refresh_rate_limit_blocks_after_configured_window(self):
+        request = _request(path="/auth/refresh")
+        with patch.object(auth, "ORION_AUTH_REFRESH_RATE_LIMIT_PER_MINUTE", 2):
+            auth.limit_refresh_requests(request=request)
+            auth.limit_refresh_requests(request=request)
+            with self.assertRaises(HTTPException) as ctx:
+                auth.limit_refresh_requests(request=request)
         self.assertEqual(ctx.exception.status_code, 429)
 
     def test_extract_request_api_key_ignores_query_string(self):
@@ -310,6 +321,18 @@ class AuthHardeningTests(unittest.TestCase):
         with patch.object(auth, "ORION_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE", 1):
             first = auth.get_current_user(request=request, authorization=f"Bearer {token}")
             self.assertEqual(first["user_id"], "user-1")
+            with self.assertRaises(HTTPException) as ctx:
+                auth.get_current_user(request=request, authorization=f"Bearer {token}")
+        self.assertEqual(ctx.exception.status_code, 429)
+        detail = ctx.exception.detail if isinstance(ctx.exception.detail, dict) else {}
+        self.assertEqual(detail.get("code"), "model_invocation_rate_limited")
+
+    def test_sage_chat_path_consumes_model_invocation_window(self):
+        request = _request(path="/api/sage/chat")
+        token = auth.issue_token("sage-user-1", email="sage-user@example.com", role="member")
+        with patch.object(auth, "ORION_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE", 1):
+            first = auth.get_current_user(request=request, authorization=f"Bearer {token}")
+            self.assertEqual(first["user_id"], "sage-user-1")
             with self.assertRaises(HTTPException) as ctx:
                 auth.get_current_user(request=request, authorization=f"Bearer {token}")
         self.assertEqual(ctx.exception.status_code, 429)

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import tempfile
+import os
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
 from fastapi import FastAPI
-from unittest.mock import AsyncMock, Mock
 
 from server_modules import billing_service, mini_apps_service, routes_mini_apps, workspace_context
 
@@ -135,6 +136,17 @@ def _active_flashcards_payload(**overrides):
         "session_state": "active",
         **overrides,
     }
+
+
+def test_active_session_secret_fails_closed_in_production_without_real_secret():
+    with patch.dict(os.environ, {"ORION_ENV": "production"}, clear=True):
+        with pytest.raises(RuntimeError):
+            routes_mini_apps._active_session_secret()
+
+
+def test_active_session_secret_keeps_local_dev_fallback_compatibility():
+    with patch.dict(os.environ, {"ORION_ENV": "local"}, clear=True):
+        assert routes_mini_apps._active_session_secret().startswith(b"empyralis-mini-app-active-session")
 
 
 @pytest.mark.anyio

@@ -59,12 +59,11 @@ def assert_safe_outbound_url(url: str, *, allow_private_host: bool = False) -> N
         raise RuntimeError("Outbound HTTP URL is missing a host.")
     try:
         resolved = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return
+    except socket.gaierror as exc:
+        raise RuntimeError("Outbound HTTP URL host could not be resolved safely.") from exc
     for item in resolved:
         sockaddr = item[4] if len(item) > 4 else ()
         candidate = str(sockaddr[0] if sockaddr else "").strip()
         reason = _ip_block_reason(candidate)
         if reason:
             raise RuntimeError(f"Outbound HTTP URL resolves to a disallowed {reason} address.")
-

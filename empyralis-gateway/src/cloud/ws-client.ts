@@ -184,7 +184,7 @@ export class GatewayWsClient {
     const session = await this.createSession(identity.gatewayId);
     try {
       const wsUrl = assertWebSocketUrl(session.ws_url);
-      this.socket = await this.openSocket(wsUrl);
+      this.socket = await this.openSocket(wsUrl, session.session_token);
       this._connectionStartedAt = Date.now();
       this.socket.onmessage = (event) => {
         void this.handleIncomingFrame(typeof event.data === "string" ? event.data : String(event.data));
@@ -425,9 +425,12 @@ export class GatewayWsClient {
     }
   }
 
-  private async openSocket(url: string): Promise<WebSocket> {
+  private async openSocket(url: string, sessionToken: string): Promise<WebSocket> {
     return new Promise<WebSocket>((resolve, reject) => {
-      const socket = new WebSocket(url);
+      const socket = new WebSocket(url, [
+        "empyralis.gateway.v1",
+        `empyralis.gateway.session.${sessionToken}`,
+      ]);
       const timeout = setTimeout(() => {
         socket.onopen = null;
         socket.onerror = null;

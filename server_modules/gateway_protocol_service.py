@@ -493,6 +493,7 @@ async def handle_gateway_websocket(
     *,
     gateway_id: str,
     session_token: str,
+    accept_subprotocol: Optional[str] = None,
 ) -> None:
     connection: Optional[_LiveGatewayConnection] = None
     background_tasks: set[asyncio.Task[Any]] = set()
@@ -548,7 +549,7 @@ async def handle_gateway_websocket(
     server_event_seq = 0
     last_client_seq: Optional[int] = None
     disconnected = False
-    await websocket.accept()
+    await websocket.accept(subprotocol=accept_subprotocol)
 
     try:
         try:

@@ -566,6 +566,46 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
         event_types = [item["message_type"] for item in events_payload.json()["items"]]
         self.assertIn("gateway.approval.requested", event_types)
 
+    def test_execute_js_browser_action_requires_approval(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway = registration_payload["gateway"]
+        gateway_id = gateway["gateway_id"]
+        gateway_state_repository.upsert_gateway_browser_session(
+            gateway_id=gateway_id,
+            device_id=gateway["device_id"],
+            tenant_id="default",
+            workspace_id="default",
+            user_id="owner-1",
+            run_id="run-browser-js",
+            browser_session_id="gbsess-js",
+            status="active",
+            execution_target="local_gateway",
+            session_profile="qa-browser",
+            metadata={"browser_session_mode": "managed"},
+        )
+        execute_mock = AsyncMock(return_value={"status": "completed"})
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.execute_browser_capability_via_gateway",
+            execute_mock,
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-js/actions",
+                json={
+                    "action": "execute_js",
+                    "action_args": {"script": "window.localStorage.clear()"},
+                    "run_id": "run-browser-js",
+                    "trace_id": "trace-browser-js",
+                },
+            )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["status"], "approval_required")
+        self.assertEqual(payload["normalized_approval"]["action"], "browser.session.action")
+        self.assertEqual(payload["approval"]["request_payload"]["capability_id"], "browser.session.action")
+        self.assertEqual(payload["approval"]["request_payload"]["arguments"]["action"], "execute_js")
+        execute_mock.assert_not_awaited()
+
     def test_review_required_browser_session_with_interactive_approvals_disabled_returns_pending_approval(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]

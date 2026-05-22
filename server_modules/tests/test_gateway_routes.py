@@ -217,6 +217,45 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 4401)
         self.assertIn("expired", raised.exception.reason.lower())
 
+    def test_gateway_websocket_rejects_query_session_token_in_production(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        session_response = self.client.post(
+            "/api/gateway/sessions",
+            json={"gateway_id": gateway_id, "gateway_token": registration_payload["gateway_token"]},
+        )
+        self.assertEqual(session_response.status_code, 200)
+        session_payload = session_response.json()
+        ws_path = f"/api/gateway/ws?gateway_id={gateway_id}&session_token={session_payload['session_token']}"
+
+        with patch.dict(os.environ, {"ORION_ENV": "production"}, clear=False):
+            with self.assertRaises(WebSocketDisconnect) as raised:
+                with self.client.websocket_connect(ws_path) as websocket:
+                    websocket.receive_text()
+        self.assertEqual(raised.exception.code, 4401)
+        self.assertIn("query session token", raised.exception.reason.lower())
+
+    def test_gateway_websocket_accepts_session_token_subprotocol_in_production(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        session_response = self.client.post(
+            "/api/gateway/sessions",
+            json={"gateway_id": gateway_id, "gateway_token": registration_payload["gateway_token"]},
+        )
+        self.assertEqual(session_response.status_code, 200)
+        session_payload = session_response.json()
+        ws_path = f"/api/gateway/ws?gateway_id={gateway_id}"
+
+        with patch.dict(os.environ, {"ORION_ENV": "production"}, clear=False):
+            with self.client.websocket_connect(
+                ws_path,
+                subprotocols=[
+                    "empyralis.gateway.v1",
+                    f"empyralis.gateway.session.{session_payload['session_token']}",
+                ],
+            ) as websocket:
+                self.assertEqual(websocket.accepted_subprotocol, "empyralis.gateway.v1")
+
     def _register_gateway(self) -> dict:
         pairing_response = self.client.post(
             "/api/gateway/pairings/intents",

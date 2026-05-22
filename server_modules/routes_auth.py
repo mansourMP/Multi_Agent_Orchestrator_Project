@@ -1,7 +1,7 @@
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from server_modules.auth import (
     auth_cookie_refresh_token,
@@ -15,6 +15,8 @@ from server_modules.auth import (
     get_current_user,
     limit_login_requests,
     limit_public_requests,
+    limit_refresh_requests,
+    login_mobile_beta_user,
     login_external_user,
     login_user,
     load_tenant_enterprise_settings,
@@ -53,33 +55,41 @@ def _require_tenant_id(value: Optional[str]) -> str:
 
 
 class AuthMePatchRequest(BaseModel):
-    name: Optional[str] = None
-    avatar_url: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=120)
+    avatar_url: Optional[str] = Field(default=None, max_length=2_048)
 
 
 class AuthRefreshRequest(BaseModel):
-    refresh_token: Optional[str] = None
-    channel: Optional[str] = None
-    device_id: Optional[str] = None
-    device_name: Optional[str] = None
-    device_platform: Optional[str] = None
-    workspace_id: Optional[str] = None
+    refresh_token: Optional[str] = Field(default=None, max_length=512)
+    channel: Optional[str] = Field(default=None, max_length=80)
+    device_id: Optional[str] = Field(default=None, max_length=180)
+    device_name: Optional[str] = Field(default=None, max_length=120)
+    device_platform: Optional[str] = Field(default=None, max_length=120)
+    workspace_id: Optional[str] = Field(default=None, max_length=120)
     session_ttl_seconds: Optional[int] = None
 
 
 class AuthProviderLoginRequest(BaseModel):
-    provider: str
-    identity_token: str
-    email: Optional[str] = None
-    name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    channel: Optional[str] = None
-    device_id: Optional[str] = None
-    device_name: Optional[str] = None
-    device_platform: Optional[str] = None
-    workspace_id: Optional[str] = None
+    provider: str = Field(min_length=1, max_length=80)
+    identity_token: str = Field(min_length=1, max_length=16_384)
+    email: Optional[str] = Field(default=None, max_length=320)
+    name: Optional[str] = Field(default=None, max_length=120)
+    avatar_url: Optional[str] = Field(default=None, max_length=2_048)
+    channel: Optional[str] = Field(default=None, max_length=80)
+    device_id: Optional[str] = Field(default=None, max_length=180)
+    device_name: Optional[str] = Field(default=None, max_length=120)
+    device_platform: Optional[str] = Field(default=None, max_length=120)
+    workspace_id: Optional[str] = Field(default=None, max_length=120)
     session_ttl_seconds: Optional[int] = None
-    acquisition_token: Optional[str] = None
+    acquisition_token: Optional[str] = Field(default=None, max_length=512)
+
+
+class MobileBetaBootstrapRequest(BaseModel):
+    device_id: str = Field(min_length=1, max_length=180)
+    device_name: Optional[str] = Field(default=None, max_length=120)
+    device_platform: Optional[str] = Field(default=None, max_length=120)
+    workspace_id: Optional[str] = Field(default=None, max_length=120)
+    session_ttl_seconds: Optional[int] = None
 
 
 class ChannelPairingIntentCreateRequest(BaseModel):
@@ -206,6 +216,17 @@ async def provider_login(body: AuthProviderLoginRequest, request: Request, respo
     return payload
 
 
+@router.post("/auth/mobile-beta-bootstrap", dependencies=[Depends(limit_login_requests)])
+async def mobile_beta_bootstrap(body: MobileBetaBootstrapRequest):
+    return login_mobile_beta_user(
+        device_id=body.device_id,
+        device_name=body.device_name,
+        device_platform=body.device_platform,
+        workspace_id=body.workspace_id,
+        session_ttl_seconds=body.session_ttl_seconds,
+    )
+
+
 async def _validate_and_apply_pilot_invite(code: Optional[str]) -> Optional[str]:
     """Validate pilot invite code when invite-only mode is active. Returns plan_id or None."""
     if not pilot_invite_service.pilot_signup_requires_invite():
@@ -297,7 +318,7 @@ async def auth_status(current_user=Depends(get_current_user)):
     return {"authenticated": True, "user": user}
 
 
-@router.post("/auth/refresh")
+@router.post("/auth/refresh", dependencies=[Depends(limit_refresh_requests)])
 async def refresh_session(body: AuthRefreshRequest, request: Request, response: Response):
     requested_channel = body.channel
     browser_session_request = False

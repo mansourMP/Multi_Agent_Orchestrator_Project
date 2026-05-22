@@ -120,14 +120,14 @@ class SageProfileUpdateRequest(BaseModel):
 
 
 class SageProfileBootstrapAnswerRequest(BaseModel):
-    workspace_id: str
-    answer: str
+    workspace_id: str = Field(min_length=1, max_length=120)
+    answer: str = Field(min_length=1, max_length=8_000)
 
 
 class SageChatRequest(BaseModel):
-    workspace_id: str
-    message: str
-    surface: str = "chat"
+    workspace_id: str = Field(min_length=1, max_length=120)
+    message: str = Field(min_length=1, max_length=32_000)
+    surface: str = Field(default="chat", max_length=80)
     mode: Literal["owner_sage"] = "owner_sage"
 
 
@@ -163,20 +163,20 @@ class ConnectorCreate(ConnectorUpsertRequest):
 
 
 class AuthLoginRequest(BaseModel):
-    email: str
-    password: str
-    acquisition_token: Optional[str] = None
-    channel: Optional[str] = None
-    device_id: Optional[str] = None
-    device_name: Optional[str] = None
-    device_platform: Optional[str] = None
-    workspace_id: Optional[str] = None
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=256)
+    acquisition_token: Optional[str] = Field(default=None, max_length=512)
+    channel: Optional[str] = Field(default=None, max_length=80)
+    device_id: Optional[str] = Field(default=None, max_length=180)
+    device_name: Optional[str] = Field(default=None, max_length=120)
+    device_platform: Optional[str] = Field(default=None, max_length=120)
+    workspace_id: Optional[str] = Field(default=None, max_length=120)
     session_ttl_seconds: Optional[int] = None
 
 
 class AuthRegisterRequest(AuthLoginRequest):
-    name: Optional[str] = None
-    pilot_invite_code: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=120)
+    pilot_invite_code: Optional[str] = Field(default=None, max_length=120)
 
 
 class WorkspaceFileWriteRequest(BaseModel):

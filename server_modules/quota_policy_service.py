@@ -72,6 +72,11 @@ AUTH_CSRF_FAILURE_PROFILE = QuotaPolicyProfile(
     surface_kind="auth_csrf",
     deny_reason="auth_csrf_rate_limited",
 )
+AUTH_REFRESH_PROFILE = QuotaPolicyProfile(
+    name="auth_refresh",
+    surface_kind="auth_refresh",
+    deny_reason="auth_refresh_rate_limited",
+)
 MODEL_INVOCATION_PROFILE = QuotaPolicyProfile(
     name="model_invocation",
     surface_kind="model_invocation",
@@ -103,6 +108,7 @@ _PROFILES = {
     SERVICE_API_PROFILE.name: SERVICE_API_PROFILE,
     CONTROL_PLANE_MUTATION_PROFILE.name: CONTROL_PLANE_MUTATION_PROFILE,
     AUTH_CSRF_FAILURE_PROFILE.name: AUTH_CSRF_FAILURE_PROFILE,
+    AUTH_REFRESH_PROFILE.name: AUTH_REFRESH_PROFILE,
     MODEL_INVOCATION_PROFILE.name: MODEL_INVOCATION_PROFILE,
     MINI_APP_BRIDGE_PROFILE.name: MINI_APP_BRIDGE_PROFILE,
     MINI_APP_INVOKE_PROFILE.name: MINI_APP_INVOKE_PROFILE,
@@ -117,6 +123,7 @@ _RESPONSE_CLASS_BY_REASON = {
     "service_api_rate_limited": "http_rate_limited",
     "control_plane_rate_limited": "http_rate_limited",
     "auth_csrf_rate_limited": "http_rate_limited",
+    "auth_refresh_rate_limited": "http_rate_limited",
     "model_invocation_rate_limited": "http_rate_limited",
     "mini_app_bridge_rate_limited": "http_rate_limited",
     "mini_app_invoke_rate_limited": "http_rate_limited",
@@ -135,6 +142,7 @@ _SCOPE_BY_REASON = {
     "service_api_rate_limited": "service_api_actor_window",
     "control_plane_rate_limited": "control_plane_identity_window",
     "auth_csrf_rate_limited": "auth_csrf_failure_ip_window",
+    "auth_refresh_rate_limited": "auth_refresh_ip_window",
     "model_invocation_rate_limited": "model_invocation_actor_window",
     "mini_app_bridge_rate_limited": "mini_app_bridge_actor_window",
     "mini_app_invoke_rate_limited": "mini_app_invoke_actor_window",

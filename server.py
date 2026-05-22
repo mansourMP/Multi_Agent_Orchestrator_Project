@@ -69,6 +69,43 @@ from server_modules.direct_chat_tool_catalog_service import registered_direct_ch
 
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024
+DEFAULT_MAX_WEBHOOK_BODY_BYTES = 1 * 1024 * 1024
+DEFAULT_MAX_AUDIO_BODY_BYTES = 25 * 1024 * 1024
+
+
+class RequestBodyTooLargeError(Exception):
+    pass
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(int(os.getenv(name, str(default)) or default), 1)
+    except (TypeError, ValueError):
+        return default
+
+
+def _request_body_limit_for_path(path: str) -> int:
+    normalized = str(path or "").strip().lower()
+    if normalized.endswith("/stt") or "/stt/" in normalized:
+        return _env_int("EMPYRALIS_MAX_AUDIO_BODY_BYTES", DEFAULT_MAX_AUDIO_BODY_BYTES)
+    if "/webhook" in normalized or normalized.endswith("/channels/slack/events"):
+        return _env_int("EMPYRALIS_MAX_WEBHOOK_BODY_BYTES", DEFAULT_MAX_WEBHOOK_BODY_BYTES)
+    return _env_int("EMPYRALIS_MAX_REQUEST_BODY_BYTES", DEFAULT_MAX_REQUEST_BODY_BYTES)
+
+
+def _request_body_too_large_response(request: Request, *, limit: int):
+    return error_response_service.json_response_from_platform_error(
+        error_response_service.platform_error(
+            code="request_body_too_large",
+            message="Request body is too large.",
+            error_class=error_response_service.USER_INPUT_ERROR,
+            retryable=False,
+            status_code=413,
+            request_id=error_response_service.request_id_from_request(request),
+            details={"max_body_bytes": int(limit)},
+        )
+    )
 
 for module in (
     runtime_config,
@@ -108,6 +145,18 @@ def _log_machine_mode_startup() -> None:
 
 
 _log_machine_mode_startup()
+
+
+def _warn_project_local_secret_files() -> None:
+    for relative_path in (".gws-config/client_secret.json", ".orion-stack/stack.env"):
+        if os.path.exists(relative_path):
+            LOGGER.warning(
+                "Project-local secret file detected at %s. Keep it gitignored and rotate/move secrets before shared or production use.",
+                relative_path,
+            )
+
+
+_warn_project_local_secret_files()
 
 configure_runtime_memory(
     memory_enabled=ORION_MEMORY_ENABLED,
@@ -223,6 +272,37 @@ mount_empyralist_mcp(app)
 @app.middleware("http")
 async def control_plane_guard(request: Request, call_next):
     return await control_plane_guard_middleware(request, call_next)
+
+
+@app.middleware("http")
+async def request_body_limit_guard(request: Request, call_next):
+    limit = _request_body_limit_for_path(str(request.url.path or ""))
+    content_length = str(request.headers.get("content-length") or "").strip()
+    if content_length:
+        try:
+            if int(content_length) > limit:
+                return _request_body_too_large_response(request, limit=limit)
+        except ValueError:
+            return _request_body_too_large_response(request, limit=limit)
+
+    received = 0
+    original_receive = request._receive  # type: ignore[attr-defined]
+
+    async def limited_receive():
+        nonlocal received
+        message = await original_receive()
+        if message.get("type") == "http.request":
+            body = message.get("body") or b""
+            received += len(body)
+            if received > limit:
+                raise RequestBodyTooLargeError()
+        return message
+
+    request._receive = limited_receive  # type: ignore[attr-defined]
+    try:
+        return await call_next(request)
+    except RequestBodyTooLargeError:
+        return _request_body_too_large_response(request, limit=limit)
 
 
 app.include_router(workflows_router)

@@ -159,6 +159,21 @@ class TestSecretRedactionSanitizeValue:
         assert "[redacted-secret]" in result
         assert token not in result
 
+    def test_common_raw_secret_formats_are_redacted_from_text(self) -> None:
+        samples = {
+            "stripe": "stripe=sk_live_51N7abcdefghijklmnopqrstuvwxyz",
+            "telegram": "telegram=123456789:ABCdefGhIJKlmNoPQRstuVWxyz1234567",
+            "discord": "discord=mfa.Qx9vLp2R8mN4sT6uY7zA1bC3dE5fG",
+            "aws": "aws=AKIAIOSFODNN7EXAMPLE",
+            "ssh": "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----",
+            "google": '{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----\\nabc"}',
+            "docker": '{"auths":{"registry.example.com":{"auth":"dXNlcjpwYXNz"}}}',
+        }
+        for label, text in samples.items():
+            result = secret_redaction_service.sanitize_value(text)
+            assert result != text, label
+            assert "[redacted" in result, label
+
     def test_normal_text_and_url_are_not_entropy_redacted(self) -> None:
         text = "Open https://docs.example.com/product/reference for the normal integration documentation."
         result = secret_redaction_service.sanitize_value(text)

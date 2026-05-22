@@ -48,6 +48,8 @@ USER_RATE_LIMIT_LOCK = threading.Lock()
 USER_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
 CSRF_FAILURE_RATE_LIMIT_LOCK = threading.Lock()
 CSRF_FAILURE_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
+REFRESH_RATE_LIMIT_LOCK = threading.Lock()
+REFRESH_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
 JWT_EXP_SECONDS = int(os.getenv("ORION_JWT_EXP_SECONDS", "3600"))
 MOBILE_JWT_EXP_SECONDS = int(os.getenv("ORION_MOBILE_JWT_EXP_SECONDS", str(60 * 60 * 24 * 30)))
 MOBILE_REFRESH_EXP_SECONDS = int(os.getenv("ORION_MOBILE_REFRESH_EXP_SECONDS", str(60 * 60 * 24 * 180)))
@@ -70,6 +72,9 @@ ORION_MOBILE_MODEL_INVOCATION_RATE_LIMIT_PER_MINUTE = int(
 )
 ORION_AUTH_CSRF_FAILURE_RATE_LIMIT_PER_MINUTE = int(
     os.getenv("ORION_AUTH_CSRF_FAILURE_RATE_LIMIT_PER_MINUTE", "30")
+)
+ORION_AUTH_REFRESH_RATE_LIMIT_PER_MINUTE = int(
+    os.getenv("ORION_AUTH_REFRESH_RATE_LIMIT_PER_MINUTE", "10")
 )
 ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED = str(
     os.getenv("ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED", "1")
@@ -4768,7 +4773,7 @@ def _should_rate_limit_authenticated_api_path(request_path: Any) -> bool:
 
 def _is_model_invocation_path(request_path: Any) -> bool:
     path = str(request_path or "").strip().rstrip("/") or "/"
-    if path in {"/turn", "/api/turn"}:
+    if path in {"/turn", "/api/turn", "/api/sage/chat"}:
         return True
     if path.startswith("/threads/") and path.endswith("/turns"):
         return True
@@ -4827,6 +4832,17 @@ def limit_public_requests(request: Request) -> None:
         key=f"public:{_client_ip(request)}",
         limit=60,
         profile_name=quota_policy_service.AUTH_PUBLIC_REGISTRATION_PROFILE.name,
+    )
+
+
+def limit_refresh_requests(request: Request) -> None:
+    _enforce_window_limit(
+        request=request,
+        buckets=REFRESH_RATE_LIMIT_BUCKETS,
+        lock=REFRESH_RATE_LIMIT_LOCK,
+        key=f"refresh:{_client_ip(request)}",
+        limit=max(1, int(ORION_AUTH_REFRESH_RATE_LIMIT_PER_MINUTE or 10)),
+        profile_name=quota_policy_service.AUTH_REFRESH_PROFILE.name,
     )
 
 

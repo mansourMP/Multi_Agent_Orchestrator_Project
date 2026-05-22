@@ -22,3 +22,11 @@ def test_assert_safe_outbound_url_rejects_dns_resolution_to_private_ip() -> None
             assert_safe_outbound_url("https://public.example.com")
 
     assert "private" in str(exc_info.value)
+
+
+def test_assert_safe_outbound_url_rejects_dns_resolution_failure() -> None:
+    with patch("server_modules.url_security.socket.getaddrinfo", side_effect=socket.gaierror):
+        with pytest.raises(RuntimeError) as exc_info:
+            assert_safe_outbound_url("https://unresolvable.example.com")
+
+    assert "could not be resolved" in str(exc_info.value)

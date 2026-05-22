@@ -88,20 +88,20 @@ def _enforce_mini_app_request_limit(
 
 
 class MiniAppContractUpsertRequest(BaseModel):
-    label: Optional[str] = None
-    description: Optional[str] = None
-    delivery_mode: Optional[str] = None
-    hosted_url: Optional[str] = None
-    embed_kind: Optional[str] = None
-    allowed_origins: Optional[List[str]] = None
+    label: Optional[str] = Field(default=None, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2_000)
+    delivery_mode: Optional[str] = Field(default=None, max_length=80)
+    hosted_url: Optional[str] = Field(default=None, max_length=2_048)
+    embed_kind: Optional[str] = Field(default=None, max_length=80)
+    allowed_origins: Optional[List[str]] = Field(default=None, max_length=50)
     bridge_contracts: Optional[Dict[str, List[str]]] = None
-    permissions: Optional[List[str]] = None
-    trust_tier: Optional[str] = None
+    permissions: Optional[List[str]] = Field(default=None, max_length=100)
+    trust_tier: Optional[str] = Field(default=None, max_length=80)
     background_ai_allowed: Optional[bool] = None
     ai_invoke_policy: Optional[Dict[str, Any]] = None
     context_envelope: Optional[Dict[str, List[str]]] = None
-    visibility: Optional[str] = None
-    install_status: Optional[str] = None
+    visibility: Optional[str] = Field(default=None, max_length=80)
+    install_status: Optional[str] = Field(default=None, max_length=80)
     current_state: Optional[Dict[str, Any]] = None
     recent_events: Optional[List[Dict[str, Any]]] = None
     daily_summary: Optional[Dict[str, Any]] = None
@@ -192,10 +192,10 @@ class FlashcardRetrieveRequest(BaseModel):
 
 
 class FlashcardGenerateRequest(BaseModel):
-    deck: str = Field(min_length=1)
-    source_text: str = Field(min_length=1)
-    topic: Optional[str] = None
-    language: Optional[str] = None
+    deck: str = Field(min_length=1, max_length=120)
+    source_text: str = Field(min_length=1, max_length=100_000)
+    topic: Optional[str] = Field(default=None, max_length=120)
+    language: Optional[str] = Field(default=None, max_length=80)
     count: int = Field(default=flashcards_tracking_service.DEFAULT_GENERATED_CARD_COUNT, ge=1, le=flashcards_tracking_service.MAX_GENERATED_CARD_COUNT)
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -258,8 +258,12 @@ def _active_session_secret() -> bytes:
         or os.getenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET")
         or os.getenv("ORION_JWT_SECRET")
         or os.getenv("ORION_SECRET_KEY")
-        or "empyralis-mini-app-active-session-local-dev-secret"
     )
+    if not secret:
+        environment = str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+        if environment not in {"", "dev", "development", "local", "test", "testing"}:
+            raise RuntimeError("Mini-app active session secret is not configured.")
+        secret = "empyralis-mini-app-active-session-local-dev-secret"
     return secret.encode("utf-8")
 
 

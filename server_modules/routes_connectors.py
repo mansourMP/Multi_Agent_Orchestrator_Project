@@ -1,9 +1,11 @@
+import os
+import threading
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from server_modules.auth import enforce_workspace_access
-from server_modules import provider_catalog_service
+from server_modules import provider_catalog_service, request_window_quota_adapter
 from server_modules import channel_lane_contract_service
 from server_modules.runtime_common import require_admin_api_key, require_api_key
 from server_modules.runtime_models import (
@@ -23,6 +25,9 @@ from server_modules.schemas import ConnectorCreate, ConnectorDocumentCreateReque
 router = APIRouter()
 admin_deps = [Depends(require_admin_api_key)]
 _TELEGRAM_PUBLIC_WEBHOOK_LANE_PATH = "/channels/telegram/webhook"
+PUBLIC_WEBHOOK_RATE_LIMIT_LOCK = threading.Lock()
+PUBLIC_WEBHOOK_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
+PUBLIC_WEBHOOK_RATE_LIMIT_PER_MINUTE = int(os.getenv("EMPYRALIS_PUBLIC_WEBHOOK_RATE_LIMIT_PER_MINUTE", "60"))
 
 
 def _human_admin_connector_execution_context(current_user: Optional[dict], *, workspace_id: str, purpose: str) -> Dict[str, Optional[str]]:
@@ -46,10 +51,29 @@ def _assert_public_studio_webhook_lane(path: str) -> Dict[str, str]:
 
 async def _dispatch_public_studio_webhook(
     *,
+    request: Request,
     path: str,
     delegate: Callable[[], Awaitable[Any]],
 ) -> Any:
     _assert_public_studio_webhook_lane(path)
+    client_ip = str((request.client.host if request.client else "") or "unknown").strip() or "unknown"
+    decision = request_window_quota_adapter.evaluate_request_window(
+        buckets=PUBLIC_WEBHOOK_RATE_LIMIT_BUCKETS,
+        lock=PUBLIC_WEBHOOK_RATE_LIMIT_LOCK,
+        key=f"{client_ip}:{path}",
+        limit=max(1, int(PUBLIC_WEBHOOK_RATE_LIMIT_PER_MINUTE or 60)),
+    )
+    if not decision.get("allowed"):
+        retry_after = int(decision.get("retry_after_seconds") or 1)
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "public_webhook_rate_limited",
+                "message": "Webhook ingress is receiving too many requests.",
+                "retry_after_seconds": retry_after,
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
     return await delegate()
 
 
@@ -159,6 +183,7 @@ async def providers_health_check(
 async def whatsapp_twilio_webhook(request: Request):
     # This route stays public because Twilio authenticates through the webhook secret boundary.
     return await _dispatch_public_studio_webhook(
+        request=request,
         path=str(request.url.path),
         delegate=lambda: actions.whatsapp_twilio_webhook(request),
     )
@@ -167,6 +192,7 @@ async def whatsapp_twilio_webhook(request: Request):
 async def telegram_webhook(request: Request, connector_id: str):
     # This route stays public because Telegram authenticates through the webhook secret boundary.
     return await _dispatch_public_studio_webhook(
+        request=request,
         path=_TELEGRAM_PUBLIC_WEBHOOK_LANE_PATH,
         delegate=lambda: actions.telegram_webhook_canonical(request, connector_id),
     )
@@ -175,6 +201,7 @@ async def telegram_webhook(request: Request, connector_id: str):
 async def discord_webhook(request: Request):
     # This route stays public because Discord signs requests at the edge.
     return await _dispatch_public_studio_webhook(
+        request=request,
         path=str(request.url.path),
         delegate=lambda: actions.discord_webhook(request),
     )
@@ -183,6 +210,7 @@ async def discord_webhook(request: Request):
 async def github_webhook(request: Request):
     # This route stays public because GitHub signs requests at the edge.
     return await _dispatch_public_studio_webhook(
+        request=request,
         path=str(request.url.path),
         delegate=lambda: actions.github_events_webhook(request),
     )
@@ -191,9 +219,14 @@ async def github_webhook(request: Request):
 async def slack_events_webhook(request: Request):
     # This route stays public because Slack signs requests at the edge.
     return await _dispatch_public_studio_webhook(
+        request=request,
         path=str(request.url.path),
         delegate=lambda: actions.slack_events_webhook(request),
     )
+
+
+async def slack_oauth_callback(request: Request, current_user=Depends(require_api_key)):
+    return await actions.slack_oauth_callback(request, current_user=current_user)
 
 
 async def update_tool_contract(
@@ -491,7 +524,7 @@ router.add_api_route("/channels/discord/bot-runtime/status", discord_bot_runtime
 router.add_api_route("/channels/autopilot/profiles", actions.list_autopilot_profiles, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/telegram/send", actions.telegram_send_message, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/telegram/autopilot/test-message", actions.telegram_autopilot_test_message, methods=['POST'], dependencies=[Depends(require_api_key)])
-router.add_api_route("/connectors/slack/oauth/callback", actions.slack_oauth_callback, methods=['POST'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/connectors/slack/oauth/callback", slack_oauth_callback, methods=['POST'])
 router.add_api_route("/connectors/vault", create_connector_vault, methods=['POST'])
 router.add_api_route("/connectors/vault/{credential_id}", update_connector_vault, methods=['PATCH'])
 router.add_api_route("/connectors/vault/{credential_id}/test", test_connector_vault, methods=['POST'])

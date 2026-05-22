@@ -30,16 +30,24 @@ _SENSITIVE_KEY_PARTS = (
 )
 
 _SENSITIVE_VALUE_PATTERNS = (
+    (re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----", re.DOTALL), "[redacted-private-key]"),
     (re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+\b", re.IGNORECASE), "Bearer [redacted]"),
     (re.compile(r"(?i)\b(authorization|proxy-authorization)\s*:\s*[^\r\n]+"), r"\1: [redacted]"),
     (re.compile(r"(?i)\b(cookie|set-cookie)\s*:\s*[^\r\n]+"), r"\1: [redacted]"),
     (re.compile(r"(?i)\b(x-api-key|api-key)\s*:\s*[^\r\n]+"), r"\1: [redacted]"),
+    (re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{12,}\b"), "[redacted-secret]"),
     (re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{8,}\b"), "[redacted-secret]"),
+    (re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b"), "[redacted-secret]"),
+    (re.compile(r"\bmfa\.[A-Za-z0-9_-]{20,}\b"), "[redacted-secret]"),
+    (re.compile(r"\b[A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,8}\.[A-Za-z0-9_-]{27,}\b"), "[redacted-secret]"),
+    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "[redacted-secret]"),
     (re.compile(r"\bgpair_[A-Za-z0-9_-]+\b"), "[redacted-token]"),
     (re.compile(r"\bggt_[A-Za-z0-9_-]+\b"), "[redacted-token]"),
     (re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"), "[redacted-secret]"),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"), "[redacted-secret]"),
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]+\b"), "[redacted-secret]"),
+    (re.compile(r'(?i)("private_key"\s*:\s*")[^"]+(")'), r'\1[redacted-private-key]\2'),
+    (re.compile(r'(?i)("auth"\s*:\s*")[A-Za-z0-9+/=]{8,}(")'), r'\1[redacted-secret]\2'),
     (re.compile(r"(?i)\b(api[_-]?key|token|secret|password)\s*=\s*[^\s&]+"), r"\1=[redacted-secret]"),
     (re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)"), "[redacted-phone]"),
 )

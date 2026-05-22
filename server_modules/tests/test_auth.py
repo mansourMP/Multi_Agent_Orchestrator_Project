@@ -1028,6 +1028,46 @@ async def test_auth_status_returns_authenticated_payload(monkeypatch: pytest.Mon
 
 
 @pytest.mark.anyio
+async def test_mobile_beta_bootstrap_route_forwards_to_auth_helper(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_mobile_bootstrap(**kwargs):
+        captured.update(kwargs)
+        return {
+            "token": "mobile-token",
+            "refresh_token": "refresh-token",
+            "user": {"id": "user-mobile", "email": "mobile@example.com"},
+            "workspace": {"id": "ws-1"},
+        }
+
+    monkeypatch.setattr(routes_auth_module, "login_mobile_beta_user", fake_mobile_bootstrap)
+    app = _build_auth_test_app()
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/auth/mobile-beta-bootstrap",
+            json={
+                "device_id": "iphone-1",
+                "device_name": "Mansur iPhone",
+                "device_platform": "ios",
+                "workspace_id": "ws-1",
+                "session_ttl_seconds": 3600,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["token"] == "mobile-token"
+    assert captured == {
+        "device_id": "iphone-1",
+        "device_name": "Mansur iPhone",
+        "device_platform": "ios",
+        "workspace_id": "ws-1",
+        "session_ttl_seconds": 3600,
+    }
+
+
+@pytest.mark.anyio
 async def test_auth_signup_alias_forwards_to_register(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
 

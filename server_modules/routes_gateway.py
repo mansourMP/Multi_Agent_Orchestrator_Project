@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
@@ -55,6 +56,27 @@ LOGGER = logging.getLogger(__name__)
 
 
 router = APIRouter()
+GATEWAY_WS_SAFE_SUBPROTOCOL = "empyralis.gateway.v1"
+GATEWAY_WS_TOKEN_SUBPROTOCOL_PREFIX = "empyralis.gateway.session."
+
+
+def _gateway_ws_query_token_allowed() -> bool:
+    if str(os.getenv("EMPYRALIS_ALLOW_GATEWAY_WS_QUERY_TOKEN", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    environment = str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+    return environment in {"", "dev", "development", "local", "test", "testing"}
+
+
+def _gateway_ws_session_token_from_subprotocol(websocket: WebSocket) -> tuple[str, Optional[str]]:
+    raw = str(websocket.headers.get("sec-websocket-protocol") or "")
+    protocols = [item.strip() for item in raw.split(",") if item.strip()]
+    token = ""
+    for item in protocols:
+        if item.startswith(GATEWAY_WS_TOKEN_SUBPROTOCOL_PREFIX):
+            token = item[len(GATEWAY_WS_TOKEN_SUBPROTOCOL_PREFIX) :].strip()
+            break
+    accept_subprotocol = GATEWAY_WS_SAFE_SUBPROTOCOL if GATEWAY_WS_SAFE_SUBPROTOCOL in protocols else None
+    return token, accept_subprotocol
 
 
 def _enforce_gateway_safety_gates(
@@ -1466,8 +1488,16 @@ async def interrupt_gateway_tool(
 async def gateway_websocket(
     websocket: WebSocket,
     gateway_id: str = Query(..., min_length=1),
-    session_token: str = Query(..., min_length=1),
+    session_token: Optional[str] = Query(default=None, min_length=1),
 ):
+    subprotocol_token, accept_subprotocol = _gateway_ws_session_token_from_subprotocol(websocket)
+    if session_token and not _gateway_ws_query_token_allowed():
+        await websocket.close(code=4401, reason="query session token disabled")
+        return
+    resolved_session_token = str(subprotocol_token or session_token or "").strip()
+    if not resolved_session_token:
+        await websocket.close(code=4401, reason="session token required")
+        return
     registration = gateway_state_repository.get_gateway_registration(gateway_id)
     workspace_id = str((registration or {}).get("workspace_id") or "").strip() or "default"
     try:
@@ -1484,5 +1514,6 @@ async def gateway_websocket(
     await gateway_protocol_service.handle_gateway_websocket(
         websocket,
         gateway_id=gateway_id,
-        session_token=session_token,
+        session_token=resolved_session_token,
+        accept_subprotocol=accept_subprotocol,
     )

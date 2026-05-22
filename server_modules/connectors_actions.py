@@ -1,5 +1,6 @@
 import os
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from server_modules import runtime_config as config
 from server_modules import secrets_broker, tool_broker
@@ -33,6 +34,26 @@ from server_modules.tool_availability_truth import capability_verification_metad
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
+
+
+def _origin_from_url(value: str) -> str:
+    parsed = urlparse(str(value or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+
+
+def _assert_slack_redirect_uri_allowed(redirect_uri: str) -> None:
+    redirect_origin = _origin_from_url(redirect_uri)
+    if not redirect_origin:
+        raise HTTPException(status_code=400, detail="Slack redirect_uri is invalid.")
+    allowed_origins = {
+        _origin_from_url(origin)
+        for origin in str(os.getenv("FRONTEND_ORIGINS") or FRONTEND_ORIGINS or "").split(",")
+        if str(origin or "").strip()
+    }
+    if redirect_origin not in allowed_origins:
+        raise HTTPException(status_code=400, detail="Slack redirect_uri is not allowed.")
 
 
 CONNECTOR_CLASS_API = "api_connector"
@@ -1012,7 +1033,7 @@ def _upsert_slack_oauth_connector_entry(
     }
 
 
-async def slack_oauth_callback(request: Request):
+async def slack_oauth_callback(request: Request, current_user: Optional[Dict[str, Any]] = None):
     try:
         payload = await request.json()
     except Exception:
@@ -1029,6 +1050,18 @@ async def slack_oauth_callback(request: Request):
         raise HTTPException(status_code=400, detail="Slack OAuth code is required.")
     if not redirect_uri:
         raise HTTPException(status_code=400, detail="Slack redirect_uri is required.")
+    _assert_slack_redirect_uri_allowed(redirect_uri)
+    if not workspace_id:
+        raise HTTPException(status_code=400, detail="workspace_id is required.")
+    if current_user is not None:
+        from server_modules.auth import enforce_workspace_access
+
+        workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id,
+            minimum_role="owner",
+            capability_id="connectors.manage",
+        )
 
     try:
         exchange = slack_exchange_oauth_code(code, redirect_uri, http_json_request=http_json_request)

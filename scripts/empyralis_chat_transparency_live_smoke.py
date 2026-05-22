@@ -255,7 +255,8 @@ def run_smoke(args: argparse.Namespace) -> int:
     )
     hardware_status = str(hardware_result.get("status") or "").strip()
     if hardware_status != "completed":
-        raise AssertionError(f"hardware action did not complete: {hardware_status or hardware_result}")
+        detail = json.dumps(hardware_result, sort_keys=True)
+        raise AssertionError(f"hardware action did not complete: {hardware_status or 'missing_status'} {detail}")
 
     hardware_events: list[dict[str, Any]] = []
     for _ in range(args.poll_attempts):

@@ -430,6 +430,17 @@ def _runtime_cost_metadata(response: Dict[str, Any], *, runtime_choice: str, pro
     return {key: value for key, value in cost_metadata.items() if value not in (None, "", {})}
 
 
+def _cloud_computer_session_persistence(cost_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    metadata = _dict(cost_metadata)
+    requested = metadata.get("session_persistence") or metadata.get("runtime_session_persistence")
+    if isinstance(requested, dict) and requested:
+        return dict(requested)
+    return {
+        "session_mode": virtual_computer_runtime.SESSION_PERSISTENCE_EPHEMERAL,
+        "auto_terminate_on_task_complete": True,
+    }
+
+
 def _self_hosted_required_capabilities(capability_id: str) -> List[str]:
     if capability_id == "shell.execute":
         return ["shell.execute"]
@@ -1748,6 +1759,8 @@ async def _execute_cloud_computer_action(
         }
 
     provider_id = _text((_dict(cost_metadata).get("runtime_provider_id") or _dict(cost_metadata).get("provider_id"))) or None
+    session_persistence = _cloud_computer_session_persistence(cost_metadata)
+    session_mode = _text(session_persistence.get("session_mode") or session_persistence.get("mode")).lower()
     runtime_session_id = _text(runtime_session.get("session_id")) or _new_runtime_session_id()
     create_payload = {
         "tenant_id": _text(tenant_id) or "default",
@@ -1765,6 +1778,8 @@ async def _execute_cloud_computer_action(
         "runtime_provider_id": provider_id,
         "source": HARDWARE_RUNTIME_SESSION_BINDING,
         "require_session_token": False,
+        "ephemeral_task": session_mode != virtual_computer_runtime.SESSION_PERSISTENCE_RESUMABLE,
+        "session_persistence": session_persistence,
         "metadata": {
             "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
             "runtime_target": "empyralis_cloud_computer",

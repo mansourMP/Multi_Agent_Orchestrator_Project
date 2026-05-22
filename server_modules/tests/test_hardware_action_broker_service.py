@@ -501,6 +501,10 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["execution"]["action"], "open_url")
         self.assertEqual(cloud_registry.resolve_calls[0]["runtime_choice"], "virtual_browser")
         cloud_runtime.create_session.assert_awaited_once()
+        create_payload = cloud_runtime.create_session.await_args.args[0]
+        self.assertTrue(create_payload["ephemeral_task"])
+        self.assertEqual(create_payload["session_persistence"]["session_mode"], "ephemeral")
+        self.assertTrue(create_payload["session_persistence"]["auto_terminate_on_task_complete"])
         cloud_runtime.execute_action.assert_awaited_once()
         action_payload = cloud_runtime.execute_action.await_args.args[0]
         self.assertEqual(action_payload["action"], "open_url")
@@ -542,6 +546,10 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["runtime_session"]["artifacts"], ["artifact-cloud-shot"])
         self.assertEqual(cloud_registry.resolve_calls[0]["runtime_choice"], "virtual_browser")
         cloud_runtime.create_session.assert_awaited_once()
+        create_payload = cloud_runtime.create_session.await_args.args[0]
+        self.assertTrue(create_payload["ephemeral_task"])
+        self.assertEqual(create_payload["session_persistence"]["session_mode"], "ephemeral")
+        self.assertTrue(create_payload["session_persistence"]["auto_terminate_on_task_complete"])
         cloud_runtime.stream_screenshot.assert_awaited_once()
         cloud_runtime.execute_action.assert_not_awaited()
         emit_artifact.assert_awaited_once()

@@ -3694,6 +3694,25 @@ class InMemoryVirtualComputerRuntime:
         response = self._base_response(session)
         response["status"] = "streaming"
         response["artifact"] = artifact
+        if persistence_state is not None and persistence_state.profile.auto_terminate_on_task_complete:
+            if isolation is not None:
+                isolation.terminated = True
+                isolation.termination_reason = "ephemeral_auto_terminate"
+            if cost_state is not None:
+                cost_state.quota_terminated = True
+                cost_state.termination_reason = "ephemeral_auto_terminate"
+            session["state"] = RUNTIME_STATE_TERMINATED
+            self._identity_by_session.pop(session_id, None)
+            self._persistence_by_session.pop(session_id, None)
+            response = self._base_response(session)
+            response["status"] = "terminated"
+            response["auto_terminated"] = True
+            response["artifact"] = artifact
+            response["action_result"] = {
+                "ok": True,
+                "action": ACTION_SCREENSHOT,
+                "artifact": artifact,
+            }
         return response
 
     async def collect_artifact(self, payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -1646,7 +1646,9 @@ export function WorkstationSageConnectorsPane({
     setMcpServers(nextState.mcpServers);
 
     if (catalogResult.status === 'rejected') {
-      throw catalogResult.reason;
+      throw catalogResult.reason instanceof Error
+        ? catalogResult.reason
+        : new Error('Provider catalog is unavailable right now.');
     }
   }, [cacheKey, services.client, workspaceId]);
 

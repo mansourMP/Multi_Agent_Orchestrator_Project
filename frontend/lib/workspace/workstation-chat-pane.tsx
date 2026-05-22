@@ -2719,7 +2719,9 @@ export function WorkstationChatPane() {
       const responseInterventions = Array.isArray(normalizedResponse.interventions)
         ? normalizedResponse.interventions
         : [];
-      const connectorSetupNotice = connectorSetupNoticeFromInterventions(responseInterventions);
+      const connectorSetupNotice = hasVisibleAssistantReply
+        ? null
+        : connectorSetupNoticeFromInterventions(responseInterventions);
       const connectorSetupInterventionOnly = responseInterventions.length > 0
         && responseInterventions.every(isConnectorSetupIntervention);
       const needsUserIntervention = responseInterventions.length > 0

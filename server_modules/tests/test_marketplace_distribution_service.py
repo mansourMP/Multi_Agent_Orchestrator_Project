@@ -39,13 +39,13 @@ def test_empty_marketplace_returns_preview_packages(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
 
     payload = marketplace_distribution_service.list_marketplace_packages("ws-empty")
-    provider_payload = marketplace_distribution_service.list_marketplace_packages("ws-empty", kind="provider")
     template_payload = marketplace_distribution_service.list_marketplace_packages("ws-empty", kind="agent_template")
 
     assert payload["count"] >= 9
     package_ids = {item["package_id"] for item in payload["items"]}
     assert "preview-restaurant-orders" in package_ids
-    assert "preview-deepseek-provider" in package_ids
+    assert "preview-deepseek-provider" not in package_ids
+    assert all(item["kind"] != "provider" for item in payload["items"])
     assert set(INSTALLABLE_PROOF_PACKAGES).issubset(package_ids)
     installable_items = [
         item for item in payload["items"] if item["package_id"] in INSTALLABLE_PROOF_PACKAGES
@@ -74,11 +74,6 @@ def test_empty_marketplace_returns_preview_packages(monkeypatch, tmp_path):
     assert all(item["preview_only"] is True for item in preview_packages)
     assert all(item["install_eligible"] is False for item in preview_packages)
     assert all("preview_only" in item["install_blockers"] for item in preview_packages)
-    assert provider_payload["count"] == 1
-    assert provider_payload["items"][0]["package_id"] == "preview-deepseek-provider"
-    assert provider_payload["items"][0]["preview_only"] is True
-    assert provider_payload["items"][0]["billing"]["payment_processing_live"] is False
-    assert provider_payload["items"][0]["billing"]["billing_status"] == "metadata_only"
     assert template_payload["count"] == 6
     assert template_payload["items"][0]["kind"] == "agent_template"
 
@@ -460,24 +455,13 @@ def test_preview_packages_with_trust_metadata_remain_preview_only(monkeypatch, t
 
     listed = marketplace_distribution_service.list_marketplace_packages("ws-phase8")
     restaurant = next(item for item in listed["items"] if item["package_id"] == "preview-restaurant-orders")
-    deepseek = next(item for item in listed["items"] if item["package_id"] == "preview-deepseek-provider")
     assert restaurant["preview_only"] is True
     assert restaurant["install_eligible"] is False
     assert "preview_only" in restaurant["install_blockers"]
-    assert deepseek["preview_only"] is True
-    assert deepseek["install_eligible"] is False
-    assert "preview_only" in deepseek["install_blockers"]
 
     with pytest.raises(ValueError, match="preview_only"):
         marketplace_distribution_service.install_marketplace_package(
             "ws-phase8",
             package_id="preview-restaurant-orders",
-            actor_user_id="user-1",
-        )
-
-    with pytest.raises(ValueError, match="preview_only"):
-        marketplace_distribution_service.install_marketplace_package(
-            "ws-phase8",
-            package_id="preview-deepseek-provider",
             actor_user_id="user-1",
         )

@@ -24,6 +24,14 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     direct: true,
   },
   {
+    id: 'applications',
+    label: 'Applications',
+    iconName: 'package',
+    defaultRouteId: 'applications',
+    childRouteIds: ['applications'],
+    direct: true,
+  },
+  {
     id: 'gateway',
     label: 'Computers',
     iconName: 'waypoints',
@@ -56,6 +64,7 @@ export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = {
   sage: 'Sage',
   studio: 'Agents',
   marketplace: 'Discover',
+  applications: 'Applications',
   gateway: 'Computers',
   settings: 'Settings',
 };
@@ -201,7 +210,6 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     id: 'deploy',
     label: 'Go Live',
     segment: 'deploy',
-    legacySegments: ['applications'],
     destinationId: 'studio',
     requiredCapabilities: ['workspace_admin_enabled'],
     web: {},
@@ -244,6 +252,14 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       tabLabel: 'Discover',
       includeInBottomTabs: true,
     },
+  },
+  {
+    id: 'applications',
+    label: 'Applications',
+    segment: 'applications',
+    destinationId: 'applications',
+    requiredCapabilities: ['workspace_admin_enabled'],
+    web: {},
   },
   {
     id: 'gateway',
@@ -337,6 +353,10 @@ export function resolveWorkspaceRouteIdFromSegment(segment) {
 
   if (!normalizedSegment) {
     return null;
+  }
+
+  if (normalizedSegment.startsWith('applications/')) {
+    return 'applications';
   }
 
   return WORKSPACE_ROUTE_SEGMENT_INDEX[normalizedSegment] ?? null;

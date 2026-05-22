@@ -5,13 +5,17 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { Activity, Bot, Check, ChevronDown, Compass, LayoutGrid, Menu, Monitor, Plus, Waypoints } from 'lucide-react';
+import { Activity, Bot, Compass, LayoutGrid, Menu, Monitor, Package, Plus, Waypoints } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
+import {
+  APPLICATION_SURFACE_TABS,
+  buildApplicationTabHref,
+  normalizeApplicationSurfaceTabId,
+} from '@/lib/workspace/application-surface-tabs';
 import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
 import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
-import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationActivityVersion } from '@/lib/workspace/workspace-services';
 import { emitWorkstationChatThreadSelected } from '@/lib/workspace/workstation-chat-thread-events';
@@ -20,6 +24,11 @@ import {
   activeThreadStorageKey,
   persistActiveThread,
 } from '@/lib/workspace/workstation-chat-pane-model';
+import {
+  normalizeSpecialistOverlayTabId,
+  SPECIALIST_OVERLAY_TABS,
+} from '@/lib/workspace/deployed-agents/constants';
+import type { SpecialistOverlayTabId } from '@/lib/workspace/deployed-agents/types';
 import {
   buildWorkspaceRouteHref,
   getWorkspaceNavRouteDefinition,
@@ -32,6 +41,7 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
   studio: ['studio'],
   gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: ['marketplace'],
+  applications: ['applications'],
   settings: ['settings'],
 };
 
@@ -50,7 +60,6 @@ const MARKETPLACE_TITLEBAR_FILTERS = [
   { id: 'agent_template', label: 'Agent templates' },
   { id: 'skill', label: 'Tools' },
   { id: 'connector', label: 'MCP' },
-  { id: 'provider', label: 'Models' },
   { id: 'bundle', label: 'Bundles' },
 ] as const;
 
@@ -68,6 +77,24 @@ function buildMarketplaceCategoryHref(workspaceId: string, filter: MarketplaceTi
     return baseHref;
   }
   return `${baseHref}?category=${encodeURIComponent(filter)}`;
+}
+
+function buildStudioTabHref(
+  workspaceId: string,
+  tabId: SpecialistOverlayTabId,
+  searchParams: { toString: () => string },
+): string {
+  const params = new URLSearchParams(searchParams.toString());
+  if (tabId === 'overview') {
+    params.delete('tab');
+    params.delete('studioTab');
+  } else {
+    params.set('tab', tabId);
+    params.delete('studioTab');
+  }
+  const query = params.toString();
+  const baseHref = buildWorkspaceRouteHref(workspaceId, 'studio');
+  return query ? `${baseHref}?${query}` : baseHref;
 }
 
 type ThreadTurnRecord = Record<string, unknown> & {
@@ -96,7 +123,7 @@ type ComputerConnectionStatus = {
 };
 
 const MOBILE_DESTINATION_NAV: readonly {
-  id: 'chat' | 'studio' | 'gateway' | 'marketplace' | 'activity';
+  id: 'chat' | 'studio' | 'gateway' | 'marketplace' | 'applications' | 'activity';
   label: string;
   defaultRouteId: WorkspaceRouteId;
   icon: LucideIcon;
@@ -105,6 +132,7 @@ const MOBILE_DESTINATION_NAV: readonly {
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
   { id: 'gateway', label: 'Computers', defaultRouteId: 'gateway', icon: Waypoints },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
+  { id: 'applications', label: 'Applications', defaultRouteId: 'applications', icon: Package },
   { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
 ];
 
@@ -352,117 +380,6 @@ function MainAgentHistoryPopover({
   );
 }
 
-function WorkspaceTitlebarSwitcher({
-  workspaceId,
-  workspaceLabel,
-}: {
-  workspaceId: string;
-  workspaceLabel: string;
-}) {
-  const router = useRouter();
-  const { state, actions } = useAccountShell();
-  const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-  const [open, setOpen] = useState(false);
-  const memberships = state.workspaceMemberships;
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (buttonRef.current?.contains(target) || popoverRef.current?.contains(target)) {
-        return;
-      }
-      setOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [open]);
-
-  const openWorkspace = (nextWorkspaceId: string) => {
-    const href = actions.resolveWorkspaceHref(nextWorkspaceId) ?? buildWorkspaceRouteHref(nextWorkspaceId, 'chat');
-    setOpen(false);
-    router.push(href);
-  };
-
-  return (
-    <div className="workstation-titlebar__workspace-switcher">
-      <button
-        ref={buttonRef}
-        type="button"
-        className="workstation-titlebar__workspace-trigger"
-        aria-label={`Workspace. Current workspace: ${workspaceLabel}`}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        title={workspaceLabel}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="workstation-titlebar__workspace-label">Workspace</span>
-        <ChevronDown size={14} aria-hidden="true" />
-      </button>
-      {open ? (
-        <div
-          ref={popoverRef}
-          className="workstation-titlebar__workspace-popover"
-          role="dialog"
-          aria-label="Workspaces"
-        >
-          <div className="workstation-titlebar__workspace-current">
-            <span>Current workspace</span>
-            <strong>{workspaceLabel}</strong>
-          </div>
-          <div className="workstation-titlebar__workspace-list">
-            {memberships.length === 0 ? (
-              <div className="workstation-titlebar__workspace-empty">No workspaces available.</div>
-            ) : memberships.map((membership) => {
-              const isActive = membership.workspace.id === workspaceId;
-              return (
-                <button
-                  key={membership.workspace.id}
-                  type="button"
-                  className={joinClassNames(
-                    'workstation-titlebar__workspace-row',
-                    isActive && 'workstation-titlebar__workspace-row--active',
-                  )}
-                  aria-current={isActive ? 'true' : undefined}
-                  onClick={() => openWorkspace(membership.workspace.id)}
-                >
-                  <span className="workstation-titlebar__workspace-row-copy">
-                    <span className="workstation-titlebar__workspace-row-name">{membership.workspace.label}</span>
-                    <span className="workstation-titlebar__workspace-row-meta">
-                      {membership.workspace.kind} / {membership.role}
-                    </span>
-                  </span>
-                  {isActive ? <Check size={16} aria-hidden="true" /> : null}
-                </button>
-              );
-            })}
-          </div>
-          <Link
-            href="/workspaces/new"
-            className="workstation-titlebar__workspace-new"
-            onClick={() => setOpen(false)}
-          >
-            <Plus size={16} aria-hidden="true" />
-            <span>New workspace</span>
-          </Link>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 export function WorkstationKernelShell({
   children,
 }: PropsWithChildren) {
@@ -499,6 +416,7 @@ export function WorkstationKernelShell({
       activeDestinationId === 'studio'
       || activeDestinationId === 'gateway'
       || activeDestinationId === 'marketplace'
+      || activeDestinationId === 'applications'
     ) {
       return activeDestinationId;
     }
@@ -560,22 +478,6 @@ export function WorkstationKernelShell({
     };
   }, [activityVersion, routeManifest.routeIndex.gateway, workspaceId]);
 
-  const surfaceHomeHref = useMemo(() => {
-    if (activeDestinationId === 'sage') {
-      return routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`;
-    }
-    if (activeDestinationId === 'studio') {
-      return routeManifest.routeIndex.studio?.href ?? `/w/${encodeURIComponent(workspaceId)}/studio`;
-    }
-    if (activeDestinationId === 'marketplace') {
-      return routeManifest.routeIndex.marketplace?.href ?? `/w/${encodeURIComponent(workspaceId)}/marketplace`;
-    }
-    if (activeDestinationId === 'gateway') {
-      return routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(workspaceId)}/gateway`;
-    }
-    return routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(workspaceId)}/settings`;
-  }, [activeDestinationId, routeManifest.routeIndex, workspaceId]);
-
   const isContextRouteActive = (routeId: WorkspaceRouteId): boolean => {
     if (routeId === activeRouteId) {
       return true;
@@ -586,6 +488,8 @@ export function WorkstationKernelShell({
     return false;
   };
   const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('category'));
+  const studioTab = normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab'));
+  const applicationTab = normalizeApplicationSurfaceTabId(searchParams.get('tab') || searchParams.get('applicationTab'));
   const titlebarNavigation = activeDestinationId === 'marketplace'
     ? MARKETPLACE_TITLEBAR_FILTERS.map((filter) => (
       <Link
@@ -602,6 +506,36 @@ export function WorkstationKernelShell({
         <span>{filter.label}</span>
       </Link>
     ))
+    : activeDestinationId === 'studio'
+      ? SPECIALIST_OVERLAY_TABS.map((tab) => (
+        <Link
+          key={tab.id}
+          href={buildStudioTabHref(workspaceId, tab.id, searchParams)}
+          prefetch
+          aria-current={studioTab === tab.id ? 'page' : undefined}
+          className={joinClassNames(
+            'workstation-titlebar__link',
+            studioTab === tab.id && 'workstation-titlebar__link--active',
+          )}
+        >
+          <span>{tab.label}</span>
+        </Link>
+      ))
+    : activeDestinationId === 'applications'
+      ? APPLICATION_SURFACE_TABS.map((tab) => (
+        <Link
+          key={tab.id}
+          href={buildApplicationTabHref(workspaceId, tab.id, searchParams)}
+          prefetch
+          aria-current={applicationTab === tab.id ? 'page' : undefined}
+          className={joinClassNames(
+            'workstation-titlebar__link',
+            applicationTab === tab.id && 'workstation-titlebar__link--active',
+          )}
+        >
+          <span>{tab.label}</span>
+        </Link>
+      ))
     : contextRoutes.length > 0
       ? contextRoutes.map((route) => (
         route.id === 'activity' ? (
@@ -642,14 +576,8 @@ export function WorkstationKernelShell({
     >
       <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
         <WorkstationTitlebar
-          surfaceLabel="Workspace"
-          surfaceHref={surfaceHomeHref}
-          surfaceControl={(
-            <WorkspaceTitlebarSwitcher
-              workspaceId={workspaceId}
-              workspaceLabel={workspaceLabel}
-            />
-          )}
+          surfaceLabel=""
+          surfaceControl={<span className="workstation-titlebar__surface-empty" aria-hidden="true" />}
           diagnosticsVisible={false}
           onToggleDiagnostics={() => {}}
           leftAction={(

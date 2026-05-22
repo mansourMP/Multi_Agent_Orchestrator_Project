@@ -11,13 +11,11 @@ import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { DeployedAgentRecord } from '@/lib/workspace/workstation-client';
 import type {
   AgentOperationalMetrics,
-  AgentRosterFilterId,
   LaunchReadinessItem,
   RuntimeAttachmentSnapshot,
   StudioTemplate,
 } from './types';
 import {
-  AGENT_ROSTER_FILTERS,
   CUSTOM_STUDIO_TEMPLATE,
   PRIMARY_STUDIO_TEMPLATE_IDS,
 } from './constants';
@@ -101,10 +99,6 @@ export interface AgentRosterSidebarProps {
   onRefreshAgents: () => void;
   studioTemplates: StudioTemplate[];
   agents: DeployedAgentRecord[];
-  agentRosterFilter: AgentRosterFilterId;
-  onSetAgentRosterFilter: (filterId: AgentRosterFilterId) => void;
-  agentRosterCounts: Record<AgentRosterFilterId, number>;
-  visibleAgents: DeployedAgentRecord[];
   selectedAgentId: string | null;
   busyAuditExportAgentId: string | null;
   onSelectAgent: (id: string) => void;
@@ -137,10 +131,6 @@ export const AgentRosterSidebar = memo(({
   onRefreshAgents,
   studioTemplates,
   agents,
-  agentRosterFilter,
-  onSetAgentRosterFilter,
-  agentRosterCounts,
-  visibleAgents,
   selectedAgentId,
   busyAuditExportAgentId,
   onSelectAgent,
@@ -294,46 +284,20 @@ export const AgentRosterSidebar = memo(({
                 </AppButton>
               </div>
             ) : (
-              <>
-                <div className="studio-agents-nav__filters" aria-label="Agent filters">
-                  {AGENT_ROSTER_FILTERS.map((filter) => (
-                    <button
-                      key={filter.id}
-                      type="button"
-                      className={joinClassNames(
-                        'studio-agents-nav__filter',
-                        agentRosterFilter === filter.id && 'studio-agents-nav__filter--active',
-                      )}
-                      aria-pressed={agentRosterFilter === filter.id}
-                      onClick={() => onSetAgentRosterFilter(filter.id)}
-                    >
-                      <span>{filter.label}</span>
-                      <strong>{agentRosterCounts[filter.id]}</strong>
-                    </button>
-                  ))}
-                </div>
-                {visibleAgents.length === 0 ? (
-                  <div className="studio-agents-nav__placeholder">
-                    <strong>No agents match</strong>
-                    <span>Switch filters to see more workspace agents.</span>
-                  </div>
-                ) : (
-                  <div className="studio-agents-nav__items">
-                    {visibleAgents.map((agent, index) => {
-                      const agentId = readString(agent.id, `deployed-agent-${index}`);
-                      return (
-                        <AgentRosterItem
-                          key={agentId}
-                          agent={agent}
-                          selected={agentId === selectedAgentId}
-                          agentMetrics={agentMetricsById[agentId] ?? null}
-                          onSelectAgent={onSelectAgent}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-              </>
+              <div className="studio-agents-nav__items">
+                {agents.map((agent, index) => {
+                  const agentId = readString(agent.id, `deployed-agent-${index}`);
+                  return (
+                    <AgentRosterItem
+                      key={agentId}
+                      agent={agent}
+                      selected={agentId === selectedAgentId}
+                      agentMetrics={agentMetricsById[agentId] ?? null}
+                      onSelectAgent={onSelectAgent}
+                    />
+                  );
+                })}
+              </div>
             )}
           </div>
         </>

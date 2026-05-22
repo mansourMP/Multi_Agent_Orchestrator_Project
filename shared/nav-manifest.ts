@@ -7,6 +7,7 @@ export type WorkspaceNavDestinationId =
   | 'sage'
   | 'studio'
   | 'marketplace'
+  | 'applications'
   | 'gateway'
   | 'settings';
 
@@ -25,6 +26,7 @@ export type WorkspaceRouteId =
   | 'inbox'
   | 'deploy'
   | 'marketplace'
+  | 'applications'
   | 'gateway'
   | 'gatewayApprovals'
   | 'gatewayActivity'
@@ -35,6 +37,7 @@ export type WorkspaceNavIconName =
   | 'message-square'
   | 'boxes'
   | 'compass'
+  | 'package'
   | 'waypoints'
   | 'sliders-horizontal';
 

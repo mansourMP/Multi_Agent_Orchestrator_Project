@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { type ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import {
   Brain,
   Camera,
@@ -90,6 +90,156 @@ function providerLabel(cell: CodexTranscriptCell): string {
     cell.effectiveModel,
   ].filter(Boolean);
   return parts.join(' · ');
+}
+
+function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) {
+      nodes.push(text.slice(cursor, match.index));
+    }
+    const token = match[0];
+    const key = `${keyPrefix}-${nodes.length}`;
+    if (token.startsWith('`') && token.endsWith('`')) {
+      nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
+    } else if (token.startsWith('**') && token.endsWith('**')) {
+      nodes.push(<strong key={key}>{token.slice(2, -2)}</strong>);
+    } else {
+      nodes.push(token);
+    }
+    cursor = match.index + token.length;
+  }
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor));
+  }
+  return nodes;
+}
+
+function MarkdownMessage({ text }: { text: string }) {
+  const lines = text.replace(/\r/g, '').split('\n');
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const rawLine = lines[index] ?? '';
+    const line = rawLine.trim();
+    if (!line) {
+      index += 1;
+      continue;
+    }
+
+    const codeFence = line.match(/^```([\w-]+)?\s*$/);
+    if (codeFence) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !(lines[index] ?? '').trim().startsWith('```')) {
+        codeLines.push(lines[index] ?? '');
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      blocks.push(
+        <pre key={`code-${index}`} className="app-chat-markdown__code">
+          <code>{codeLines.join('\n')}</code>
+        </pre>,
+      );
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      const level = Math.min(heading[1]?.length ?? 2, 4);
+      const content = heading[2] ?? '';
+      const headingContent = renderInlineMarkdown(content, `heading-${index}`);
+      const headingClassName = 'app-chat-markdown__heading';
+      blocks.push(
+        level <= 1
+          ? <h2 key={`heading-${index}`} className={headingClassName}>{headingContent}</h2>
+          : level === 2
+            ? <h3 key={`heading-${index}`} className={headingClassName}>{headingContent}</h3>
+            : <h4 key={`heading-${index}`} className={headingClassName}>{headingContent}</h4>,
+      );
+      index += 1;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const item = (lines[index] ?? '').trim().match(/^[-*]\s+(.+)$/);
+        if (!item) {
+          break;
+        }
+        items.push(item[1] ?? '');
+        index += 1;
+      }
+      blocks.push(
+        <ul key={`ul-${index}`} className="app-chat-markdown__list">
+          {items.map((item, itemIndex) => (
+            <li key={`ul-${index}-${itemIndex}`}>
+              {renderInlineMarkdown(item, `ul-${index}-${itemIndex}`)}
+            </li>
+          ))}
+        </ul>,
+      );
+      continue;
+    }
+
+    if (/^\d+[.)]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const item = (lines[index] ?? '').trim().match(/^\d+[.)]\s+(.+)$/);
+        if (!item) {
+          break;
+        }
+        items.push(item[1] ?? '');
+        index += 1;
+      }
+      blocks.push(
+        <ol key={`ol-${index}`} className="app-chat-markdown__list">
+          {items.map((item, itemIndex) => (
+            <li key={`ol-${index}-${itemIndex}`}>
+              {renderInlineMarkdown(item, `ol-${index}-${itemIndex}`)}
+            </li>
+          ))}
+        </ol>,
+      );
+      continue;
+    }
+
+    const paragraphLines = [line];
+    index += 1;
+    while (index < lines.length) {
+      const nextLine = (lines[index] ?? '').trim();
+      if (
+        !nextLine
+        || /^```/.test(nextLine)
+        || /^#{1,4}\s+/.test(nextLine)
+        || /^[-*]\s+/.test(nextLine)
+        || /^\d+[.)]\s+/.test(nextLine)
+      ) {
+        break;
+      }
+      paragraphLines.push(nextLine);
+      index += 1;
+    }
+    blocks.push(
+      <p key={`p-${index}`} className="app-chat-markdown__paragraph">
+        {paragraphLines.map((paragraphLine, paragraphIndex) => (
+          <Fragment key={`p-${index}-${paragraphIndex}`}>
+            {paragraphIndex > 0 ? <br /> : null}
+            {renderInlineMarkdown(paragraphLine, `p-${index}-${paragraphIndex}`)}
+          </Fragment>
+        ))}
+      </p>,
+    );
+  }
+
+  return <div className="app-chat-markdown">{blocks}</div>;
 }
 
 const THINKING_ACTIVITY_PREFIXES = [
@@ -245,7 +395,9 @@ export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
   const transparencyEvents = (cell.metadata?.transparency_events as Array<Record<string, unknown>> | undefined) ?? [];
   return (
     <article data-chat-role="assistant" className="app-chat-message">
-      <div className="app-chat-message__content">{text}</div>
+      <div className="app-chat-message__content">
+        <MarkdownMessage text={text} />
+      </div>
       {transparencyEvents.length > 0 ? (
         <div style={{ marginTop: 4 }}>
           <AgentTransparencyTimeline

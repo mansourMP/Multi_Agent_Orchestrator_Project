@@ -346,6 +346,13 @@ export const SPECIALIST_OVERLAY_TABS: Array<{
   { id: 'analytics', label: 'Results' },
 ];
 
+export function normalizeSpecialistOverlayTabId(value: string | null | undefined): SpecialistOverlayTabId {
+  const normalized = String(value || '').trim();
+  return SPECIALIST_OVERLAY_TABS.some((tab) => tab.id === normalized)
+    ? normalized as SpecialistOverlayTabId
+    : 'overview';
+}
+
 export const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
   id: string;
   label: string;

@@ -1,4 +1,4 @@
-import { redirect } from 'next/navigation';
+import { WorkspaceSurfacePage } from '@/app/(account)/w/[workspaceId]/WorkspaceSurfacePage';
 
 export default async function WorkspaceApplicationsPage({
   params,
@@ -6,5 +6,5 @@ export default async function WorkspaceApplicationsPage({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  redirect(`/w/${encodeURIComponent(workspaceId)}/deploy`);
+  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="applications" />;
 }

@@ -454,9 +454,16 @@ export const AgentDetailView = memo(({
           title="Agent knowledge"
           subtitle="Instructions and trusted sources this agent should use when answering."
           actions={(
-            <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
-              Edit
-            </AppButton>
+            <div className="app-inline-actions app-inline-actions--tight">
+              <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
+                Edit
+              </AppButton>
+              {detailConfigDraft ? (
+                <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
+                  {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                </AppButton>
+              ) : null}
+            </div>
           )}
         >
           <div className="studio-agent-knowledge">
@@ -610,11 +617,6 @@ export const AgentDetailView = memo(({
                   value={detailConfigDraft.contextBudgetPreset}
                   onSelect={(nextValue) => onUpdateDetailConfig({ contextBudgetPreset: nextValue })}
                 />
-                <div className="app-inline-actions">
-                  <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
-                    {isSavingDetailConfig ? 'Saving…' : 'Save changes'}
-                  </AppButton>
-                </div>
               </div>
             ) : null}
           </div>
@@ -629,6 +631,11 @@ export const AgentDetailView = memo(({
           eyebrow="Model"
           title="AI route"
           subtitle="Choose whether this agent uses Empyralis credits or a connected API account."
+          actions={detailConfigDraft ? (
+            <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
+              {isSavingDetailConfig ? 'Saving…' : 'Save'}
+            </AppButton>
+          ) : undefined}
         >
           {detailConfigDraft ? (
             <>
@@ -651,11 +658,6 @@ export const AgentDetailView = memo(({
                 onRefreshProviderModels={onRefreshProviderModels}
                 onOpenIntegrations={() => onSelectTab('connectors')}
               />
-              <div className="app-inline-actions">
-                <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
-                  {isSavingDetailConfig ? 'Saving…' : 'Save'}
-                </AppButton>
-              </div>
             </>
           ) : null}
         </ListDetailPanel>
@@ -669,6 +671,11 @@ export const AgentDetailView = memo(({
           eyebrow="Actions"
           title="Agent actions"
           subtitle="Choose what this agent may do with connected services."
+          actions={detailConfigDraft ? (
+            <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
+              {isSavingDetailConfig ? 'Saving…' : 'Save'}
+            </AppButton>
+          ) : undefined}
         >
           {detailConfigDraft ? (
             <>
@@ -682,11 +689,6 @@ export const AgentDetailView = memo(({
                   onUpdateDetailConfig({ selectedToolIds: nextSelected });
                 }}
               />
-              <div className="app-inline-actions">
-                <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
-                  {isSavingDetailConfig ? 'Saving…' : 'Save'}
-                </AppButton>
-              </div>
             </>
           ) : null}
         </ListDetailPanel>
@@ -700,6 +702,11 @@ export const AgentDetailView = memo(({
           eyebrow="Memory"
           title="Agent memory"
           subtitle="Control what this agent can carry forward from customer conversations."
+          actions={detailConfigDraft ? (
+            <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
+              {isSavingDetailConfig ? 'Saving…' : 'Save'}
+            </AppButton>
+          ) : undefined}
         >
           {detailConfigDraft ? (
             <>
@@ -743,11 +750,6 @@ export const AgentDetailView = memo(({
                     <span className="deployed-agents-overlay__memory-meta">{formatTimestamp(entry.updated_at)}</span>
                   </article>
                 ))}
-              </div>
-              <div className="app-inline-actions">
-                <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
-                  {isSavingDetailConfig ? 'Saving…' : 'Save'}
-                </AppButton>
               </div>
             </>
           ) : null}

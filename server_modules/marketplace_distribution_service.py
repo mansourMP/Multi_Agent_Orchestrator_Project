@@ -40,7 +40,7 @@ DEFAULT_CATEGORIES = {
     "app": "Applications",
     "connector": "Connectors",
     "mini_app": "Mini Apps",
-    "provider": "Models",
+    "provider": "Provider catalog",
     "skill": "Skills",
 }
 VALID_MARKETPLACE_RUNTIME_REQUIREMENTS = {
@@ -212,31 +212,6 @@ PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
             "actions": ["discover_tools", "approve_tool", "invoke_tool"],
             "egress_domains": [],
             "data_classes": ["tool_manifest", "tool_result"],
-        },
-    },
-    {
-        "package_id": "preview-deepseek-provider",
-        "kind": "provider",
-        "label": "DeepSeek Provider",
-        "description": "BYOK model provider package for DeepSeek chat and tool-capable generation.",
-        "category": "Models",
-        "publisher": {"publisher_id": "deepseek", "label": "DeepSeek", "website": "https://platform.deepseek.com"},
-        "onboarding": {"docs_url": "https://platform.deepseek.com"},
-        "verification_status": "partner",
-        "review_state": "approved",
-        "health_state": "setup_required",
-        "policy_posture": "governed",
-        "billing": {
-            "monetization_kind": "free",
-            "accounting_hook": {"ledger_key": "provider.deepseek", "hook_kind": "provider_usage"},
-        },
-        "provider": {
-            "provider_id": "marketplace_deepseek_preview",
-            "default_model": "deepseek-chat",
-            "auth_modes": ["api_key"],
-            "privacy_posture": "Cloud provider. User supplies key or uses platform-hosted credits where available.",
-            "capability_labels": ["chat", "tools"],
-            "models": [{"id": "deepseek-chat", "label": "DeepSeek Chat", "supports_tools": True}],
         },
     },
 ]

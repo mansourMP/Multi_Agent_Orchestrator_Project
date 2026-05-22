@@ -26,8 +26,8 @@ import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
-const KIND_FILTERS = ['all', 'agent_template', 'skill', 'connector', 'provider', 'bundle'] as const;
-const COMPOSER_KINDS = ['app', 'provider'] as const;
+const KIND_FILTERS = ['all', 'agent_template', 'skill', 'connector', 'bundle'] as const;
+const COMPOSER_KINDS = ['app'] as const;
 const VERIFICATION_OPTIONS = ['unverified', 'partner', 'verified'] as const;
 const REVIEW_OPTIONS = ['pending', 'approved', 'restricted'] as const;
 const HEALTH_OPTIONS = ['setup_required', 'healthy', 'degraded'] as const;
@@ -35,11 +35,11 @@ const POLICY_OPTIONS = ['governed', 'restricted'] as const;
 const MONETIZATION_OPTIONS = ['free', 'metered', 'subscription', 'revenue_share'] as const;
 
 type KindFilter = typeof KIND_FILTERS[number];
-type ComposerKind = typeof COMPOSER_KINDS[number];
+type ComposerKind = 'app' | 'provider';
 
 function isVisibleMarketplaceKind(kind: string): boolean {
   const normalized = kind.trim().toLowerCase();
-  return normalized === 'agent_template' || normalized === 'skill' || normalized === 'connector' || normalized === 'provider' || normalized === 'bundle';
+  return normalized === 'agent_template' || normalized === 'skill' || normalized === 'connector' || normalized === 'bundle';
 }
 
 function marketplaceKindMatchesFilter(kind: string, filter: KindFilter): boolean {
@@ -54,7 +54,7 @@ function marketplaceKindMatchesFilter(kind: string, filter: KindFilter): boolean
 }
 
 function marketplaceApiKindForFilter(filter: KindFilter): string | null {
-  return filter === 'agent_template' || filter === 'skill' || filter === 'connector' || filter === 'provider'
+  return filter === 'agent_template' || filter === 'skill' || filter === 'connector'
     ? filter
     : null;
 }
@@ -1100,7 +1100,7 @@ export function MarketplacePane() {
                 <div className="marketplace-pane__catalog-title-group">
                   <h1 className="marketplace-pane__catalog-title">Discover</h1>
                   <p className="marketplace-pane__catalog-subtitle">
-                    Browse governed agent templates, tools, MCP connectors, model providers, and bundles for this workspace.
+                    Browse governed agent templates, skills, tools, MCP connectors, and bundles for this workspace.
                   </p>
                 </div>
               </div>
@@ -1332,7 +1332,7 @@ export function MarketplacePane() {
                   className="marketplace-pane__composer-panel"
                   eyebrow="Operator publishing"
                   title="Register governed package"
-                  subtitle="Create a governed provider or hosted package. This stays hidden from the normal install flow so Discover does not turn into an open plugin bazaar."
+                  subtitle="Create a governed hosted app package. This stays hidden from the normal install flow so Discover does not turn into an open plugin bazaar."
                   actions={(
                     <AppButton type="button" tone="secondary" onClick={() => setShowDeveloperRegistration(false)}>
                       Hide

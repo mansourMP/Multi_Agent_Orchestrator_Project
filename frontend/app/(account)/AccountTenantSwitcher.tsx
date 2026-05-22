@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   Monitor,
   Moon,
+  Package,
   Settings2,
   SunMedium,
   type LucideIcon,
@@ -30,7 +31,7 @@ import {
 import { useAppTheme } from '@/lib/ui/app-theme';
 import { APP_THEME_ATTRIBUTE } from '@/lib/ui/tokens';
 
-type RailDestinationId = 'chat' | 'studio' | 'gateway' | 'marketplace' | 'settings';
+type RailDestinationId = 'chat' | 'studio' | 'gateway' | 'marketplace' | 'applications' | 'settings';
 
 type RailDestination = {
   id: RailDestinationId;
@@ -45,6 +46,7 @@ const PRIMARY_DESTINATIONS: RailDestination[] = [
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
   { id: 'gateway', label: 'Computers', defaultRouteId: 'gateway', icon: Monitor },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
+  { id: 'applications', label: 'Applications', defaultRouteId: 'applications', icon: Package },
 ];
 
 const SECONDARY_DESTINATIONS: RailDestination[] = [
@@ -91,7 +93,13 @@ function extractActiveRailId(pathname: string | null): RailDestinationId {
   }
 
   const destinationId = getWorkspaceNavRouteDefinition(routeId).destinationId;
-  if (destinationId === 'studio' || destinationId === 'gateway' || destinationId === 'marketplace' || destinationId === 'settings') {
+  if (
+    destinationId === 'studio'
+    || destinationId === 'gateway'
+    || destinationId === 'marketplace'
+    || destinationId === 'applications'
+    || destinationId === 'settings'
+  ) {
     return destinationId;
   }
   return 'chat';

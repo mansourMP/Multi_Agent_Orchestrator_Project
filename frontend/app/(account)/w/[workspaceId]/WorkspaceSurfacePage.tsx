@@ -18,6 +18,7 @@ import { WorkstationSettingsPane } from '@/lib/workspace/workstation-settings-pa
 import { WorkstationStudioIntegrationsPane } from '@/lib/workspace/workstation-studio-integrations-pane';
 import { WorkstationInvestorDemoPane } from '@/lib/workspace/workstation-investor-demo-pane';
 import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gateway-operator-pane';
+import { HostedMiniAppsPane } from '@/lib/workspace/hosted-mini-apps-pane';
 import { WorkstationSurfaceViewport } from '@/lib/workspace/workstation-shell-frame';
 import { resolveRouteIdFromHref, type WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
 import {
@@ -25,7 +26,7 @@ import {
   type WorkspaceNavDestinationId,
 } from '../../../../../shared/nav-manifest';
 
-type SurfaceRenderer = () => ReactNode;
+type SurfaceRenderer = (workspaceId: string) => ReactNode;
 
 type SurfaceRouteRenderer = {
   destinationId: WorkspaceNavDestinationId;
@@ -93,6 +94,10 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
     destinationId: 'marketplace',
     render: () => <MarketplacePane />,
   },
+  applications: {
+    destinationId: 'applications',
+    render: (workspaceId) => <HostedMiniAppsPane workspaceId={workspaceId} />,
+  },
   gatewayApprovals: {
     destinationId: 'gateway',
     render: () => <WorkstationGatewayOperatorPane initialSection="approvals" />,
@@ -139,14 +144,14 @@ export function WorkspaceSurfacePage({
   if (!hasValidSurface) {
     return (
       <WorkstationSurfaceViewport surface={fallbackRouteId}>
-        {fallbackRenderer()}
+        {fallbackRenderer(workspaceId)}
       </WorkstationSurfaceViewport>
     );
   }
 
   return (
     <WorkstationSurfaceViewport surface={surface}>
-      {renderSurface()}
+      {renderSurface(workspaceId)}
     </WorkstationSurfaceViewport>
   );
 }

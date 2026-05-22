@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
 
 import {
@@ -10,6 +10,7 @@ import {
 import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
+import { StudioIcon } from '@/lib/ui/icons';
 import type {
   DeployedAgentAnalyticsRecord,
   DeployedAgentConversationDetail,
@@ -25,7 +26,6 @@ import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-prim
 import type {
   AgentAnalyticsSnapshot,
   AgentOperationalMetrics,
-  AgentRosterFilterId,
   ConversationFilters,
   DetailConfigDraft,
   LaunchReadinessItem,
@@ -41,7 +41,7 @@ import type {
 import {
   CUSTOM_STUDIO_TEMPLATE,
   DEFAULT_STUDIO_TEMPLATE,
-  SPECIALIST_OVERLAY_TABS,
+  normalizeSpecialistOverlayTabId,
   STUDIO_TEMPLATES,
 } from './deployed-agents/constants';
 import {
@@ -80,7 +80,6 @@ import {
   runtimeTargetForPlacement,
   runtimePlacementLabel,
   testRuntimeModeForPlacement,
-  agentMatchesRosterFilter,
   inferAiTierFromProviderModel,
   pickStudioModelForTier,
   resolveProviderModelForTier,
@@ -96,7 +95,6 @@ import {
   summarizeStudioErrorMessage,
   isWizardScopedError,
   studioRuntimeOption,
-  agentModeBucket,
   listEnabledChannels,
   hasEnabledChannel,
   normalizeTemplateToken,
@@ -124,6 +122,7 @@ export function WorkstationDeployedAgentsPane({
   const { workspaceId, bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const cachedStudioPane = studioPaneCache.get(workspaceId) ?? null;
   const [hadInitialCache] = useState(() => cachedStudioPane !== null);
@@ -136,7 +135,9 @@ export function WorkstationDeployedAgentsPane({
   const [agentAnalyticsById, setAgentAnalyticsById] = useState<Record<string, AgentAnalyticsSnapshot>>(() => cachedStudioPane?.agentAnalyticsById ?? {});
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [overlayAgentId, setOverlayAgentId] = useState<string | null>(null);
-  const [overlayTab, setOverlayTab] = useState<SpecialistOverlayTabId>('overview');
+  const [overlayTab, setOverlayTab] = useState<SpecialistOverlayTabId>(() => (
+    normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab'))
+  ));
   const [selectedAgentDetail, setSelectedAgentDetail] = useState<DeployedAgentRecord | null>(null);
   const [selectedAgentAnalytics, setSelectedAgentAnalytics] = useState<AgentAnalyticsSnapshot | null>(null);
   const [selectedTelegramReadiness, setSelectedTelegramReadiness] = useState<TelegramReadinessSnapshot | null>(null);
@@ -167,7 +168,6 @@ export function WorkstationDeployedAgentsPane({
   const [recentlyCreatedAgentId, setRecentlyCreatedAgentId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [agentRosterFilter, setAgentRosterFilter] = useState<AgentRosterFilterId>('all');
   const [conversationFilters, setConversationFilters] = useState<ConversationFilters>({
     channel: 'all',
     escalationState: 'all',
@@ -235,30 +235,6 @@ export function WorkstationDeployedAgentsPane({
     () => studioTemplateById(selectedTemplateId, studioTemplates),
     [selectedTemplateId, studioTemplates],
   );
-  const agentRosterCounts = useMemo(
-    () => agents.reduce<Record<AgentRosterFilterId, number>>((counts, agent) => {
-      counts.all += 1;
-      counts[agentModeBucket(agent)] += 1;
-      if (listEnabledChannels(agent.channels).length > 0) {
-        counts.connected += 1;
-      }
-      if (readString(agent.deployment_state).toLowerCase() !== 'live') {
-        counts.draft += 1;
-      }
-      return counts;
-    }, {
-      all: 0,
-      text: 0,
-      computer: 0,
-      connected: 0,
-      draft: 0,
-    }),
-    [agents],
-  );
-  const visibleAgents = useMemo(
-    () => agents.filter((agent) => agentMatchesRosterFilter(agent, agentRosterFilter)),
-    [agentRosterFilter, agents],
-  );
   const filteredConversations = useMemo(
     () => conversations.filter((conversation) => matchesConversationFilters(conversation, conversationFilters)),
     [conversationFilters, conversations],
@@ -287,6 +263,27 @@ export function WorkstationDeployedAgentsPane({
     () => String(searchParams.get('proof_agent') || searchParams.get('template') || '').trim(),
     [searchParams],
   );
+  const requestedOverlayTab = useMemo(
+    () => normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab')),
+    [searchParams],
+  );
+  const selectOverlayTab = useCallback((nextTab: SpecialistOverlayTabId) => {
+    setOverlayTab(nextTab);
+    const params = new URLSearchParams(searchParams.toString());
+    if (nextTab === 'overview') {
+      params.delete('tab');
+      params.delete('studioTab');
+    } else {
+      params.set('tab', nextTab);
+      params.delete('studioTab');
+    }
+    const query = params.toString();
+    router.replace(`${pathname}${query ? `?${query}` : ''}`, { scroll: false });
+  }, [pathname, router, searchParams]);
+
+  useEffect(() => {
+    setOverlayTab(requestedOverlayTab);
+  }, [requestedOverlayTab]);
 
   async function refreshAgentAnalytics(items: DeployedAgentRecord[]) {
     if (items.length === 0) {
@@ -794,7 +791,7 @@ export function WorkstationDeployedAgentsPane({
     if (wizardMode === 'create') {
       setSelectedAgentAnalytics(null);
       setOverlayAgentId(null);
-      setOverlayTab('overview');
+      selectOverlayTab('overview');
       setRecentlyCreatedAgentId(recordId || null);
       setStatusMessage(`Created agent ${readString(record.name)}.`);
       if (recordId) {
@@ -836,7 +833,7 @@ export function WorkstationDeployedAgentsPane({
       return;
     }
     if (action === 'deploy' && selectedAgentModelDeployBlocker) {
-      setOverlayTab('connectors');
+      selectOverlayTab('connectors');
       setErrorMessage(`${selectedAgentModelDeployBlocker} Open Integrations and connect OpenRouter, OpenAI, Anthropic, Google Gemini, or another API provider.`);
       return;
     }
@@ -1222,7 +1219,7 @@ export function WorkstationDeployedAgentsPane({
   const handleOpenAssistantDetail = useStableEvent((id: string) => {
     setSelectedAgentId(id);
     setOverlayAgentId(null);
-    setOverlayTab('overview');
+    selectOverlayTab('overview');
   });
 
   const handleRefreshAgentsEvent = useStableEvent(() => {
@@ -1235,7 +1232,7 @@ export function WorkstationDeployedAgentsPane({
   const handleSelectAgent = useStableEvent((id: string) => {
     setSelectedAgentId(id);
     setOverlayAgentId(null);
-    setOverlayTab('overview');
+    selectOverlayTab('overview');
   });
 
   const handleSaveDetailConfigEvent = useStableEvent(() => {
@@ -1315,27 +1312,7 @@ export function WorkstationDeployedAgentsPane({
           className="studio-agents-workbench"
           mainHeader={currentStudioSubview === 'agents' ? (
             <div className="studio-agents-workbench__header">
-              {selectedAgent ? (
-                <div className="studio-agent-detail-tabs studio-agent-detail-tabs--header" role="tablist" aria-label="Agent sections">
-                  {SPECIALIST_OVERLAY_TABS.map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={overlayTab === tab.id}
-                      className={joinClassNames(
-                        'studio-agent-detail-tabs__button',
-                        overlayTab === tab.id && 'studio-agent-detail-tabs__button--active',
-                      )}
-                      onClick={() => setOverlayTab(tab.id)}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <span className="studio-agents-workbench__header-spacer" aria-hidden="true" />
-              )}
+              <span className="studio-agents-workbench__header-spacer" aria-hidden="true" />
               <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
                 Add agent
               </AppButton>
@@ -1356,10 +1333,6 @@ export function WorkstationDeployedAgentsPane({
               onRefreshAgents={handleRefreshAgentsEvent}
               studioTemplates={studioTemplates}
               agents={agents}
-              agentRosterFilter={agentRosterFilter}
-              onSetAgentRosterFilter={setAgentRosterFilter}
-              agentRosterCounts={agentRosterCounts}
-              visibleAgents={visibleAgents}
               selectedAgentId={selectedAgentId}
               busyAuditExportAgentId={busyAuditExportAgentId}
               onSelectAgent={handleSelectAgent}
@@ -1380,40 +1353,42 @@ export function WorkstationDeployedAgentsPane({
           )}
         >
           {currentStudioSubview === 'agents' && !selectedAgent ? (
-            <div className="studio-agent-detail-empty" data-loading={isAgentListPriming} aria-label="Agent detail">
-              {isAgentListPriming ? (
-                <div className="studio-agent-detail-loading-body app-stack-5">
-                  <SkeletonBlock height="8rem" />
-                  <div className="studio-agent-overview__grid">
-                    <SkeletonBlock height="12rem" />
-                    <SkeletonBlock height="12rem" />
-                    <SkeletonBlock height="12rem" />
-                    <SkeletonBlock height="12rem" />
+            isAgentListPriming || isAgentListUnavailable ? (
+              <div className="studio-agent-detail-empty" data-loading={isAgentListPriming} aria-label="Agent detail">
+                {isAgentListPriming ? (
+                  <div className="studio-agent-detail-loading-body app-stack-5">
+                    <SkeletonBlock height="8rem" />
+                    <div className="studio-agent-overview__grid">
+                      <SkeletonBlock height="12rem" />
+                      <SkeletonBlock height="12rem" />
+                      <SkeletonBlock height="12rem" />
+                      <SkeletonBlock height="12rem" />
+                    </div>
                   </div>
-                </div>
-              ) : isAgentListUnavailable ? (
-                <>
-                  <strong>Agent list did not load</strong>
-                  <span>Retry the workspace agent list.</span>
-                  <AppButton type="button" tone="secondary" onClick={handleRefreshAgentsEvent}>
-                    Retry
-                  </AppButton>
-                </>
-              ) : agents.length === 0 ? (
-                <>
-                  <strong>Welcome to Studio</strong>
-                  <span>Create your first business assistant to see performance signals, launch readiness, and customer activity.</span>
-                  <AppButton type="button" onClick={() => handleOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                    Create assistant
-                  </AppButton>
-                </>
-              ) : (
-                <>
-                  <strong>Select an agent</strong>
-                  <span>Configuration, channels, and performance signals will appear here.</span>
-                </>
-              )}
-            </div>
+                ) : isAgentListUnavailable ? (
+                  <>
+                    <strong>Agent list did not load</strong>
+                    <span>Retry the workspace agent list.</span>
+                    <AppButton type="button" tone="secondary" onClick={handleRefreshAgentsEvent}>
+                      Retry
+                    </AppButton>
+                  </>
+                ) : null}
+              </div>
+            ) : agents.length === 0 ? (
+              <div className="studio-agent-detail-empty" aria-label="No Studio agents">
+                <strong>No agents yet</strong>
+                <span>Create a Studio agent to configure knowledge, model, actions, and test chat.</span>
+                <AppButton type="button" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+                  Create agent
+                </AppButton>
+              </div>
+            ) : (
+              <div className="app-watermark">
+                <StudioIcon className="app-watermark__icon" size={48} />
+                <div className="app-watermark__text">Select an agent to view configuration and signals</div>
+              </div>
+            )
           ) : null}
 
           {currentStudioSubview === 'agents' && selectedAgent && (
@@ -1446,7 +1421,7 @@ export function WorkstationDeployedAgentsPane({
               overlayMemoryEntries={overlayMemoryEntries}
               isLoadingOverlayMemory={isLoadingOverlayMemory}
               currentStudioSubview={currentStudioSubview}
-              onSelectTab={setOverlayTab}
+              onSelectTab={selectOverlayTab}
               connectorVaultIds={connectorVaultIds}
               selectedAgentModelDeployBlocker={selectedAgentModelDeployBlocker}
               selectedAgentSelfHostedDeployBlocker={selectedAgentSelfHostedDeployBlocker}

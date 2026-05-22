@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useAppTheme } from '../../theme/useAppTheme';
 import { Ionicons } from '@expo/vector-icons';
-import { ActionButton, ActionChip } from '../system';
+import { ActionChip } from '../system';
 
 interface StudyArtifactProps {
   title: string;
@@ -18,6 +18,7 @@ export const StudyArtifact: React.FC<StudyArtifactProps> = ({ title, description
     <TouchableOpacity 
       style={[styles.container, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}
       activeOpacity={0.7}
+      accessibilityLabel={`Study artifact ${artifact_id}`}
     >
       <View style={[styles.iconContainer, { backgroundColor: theme.colors.accent + '15' }]}>
         <Ionicons name="document-text-outline" size={22} color={theme.colors.accent} />
@@ -30,9 +31,6 @@ export const StudyArtifact: React.FC<StudyArtifactProps> = ({ title, description
         <Text style={[styles.description, { color: theme.colors.textSecondary }]} numberOfLines={2}>
           {description}
         </Text>
-        <View style={styles.footer}>
-        <ActionButton label="Open in Files" variant="secondary" icon="chevron-forward" />
-        </View>
       </View>
     </TouchableOpacity>
   );
@@ -72,10 +70,5 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSans_400Regular',
     lineHeight: 18,
     marginBottom: 8,
-  },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
   },
 });

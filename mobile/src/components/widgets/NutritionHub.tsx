@@ -14,31 +14,15 @@ interface NutritionHubProps {
 }
 
 export const NutritionHub: React.FC<NutritionHubProps> = ({ currentCalories, goalCalories, macros }) => {
-  const QUICK_ACTIONS = [
-    { id: 'scan', label: 'Scan Food', icon: 'camera', onPress: () => {} },
-    { id: 'log', label: 'Manual Log', icon: 'add-circle', onPress: () => {} },
-    { id: 'coach', label: 'Ask Coach', icon: 'chatbubbles', onPress: () => {} },
-  ];
-
-  const TIMELINE = [
-    { id: '1', title: 'Lunch: Salmon Rice Bowl', time: '1:30 PM', icon: 'restaurant', color: '#FF6B35' },
-    { id: '2', title: 'Calculated: 632 kcal', time: '1:32 PM', icon: 'calculator', color: '#3B82F6' },
-    { id: '3', title: 'Updated Daily Caloric Plan', time: '1:32 PM', icon: 'sync', color: '#10B981' },
-  ];
-
   return (
     <HubShell 
       title="Nutrition Hub"
       status="Balanced"
       icon="restaurant"
       iconColor="#FF6B35"
-      quickActions={QUICK_ACTIONS}
-      timeline={TIMELINE}
-      insight={{
-        text: "You are consistent with your protein intake today. Adding 15g more would hit your optimal hypertrophy target.",
-        confidence: 94
-      }}
-      source="Health Coach"
+      quickActions={[]}
+      timeline={[]}
+      source="Nutrition summary"
     >
       <View style={styles.content}>
         <StatusCard

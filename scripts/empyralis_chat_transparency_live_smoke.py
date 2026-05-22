@@ -4,11 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import tempfile
 import time
 import uuid
 from http.cookiejar import MozillaCookieJar
-from pathlib import Path
 from typing import Any
 from urllib import error, request
 
@@ -103,6 +101,14 @@ def _assistant_turns(thread_payload: dict[str, Any]) -> list[dict[str, Any]]:
     return turns
 
 
+def _transcript_event_payloads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item.get("payload")
+        for item in events
+        if isinstance(item, dict) and isinstance(item.get("payload"), dict)
+    ]
+
+
 def _assert_safe_transcript_events(events: list[dict[str, Any]]) -> None:
     if not events:
         raise AssertionError("assistant turn did not persist metadata.transcript_events")
@@ -117,6 +123,44 @@ def _assert_safe_transcript_events(events: list[dict[str, Any]]) -> None:
             raise AssertionError(f"unexpected transcript event name: {event_name}")
         if item.get("schema_version") != 1:
             raise AssertionError("transcript event schema_version must be 1")
+
+
+def _assert_hardware_transcript_events(events: list[dict[str, Any]]) -> None:
+    payloads = _transcript_event_payloads(events)
+    event_types = {str(item.get("event_type") or "").strip() for item in payloads}
+    if "tool.result" not in event_types:
+        raise AssertionError("hardware completion did not append a tool.result transcript event")
+    if "artifact.created" not in event_types:
+        raise AssertionError("hardware completion did not append an artifact.created transcript event")
+    runtime_targets = {
+        str((item.get("data") or {}).get("runtime_target") or "").strip()
+        for item in payloads
+        if isinstance(item.get("data"), dict)
+    }
+    if "empyralis_cloud_computer" not in runtime_targets:
+        raise AssertionError("hardware transcript events did not preserve the cloud computer runtime target")
+
+
+def _transcript_events_for_request(
+    *,
+    base_url: str,
+    workspace_id: str,
+    request_id: str,
+    cookie_jar: MozillaCookieJar,
+    timeout: int,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    threads = _json_request(
+        base_url=base_url,
+        path=f"/api/threads?workspace_id={workspace_id}&include_turns=true",
+        cookie_jar=cookie_jar,
+        timeout=timeout,
+    )
+    for turn in _assistant_turns(threads):
+        metadata = turn.get("metadata") if isinstance(turn.get("metadata"), dict) else {}
+        if str(metadata.get("request_id") or turn.get("request_id") or "").strip() == request_id:
+            events = [item for item in list(metadata.get("transcript_events") or []) if isinstance(item, dict)]
+            return turn, events
+    return None, []
 
 
 def run_smoke(args: argparse.Namespace) -> int:
@@ -169,33 +213,71 @@ def run_smoke(args: argparse.Namespace) -> int:
         raise AssertionError("turn stream did not emit proof events")
 
     matching_turn: dict[str, Any] | None = None
+    transcript_events: list[dict[str, Any]] = []
     for _ in range(args.poll_attempts):
-        threads = _json_request(
+        matching_turn, transcript_events = _transcript_events_for_request(
             base_url=args.backend_url,
-            path=f"/api/threads?workspace_id={workspace_id}&include_turns=true",
+            workspace_id=workspace_id,
+            request_id=request_id,
             cookie_jar=cookie_jar,
             timeout=args.timeout,
         )
-        for turn in _assistant_turns(threads):
-            metadata = turn.get("metadata") if isinstance(turn.get("metadata"), dict) else {}
-            if str(metadata.get("request_id") or turn.get("request_id") or "").strip() == request_id:
-                matching_turn = turn
-                break
         if matching_turn is not None:
             break
         time.sleep(args.poll_interval)
 
     if matching_turn is None:
         raise AssertionError("assistant turn was not replayable from thread history")
-    metadata = matching_turn.get("metadata") if isinstance(matching_turn.get("metadata"), dict) else {}
-    transcript_events = list(metadata.get("transcript_events") or [])
     _assert_safe_transcript_events([item for item in transcript_events if isinstance(item, dict)])
+
+    thread_id = str(matching_turn.get("thread_id") or "").strip()
+    if not thread_id:
+        raise AssertionError("assistant turn did not include a thread_id for hardware correlation")
+    hardware_payload = {
+        "workspace_id": workspace_id,
+        "action_id": "screenshot.capture",
+        "runtime_target": "empyralis_cloud_computer",
+        "runtime_access_mode": "full_access",
+        "thread_id": thread_id,
+        "request_id": request_id,
+        "run_id": f"hardware-smoke-{uuid.uuid4().hex[:12]}",
+        "trace_id": f"trace-hardware-smoke-{uuid.uuid4().hex[:12]}",
+        "session_id": f"hrs-smoke-{uuid.uuid4().hex[:12]}",
+        "cost_metadata": {"source": "chat_transparency_live_smoke"},
+    }
+    hardware_result = _json_request(
+        base_url=args.backend_url,
+        path="/api/runtime/hardware/actions/execute",
+        cookie_jar=cookie_jar,
+        method="POST",
+        payload=hardware_payload,
+        timeout=args.hardware_timeout,
+    )
+    hardware_status = str(hardware_result.get("status") or "").strip()
+    if hardware_status != "completed":
+        raise AssertionError(f"hardware action did not complete: {hardware_status or hardware_result}")
+
+    hardware_events: list[dict[str, Any]] = []
+    for _ in range(args.poll_attempts):
+        _, hardware_events = _transcript_events_for_request(
+            base_url=args.backend_url,
+            workspace_id=workspace_id,
+            request_id=request_id,
+            cookie_jar=cookie_jar,
+            timeout=args.timeout,
+        )
+        try:
+            _assert_hardware_transcript_events(hardware_events)
+            break
+        except AssertionError:
+            time.sleep(args.poll_interval)
+    _assert_hardware_transcript_events(hardware_events)
 
     print("PASS chat transparency live smoke")
     print(f"  workspace_id: {workspace_id}")
     print(f"  request_id: {request_id}")
     print(f"  stream_events: {len(stream_events)}")
-    print(f"  transcript_events: {len(transcript_events)}")
+    print(f"  transcript_events: {len(hardware_events)}")
     return 0
 
 
@@ -207,6 +289,7 @@ def main() -> int:
     parser.add_argument("--message", default=DEFAULT_MESSAGE)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--turn-timeout", type=int, default=90)
+    parser.add_argument("--hardware-timeout", type=int, default=120)
     parser.add_argument("--poll-attempts", type=int, default=20)
     parser.add_argument("--poll-interval", type=float, default=0.5)
     args = parser.parse_args()

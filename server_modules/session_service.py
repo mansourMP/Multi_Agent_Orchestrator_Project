@@ -524,6 +524,56 @@ async def list_workspace_runtime_sessions(
     return records
 
 
+async def find_runtime_session_by_approval_id(
+    approval_id: str,
+    *,
+    workspace_id: Optional[str] = None,
+    active_only: bool = True,
+) -> Optional[Dict[str, Any]]:
+    token = str(approval_id or "").strip()
+    if not token:
+        return None
+    pool = await _ensure_runtime_sessions_table()
+    if pool is None:
+        LOGGER.warning("Authoritative runtime_sessions store unavailable; approval session lookup refused.")
+        return None
+    resolved_workspace_id = str(workspace_id or "").strip()
+    where = [
+        """
+        EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(COALESCE(metadata->'approvals', '[]'::jsonb)) AS approval
+            WHERE approval->>'approval_id' = $1
+        )
+        """,
+    ]
+    params: list[Any] = [token]
+    if resolved_workspace_id:
+        params.append(resolved_workspace_id)
+        where.append(f"workspace_id = ${len(params)}")
+    if active_only:
+        where.append("expires_at > NOW()")
+    try:
+        row = await pool.fetchrow(
+            f"""
+            SELECT session_id, workspace_id, tenant_id, channel, actor, created_at, expires_at, metadata
+            FROM runtime_sessions
+            WHERE {' AND '.join(where)}
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            *params,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres find_runtime_session_by_approval_id failed for %s: %s", token, exc)
+        return None
+    record = _session_from_pg(row)
+    if isinstance(record, dict):
+        record["status"] = "expired" if _is_expired(record) else "active"
+        return record
+    return None
+
+
 async def get_session_scoped(
     session_id: str,
     *,

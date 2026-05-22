@@ -6,9 +6,10 @@ from server_modules import runs_history
 
 
 class _ApprovalPayload:
-    def __init__(self, decision: str, note: str = "") -> None:
+    def __init__(self, decision: str, note: str = "", approval_scope: str | None = None) -> None:
         self.decision = decision
         self.note = note
+        self.approval_scope = approval_scope
 
     def validate_fields(self) -> None:
         return None
@@ -132,6 +133,51 @@ class LegacyApprovalRouteForwardingTests(unittest.TestCase):
         self.assertEqual(payload["status"], "approved")
         resolve_gateway.assert_awaited_once()
         record_resolution.assert_awaited_once()
+
+    def test_resolve_approval_bridges_runtime_hardware_approval(self):
+        with (
+            patch.object(
+                runs_history.gateway_approval_service,
+                "get_gateway_tool_approval",
+                return_value=None,
+            ),
+            patch.object(
+                runs_history.hardware_action_broker_service,
+                "get_runtime_hardware_approval",
+                new=AsyncMock(
+                    return_value={
+                        "approval_id": "cloudapproval-1",
+                        "workspace_id": "ws-1",
+                        "run_id": "run-1",
+                    }
+                ),
+            ) as get_hardware,
+            patch.object(
+                runs_history.hardware_action_broker_service,
+                "resolve_runtime_hardware_approval",
+                new=AsyncMock(
+                    return_value={
+                        "status": "completed",
+                        "runtime_session": {"state": "ready", "run_id": "run-1"},
+                    }
+                ),
+            ) as resolve_hardware,
+        ):
+            payload = asyncio.run(
+                runs_history.resolve_approval(
+                    "cloudapproval-1",
+                    _ApprovalPayload("approved", "ok", approval_scope="session"),
+                    workspace_id="ws-1",
+                    current_user={"user_id": "user-1"},
+                )
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["source"], "hardware_runtime")
+        self.assertEqual(payload["status"], "approved")
+        get_hardware.assert_awaited_once()
+        resolve_hardware.assert_awaited_once()
+        self.assertEqual(resolve_hardware.await_args.kwargs["approval_scope"], "session")
 
 
 if __name__ == "__main__":

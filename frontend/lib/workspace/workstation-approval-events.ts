@@ -52,6 +52,7 @@ export async function resolveWorkstationApproval(
   options: {
     approvalId: string;
     resolution: WorkstationApprovalResolution;
+    approvalScope?: 'once' | 'session';
     reason?: string;
   },
 ): Promise<Record<string, unknown> | null> {
@@ -61,6 +62,7 @@ export async function resolveWorkstationApproval(
       approval_id: options.approvalId,
       decision: options.resolution,
       resolution: options.resolution,
+      approval_scope: options.approvalScope,
       reason: options.reason?.trim() || undefined,
     },
   });

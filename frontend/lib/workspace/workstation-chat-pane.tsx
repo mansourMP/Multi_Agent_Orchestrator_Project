@@ -906,7 +906,11 @@ export function WorkstationChatPane() {
     }
   };
 
-  const handleResolveApproval = async (approvalId: string, resolution: 'approved' | 'rejected') => {
+  const handleResolveApproval = async (
+    approvalId: string,
+    resolution: 'approved' | 'rejected',
+    approvalScope: 'once' | 'session' = 'once',
+  ) => {
     if (!approvalId || resolvingApprovalId) {
       return;
     }
@@ -916,6 +920,7 @@ export function WorkstationChatPane() {
       await resolveWorkstationApproval(services.client, {
         approvalId,
         resolution,
+        approvalScope,
       });
       services.streams.touchActivity();
     } catch (error) {
@@ -930,7 +935,11 @@ export function WorkstationChatPane() {
   };
 
   const handleResolveCodexApproval = (approvalId: string, action: CodexApprovalAction) => {
-    void handleResolveApproval(approvalId, action === 'deny' ? 'rejected' : 'approved');
+    void handleResolveApproval(
+      approvalId,
+      action === 'deny' ? 'rejected' : 'approved',
+      action === 'allow_session' ? 'session' : 'once',
+    );
   };
 
   useEffect(() => {

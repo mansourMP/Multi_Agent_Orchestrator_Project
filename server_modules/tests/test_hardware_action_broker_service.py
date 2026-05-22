@@ -57,6 +57,47 @@ def _self_hosted_inventory(*, status: str = "online", online: bool = True, healt
     }
 
 
+def _hardware_approval_session_record(*, runtime_target: str, approval_id: str, request_payload: dict) -> dict:
+    return {
+        "session_id": request_payload.get("runtime_session_id") or "hrs-approval",
+        "tenant_id": "tenant-1",
+        "workspace_id": "ws-1",
+        "metadata": {
+            "runtime_session_binding": broker.HARDWARE_RUNTIME_SESSION_BINDING,
+            "runtime_session_id": request_payload.get("runtime_session_id") or "hrs-approval",
+            "runtime_target": runtime_target,
+            "canonical_runtime_target": runtime_target,
+            "runtime_access_mode": "default_guarded",
+            "execution_mode": "default",
+            "state": "waiting_approval",
+            "tenant_id": "tenant-1",
+            "workspace_id": "ws-1",
+            "thread_id": "thread-1",
+            "user_id": "user-1",
+            "run_id": request_payload.get("run_id") or "run-1",
+            "trace_id": request_payload.get("trace_id") or "trace-1",
+            "request_id": request_payload.get("request_id") or "req-approval",
+            "capability_id": request_payload.get("capability_id"),
+            "action_id": request_payload.get("action_id"),
+            "approvals": [
+                {
+                    "approval_id": approval_id,
+                    "status": "pending",
+                    "kind": "hardware_action",
+                    "request_payload": {
+                        **request_payload,
+                        "arguments": {"command": "[redacted]"},
+                    },
+                }
+            ],
+            "approval_execution_payloads": {approval_id: request_payload},
+            "artifacts": [],
+            "audit_events": [],
+            "billing": {},
+        },
+    }
+
+
 class _FakeCloudRuntime:
     def __init__(self) -> None:
         self.create_session = AsyncMock(
@@ -975,6 +1016,232 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emit_result.await_args.kwargs["request_id"], "req-gateway")
         self.assertEqual(emit_result.await_args.kwargs["action_id"], "shell.exec")
         self.assertEqual(emit_result.await_args.kwargs["args_preview"]["command"], "whoami")
+
+    async def test_cloud_computer_runtime_approval_resume_executes_stored_request(self) -> None:
+        request_payload = {
+            "runtime_session_binding": broker.HARDWARE_RUNTIME_SESSION_BINDING,
+            "runtime_session_id": "hrs-cloud-approval",
+            "runtime_target": "empyralis_cloud_computer",
+            "runtime_access_mode": "default_guarded",
+            "tenant_id": "tenant-1",
+            "workspace_id": "ws-1",
+            "thread_id": "thread-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "request_id": "req-cloud-approval",
+            "capability_id": "shell.execute",
+            "action_id": "shell.exec",
+            "arguments": {"command": "rm -rf /tmp/demo"},
+        }
+        cloud_runtime = _FakeCloudRuntime()
+        cloud_registry = _FakeCloudRuntimeRegistry(cloud_runtime)
+        with (
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.find_runtime_session_by_approval_id",
+                new=AsyncMock(
+                    return_value=_hardware_approval_session_record(
+                        runtime_target="empyralis_cloud_computer",
+                        approval_id="cloudapproval-1",
+                        request_payload=request_payload,
+                    )
+                ),
+            ) as find_session,
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.extend_session",
+                new=AsyncMock(return_value=None),
+            ) as extend_session,
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.resume_trace",
+                new=AsyncMock(return_value=_trace()),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_approval_resolved",
+                new=AsyncMock(return_value="evt-approval-resolved"),
+            ) as emit_resolved,
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_tool_result",
+                new=AsyncMock(return_value="evt-result"),
+            ) as emit_result,
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_artifact_created",
+                new=AsyncMock(return_value="evt-artifact"),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",
+                return_value=cloud_registry,
+            ),
+        ):
+            payload = await broker.resolve_runtime_hardware_approval(
+                "cloudapproval-1",
+                decision="approved",
+                actor="user-1",
+                note="ok",
+                workspace_id="ws-1",
+                approval_scope="session",
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["runtime_session"]["state"], "ready")
+        self.assertEqual(payload["approval"]["status"], "executed")
+        self.assertEqual(payload["approval"]["approval_scope"], "session")
+        find_session.assert_awaited_once()
+        self.assertGreaterEqual(extend_session.await_count, 3)
+        emit_resolved.assert_awaited_once()
+        cloud_runtime.execute_action.assert_awaited_once()
+        action_payload = cloud_runtime.execute_action.await_args.args[0]
+        self.assertEqual(action_payload["action"], broker.virtual_computer_runtime.ACTION_RUN_COMMAND)
+        self.assertEqual(action_payload["action_args"]["command"], "rm -rf /tmp/demo")
+        emit_result.assert_awaited()
+        self.assertEqual(emit_result.await_args.kwargs["runtime_session_id"], "hrs-cloud-approval")
+
+    async def test_self_hosted_runtime_approval_resume_enqueues_stored_request(self) -> None:
+        request_payload = {
+            "runtime_session_binding": broker.HARDWARE_RUNTIME_SESSION_BINDING,
+            "runtime_session_id": "hrs-self-approval",
+            "runtime_target": "self_hosted_node",
+            "runtime_access_mode": "default_guarded",
+            "tenant_id": "tenant-1",
+            "workspace_id": "ws-1",
+            "thread_id": "thread-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "request_id": "req-self-approval",
+            "capability_id": "shell.execute",
+            "action_id": "shell.exec",
+            "runtime_node_id": "node-1",
+            "runtime_profile_id": "rprof-self",
+            "arguments": {"command": "rm -rf /tmp/demo"},
+        }
+        enqueue_mock = AsyncMock(
+            return_value={
+                "ok": True,
+                "runtime_profile_id": "rprof-self",
+                "runtime_node_id": "node-1",
+                "workspace_id": "ws-1",
+                "command": {
+                    "id": "shcmd-resumed",
+                    "state": "queued",
+                    "command_type": "hardware_action",
+                },
+            }
+        )
+        with (
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.find_runtime_session_by_approval_id",
+                new=AsyncMock(
+                    return_value=_hardware_approval_session_record(
+                        runtime_target="self_hosted_node",
+                        approval_id="selfhostapproval-1",
+                        request_payload=request_payload,
+                    )
+                ),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.extend_session",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.resume_trace",
+                new=AsyncMock(return_value=_trace()),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_approval_resolved",
+                new=AsyncMock(return_value="evt-approval-resolved"),
+            ) as emit_resolved,
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_tool_result",
+                new=AsyncMock(return_value="evt-result"),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.runtime_attachment_service.list_workspace_runtime_attachments",
+                new=AsyncMock(return_value=_self_hosted_inventory()),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_registry_repository.enqueue_self_hosted_runtime_command",
+                enqueue_mock,
+            ),
+        ):
+            payload = await broker.resolve_runtime_hardware_approval(
+                "selfhostapproval-1",
+                decision="approved",
+                actor="user-1",
+                note="ok",
+                workspace_id="ws-1",
+            )
+
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["runtime_session"]["state"], "running")
+        self.assertEqual(payload["approval"]["status"], "executed")
+        emit_resolved.assert_awaited_once()
+        enqueue_mock.assert_awaited_once()
+        command_payload = enqueue_mock.await_args.kwargs["command_payload"]
+        self.assertEqual(command_payload["runtime_session_id"], "hrs-self-approval")
+        self.assertEqual(command_payload["arguments"]["command"], "rm -rf /tmp/demo")
+
+    async def test_runtime_approval_deny_terminates_without_execution(self) -> None:
+        request_payload = {
+            "runtime_session_binding": broker.HARDWARE_RUNTIME_SESSION_BINDING,
+            "runtime_session_id": "hrs-cloud-deny",
+            "runtime_target": "empyralis_cloud_computer",
+            "runtime_access_mode": "default_guarded",
+            "tenant_id": "tenant-1",
+            "workspace_id": "ws-1",
+            "thread_id": "thread-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "request_id": "req-cloud-deny",
+            "capability_id": "shell.execute",
+            "action_id": "shell.exec",
+            "arguments": {"command": "rm -rf /tmp/demo"},
+        }
+        cloud_runtime = _FakeCloudRuntime()
+        with (
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.find_runtime_session_by_approval_id",
+                new=AsyncMock(
+                    return_value=_hardware_approval_session_record(
+                        runtime_target="empyralis_cloud_computer",
+                        approval_id="cloudapproval-deny",
+                        request_payload=request_payload,
+                    )
+                ),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.extend_session",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.resume_trace",
+                new=AsyncMock(return_value=_trace()),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_approval_resolved",
+                new=AsyncMock(return_value="evt-approval-resolved"),
+            ) as emit_resolved,
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_tool_result",
+                new=AsyncMock(return_value="evt-result"),
+            ) as emit_result,
+            patch(
+                "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",
+                return_value=_FakeCloudRuntimeRegistry(cloud_runtime),
+            ),
+        ):
+            payload = await broker.resolve_runtime_hardware_approval(
+                "cloudapproval-deny",
+                decision="rejected",
+                actor="user-1",
+                note="no",
+                workspace_id="ws-1",
+            )
+
+        self.assertEqual(payload["status"], "rejected")
+        self.assertEqual(payload["runtime_session"]["state"], "terminated")
+        self.assertEqual(payload["approval"]["status"], "rejected")
+        emit_resolved.assert_awaited_once()
+        emit_result.assert_awaited_once()
+        self.assertEqual(emit_result.await_args.kwargs["status"], "terminated")
+        cloud_runtime.execute_action.assert_not_awaited()
 
     async def test_stop_gateway_action_interrupts_and_marks_session_terminated(self) -> None:
         interrupt_mock = AsyncMock(

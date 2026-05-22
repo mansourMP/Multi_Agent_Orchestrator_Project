@@ -432,6 +432,7 @@ class ProviderProfileUpsertRequest(BaseModel):
 class ApprovalResolvePayload(BaseModel):
     decision: str
     note: Optional[str] = None
+    approval_scope: Optional[str] = None
 
     def validate_fields(self) -> None:
         decision = str(self.decision or "").strip().lower()
@@ -457,6 +458,8 @@ class ApprovalResolvePayload(BaseModel):
             raise HTTPException(status_code=400, detail="Unsupported decision value.")
         if self.note is not None and len(str(self.note)) > 2000:
             raise HTTPException(status_code=400, detail="note is too long.")
+        if self.approval_scope is not None and str(self.approval_scope).strip().lower() not in {"once", "session"}:
+            raise HTTPException(status_code=400, detail="Unsupported approval scope.")
 
 
 class CredentialUpsertRequest(BaseModel):

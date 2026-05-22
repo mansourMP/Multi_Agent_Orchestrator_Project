@@ -977,6 +977,320 @@ def _self_hosted_completion_summary(
     return "Self-hosted node action completed." if status == "completed" else "Self-hosted node action failed."
 
 
+def _runtime_session_approval_by_id(runtime_session: Dict[str, Any], approval_id: str) -> Optional[Dict[str, Any]]:
+    token = _text(approval_id)
+    if not token:
+        return None
+    for approval in _list_dicts(runtime_session.get("approvals")):
+        if _text(approval.get("approval_id")) == token:
+            return approval
+    return None
+
+
+def _runtime_session_raw_approval_payload(metadata: Dict[str, Any], approval_id: str) -> Dict[str, Any]:
+    token = _text(approval_id)
+    payloads = _dict(metadata.get("approval_execution_payloads"))
+    payload = payloads.get(token) if token else None
+    return _dict(payload)
+
+
+async def _find_runtime_hardware_approval(
+    approval_id: str,
+    *,
+    workspace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    token = _text(approval_id)
+    if not token:
+        return None
+    record = await session_service.find_runtime_session_by_approval_id(
+        token,
+        workspace_id=_text(workspace_id) or None,
+    )
+    if not isinstance(record, dict):
+        return None
+    metadata = _dict(record.get("metadata"))
+    if _text(metadata.get("runtime_session_binding")) != HARDWARE_RUNTIME_SESSION_BINDING:
+        return None
+    runtime_session = _session_view(_text(record.get("session_id")), metadata)
+    approval = _runtime_session_approval_by_id(runtime_session, token)
+    if not isinstance(approval, dict):
+        return None
+    request_payload = _runtime_session_raw_approval_payload(metadata, token) or _dict(approval.get("request_payload"))
+    return {
+        "approval": approval,
+        "request_payload": request_payload,
+        "runtime_session": runtime_session,
+        "session_record": record,
+        "metadata": metadata,
+    }
+
+
+async def get_runtime_hardware_approval(
+    approval_id: str,
+    *,
+    workspace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    match = await _find_runtime_hardware_approval(approval_id, workspace_id=workspace_id)
+    if not isinstance(match, dict):
+        return None
+    approval = _dict(match.get("approval"))
+    runtime_session = _dict(match.get("runtime_session"))
+    return {
+        **approval,
+        "approval_id": _text(approval.get("approval_id")),
+        "runtime_session_id": _text(runtime_session.get("session_id")),
+        "runtime_target": _text(runtime_session.get("canonical_runtime_target")) or _text(runtime_session.get("runtime_target")),
+        "workspace_id": _text(runtime_session.get("workspace_id")) or None,
+        "run_id": _text(runtime_session.get("run_id")) or None,
+        "trace_id": _text(runtime_session.get("trace_id")) or None,
+    }
+
+
+def _approval_resolution_status(decision: str) -> str:
+    token = _text(decision).lower()
+    if token in {"proceed", "approve", "approved", "yes", "y", "continue", "ok", "allow_once", "allow_session"}:
+        return "approved"
+    if token in {"hold", "reject", "rejected", "no", "n", "abort", "stop", "cancel", "deny", "denied"}:
+        return "rejected"
+    raise ValueError("Hardware approval decision must be approved or rejected.")
+
+
+async def _set_runtime_session_approval_status(
+    runtime_session: Dict[str, Any],
+    *,
+    approval_id: str,
+    status: str,
+    decision: str,
+    actor: str,
+    note: Optional[str],
+    approval_scope: Optional[str],
+    state: str,
+    audit_action: str,
+    extra_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    token = _text(approval_id)
+    resolved_at = _utc_now_iso()
+    approvals: List[Dict[str, Any]] = []
+    found = False
+    for item in _list_dicts(runtime_session.get("approvals")):
+        approval = dict(item)
+        if _text(approval.get("approval_id")) == token:
+            found = True
+            approval.update(
+                {
+                    "status": _text(status),
+                    "decision": _text(decision),
+                    "decision_actor": _text(actor) or "user",
+                    "decision_note": _text(note) or None,
+                    "approval_scope": _text(approval_scope) or "once",
+                    "resolved_at": resolved_at,
+                }
+            )
+        approvals.append(approval)
+    if not found and token:
+        approvals.append(
+            {
+                "approval_id": token,
+                "status": _text(status),
+                "decision": _text(decision),
+                "decision_actor": _text(actor) or "user",
+                "decision_note": _text(note) or None,
+                "approval_scope": _text(approval_scope) or "once",
+                "resolved_at": resolved_at,
+            }
+        )
+    return await _update_runtime_session(
+        runtime_session,
+        state=state,
+        audit_action=audit_action,
+        reason=_text(note) or None,
+        extra_metadata={
+            "approval_id": token,
+            "approval_decision": _text(decision),
+            "approval_scope": _text(approval_scope) or "once",
+            "approvals": approvals,
+            **_dict(extra_metadata),
+        },
+    )
+
+
+async def resolve_runtime_hardware_approval(
+    approval_id: str,
+    *,
+    decision: str,
+    actor: str,
+    note: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    approval_scope: Optional[str] = None,
+    timeout_seconds: Optional[int] = None,
+) -> Dict[str, Any]:
+    resolved_decision = _approval_resolution_status(decision)
+    match = await _find_runtime_hardware_approval(approval_id, workspace_id=workspace_id)
+    if not isinstance(match, dict):
+        return {"status": "not_found", "approval_id": _text(approval_id)}
+    approval = _dict(match.get("approval"))
+    runtime_session = _dict(match.get("runtime_session"))
+    request_payload = _dict(match.get("request_payload")) or _dict(approval.get("request_payload"))
+    approval_id = _text(approval.get("approval_id")) or _text(approval_id)
+    current_status = _text(approval.get("status")).lower()
+    if current_status in {"executed", "completed", "running", "rejected", "denied", "failed", "terminated"}:
+        return {
+            "status": current_status,
+            "approval": approval,
+            "runtime_session": runtime_session,
+            "trace_id": _text(runtime_session.get("trace_id")) or None,
+        }
+
+    capability_id = _text(request_payload.get("capability_id")) or _text(runtime_session.get("capability_id"))
+    action_id = _text(request_payload.get("action_id") or request_payload.get("action")) or _text(runtime_session.get("action_id"))
+    arguments = _dict(request_payload.get("arguments"))
+    runtime_target = _text(request_payload.get("runtime_target")) or _text(runtime_session.get("canonical_runtime_target"))
+    run_id = _text(request_payload.get("run_id")) or _text(runtime_session.get("run_id")) or _text(runtime_session.get("session_id"))
+    trace_id = _text(request_payload.get("trace_id")) or _text(runtime_session.get("trace_id"))
+    request_id = _text(request_payload.get("request_id")) or _text(runtime_session.get("request_id")) or approval_id
+    thread_id = _text(request_payload.get("thread_id")) or _text(runtime_session.get("thread_id")) or None
+    runtime_access_mode = _text(request_payload.get("runtime_access_mode")) or _text(runtime_session.get("runtime_access_mode"))
+    trace_context = await _resolve_trace_context(
+        None,
+        trace_id=trace_id,
+        tenant_id=_text(request_payload.get("tenant_id")) or _text(runtime_session.get("tenant_id")) or "default",
+        workspace_id=_text(request_payload.get("workspace_id")) or _text(runtime_session.get("workspace_id")) or "default",
+        thread_id=thread_id,
+        run_id=run_id,
+    )
+    await agent_trace_service.emit_approval_resolved(
+        trace_context,
+        approval_id=approval_id,
+        decision=resolved_decision,
+        actor=_text(actor) or "user",
+        note=note,
+    )
+
+    if resolved_decision == "rejected":
+        runtime_session = await _set_runtime_session_approval_status(
+            runtime_session,
+            approval_id=approval_id,
+            status="rejected",
+            decision=resolved_decision,
+            actor=actor,
+            note=note,
+            approval_scope=approval_scope,
+            state="terminated",
+            audit_action="hardware_action.approval_rejected",
+        )
+        await _emit_tool_result(
+            trace_context,
+            tool_call_id=request_id,
+            status="terminated",
+            summary="Hardware action denied.",
+            capability_id=capability_id,
+            arguments=arguments,
+            runtime_session=runtime_session,
+            runtime_target=runtime_target,
+            request_id=request_id,
+            action_id=action_id,
+            metadata={"approval_id": approval_id, "approval_decision": resolved_decision},
+        )
+        return {
+            "status": "rejected",
+            "approval": _runtime_session_approval_by_id(runtime_session, approval_id) or approval,
+            "runtime_session": runtime_session,
+            "trace_id": trace_id,
+        }
+
+    runtime_session = await _set_runtime_session_approval_status(
+        runtime_session,
+        approval_id=approval_id,
+        status="approved",
+        decision=resolved_decision,
+        actor=actor,
+        note=note,
+        approval_scope=approval_scope,
+        state="running",
+        audit_action="hardware_action.approval_approved",
+    )
+    if runtime_target == "empyralis_cloud_computer":
+        result = await _execute_cloud_computer_action(
+            tenant_id=_text(request_payload.get("tenant_id")) or _text(runtime_session.get("tenant_id")) or "default",
+            workspace_id=_text(request_payload.get("workspace_id")) or _text(runtime_session.get("workspace_id")) or "default",
+            user_id=_text(request_payload.get("user_id")) or _text(runtime_session.get("user_id")) or None,
+            action_id=action_id,
+            capability_id=capability_id,
+            arguments=arguments,
+            runtime_session=runtime_session,
+            run_id=run_id,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            request_id=request_id,
+            trace_context=trace_context,
+            require_approval=False,
+            runtime_access_mode=runtime_access_mode,
+            cost_metadata=_dict(runtime_session.get("billing")),
+            tool_call_id=request_id,
+        )
+    elif runtime_target == "self_hosted_node":
+        result = await _execute_self_hosted_node_action(
+            tenant_id=_text(request_payload.get("tenant_id")) or _text(runtime_session.get("tenant_id")) or "default",
+            workspace_id=_text(request_payload.get("workspace_id")) or _text(runtime_session.get("workspace_id")) or "default",
+            user_id=_text(request_payload.get("user_id")) or _text(runtime_session.get("user_id")) or None,
+            node_id=_text(request_payload.get("runtime_node_id") or request_payload.get("node_id")) or _text(runtime_session.get("runtime_node_id")) or None,
+            action_id=action_id,
+            capability_id=capability_id,
+            arguments=arguments,
+            runtime_session=runtime_session,
+            run_id=run_id,
+            trace_id=trace_id,
+            thread_id=thread_id,
+            request_id=request_id,
+            trace_context=trace_context,
+            require_approval=False,
+            runtime_access_mode=runtime_access_mode,
+            tool_call_id=request_id,
+        )
+    else:
+        runtime_session = await _set_runtime_session_approval_status(
+            runtime_session,
+            approval_id=approval_id,
+            status="failed",
+            decision=resolved_decision,
+            actor=actor,
+            note="Unsupported runtime approval target.",
+            approval_scope=approval_scope,
+            state="failed",
+            audit_action="hardware_action.approval_resume_failed",
+            extra_metadata={"runtime_target": runtime_target, "failure_reason": "unsupported_runtime_target"},
+        )
+        result = {
+            "status": "failed",
+            "reason": "unsupported_runtime_target",
+            "approval": _runtime_session_approval_by_id(runtime_session, approval_id) or approval,
+            "runtime_session": runtime_session,
+            "trace_id": trace_id,
+        }
+    final_session = _dict(result.get("runtime_session")) or runtime_session
+    final_status = _text(result.get("status")).lower()
+    approval_status = "executed" if final_status in {"completed", "running"} else "failed"
+    final_session = await _set_runtime_session_approval_status(
+        final_session,
+        approval_id=approval_id,
+        status=approval_status,
+        decision=resolved_decision,
+        actor=actor,
+        note=note,
+        approval_scope=approval_scope,
+        state=_text(final_session.get("state")) or ("running" if final_status == "running" else "ready"),
+        audit_action="hardware_action.approval_resumed",
+        extra_metadata={
+            "resume_status": final_status,
+            "execution_request_id": request_id,
+        },
+    )
+    result["approval"] = _runtime_session_approval_by_id(final_session, approval_id) or approval
+    result["runtime_session"] = final_session
+    result["approval_id"] = approval_id
+    return result
+
+
 async def record_gateway_approval_resolution(
     result: Dict[str, Any],
     *,
@@ -1222,12 +1536,19 @@ async def _execute_cloud_computer_action(
                 "runtime_session_id": _text(runtime_session.get("session_id")),
                 "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
                 "capability_id": capability_id,
+                "action_id": action_id,
                 "action": virtual_action,
                 "arguments": secret_redaction_service.sanitize_mapping(virtual_action_args),
                 "run_id": run_id,
                 "trace_id": trace_id,
+                "thread_id": _text(thread_id) or None,
                 "request_id": request_id,
             },
+        }
+        approval_execution_payload = {
+            **approval["request_payload"],
+            "arguments": arguments,
+            "user_id": _text(user_id) or None,
         }
         await agent_trace_service.emit_approval_requested(
             trace_context,
@@ -1247,6 +1568,7 @@ async def _execute_cloud_computer_action(
                 "approval_id": approval["approval_id"],
                 "capability_id": capability_id,
                 "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
+                "approval_execution_payloads": {approval["approval_id"]: approval_execution_payload},
             },
         )
         await _emit_tool_result(
@@ -1500,8 +1822,16 @@ async def _execute_self_hosted_node_action(
                 "arguments": secret_redaction_service.sanitize_mapping(arguments),
                 "run_id": run_id,
                 "trace_id": trace_id,
+                "thread_id": _text(thread_id) or None,
                 "request_id": request_id,
             },
+        }
+        approval_execution_payload = {
+            **approval["request_payload"],
+            "arguments": arguments,
+            "user_id": _text(user_id) or None,
+            "runtime_attachment_id": runtime_attachment_id,
+            "node_kind": node_kind or None,
         }
         await agent_trace_service.emit_approval_requested(
             trace_context,
@@ -1521,6 +1851,7 @@ async def _execute_self_hosted_node_action(
                 "runtime_profile_id": runtime_profile_id,
                 "approval_id": approval["approval_id"],
                 "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
+                "approval_execution_payloads": {approval["approval_id"]: approval_execution_payload},
             },
         )
         await _emit_tool_result(

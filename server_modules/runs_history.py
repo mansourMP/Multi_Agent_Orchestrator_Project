@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import time
-from typing import Any
+from typing import Any, Optional
 
 from server_modules import runtime_config as config
 from server_modules import shared as shared
@@ -352,7 +352,12 @@ async def resolve_cognitive_approval(event_id: str, payload: ApprovalResolvePayl
         "outbox_event": result.get("outbox_event"),
     }
 
-async def resolve_approval(approval_id: str, payload: ApprovalResolvePayload):
+async def resolve_approval(
+    approval_id: str,
+    payload: ApprovalResolvePayload,
+    workspace_id: Optional[str] = None,
+    current_user=Depends(require_api_key),
+):
     payload.validate_fields()
     target_approval_id = str(approval_id or "").strip()
     if not target_approval_id:
@@ -397,6 +402,37 @@ async def resolve_approval(approval_id: str, payload: ApprovalResolvePayload):
                 "gateway_result": result,
                 "runtime_session": result.get("runtime_session") if isinstance(result.get("runtime_session"), dict) else None,
             }
+    hardware_approval = await hardware_action_broker_service.get_runtime_hardware_approval(
+        target_approval_id,
+        workspace_id=workspace_id,
+    )
+    if isinstance(hardware_approval, dict):
+        resolved_actor = _current_user_owner_id(current_user) or "user"
+        result = await hardware_action_broker_service.resolve_runtime_hardware_approval(
+            target_approval_id,
+            decision="approved" if approved else "rejected",
+            actor=resolved_actor,
+            note=str(payload.note or "").strip(),
+            workspace_id=workspace_id,
+            approval_scope=str(getattr(payload, "approval_scope", "") or "").strip() or None,
+        )
+        status_token = str(result.get("status") or "").strip().lower()
+        resolution = "approved" if status_token in {"approved", "executed", "completed", "running"} else "rejected"
+        runtime_session = result.get("runtime_session") if isinstance(result.get("runtime_session"), dict) else {}
+        return {
+            "ok": True,
+            "source": "hardware_runtime",
+            "approval_id": target_approval_id,
+            "run_id": str(hardware_approval.get("run_id") or runtime_session.get("run_id") or "").strip() or None,
+            "status": resolution,
+            "resolution": resolution,
+            "decision_kind": resolution,
+            "actor": resolved_actor,
+            "note": str(payload.note or ""),
+            "reason": str(payload.note or ""),
+            "hardware_result": result,
+            "runtime_session": runtime_session or None,
+        }
     result = runtime_run_approval_service.resolve_standalone_approval_with_runtime_defaults(
         target_approval_id,
         payload={

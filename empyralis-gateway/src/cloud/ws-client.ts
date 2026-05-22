@@ -68,6 +68,33 @@ interface GatewayRunOptions {
   afterConnected?: () => Promise<void>;
 }
 
+function compactGatewayResponsePayload(payload?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (!payload || payload.capability_id !== "screenshot.capture") {
+    return payload;
+  }
+  const result = payload.result && typeof payload.result === "object"
+    ? { ...(payload.result as Record<string, unknown>) }
+    : {};
+  const images = Array.isArray(result.images) ? result.images : [];
+  result.images = images
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => {
+      const compact = { ...item };
+      if (typeof compact.data_base64 === "string" && compact.data_base64.length > 0) {
+        compact.data_truncated = true;
+        compact.byte_size_estimate = Math.floor((compact.data_base64.length * 3) / 4);
+      }
+      delete compact.data_base64;
+      delete compact.base64;
+      delete compact.data;
+      return compact;
+    });
+  return {
+    ...payload,
+    result,
+  };
+}
+
 export class GatewayWsClient {
   private socket: WebSocket | null = null;
   private readonly heartbeatLoop = new HeartbeatLoop();
@@ -812,7 +839,7 @@ export class GatewayWsClient {
       ts: new Date().toISOString(),
     };
     if (ok) {
-      frame.payload = payload ?? {};
+      frame.payload = compactGatewayResponsePayload(payload) ?? {};
     } else {
       frame.error = error ?? { message: "Unknown gateway request failure." };
     }

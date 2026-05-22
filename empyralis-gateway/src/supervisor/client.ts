@@ -28,6 +28,8 @@ export interface GatewaySupervisorExecuteInput {
   traceId: string;
   workspaceId: string;
   arguments: Record<string, unknown>;
+  runtimeAccessMode?: string;
+  empyralisApproved?: boolean;
 }
 
 export interface GatewaySupervisorInterruptInput {
@@ -75,6 +77,8 @@ export class GatewaySupervisorClient {
       trace_id: input.traceId,
       workspace_id: input.workspaceId,
       arguments: input.arguments,
+      runtime_access_mode: String(input.runtimeAccessMode ?? "").trim() || undefined,
+      empyralis_approved: Boolean(input.empyralisApproved),
       nonce,
       expires_at: expiresAt,
       signature: signSupervisorExecuteRequest(secret, {

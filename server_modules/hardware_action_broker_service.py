@@ -2485,6 +2485,7 @@ async def execute_hardware_action(
             runtime_target=canonical_target_id,
             runtime_access_mode=resolved_runtime_access_mode,
             runtime_session_binding=HARDWARE_RUNTIME_SESSION_BINDING,
+            thread_id=thread_id,
         )
         approval_id = _text(approval.get("approval_id"))
         if approval_id:
@@ -2538,6 +2539,8 @@ async def execute_hardware_action(
             workspace_id=_text(workspace_id) or "default",
             timeout_seconds=int(timeout_seconds or gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS),
             request_id=resolved_request_id,
+            runtime_access_mode=resolved_runtime_access_mode,
+            empyralis_approved=resolved_runtime_access_mode == FULL_RUNTIME_ACCESS_MODE,
         )
     except Exception as exc:
         message = str(exc)

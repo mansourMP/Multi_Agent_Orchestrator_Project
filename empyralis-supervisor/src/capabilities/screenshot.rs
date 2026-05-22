@@ -2,11 +2,18 @@ use anyhow::{bail, Context, Result};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde::Deserialize;
 use serde_json::{json, Value};
+#[cfg(target_os = "macos")]
+use std::fs;
 use std::io::Cursor;
+#[cfg(target_os = "macos")]
+use std::process::Command;
+#[cfg(target_os = "macos")]
+use std::time::{SystemTime, UNIX_EPOCH};
 use xcap::Monitor;
 
 #[derive(Debug, Deserialize)]
 struct ScreenshotArguments {
+    #[serde(default = "default_monitor")]
     monitor: String,
     region: Option<CaptureRegion>,
 }
@@ -22,6 +29,12 @@ struct CaptureRegion {
 pub fn capture(arguments: &Value) -> Result<Value> {
     let args: ScreenshotArguments = serde_json::from_value(arguments.clone())
         .context("invalid screenshot.capture arguments")?;
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(payload) = capture_with_screencapture(&args) {
+            return Ok(payload);
+        }
+    }
     let monitors = Monitor::all().context("failed to enumerate monitors")?;
     if monitors.is_empty() {
         bail!("no monitors available");
@@ -64,6 +77,54 @@ pub fn capture(arguments: &Value) -> Result<Value> {
     }
 
     Ok(json!({ "images": images }))
+}
+
+fn default_monitor() -> String {
+    "primary".to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn capture_with_screencapture(args: &ScreenshotArguments) -> Result<Value> {
+    if args.monitor != "primary" && args.monitor != "all" {
+        bail!("monitor must be `primary` or `all`");
+    }
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("empyralis-screenshot-{suffix}.png"));
+    let mut command = Command::new("/usr/sbin/screencapture");
+    command.arg("-x").arg("-t").arg("png");
+    if let Some(region) = &args.region {
+        command.arg("-R").arg(format!(
+            "{},{},{},{}",
+            region.x, region.y, region.w, region.h
+        ));
+    }
+    command.arg(&path);
+    let output = command.output().context("failed to run screencapture")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!(
+            "{}",
+            if stderr.is_empty() {
+                "screencapture failed".to_string()
+            } else {
+                stderr
+            }
+        );
+    }
+    let png = fs::read(&path).context("failed to read screencapture output")?;
+    let _ = fs::remove_file(&path);
+    let image = image::load_from_memory(&png).context("failed to inspect screencapture output")?;
+    Ok(json!({
+        "images": [{
+            "monitor_name": args.monitor,
+            "data_base64": crate::encode_png_base64(&png),
+            "width": image.width(),
+            "height": image.height(),
+        }]
+    }))
 }
 
 fn image_to_rgba(image: xcap::image::RgbaImage) -> Result<RgbaImage> {

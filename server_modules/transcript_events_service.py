@@ -182,6 +182,7 @@ _TRACE_EVENT_BLOCKED_TOKENS = (
 )
 _INTERNAL_TEXT_TOKENS = (
     "activity_event_id",
+    "arguments",
     "chain of thought",
     "chain_of_thought",
     "deepseek",

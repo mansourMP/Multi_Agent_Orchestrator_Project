@@ -37,6 +37,7 @@ class ThreadTranscriptEventAppendTests(unittest.IsolatedAsyncioTestCase):
         append_event.assert_awaited_once()
         event = append_event.await_args.kwargs["transcript_event"]
         self.assertEqual(event["event"], "trace")
+        self.assertEqual(event["schema_version"], 1)
         payload = event["payload"]
         self.assertEqual(payload["event_type"], "tool.result")
         self.assertEqual(payload["data"]["status"], "completed")

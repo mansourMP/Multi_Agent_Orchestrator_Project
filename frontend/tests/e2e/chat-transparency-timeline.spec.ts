@@ -587,4 +587,87 @@ test.describe('chat transparency timeline', () => {
     await expect(page.getByText(/hidden raw output/i)).toHaveCount(0);
     await expect(page.getByText(/rm -rf hidden-raw-command/i)).toHaveCount(0);
   });
+
+  test('replays persisted hardware completion artifacts inside the chat transcript', async ({ page }) => {
+    await installTransparencyTurnStub(page, {
+      persistedTurns: [
+        {
+          id: 'turn-user-hardware',
+          role: 'user',
+          status: 'completed',
+          content: 'run the self-hosted check',
+          created_at: '2026-05-23T11:00:00Z',
+          metadata: {},
+        },
+        {
+          id: 'turn-assistant-hardware',
+          role: 'assistant',
+          status: 'completed',
+          content: 'The hardware check completed.',
+          created_at: '2026-05-23T11:00:03Z',
+          metadata: {
+            request_id: 'req-hardware-1',
+            trace_id: 'trace-hardware-1',
+            transcript_events: [
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'approval.resolved',
+                  approval_id: 'approval-hardware-1',
+                  data: {
+                    approval_id: 'approval-hardware-1',
+                    decision: 'approved',
+                    actor: 'owner',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'artifact.created',
+                  artifact_id: 'artifact-hardware-1',
+                  data: {
+                    kind: 'hardware_action',
+                    title: 'Self-hosted output bundle',
+                    artifact_id: 'artifact-hardware-1',
+                    mime_type: 'application/json',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'tool.result',
+                  tool_call_id: 'req-hardware-1',
+                  data: {
+                    status: 'completed',
+                    summary: 'Self-hosted command completed.',
+                    tool_name: 'shell.execute',
+                    capability_id: 'shell.execute',
+                    runtime_target: 'self_hosted_node',
+                    runtime_access_mode: 'full_access',
+                    runtime_session_id: 'hrs-hardware-1',
+                    request_id: 'req-hardware-1',
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/sage');
+
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval approved');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Created artifact');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-hardware-1/);
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Ran command');
+    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'The hardware check completed.' })).toBeVisible();
+    await expect(page.getByText(/trace-hardware-1/i)).toHaveCount(0);
+    await expect(page.getByText(/hrs-hardware-1/i)).toHaveCount(0);
+  });
 });

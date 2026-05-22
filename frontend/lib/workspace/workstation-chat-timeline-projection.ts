@@ -7,6 +7,7 @@ import type { CodexTranscriptCell } from '@/lib/workspace/codex-chat/cells';
 import type { TimelineProjectionEvent } from '@/lib/workspace/codex-chat/timeline-reducer';
 import { projectCodexTimeline } from '@/lib/workspace/codex-chat/timeline-reducer';
 import { workstationMessageToCodexCell } from '@/lib/workspace/codex-chat/message-adapter';
+import { transcriptProjectionEventsFromMetadata } from '@/lib/workspace/transcript-event-contract';
 
 export type TimelineProjectionOptions = {
   approvals: (Record<string, unknown> & {
@@ -38,24 +39,6 @@ function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-function transcriptEventsFromMetadata(metadata: Record<string, unknown>): TimelineProjectionEvent[] {
-  const rawEvents = Array.isArray(metadata.transcript_events) ? metadata.transcript_events : [];
-  return rawEvents
-    .map((item): TimelineProjectionEvent | null => {
-      const record = readRecord(item);
-      const type = String(record.event || record.type || '').trim();
-      if (type !== 'trace' && type !== 'step') {
-        return null;
-      }
-      const payload = readRecord(record.payload);
-      if (Object.keys(payload).length === 0) {
-        return null;
-      }
-      return { type, payload };
-    })
-    .filter((item): item is TimelineProjectionEvent => item !== null);
 }
 
 const SAFE_TRACE_DATA_KEYS = new Set([
@@ -243,6 +226,7 @@ function isProofCell(cell: CodexTranscriptCell): boolean {
     || cell.kind === 'web_search'
     || cell.kind === 'file_change'
     || cell.kind === 'screenshot'
+    || cell.kind === 'artifact'
     || cell.kind === 'approval_request'
     || cell.kind === 'status'
     || cell.kind === 'error'
@@ -253,7 +237,7 @@ function replayProofCellsForMessage(
   message: WorkstationChatMessageRecord,
   options: Pick<TimelineProjectionOptions, 'isProviderGateSystemCell' | 'legacyTraceEventsByTraceId'>,
 ): CodexTranscriptCell[] {
-  const events = transcriptEventsFromMetadata(message.metadata);
+  const events = transcriptProjectionEventsFromMetadata(message.metadata);
   const replayEvents = events.length > 0
     ? events
     : options.legacyTraceEventsByTraceId?.[traceIdFromMetadata(message.metadata)] ?? [];

@@ -8,6 +8,7 @@ import {
   Check,
   CircleAlert,
   FileText,
+  Paperclip,
   Search,
   ShieldCheck,
   SquareTerminal,
@@ -547,6 +548,28 @@ export function ScreenshotCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
   );
 }
 
+export function ArtifactCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'artifact' }> }) {
+  const services = useWorkspaceServices();
+  const artifactHref = cell.artifactId ? services.client.artifactDownloadUrl(cell.artifactId) : null;
+  return (
+    <SystemInlineRow
+      kind="artifact"
+      icon={cell.status === 'done'
+        ? <Paperclip size={14} strokeWidth={1.9} />
+        : <CircleAlert size={14} strokeWidth={2} />}
+      primary={cell.status === 'done' ? 'Created artifact' : 'Artifact failed'}
+      secondary={compactSystemDetail(cell.title || cell.mimeType, cell.status === 'done' ? 'Created' : 'Failed')}
+      state={cell.status}
+      dimmed={cell.dimmed === true}
+      action={artifactHref ? (
+        <Link href={artifactHref} target="_blank" rel="noreferrer">
+          Open
+        </Link>
+      ) : null}
+    />
+  );
+}
+
 export function ApprovalCell({
   cell,
   resolvingApprovalId,
@@ -705,6 +728,8 @@ export function CodexChatCell({
       return <FileChangeCell cell={cell} />;
     case 'screenshot':
       return <ScreenshotCell cell={cell} />;
+    case 'artifact':
+      return <ArtifactCell cell={cell} />;
     case 'approval_request':
       return (
         <ApprovalCell

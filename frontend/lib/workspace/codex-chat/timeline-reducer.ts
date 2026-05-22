@@ -139,6 +139,7 @@ function dimSystemCells(cells: CodexTranscriptCell[]): CodexTranscriptCell[] {
       || cell.kind === 'web_search'
       || cell.kind === 'file_change'
       || cell.kind === 'screenshot'
+      || cell.kind === 'artifact'
       || cell.kind === 'status'
     ) {
       return { ...cell, dimmed: true };
@@ -453,6 +454,31 @@ function applyCodexEvent(
         artifactId: event.artifactId || current.artifactId,
         width: event.width ?? current.width,
         height: event.height ?? current.height,
+        status: event.status,
+      }),
+    );
+    return { activeCell: cell, streamStatus: event.status === 'error' ? 'error' : 'streaming' };
+  }
+
+  if (event.type === 'artifact_created') {
+    const cell = updateCell(
+      cells,
+      indexById,
+      event.id,
+      () => ({
+        id: event.id,
+        kind: 'artifact' as const,
+        title: event.title,
+        artifactId: event.artifactId,
+        mimeType: event.mimeType,
+        status: event.status,
+        createdAt: nowIso(),
+      }),
+      (current) => ({
+        ...current,
+        title: event.title || current.title,
+        artifactId: event.artifactId || current.artifactId,
+        mimeType: event.mimeType || current.mimeType,
         status: event.status,
       }),
     );

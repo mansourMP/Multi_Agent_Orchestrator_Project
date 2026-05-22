@@ -4,6 +4,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 TRANSCRIPT_EVENT_LIMIT = 200
+TRANSCRIPT_EVENT_SCHEMA_VERSION = 1
 
 _STREAM_EVENT_TYPES = {"trace", "step"}
 _BLOCKED_KEYS = {
@@ -281,6 +282,7 @@ def build_transcript_event(event_name: Any, payload: Any) -> Optional[Dict[str, 
         return None
     return {
         "event": event,
+        "schema_version": TRANSCRIPT_EVENT_SCHEMA_VERSION,
         "payload": sanitized_payload,
     }
 

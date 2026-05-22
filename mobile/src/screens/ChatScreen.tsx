@@ -34,6 +34,7 @@ import { buildAgentThreadFromInstall, getPrimaryAgent } from "@/src/lib/agents";
 import { MobileAuthExpiredError, mobileApi, type EmpyralistStreamEvent, type MobileThreadHistoryItem } from "@/src/lib/api";
 import { useMobileChatContext, usePrimaryGatewayDoctor } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
+import { transcriptStreamEventsFromMetadata } from "@/src/lib/transcriptEvents";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
@@ -400,8 +401,13 @@ function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null
         : status === "error" || ["rejected", "reject", "denied", "deny"].includes(decision)
           ? "Approval denied"
           : "Waiting for approval";
-    } else if (eventType.includes("screenshot") || eventType.includes("artifact")) {
+    } else if (eventType.includes("screenshot")) {
       speech = "Captured screenshot";
+    } else if (eventType.includes("artifact")) {
+      const artifactText = `${String(detailPayload.kind || "")} ${String(detailPayload.title || "")} ${String(detailPayload.mime_type || detailPayload.mimeType || "")}`.toLowerCase();
+      speech = artifactText.includes("screenshot") || artifactText.includes("image/")
+        ? "Captured screenshot"
+        : "Created artifact";
     } else if (eventType.includes("search")) {
       speech = status === "done" ? "Searched web" : "Searching web";
     } else if (eventType.includes("browser") || toolToken.includes("browser")) {
@@ -489,17 +495,7 @@ function buildTransparencyCards(payload: {
 
 function transcriptEventsFromTurn(turn: NonNullable<MobileThreadHistoryItem["turns"]>[number]): EmpyralistStreamEvent[] {
   const metadata = readRecord(turn?.metadata);
-  const rawEvents = Array.isArray(metadata.transcript_events) ? metadata.transcript_events : [];
-  return rawEvents
-    .map((item) => {
-      const record = readRecord(item);
-      const event = readText(record.event || record.type);
-      if (event !== "trace" && event !== "step") return null;
-      const payload = readRecord(record.payload);
-      if (Object.keys(payload).length === 0) return null;
-      return { event, payload } as EmpyralistStreamEvent;
-    })
-    .filter((item): item is EmpyralistStreamEvent => Boolean(item));
+  return transcriptStreamEventsFromMetadata(metadata);
 }
 
 function buildCloudThreadMessages(item: MobileThreadHistoryItem): AgentPayload[] {

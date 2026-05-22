@@ -465,12 +465,18 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
         status: 'done',
       }];
     }
+    const artifactId = readString(data.artifact_id)
+      || readString(data.artifactId)
+      || readString(payload.artifact_id)
+      || readString(payload.item_id)
+      || null;
     return [{
-      type: 'status',
-      id: eventId('artifact', data.artifact_id || data.artifactId || payload.item_id, fallbackIndex),
-      label: 'Done',
-      detail: readString(data.title) || readString(data.label) || readString(data.mime_type) || null,
-      status: 'done',
+      type: 'artifact_created',
+      id: eventId('artifact', artifactId || payload.item_id, fallbackIndex),
+      title: readString(data.title) || readString(data.label) || readString(data.mime_type) || 'Artifact created',
+      artifactId,
+      mimeType: mimeType || null,
+      status: readString(data.status).toLowerCase() === 'error' ? 'error' : 'done',
     }];
   }
 

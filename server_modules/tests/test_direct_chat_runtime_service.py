@@ -314,6 +314,8 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
                     request_meta={
                         "workspace_id": "meta-workspace",
                         "thread_id": "meta-thread",
+                        "request_id": "req-meta-1",
+                        "client_request_id": "req-meta-1",
                         "agent_turn_request": {
                             "workspace_id": "meta-workspace",
                             "session_id": "meta-thread",
@@ -329,6 +331,8 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(captured["workspace_id"], "meta-workspace")
         self.assertEqual(captured["thread_id"], "meta-thread")
         self.assertEqual(captured["agent_turn_request"].workspace_id, "meta-workspace")
+        self.assertEqual(captured["session_ctx"]["request_id"], "req-meta-1")
+        self.assertEqual(captured["session_ctx"]["client_request_id"], "req-meta-1")
 
     def test_build_chat_turn_event_stream_resumes_trace_context_from_request_meta(self) -> None:
         captured: dict[str, object] = {}

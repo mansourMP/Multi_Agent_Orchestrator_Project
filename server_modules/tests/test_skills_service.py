@@ -710,12 +710,14 @@ class SkillsServiceTests(unittest.TestCase):
                 workspace_id="default",
                 thread_id="thread-1",
                 index=1,
-                session_ctx={"runtime_id": "gw-1"},
+                session_ctx={"runtime_id": "gw-1", "request_id": "chat-request-2"},
                 callbacks=callbacks,
             )
 
         self.assertIn("Command completed: pwd", raw)
         execute_gateway_mock.assert_called_once()
+        call_kwargs = execute_gateway_mock.call_args.kwargs
+        self.assertEqual(call_kwargs["request_id"], "chat-request-2")
 
     def test_execute_single_direct_tool_call_routes_file_read_via_gateway_when_live(self) -> None:
         callbacks = self._execution_callbacks()
@@ -748,7 +750,7 @@ class SkillsServiceTests(unittest.TestCase):
                 workspace_id="default",
                 thread_id="thread-1",
                 index=1,
-                session_ctx={"runtime_id": "gw-1"},
+                session_ctx={"runtime_id": "gw-1", "request_id": "chat-request-3"},
                 callbacks=callbacks,
             )
 
@@ -757,6 +759,7 @@ class SkillsServiceTests(unittest.TestCase):
         execute_gateway_mock.assert_called_once()
         call_kwargs = execute_gateway_mock.call_args.kwargs
         self.assertEqual(call_kwargs["capability_id"], "filesystem.read_write")
+        self.assertEqual(call_kwargs["request_id"], "chat-request-3")
         self.assertEqual(call_kwargs["arguments"]["path"], str(Path.home() / "Desktop"))
         self.assertEqual(call_kwargs["arguments"]["mode"], "read")
 
@@ -801,7 +804,12 @@ class SkillsServiceTests(unittest.TestCase):
                 workspace_id="default",
                 thread_id="thread-1",
                 index=1,
-                session_ctx={"runtime_id": "gw-1", "tenant_id": "tenant-1"},
+                session_ctx={
+                    "runtime_id": "gw-1",
+                    "tenant_id": "tenant-1",
+                    "request_id": "chat-request-1",
+                    "client_request_id": "chat-request-1",
+                },
                 callbacks=callbacks,
             )
 
@@ -814,6 +822,7 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(call_kwargs["runtime_target"], "user_device_gateway")
         self.assertEqual(call_kwargs["action_id"], "screenshot.capture")
         self.assertEqual(call_kwargs["gateway_id"], "gw-1")
+        self.assertEqual(call_kwargs["request_id"], "chat-request-1")
 
 
 if __name__ == "__main__":

@@ -166,6 +166,8 @@ class DirectChatServiceTests(unittest.TestCase):
         self.assertEqual(payload["reply"], "direct")
         self.assertEqual(captured["kwargs"]["session_ctx"]["workspace_id"], "default")
         self.assertEqual(captured["kwargs"]["session_ctx"]["thread_id"], "thread-1")
+        self.assertEqual(captured["kwargs"]["session_ctx"]["request_id"], "req-1")
+        self.assertEqual(captured["kwargs"]["session_ctx"]["client_request_id"], "req-1")
         self.assertEqual(captured["kwargs"]["session_ctx"]["agent_turn_request"]["message"], "hello")
 
     def test_build_direct_chat_request_meta_accepts_serialized_turn_request(self):

@@ -1857,6 +1857,30 @@ def _tenant_id_from_direct_tool_context(session_ctx: Dict[str, Any] | None) -> s
     ).strip() or "default"
 
 
+def _request_id_from_direct_tool_context(session_ctx: Dict[str, Any] | None) -> str:
+    session_payload = session_ctx if isinstance(session_ctx, dict) else {}
+    agent_turn_request = session_payload.get("agent_turn_request") if isinstance(session_payload.get("agent_turn_request"), dict) else {}
+    context_hints = agent_turn_request.get("context_hints") if isinstance(agent_turn_request.get("context_hints"), dict) else {}
+    context_metadata = context_hints.get("metadata") if isinstance(context_hints.get("metadata"), dict) else {}
+    metadata = _direct_tool_session_metadata(session_ctx)
+    for value in (
+        session_payload.get("request_id"),
+        session_payload.get("client_request_id"),
+        agent_turn_request.get("request_id"),
+        agent_turn_request.get("client_request_id"),
+        context_hints.get("request_id"),
+        context_hints.get("client_request_id"),
+        context_metadata.get("request_id"),
+        context_metadata.get("client_request_id"),
+        metadata.get("request_id"),
+        metadata.get("client_request_id"),
+    ):
+        token = str(value or "").strip()
+        if token:
+            return token
+    return ""
+
+
 def _gateway_arguments_for_direct_local_tool(
     connector_id: str,
     action_id: str,
@@ -2009,6 +2033,7 @@ def _execute_direct_tool_via_gateway(
     runtime_access_mode: str = "default_guarded",
     tenant_id: str = "default",
     thread_id: str = "",
+    request_id: str = "",
     session_ctx: Dict[str, Any] | None = None,
     require_approval: Optional[bool] = None,
     callbacks: Any,
@@ -2029,6 +2054,7 @@ def _execute_direct_tool_via_gateway(
             run_id=run_id,
             trace_id=trace_id,
             thread_id=thread_id,
+            request_id=request_id,
             trace_context=trace_context,
             require_approval=require_approval,
         )
@@ -2110,6 +2136,8 @@ def _execute_hardware_action_tool_call(
                 "gateway_id",
                 "device_id",
                 "node_id",
+                "request_id",
+                "client_request_id",
             }
         }
     metadata = _direct_tool_session_metadata(session_ctx)
@@ -2125,6 +2153,11 @@ def _execute_hardware_action_tool_call(
     )
     run_id = str(payload.get("run_id") or "").strip() or (
         f"direct_chat:{str(thread_id or 'thread').strip() or 'thread'}:hardware:{index}:{uuid.uuid4().hex}"
+    )
+    request_id = (
+        _request_id_from_direct_tool_context(session_ctx)
+        or str(payload.get("request_id") or payload.get("client_request_id") or "").strip()
+        or run_id
     )
     runtime_target = _runtime_target_from_direct_tool_context(
         explicit_target=payload.get("runtime_target"),
@@ -2149,6 +2182,7 @@ def _execute_hardware_action_tool_call(
             run_id=run_id,
             trace_id=trace_id,
             thread_id=str(thread_id or "").strip(),
+            request_id=request_id,
             trace_context=trace_context,
         )
     )
@@ -2259,6 +2293,7 @@ def _execute_safe_direct_local_tool_call(
         gateway_run_id = (
             f"direct_chat:{str(thread_id or 'thread').strip() or 'thread'}:{index}:{uuid.uuid4().hex}"
         )
+        gateway_request_id = _request_id_from_direct_tool_context(session_ctx) or gateway_run_id
         gateway_trace_id = (
             str(getattr(trace_context, "trace_id", "") or "").strip()
             or str(metadata.get("trace_id") or "").strip()
@@ -2285,6 +2320,7 @@ def _execute_safe_direct_local_tool_call(
             runtime_access_mode=_runtime_access_mode_from_direct_tool_context(session_ctx=session_ctx),
             tenant_id=tenant_id,
             thread_id=str(thread_id or "").strip(),
+            request_id=gateway_request_id,
             session_ctx=session_ctx,
             require_approval=approval_override,
             callbacks=callbacks,

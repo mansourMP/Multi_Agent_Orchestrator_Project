@@ -198,6 +198,9 @@ def build_direct_chat_event_producer(
         session_id=normalized_thread_id,
         user_id=user_id,
     )
+    if isinstance(direct_session_ctx, dict) and client_request_id:
+        direct_session_ctx["request_id"] = client_request_id
+        direct_session_ctx["client_request_id"] = client_request_id
     trace_id = str(getattr(trace_context, "trace_id", "") or "").strip()
     if trace_context is not None and isinstance(direct_session_ctx, dict):
         direct_session_ctx["trace_context"] = trace_context

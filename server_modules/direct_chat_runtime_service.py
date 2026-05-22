@@ -57,6 +57,37 @@ def _provider_chat_tools_for_message(message: str, tools: List[Dict[str, Any]], 
     return tools
 
 
+def _turn_request_context_hints(turn_request: Any) -> Dict[str, Any]:
+    if isinstance(turn_request, dict):
+        value = turn_request.get("context_hints")
+    else:
+        value = getattr(turn_request, "context_hints", None)
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _request_id_from_turn_request(turn_request: Any) -> str:
+    hints = _turn_request_context_hints(turn_request)
+    metadata = hints.get("metadata") if isinstance(hints.get("metadata"), dict) else {}
+    if isinstance(turn_request, dict):
+        direct_request_id = turn_request.get("request_id")
+        direct_client_request_id = turn_request.get("client_request_id")
+    else:
+        direct_request_id = getattr(turn_request, "request_id", None)
+        direct_client_request_id = getattr(turn_request, "client_request_id", None)
+    for value in (
+        direct_request_id,
+        direct_client_request_id,
+        hints.get("request_id"),
+        hints.get("client_request_id"),
+        metadata.get("request_id"),
+        metadata.get("client_request_id"),
+    ):
+        token = str(value or "").strip()
+        if token:
+            return token
+    return ""
+
+
 def _runtime_identity_for_availability(
     *,
     availability_payload: Dict[str, Any],
@@ -780,8 +811,16 @@ def build_direct_operator_reply(
             or str((session_ctx or {}).get("client_request_id") or "").strip()
             or f"direct-{uuid.uuid4().hex}"
         )
+    normalized_request_id = (
+        str((session_ctx or {}).get("request_id") or "").strip()
+        or str((session_ctx or {}).get("client_request_id") or "").strip()
+        or _request_id_from_turn_request(resolved_turn_request)
+        or normalized_thread_id
+    )
     generation_session_ctx = dict(session_ctx or {})
-    generation_session_ctx.setdefault("request_id", normalized_thread_id)
+    if normalized_request_id:
+        generation_session_ctx["request_id"] = normalized_request_id
+        generation_session_ctx["client_request_id"] = normalized_request_id
     generation_session_ctx.setdefault("tenant_id", normalized_workspace_id)
     generation_session_ctx.setdefault("workspace_id", normalized_workspace_id)
     normalized_requested_provider = prepared.normalized_requested_provider
@@ -1201,6 +1240,10 @@ def build_chat_turn_event_stream(
 ) -> Iterator[Dict[str, Any]]:
     context = session_ctx if isinstance(session_ctx, dict) else {}
     meta = request_meta if isinstance(request_meta, dict) else {}
+    request_id = str(meta.get("request_id") or meta.get("client_request_id") or "").strip()
+    if request_id:
+        context["request_id"] = request_id
+        context["client_request_id"] = request_id
     trace_context = _resume_trace_context(
         session_ctx=context,
         request_meta=meta,

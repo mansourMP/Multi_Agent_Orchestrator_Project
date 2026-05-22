@@ -141,12 +141,12 @@ def _runtime_target_status_reason(target: Dict[str, Any]) -> str:
         return "This Device is ready. Sensitive device actions follow the selected access mode."
     if target_id == "self_host_runtime":
         if not available:
-            return "No self-hosted node is configured for this workspace yet."
+            return "No Server/VPS runtime is configured for this workspace yet."
         if not online:
-            return "The self-hosted node is configured but currently offline."
+            return "The Server/VPS runtime is configured but currently offline."
         if not healthy:
-            return "The self-hosted node is reachable but needs attention before Sage can trust it."
-        return "The self-hosted node is ready under the workspace policy boundary."
+            return "The Server/VPS runtime is reachable but needs attention before Sage can trust it."
+        return "The Server/VPS runtime is ready under the workspace policy boundary."
     if target_id == "sage_cloud_computer":
         if not available:
             return "Cloud Computer is not enabled for this workspace. Sage will not allocate a hosted computer automatically."

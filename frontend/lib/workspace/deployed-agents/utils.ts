@@ -148,7 +148,7 @@ export function normalizeRuntimeAttachments(payload: unknown): RuntimeAttachment
       attachmentKind: readString(item.attachment_kind),
       runtimeProfileId: readString(item.runtime_profile_id),
       runtimeNodeId: readString(item.runtime_node_id),
-      label: readString(item.label, 'Self-hosted node'),
+      label: readString(item.label, 'Server/VPS'),
       online: readBoolean(item.online),
       healthy: readBoolean(item.healthy),
       ownerApproved: readBoolean(item.owner_approved),
@@ -163,7 +163,7 @@ export function normalizeRuntimeAttachments(payload: unknown): RuntimeAttachment
 
 export function selfHostedNodeGateReason(node: RuntimeAttachmentSnapshot | null): string | null {
   if (!node) {
-    return 'Select a self-hosted node.';
+    return 'Select a Server/VPS runtime.';
   }
   if (!node.runtimeProfileId) {
     return 'Selected node is missing its binding id.';
@@ -1677,7 +1677,7 @@ export function isWizardScopedError(message: string | null): boolean {
   const normalized = readString(message).toLowerCase();
   return Boolean(normalized) && (
     normalized.includes('self-hosted mode requires selecting')
-    || normalized.includes('select a self-hosted node')
+    || normalized.includes('select a server/vps runtime')
     || normalized.includes('accept the privacy contract')
     || normalized.includes('accept the safety contract')
     || normalized.includes('daily message limit')

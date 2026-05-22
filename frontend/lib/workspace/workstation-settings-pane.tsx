@@ -42,9 +42,9 @@ const SETTINGS_SECTIONS: Array<{
   {
     id: 'devices',
     label: 'Devices',
-    eyebrow: 'Runtime',
-    title: 'Runtime targets',
-    description: 'Cloud, connected device, cloud computer, and self-hosted node readiness.',
+    eyebrow: 'Agent Computer',
+    title: 'Agent Computer',
+    description: 'Optional computer power for browser, files, shell, screenshots, and apps.',
   },
   {
     id: 'usage',
@@ -463,10 +463,13 @@ export function WorkstationSettingsPane() {
   );
   const preferredComputerLabel = preferredRuntimeTarget
     ? preferredRuntimeTarget.id === 'local_companion' || preferredRuntimeTarget.canonicalId === 'user_device_gateway'
-      ? 'This Device'
+      ? 'Agent Computer · This Device'
       : preferredRuntimeTarget.id === 'sage_cloud_computer'
         || preferredRuntimeTarget.canonicalId === 'empyralis_cloud_computer'
-        ? 'Cloud Computer'
+        ? 'Agent Computer · Cloud Computer'
+        : preferredRuntimeTarget.id === 'self_host_runtime'
+          || preferredRuntimeTarget.canonicalId === 'self_hosted_node'
+          ? 'Agent Computer · Server/VPS'
         : preferredRuntimeTarget.publicLabel || preferredRuntimeTarget.label
     : 'Cloud';
   const activeSection = SETTINGS_SECTIONS.find((section) => section.id === selectedSection) ?? SETTINGS_SECTIONS[0];
@@ -662,7 +665,7 @@ export function WorkstationSettingsPane() {
               <FormGrid>
                 <FormReadout label="Deployment mode" value={humanizeToken(bootstrap.runtime.deploymentMode)} />
                 <FormReadout
-                  label="Preferred runtime target"
+                  label="Preferred runtime"
                   value={preferredComputerLabel}
                 />
                 <FormReadout
@@ -678,7 +681,9 @@ export function WorkstationSettingsPane() {
                 {bootstrap.runtime.runtimeTargets.map((target) => (
                   <article key={target.id} className="settings-detail-card">
                     <div className="settings-detail-card__header">
-                      <strong className="settings-detail-card__title">{target.label}</strong>
+                      <strong className="settings-detail-card__title">
+                        {target.id === 'cloud_default' ? 'Cloud' : `Agent Computer · ${target.label}`}
+                      </strong>
                       <span className={`settings-status settings-status--${target.online && target.healthy ? 'ready' : target.available ? 'warning' : 'muted'}`}>
                         {target.statusLabel || humanizeToken(target.status)}
                       </span>

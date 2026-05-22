@@ -378,7 +378,7 @@ export function AgentWizard({
     }
     if (stateForSave.runtimePlacement === 'customer_hosted') {
       if (!stateForSave.selfHostedRuntimeProfileId.trim()) {
-        setWizardErrorMessage('Self-hosted mode requires selecting a self-hosted node.');
+        setWizardErrorMessage('Server/VPS mode requires selecting a runtime.');
         return;
       }
       if (selfHostedWizardNodeBlocker) {
@@ -1013,18 +1013,18 @@ export function AgentWizard({
                 <div className="app-stack-3">
                   <StateBanner
                     tone="neutral"
-                    title="Self-hosted execution boundary"
-                    detail="This mode runs only on your selected customer-owned node. Platform-hosted compute is not used as fallback."
+                    title="Server/VPS execution boundary"
+                    detail="This mode runs only on your selected customer-owned runtime. Platform-hosted compute is not used as fallback."
                   />
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Self-hosted node" hint="Choose an enrolled self-hosted node in this workspace.">
+                    <FormField label="Server/VPS runtime" hint="Choose an enrolled Server/VPS runtime in this workspace.">
                       <FormSelect
                         value={wizardState.selfHostedRuntimeProfileId}
                         onChange={(event) => setWizardField('selfHostedRuntimeProfileId', event.currentTarget.value)}
                         disabled={isLoadingRuntimeAttachments}
                       >
                         <option value="">
-                          {isLoadingRuntimeAttachments ? 'Loading nodes…' : selfHostedNodeOptions.length > 0 ? 'Select a node' : 'No enrolled nodes found'}
+                          {isLoadingRuntimeAttachments ? 'Loading runtimes...' : selfHostedNodeOptions.length > 0 ? 'Select a runtime' : 'No enrolled runtimes found'}
                         </option>
                         {selfHostedNodeOptions.map((node) => (
                           <option key={node.runtimeProfileId} value={node.runtimeProfileId}>
@@ -1058,9 +1058,9 @@ export function AgentWizard({
                     </FormField>
                   </FormGrid>
                   {selfHostedWizardNodeBlocker ? (
-                    <StateBanner tone="warning" title="Self-hosted setup required" detail={selfHostedWizardNodeBlocker} />
+                    <StateBanner tone="warning" title="Server/VPS setup required" detail={selfHostedWizardNodeBlocker} />
                   ) : (
-                    <StateBanner tone="success" title="Self-hosted node ready" detail="Node selection and health checks passed for this draft." />
+                    <StateBanner tone="success" title="Server/VPS ready" detail="Runtime selection and health checks passed for this draft." />
                   )}
                 </div>
               ) : null}

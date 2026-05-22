@@ -358,7 +358,7 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
                 "cloud_default": "Cloud",
                 "user_device_gateway": "This Device",
                 "empyralis_cloud_computer": "Cloud Computer",
-                "self_hosted_node": "Self-hosted Node",
+                "self_hosted_node": "Server/VPS",
             },
         )
 
@@ -368,8 +368,8 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(runtime_attachment_service.public_runtime_target_label("user_device_gateway"), "This Device")
         self.assertEqual(runtime_attachment_service.public_runtime_target_label("sage_cloud_computer"), "Cloud Computer")
         self.assertEqual(runtime_attachment_service.public_runtime_target_label("empyralis_cloud_computer"), "Cloud Computer")
-        self.assertEqual(runtime_attachment_service.public_runtime_target_label("self_host_runtime"), "Self-hosted Node")
-        self.assertEqual(runtime_attachment_service.public_runtime_target_label("self_hosted_node"), "Self-hosted Node")
+        self.assertEqual(runtime_attachment_service.public_runtime_target_label("self_host_runtime"), "Server/VPS")
+        self.assertEqual(runtime_attachment_service.public_runtime_target_label("self_hosted_node"), "Server/VPS")
 
     def test_list_workspace_runtime_attachments_maps_cloud_computer_profile(self) -> None:
         inventory = asyncio.run(

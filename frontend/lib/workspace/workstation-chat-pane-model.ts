@@ -2210,15 +2210,16 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
   const local = localCompanionTarget(runtimeTargets);
   const preferredLabel = preferred?.label ?? 'Cloud runtime';
   const preferredStatus = preferred?.statusLabel ?? (preferred?.online ? 'Ready' : 'Unavailable');
+  const agentComputerLabel = 'Agent Computer';
 
   if (!local || !local.available) {
     return {
       tone: 'neutral',
       title: `${preferredLabel} is carrying Sage`,
       meta: `${preferredStatus} · cloud-first`,
-      body: 'Sage stays in cloud mode until a computer is connected. Computer work will not start from this workspace yet.',
+      body: 'Sage stays in cloud mode until an Agent Computer is connected. Computer work will not start from this workspace yet.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: 'Computer · needs connection',
+      localPill: `${agentComputerLabel} · needs connection`,
     };
   }
 
@@ -2229,7 +2230,7 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
       meta: `${preferredLabel} remains active`,
       body: local.statusReason || 'Sage will stay in cloud mode until This Device reconnects.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: `Computer · ${local.statusLabel ?? 'Offline'}`,
+      localPill: `${agentComputerLabel} · This Device · ${local.statusLabel ?? 'Offline'}`,
     };
   }
 
@@ -2240,19 +2241,19 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
       meta: `${preferredLabel} remains active`,
       body: local.statusReason || 'Sage will avoid computer work until the connection is healthy again.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: `Computer · ${local.statusLabel ?? 'Needs attention'}`,
+      localPill: `${agentComputerLabel} · This Device · ${local.statusLabel ?? 'Needs attention'}`,
     };
   }
 
   return {
     tone: 'success',
     title: 'This Device is ready',
-    meta: `${local.sampleAttachmentLabel ?? local.label} · Default Guarded`,
+    meta: `${agentComputerLabel} · ${local.sampleAttachmentLabel ?? local.label} · Default Guarded`,
     body: local.supportsFullAccess
       ? 'Sage still uses cloud execution for ordinary turns. Device work starts in Default Guarded mode, and dedicated hardware can be switched to Autonomous Agent mode during setup.'
       : 'Sage still uses cloud execution for ordinary turns. Device work starts in Default Guarded mode on This Device.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
-    localPill: `Computer · ${local.statusLabel ?? 'Ready'}`,
+    localPill: `${agentComputerLabel} · This Device · ${local.statusLabel ?? 'Ready'}`,
   };
 }
 

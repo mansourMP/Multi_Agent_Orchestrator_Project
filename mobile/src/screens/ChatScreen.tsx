@@ -199,10 +199,14 @@ function runtimeAccessModeFromRecord(record: Record<string, unknown> | null | un
 function runtimeTargetLabelFromToken(value: unknown) {
   const token = String(value ?? "").trim().toLowerCase();
   if (token.includes("cloud_computer") || token.includes("browser_session")) return "Cloud Computer";
-  if (token.includes("self_host") || token.includes("node") || token.includes("vps")) return "Self-hosted Node";
+  if (token.includes("self_host") || token.includes("node") || token.includes("vps")) return "Server/VPS";
   if (token.includes("gateway") || token.includes("local") || token.includes("companion") || token.includes("user_device")) return "This Device";
   if (token.includes("cloud")) return "Cloud";
   return "";
+}
+
+function agentComputerPill(source: string, access: string) {
+  return `Agent Computer · ${source}${access ? ` · ${access}` : ""}`;
 }
 
 function localGatewayLabel(gateway: Record<string, unknown>) {
@@ -231,12 +235,12 @@ function runtimePillFromState(params: {
   if (Object.keys(gateway).length > 0) {
     const access = runtimeAccessModeLabel(runtimeAccessModeFromRecord(gateway));
     if (["offline", "not_attached", "disconnected"].includes(gatewayStatus)) {
-      return { target: "Gateway offline", access };
+      return { target: "Agent Computer · Offline", access: "" };
     }
     if (["degraded", "blocked", "unhealthy", "warn"].includes(gatewayStatus)) {
-      return { target: "Gateway degraded", access };
+      return { target: agentComputerPill("Degraded", access), access: "" };
     }
-    return { target: localGatewayLabel(gateway), access };
+    return { target: agentComputerPill(localGatewayLabel(gateway), access), access: "" };
   }
 
   const attachments = Array.isArray(params.runtimeAttachments?.attachments)
@@ -251,17 +255,17 @@ function runtimePillFromState(params: {
     const status = readText(preferred.status).toLowerCase();
     const access = runtimeAccessModeLabel(runtimeAccessModeFromRecord(preferred));
     if (kind === "cloud_computer") {
-      return { target: preferred.healthy === false ? "Cloud Computer degraded" : "Cloud Computer", access };
+      return { target: agentComputerPill(preferred.healthy === false ? "Cloud Computer degraded" : "Cloud Computer", access), access: "" };
     }
     if (kind === "self_hosted_business_node") {
-      if (preferred.online === false || status === "offline") return { target: "Node offline", access };
-      if (preferred.healthy === false || ["degraded", "unhealthy"].includes(status)) return { target: "Node degraded", access };
-      return { target: "Self-hosted Node", access };
+      if (preferred.online === false || status === "offline") return { target: "Agent Computer · Server/VPS offline", access: "" };
+      if (preferred.healthy === false || ["degraded", "unhealthy"].includes(status)) return { target: agentComputerPill("Server/VPS degraded", access), access: "" };
+      return { target: agentComputerPill("Server/VPS", access), access: "" };
     }
-    return { target: preferred.online === false ? "Gateway offline" : "This Device", access };
+    return { target: preferred.online === false ? "Agent Computer · Offline" : agentComputerPill("This Device", access), access: "" };
   }
 
-  return { target: "Cloud", access: runtimeAccessModeLabel("") };
+  return { target: "Cloud", access: "" };
 }
 
 function collectMemoryFacts(value: unknown, limit = 3): string[] {
@@ -1394,7 +1398,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
             }}
           >
             <Text numberOfLines={1} style={{ fontSize: 11.5, color: theme.colors.textSecondary, fontFamily: "DMSans_700Bold" }}>
-              {runtimePill.target} · {runtimePill.access}
+              {runtimePill.access ? `${runtimePill.target} · ${runtimePill.access}` : runtimePill.target}
             </Text>
           </TouchableOpacity>
         </View>

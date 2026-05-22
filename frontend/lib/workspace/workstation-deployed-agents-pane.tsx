@@ -223,7 +223,7 @@ export function WorkstationDeployedAgentsPane({
       return null;
     }
     if (!selectedAgentSelfHostedProfileId) {
-      return 'Self-hosted deployment requires an explicit self-hosted node binding.';
+      return 'Server/VPS deployment requires an explicit runtime binding.';
     }
     return selfHostedNodeGateReason(selectedAgentSelfHostedNode);
   }, [selectedAgentRuntimePlacement, selectedAgentSelfHostedNode, selectedAgentSelfHostedProfileId]);
@@ -358,7 +358,7 @@ export function WorkstationDeployedAgentsPane({
       setRuntimeAttachments(normalizeRuntimeAttachments(payload));
     } catch (error) {
       setRuntimeAttachments([]);
-      setErrorMessage(error instanceof Error ? error.message : 'Self-hosted node inventory is unavailable.');
+      setErrorMessage(error instanceof Error ? error.message : 'Server/VPS inventory is unavailable.');
     } finally {
       setIsLoadingRuntimeAttachments(false);
     }

@@ -6,7 +6,8 @@ This document freezes the runtime vocabulary for new product and implementation 
 
 Normal users should see two concepts only:
 
-- Runtime target: `Cloud`, `This Device`, `Cloud Computer`, `Self-hosted Node`
+- Runtime target: `Cloud`, `Agent Computer`
+- Agent Computer source: `This Device`, `Dedicated Computer`, `Cloud Computer`, `Server/VPS`
 - Access mode: `Default Guarded`, `Autonomous Agent`
 
 `Autonomous Agent` means Empyralis does not ask action-by-action approval prompts for that dedicated runtime. It does not bypass owner binding, tenant/workspace isolation, revocation, offline/degraded state, quota, billing, audit, stop/cancel, provider limits, or OS boundaries.
@@ -26,7 +27,7 @@ Legacy target IDs remain compatibility aliases at API boundaries:
 - `sage_cloud_computer` -> `empyralis_cloud_computer`
 - `self_host_runtime` -> `self_hosted_node`
 
-Do not create new public names for the same runtime concepts.
+Do not create new public names for the same runtime concepts. In ordinary UI, group every non-cloud runtime under `Agent Computer`; use `Server/VPS` instead of `Self-hosted Node` in advanced/business setup copy.
 
 ## Architecture Direction
 

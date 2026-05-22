@@ -62,7 +62,7 @@ PUBLIC_RUNTIME_TARGET_LABEL_BY_CANONICAL: dict[str, str] = {
     "cloud_default": "Cloud",
     "user_device_gateway": "This Device",
     "empyralis_cloud_computer": "Cloud Computer",
-    "self_hosted_node": "Self-hosted Node",
+    "self_hosted_node": "Server/VPS",
 }
 CLOUD_COMPUTER_RUNTIME_CLASSES = {"cloud_computer", "cloud_desktop", "cloud_sandbox", "hosted_cloud_computer"}
 SELF_HOSTED_NODE_KINDS = {"mac_mini", "mac", "linux_server", "docker_host"}
@@ -144,7 +144,7 @@ RUNTIME_TARGET_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Paired user device execution routed through the same workspace identity and policy model.",
     },
     "self_host_runtime": {
-        "label": "Self-hosted Node",
+        "label": "Server/VPS",
         "attachment_kind": "self_hosted_business_node",
         "execution_target": "cloud",
         "connection_mode": "workspace_hosted",

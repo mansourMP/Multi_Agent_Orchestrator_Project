@@ -257,7 +257,7 @@ function runtimeBindingLabel(value: unknown): string {
     case 'my_computer_agent':
       return 'This Device';
     case 'self_hosted_agent':
-      return 'Self-hosted Node';
+      return 'Server/VPS';
     default:
       return humanizeToken(value, 'Computer session');
   }

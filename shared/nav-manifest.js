@@ -4,7 +4,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'tasks', 'artifacts', 'activity', 'approvals', 'notifications'],
+    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'tasks', 'artifacts', 'approvals', 'notifications'],
     direct: true,
   },
   {
@@ -136,7 +136,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/inbox/index',
       screenName: 'inbox/index',
       groupId: 'sage',
-      tabLabel: 'Activity',
+      tabLabel: 'Inbox',
       includeInBottomTabs: true,
     },
   },
@@ -145,7 +145,9 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     label: 'Activity',
     segment: 'activity',
     destinationId: 'sage',
-    web: {},
+    web: {
+      hiddenFromNavigation: true,
+    },
   },
   {
     id: 'tasks',

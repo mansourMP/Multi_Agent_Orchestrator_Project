@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { Activity, Bot, Compass, LayoutGrid, Menu, Monitor, Package, Plus } from 'lucide-react';
+import { Bot, Compass, LayoutGrid, Menu, Monitor, Package, Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
@@ -123,7 +123,7 @@ type ComputerConnectionStatus = {
 };
 
 const MOBILE_DESTINATION_NAV: readonly {
-  id: 'chat' | 'studio' | 'marketplace' | 'applications' | 'activity';
+  id: 'chat' | 'studio' | 'marketplace' | 'applications';
   label: string;
   defaultRouteId: WorkspaceRouteId;
   icon: LucideIcon;
@@ -132,7 +132,6 @@ const MOBILE_DESTINATION_NAV: readonly {
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
   { id: 'applications', label: 'Applications', defaultRouteId: 'applications', icon: Package },
-  { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
 ];
 
 function readString(value: unknown, fallback = ''): string {
@@ -404,12 +403,8 @@ export function WorkstationKernelShell({
     return getWorkspaceNavRouteDefinition(activeRouteId).destinationId;
   }, [activeRouteId]);
   const activeMobileDestinationId = useMemo(() => {
-    if (
-      activeRouteId === 'activity'
-      || activeRouteId === 'approvals'
-      || activeRouteId === 'notifications'
-    ) {
-      return 'activity';
+    if (activeRouteId === 'activity' || activeRouteId === 'approvals' || activeRouteId === 'notifications') {
+      return 'chat';
     }
     if (
       activeDestinationId === 'studio'

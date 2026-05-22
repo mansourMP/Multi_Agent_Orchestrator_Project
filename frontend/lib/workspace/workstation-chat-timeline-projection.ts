@@ -19,6 +19,7 @@ export type TimelineProjectionOptions = {
   pendingUserMessage: WorkstationChatMessageRecord | null;
   isSending: boolean;
   liveTimelineEvents: TimelineProjectionEvent[];
+  legacyTraceEventsByTraceId?: Record<string, TimelineProjectionEvent[]>;
   showProjectedAssistant: boolean;
   isSyntheticTranscriptMessage: (message: WorkstationChatMessageRecord) => boolean;
   canonicalIncludesMessage: (
@@ -57,6 +58,183 @@ function transcriptEventsFromMetadata(metadata: Record<string, unknown>): Timeli
     .filter((item): item is TimelineProjectionEvent => item !== null);
 }
 
+const SAFE_TRACE_DATA_KEYS = new Set([
+  'action',
+  'action_id',
+  'approval_id',
+  'artifact_id',
+  'artifact_ids',
+  'artifactId',
+  'caption',
+  'capability_id',
+  'code',
+  'decision',
+  'delivery_transport',
+  'description',
+  'detail',
+  'event',
+  'exit_code',
+  'filename',
+  'height',
+  'id',
+  'kind',
+  'label',
+  'message',
+  'mime_type',
+  'mimeType',
+  'name',
+  'normalized_approval',
+  'path',
+  'query',
+  'request_id',
+  'resolution',
+  'runtime_access_mode',
+  'runtime_session_id',
+  'runtime_target',
+  'state',
+  'status',
+  'summary',
+  'target_summary',
+  'title',
+  'tool_call_id',
+  'tool_name',
+  'url',
+  'width',
+]);
+
+const SAFE_TRACE_METADATA_KEYS = new Set([
+  'action_id',
+  'approval_id',
+  'artifact_id',
+  'code',
+  'label',
+  'request_id',
+  'runtime_access_mode',
+  'runtime_session_id',
+  'runtime_target',
+  'status',
+  'summary',
+  'title',
+]);
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function looksInternalText(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    (normalized.startsWith('{') && normalized.endsWith('}'))
+    || (normalized.startsWith('[') && normalized.endsWith(']'))
+  ) {
+    return true;
+  }
+  const lowered = normalized.toLowerCase();
+  return lowered.includes('activity_event_id')
+    || lowered.includes('stacktrace')
+    || lowered.includes('trace_id')
+    || lowered.includes('raw_');
+}
+
+function safeScalar(value: unknown, key = ''): string | number | boolean | null {
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/\0/g, '').trim();
+    if (
+      ['caption', 'description', 'detail', 'label', 'message', 'summary', 'title'].includes(key)
+      && looksInternalText(cleaned)
+    ) {
+      return null;
+    }
+    return cleaned.slice(0, 500);
+  }
+  return null;
+}
+
+function sanitizeSafeRecord(value: unknown, safeKeys: Set<string>, depth = 0): Record<string, unknown> {
+  const record = readRecord(value);
+  if (Object.keys(record).length === 0 || depth > 2) {
+    return {};
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (!safeKeys.has(key)) {
+      continue;
+    }
+    if (key === 'metadata') {
+      const metadata = sanitizeSafeRecord(item, SAFE_TRACE_METADATA_KEYS, depth + 1);
+      if (Object.keys(metadata).length > 0) {
+        sanitized[key] = metadata;
+      }
+      continue;
+    }
+    const scalar = safeScalar(item, key);
+    if (scalar !== null) {
+      sanitized[key] = scalar;
+      continue;
+    }
+    if (Array.isArray(item)) {
+      const values = item
+        .slice(0, 20)
+        .map((entry) => safeScalar(entry, key))
+        .filter((entry): entry is string | number | boolean => entry !== null);
+      if (values.length > 0) {
+        sanitized[key] = values;
+      }
+      continue;
+    }
+    const nested = sanitizeSafeRecord(item, key === 'normalized_approval' ? SAFE_TRACE_DATA_KEYS : safeKeys, depth + 1);
+    if (Object.keys(nested).length > 0) {
+      sanitized[key] = nested;
+    }
+  }
+  return sanitized;
+}
+
+function safeTraceProjectionEvent(record: Record<string, unknown>, index: number): TimelineProjectionEvent | null {
+  const eventType = readString(record.event_type).toLowerCase();
+  if (!eventType || eventType === 'trace.started') {
+    return null;
+  }
+  const data = sanitizeSafeRecord(record.data ?? record.payload, SAFE_TRACE_DATA_KEYS);
+  const metadata = sanitizeSafeRecord(record.metadata, SAFE_TRACE_METADATA_KEYS);
+  const payload: Record<string, unknown> = {
+    event_type: eventType,
+    item_id: readString(record.item_id) || undefined,
+    tool_call_id: readString(record.tool_call_id) || undefined,
+    approval_id: readString(record.approval_id) || undefined,
+    artifact_id: readString(record.artifact_id) || undefined,
+    seq: typeof record.seq === 'number' ? record.seq : index,
+    ts: readString(record.ts) || undefined,
+  };
+  if (Object.keys(data).length > 0) {
+    payload.data = data;
+  }
+  if (Object.keys(metadata).length > 0) {
+    payload.metadata = metadata;
+  }
+  return { type: 'trace', payload };
+}
+
+export function safeTimelineEventsFromTraceReplay(replay: unknown): TimelineProjectionEvent[] {
+  const record = readRecord(replay);
+  const rawEvents = Array.isArray(record.events) ? record.events : [];
+  return rawEvents
+    .map((item, index) => safeTraceProjectionEvent(readRecord(item), index))
+    .filter((event): event is TimelineProjectionEvent => event !== null)
+    .slice(-200);
+}
+
+function traceIdFromMetadata(metadata: Record<string, unknown>): string {
+  const contextUsed = readRecord(metadata.context_used);
+  return readString(metadata.trace_id) || readString(contextUsed.trace_id);
+}
+
 function isProofCell(cell: CodexTranscriptCell): boolean {
   return (
     cell.kind === 'reasoning_summary'
@@ -73,13 +251,16 @@ function isProofCell(cell: CodexTranscriptCell): boolean {
 
 function replayProofCellsForMessage(
   message: WorkstationChatMessageRecord,
-  options: Pick<TimelineProjectionOptions, 'isProviderGateSystemCell'>,
+  options: Pick<TimelineProjectionOptions, 'isProviderGateSystemCell' | 'legacyTraceEventsByTraceId'>,
 ): CodexTranscriptCell[] {
   const events = transcriptEventsFromMetadata(message.metadata);
-  if (events.length === 0) {
+  const replayEvents = events.length > 0
+    ? events
+    : options.legacyTraceEventsByTraceId?.[traceIdFromMetadata(message.metadata)] ?? [];
+  if (replayEvents.length === 0) {
     return [];
   }
-  return projectCodexTimeline(events).cells
+  return projectCodexTimeline(replayEvents).cells
     .filter((cell) => isProofCell(cell) && !options.isProviderGateSystemCell(cell))
     .map((cell) => ({
       ...cell,

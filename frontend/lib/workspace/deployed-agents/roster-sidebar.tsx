@@ -90,7 +90,7 @@ export interface AgentRosterSidebarProps {
   recentlyCreatedAgentId: string | null;
   selectedAgent: DeployedAgentRecord | null;
   onDismissRecentlyCreated: () => void;
-  onOpenActivity: () => void;
+  onOpenChatProof: () => void;
   onOpenBilling: () => void;
   onExportAudit: (agentId: string) => void;
   onOpenAssistantDetail: (id: string) => void;
@@ -122,7 +122,7 @@ export const AgentRosterSidebar = memo(({
   recentlyCreatedAgentId,
   selectedAgent,
   onDismissRecentlyCreated,
-  onOpenActivity,
+  onOpenChatProof,
   onOpenBilling,
   onExportAudit,
   onOpenAssistantDetail,
@@ -160,7 +160,7 @@ export const AgentRosterSidebar = memo(({
               className="studio-panel studio-panel--demo-proof"
               eyebrow="Next step"
               title="Show proof in under a minute"
-              subtitle="Open activity to show customer work, then open billing and credits to show the revenue path."
+              subtitle="Open the chat transcript to show customer work, then open billing and credits to show the revenue path."
               actions={(
                 <div className="app-inline-actions app-inline-actions--tight">
                   <AppButton type="button" tone="secondary" onClick={onDismissRecentlyCreated}>
@@ -170,8 +170,8 @@ export const AgentRosterSidebar = memo(({
               )}
             >
               <div className="app-inline-actions app-inline-actions--tight studio-inline-wrap">
-                <AppButton type="button" onClick={onOpenActivity}>
-                  Open Activity proof
+                <AppButton type="button" onClick={onOpenChatProof}>
+                  Open chat proof
                 </AppButton>
                 <AppButton type="button" tone="secondary" onClick={onOpenBilling}>
                   Open billing & credits

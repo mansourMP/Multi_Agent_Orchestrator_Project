@@ -3,12 +3,15 @@ import { expect, test } from '@playwright/test';
 
 import { loginAsOwner } from './support/auth';
 
-function installTransparencyTurnStub(page) {
-  return page.addInitScript(() => {
+function installTransparencyTurnStub(page, initialSavedState = null) {
+  return page.addInitScript((seedState) => {
     const originalFetch = window.fetch.bind(window);
     const encoder = new TextEncoder();
     const storageKey = 'empyralis-transparency-turn-stub';
     const savedState = (() => {
+      if (seedState && typeof seedState === 'object') {
+        return seedState;
+      }
       try {
         return JSON.parse(sessionStorage.getItem(storageKey) || '{}') || {};
       } catch {
@@ -277,6 +280,60 @@ function installTransparencyTurnStub(page) {
         return jsonResponse({ items: [] });
       }
 
+      if (url.includes('/api/agent-traces/trace-legacy-1')) {
+        return jsonResponse({
+          trace: {
+            id: 'trace-legacy-1',
+            workspace_id: 'ws-1',
+            thread_id: 'primary',
+            outcome: 'success',
+          },
+          events: [
+            {
+              id: 'legacy-event-1',
+              trace_id: 'trace-legacy-1',
+              seq: 1,
+              ts: '2026-05-23T10:00:00Z',
+              event_type: 'search.query',
+              tool_call_id: 'legacy-search',
+              data: {
+                query: 'legacy trace replay',
+                raw_output: 'hidden raw output',
+              },
+            },
+            {
+              id: 'legacy-event-2',
+              trace_id: 'trace-legacy-1',
+              seq: 2,
+              ts: '2026-05-23T10:00:01Z',
+              event_type: 'tool.result',
+              tool_call_id: 'legacy-shell',
+              data: {
+                tool_name: 'shell__exec',
+                input: {
+                  command: 'rm -rf hidden-raw-command',
+                },
+                status: 'done',
+                summary: 'Legacy command completed.',
+              },
+            },
+            {
+              id: 'legacy-event-3',
+              trace_id: 'trace-legacy-1',
+              seq: 3,
+              ts: '2026-05-23T10:00:02Z',
+              event_type: 'screenshot.captured',
+              item_id: 'legacy-shot',
+              data: {
+                artifact_id: 'legacy-artifact-1',
+                status: 'done',
+                summary: 'Legacy screenshot captured.',
+              },
+            },
+          ],
+        });
+      }
+
       if (url.includes('/api/turn')) {
         const reply = 'I reviewed the workspace activity and I am ready to continue.';
         state.pendingTranscriptEvents = [];
@@ -382,6 +439,7 @@ function installTransparencyTurnStub(page) {
               event_type: 'screenshot.captured',
               item_id: 'screenshot-1',
               data: {
+                artifact_id: 'artifact-screenshot-1',
                 status: 'done',
                 summary: 'Captured the settings panel.',
               },
@@ -445,7 +503,7 @@ function installTransparencyTurnStub(page) {
 
       return originalFetch(input, init);
     };
-  });
+  }, initialSavedState);
 }
 
 test.describe('chat transparency timeline', () => {
@@ -458,6 +516,10 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('Light');
     await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('Empyralis credits');
     const composer = page.locator('[data-workstation-chat-composer="root"] textarea');
+    await composer.fill('/');
+    await expect(page.locator('.app-chat-composer__command-list')).toBeVisible();
+    await expect(page.getByText('/proof')).toHaveCount(0);
+    await expect(page.getByRole('option', { name: /show proof/i })).toHaveCount(0);
     await composer.fill('show me what you are doing');
     await composer.press('Enter');
 
@@ -468,6 +530,7 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_telegram"]')).toContainText('Sending Telegram');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_whatsapp"]')).toContainText('Sending WhatsApp');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-screenshot-1/);
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval approved');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="done"]')).toContainText('Done');
 
@@ -487,5 +550,41 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Used browser');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
+  });
+
+  test('replays older trace IDs inline without exposing raw trace data', async ({ page }) => {
+    await installTransparencyTurnStub(page, {
+      persistedTurns: [
+        {
+          id: 'turn-user-legacy',
+          role: 'user',
+          status: 'completed',
+          content: 'show legacy work',
+          created_at: '2026-05-23T10:00:00Z',
+          metadata: {},
+        },
+        {
+          id: 'turn-assistant-legacy',
+          role: 'assistant',
+          status: 'completed',
+          content: 'Legacy answer is ready.',
+          created_at: '2026-05-23T10:00:03Z',
+          metadata: {
+            trace_id: 'trace-legacy-1',
+          },
+        },
+      ],
+    });
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/sage');
+
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="search"]')).toContainText('legacy trace replay');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Ran command');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /legacy-artifact-1/);
+    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'Legacy answer is ready.' })).toBeVisible();
+    await expect(page.getByText(/trace-legacy-1/i)).toHaveCount(0);
+    await expect(page.getByText(/hidden raw output/i)).toHaveCount(0);
+    await expect(page.getByText(/rm -rf hidden-raw-command/i)).toHaveCount(0);
   });
 });

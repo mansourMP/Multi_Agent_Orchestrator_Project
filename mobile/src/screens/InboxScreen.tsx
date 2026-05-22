@@ -61,11 +61,11 @@ export default function InboxScreen() {
       contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 36 }}
       showsVerticalScrollIndicator={false}
     >
-      <PrimaryScreenHeader title="Activity" subtitle="Simple updates from Sage and your phone." />
+      <PrimaryScreenHeader title="Inbox" subtitle="Simple updates from Sage and your phone." />
 
       {!connected ? (
         <FeedCard
-          title="Finish setup to see activity"
+          title="Finish setup to see updates"
           subtitle="Once your phone is connected, important updates will appear here."
           actionLabel="Open Phone Access"
           onPress={() => router.push("/session")}

@@ -1171,8 +1171,8 @@ export function WorkstationDeployedAgentsPane({
     }
   }
 
-  const handleOpenActivity = useStableEvent(() => {
-    router.push(`/w/${encodeURIComponent(workspaceId)}/activity`);
+  const handleOpenChatProof = useStableEvent(() => {
+    router.push(`/w/${encodeURIComponent(workspaceId)}/sage`);
   });
 
   const handleOpenBilling = useStableEvent(() => {
@@ -1324,7 +1324,7 @@ export function WorkstationDeployedAgentsPane({
               recentlyCreatedAgentId={recentlyCreatedAgentId}
               selectedAgent={selectedAgent}
               onDismissRecentlyCreated={handleDismissRecentlyCreated}
-              onOpenActivity={handleOpenActivity}
+              onOpenChatProof={handleOpenChatProof}
               onOpenBilling={handleOpenBilling}
               onExportAudit={handleExportAudit}
               onOpenAssistantDetail={handleOpenAssistantDetail}

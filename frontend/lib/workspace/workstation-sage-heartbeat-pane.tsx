@@ -420,7 +420,7 @@ export function WorkstationSageHeartbeatPane() {
       : snapshot?.laneQueue.acceptingNewWork
         ? 'Ready'
         : 'Paused';
-  const activityHref = routeManifest.routeIndex.activity?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/activity`;
+  const chatHref = routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/sage`;
   const approvalsHref = routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`;
   const workerLaneRows = useMemo(() => {
     if (!snapshot) {
@@ -468,8 +468,8 @@ export function WorkstationSageHeartbeatPane() {
                   >
                     Refresh
                   </button>
-                  <Link href={activityHref} className="app-link-button app-link-button--secondary">
-                    Open Activity
+                  <Link href={chatHref} className="app-link-button app-link-button--secondary">
+                    Open chat
                   </Link>
                   <Link href={approvalsHref} className="app-link-button app-link-button--secondary">
                     Approvals

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 
 import type { CodexTranscriptCell } from './cells';
+import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 
 export type CodexApprovalAction = 'allow_once' | 'allow_session' | 'deny';
 
@@ -363,6 +364,7 @@ function SystemInlineRow({
   secondary,
   state,
   dimmed,
+  action,
 }: {
   icon: ReactNode;
   kind: string;
@@ -370,6 +372,7 @@ function SystemInlineRow({
   secondary: string;
   state: 'running' | 'done' | 'error';
   dimmed: boolean;
+  action?: ReactNode;
 }) {
   return (
     <article
@@ -380,6 +383,7 @@ function SystemInlineRow({
       <span className="app-chat-system-row__icon" aria-hidden="true">{icon}</span>
       <span className="app-chat-system-row__primary">{primary}</span>
       <span className="app-chat-system-row__secondary">{secondary}</span>
+      {action ? <span className="app-chat-system-row__action">{action}</span> : null}
     </article>
   );
 }
@@ -522,6 +526,8 @@ export function FileChangeCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
 }
 
 export function ScreenshotCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'screenshot' }> }) {
+  const services = useWorkspaceServices();
+  const artifactHref = cell.artifactId ? services.client.artifactDownloadUrl(cell.artifactId) : null;
   return (
     <SystemInlineRow
       kind="artifact"
@@ -532,6 +538,11 @@ export function ScreenshotCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
       secondary={compactSystemDetail(cell.caption, cell.status === 'done' ? 'Captured' : 'Failed')}
       state={cell.status}
       dimmed={cell.dimmed === true}
+      action={artifactHref ? (
+        <Link href={artifactHref} target="_blank" rel="noreferrer">
+          Open
+        </Link>
+      ) : null}
     />
   );
 }

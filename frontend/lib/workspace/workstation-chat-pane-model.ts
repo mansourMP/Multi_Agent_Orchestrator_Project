@@ -1005,7 +1005,7 @@ export function chatPermissionModeDetail(
     return 'Safe actions continue; risky actions are checked by policy before asking you.';
   }
   if (effectiveMode === 'autopilot') {
-    return 'Runs autonomously inside an isolated Empyralis computer with activity proof.';
+    return 'Runs autonomously inside an isolated Empyralis computer with inline proof.';
   }
   if (effectiveMode === 'device_access') {
     return 'Uses your computer with sensitive actions still approval-gated.';

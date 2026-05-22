@@ -15,7 +15,6 @@ import type { WorkspaceRouteId } from '../../../shared/nav-manifest';
 
 export type SageCommandActionKind =
   | 'open_status'
-  | 'open_proof'
   | 'open_usage'
   | 'open_tools'
   | 'open_runtime'
@@ -58,15 +57,6 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     actionKind: 'open_usage',
     icon: Coins,
     keywords: ['quota', 'cost', 'billing', 'stats'],
-  },
-  {
-    id: 'proof',
-    slash: '/proof',
-    title: 'Show proof',
-    description: 'Open session evidence, computer proofs, artifacts, and audit trail.',
-    actionKind: 'open_proof',
-    icon: Table,
-    keywords: ['activity', 'evidence', 'computer', 'browser', 'audit', 'artifact'],
   },
   {
     id: 'tools',
@@ -137,14 +127,6 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     routeId: 'integrations',
     icon: LayoutGrid,
     keywords: ['connect', 'apps', 'providers', 'channels', 'services'],
-  },
-  {
-    id: 'activity',
-    title: 'Activity',
-    description: 'Open run and event activity for recent work in this workspace.',
-    routeId: 'activity',
-    icon: Activity,
-    keywords: ['events', 'audit', 'timeline', 'history', 'runs'],
   },
 ];
 

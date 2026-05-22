@@ -34,7 +34,7 @@ import type {
   WorkstationChatMessageRecord,
 } from '@/lib/workspace/chat-message';
 import { CodexChatCell, type CodexApprovalAction } from '@/lib/workspace/codex-chat/cell-components';
-import type { CodexTranscriptCell } from '@/lib/workspace/codex-chat/cells';
+import type { CodexTranscriptCell, TimelineProjectionEvent } from '@/lib/workspace/codex-chat/cells';
 import {
   resolveModelContextWindow,
 } from '@/lib/workspace/model-capabilities';
@@ -101,7 +101,10 @@ import {
   loadChatMemorySnapshot,
   loadChatProfileSnapshot,
 } from '@/lib/workspace/workstation-chat-memory-loaders';
-import { useWorkstationTimelineProjection } from '@/lib/workspace/workstation-chat-timeline-projection';
+import {
+  safeTimelineEventsFromTraceReplay,
+  useWorkstationTimelineProjection,
+} from '@/lib/workspace/workstation-chat-timeline-projection';
 import {
   PRIMARY_THREAD_ID,
   CHAT_READ_TIMEOUT_MS,
@@ -254,8 +257,6 @@ function sageCommandSheetTitle(command: SageCommandActionKind | null): string {
   switch (command) {
     case 'open_status':
       return "What's Sage doing?";
-    case 'open_proof':
-      return 'Show proof';
     case 'open_usage':
       return 'Credits and usage';
     case 'open_tools':
@@ -273,8 +274,6 @@ function sageCommandSheetDescription(command: SageCommandActionKind | null): str
   switch (command) {
     case 'open_status':
       return 'Current health, readiness, approvals, and run state.';
-    case 'open_proof':
-      return 'Session evidence, computer proofs, artifacts, and audit trail.';
     case 'open_usage':
       return 'Credits, estimated cost, and recent conversation usage.';
     case 'open_tools':
@@ -311,6 +310,19 @@ type SageCommandComputerProofSummary = {
   providerId: string | null;
   artifactCount: number;
 };
+
+function legacyTraceIdForReplay(message: WorkstationChatMessageRecord): string | null {
+  if (message.role.trim().toLowerCase() !== 'assistant') {
+    return null;
+  }
+  const metadata = readObject(message.metadata);
+  const transcriptEvents = Array.isArray(metadata.transcript_events) ? metadata.transcript_events : [];
+  if (transcriptEvents.length > 0) {
+    return null;
+  }
+  const contextUsed = readObject(metadata.context_used);
+  return readString(metadata.trace_id) || readString(contextUsed.trace_id) || null;
+}
 
 function readRecordList(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
@@ -371,6 +383,8 @@ export function WorkstationChatPane() {
   const router = useRouter();
   const [activeSageCommandPanel, setActiveSageCommandPanel] = useState<SageCommandActionKind | null>(null);
   const [workspaceCommandPaletteOpen, setWorkspaceCommandPaletteOpen] = useState(false);
+  const [legacyTraceEventsByTraceId, setLegacyTraceEventsByTraceId] = useState<Record<string, TimelineProjectionEvent[]>>({});
+  const pendingLegacyTraceIdsRef = useRef<Set<string>>(new Set());
   const actor = useMemo<WorkstationSessionActor>(() => ({
     type: 'user',
     id: bootstrap.account.id,
@@ -1266,12 +1280,65 @@ export function WorkstationChatPane() {
     };
   }, [activeThreadId, bootstrap.workspace.id]);
 
+  useEffect(() => {
+    if (isSending) {
+      return undefined;
+    }
+    const traceIds = Array.from(new Set(
+      thread.messages
+        .map(legacyTraceIdForReplay)
+        .filter((traceId): traceId is string => Boolean(traceId)),
+    ));
+    const missingTraceIds = traceIds.filter((traceId) => (
+      legacyTraceEventsByTraceId[traceId] === undefined
+      && !pendingLegacyTraceIdsRef.current.has(traceId)
+    ));
+    if (missingTraceIds.length === 0) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    missingTraceIds.forEach((traceId) => {
+      pendingLegacyTraceIdsRef.current.add(traceId);
+    });
+
+    void Promise.all(missingTraceIds.map(async (traceId): Promise<[string, TimelineProjectionEvent[]]> => {
+      try {
+        const replay = await services.client.getTraceReplay({ traceId, allowMissing: true });
+        return [traceId, safeTimelineEventsFromTraceReplay(replay)];
+      } catch (error) {
+        void error;
+        // Legacy replay is a best-effort compatibility path. Chat history should
+        // stay usable even when old trace detail is unavailable.
+        return [traceId, []];
+      } finally {
+        pendingLegacyTraceIdsRef.current.delete(traceId);
+      }
+    })).then((entries) => {
+      if (cancelled) {
+        return;
+      }
+      setLegacyTraceEventsByTraceId((current) => {
+        const next = { ...current };
+        for (const [traceId, events] of entries) {
+          next[traceId] = events;
+        }
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isSending, legacyTraceEventsByTraceId, services.client, thread.messages]);
+
   const projectionOptions = useMemo(() => ({
     approvals,
     threadMessages: thread.messages,
     pendingUserMessage,
     isSending,
     liveTimelineEvents,
+    legacyTraceEventsByTraceId,
     showProjectedAssistant,
     isSyntheticTranscriptMessage,
     canonicalIncludesMessage,
@@ -1285,6 +1352,7 @@ export function WorkstationChatPane() {
     pendingUserMessage,
     isSending,
     liveTimelineEvents,
+    legacyTraceEventsByTraceId,
     showProjectedAssistant,
     isSyntheticTranscriptMessage,
     canonicalIncludesMessage,
@@ -1517,7 +1585,7 @@ export function WorkstationChatPane() {
       const proofAge = formatRelativeTime(latestComputerProof.occurredAt);
       return {
         statValue: 'Recorded',
-        statHint: `${proofAge} in Activity`,
+        statHint: `${proofAge} in chat`,
         title: latestComputerProof.title,
         body: latestComputerProof.summary,
         pills: [
@@ -1551,7 +1619,7 @@ export function WorkstationChatPane() {
         statValue: 'Ready',
         statHint: 'dedicated cloud computer',
         title: 'Dedicated computer runtime',
-        body: 'Cloud computer work will return screenshots, artifacts, runtime session IDs, and activity proof when a run uses it.',
+        body: 'Cloud computer work returns inline proof rows with screenshots, artifacts, runtime sessions, and outcomes when Sage uses it.',
         pills: [
           runtimeTrustZoneLabel(runtimeTrustZone),
           runtimeStatus.label,
@@ -1565,7 +1633,7 @@ export function WorkstationChatPane() {
       statHint: gatewayToolingOnline ? 'tools can produce proof' : 'no computer proof yet',
       title: gatewayToolingOnline ? 'Computer tools are available' : 'No computer proof yet',
       body: gatewayToolingOnline
-        ? 'When Sage uses a browser or computer runtime, the proof appears in Activity instead of the chat transcript.'
+        ? 'When Sage uses a browser or computer runtime, proof appears inline in this chat.'
         : 'Server-only replies can still work, but no screen proof exists until Sage uses a browser or computer runtime.',
       pills: [
         runtimeTrustZoneLabel(runtimeTrustZone),
@@ -1649,10 +1717,6 @@ export function WorkstationChatPane() {
   const integrationsHref = useMemo(
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
-  );
-  const activityHref = useMemo(
-    () => routeManifest.routeIndex.activity?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/activity`,
-    [bootstrap.workspace.id, routeManifest.routeIndex.activity],
   );
   const approvalsHref = useMemo(
     () => routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`,
@@ -3356,43 +3420,6 @@ export function WorkstationChatPane() {
             </>
           ) : null}
 
-          {activeSageCommandPanel === 'open_proof' ? (
-            <>
-              <AppSurfaceStatGrid>
-                <AppSurfaceStat label="Computer proof" value={computerControlSummary.statValue} hint={computerControlSummary.statHint} />
-                <AppSurfaceStat label="Thread outputs" value={artifactCount} hint={artifactCount === 1 ? 'artifact in this thread' : 'artifacts in this thread'} />
-                <AppSurfaceStat label="Latest run" value={latestRun ? readString(latestRun.status) || 'unknown' : 'Idle'} hint={latestRun ? runPreviewLabel(latestRun) : 'No active run attached'} />
-                <AppSurfaceStat label="Approvals" value={approvals.length} hint="guarded actions recorded separately" />
-              </AppSurfaceStatGrid>
-              <section className={`sage-command-panel__hero sage-command-panel__hero--${latestComputerProof ? 'success' : 'neutral'}`}>
-                <span className="sage-command-panel__eyebrow">Computer control</span>
-                <h3>{computerControlSummary.title}</h3>
-                <p>{computerControlSummary.body}</p>
-                <div className="sage-command-panel__pills">
-                  {computerControlSummary.pills.map((pill) => (
-                    <span key={pill}>{pill}</span>
-                  ))}
-                </div>
-              </section>
-              <AppNotice tone="neutral" className="sage-command-panel__notice">
-                <strong>Proof stays outside the chat transcript</strong>
-                <span>Computer screenshots, tool artifacts, runtime sessions, approvals, and final outcomes are inspectable in Activity.</span>
-              </AppNotice>
-              <div className="app-inline-actions">
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    setActiveSageCommandPanel(null);
-                    router.push(activityHref);
-                  }}
-                >
-                  Open Activity proof
-                </AppButton>
-              </div>
-            </>
-          ) : null}
-
           {activeSageCommandPanel === 'open_runtime' ? (
             <>
               <section className={`sage-command-panel__hero sage-command-panel__hero--${runtimeCard.tone}`}>
@@ -3425,16 +3452,6 @@ export function WorkstationChatPane() {
                   }}
                 >
                   Open Computers
-                </AppButton>
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    setActiveSageCommandPanel(null);
-                    router.push(activityHref);
-                  }}
-                >
-                  Open Activity proof
                 </AppButton>
               </div>
             </>

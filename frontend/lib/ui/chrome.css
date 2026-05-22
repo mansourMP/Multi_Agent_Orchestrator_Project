@@ -3768,6 +3768,34 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
   color: var(--text-secondary);
 }
 
+.app-chat-system-row__action {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 2px;
+}
+
+.app-chat-system-row__action a,
+.app-chat-system-row__action button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-surface) 74%, transparent);
+  color: var(--text-primary);
+  font-size: var(--app-font-11);
+  font-weight: var(--app-weight-semibold);
+  text-decoration: none;
+}
+
+.app-chat-system-row__action a:hover,
+.app-chat-system-row__action button:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-surface);
+}
+
 .app-chat-approval-cell {
   width: fit-content;
   max-width: min(100%, 760px);

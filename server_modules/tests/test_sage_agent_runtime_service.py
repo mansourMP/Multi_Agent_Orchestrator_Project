@@ -54,7 +54,7 @@ class SageAgentRuntimeContextLoadingTests(unittest.TestCase):
 
         self.assertIn("SOUL.md", text)
         self.assertIn("GOALS.md", text)
-        self.assertIn("Available Memory Files", text)
+        self.assertIn("Root Memory Index", text)
         self.assertIn("memory/files/architecture-notes.md", text)
 
     def test_load_context_files_skips_default_placeholders(self):
@@ -329,6 +329,7 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             self.assertEqual(result["message"], "Reply")
             self.assertEqual(result["blocked_tools"], [])
             self.assertEqual(result["approvals_required"], [])
+            self.assertEqual(result["action_execution_mode"], "text_only")
 
     def test_kill_switch_does_not_fire_from_keyword_scan(self):
         from server_modules import kill_switch_gate

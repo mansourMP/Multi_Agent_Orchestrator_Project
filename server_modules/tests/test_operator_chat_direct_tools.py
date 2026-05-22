@@ -455,7 +455,7 @@ class OperatorChatDirectToolTests(unittest.TestCase):
     @patch("operator_chat_direct_tools_under_test.supports_direct_message_native_chat", return_value=True)
     @patch("operator_chat_direct_tools_under_test.generate_chat_reply_stream_with_provider_fallback")
     @patch("operator_chat_direct_tools_under_test.execute_single_direct_tool_call")
-    def test_simple_local_file_request_stays_on_direct_tool_path(
+    def test_simple_local_file_request_stays_on_ai_first_chat_path(
         self,
         execute_direct_tool_mock,
         stream_mock,
@@ -470,6 +470,20 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             "status": "queued_local",
             "route": {"selected": "local_companion"},
         }
+        stream_mock.return_value = iter(
+            [
+                {
+                    "type": "result",
+                    "reply": "I can help inspect that file if an enabled file tool is available.",
+                    "usage_masked": {"provider": "codex_cli", "model": "gpt-5.4"},
+                    "provider": "codex_cli",
+                    "model": "gpt-5.4",
+                    "attempted_providers": "codex_cli",
+                    "error": "",
+                    "tool_calls": [],
+                }
+            ]
+        )
 
         payload = operator_chat.collect_direct_operator_reply(
             message="Open file /tmp/README.md",
@@ -484,11 +498,11 @@ class OperatorChatDirectToolTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(payload["mode"], "answer_with_action")
-        self.assertTrue(payload["actions"])
-        stream_mock.assert_not_called()
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("enabled file tool", payload["reply"])
+        stream_mock.assert_called_once()
         execute_direct_tool_mock.assert_not_called()
-        start_run_mock.assert_called_once()
+        start_run_mock.assert_not_called()
 
 
 if __name__ == "__main__":

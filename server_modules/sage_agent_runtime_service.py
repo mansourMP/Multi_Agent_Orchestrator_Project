@@ -127,7 +127,7 @@ def _load_profile_context(*, workspace_id: str) -> str:
 
 def _load_context_files(*, workspace_id: str) -> str:
     files = workspace_context.read_workspace_context_files(workspace_id=workspace_id)
-    sections, _diagnostics = sage_instruction_compiler_service.build_root_memory_sections(files)
+    sections, _diagnostics = sage_instruction_compiler_service.build_root_memory_brief_sections(files)
     return "\n\n".join(sections)
 
 
@@ -399,8 +399,7 @@ async def handle_sage_chat(
     actor_auth_type = _coerce_text((current_user or {}).get("auth_type"))
 
     used_context: list[str] = []
-    blocked_actions: list[dict] = []
-    approvals_required: list[dict] = []
+    action_execution_mode = "text_only"
 
     # --- Load context ---
     profile_context = _load_profile_context(workspace_id=normalized_workspace_id)
@@ -547,7 +546,8 @@ async def handle_sage_chat(
                 "provider": effective_provider,
                 "model": effective_model or None,
                 "surface": normalized_surface,
-                "blocked_action_count": len(blocked_actions),
+                "blocked_action_count": 0,
+                "action_execution_mode": action_execution_mode,
                 "prompt_diagnostics": prompt_diagnostics,
             },
         )
@@ -571,53 +571,14 @@ async def handle_sage_chat(
                 "provider": effective_provider,
                 "model": effective_model or None,
                 "surface": normalized_surface,
-                "blocked_action_count": len(blocked_actions),
+                "blocked_action_count": 0,
+                "action_execution_mode": action_execution_mode,
                 "prompt_diagnostics": prompt_diagnostics,
             },
             idempotency_key=f"sage_chat:{trace_id}",
         )
     except Exception:
         pass
-
-    # --- Emit audit for blocked actions ---
-    for blocked in blocked_actions:
-        try:
-            security_audit_service.emit_security_audit_event(
-                action="sage_chat.tool_blocked",
-                status="blocked",
-                tenant_id=normalized_tenant_id,
-                workspace_id=normalized_workspace_id,
-                actor_user_id=actor_user_id or None,
-                trace_id=trace_id,
-                detail=f"Blocked {blocked['action_class']} skill: {blocked['label']}",
-                metadata=blocked,
-            )
-        except Exception:
-            pass
-
-    # --- Emit audit for approval requests ---
-    for approval in approvals_required:
-        token = _coerce_text(approval.get("approval_token"))
-        if not token or token == "None":
-            continue
-        try:
-            security_audit_service.emit_security_audit_event(
-                action="approval.requested",
-                status="pending",
-                tenant_id=normalized_tenant_id,
-                workspace_id=normalized_workspace_id,
-                actor_user_id=actor_user_id or None,
-                trace_id=trace_id,
-                detail=f"Approval requested for {approval.get('label', 'unknown')}",
-                metadata={
-                    "approval_token": token,
-                    "skill_id": approval.get("skill_id"),
-                    "action_class": approval.get("action_class"),
-                },
-                idempotency_key=f"approval:requested:{token}",
-            )
-        except Exception:
-            pass
 
     # ── Emit transparency events ──────────────────────────────────
     try:
@@ -631,10 +592,8 @@ async def handle_sage_chat(
                     {"name": ctx_label} for ctx_label in used_context
                 ],
                 "tool_calls": [],
-                "blocked_tools": [
-                    {"name": ba.get("skill_id", "unknown")} for ba in blocked_actions
-                ],
-                "approvals_required": approvals_required,
+                "blocked_tools": [],
+                "approvals_required": [],
                 "error": None,
             },
             surface=normalized_surface,
@@ -662,9 +621,10 @@ async def handle_sage_chat(
         "used_context": used_context,
         "tool_calls": [],
         "available_tools": safe_skills,
-        "blocked_tools": blocked_actions,
-        "approvals_required": approvals_required,
+        "blocked_tools": [],
+        "approvals_required": [],
         "memory_updates": [],
+        "action_execution_mode": action_execution_mode,
         "trace_id": trace_id,
         "provider": effective_provider,
         "model": effective_model or None,

@@ -495,7 +495,7 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(payload["reply"], "Mock provider reply.")
         self.assertFalse(payload.get("interventions"))
 
-    def test_collect_direct_operator_reply_answers_capability_question_from_active_catalog(self) -> None:
+    def test_collect_direct_operator_reply_sends_capability_question_to_model(self) -> None:
         prepared = SimpleNamespace(
             normalized_message="what can you do here right now?",
             normalized_workspace_id="default",
@@ -543,9 +543,25 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
             resolved_chat_max_iterations=3,
         )
         services = self._runtime_services(prepared)
-        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = (
-            lambda **kwargs: (_ for _ in ()).throw(AssertionError("model generation should not run for tool inventory"))
-        )
+        captured: dict = {}
+
+        def _provider_stream(**kwargs):
+            captured.update(kwargs)
+            return iter(
+                [
+                    {
+                        "type": "result",
+                        "reply": "I can help with connected apps, channels, and available tools from this workspace.",
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "openai",
+                        "error": "",
+                        "usage_masked": {},
+                    }
+                ]
+            )
+
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = _provider_stream
 
         payload = direct_chat_runtime_service.collect_direct_operator_reply(
             services=services,
@@ -556,13 +572,8 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["mode"], "answer")
-        self.assertIn("Here is what I can actually do in this workspace right now:", payload["reply"])
-        self.assertIn("Selected AI model: DeepSeek (ready)", payload["reply"])
-        self.assertIn("Empyralis credits: available", payload["reply"])
-        self.assertIn("My Computer: offline", payload["reply"])
-        self.assertIn("Connected apps: Google Workspace", payload["reply"])
-        self.assertIn("Messaging channels: Telegram", payload["reply"])
-        self.assertIn("Setup available now: Connect My Computer.", payload["reply"])
+        self.assertIn("I can help with connected apps", payload["reply"])
+        self.assertEqual(captured.get("user_goal"), "what can you do here right now?")
 
     def test_build_direct_operator_reply_returns_explicit_provider_unavailable_when_not_ready(self) -> None:
         prepared = SimpleNamespace(

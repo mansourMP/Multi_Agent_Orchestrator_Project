@@ -704,10 +704,10 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIn("what I can actually do", payload["reply"])
+        self.assertEqual(payload["reply"], "I can access Google Workspace here.")
         self.assertIn("Google Workspace", payload["reply"])
         self.assertEqual(payload["mode"], "answer")
-        generate_reply.assert_not_called()
+        generate_reply.assert_called_once()
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
     @patch(

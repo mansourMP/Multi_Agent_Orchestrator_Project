@@ -355,28 +355,16 @@ def message_requests_tool_inventory(message: str) -> bool:
     compact = " ".join(str(message or "").lower().split())
     if not compact:
         return False
-    inventory_phrases = (
-        "what can you do",
-        "what are your capabilities",
-        "what capabilities do you have",
-        "show me your capabilities",
-        "list your capabilities",
-        "what tools do you have",
-        "what tools can you use",
-        "which tools do you have",
-        "which tools can you use",
-        "show me your tools",
-        "list your tools",
-        "available tools",
-        "tools available",
-        "what can you do with tools",
-        "do you have any tools",
-        "what can you help me with",
-        "what do you have access to",
-        "what is available right now",
-        "what's available right now",
-    )
-    return any(phrase in compact for phrase in inventory_phrases)
+    explicit_commands = {
+        "/tools",
+        "/tool inventory",
+        "/capabilities",
+        "tool inventory",
+        "show tool inventory",
+        "list tool inventory",
+        "open tool inventory",
+    }
+    return compact in explicit_commands
 
 
 def _tool_group_label(name: str) -> str:

@@ -161,6 +161,106 @@ function humanizeToken(value: string) {
     .join(" ");
 }
 
+function readText(value: unknown, fallback = "") {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function normalizeRuntimeAccessMode(value: unknown): "default_guarded" | "full_access" {
+  const token = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["full_access", "autonomous_agent", "trusted_full_access", "agent_owned_full_access"].includes(token)) {
+    return "full_access";
+  }
+  return "default_guarded";
+}
+
+function runtimeAccessModeLabel(value: unknown) {
+  return normalizeRuntimeAccessMode(value) === "full_access" ? "Autonomous Agent" : "Default guarded";
+}
+
+function runtimeAccessModeFromRecord(record: Record<string, unknown> | null | undefined): string {
+  const source = readRecord(record);
+  const metadata = readRecord(source.metadata);
+  return readText(source.runtime_access_mode)
+    || readText(source.runtimeAccessMode)
+    || readText(source.runtime_access_label)
+    || readText(metadata.runtime_access_mode)
+    || readText(metadata.runtimeAccessMode)
+    || "";
+}
+
+function runtimeTargetLabelFromToken(value: unknown) {
+  const token = String(value ?? "").trim().toLowerCase();
+  if (token.includes("cloud_computer") || token.includes("browser_session")) return "Cloud Computer";
+  if (token.includes("self_host") || token.includes("node") || token.includes("vps")) return "Self-hosted node";
+  if (token.includes("gateway") || token.includes("local") || token.includes("companion") || token.includes("user_device")) return "This computer";
+  return "";
+}
+
+function localGatewayLabel(gateway: Record<string, unknown>) {
+  const label = [
+    gateway.display_name,
+    gateway.device_name,
+    gateway.platform,
+    gateway.device_id,
+  ].map((item) => String(item ?? "").trim()).find(Boolean) || "";
+  const token = label.toLowerCase();
+  if (token.includes("mac mini")) return "Mac mini";
+  if (token.includes("mac")) return "This Mac";
+  return label ? "This computer" : "This computer";
+}
+
+function runtimePillFromState(params: {
+  gateway: Record<string, unknown> | null | undefined;
+  doctor: Record<string, unknown> | null | undefined;
+  runtimeAttachments?: { attachments?: unknown[] } | null;
+}) {
+  const gateway = readRecord(params.gateway);
+  const doctor = readRecord(params.doctor);
+  const gatewayStatus = readText(doctor.status).toLowerCase()
+    || readText(gateway.status).toLowerCase()
+    || readText(gateway.connection_status).toLowerCase();
+  if (Object.keys(gateway).length > 0) {
+    const access = runtimeAccessModeLabel(runtimeAccessModeFromRecord(gateway));
+    if (["offline", "not_attached", "disconnected"].includes(gatewayStatus)) {
+      return { target: "Gateway offline", access };
+    }
+    if (["degraded", "blocked", "unhealthy", "warn"].includes(gatewayStatus)) {
+      return { target: "Gateway degraded", access };
+    }
+    return { target: localGatewayLabel(gateway), access };
+  }
+
+  const attachments = Array.isArray(params.runtimeAttachments?.attachments)
+    ? (params.runtimeAttachments?.attachments ?? []).map((item) => readRecord(item))
+    : [];
+  const preferred = attachments.find((item) => {
+    const kind = readText(item.attachment_kind).toLowerCase();
+    return kind === "cloud_computer" || kind === "self_hosted_business_node" || kind === "local_companion";
+  });
+  if (preferred) {
+    const kind = readText(preferred.attachment_kind).toLowerCase();
+    const status = readText(preferred.status).toLowerCase();
+    const access = runtimeAccessModeLabel(runtimeAccessModeFromRecord(preferred));
+    if (kind === "cloud_computer") {
+      return { target: preferred.healthy === false ? "Cloud Computer degraded" : "Cloud Computer", access };
+    }
+    if (kind === "self_hosted_business_node") {
+      if (preferred.online === false || status === "offline") return { target: "Node offline", access };
+      if (preferred.healthy === false || ["degraded", "unhealthy"].includes(status)) return { target: "Node degraded", access };
+      return { target: "Self-hosted node", access };
+    }
+    return { target: preferred.online === false ? "Gateway offline" : "This computer", access };
+  }
+
+  return { target: "Cloud", access: runtimeAccessModeLabel("") };
+}
+
 function collectMemoryFacts(value: unknown, limit = 3): string[] {
   const facts: string[] = [];
   const pushFact = (candidate: unknown) => {
@@ -194,13 +294,26 @@ function collectMemoryFacts(value: unknown, limit = 3): string[] {
   return facts;
 }
 
-function streamEventStatus(value: unknown): "running" | "done" | "error" {
-  const status = String(value || "").trim().toLowerCase();
-  if (["done", "complete", "completed", "success", "succeeded"].includes(status)) {
+function streamEventStatus(value: unknown, eventType = "", detailPayload: Record<string, unknown> = {}): "running" | "done" | "error" {
+  const normalizedEventType = eventType.toLowerCase();
+  const status = String(value || detailPayload.decision || detailPayload.resolution || "").trim().toLowerCase();
+  if (["done", "complete", "completed", "success", "succeeded", "approved", "approve", "allowed", "accepted", "resolved", "executed"].includes(status)) {
     return "done";
   }
-  if (["error", "failed", "failure", "blocked", "denied", "offline", "degraded"].includes(status)) {
+  if (["error", "failed", "failure", "blocked", "denied", "deny", "rejected", "reject", "offline", "degraded", "cancelled", "canceled", "aborted"].includes(status)) {
     return "error";
+  }
+  if (normalizedEventType.includes("approval.resolved")) {
+    return "done";
+  }
+  if (
+    normalizedEventType.includes("result")
+    || normalizedEventType.includes("completed")
+    || normalizedEventType.includes("finished")
+    || normalizedEventType.includes("artifact.created")
+    || normalizedEventType.includes("screenshot")
+  ) {
+    return "done";
   }
   return "running";
 }
@@ -213,21 +326,44 @@ function streamEventData(payload: Record<string, unknown>): Record<string, unkno
 
 function streamEventGroupKey(event: EmpyralistStreamEvent): string {
   const payload = event.payload || {};
-  const explicitId =
-    String(payload.tool_call_id || payload.activity_event_id || payload.step_id || payload.trace_id || payload.id || "").trim();
+  const data = streamEventData(payload);
+  const detailPayload = { ...payload, ...data };
+  const eventType = String(payload.event_type || payload.type || payload.kind || "").trim().toLowerCase();
+  const groupKind = eventType.includes("approval")
+    ? "approval"
+    : eventType.includes("artifact") || eventType.includes("screenshot")
+      ? "artifact"
+      : eventType.includes("tool") || eventType.includes("browser") || eventType.includes("search") || eventType.includes("file") || eventType.includes("shell") || eventType.includes("exec")
+        ? "tool"
+        : event.event;
+  const explicitId = String(
+    detailPayload.approval_id
+    || detailPayload.artifact_id
+    || detailPayload.tool_call_id
+    || detailPayload.request_id
+    || detailPayload.item_id
+    || detailPayload.activity_event_id
+    || detailPayload.step_id
+    || detailPayload.runtime_session_id
+    || detailPayload.id
+    || "",
+  ).trim();
   if (explicitId) {
-    return `${event.event}:${explicitId}`;
+    return `${event.event}:${groupKind}:${explicitId}`;
   }
-  const eventType = String(payload.event_type || payload.type || payload.kind || "").trim();
   const title = String(payload.title || payload.label || payload.action || "").trim();
   return `${event.event}:${eventType}:${title}`;
 }
 
 function compactStreamEventDetail(payload: Record<string, unknown>): string | undefined {
   const candidates = [
+    payload.description,
+    payload.caption,
+    payload.title,
     payload.summary,
     payload.detail,
     payload.message,
+    payload.target_summary,
     payload.query,
     payload.path,
     payload.filename,
@@ -248,25 +384,34 @@ function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null
   const payload = event.payload || {};
   const data = streamEventData(payload);
   const detailPayload = { ...payload, ...data };
+  const metadata = readRecord(detailPayload.metadata);
   const eventType = String(payload.event_type || payload.type || payload.kind || "").trim().toLowerCase();
-  const status = streamEventStatus(detailPayload.status || detailPayload.state || (eventType.includes("result") ? "done" : ""));
+  const status = streamEventStatus(detailPayload.status || detailPayload.state, eventType, detailPayload);
   const explicitTitle = String(detailPayload.title || detailPayload.label || detailPayload.action || "").trim();
-  const toolName = String(detailPayload.tool_name || detailPayload.name || "").trim();
+  const toolName = String(detailPayload.tool_name || detailPayload.name || detailPayload.capability_id || detailPayload.action_id || "").trim();
+  const toolToken = `${eventType} ${toolName}`.toLowerCase();
+  const decision = String(detailPayload.decision || detailPayload.resolution || "").trim().toLowerCase();
   let speech = explicitTitle;
 
   if (!speech) {
     if (eventType.includes("approval")) {
-      speech = status === "done" ? "Approval resolved" : "Waiting for approval";
+      speech = status === "done"
+        ? "Approval approved"
+        : status === "error" || ["rejected", "reject", "denied", "deny"].includes(decision)
+          ? "Approval denied"
+          : "Waiting for approval";
     } else if (eventType.includes("screenshot") || eventType.includes("artifact")) {
       speech = "Captured screenshot";
     } else if (eventType.includes("search")) {
       speech = status === "done" ? "Searched web" : "Searching web";
-    } else if (eventType.includes("browser")) {
+    } else if (eventType.includes("browser") || toolToken.includes("browser")) {
       speech = status === "done" ? "Used browser" : "Using browser";
-    } else if (eventType.includes("file")) {
+    } else if (eventType.includes("file") || toolToken.includes("file")) {
       speech = status === "done" ? "Read file" : "Reading file";
-    } else if (eventType.includes("shell") || eventType.includes("exec") || eventType.includes("command")) {
+    } else if (eventType.includes("shell") || eventType.includes("exec") || eventType.includes("command") || toolToken.includes("shell") || toolToken.includes("command")) {
       speech = status === "done" ? "Ran command" : "Running shell";
+    } else if (eventType.includes("hardware")) {
+      speech = status === "done" ? "Hardware action complete" : "Using hardware runtime";
     } else if (toolName) {
       speech = status === "done" ? `Used ${toolName}` : `Using ${toolName}`;
     } else if (event.event === "step") {
@@ -276,13 +421,21 @@ function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null
     }
   }
 
+  const detail = compactStreamEventDetail(detailPayload);
+  const runtimeTarget = runtimeTargetLabelFromToken(detailPayload.runtime_target || metadata.runtime_target);
+  const runtimeAccess = runtimeAccessModeFromRecord({ ...detailPayload, metadata });
+  const runtimeDetail = [runtimeTarget, runtimeAccess ? runtimeAccessModeLabel(runtimeAccess) : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const source = [detail, runtimeDetail].filter(Boolean).join(" · ") || undefined;
+
   return {
     intent: "assistant",
     messageType: "tool",
     toolStatus: status,
     toolKind: eventType || event.event,
     speech,
-    source: compactStreamEventDetail(detailPayload),
+    source,
   };
 }
 
@@ -477,6 +630,14 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
       chatContextQuery.data?.personalContext?.summary,
     ]),
     [chatContextQuery.data?.personalContext?.summary, chatContextQuery.data?.unifiedMemory?.summary],
+  );
+  const runtimePill = useMemo(
+    () => runtimePillFromState({
+      gateway: gatewayDoctor.gateway,
+      doctor: gatewayDoctor.doctor,
+      runtimeAttachments: chatContextQuery.data?.runtimeAttachments,
+    }),
+    [chatContextQuery.data?.runtimeAttachments, gatewayDoctor.doctor, gatewayDoctor.gateway],
   );
 
   const scrollToBottom = React.useCallback((animated = true) => {
@@ -1094,6 +1255,25 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
               {String(channelRole || "specialist").replace(/[_-]+/g, " ")}
             </Text>
           ) : null}
+          <TouchableOpacity
+            activeOpacity={0.84}
+            onPress={() => router.push(runtimePill.target === "Cloud" ? "/status" : "/gateway")}
+            style={{
+              marginTop: 6,
+              alignSelf: embeddedMode ? "center" : "flex-start",
+              maxWidth: "100%",
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.surface,
+            }}
+          >
+            <Text numberOfLines={1} style={{ fontSize: 11.5, color: theme.colors.textSecondary, fontFamily: "DMSans_700Bold" }}>
+              {runtimePill.target} · {runtimePill.access}
+            </Text>
+          </TouchableOpacity>
         </View>
         {!historyVisible ? (
           <MotionPressable

@@ -51,6 +51,20 @@ function normalizeToolResultStatus(value: unknown): 'running' | 'done' | 'error'
   return 'done';
 }
 
+function normalizeApprovalStatus(eventType: string, data: Record<string, unknown>): 'waiting' | 'done' | 'error' {
+  const token = readString(data.decision || data.resolution || data.status).toLowerCase();
+  if (['rejected', 'reject', 'denied', 'deny', 'no', 'cancel', 'cancelled', 'canceled', 'stopped', 'aborted', 'failed', 'error'].includes(token)) {
+    return 'error';
+  }
+  if (
+    eventType.includes('resolved')
+    || ['approved', 'approve', 'allowed', 'allow_once', 'allow_session', 'accepted', 'proceed', 'executed', 'done', 'resolved'].includes(token)
+  ) {
+    return 'done';
+  }
+  return 'waiting';
+}
+
 function fileActionLabel(label: string, fallback: string): string {
   const lower = `${label} ${fallback}`.toLowerCase();
   if (lower.includes('read')) {
@@ -486,18 +500,33 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     const normalizedApproval = data.normalized_approval && typeof data.normalized_approval === 'object'
       ? data.normalized_approval as Record<string, unknown>
       : {};
-    const approvalId = data.approval_id || data.id || normalizedApproval.approval_id || normalizedApproval.id || payload.item_id;
+    const approvalId = data.approval_id
+      || payload.approval_id
+      || data.id
+      || normalizedApproval.approval_id
+      || normalizedApproval.id
+      || payload.item_id;
+    const status = normalizeApprovalStatus(eventType, {
+      ...normalizedApproval,
+      ...data,
+    });
     return [{
       type: 'approval_request',
       id: eventId('approval', approvalId, fallbackIndex),
       prompt: readString(data.prompt)
         || readString(data.message)
+        || readString(data.title)
+        || readString(data.description)
         || readString(normalizedApproval.action)
-        || 'Approval required',
+        || (status === 'waiting' ? 'Approval required' : ''),
+      status,
       metadata: {
         ...data,
         ...normalizedApproval,
-        approval_id: readString(data.approval_id) || readString(normalizedApproval.approval_id) || readString(normalizedApproval.id),
+        approval_id: readString(data.approval_id)
+          || readString(payload.approval_id)
+          || readString(normalizedApproval.approval_id)
+          || readString(normalizedApproval.id),
         code: readString(data.code) || readString(normalizedApproval.code),
       },
     }];

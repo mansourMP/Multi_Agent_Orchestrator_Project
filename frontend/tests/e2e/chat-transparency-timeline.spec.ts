@@ -244,6 +244,19 @@ function installTransparencyTurnStub(page) {
             event: 'trace',
             payload: {
               trace_id: 'trace-live-1',
+              event_type: 'approval.resolved',
+              approval_id: 'approval-1',
+              data: {
+                decision: 'approved',
+                actor: 'owner',
+              },
+            },
+          },
+          {
+            delay: 40,
+            event: 'trace',
+            payload: {
+              trace_id: 'trace-live-1',
               event_type: 'tool.started',
               tool_call_id: 'shell-1',
               data: {
@@ -390,7 +403,7 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_telegram"]')).toContainText('Sending Telegram');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_whatsapp"]')).toContainText('Sending WhatsApp');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval needed');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval approved');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="done"]')).toContainText('Done');
 
     await expect(page.getByText(/inspect workspace state and decide next step/i)).toHaveCount(0);

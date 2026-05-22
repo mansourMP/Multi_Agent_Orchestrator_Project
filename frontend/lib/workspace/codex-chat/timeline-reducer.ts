@@ -460,6 +460,7 @@ function applyCodexEvent(
   }
 
   if (event.type === 'approval_request') {
+    const approvalStatus = event.status ?? 'waiting';
     const cell = updateCell<CodexApprovalRequestCell>(
       cells,
       indexById,
@@ -467,16 +468,16 @@ function applyCodexEvent(
       () => ({
         id: event.id,
         kind: 'approval_request',
-        prompt: event.prompt,
+        prompt: event.prompt || 'Approval resolved',
         actions: ['allow_once', 'allow_session', 'deny'],
-        status: 'waiting',
+        status: approvalStatus,
         createdAt: nowIso(),
         metadata: event.metadata,
       }),
       (current) => ({
         ...current,
         prompt: event.prompt || current.prompt,
-        status: 'waiting',
+        status: approvalStatus,
         metadata: {
           ...(current.metadata ?? {}),
           ...(event.metadata ?? {}),

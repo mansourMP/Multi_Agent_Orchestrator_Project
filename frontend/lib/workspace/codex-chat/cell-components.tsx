@@ -553,6 +553,26 @@ export function ApprovalCell({
   const approvalCode = typeof cell.metadata?.code === 'string' && cell.metadata.code.trim()
     ? cell.metadata.code.trim()
     : approvalId;
+  const decision = typeof cell.metadata?.decision === 'string'
+    ? cell.metadata.decision.trim().toLowerCase()
+    : typeof cell.metadata?.resolution === 'string'
+      ? cell.metadata.resolution.trim().toLowerCase()
+      : '';
+  const denied = cell.status === 'error' && /reject|deny|denied|rejected|cancel|stop|abort|no/.test(decision);
+  const primary = cell.status === 'waiting'
+    ? 'Approval needed'
+    : cell.status === 'done'
+      ? 'Approval approved'
+      : denied
+        ? 'Approval denied'
+        : 'Approval failed';
+  const fallback = cell.status === 'waiting'
+    ? 'Choose 1 allow once, 2 allow session, or 3 deny'
+    : cell.status === 'done'
+      ? 'Approved'
+      : denied
+        ? 'Denied'
+        : 'Failed';
   const resolving = Boolean(resolvingApprovalId && resolvingApprovalId === approvalId);
   const canResolve = Boolean(approvalId && onResolveApproval && cell.status === 'waiting');
   return (
@@ -565,12 +585,9 @@ export function ApprovalCell({
         <ShieldCheck size={14} strokeWidth={1.9} />
       </span>
       <div className="app-chat-approval-cell__copy">
-        <span className="app-chat-system-row__primary">Approval needed</span>
+        <span className="app-chat-system-row__primary">{primary}</span>
         <span className="app-chat-system-row__secondary">
-          {compactSystemDetail(
-            cell.prompt,
-            cell.status === 'waiting' ? 'Choose 1 allow once, 2 allow session, or 3 deny' : cell.status === 'done' ? 'Done' : 'Failed',
-          )}
+          {compactSystemDetail(cell.prompt, fallback)}
           {approvalCode ? ` · Code ${approvalCode}` : ''}
         </span>
       </div>

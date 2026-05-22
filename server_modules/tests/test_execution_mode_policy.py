@@ -33,6 +33,7 @@ class ExecutionModePolicyTests(unittest.TestCase):
     def test_summary_declares_safety_boundary(self) -> None:
         summary = execution_mode_policy.routing_contract_summary()
 
+        self.assertEqual(summary["default_guarded_public_label"], "Default Guarded")
         self.assertEqual(summary["full_access_public_label"], "Autonomous Agent")
         self.assertEqual(summary["autonomous_agent_runtime_access_mode"], "full_access")
         self.assertEqual(summary["full_access_scope"], "dedicated_runtime_targets")
@@ -67,7 +68,7 @@ class ExecutionModePolicyTests(unittest.TestCase):
             "without Empyralis asking for each action",
             execution_mode_policy.runtime_access_setup_warning("Autonomous Agent") or "",
         )
-        self.assertEqual(execution_mode_policy.public_runtime_access_label("default_guarded"), "Default")
+        self.assertEqual(execution_mode_policy.public_runtime_access_label("default_guarded"), "Default Guarded")
         self.assertIsNone(execution_mode_policy.runtime_access_setup_warning("default_guarded"))
 
 

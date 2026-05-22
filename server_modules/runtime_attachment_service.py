@@ -58,6 +58,12 @@ RUNTIME_TARGET_HARDWARE_EDGE: dict[str, str] = {
     "sage_cloud_computer": "empyralis_cloud_computer",
     "self_host_runtime": "self_hosted_node",
 }
+PUBLIC_RUNTIME_TARGET_LABEL_BY_CANONICAL: dict[str, str] = {
+    "cloud_default": "Cloud",
+    "user_device_gateway": "This Device",
+    "empyralis_cloud_computer": "Cloud Computer",
+    "self_hosted_node": "Self-hosted Node",
+}
 CLOUD_COMPUTER_RUNTIME_CLASSES = {"cloud_computer", "cloud_desktop", "cloud_sandbox", "hosted_cloud_computer"}
 SELF_HOSTED_NODE_KINDS = {"mac_mini", "mac", "linux_server", "docker_host"}
 SELF_HOSTED_NODE_STATUSES = {"pending", "online", "offline", "unhealthy", "revoked"}
@@ -114,28 +120,28 @@ TRUST_MODEL_MAP: dict[str, dict[str, Any]] = {
 
 RUNTIME_TARGET_DEFINITIONS: dict[str, dict[str, Any]] = {
     "cloud_default": {
-        "label": "Cloud Default",
+        "label": "Cloud",
         "attachment_kind": "managed_cloud",
         "execution_target": "cloud",
         "connection_mode": "platform_cloud",
         "product_default": True,
-        "description": "Cloud-hosted execution for the workspace. This remains the default product path when cloud is available.",
+        "description": "Cloud-hosted execution for the workspace. This remains the default path.",
     },
     "sage_cloud_computer": {
-        "label": "Sage Cloud Computer",
+        "label": "Cloud Computer",
         "attachment_kind": "cloud_computer",
         "execution_target": "cloud_computer",
         "connection_mode": "platform_metered_cloud_computer",
         "product_default": False,
-        "description": "Optional metered cloud computer for browser, terminal, and file work in an isolated hosted workspace. It never replaces the default cloud path automatically.",
+        "description": "Optional metered hosted computer for browser, terminal, and file work in an isolated workspace.",
     },
     "local_companion": {
-        "label": "Gateway",
+        "label": "This Device",
         "attachment_kind": "local_companion",
         "execution_target": "local_companion",
         "connection_mode": "platform_relay",
         "product_default": False,
-        "description": "Paired Gateway execution routed through the same workspace identity and policy model.",
+        "description": "Paired user device execution routed through the same workspace identity and policy model.",
     },
     "self_host_runtime": {
         "label": "Self-hosted Node",
@@ -187,6 +193,17 @@ def normalize_runtime_target_id(value: Any) -> str:
 def canonical_runtime_target_id(value: Any) -> str:
     legacy_target = normalize_runtime_target_id(value)
     return CANONICAL_RUNTIME_TARGET_BY_LEGACY.get(legacy_target, legacy_target)
+
+
+def public_runtime_target_label(value: Any) -> str:
+    canonical_target = canonical_runtime_target_id(value)
+    if canonical_target in PUBLIC_RUNTIME_TARGET_LABEL_BY_CANONICAL:
+        return PUBLIC_RUNTIME_TARGET_LABEL_BY_CANONICAL[canonical_target]
+    legacy_target = normalize_runtime_target_id(value)
+    definition = RUNTIME_TARGET_DEFINITIONS.get(legacy_target)
+    if definition:
+        return str(definition.get("label") or legacy_target).strip() or legacy_target
+    return str(value or "Runtime").strip() or "Runtime"
 
 
 def _normalize_node_kind(value: Any, *, runtime_class: str, runtime_type: str, label: str) -> str:
@@ -705,7 +722,7 @@ def _gateway_attachment_from_registration(registration: Dict[str, Any]) -> Dict[
         "machine_id": str(registration.get("device_id") or "").strip() or None,
         "runtime_type": "local_companion",
         "label": str(registration.get("display_name") or registration.get("device_id") or registration.get("gateway_id") or "").strip()
-        or "Paired Gateway",
+        or "Paired Device",
         "online": online and not revoked,
         "healthy": healthy,
         "control_state": "revoked" if revoked else "active",
@@ -851,6 +868,7 @@ def build_workspace_runtime_targets(
     for target_id in SUPPORTED_RUNTIME_TARGET_IDS:
         definition = dict(RUNTIME_TARGET_DEFINITIONS[target_id])
         canonical_target_id = canonical_runtime_target_id(target_id)
+        public_label = public_runtime_target_label(target_id)
         matching = _attachments_for_kind(attachments, str(definition.get("attachment_kind") or ""))
         supports_runtime_modes = sorted(
             {
@@ -871,7 +889,9 @@ def build_workspace_runtime_targets(
             "canonical_target_id": canonical_target_id,
             "runtime_fabric_target": canonical_target_id,
             "legacy_target_id": target_id if canonical_target_id != target_id else None,
-            "label": definition["label"],
+            "label": public_label,
+            "public_label": public_label,
+            "canonical_label": public_label,
             "description": definition["description"],
             "attachment_kind": definition["attachment_kind"],
             "hardware_edge": RUNTIME_TARGET_HARDWARE_EDGE.get(target_id, definition["attachment_kind"]),
@@ -919,6 +939,7 @@ def build_workspace_runtime_targets(
             "canonical_runtime_targets": list(CANONICAL_RUNTIME_TARGET_IDS),
             "legacy_target_aliases": dict(LEGACY_RUNTIME_TARGET_BY_CANONICAL),
             "local_hardware_edge": "empyralis_gateway",
+            "public_runtime_target_labels": dict(PUBLIC_RUNTIME_TARGET_LABEL_BY_CANONICAL),
             "business_default_mode": "cloud_first",
             "runtime_placement_separate_from_computer_automation": True,
             "legacy_local_companion_deprecated_for_machine_control": True,

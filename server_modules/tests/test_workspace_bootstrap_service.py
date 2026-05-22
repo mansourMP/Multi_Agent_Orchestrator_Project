@@ -48,7 +48,7 @@ def test_runtime_target_payload_exposes_cloud_computer_as_optional_metered_runti
     payload = workspace_bootstrap_service._runtime_target_payload(
         {
             "target_id": "sage_cloud_computer",
-            "label": "Sage Cloud Computer",
+            "label": "Cloud Computer",
             "description": "Optional metered cloud computer.",
             "available": False,
             "online": False,
@@ -62,7 +62,7 @@ def test_runtime_target_payload_exposes_cloud_computer_as_optional_metered_runti
             "execution_modes": [
                 {
                     "id": "default",
-                    "label": "Default",
+                    "label": "Default Guarded",
                     "available": True,
                     "runtime_access_mode": "default_guarded",
                 },
@@ -78,6 +78,9 @@ def test_runtime_target_payload_exposes_cloud_computer_as_optional_metered_runti
     )
 
     assert payload["kind"] == "cloud_computer"
+    assert payload["canonicalId"] == "empyralis_cloud_computer"
+    assert payload["label"] == "Cloud Computer"
+    assert payload["publicLabel"] == "Cloud Computer"
     assert payload["statusLabel"] == "Not enabled"
     assert payload["trustTier"] == "hosted_cloud_computer"
     assert payload["supportsFullAccess"] is True
@@ -129,7 +132,7 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
             "targets": [
                 {
                     "target_id": "cloud_default",
-                    "label": "Cloud Default",
+                    "label": "Cloud",
                     "description": "Cloud-hosted execution for the workspace.",
                     "available": True,
                     "online": True,
@@ -142,8 +145,10 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
                 },
                 {
                     "target_id": "local_companion",
-                    "label": "Gateway",
-                    "description": "Paired Gateway execution.",
+                    "label": "This Device",
+                    "description": "Paired user device execution.",
+                    "canonical_target_id": "user_device_gateway",
+                    "public_label": "This Device",
                     "available": True,
                     "online": False,
                     "healthy": False,
@@ -156,7 +161,7 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
                     "execution_modes": [
                         {
                             "id": "default",
-                            "label": "Default",
+                            "label": "Default Guarded",
                             "available": True,
                             "runtime_access_mode": "default_guarded",
                         },
@@ -213,9 +218,12 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
     assert payload["capabilities"]["channel_pairing_enabled"] is True
     assert payload["runtime"]["deploymentMode"] == "hybrid"
     assert payload["runtime"]["runtimeTargets"][0]["id"] == "cloud_default"
+    assert payload["runtime"]["runtimeTargets"][0]["label"] == "Cloud"
     assert payload["runtime"]["runtimeTargets"][0]["statusLabel"] == "Ready"
     assert payload["runtime"]["runtimeTargets"][0]["approvalMode"] == "policy_bound"
     assert payload["runtime"]["runtimeTargets"][1]["statusLabel"] == "Offline"
+    assert payload["runtime"]["runtimeTargets"][1]["canonicalId"] == "user_device_gateway"
+    assert payload["runtime"]["runtimeTargets"][1]["label"] == "This Device"
     assert "will not start device work" in payload["runtime"]["runtimeTargets"][1]["statusReason"]
     assert payload["runtime"]["runtimeTargets"][1]["approvalMode"] == "explicit_owner_approval"
     assert payload["runtime"]["runtimeTargets"][1]["supportsFullAccess"] is True
@@ -278,7 +286,7 @@ async def test_build_workspace_bootstrap_reuses_cached_payload_for_identical_ver
             "targets": [
                 {
                     "target_id": "cloud_default",
-                    "label": "Cloud Default",
+                    "label": "Cloud",
                     "online": True,
                     "default_for_workspace": True,
                 }
@@ -375,7 +383,7 @@ async def test_build_workspace_bootstrap_prefers_membership_tenant_over_stale_au
             "targets": [
                 {
                     "target_id": "cloud_default",
-                    "label": "Cloud Default",
+                    "label": "Cloud",
                     "available": True,
                     "online": True,
                     "healthy": True,

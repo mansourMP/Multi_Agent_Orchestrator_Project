@@ -253,11 +253,11 @@ function humanizeToken(value: unknown, fallback = 'Unknown'): string {
 function runtimeBindingLabel(value: unknown): string {
   switch (String(value ?? '').trim().toLowerCase()) {
     case 'cloud_computer_agent':
-      return 'Cloud computer';
+      return 'Cloud Computer';
     case 'my_computer_agent':
-      return 'My computer';
+      return 'This Device';
     case 'self_hosted_agent':
-      return 'Self-hosted computer';
+      return 'Self-hosted Node';
     default:
       return humanizeToken(value, 'Computer session');
   }
@@ -368,7 +368,7 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
     return 'Autonomous Agent';
   }
   if (accessMode === 'default_guarded') {
-    return pendingCount > 0 ? 'Needs approval' : 'Default';
+    return pendingCount > 0 ? 'Needs approval' : 'Default Guarded';
   }
   const explicitMode = readString(session.permission_mode ?? session.approval_mode, '');
   if (explicitMode) {
@@ -385,7 +385,7 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
   }
   switch (String(session.runtime_binding ?? '').trim().toLowerCase()) {
     case 'my_computer_agent':
-      return 'Default';
+      return 'Default Guarded';
     case 'cloud_computer_agent':
       return 'Autopilot capable';
     default:
@@ -406,7 +406,7 @@ function gatewayRuntimeAccessLabel(gateway: GatewayRegistrationRecord | null): s
   if (explicit) {
     return explicit;
   }
-  return runtimeAccessModeToken(gateway?.runtime_access_mode) === 'full_access' ? 'Autonomous Agent' : 'Default';
+  return runtimeAccessModeToken(gateway?.runtime_access_mode) === 'full_access' ? 'Autonomous Agent' : 'Default Guarded';
 }
 
 function browserTakeoverStatus(session: GatewayBrowserSessionRecord): string {
@@ -632,7 +632,7 @@ const GATEWAY_PERMISSION_CHECKLIST = [
 
 const GATEWAY_MODE_SUMMARIES = [
   {
-    title: 'Default',
+    title: 'Default Guarded',
     subtitle: 'Safe',
     description: 'Sage can use ordinary local context automatically. Risky actions always wait for approval.',
   },
@@ -652,8 +652,8 @@ function gatewayTrustSummary(selectedGateway: GatewayRegistrationRecord | null):
 } {
   return {
     deviceLabel: selectedGateway
-      ? readString(selectedGateway.display_name, 'Connected computer')
-      : 'Connected computer',
+      ? readString(selectedGateway.display_name, 'This Device')
+      : 'This Device',
     platformLabel: selectedGateway
       ? humanizeToken(selectedGateway.platform, 'Unknown platform')
       : 'Unknown platform',
@@ -745,13 +745,13 @@ function summarizeMyComputerCapabilities(
     {
       id: 'telegram',
       label: 'Telegram',
-      description: 'Use personal Telegram through this connected computer.',
+      description: 'Use personal Telegram through This Device.',
       available: hasTelegram,
     },
     {
       id: 'whatsapp',
       label: 'WhatsApp',
-      description: 'Use personal WhatsApp through this connected computer.',
+      description: 'Use personal WhatsApp through This Device.',
       available: hasWhatsApp,
     },
     {
@@ -938,7 +938,7 @@ function channelRecoveryLane(params: {
     id: 'channel_recovery',
     title: 'Channel recovery',
     subtitle: configured ? 'Standby' : 'Not configured',
-    description: 'Personal Channels are optional. Configure them here when Sage should use a connected computer to deliver messages.',
+    description: 'Personal Channels are optional. Configure them here when Sage should use This Device to deliver messages.',
     tone: configured ? 'neutral' : 'accent',
   };
 }
@@ -1290,7 +1290,7 @@ export function WorkstationGatewayOperatorPane({
       if (cancelled) {
         return;
       }
-      setErrorMessage(error instanceof Error ? error.message : 'Connected computers are unavailable right now.');
+      setErrorMessage(error instanceof Error ? error.message : 'Device runtimes are unavailable right now.');
       setLoadingRegistrations(false);
     });
     return () => {
@@ -1860,7 +1860,7 @@ export function WorkstationGatewayOperatorPane({
 
         {diagnosticsSectionVisible ? (
           <FormSection
-          title="What Sage can use on the connected computer"
+          title="What Sage can use on This Device"
           description="Capability groups from the selected computer, shown without protocol or token detail."
         >
           {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
@@ -1924,7 +1924,7 @@ export function WorkstationGatewayOperatorPane({
                   setPairingIntent(null);
                 }}
               >
-                <option value="default_guarded">{defaultAccessMode?.label || 'Default'}</option>
+                <option value="default_guarded">{defaultAccessMode?.label || 'Default Guarded'}</option>
                 <option value="full_access" disabled={!autonomousAgentAvailable}>
                   {autonomousAgentMode?.label || 'Autonomous Agent'}
                 </option>
@@ -1975,7 +1975,7 @@ export function WorkstationGatewayOperatorPane({
         {diagnosticsSectionVisible ? (
           <FormSection
           title="How this trust lane works"
-          description="Connected computers are useful by default. Approval is reserved for risky local and external actions."
+          description="This Device is useful by default. Approval is reserved for risky local and external actions."
         >
           <WorkstationSurfaceList>
             {GATEWAY_MODE_SUMMARIES.map((mode) => (
@@ -1985,8 +1985,8 @@ export function WorkstationGatewayOperatorPane({
                 subtitle={mode.subtitle}
                 description={mode.description}
                 actions={(
-                  <DataBadge tone={mode.title === 'Default' ? 'success' : 'warning'}>
-                    {mode.title === 'Default' ? 'Safe default' : 'Owner enabled'}
+                  <DataBadge tone={mode.title === 'Default Guarded' ? 'success' : 'warning'}>
+                    {mode.title === 'Default Guarded' ? 'Safe default' : 'Owner enabled'}
                   </DataBadge>
                 )}
               />
@@ -2023,7 +2023,7 @@ export function WorkstationGatewayOperatorPane({
                 label="Runtime mode"
                 value={runtimeAccessModeToken(readRecord(pairingIntent.metadata).runtime_access_mode) === 'full_access'
                   ? 'Autonomous Agent'
-                  : 'Default'}
+                  : 'Default Guarded'}
               />
             </FormGrid>
             <div className="gateway-pairing-command-card">
@@ -2051,7 +2051,7 @@ export function WorkstationGatewayOperatorPane({
         ) : null}
 
         {diagnosticsSectionVisible && loadingRegistrations && !registrationsTimedOut ? (
-          <WorkstationSurfaceNotice tone="neutral">Loading connected computers…</WorkstationSurfaceNotice>
+          <WorkstationSurfaceNotice tone="neutral">Loading device runtimes...</WorkstationSurfaceNotice>
         ) : diagnosticsSectionVisible && gateways.length === 0 ? (
           <EmptyPanel
             title="No computers connected"

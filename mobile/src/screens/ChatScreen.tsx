@@ -182,7 +182,7 @@ function normalizeRuntimeAccessMode(value: unknown): "default_guarded" | "full_a
 }
 
 function runtimeAccessModeLabel(value: unknown) {
-  return normalizeRuntimeAccessMode(value) === "full_access" ? "Autonomous Agent" : "Default guarded";
+  return normalizeRuntimeAccessMode(value) === "full_access" ? "Autonomous Agent" : "Default Guarded";
 }
 
 function runtimeAccessModeFromRecord(record: Record<string, unknown> | null | undefined): string {
@@ -199,8 +199,9 @@ function runtimeAccessModeFromRecord(record: Record<string, unknown> | null | un
 function runtimeTargetLabelFromToken(value: unknown) {
   const token = String(value ?? "").trim().toLowerCase();
   if (token.includes("cloud_computer") || token.includes("browser_session")) return "Cloud Computer";
-  if (token.includes("self_host") || token.includes("node") || token.includes("vps")) return "Self-hosted node";
-  if (token.includes("gateway") || token.includes("local") || token.includes("companion") || token.includes("user_device")) return "This computer";
+  if (token.includes("self_host") || token.includes("node") || token.includes("vps")) return "Self-hosted Node";
+  if (token.includes("gateway") || token.includes("local") || token.includes("companion") || token.includes("user_device")) return "This Device";
+  if (token.includes("cloud")) return "Cloud";
   return "";
 }
 
@@ -214,7 +215,7 @@ function localGatewayLabel(gateway: Record<string, unknown>) {
   const token = label.toLowerCase();
   if (token.includes("mac mini")) return "Mac mini";
   if (token.includes("mac")) return "This Mac";
-  return label ? "This computer" : "This computer";
+  return label ? "This Device" : "This Device";
 }
 
 function runtimePillFromState(params: {
@@ -255,9 +256,9 @@ function runtimePillFromState(params: {
     if (kind === "self_hosted_business_node") {
       if (preferred.online === false || status === "offline") return { target: "Node offline", access };
       if (preferred.healthy === false || ["degraded", "unhealthy"].includes(status)) return { target: "Node degraded", access };
-      return { target: "Self-hosted node", access };
+      return { target: "Self-hosted Node", access };
     }
-    return { target: preferred.online === false ? "Gateway offline" : "This computer", access };
+    return { target: preferred.online === false ? "Gateway offline" : "This Device", access };
   }
 
   return { target: "Cloud", access: runtimeAccessModeLabel("") };

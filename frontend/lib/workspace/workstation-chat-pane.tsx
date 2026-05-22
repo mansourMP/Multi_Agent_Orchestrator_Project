@@ -1538,7 +1538,7 @@ export function WorkstationChatPane() {
       }
       if (selectedModelOption.uiSection === 'local_ai') {
         return {
-          label: localToolingOnline ? 'Connected computer' : 'Connected computer offline',
+          label: localToolingOnline ? 'This Device' : 'This Device offline',
           tone: localToolingOnline ? 'success' as const : 'warning' as const,
         };
       }
@@ -1551,10 +1551,10 @@ export function WorkstationChatPane() {
       return { label: 'No AI model', tone: 'warning' as const };
     }
     if (localProvider && !localToolingOnline) {
-      return { label: 'Connected computer offline', tone: 'warning' as const };
+      return { label: 'This Device offline', tone: 'warning' as const };
     }
     if (localProvider) {
-      return { label: providerPath ?? 'Connected computer', tone: 'success' as const };
+      return { label: providerPath ?? 'This Device', tone: 'success' as const };
     }
     if (providerPath === 'Empyralis credits') {
       return { label: 'Empyralis credits', tone: 'success' as const };
@@ -1602,7 +1602,7 @@ export function WorkstationChatPane() {
       return {
         statValue: localToolingOnline ? 'Ready' : 'Offline',
         statHint: localToolingOnline ? 'paired local computer' : 'connect local runtime',
-        title: localToolingOnline ? 'Sage can use this computer' : 'Connected computer is offline',
+        title: localToolingOnline ? 'Sage can use This Device' : 'This Device is offline',
         body: localToolingOnline
           ? 'Local tools, browser actions, screenshots, and terminal work can be requested with approval policy attached.'
           : 'Local computer actions stay unavailable until the paired runtime is online.',
@@ -1666,7 +1666,7 @@ export function WorkstationChatPane() {
     return [
       {
         id: 'local-machine',
-        label: 'Connected computer',
+        label: 'This Device',
         items: [
           { id: 'files', label: 'Files', detail: fileEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && fileEnabled },
           { id: 'browser', label: 'Browser', detail: browserEnabled ? localReason : 'Browser is not connected', enabled: browserEnabled },
@@ -1969,7 +1969,7 @@ export function WorkstationChatPane() {
     if (!localToolingOnline) {
       pills.push({
         id: 'gateway',
-        label: 'Connected computer: Offline',
+        label: 'This Device: Offline',
         tone: 'danger',
         target: 'integrations',
       });
@@ -2879,7 +2879,7 @@ export function WorkstationChatPane() {
         const serverFailure = (typeof normalizedError?.status === 'number' && normalizedError.status >= 500)
           || /bad gateway|gateway timeout|service unavailable|internal server error|server error/i.test(normalizedRawMessage);
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
-          ? 'Connected computer is needed for this request. Connect a computer and try again.'
+          ? 'This Device is needed for this request. Connect a device and try again.'
           : providerNeedsAttention
             ? 'The selected AI path is not ready. Use Empyralis credits, connect your own AI account, connect a computer, or choose another model in Integrations.'
             : approvalNeedsAttention

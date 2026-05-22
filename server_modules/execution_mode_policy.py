@@ -7,6 +7,7 @@ EXECUTION_MODE_POLICY_VERSION = "2026-05-23"
 
 GUARDED_RUNTIME_ACCESS_MODE = "default_guarded"
 FULL_RUNTIME_ACCESS_MODE = "full_access"
+GUARDED_RUNTIME_ACCESS_PUBLIC_LABEL = "Default Guarded"
 FULL_RUNTIME_ACCESS_PUBLIC_LABEL = "Autonomous Agent"
 
 SUPPORTED_EXECUTION_MODES = (
@@ -28,7 +29,7 @@ RUNTIME_TARGET_MODE_MATRIX: dict[str, tuple[str, ...]] = {
 
 MODE_DEFINITIONS: dict[str, dict[str, Any]] = {
     "default": {
-        "label": "Default",
+        "label": GUARDED_RUNTIME_ACCESS_PUBLIC_LABEL,
         "description": "Sage can use obvious low-risk tools and asks before risky actions.",
         "destructive_actions_require_approval": True,
         "external_send_requires_approval": True,
@@ -124,7 +125,7 @@ def public_runtime_access_label(value: Any) -> str:
     mode = normalize_runtime_access_mode(value)
     if mode == FULL_RUNTIME_ACCESS_MODE:
         return FULL_RUNTIME_ACCESS_PUBLIC_LABEL
-    return "Default"
+    return GUARDED_RUNTIME_ACCESS_PUBLIC_LABEL
 
 
 def runtime_access_setup_warning(value: Any) -> str | None:
@@ -164,6 +165,7 @@ def routing_contract_summary() -> Dict[str, Any]:
             FULL_RUNTIME_ACCESS_MODE,
         ],
         "default_runtime_access_mode": GUARDED_RUNTIME_ACCESS_MODE,
+        "default_guarded_public_label": GUARDED_RUNTIME_ACCESS_PUBLIC_LABEL,
         "full_access_public_label": FULL_RUNTIME_ACCESS_PUBLIC_LABEL,
         "autonomous_agent_runtime_access_mode": FULL_RUNTIME_ACCESS_MODE,
         "full_access_scope": "dedicated_runtime_targets",

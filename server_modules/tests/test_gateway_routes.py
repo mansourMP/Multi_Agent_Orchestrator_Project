@@ -17,6 +17,7 @@ from starlette.websockets import WebSocketDisconnect
 from server_modules import (
     agent_computer_profile_service,
     auth,
+    gateway_protocol_service,
     kill_switch_gate,
     gateway_state_repository,
     personal_channels_repository,
@@ -357,7 +358,7 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertEqual(registration_response.status_code, 200)
         payload = registration_response.json()
         self.assertEqual(payload["gateway"]["runtime_access_mode"], "default_guarded")
-        self.assertEqual(payload["gateway"]["runtime_access_label"], "Default")
+        self.assertEqual(payload["gateway"]["runtime_access_label"], "Default Guarded")
 
     def test_dedicated_workstation_bind_creates_profile_and_readiness(self) -> None:
         registration_payload = self._register_gateway()
@@ -2075,7 +2076,7 @@ class GatewayRoutesTests(unittest.TestCase):
             websocket.receive_json()
 
             # Now send an oversized frame
-            oversized_payload = "x" * (300 * 1024)
+            oversized_payload = "x" * (gateway_protocol_service.MAX_GATEWAY_FRAME_BYTES + 1)
             websocket.send_text('{"kind":"request","id":"big-1","type":"gateway.heartbeat","scope":' + json.dumps(session_payload["scope"]) + ',"payload":"' + oversized_payload + '"}')
 
             error_response = websocket.receive_json()

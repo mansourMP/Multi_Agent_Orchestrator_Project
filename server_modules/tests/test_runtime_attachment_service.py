@@ -326,9 +326,13 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertFalse(payload["routing_contract"]["direct_mobile_lan_default"])
         targets = {item["target_id"]: item for item in payload["targets"]}
         self.assertTrue(targets["cloud_default"]["default_for_workspace"])
+        self.assertEqual(targets["cloud_default"]["label"], "Cloud")
+        self.assertEqual(targets["cloud_default"]["public_label"], "Cloud")
         self.assertEqual(targets["cloud_default"]["status"], "live")
         self.assertEqual(targets["local_companion"]["connection_mode"], "platform_relay")
         self.assertEqual(targets["local_companion"]["canonical_target_id"], "user_device_gateway")
+        self.assertEqual(targets["local_companion"]["label"], "This Device")
+        self.assertEqual(targets["local_companion"]["public_label"], "This Device")
         self.assertEqual(targets["local_companion"]["runtime_fabric_target"], "user_device_gateway")
         self.assertEqual(targets["local_companion"]["hardware_edge"], "empyralis_gateway")
         self.assertTrue(targets["local_companion"]["runtime_session_required"])
@@ -348,6 +352,24 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertTrue(payload["routing_contract"]["hardware_actions_require_runtime_session"])
         self.assertTrue(payload["routing_contract"]["hardware_actions_emit_transparency_events"])
         self.assertTrue(payload["routing_contract"]["legacy_local_companion_deprecated_for_machine_control"])
+        self.assertEqual(
+            payload["routing_contract"]["public_runtime_target_labels"],
+            {
+                "cloud_default": "Cloud",
+                "user_device_gateway": "This Device",
+                "empyralis_cloud_computer": "Cloud Computer",
+                "self_hosted_node": "Self-hosted Node",
+            },
+        )
+
+    def test_public_runtime_target_labels_hide_legacy_target_ids(self) -> None:
+        self.assertEqual(runtime_attachment_service.public_runtime_target_label("cloud_default"), "Cloud")
+        self.assertEqual(runtime_attachment_service.public_runtime_target_label("local_companion"), "This Device")
+        self.assertEqual(runtime_attachment_service.public_runtime_target_label("user_device_gateway"), "This Device")
+        self.assertEqual(runtime_attachment_service.public_runtime_target_label("sage_cloud_computer"), "Cloud Computer")
+        self.assertEqual(runtime_attachment_service.public_runtime_target_label("empyralis_cloud_computer"), "Cloud Computer")
+        self.assertEqual(runtime_attachment_service.public_runtime_target_label("self_host_runtime"), "Self-hosted Node")
+        self.assertEqual(runtime_attachment_service.public_runtime_target_label("self_hosted_node"), "Self-hosted Node")
 
     def test_list_workspace_runtime_attachments_maps_cloud_computer_profile(self) -> None:
         inventory = asyncio.run(
@@ -430,6 +452,8 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertTrue(payload["routing_contract"]["registered_agents_active_agents_queue_when_over_capacity"])
         targets = {item["target_id"]: item for item in payload["targets"]}
         self.assertTrue(targets["sage_cloud_computer"]["available"])
+        self.assertEqual(targets["sage_cloud_computer"]["label"], "Cloud Computer")
+        self.assertEqual(targets["sage_cloud_computer"]["canonical_target_id"], "empyralis_cloud_computer")
         self.assertTrue(targets["sage_cloud_computer"]["metered"])
         self.assertTrue(targets["sage_cloud_computer"]["requires_explicit_selection"])
         self.assertFalse(targets["sage_cloud_computer"]["default_for_workspace"])

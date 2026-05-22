@@ -42,9 +42,9 @@ const SETTINGS_SECTIONS: Array<{
   {
     id: 'devices',
     label: 'Devices',
-    eyebrow: 'Connected computers',
-    title: 'Connected computers',
-    description: 'Trusted computers, connection health, and local tool readiness.',
+    eyebrow: 'Runtime',
+    title: 'Runtime targets',
+    description: 'Cloud, connected device, cloud computer, and self-hosted node readiness.',
   },
   {
     id: 'usage',
@@ -238,7 +238,7 @@ function deriveActiveModelPath(
       || readString(provider?.default_model)
       || 'Default model';
     const routeLabel = provider?.local_only === true || providerId === 'ollama'
-      ? 'Connected computer'
+      ? 'This Device'
       : 'Your AI account';
     return {
       value: `${providerLabel} · ${modelLabel}`,
@@ -462,11 +462,12 @@ export function WorkstationSettingsPane() {
     [bootstrap.runtime.runtimeTargets],
   );
   const preferredComputerLabel = preferredRuntimeTarget
-    ? preferredRuntimeTarget.id === 'local_companion'
-      ? 'Connected computer'
+    ? preferredRuntimeTarget.id === 'local_companion' || preferredRuntimeTarget.canonicalId === 'user_device_gateway'
+      ? 'This Device'
       : preferredRuntimeTarget.id === 'sage_cloud_computer'
-        ? 'Cloud computer'
-        : preferredRuntimeTarget.label
+        || preferredRuntimeTarget.canonicalId === 'empyralis_cloud_computer'
+        ? 'Cloud Computer'
+        : preferredRuntimeTarget.publicLabel || preferredRuntimeTarget.label
     : 'Cloud';
   const activeSection = SETTINGS_SECTIONS.find((section) => section.id === selectedSection) ?? SETTINGS_SECTIONS[0];
   const accountDisplayName = bootstrap.account.displayName?.trim() || 'Empyralis User';
@@ -661,11 +662,11 @@ export function WorkstationSettingsPane() {
               <FormGrid>
                 <FormReadout label="Deployment mode" value={humanizeToken(bootstrap.runtime.deploymentMode)} />
                 <FormReadout
-                  label="Preferred computer target"
+                  label="Preferred runtime target"
                   value={preferredComputerLabel}
                 />
                 <FormReadout
-                  label="Connected computer"
+                  label="This Device"
                   value={localCompanionTarget?.online ? 'Connected' : localCompanionTarget ? 'Available but offline' : 'Not detected'}
                 />
                 <FormReadout
@@ -715,10 +716,10 @@ export function WorkstationSettingsPane() {
                 </article>
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">Connected computer boundary</strong>
+                    <strong className="settings-detail-card__title">This Device boundary</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Local files, browser, clipboard, screenshots, and terminal require an online connected computer with trusted device access.
+                    Local files, browser, clipboard, screenshots, and terminal require an online trusted device.
                   </p>
                 </article>
                 <article className="settings-detail-card">

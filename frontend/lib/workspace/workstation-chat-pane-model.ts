@@ -1342,10 +1342,10 @@ export function providerPathLabel(provider: ProviderCatalogRecord | null | undef
   const providerLabel = readString(provider.label) || readString(provider.id);
 
   if (providerId === 'ollama') {
-    return 'Connected computer · Ollama local';
+    return 'This Device · Ollama local';
   }
   if (providerId === 'openai-codex' || runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
-    return 'Connected computer';
+    return 'This Device';
   }
   if (providerId === 'ollama_cloud') {
     return 'Ollama Cloud';
@@ -1357,7 +1357,7 @@ export function providerPathLabel(provider: ProviderCatalogRecord | null | undef
     return 'Your AI account';
   }
   if (provider.local_only === true || credentialPlane === 'local_runtime') {
-    return 'Connected computer';
+    return 'This Device';
   }
   return providerLabel || null;
 }
@@ -1586,7 +1586,7 @@ export function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
       return [];
     }
     const routePathLabel = routeKind === 'local_ai'
-      ? 'Connected computer'
+      ? 'This Device'
       : routeKind === 'my_ai_account'
         ? 'My AI Account'
         : 'My API Key';
@@ -2225,9 +2225,9 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
   if (!local.online) {
     return {
       tone: 'warning',
-      title: 'Connected computer is offline',
+      title: 'This Device is offline',
       meta: `${preferredLabel} remains active`,
-      body: local.statusReason || 'Sage will stay in cloud mode until the connected computer reconnects.',
+      body: local.statusReason || 'Sage will stay in cloud mode until This Device reconnects.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
       localPill: `Computer · ${local.statusLabel ?? 'Offline'}`,
     };
@@ -2236,7 +2236,7 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
   if (!local.healthy) {
     return {
       tone: 'warning',
-      title: 'Connected computer needs attention',
+      title: 'This Device needs attention',
       meta: `${preferredLabel} remains active`,
       body: local.statusReason || 'Sage will avoid computer work until the connection is healthy again.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
@@ -2246,11 +2246,11 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
 
   return {
     tone: 'success',
-    title: 'Connected computer is ready',
-    meta: `${local.sampleAttachmentLabel ?? local.label} · Default`,
+    title: 'This Device is ready',
+    meta: `${local.sampleAttachmentLabel ?? local.label} · Default Guarded`,
     body: local.supportsFullAccess
-      ? 'Sage still uses cloud execution for ordinary turns. Device work starts in Default mode, and dedicated hardware can be switched to Autonomous Agent mode during setup.'
-      : 'Sage still uses cloud execution for ordinary turns. Device work starts in Default mode on this connected computer.',
+      ? 'Sage still uses cloud execution for ordinary turns. Device work starts in Default Guarded mode, and dedicated hardware can be switched to Autonomous Agent mode during setup.'
+      : 'Sage still uses cloud execution for ordinary turns. Device work starts in Default Guarded mode on This Device.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
     localPill: `Computer · ${local.statusLabel ?? 'Ready'}`,
   };
@@ -2303,8 +2303,8 @@ export function classifyStatusNotice(message: string): {
   if (isGatewayBrowserMessage(message)) {
     return {
       tone: 'warning',
-      title: 'Connected computer browser needed',
-      body: 'Localhost pages, signed-in sites, and private browser sessions stay on the selected computer. Open Integrations to manage connected computer access.',
+      title: 'This Device browser needed',
+      body: 'Localhost pages, signed-in sites, and private browser sessions stay on This Device. Open Integrations to manage device access.',
       requiresLocalAccess: true,
       actionTarget: 'integrations',
       actionLabel: 'Open Integrations',
@@ -2313,7 +2313,7 @@ export function classifyStatusNotice(message: string): {
   if (isLocalCompanionGateMessage(message)) {
     return {
       tone: 'warning',
-      title: 'Connected computer attention needed',
+      title: 'This Device attention needed',
       body: message,
       requiresLocalAccess: true,
       actionTarget: 'integrations',

@@ -27,6 +27,10 @@ export type WorkspaceBootstrapEntitlements = {
 
 export type WorkspaceBootstrapRuntimeTarget = {
   id: string;
+  canonicalId?: string | null;
+  runtimeFabricTarget?: string | null;
+  legacyId?: string | null;
+  publicLabel?: string | null;
   label: string;
   kind: string;
   online: boolean;
@@ -141,6 +145,10 @@ function parseRuntimeTargets(value: unknown): WorkspaceBootstrapRuntimeTarget[] 
     return [
       {
         id: requireString(entry.id, 'runtime.runtimeTargets[].id'),
+        canonicalId: typeof entry.canonicalId === 'string' ? entry.canonicalId : null,
+        runtimeFabricTarget: typeof entry.runtimeFabricTarget === 'string' ? entry.runtimeFabricTarget : null,
+        legacyId: typeof entry.legacyId === 'string' ? entry.legacyId : null,
+        publicLabel: typeof entry.publicLabel === 'string' ? entry.publicLabel : null,
         label: requireString(entry.label, 'runtime.runtimeTargets[].label'),
         kind: requireString(entry.kind, 'runtime.runtimeTargets[].kind'),
         online: Boolean(entry.online),

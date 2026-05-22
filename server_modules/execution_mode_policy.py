@@ -7,6 +7,7 @@ EXECUTION_MODE_POLICY_VERSION = "2026-05-23"
 
 GUARDED_RUNTIME_ACCESS_MODE = "default_guarded"
 FULL_RUNTIME_ACCESS_MODE = "full_access"
+FULL_RUNTIME_ACCESS_PUBLIC_LABEL = "Autonomous Agent"
 
 SUPPORTED_EXECUTION_MODES = (
     "default",
@@ -60,8 +61,11 @@ MODE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "requires_owner_approval": False,
     },
     "full_access": {
-        "label": "Full Access",
-        "description": "Sage can use the selected dedicated runtime without Empyralis action-by-action approval prompts.",
+        "label": FULL_RUNTIME_ACCESS_PUBLIC_LABEL,
+        "description": (
+            "Sage can operate the selected dedicated runtime as an autonomous agent "
+            "without Empyralis action-by-action approval prompts."
+        ),
         "destructive_actions_require_approval": False,
         "external_send_requires_approval": False,
         "dangerous_shell_requires_approval": False,
@@ -70,8 +74,9 @@ MODE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "requires_explicit_selection": True,
         "requires_owner_approval": True,
         "setup_warning": (
-            "Full Access lets the AI operate this runtime without Empyralis asking for each action. "
-            "Only enable it for a runtime you intentionally dedicate to the agent."
+            "Autonomous Agent lets the AI operate this dedicated runtime "
+            "without Empyralis asking for each action. "
+            "Only enable it for hardware or cloud compute you intentionally dedicate to the agent."
         ),
     },
 }
@@ -84,14 +89,31 @@ EXECUTION_MODE_ACCESS_MODE: dict[str, str] = {
 
 def runtime_access_mode_for_execution_mode(execution_mode: Any) -> str:
     token = str(execution_mode or "").strip().lower()
-    if token == FULL_RUNTIME_ACCESS_MODE:
+    token = token.replace("-", "_").replace(" ", "_")
+    if token in {
+        FULL_RUNTIME_ACCESS_MODE,
+        "autonomous_agent",
+        "autonomous",
+        "dedicated_agent",
+        "agent_owned",
+        "agent_owned_runtime",
+    }:
         return FULL_RUNTIME_ACCESS_MODE
     return EXECUTION_MODE_ACCESS_MODE.get(token, GUARDED_RUNTIME_ACCESS_MODE)
 
 
 def normalize_runtime_access_mode(value: Any, *, execution_mode: Any = None) -> str:
     token = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if token in {FULL_RUNTIME_ACCESS_MODE, "trusted_full_access", "agent_owned_full_access"}:
+    if token in {
+        FULL_RUNTIME_ACCESS_MODE,
+        "trusted_full_access",
+        "agent_owned_full_access",
+        "autonomous_agent",
+        "autonomous",
+        "dedicated_agent",
+        "agent_owned",
+        "agent_owned_runtime",
+    }:
         return FULL_RUNTIME_ACCESS_MODE
     if token in {GUARDED_RUNTIME_ACCESS_MODE, "guarded", "default", "approval_mode", "autopilot"}:
         return GUARDED_RUNTIME_ACCESS_MODE
@@ -128,8 +150,10 @@ def routing_contract_summary() -> Dict[str, Any]:
             FULL_RUNTIME_ACCESS_MODE,
         ],
         "default_runtime_access_mode": GUARDED_RUNTIME_ACCESS_MODE,
+        "full_access_public_label": FULL_RUNTIME_ACCESS_PUBLIC_LABEL,
+        "autonomous_agent_runtime_access_mode": FULL_RUNTIME_ACCESS_MODE,
         "full_access_scope": "dedicated_runtime_targets",
-        "cloud_computer_mode": "explicit_selection_with_metering_and_optional_full_access",
+        "cloud_computer_mode": "explicit_selection_with_metering_and_optional_autonomous_agent",
         "default_guarded_safe_actions": [
             "filesystem.read",
             "screenshot.capture",

@@ -19,6 +19,7 @@ class ExecutionModePolicyTests(unittest.TestCase):
         }
 
         self.assertTrue(cloud_modes["full_access"]["available"])
+        self.assertEqual(cloud_modes["full_access"]["label"], "Autonomous Agent")
         self.assertTrue(cloud_modes["autopilot"]["available"])
         self.assertFalse(cloud_modes["full_access"]["destructive_actions_require_approval"])
         self.assertTrue(local_modes["full_access"]["available"])
@@ -32,11 +33,30 @@ class ExecutionModePolicyTests(unittest.TestCase):
     def test_summary_declares_safety_boundary(self) -> None:
         summary = execution_mode_policy.routing_contract_summary()
 
+        self.assertEqual(summary["full_access_public_label"], "Autonomous Agent")
+        self.assertEqual(summary["autonomous_agent_runtime_access_mode"], "full_access")
         self.assertEqual(summary["full_access_scope"], "dedicated_runtime_targets")
         self.assertEqual(summary["destructive_actions_require_approval"], "default_guarded_only")
         self.assertIn("autopilot", summary["supported_execution_modes"])
         self.assertIn("full_access", summary["supported_execution_modes"])
         self.assertIn("full_access", summary["supported_runtime_access_modes"])
+
+    def test_autonomous_agent_aliases_normalize_to_full_access(self) -> None:
+        for alias in (
+            "autonomous_agent",
+            "Autonomous Agent",
+            "dedicated-agent",
+            "agent_owned_runtime",
+        ):
+            with self.subTest(alias=alias):
+                self.assertEqual(
+                    execution_mode_policy.normalize_runtime_access_mode(alias),
+                    execution_mode_policy.FULL_RUNTIME_ACCESS_MODE,
+                )
+                self.assertEqual(
+                    execution_mode_policy.runtime_access_mode_for_execution_mode(alias),
+                    execution_mode_policy.FULL_RUNTIME_ACCESS_MODE,
+                )
 
 
 if __name__ == "__main__":

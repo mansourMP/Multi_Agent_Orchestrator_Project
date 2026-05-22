@@ -356,12 +356,12 @@ function runtimeSessionLaneLabel(session: WorkspaceRuntimeSessionRecord): string
 }
 
 function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord, pendingCount = 0): string {
-  const accessMode = readString(session.runtime_access_mode, '').toLowerCase();
-  if (accessMode === 'full_access') {
-    return 'Full Access';
+  const accessMode = readString(session.runtime_access_mode, '').toLowerCase().replace(/[\s-]+/g, '_');
+  if (accessMode === 'full_access' || accessMode === 'autonomous_agent') {
+    return 'Autonomous Agent';
   }
   if (accessMode === 'default_guarded') {
-    return pendingCount > 0 ? 'Needs approval' : 'Default guarded';
+    return pendingCount > 0 ? 'Needs approval' : 'Default';
   }
   const explicitMode = readString(session.permission_mode ?? session.approval_mode, '');
   if (explicitMode) {

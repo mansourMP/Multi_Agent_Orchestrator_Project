@@ -2247,10 +2247,10 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
   return {
     tone: 'success',
     title: 'Connected computer is ready',
-    meta: `${local.sampleAttachmentLabel ?? local.label} · default guarded`,
+    meta: `${local.sampleAttachmentLabel ?? local.label} · Default`,
     body: local.supportsFullAccess
-      ? 'Sage still uses cloud execution for ordinary turns. Device work starts guarded by default, and dedicated hardware can be switched to Full Access during setup.'
-      : 'Sage still uses cloud execution for ordinary turns. Device work starts guarded by default on this connected computer.',
+      ? 'Sage still uses cloud execution for ordinary turns. Device work starts in Default mode, and dedicated hardware can be switched to Autonomous Agent mode during setup.'
+      : 'Sage still uses cloud execution for ordinary turns. Device work starts in Default mode on this connected computer.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
     localPill: `Computer · ${local.statusLabel ?? 'Ready'}`,
   };

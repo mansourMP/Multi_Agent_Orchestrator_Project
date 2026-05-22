@@ -2247,8 +2247,10 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
   return {
     tone: 'success',
     title: 'Connected computer is ready',
-    meta: `${local.sampleAttachmentLabel ?? local.label} · explicit approval`,
-    body: 'Sage still uses cloud execution for ordinary turns. If a step needs device work, Sage pauses for explicit approval before using the connected computer.',
+    meta: `${local.sampleAttachmentLabel ?? local.label} · default guarded`,
+    body: local.supportsFullAccess
+      ? 'Sage still uses cloud execution for ordinary turns. Device work starts guarded by default, and dedicated hardware can be switched to Full Access during setup.'
+      : 'Sage still uses cloud execution for ordinary turns. Device work starts guarded by default on this connected computer.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
     localPill: `Computer · ${local.statusLabel ?? 'Ready'}`,
   };

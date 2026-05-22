@@ -41,6 +41,8 @@ export type WorkspaceBootstrapRuntimeTarget = {
   executionTarget?: string | null;
   trustTier?: string | null;
   approvalMode?: string | null;
+  defaultRuntimeAccessMode?: string | null;
+  supportsFullAccess?: boolean;
   sampleAttachmentLabel?: string | null;
 };
 
@@ -141,6 +143,8 @@ function parseRuntimeTargets(value: unknown): WorkspaceBootstrapRuntimeTarget[] 
         executionTarget: typeof entry.executionTarget === 'string' ? entry.executionTarget : null,
         trustTier: typeof entry.trustTier === 'string' ? entry.trustTier : null,
         approvalMode: typeof entry.approvalMode === 'string' ? entry.approvalMode : null,
+        defaultRuntimeAccessMode: typeof entry.defaultRuntimeAccessMode === 'string' ? entry.defaultRuntimeAccessMode : null,
+        supportsFullAccess: Boolean(entry.supportsFullAccess),
         sampleAttachmentLabel: typeof entry.sampleAttachmentLabel === 'string' ? entry.sampleAttachmentLabel : null,
       },
     ];

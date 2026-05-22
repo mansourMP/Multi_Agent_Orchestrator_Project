@@ -892,6 +892,11 @@ def build_workspace_runtime_targets(
             "routed_through_platform": True,
             "runtime_session_required": target_id != "cloud_default",
             "approval_boundary": "platform_policy" if target_id == "cloud_default" else "runtime_session_policy",
+            "default_runtime_access_mode": execution_mode_policy.GUARDED_RUNTIME_ACCESS_MODE,
+            "supports_full_access": any(
+                bool(mode.get("available")) and str(mode.get("id") or "").strip() == "full_access"
+                for mode in execution_modes
+            ),
             "direct_mobile_connection_required": False,
             "workspace_scoped_identity": True,
             "supports_runtime_modes": supports_runtime_modes,

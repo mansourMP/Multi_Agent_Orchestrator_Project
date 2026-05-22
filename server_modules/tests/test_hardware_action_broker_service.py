@@ -294,13 +294,13 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_gateway_risky_action_requests_approval_without_execution(self) -> None:
         create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
         approval = {
-            "approval_id": "gapproval-1",
-            "status": "pending",
-            "request_payload": {
-                "capability_id": "shell.execute",
-                "arguments": {"command": "echo hello", "password": "secret"},
-            },
-        }
+                "approval_id": "gapproval-1",
+                "status": "pending",
+                "request_payload": {
+                    "capability_id": "shell.execute",
+                    "arguments": {"command": "rm -rf /tmp/demo", "password": "secret"},
+                },
+            }
         request_approval_mock = AsyncMock(return_value=approval)
         execute_mock = AsyncMock()
         with (
@@ -335,7 +335,7 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
                 tenant_id="tenant-1",
                 workspace_id="ws-1",
                 action_id="shell.exec",
-                arguments={"command": "echo hello", "password": "secret"},
+                arguments={"command": "rm -rf /tmp/demo", "password": "secret"},
                 runtime_target="user_device_gateway",
                 gateway_id="gw-1",
                 run_id="run-1",
@@ -354,6 +354,66 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         request_approval_mock.assert_awaited_once()
         execute_mock.assert_not_awaited()
         emit_approval.assert_awaited_once()
+
+    async def test_gateway_full_access_risky_action_executes_without_approval(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        request_approval_mock = AsyncMock()
+        execute_mock = AsyncMock(
+            return_value={
+                "gateway_id": "gw-1",
+                "device_id": "device-1",
+                "workspace_id": "ws-1",
+                "request_id": "req-full",
+                "capability_id": "shell.execute",
+                "run_id": "run-1",
+                "result": {"summary": "Ran command.", "command": "rm -rf /tmp/demo", "exit_code": 0},
+            }
+        )
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch as emit_approval,
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_state_repository.get_gateway_registration",
+                return_value=_registration(),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_protocol_service.gateway_connection_is_live",
+                return_value=True,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_approval_service.request_gateway_tool_approval",
+                request_approval_mock,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_execution_service.execute_tool_via_gateway",
+                execute_mock,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="shell.exec",
+                arguments={"command": "rm -rf /tmp/demo", "password": "secret"},
+                runtime_target="user_device_gateway",
+                runtime_access_mode="full_access",
+                gateway_id="gw-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-full",
+                session_id="hrs-full",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["runtime_session"]["runtime_access_mode"], "full_access")
+        self.assertFalse(payload["runtime_session"]["empyralis_action_approvals_enabled"])
+        request_approval_mock.assert_not_awaited()
+        emit_approval.assert_not_awaited()
+        execute_mock.assert_awaited_once()
 
     async def test_cloud_computer_browser_action_uses_virtual_runtime_adapter(self) -> None:
         create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
@@ -475,6 +535,43 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         cloud_runtime.create_session.assert_not_awaited()
         cloud_runtime.execute_action.assert_not_awaited()
         emit_approval.assert_awaited_once()
+
+    async def test_cloud_computer_full_access_shell_executes_without_approval(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        cloud_runtime = _FakeCloudRuntime()
+        cloud_registry = _FakeCloudRuntimeRegistry(cloud_runtime)
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch as emit_approval,
+            patch(
+                "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",
+                return_value=cloud_registry,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="shell.exec",
+                arguments={"command": "rm -rf /tmp/demo"},
+                runtime_target="empyralis_cloud_computer",
+                runtime_access_mode="full_access",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-cloud-full",
+                session_id="hrs-cloud-computer",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["runtime_session"]["runtime_access_mode"], "full_access")
+        self.assertEqual(cloud_registry.resolve_calls[0]["runtime_choice"], "virtual_code_sandbox")
+        cloud_runtime.create_session.assert_awaited_once()
+        cloud_runtime.execute_action.assert_awaited_once()
+        emit_approval.assert_not_awaited()
 
     async def test_cloud_computer_unsupported_file_action_returns_degraded(self) -> None:
         create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
@@ -613,6 +710,60 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         enqueue_mock.assert_not_awaited()
         emit_approval.assert_awaited_once()
 
+    async def test_self_hosted_node_full_access_risky_action_enqueues_without_approval(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        enqueue_mock = AsyncMock(
+            return_value={
+                "ok": True,
+                "runtime_profile_id": "rprof-self",
+                "runtime_node_id": "node-1",
+                "workspace_id": "ws-1",
+                "command": {
+                    "id": "shcmd-full",
+                    "state": "queued",
+                    "command_type": "hardware_action",
+                },
+            }
+        )
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch as emit_approval,
+            patch(
+                "server_modules.hardware_action_broker_service.runtime_attachment_service.list_workspace_runtime_attachments",
+                new=AsyncMock(return_value=_self_hosted_inventory()),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_registry_repository.enqueue_self_hosted_runtime_command",
+                enqueue_mock,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="shell.exec",
+                arguments={"command": "rm -rf /tmp/demo", "password": "secret"},
+                runtime_target="self_hosted_node",
+                runtime_access_mode="full_access",
+                node_id="node-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-self-full",
+                session_id="hrs-self-host",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["runtime_session"]["runtime_access_mode"], "full_access")
+        enqueue_mock.assert_awaited_once()
+        command_payload = enqueue_mock.await_args.kwargs["command_payload"]
+        self.assertEqual(command_payload["runtime_access_mode"], "full_access")
+        self.assertEqual(command_payload["runtime_session_id"], "hrs-self-host")
+        emit_approval.assert_not_awaited()
+
     async def test_self_hosted_node_offline_returns_offline_without_enqueue(self) -> None:
         create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
         enqueue_mock = AsyncMock()
@@ -650,6 +801,148 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["status"], "offline")
         self.assertEqual(payload["reason"], "self_hosted_node_offline")
         enqueue_mock.assert_not_awaited()
+
+    async def test_self_hosted_command_completion_updates_original_runtime_session(self) -> None:
+        _create_patch, extend_patch, _started_patch, result_patch, artifact_patch, _approval_patch = self._session_patches()
+        completion = {
+            "ok": True,
+            "status": "completed",
+            "command_id": "shcmd-1",
+            "command": {
+                "id": "shcmd-1",
+                "command_payload": {
+                    "runtime_session_binding": broker.HARDWARE_RUNTIME_SESSION_BINDING,
+                    "runtime_session_id": "hrs-self-host",
+                    "runtime_target": "self_hosted_node",
+                    "runtime_access_mode": "full_access",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "thread_id": "thread-1",
+                    "run_id": "run-1",
+                    "trace_id": "trace-1",
+                    "request_id": "req-self-host",
+                    "capability_id": "shell.execute",
+                    "runtime_node_id": "node-1",
+                    "runtime_profile_id": "rprof-self",
+                },
+            },
+            "result_payload": {"summary": "Command completed."},
+            "artifacts": [{"artifact_id": "artifact-self"}],
+        }
+        with (
+            extend_patch as extend_session,
+            result_patch as emit_result,
+            artifact_patch as emit_artifact,
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.get_session",
+                new=AsyncMock(
+                    return_value={
+                        "session_id": "hrs-self-host",
+                        "tenant_id": "tenant-1",
+                        "workspace_id": "ws-1",
+                        "metadata": {
+                            "runtime_session_binding": broker.HARDWARE_RUNTIME_SESSION_BINDING,
+                            "runtime_session_id": "hrs-self-host",
+                            "runtime_target": "self_hosted_node",
+                            "canonical_runtime_target": "self_hosted_node",
+                            "runtime_access_mode": "full_access",
+                            "state": "running",
+                            "run_id": "run-1",
+                            "trace_id": "trace-1",
+                            "request_id": "req-self-host",
+                            "capability_id": "shell.execute",
+                        },
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.resume_trace",
+                new=AsyncMock(return_value=_trace()),
+            ),
+        ):
+            payload = await broker.record_self_hosted_command_completion(completion)
+
+        self.assertEqual(payload["runtime_session"]["state"], "ready")
+        self.assertEqual(payload["runtime_session"]["self_hosted_command_id"], "shcmd-1")
+        self.assertEqual(payload["runtime_session"]["artifacts"], ["artifact-self"])
+        extend_session.assert_awaited_once()
+        emit_artifact.assert_awaited_once()
+        emit_result.assert_awaited_once()
+        self.assertEqual(emit_result.await_args.kwargs["status"], "completed")
+
+    async def test_gateway_approval_execution_updates_original_runtime_session(self) -> None:
+        _create_patch, extend_patch, _started_patch, result_patch, artifact_patch, _approval_patch = self._session_patches()
+        result = {
+            "status": "executed",
+            "approval": {
+                "approval_id": "gapproval-1",
+                "decision": "approved",
+                "request_payload": {
+                    "runtime_session_binding": broker.HARDWARE_RUNTIME_SESSION_BINDING,
+                    "runtime_session_id": "hrs-gateway",
+                    "runtime_target": "user_device_gateway",
+                    "runtime_access_mode": "default_guarded",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "thread_id": "thread-1",
+                    "run_id": "run-1",
+                    "trace_id": "trace-1",
+                    "request_id": "req-gateway",
+                    "capability_id": "shell.execute",
+                },
+            },
+            "execution": {
+                "request_id": "req-gateway",
+                "result": {
+                    "summary": "Ran command.",
+                    "artifacts": [{"id": "artifact-gateway"}],
+                },
+            },
+        }
+        with (
+            extend_patch as extend_session,
+            result_patch as emit_result,
+            artifact_patch as emit_artifact,
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.get_session",
+                new=AsyncMock(
+                    return_value={
+                        "session_id": "hrs-gateway",
+                        "tenant_id": "tenant-1",
+                        "workspace_id": "ws-1",
+                        "metadata": {
+                            "runtime_session_binding": broker.HARDWARE_RUNTIME_SESSION_BINDING,
+                            "runtime_session_id": "hrs-gateway",
+                            "runtime_target": "user_device_gateway",
+                            "canonical_runtime_target": "user_device_gateway",
+                            "runtime_access_mode": "default_guarded",
+                            "state": "waiting_approval",
+                            "run_id": "run-1",
+                            "trace_id": "trace-1",
+                            "request_id": "req-gateway",
+                            "capability_id": "shell.execute",
+                        },
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.resume_trace",
+                new=AsyncMock(return_value=_trace()),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_approval_resolved",
+                new=AsyncMock(return_value="evt-approval-resolved"),
+            ) as emit_resolved,
+        ):
+            payload = await broker.record_gateway_approval_resolution(result, actor="user-1")
+
+        self.assertEqual(payload["runtime_session"]["state"], "ready")
+        self.assertEqual(payload["runtime_session"]["artifacts"], ["artifact-gateway"])
+        extend_session.assert_awaited_once()
+        emit_resolved.assert_awaited_once()
+        emit_artifact.assert_awaited_once()
+        emit_result.assert_awaited_once()
+        self.assertEqual(emit_result.await_args.kwargs["status"], "completed")
 
     async def test_stop_gateway_action_interrupts_and_marks_session_terminated(self) -> None:
         interrupt_mock = AsyncMock(

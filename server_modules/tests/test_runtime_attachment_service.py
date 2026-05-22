@@ -435,8 +435,8 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertFalse(targets["sage_cloud_computer"]["default_for_workspace"])
         cloud_modes = {item["id"]: item for item in targets["sage_cloud_computer"]["execution_modes"]}
         self.assertTrue(cloud_modes["autopilot"]["available"])
-        self.assertFalse(cloud_modes["full_access"]["available"])
-        self.assertEqual(payload["routing_contract"]["full_access_scope"], "local_companion_only")
+        self.assertTrue(cloud_modes["full_access"]["available"])
+        self.assertEqual(payload["routing_contract"]["full_access_scope"], "dedicated_runtime_targets")
 
     def test_build_workspace_runtime_targets_never_defaults_to_cloud_computer(self) -> None:
         payload = runtime_attachment_service.build_workspace_runtime_targets(

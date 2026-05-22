@@ -174,6 +174,8 @@ def _runtime_target_payload(item: Dict[str, Any]) -> Dict[str, Any]:
         "executionTarget": str(item.get("execution_target") or "").strip() or None,
         "trustTier": str(trust_profile.get("trust_tier") or "").strip() or None,
         "approvalMode": str(trust_profile.get("approval_mode") or "").strip() or None,
+        "defaultRuntimeAccessMode": str(item.get("default_runtime_access_mode") or "").strip() or None,
+        "supportsFullAccess": bool(item.get("supports_full_access")),
         "sampleAttachmentLabel": str(item.get("sample_attachment_label") or "").strip() or None,
     }
 

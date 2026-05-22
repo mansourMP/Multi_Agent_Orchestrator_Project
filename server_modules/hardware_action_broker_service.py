@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+import re
 import uuid
 
 from server_modules import (
     agent_trace_service,
     agent_registry_repository,
+    execution_mode_policy,
     gateway_approval_service,
     gateway_execution_service,
     gateway_protocol_service,
@@ -30,6 +32,8 @@ HARDWARE_ACTION_STATES = {
     "failed",
     "terminated",
 }
+DEFAULT_GUARDED_RUNTIME_ACCESS_MODE = execution_mode_policy.GUARDED_RUNTIME_ACCESS_MODE
+FULL_RUNTIME_ACCESS_MODE = execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
 
 _CLOUD_COMPUTER_RUNTIME_REGISTRY: Any = None
 
@@ -57,6 +61,43 @@ _CAPABILITY_ALIASES = {
     "shell__exec": "shell.execute",
     "shell__execute": "shell.execute",
 }
+
+_DEFAULT_GUARDED_APPROVAL_CAPABILITIES = {
+    "computer_control.click",
+    "computer_control.type",
+    "computer_control.key",
+    "computer_control.move",
+    "computer_control.clipboard_read",
+    "computer_control.clipboard_write",
+    "computer_control.launch",
+    "computer_control.launch_app",
+    "computer_control.applescript",
+    "computer_control.notify",
+    "computer_control.speak",
+    "connector.action.write",
+    "connector.action.execute",
+    "send_message",
+    "payment.charge",
+    "payment.refund",
+    "payment.transfer",
+}
+
+_DESTRUCTIVE_SHELL_MARKERS = (
+    "rm -rf",
+    "rm -r ",
+    "rm -f ",
+    "sudo rm",
+    "del /f",
+    "del /q",
+    "rmdir /s",
+    "format ",
+    "mkfs",
+    "diskutil erase",
+    "shred ",
+    "dd if=",
+    "chmod -r",
+    "chown -r",
+)
 
 
 def _utc_now_iso() -> str:
@@ -99,6 +140,124 @@ def normalize_hardware_capability_id(action_id: Any, capability_id: Any = None) 
     lowered = candidate.lower().replace(" ", "_")
     resolved = _CAPABILITY_ALIASES.get(lowered) or _CAPABILITY_ALIASES.get(lowered.replace("__", "."))
     return canonical_capability_id(resolved or lowered)
+
+
+def normalize_runtime_access_mode(value: Any = None, *, execution_mode: Any = None) -> str:
+    return execution_mode_policy.normalize_runtime_access_mode(value, execution_mode=execution_mode)
+
+
+def _runtime_access_metadata(runtime_access_mode: str, execution_mode: Optional[str]) -> Dict[str, Any]:
+    mode = normalize_runtime_access_mode(runtime_access_mode, execution_mode=execution_mode)
+    return {
+        "runtime_access_mode": mode,
+        "execution_mode": _text(execution_mode) or ("full_access" if mode == FULL_RUNTIME_ACCESS_MODE else "default"),
+        "permission_mode": mode,
+        "approval_mode": "no_empyralis_action_approvals" if mode == FULL_RUNTIME_ACCESS_MODE else "default_guarded",
+        "empyralis_action_approvals_enabled": mode != FULL_RUNTIME_ACCESS_MODE,
+    }
+
+
+def _compact_command_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _shell_command_requires_guarded_approval(command: Any) -> bool:
+    compact = _compact_command_text(command)
+    if not compact:
+        return False
+    return any(marker in compact for marker in _DESTRUCTIVE_SHELL_MARKERS)
+
+
+def _file_action_requires_guarded_approval(action_id: str, arguments: Dict[str, Any]) -> bool:
+    mode = _text(arguments.get("mode") or arguments.get("operation") or action_id).lower().replace("__", ".")
+    if "delete" in mode or mode in {"remove", "unlink", "trash"}:
+        return True
+    if "write" in mode or "append" in mode or action_id in {"file.write", "file__write"}:
+        return True
+    if action_id in {"file.read", "file.list", "file__read", "file__list"}:
+        return False
+    return False
+
+
+def _action_requests_external_send(action_id: str, capability_id: str, arguments: Dict[str, Any]) -> bool:
+    tokens = " ".join(
+        [
+            _text(action_id).lower(),
+            _text(capability_id).lower(),
+            _text(arguments.get("action")).lower(),
+            _text(arguments.get("operation")).lower(),
+            _text(arguments.get("tool")).lower(),
+        ]
+    )
+    return any(
+        marker in tokens
+        for marker in (
+            "send",
+            "post",
+            "reply",
+            "publish",
+            "purchase",
+            "payment",
+            "charge",
+            "refund",
+            "transfer",
+        )
+    )
+
+
+def _default_guarded_action_requires_approval(
+    *,
+    capability_id: str,
+    action_id: str,
+    arguments: Dict[str, Any],
+    virtual_action: Optional[str] = None,
+) -> bool:
+    normalized_action = _text(action_id).lower().replace("__", ".")
+    normalized_capability = canonical_capability_id(capability_id)
+    if normalized_capability == "shell.execute":
+        return _shell_command_requires_guarded_approval(arguments.get("command") or arguments.get("script"))
+    if normalized_capability == "filesystem.read":
+        return False
+    if normalized_capability == "filesystem.write":
+        return True
+    if normalized_capability == "filesystem.read_write":
+        return _file_action_requires_guarded_approval(normalized_action, arguments)
+    if normalized_capability == "screenshot.capture":
+        return False
+    if normalized_capability == "browser_automation.interactive":
+        browser_action = _text(arguments.get("action") or virtual_action or normalized_action).lower().replace("__", ".")
+        return browser_action in {"click", "type", "fill", "download", "download_file", "execute_js"}
+    if normalized_capability.startswith("computer_control."):
+        return True
+    if normalized_capability in _DEFAULT_GUARDED_APPROVAL_CAPABILITIES:
+        return True
+    if _action_requests_external_send(normalized_action, normalized_capability, arguments):
+        return True
+    contract = resolve_capability(normalized_capability, enforce_kill_switch=False) if normalized_capability else None
+    if contract is None:
+        return True
+    return bool(contract.requires_approval) or str(contract.risk_level or "").strip().lower() in {"high", "critical"}
+
+
+def _hardware_action_requires_software_approval(
+    *,
+    runtime_access_mode: str,
+    capability_id: str,
+    action_id: str,
+    arguments: Dict[str, Any],
+    require_approval: Optional[bool],
+    virtual_action: Optional[str] = None,
+) -> bool:
+    if normalize_runtime_access_mode(runtime_access_mode) == FULL_RUNTIME_ACCESS_MODE:
+        return False
+    if require_approval is not None:
+        return bool(require_approval)
+    return _default_guarded_action_requires_approval(
+        capability_id=capability_id,
+        action_id=action_id,
+        arguments=arguments,
+        virtual_action=virtual_action,
+    )
 
 
 def _runtime_target_ids(runtime_target: Any) -> Dict[str, str]:
@@ -212,23 +371,22 @@ def _cloud_computer_virtual_action(
 def _cloud_computer_approval_required(
     *,
     capability_id: str,
+    action_id: str,
     virtual_action: str,
+    arguments: Dict[str, Any],
+    runtime_access_mode: str,
     require_approval: Optional[bool],
 ) -> bool:
-    if require_approval is not None:
-        return bool(require_approval)
-    if virtual_action in {
-        virtual_computer_runtime.ACTION_CLICK,
-        virtual_computer_runtime.ACTION_TYPE,
-        virtual_computer_runtime.ACTION_HOTKEY,
-        virtual_computer_runtime.ACTION_DOWNLOAD_ARTIFACT,
-        virtual_computer_runtime.ACTION_RUN_COMMAND,
-        virtual_computer_runtime.ACTION_KILL_SWITCH,
-    }:
-        return True
-    if capability_id.startswith("filesystem."):
-        return True
-    return False
+    if virtual_action == virtual_computer_runtime.ACTION_KILL_SWITCH:
+        return normalize_runtime_access_mode(runtime_access_mode) != FULL_RUNTIME_ACCESS_MODE
+    return _hardware_action_requires_software_approval(
+        runtime_access_mode=runtime_access_mode,
+        capability_id=capability_id,
+        action_id=action_id,
+        arguments=arguments,
+        require_approval=require_approval,
+        virtual_action=virtual_action,
+    )
 
 
 def _runtime_artifact_ids_from_response(response: Dict[str, Any]) -> List[str]:
@@ -402,6 +560,15 @@ def _session_view(session_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
         or _text(metadata.get("canonical_runtime_target"))
         or "cloud_default",
         "hardware_edge": _text(metadata.get("hardware_edge")) or "managed_cloud",
+        "runtime_access_mode": normalize_runtime_access_mode(metadata.get("runtime_access_mode")),
+        "execution_mode": _text(metadata.get("execution_mode")) or None,
+        "permission_mode": _text(metadata.get("permission_mode")) or None,
+        "approval_mode": _text(metadata.get("approval_mode")) or None,
+        "empyralis_action_approvals_enabled": bool(metadata.get("empyralis_action_approvals_enabled", True)),
+        "tenant_id": _text(metadata.get("tenant_id")) or None,
+        "workspace_id": _text(metadata.get("workspace_id")) or None,
+        "thread_id": _text(metadata.get("thread_id")) or None,
+        "user_id": _text(metadata.get("user_id")) or None,
         "gateway_id": _text(metadata.get("gateway_id")) or None,
         "device_id": _text(metadata.get("device_id")) or None,
         "node_id": _text(metadata.get("node_id")) or None,
@@ -443,8 +610,11 @@ async def _create_runtime_session(
     session_id: Optional[str],
     initial_state: str,
     cost_metadata: Optional[Dict[str, Any]],
+    runtime_access_mode: str,
+    execution_mode: Optional[str],
 ) -> Dict[str, Any]:
     resolved_session_id = _text(session_id) or _new_runtime_session_id()
+    access_metadata = _runtime_access_metadata(runtime_access_mode, execution_mode)
     metadata = {
         "thread_id": _text(thread_id) or resolved_session_id,
         "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
@@ -453,6 +623,7 @@ async def _create_runtime_session(
         "canonical_runtime_target": canonical_runtime_target,
         "runtime_fabric_target": canonical_runtime_target,
         "hardware_edge": _runtime_edge(canonical_runtime_target),
+        **access_metadata,
         "state": _normalize_state(initial_state),
         "tenant_id": _text(tenant_id) or "default",
         "workspace_id": _text(workspace_id) or "default",
@@ -474,6 +645,7 @@ async def _create_runtime_session(
                 payload={
                     "runtime_target": runtime_target,
                     "canonical_runtime_target": canonical_runtime_target,
+                    "runtime_access_mode": access_metadata["runtime_access_mode"],
                     "capability_id": capability_id,
                     "request_id": request_id,
                 },
@@ -517,6 +689,15 @@ async def _update_runtime_session(
             "canonical_runtime_target",
             "runtime_fabric_target",
             "hardware_edge",
+            "runtime_access_mode",
+            "execution_mode",
+            "permission_mode",
+            "approval_mode",
+            "empyralis_action_approvals_enabled",
+            "tenant_id",
+            "workspace_id",
+            "thread_id",
+            "user_id",
             "gateway_id",
             "device_id",
             "node_id",
@@ -718,6 +899,187 @@ async def _emit_artifacts(trace_context: Any, artifact_ids: List[str], capabilit
         )
 
 
+def _artifact_ids_from_artifact_records(items: Any) -> List[str]:
+    ids: List[str] = []
+    for item in list(items or []):
+        if isinstance(item, dict):
+            candidate = item.get("artifact_id") or item.get("id")
+        else:
+            candidate = item
+        token = _text(candidate)
+        if token and token not in ids:
+            ids.append(token)
+    return ids
+
+
+def _self_hosted_completion_summary(
+    *,
+    capability_id: str,
+    status: str,
+    result_payload: Dict[str, Any],
+    error: Optional[str],
+) -> str:
+    if _text(error):
+        return _text(error)
+    summary = _text(result_payload.get("summary") or result_payload.get("message") or result_payload.get("output_summary"))
+    if summary:
+        return summary
+    if capability_id == "shell.execute":
+        command = _text(result_payload.get("command"))
+        exit_code = result_payload.get("exit_code")
+        if command:
+            return f"Ran command: {command}" if status == "completed" else f"Command failed: {command}"
+        if exit_code is not None:
+            return f"Shell command finished with exit code {exit_code}."
+    if capability_id.startswith("filesystem."):
+        path = _text(result_payload.get("path"))
+        if path:
+            return f"File action completed: {path}" if status == "completed" else f"File action failed: {path}"
+    return "Self-hosted node action completed." if status == "completed" else "Self-hosted node action failed."
+
+
+async def record_gateway_approval_resolution(
+    result: Dict[str, Any],
+    *,
+    actor: str = "user",
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    approval = _dict(result.get("approval"))
+    request_payload = _dict(approval.get("request_payload"))
+    if _text(request_payload.get("runtime_session_binding")) != HARDWARE_RUNTIME_SESSION_BINDING:
+        return result
+    session_id = _text(request_payload.get("runtime_session_id"))
+    if not session_id:
+        return result
+    session_record = await session_service.get_session(session_id) or {}
+    runtime_session = _session_view(session_id, _dict(session_record.get("metadata")) or request_payload)
+    trace_id = _text(request_payload.get("trace_id")) or _text(runtime_session.get("trace_id"))
+    run_id = _text(request_payload.get("run_id")) or _text(runtime_session.get("run_id")) or session_id
+    trace_context = await _resolve_trace_context(
+        None,
+        trace_id=trace_id,
+        tenant_id=_text(runtime_session.get("tenant_id")) or _text((session_record or {}).get("tenant_id")) or "default",
+        workspace_id=_text(runtime_session.get("workspace_id")) or _text((session_record or {}).get("workspace_id")) or "default",
+        thread_id=_text(request_payload.get("thread_id")) or _text(runtime_session.get("thread_id")) or None,
+        run_id=run_id,
+    )
+    approval_id = _text(approval.get("approval_id"))
+    decision = _text(approval.get("decision") or result.get("status")) or "resolved"
+    if approval_id:
+        await agent_trace_service.emit_approval_resolved(
+            trace_context,
+            approval_id=approval_id,
+            decision=decision,
+            actor=_text(actor) or "user",
+            note=note,
+        )
+    status = _text(result.get("status")).lower()
+    capability_id = _text(request_payload.get("capability_id")) or _text(runtime_session.get("capability_id"))
+    tool_call_id = _text(request_payload.get("request_id")) or _text(runtime_session.get("request_id")) or approval_id or session_id
+    if status in {"executed", "approved"} and isinstance(result.get("execution"), dict):
+        execution = _dict(result.get("execution"))
+        artifact_ids = _artifact_ids_from_execution(execution)
+        await _emit_artifacts(trace_context, artifact_ids, capability_id)
+        summary = _execution_summary(capability_id, execution)
+        runtime_session = await _update_runtime_session(
+            runtime_session,
+            state="ready",
+            audit_action="hardware_action.approval_executed",
+            artifacts=artifact_ids,
+            extra_metadata={
+                "approval_id": approval_id,
+                "approval_decision": decision,
+                "result_summary": summary,
+                "execution_request_id": _text(execution.get("request_id")) or tool_call_id,
+            },
+        )
+        await _emit_tool_result(
+            trace_context,
+            tool_call_id=tool_call_id,
+            status="completed",
+            summary=summary,
+            artifact_ids=artifact_ids,
+        )
+        result["runtime_session"] = runtime_session
+        result["artifacts"] = artifact_ids
+        return result
+    if status in {"rejected", "denied"} or decision in {"rejected", "denied"}:
+        runtime_session = await _update_runtime_session(
+            runtime_session,
+            state="terminated",
+            audit_action="hardware_action.approval_rejected",
+            reason=_text(note) or "approval_rejected",
+            extra_metadata={"approval_id": approval_id, "approval_decision": decision},
+        )
+        await _emit_tool_result(
+            trace_context,
+            tool_call_id=tool_call_id,
+            status="terminated",
+            summary="Hardware action denied.",
+        )
+        result["runtime_session"] = runtime_session
+        return result
+    return result
+
+
+async def record_self_hosted_command_completion(completion: Dict[str, Any]) -> Dict[str, Any]:
+    command = _dict(completion.get("command"))
+    command_payload = _dict(command.get("command_payload"))
+    if _text(command_payload.get("runtime_session_binding")) != HARDWARE_RUNTIME_SESSION_BINDING:
+        return completion
+    session_id = _text(command_payload.get("runtime_session_id"))
+    if not session_id:
+        return completion
+    session_record = await session_service.get_session(session_id) or {}
+    runtime_session = _session_view(session_id, _dict(session_record.get("metadata")) or command_payload)
+    status = _text(completion.get("status")).lower()
+    terminal_state = "ready" if status == "completed" else "failed"
+    result_payload = _dict(completion.get("result_payload") or command.get("result_payload"))
+    error = _text(completion.get("error") or command.get("error")) or None
+    capability_id = _text(command_payload.get("capability_id")) or _text(runtime_session.get("capability_id"))
+    artifact_ids = _artifact_ids_from_artifact_records(completion.get("artifacts") or command.get("artifacts"))
+    summary = _self_hosted_completion_summary(
+        capability_id=capability_id,
+        status=status,
+        result_payload=result_payload,
+        error=error,
+    )
+    trace_context = await _resolve_trace_context(
+        None,
+        trace_id=_text(command_payload.get("trace_id")) or _text(runtime_session.get("trace_id")),
+        tenant_id=_text(command_payload.get("tenant_id")) or _text((session_record or {}).get("tenant_id")) or "default",
+        workspace_id=_text(command_payload.get("workspace_id")) or _text((session_record or {}).get("workspace_id")) or "default",
+        thread_id=_text(command_payload.get("thread_id")) or _text(runtime_session.get("thread_id")) or None,
+        run_id=_text(command_payload.get("run_id")) or _text(runtime_session.get("run_id")) or session_id,
+    )
+    await _emit_artifacts(trace_context, artifact_ids, capability_id)
+    runtime_session = await _update_runtime_session(
+        runtime_session,
+        state=terminal_state,
+        audit_action="hardware_action.completed" if status == "completed" else "hardware_action.failed",
+        reason=error,
+        artifacts=artifact_ids,
+        extra_metadata={
+            "runtime_node_id": _text(command_payload.get("runtime_node_id")) or None,
+            "runtime_profile_id": _text(command_payload.get("runtime_profile_id")) or None,
+            "self_hosted_command_id": _text(completion.get("command_id") or command.get("id")) or None,
+            "result_summary": summary,
+            "result_payload": result_payload,
+            "completion_status": status,
+        },
+    )
+    await _emit_tool_result(
+        trace_context,
+        tool_call_id=_text(command_payload.get("request_id")) or _text(runtime_session.get("request_id")) or session_id,
+        status="completed" if status == "completed" else "failed",
+        summary=summary,
+        artifact_ids=artifact_ids,
+    )
+    completion["runtime_session"] = runtime_session
+    completion["artifacts"] = artifact_ids
+    return completion
+
+
 async def _execute_cloud_computer_action(
     *,
     tenant_id: str,
@@ -733,6 +1095,7 @@ async def _execute_cloud_computer_action(
     request_id: str,
     trace_context: Any,
     require_approval: Optional[bool],
+    runtime_access_mode: str,
     cost_metadata: Optional[Dict[str, Any]],
     tool_call_id: str,
 ) -> Dict[str, Any]:
@@ -770,7 +1133,10 @@ async def _execute_cloud_computer_action(
 
     if _cloud_computer_approval_required(
         capability_id=capability_id,
+        action_id=action_id,
         virtual_action=virtual_action,
+        arguments=arguments,
+        runtime_access_mode=runtime_access_mode,
         require_approval=require_approval,
     ):
         approval = {
@@ -780,6 +1146,9 @@ async def _execute_cloud_computer_action(
             "requested_at": _utc_now_iso(),
             "request_payload": {
                 "runtime_target": "empyralis_cloud_computer",
+                "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
+                "runtime_session_id": _text(runtime_session.get("session_id")),
+                "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
                 "capability_id": capability_id,
                 "action": virtual_action,
                 "arguments": secret_redaction_service.sanitize_mapping(virtual_action_args),
@@ -805,6 +1174,7 @@ async def _execute_cloud_computer_action(
                 "runtime_choice": runtime_choice,
                 "approval_id": approval["approval_id"],
                 "capability_id": capability_id,
+                "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
             },
         )
         await _emit_tool_result(
@@ -841,6 +1211,7 @@ async def _execute_cloud_computer_action(
         "metadata": {
             "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
             "runtime_target": "empyralis_cloud_computer",
+            "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
             "capability_id": capability_id,
         },
     }
@@ -967,6 +1338,7 @@ async def _execute_self_hosted_node_action(
     request_id: str,
     trace_context: Any,
     require_approval: Optional[bool],
+    runtime_access_mode: str,
     tool_call_id: str,
 ) -> Dict[str, Any]:
     attachment, unavailable_reason = await _select_self_hosted_attachment(
@@ -1003,10 +1375,12 @@ async def _execute_self_hosted_node_action(
     runtime_profile_id = _text(attachment.get("runtime_profile_id"))
     runtime_attachment_id = _text(attachment.get("attachment_id"))
     node_kind = _text(attachment.get("node_kind"))
-    approval_required = (
-        bool(require_approval)
-        if require_approval is not None
-        else gateway_approval_service.capability_requires_owner_approval(capability_id)
+    approval_required = _hardware_action_requires_software_approval(
+        runtime_access_mode=runtime_access_mode,
+        capability_id=capability_id,
+        action_id=action_id,
+        arguments=arguments,
+        require_approval=require_approval,
     )
     if approval_required:
         approval = {
@@ -1016,6 +1390,9 @@ async def _execute_self_hosted_node_action(
             "requested_at": _utc_now_iso(),
             "request_payload": {
                 "runtime_target": "self_hosted_node",
+                "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
+                "runtime_session_id": _text(runtime_session.get("session_id")),
+                "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
                 "runtime_node_id": runtime_node_id,
                 "runtime_profile_id": runtime_profile_id,
                 "capability_id": capability_id,
@@ -1043,6 +1420,7 @@ async def _execute_self_hosted_node_action(
                 "runtime_node_id": runtime_node_id,
                 "runtime_profile_id": runtime_profile_id,
                 "approval_id": approval["approval_id"],
+                "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
             },
         )
         await _emit_tool_result(
@@ -1062,6 +1440,7 @@ async def _execute_self_hosted_node_action(
         "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
         "runtime_session_id": _text(runtime_session.get("session_id")),
         "runtime_target": "self_hosted_node",
+        "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
         "runtime_node_id": runtime_node_id,
         "runtime_profile_id": runtime_profile_id,
         "runtime_attachment_id": runtime_attachment_id,
@@ -1180,6 +1559,8 @@ async def execute_hardware_action(
     timeout_seconds: Optional[int] = None,
     trace_context: Any = None,
     require_approval: Optional[bool] = None,
+    runtime_access_mode: Optional[str] = None,
+    execution_mode: Optional[str] = None,
     cost_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     args = _dict(arguments)
@@ -1190,6 +1571,13 @@ async def execute_hardware_action(
     resolved_run_id = _text(run_id) or _new_run_id()
     resolved_request_id = _text(request_id) or _new_request_id()
     resolved_trace_id = _text(trace_id) or f"trace_{uuid.uuid4().hex}"
+    resolved_runtime_access_mode = normalize_runtime_access_mode(runtime_access_mode, execution_mode=execution_mode)
+    raw_access_or_execution_mode = _text(runtime_access_mode).lower()
+    resolved_execution_mode = _text(execution_mode) or (
+        raw_access_or_execution_mode
+        if raw_access_or_execution_mode in set(execution_mode_policy.SUPPORTED_EXECUTION_MODES)
+        else ("full_access" if resolved_runtime_access_mode == FULL_RUNTIME_ACCESS_MODE else "default")
+    )
     tool_call_id = resolved_request_id
     initial_state = (
         "running"
@@ -1214,6 +1602,8 @@ async def execute_hardware_action(
         session_id=session_id,
         initial_state=initial_state,
         cost_metadata=cost_metadata,
+        runtime_access_mode=resolved_runtime_access_mode,
+        execution_mode=resolved_execution_mode,
     )
     resolved_trace_context = await _resolve_trace_context(
         trace_context,
@@ -1289,6 +1679,7 @@ async def execute_hardware_action(
             request_id=resolved_request_id,
             trace_context=resolved_trace_context,
             require_approval=require_approval,
+            runtime_access_mode=resolved_runtime_access_mode,
             cost_metadata=cost_metadata,
             tool_call_id=tool_call_id,
         )
@@ -1309,6 +1700,7 @@ async def execute_hardware_action(
             request_id=resolved_request_id,
             trace_context=resolved_trace_context,
             require_approval=require_approval,
+            runtime_access_mode=resolved_runtime_access_mode,
             tool_call_id=tool_call_id,
         )
 
@@ -1371,10 +1763,12 @@ async def execute_hardware_action(
             "trace_id": resolved_trace_id,
         }
 
-    approval_required = (
-        bool(require_approval)
-        if require_approval is not None
-        else gateway_approval_service.capability_requires_owner_approval(resolved_capability_id)
+    approval_required = _hardware_action_requires_software_approval(
+        runtime_access_mode=resolved_runtime_access_mode,
+        capability_id=resolved_capability_id,
+        action_id=_text(action_id),
+        arguments=args,
+        require_approval=require_approval,
     )
     if approval_required:
         approval = await gateway_approval_service.request_gateway_tool_approval(
@@ -1384,6 +1778,10 @@ async def execute_hardware_action(
             run_id=resolved_run_id,
             trace_id=resolved_trace_id,
             request_id=resolved_request_id,
+            runtime_session_id=_text(runtime_session.get("session_id")),
+            runtime_target=canonical_target_id,
+            runtime_access_mode=resolved_runtime_access_mode,
+            runtime_session_binding=HARDWARE_RUNTIME_SESSION_BINDING,
         )
         approval_id = _text(approval.get("approval_id"))
         if approval_id:
@@ -1400,7 +1798,12 @@ async def execute_hardware_action(
             state="waiting_approval",
             audit_action="hardware_action.approval_requested",
             approvals=[approval],
-            extra_metadata={"gateway_id": gateway_token, "device_id": device_token, "approval_id": approval_id},
+            extra_metadata={
+                "gateway_id": gateway_token,
+                "device_id": device_token,
+                "approval_id": approval_id,
+                "runtime_access_mode": resolved_runtime_access_mode,
+            },
         )
         await _emit_tool_result(
             resolved_trace_context,

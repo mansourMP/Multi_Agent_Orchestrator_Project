@@ -136,6 +136,7 @@ type WorkspaceRuntimeSessionRecord = Record<string, unknown> & {
   runtime_attachment_id?: string | null;
   runtime_profile_id?: string | null;
   runtime_node_id?: string | null;
+  runtime_access_mode?: string | null;
   gateway_id?: string | null;
   owner_email?: string | null;
   owner_user_id?: string | null;
@@ -355,6 +356,13 @@ function runtimeSessionLaneLabel(session: WorkspaceRuntimeSessionRecord): string
 }
 
 function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord, pendingCount = 0): string {
+  const accessMode = readString(session.runtime_access_mode, '').toLowerCase();
+  if (accessMode === 'full_access') {
+    return 'Full Access';
+  }
+  if (accessMode === 'default_guarded') {
+    return pendingCount > 0 ? 'Needs approval' : 'Default guarded';
+  }
   const explicitMode = readString(session.permission_mode ?? session.approval_mode, '');
   if (explicitMode) {
     return humanizeToken(explicitMode);

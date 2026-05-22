@@ -59,6 +59,7 @@ export async function resolveWorkstationApproval(
     approvalId: options.approvalId,
     payload: {
       approval_id: options.approvalId,
+      decision: options.resolution,
       resolution: options.resolution,
       reason: options.reason?.trim() || undefined,
     },

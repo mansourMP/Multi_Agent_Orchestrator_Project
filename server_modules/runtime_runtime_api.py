@@ -20,7 +20,13 @@ from server_modules.auth import (
     workspace_tenant_id,
 )
 from server_modules.runtime_common import require_api_key
-from server_modules import agent_registry_repository, demo_workflows, local_queue, machine_capability_check
+from server_modules import (
+    agent_registry_repository,
+    demo_workflows,
+    hardware_action_broker_service,
+    local_queue,
+    machine_capability_check,
+)
 from server_modules import outbox_service
 from server_modules import run_state_repository, runs_output, shared, telemetry
 from server_modules import billing_service, entitlements_service
@@ -1176,7 +1182,7 @@ def register_runtime_routes(app) -> None:
         payload: SelfHostedNodeCommandResultPayload,
     ):
         try:
-            return await agent_registry_repository.complete_self_hosted_runtime_command(
+            result = await agent_registry_repository.complete_self_hosted_runtime_command(
                 runtime_profile_id=runtime_profile_id,
                 node_session_token=payload.node_session_token,
                 command_id=command_id,
@@ -1186,6 +1192,7 @@ def register_runtime_routes(app) -> None:
                 audit_references=payload.audit_references,
                 error=payload.error,
             )
+            return await hardware_action_broker_service.record_self_hosted_command_completion(result)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 

@@ -121,7 +121,26 @@ async def request_gateway_tool_approval(
     run_id: str,
     trace_id: str,
     request_id: Optional[str] = None,
+    runtime_session_id: Optional[str] = None,
+    runtime_target: Optional[str] = None,
+    runtime_access_mode: Optional[str] = None,
+    runtime_session_binding: Optional[str] = None,
 ) -> Dict[str, Any]:
+    request_payload = {
+        "capability_id": str(capability_id or "").strip(),
+        "arguments": dict(arguments or {}),
+        "run_id": str(run_id or "").strip(),
+        "trace_id": str(trace_id or "").strip() or None,
+        "request_id": str(request_id or "").strip() or None,
+    }
+    if str(runtime_session_id or "").strip():
+        request_payload["runtime_session_id"] = str(runtime_session_id or "").strip()
+    if str(runtime_target or "").strip():
+        request_payload["runtime_target"] = str(runtime_target or "").strip()
+    if str(runtime_access_mode or "").strip():
+        request_payload["runtime_access_mode"] = str(runtime_access_mode or "").strip()
+    if str(runtime_session_binding or "").strip():
+        request_payload["runtime_session_binding"] = str(runtime_session_binding or "").strip()
     approval = gateway_state_repository.create_gateway_action_approval(
         gateway_id=str(registration.get("gateway_id") or "").strip(),
         device_id=str(registration.get("device_id") or "").strip(),
@@ -132,13 +151,7 @@ async def request_gateway_tool_approval(
         run_id=str(run_id or "").strip(),
         trace_id=str(trace_id or "").strip() or None,
         request_id=str(request_id or "").strip() or None,
-        request_payload={
-            "capability_id": str(capability_id or "").strip(),
-            "arguments": dict(arguments or {}),
-            "run_id": str(run_id or "").strip(),
-            "trace_id": str(trace_id or "").strip() or None,
-            "request_id": str(request_id or "").strip() or None,
-        },
+        request_payload=request_payload,
     )
     approval = approval_contracts.attach_normalized_approval(
         approval,

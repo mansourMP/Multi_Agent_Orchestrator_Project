@@ -47,6 +47,7 @@ from server_modules import (
     gateway_protocol_service,
     gateway_registry_service,
     gateway_state_repository,
+    hardware_action_broker_service,
     safe_mode_service,
     security_audit_service,
 )
@@ -946,6 +947,11 @@ async def resolve_gateway_registration_approval(
         note=body.note,
         timeout_seconds=int(body.timeout_seconds or gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS),
         execute_fn=execute_fn,
+    )
+    result = await hardware_action_broker_service.record_gateway_approval_resolution(
+        result,
+        actor=actor_user_id,
+        note=body.note,
     )
     if str(result.get("status") or "").strip() in {"approved", "executed"} and body.remember_for_seconds:
         try:

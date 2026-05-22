@@ -1794,6 +1794,7 @@ export const mobileApi = {
     const mapped = decision === "approved" ? "approved" : "rejected";
     return buildMobileRuntimeClient(session).resolveApproval(approvalId, {
       approval_id: approvalId,
+      decision: mapped,
       resolution: mapped,
       actor: "user",
     }) as Promise<ApprovalResolveResponse>;

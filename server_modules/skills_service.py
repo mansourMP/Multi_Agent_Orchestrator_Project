@@ -1824,6 +1824,27 @@ def _runtime_target_from_direct_tool_context(
     return "cloud_default"
 
 
+def _runtime_access_mode_from_direct_tool_context(
+    *,
+    explicit_mode: Any = None,
+    session_ctx: Dict[str, Any] | None = None,
+) -> str:
+    explicit = str(explicit_mode or "").strip()
+    if explicit:
+        return explicit
+    metadata = _direct_tool_session_metadata(session_ctx)
+    for key in (
+        "runtime_access_mode",
+        "permission_mode",
+        "execution_mode",
+        "runtime_mode",
+    ):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return "default_guarded"
+
+
 def _tenant_id_from_direct_tool_context(session_ctx: Dict[str, Any] | None) -> str:
     session_payload = session_ctx if isinstance(session_ctx, dict) else {}
     agent_turn_request = session_payload.get("agent_turn_request") if isinstance(session_payload.get("agent_turn_request"), dict) else {}
@@ -1985,6 +2006,7 @@ def _execute_direct_tool_via_gateway(
     trace_id: str,
     workspace_id: str,
     runtime_target: str = "user_device_gateway",
+    runtime_access_mode: str = "default_guarded",
     tenant_id: str = "default",
     thread_id: str = "",
     session_ctx: Dict[str, Any] | None = None,
@@ -2000,6 +2022,7 @@ def _execute_direct_tool_via_gateway(
             workspace_id=str(workspace_id or "default").strip() or "default",
             action_id=capability_id,
             runtime_target=runtime_target,
+            runtime_access_mode=runtime_access_mode,
             gateway_id=gateway_id,
             capability_id=capability_id,
             arguments=arguments,
@@ -2034,6 +2057,7 @@ def _format_hardware_action_result(payload: Dict[str, Any]) -> str:
         "status": str(payload.get("status") or "").strip(),
         "reason": str(payload.get("reason") or "").strip() or None,
         "runtime_target": str(runtime_session.get("canonical_runtime_target") or runtime_session.get("runtime_target") or "").strip() or None,
+        "runtime_access_mode": str(runtime_session.get("runtime_access_mode") or "").strip() or None,
         "runtime_state": str(runtime_session.get("state") or "").strip() or None,
         "gateway_id": str(runtime_session.get("gateway_id") or "").strip() or None,
         "device_id": str(runtime_session.get("device_id") or "").strip() or None,
@@ -2080,6 +2104,9 @@ def _execute_hardware_action_tool_call(
                 "operation",
                 "arguments",
                 "runtime_target",
+                "runtime_access_mode",
+                "execution_mode",
+                "permission_mode",
                 "gateway_id",
                 "device_id",
                 "node_id",
@@ -2112,6 +2139,10 @@ def _execute_hardware_action_tool_call(
             capability_id=payload.get("capability_id"),
             arguments=action_arguments,
             runtime_target=runtime_target,
+            runtime_access_mode=_runtime_access_mode_from_direct_tool_context(
+                explicit_mode=payload.get("runtime_access_mode") or payload.get("execution_mode") or payload.get("permission_mode"),
+                session_ctx=session_ctx,
+            ),
             gateway_id=gateway_id,
             device_id=str(payload.get("device_id") or "").strip() or None,
             node_id=str(payload.get("node_id") or "").strip() or None,
@@ -2251,6 +2282,7 @@ def _execute_safe_direct_local_tool_call(
                 gateway_id=gateway_id,
                 session_ctx=session_ctx,
             ),
+            runtime_access_mode=_runtime_access_mode_from_direct_tool_context(session_ctx=session_ctx),
             tenant_id=tenant_id,
             thread_id=str(thread_id or "").strip(),
             session_ctx=session_ctx,

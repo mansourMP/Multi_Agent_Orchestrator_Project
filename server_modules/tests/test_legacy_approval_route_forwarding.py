@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from server_modules import runs_history
 
@@ -86,6 +86,52 @@ class LegacyApprovalRouteForwardingTests(unittest.TestCase):
         self.assertEqual(payload["event_id"], "approval-1")
         self.assertEqual(payload["status"], "approved")
         self.assertEqual(helper.call_args.kwargs["payload"]["resolution"], "approved")
+
+    def test_resolve_approval_bridges_gateway_hardware_approval(self):
+        gateway_result = {
+            "status": "executed",
+            "approval": {
+                "approval_id": "gapproval-1",
+                "request_payload": {
+                    "runtime_session_binding": "sage_hardware_action",
+                    "runtime_session_id": "hrs-1",
+                },
+            },
+            "execution": {"result": {"summary": "Ran command."}},
+        }
+        with (
+            patch.object(
+                runs_history.gateway_approval_service,
+                "get_gateway_tool_approval",
+                return_value={
+                    "approval_id": "gapproval-1",
+                    "gateway_id": "gw-1",
+                    "run_id": "run-1",
+                },
+            ),
+            patch.object(
+                runs_history.gateway_state_repository,
+                "get_gateway_registration",
+                return_value={"gateway_id": "gw-1"},
+            ),
+            patch.object(
+                runs_history.gateway_approval_service,
+                "resolve_gateway_tool_approval",
+                new=AsyncMock(return_value=gateway_result),
+            ) as resolve_gateway,
+            patch.object(
+                runs_history.hardware_action_broker_service,
+                "record_gateway_approval_resolution",
+                new=AsyncMock(return_value={**gateway_result, "runtime_session": {"state": "ready"}}),
+            ) as record_resolution,
+        ):
+            payload = asyncio.run(runs_history.resolve_approval("gapproval-1", _ApprovalPayload("approved", "ok")))
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["source"], "gateway")
+        self.assertEqual(payload["status"], "approved")
+        resolve_gateway.assert_awaited_once()
+        record_resolution.assert_awaited_once()
 
 
 if __name__ == "__main__":

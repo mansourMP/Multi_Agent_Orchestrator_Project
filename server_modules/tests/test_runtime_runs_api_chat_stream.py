@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -70,6 +71,40 @@ class RuntimeRunsApiChatStreamTests(unittest.TestCase):
         with patch.object(runtime_runs_api.thread_service, "record_assistant_turn", _record_assistant_turn):
             runtime_runs_api._append_chat_stream_event(
                 session,
+                "trace",
+                {
+                    "trace_id": "trace-1",
+                    "event_type": "reasoning.summary.delta",
+                    "data": {"delta": "hidden reasoning"},
+                },
+            )
+            runtime_runs_api._append_chat_stream_event(
+                session,
+                "trace",
+                {
+                    "trace_id": "trace-1",
+                    "event_type": "search.query",
+                    "tool_call_id": "search-1",
+                    "data": {"query": "gateway state"},
+                },
+            )
+            runtime_runs_api._append_chat_stream_event(
+                session,
+                "trace",
+                {
+                    "trace_id": "trace-1",
+                    "event_type": "tool.started",
+                    "tool_call_id": "shell-1",
+                    "data": {
+                        "tool_name": "shell__exec",
+                        "input": {"command": "cat ~/.ssh/config"},
+                        "args_preview": {"command": "cat ~/.ssh/config"},
+                    },
+                },
+            )
+            runtime_runs_api._append_chat_stream_event(session, "chunk", {"delta": "Done"})
+            runtime_runs_api._append_chat_stream_event(
+                session,
                 "final",
                 {
                     "reply": "Done",
@@ -89,6 +124,14 @@ class RuntimeRunsApiChatStreamTests(unittest.TestCase):
         self.assertEqual(captured["metadata"]["request_id"], "req")
         self.assertEqual(captured["metadata"]["trace_id"], "trace-1")
         self.assertEqual(captured["metadata"]["result_metadata"]["agent_role"], "sage")
+        transcript_events = captured["metadata"]["transcript_events"]
+        self.assertEqual([item["payload"]["event_type"] for item in transcript_events], ["search.query", "tool.started"])
+        transcript_snapshot = json.dumps(transcript_events)
+        self.assertNotIn("hidden reasoning", transcript_snapshot)
+        self.assertNotIn("cat ~/.ssh/config", transcript_snapshot)
+        self.assertNotIn("args_preview", transcript_snapshot)
+        self.assertNotIn("chunk", transcript_snapshot)
+        self.assertNotIn("final", transcript_snapshot)
 
     def test_final_stream_event_does_not_persist_notice_as_assistant_content(self):
         calls = []

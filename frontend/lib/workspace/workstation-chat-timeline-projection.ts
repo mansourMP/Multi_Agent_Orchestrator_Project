@@ -33,6 +33,62 @@ export type TimelineProjectionOptions = {
   readString: (value: unknown) => string;
 };
 
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function transcriptEventsFromMetadata(metadata: Record<string, unknown>): TimelineProjectionEvent[] {
+  const rawEvents = Array.isArray(metadata.transcript_events) ? metadata.transcript_events : [];
+  return rawEvents
+    .map((item): TimelineProjectionEvent | null => {
+      const record = readRecord(item);
+      const type = String(record.event || record.type || '').trim();
+      if (type !== 'trace' && type !== 'step') {
+        return null;
+      }
+      const payload = readRecord(record.payload);
+      if (Object.keys(payload).length === 0) {
+        return null;
+      }
+      return { type, payload };
+    })
+    .filter((item): item is TimelineProjectionEvent => item !== null);
+}
+
+function isProofCell(cell: CodexTranscriptCell): boolean {
+  return (
+    cell.kind === 'reasoning_summary'
+    || cell.kind === 'exec'
+    || cell.kind === 'tool'
+    || cell.kind === 'web_search'
+    || cell.kind === 'file_change'
+    || cell.kind === 'screenshot'
+    || cell.kind === 'approval_request'
+    || cell.kind === 'status'
+    || cell.kind === 'error'
+  );
+}
+
+function replayProofCellsForMessage(
+  message: WorkstationChatMessageRecord,
+  options: Pick<TimelineProjectionOptions, 'isProviderGateSystemCell'>,
+): CodexTranscriptCell[] {
+  const events = transcriptEventsFromMetadata(message.metadata);
+  if (events.length === 0) {
+    return [];
+  }
+  return projectCodexTimeline(events).cells
+    .filter((cell) => isProofCell(cell) && !options.isProviderGateSystemCell(cell))
+    .map((cell) => ({
+      ...cell,
+      id: `${message.id}:transcript:${cell.id}`,
+      createdAt: cell.createdAt || message.createdAt,
+      dimmed: cell.kind === 'approval_request' ? cell.dimmed : true,
+    }));
+}
+
 export function useWorkstationTimelineProjection(options: TimelineProjectionOptions) {
   const projectedTimelineProjection = useMemo(
     () => projectCodexTimeline(options.liveTimelineEvents),
@@ -42,19 +98,7 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
   const projectedTimelineCells = projectedTimelineProjection.cells;
 
   const projectedSystemCells = useMemo(
-    () => projectedTimelineCells.filter((cell) => (
-      (
-        cell.kind === 'reasoning_summary'
-        || cell.kind === 'exec'
-        || cell.kind === 'tool'
-        || cell.kind === 'web_search'
-        || cell.kind === 'file_change'
-        || cell.kind === 'screenshot'
-        || cell.kind === 'approval_request'
-        || cell.kind === 'status'
-        || cell.kind === 'error'
-      ) && !options.isProviderGateSystemCell(cell)
-    )),
+    () => projectedTimelineCells.filter((cell) => isProofCell(cell) && !options.isProviderGateSystemCell(cell)),
     [options, projectedTimelineCells],
   );
 
@@ -91,14 +135,27 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
 
   const visibleTranscriptCells = useMemo(() => {
     const canonicalMessages = options.threadMessages.filter((message) => !options.isSyntheticTranscriptMessage(message));
-    const nextCells = canonicalMessages
-      .map(workstationMessageToCodexCell)
-      .filter((cell) => !options.isProviderGateTranscriptCell(cell));
+    const nextCells: CodexTranscriptCell[] = [];
+    let insertedReplayProofCells = false;
+    for (const message of canonicalMessages) {
+      const cell = workstationMessageToCodexCell(message);
+      if (options.isProviderGateTranscriptCell(cell)) {
+        continue;
+      }
+      if (!options.isSending && cell.kind === 'assistant') {
+        const replayCells = replayProofCellsForMessage(message, options);
+        if (replayCells.length > 0) {
+          insertedReplayProofCells = true;
+          nextCells.push(...replayCells);
+        }
+      }
+      nextCells.push(cell);
+    }
     if (options.pendingUserMessage && !options.canonicalIncludesMessage(canonicalMessages, options.pendingUserMessage)) {
       nextCells.push(workstationMessageToCodexCell(options.pendingUserMessage));
     }
     const trailingCell = nextCells[nextCells.length - 1] ?? null;
-    const scrollableSystemCells = options.isSending ? [] : projectedSystemCells;
+    const scrollableSystemCells = options.isSending || insertedReplayProofCells ? [] : projectedSystemCells;
     const shouldInsertStepsBeforeFinalAssistant = scrollableSystemCells.length > 0
       && trailingCell?.kind === 'assistant';
     if (shouldInsertStepsBeforeFinalAssistant && trailingCell) {

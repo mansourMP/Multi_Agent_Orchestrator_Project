@@ -28,6 +28,7 @@ type ChatState = {
   addMessage: (id: string, message: AgentPayload) => void;
   removeMessage: (id: string, index: number) => void;
   updateMessage: (id: string, index: number, patch: Partial<AgentPayload>) => void;
+  replaceSession: (session: ChatSession) => void;
   setSessionTitle: (id: string, title: string) => void;
   clearAllSessions: () => void;
 };
@@ -125,6 +126,12 @@ export const useChatStore = create<ChatState>()(
           if (!updatedSession) return { sessions: state.sessions };
           return { sessions: [updatedSession, ...others] };
         });
+      },
+      replaceSession: (session) => {
+        set((state) => ({
+          sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
+          activeSessionId: session.id,
+        }));
       },
       setSessionTitle: (id, title) => {
         const trimmed = title.trim();

@@ -87,6 +87,7 @@ from server_modules import runtime_run_query_service
 from server_modules import runtime_run_resume_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
+from server_modules import transcript_events_service
 
 _CHAT_STREAM_LOCK = threading.Lock()
 _CHAT_STREAM_BUFFER_LIMIT = 50
@@ -168,6 +169,15 @@ def _assistant_turn_content(payload: dict[str, Any]) -> str:
     return reply
 
 
+def _chat_stream_transcript_events(session: dict[str, Any]) -> list[dict[str, Any]]:
+    metadata = _coerce_dict(session.get("metadata"))
+    cached_events = metadata.get("transcript_events")
+    if isinstance(cached_events, list):
+        return [dict(item) for item in cached_events if isinstance(item, dict)]
+    events = session.get("events") if isinstance(session.get("events"), list) else []
+    return transcript_events_service.transcript_events_from_stream_records(events)
+
+
 def _persist_final_direct_chat_assistant_turn(session: dict[str, Any], payload: dict[str, Any]) -> None:
     session_metadata = _coerce_dict(session.get("metadata"))
     assistant_turn = _coerce_dict(session_metadata.get("assistant_turn"))
@@ -194,6 +204,9 @@ def _persist_final_direct_chat_assistant_turn(session: dict[str, Any], payload: 
     }
     if trace_id:
         metadata["trace_id"] = trace_id
+    transcript_events = _chat_stream_transcript_events(session)
+    if transcript_events:
+        metadata["transcript_events"] = transcript_events
     run_async_tool_call(
         thread_service.record_assistant_turn(
             thread_id=thread_id,
@@ -612,6 +625,14 @@ _chat_stream_payload = chat_stream_transport_service.chat_stream_payload
 
 
 def _append_chat_stream_event(session: dict[str, Any], event_name: str, payload: dict[str, Any]) -> None:
+    transcript_event = transcript_events_service.build_transcript_event(event_name, payload)
+    if transcript_event is not None:
+        metadata = _coerce_dict(session.get("metadata"))
+        metadata["transcript_events"] = transcript_events_service.append_transcript_event(
+            metadata.get("transcript_events"),
+            transcript_event,
+        )
+        session["metadata"] = metadata
     chat_stream_runtime_service.append_chat_stream_event(
         session,
         event_name=event_name,

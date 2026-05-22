@@ -443,7 +443,7 @@ function buildTransparencyCards(payload: {
   actions?: unknown[];
   interventions?: unknown[];
   stream_events?: EmpyralistStreamEvent[];
-}): AgentPayload[] {
+}, options?: { limit?: number }): AgentPayload[] {
   const cards: AgentPayload[] = [];
   const pushCard = (title: string, detail?: string, status: AgentPayload["toolStatus"] = "done") => {
     const cleanTitle = title.trim();
@@ -483,7 +483,53 @@ function buildTransparencyCards(payload: {
     pushCard(label, target);
   }
 
-  return cards.slice(0, 4);
+  const limit = Number(options?.limit || 0);
+  return limit > 0 ? cards.slice(0, limit) : cards;
+}
+
+function transcriptEventsFromTurn(turn: NonNullable<MobileThreadHistoryItem["turns"]>[number]): EmpyralistStreamEvent[] {
+  const metadata = readRecord(turn?.metadata);
+  const rawEvents = Array.isArray(metadata.transcript_events) ? metadata.transcript_events : [];
+  return rawEvents
+    .map((item) => {
+      const record = readRecord(item);
+      const event = readText(record.event || record.type);
+      if (event !== "trace" && event !== "step") return null;
+      const payload = readRecord(record.payload);
+      if (Object.keys(payload).length === 0) return null;
+      return { event, payload } as EmpyralistStreamEvent;
+    })
+    .filter((item): item is EmpyralistStreamEvent => Boolean(item));
+}
+
+function buildCloudThreadMessages(item: MobileThreadHistoryItem): AgentPayload[] {
+  const turns = Array.isArray(item.turns) ? item.turns : [];
+  const orderedTurns = [...turns].sort((left, right) => {
+    const leftTime = parseCloudTimestamp(left?.created_at || left?.updated_at);
+    const rightTime = parseCloudTimestamp(right?.created_at || right?.updated_at);
+    return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
+  });
+  const messages: AgentPayload[] = [];
+  for (const turn of orderedTurns) {
+    const role = String(turn?.role || "").trim().toLowerCase();
+    const content = String(turn?.content || "").trim();
+    if (role === "user") {
+      if (content) {
+        messages.push({ intent: "user", speech: content });
+      }
+      continue;
+    }
+    if (role === "assistant") {
+      messages.push(...buildTransparencyCards({
+        stream_events: transcriptEventsFromTurn(turn),
+        interventions: turn.interventions,
+      }));
+      if (content) {
+        messages.push({ intent: "assistant", speech: content });
+      }
+    }
+  }
+  return messages;
 }
 
 export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScreenProps) {
@@ -500,6 +546,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     addMessage,
     removeMessage,
     updateMessage,
+    replaceSession,
     setActiveSession,
     setSessionTitle,
   } = useChatStore();
@@ -723,6 +770,30 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     closeHistory(false);
   }, [activeAgent, closeHistory, createSession, setActiveSession, triggerActionHaptic]);
 
+  const openCloudThread = React.useCallback(
+    (item: MobileThreadHistoryItem) => {
+      const threadId = String(item.id || "").trim();
+      if (!threadId) return;
+      triggerDrawerHaptic();
+      const createdAt = parseCloudTimestamp(item.created_at);
+      const updatedAt = parseCloudTimestamp(item.last_turn_at || item.updated_at || item.created_at);
+      replaceSession({
+        id: threadId,
+        title: cloudThreadPreview(item),
+        agentId: activeAgent.id,
+        agentName: activeAgent.label,
+        runtimeRole: activeAgent.runtimeRole,
+        avatarColor: activeAgent.avatarColor,
+        icon: activeAgent.icon,
+        createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+        updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+        messages: buildCloudThreadMessages(item),
+      });
+      closeHistory(false);
+    },
+    [activeAgent, closeHistory, replaceSession, triggerDrawerHaptic],
+  );
+
   const edgeSwipeResponder = React.useMemo(
     () =>
       PanResponder.create({
@@ -858,7 +929,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
       for (const card of buildTransparencyCards({
         ...payload,
         stream_events: (payload.stream_events || []).filter((event) => !streamCardIndexByKey.has(streamEventGroupKey(event))),
-      })) {
+      }, { limit: 4 })) {
         addMessage(currentSessionId, card);
       }
 
@@ -975,7 +1046,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         for (const resultCard of buildTransparencyCards({
           ...payload,
           stream_events: (payload.stream_events || []).filter((event) => !streamCardIndexByKey.has(streamEventGroupKey(event))),
-        })) {
+        }, { limit: 4 })) {
           addMessage(activeSession.id, resultCard);
         }
         setRunActivity([]);
@@ -1596,8 +1667,11 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                         const preview = cloudThreadPreview(item);
                         const occurredAt = item.last_turn_at || item.updated_at || item.created_at;
                         return (
-                          <View
+                          <MotionPressable
                             key={String(item.id || `thread-${preview}`)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open ${preview}`}
+                            onPress={() => openCloudThread(item)}
                             style={{
                               paddingVertical: 8,
                               paddingHorizontal: 10,
@@ -1624,7 +1698,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                             >
                               Thread {String(item.id || "").trim() || "unknown"}
                             </Text>
-                          </View>
+                          </MotionPressable>
                         );
                       })}
                     </View>

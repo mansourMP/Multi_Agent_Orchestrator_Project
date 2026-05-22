@@ -7,8 +7,19 @@ function installTransparencyTurnStub(page) {
   return page.addInitScript(() => {
     const originalFetch = window.fetch.bind(window);
     const encoder = new TextEncoder();
+    const storageKey = 'empyralis-transparency-turn-stub';
+    const savedState = (() => {
+      try {
+        return JSON.parse(sessionStorage.getItem(storageKey) || '{}') || {};
+      } catch {
+        return {};
+      }
+    })();
     const state = {
-      persistedTurns: [] as Array<Record<string, unknown>>,
+      persistedTurns: Array.isArray(savedState.persistedTurns)
+        ? savedState.persistedTurns as Array<Record<string, unknown>>
+        : [] as Array<Record<string, unknown>>,
+      pendingTranscriptEvents: [] as Array<Record<string, unknown>>,
       providerProfiles: [
         {
           id: 'profile-deepseek',
@@ -21,6 +32,37 @@ function installTransparencyTurnStub(page) {
           },
         },
       ] as Array<Record<string, unknown>>,
+    };
+
+    const persistState = () => {
+      sessionStorage.setItem(storageKey, JSON.stringify({
+        persistedTurns: state.persistedTurns,
+      }));
+    };
+
+    const isTranscriptEvent = (event: string, payload: Record<string, unknown>) => {
+      if (event !== 'trace' && event !== 'step') {
+        return false;
+      }
+      const eventType = String(payload.event_type ?? '').toLowerCase();
+      return eventType !== 'reasoning.summary.delta' && eventType !== 'assistant.message.delta';
+    };
+
+    const sanitizeTranscriptPayload = (payload: Record<string, unknown>) => {
+      const nextPayload = { ...payload };
+      delete nextPayload.trace_id;
+      const data = nextPayload.data && typeof nextPayload.data === 'object' && !Array.isArray(nextPayload.data)
+        ? { ...(nextPayload.data as Record<string, unknown>) }
+        : {};
+      for (const key of ['args', 'args_preview', 'arguments', 'input', 'output', 'parameters', 'prompt', 'raw_output', 'result', 'text']) {
+        delete data[key];
+      }
+      const summary = String(data.summary ?? '').trim();
+      if (summary.startsWith('{') || summary.startsWith('[') || /activity_event_id|trace_id|raw_/i.test(summary)) {
+        delete data.summary;
+      }
+      nextPayload.data = data;
+      return nextPayload;
     };
 
     const jsonResponse = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), {
@@ -42,6 +84,27 @@ function installTransparencyTurnStub(page) {
             const next = events[index];
             index += 1;
             setTimeout(() => {
+              if (isTranscriptEvent(next.event, next.payload)) {
+                state.pendingTranscriptEvents.push({
+                  event: next.event,
+                  payload: sanitizeTranscriptPayload(next.payload),
+                });
+              }
+              if (next.event === 'final') {
+                state.persistedTurns.push({
+                  id: 'turn-assistant-1',
+                  role: 'assistant',
+                  status: 'completed',
+                  content: String(next.payload.reply ?? ''),
+                  created_at: new Date().toISOString(),
+                  metadata: {
+                    request_id: 'req-1',
+                    trace_id: 'trace-live-1',
+                    transcript_events: state.pendingTranscriptEvents,
+                  },
+                });
+                persistState();
+              }
               controller.enqueue(
                 encoder.encode(`event: ${next.event}\ndata: ${JSON.stringify(next.payload)}\n\n`),
               );
@@ -168,6 +231,7 @@ function installTransparencyTurnStub(page) {
             client_request_id: payload?.client_request_id ?? 'req-1',
           },
         });
+        persistState();
         return jsonResponse({
           id: 'primary',
           thread_id: 'primary',
@@ -215,6 +279,7 @@ function installTransparencyTurnStub(page) {
 
       if (url.includes('/api/turn')) {
         const reply = 'I reviewed the workspace activity and I am ready to continue.';
+        state.pendingTranscriptEvents = [];
         return eventStreamResponse([
           {
             delay: 30,
@@ -236,19 +301,6 @@ function installTransparencyTurnStub(page) {
               tool_call_id: 'search-1',
               data: {
                 query: 'gateway reconnect behavior',
-              },
-            },
-          },
-          {
-            delay: 40,
-            event: 'trace',
-            payload: {
-              trace_id: 'trace-live-1',
-              event_type: 'approval.resolved',
-              approval_id: 'approval-1',
-              data: {
-                decision: 'approved',
-                actor: 'owner',
               },
             },
           },
@@ -353,6 +405,19 @@ function installTransparencyTurnStub(page) {
             event: 'trace',
             payload: {
               trace_id: 'trace-live-1',
+              event_type: 'approval.resolved',
+              approval_id: 'approval-1',
+              data: {
+                decision: 'approved',
+                actor: 'owner',
+              },
+            },
+          },
+          {
+            delay: 40,
+            event: 'trace',
+            payload: {
+              trace_id: 'trace-live-1',
               event_type: 'trace.completed',
               item_id: 'done-1',
               data: {
@@ -412,6 +477,15 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'Searching web' })).toHaveCount(0);
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'Running shell' })).toHaveCount(0);
 
+    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible();
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="search"]')).toContainText('Searching web');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Running shell');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Reading file');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Used browser');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
   });
 });

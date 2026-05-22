@@ -347,9 +347,15 @@ export type MobileThreadHistoryItem = {
   updated_at?: string | null;
   last_turn_at?: string | null;
   turns?: {
+    id?: string | null;
     role?: string | null;
+    status?: string | null;
     content?: string | null;
+    metadata?: Record<string, unknown> | null;
+    approvals?: Record<string, unknown>[];
+    interventions?: Record<string, unknown>[];
     created_at?: string | null;
+    updated_at?: string | null;
   }[];
 };
 

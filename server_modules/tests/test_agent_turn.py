@@ -191,6 +191,50 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(result["trace_id"], "trace-stream-1")
         record_assistant_turn.assert_not_awaited()
 
+    def test_assistant_turn_metadata_persists_sanitized_transcript_events(self):
+        agent_turn_module = importlib.import_module("server_modules.agent_turn")
+
+        metadata = agent_turn_module._assistant_turn_metadata_from_result(
+            {
+                "status": "completed",
+                "reply": "done",
+                "metadata": {"agent_role": "sage", "trace_id": "trace-1"},
+                "stream_events": [
+                    {
+                        "event": "trace",
+                        "payload": {
+                            "trace_id": "trace-1",
+                            "event_type": "reasoning.summary.delta",
+                            "data": {"delta": "private reasoning"},
+                        },
+                    },
+                    {
+                        "event": "trace",
+                        "payload": {
+                            "trace_id": "trace-1",
+                            "event_type": "tool.started",
+                            "tool_call_id": "shell-1",
+                            "data": {
+                                "tool_name": "shell__exec",
+                                "input": {"command": "rm -rf /tmp/example"},
+                            },
+                        },
+                    },
+                    {
+                        "event": "final",
+                        "payload": {"reply": "done"},
+                    },
+                ],
+            },
+            request_id="req-1",
+        )
+
+        self.assertEqual(metadata["request_id"], "req-1")
+        self.assertEqual(metadata["trace_id"], "trace-1")
+        self.assertEqual(len(metadata["transcript_events"]), 1)
+        self.assertEqual(metadata["transcript_events"][0]["payload"]["event_type"], "tool.started")
+        self.assertNotIn("input", metadata["transcript_events"][0]["payload"]["data"])
+
     def test_agent_turn_ensures_thread_before_starting_trace(self):
         turn_request = AgentTurnRequest(
             tenant_id="tenant-1",

@@ -109,17 +109,28 @@ def combine_workspace_context(
     return None
 
 
-def build_runtime_identity_guardrail(*, provider: str, model: str | None = None) -> str:
-    provider_label = str(provider or "").strip() or "the active provider"
-    model_label = str(model or "").strip()
-    if model_label:
-        identity_line = f"State exactly: provider {provider_label}, model {model_label} if asked."
-    else:
-        identity_line = f"State exactly: provider {provider_label}, model unknown if asked."
+def build_runtime_identity_guardrail(
+    *,
+    provider: str,
+    model: str | None = None,
+    billing_source: str | None = None,
+    ai_tier: str | None = None,
+    user_owned_ai_label: str | None = None,
+) -> str:
+    billing_token = str(billing_source or "").strip().lower()
+    tier_token = str(ai_tier or "").strip().lower().replace("-", "_")
+    if billing_token == "empyralis_credits" or tier_token in {"light", "pro", "max"}:
+        return (
+            "## Runtime Environment\n"
+            "You are operating inside Empyralis, an environment connecting the user with AI, tools, files, memory, apps, and computer capabilities. "
+            "The active AI source is Empyralis AI. "
+            "User identity and role files may be available through tools or workspace context when relevant."
+        )
+
     return (
-        "## Runtime Identity\n"
-        "Do not guess vendor or model identity. "
-        f"{identity_line}"
+        "## Runtime Environment\n"
+        "You are operating inside Empyralis, an environment connecting the user with this AI model, tools, files, memory, apps, and computer capabilities. "
+        "Workspace identity and role files may be available through tools or workspace context when relevant."
     )
 
 

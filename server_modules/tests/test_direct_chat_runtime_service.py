@@ -863,7 +863,7 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
 
         assembled = str(captured.get("system_prompt") or "")
         system_index = assembled.index("system prompt")
-        identity_index = assembled.index("## Runtime Identity")
+        identity_index = assembled.index("## Runtime Environment")
         workspace_index = assembled.index("## Workspace Context")
         stable_index = assembled.index("Stable Memory Summary")
         retrieved_index = assembled.index("Retrieved Relevant Memory")

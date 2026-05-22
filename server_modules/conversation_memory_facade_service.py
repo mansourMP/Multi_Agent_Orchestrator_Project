@@ -90,6 +90,9 @@ def load_context(
             memory_query=request.query_text,
             agent_install_id=request.subject.responder_install_id or None,
             policy_profile=resolved_profile,
+            include_memory_context=request.metadata.get("include_memory_context")
+            if isinstance(request.metadata.get("include_memory_context"), bool)
+            else None,
         )
         return ConversationMemoryContext(
             contextual_blocks=list(payload.get("contextual_blocks") or []),
@@ -248,11 +251,15 @@ def build_workspace_context_text(
     policy_profile: str | MemoryPolicyProfile,
     *,
     query_text: str = "",
+    include_memory_context: bool | None = None,
 ) -> str:
     context = load_context(
         subject,
         policy_profile,
         query_text=query_text,
+        metadata={"include_memory_context": include_memory_context}
+        if include_memory_context is not None
+        else None,
     )
     if context.stable_contextual_blocks or context.retrieved_contextual_blocks:
         return workspace_context_memory_adapter.render_workspace_context_text(

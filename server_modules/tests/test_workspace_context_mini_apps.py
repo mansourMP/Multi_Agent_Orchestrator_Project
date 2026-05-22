@@ -36,6 +36,7 @@ class WorkspaceContextMiniAppsTests(unittest.TestCase):
             payload = workspace_context_memory_adapter.load_workspace_context_payload(
                 workspace_id="ws-1",
                 memory_query="verbs",
+                include_memory_context=True,
                 policy_profile=get_memory_policy_profile(DIRECT_CHAT_PROFILE),
             )
 

@@ -109,6 +109,37 @@ class DirectChatPromptServiceTests(unittest.TestCase):
             "Base prompt\n\nIdentity guardrail\n\n## Workspace Context\nWorkspace context",
         )
 
+    def test_platform_paid_runtime_environment_uses_empyralis_ai_only(self) -> None:
+        guardrail = direct_chat_prompt_service.build_runtime_identity_guardrail(
+            provider="deepseek",
+            model="deepseek-v4-pro",
+            billing_source="empyralis_credits",
+            ai_tier="pro",
+        )
+
+        self.assertIn("## Runtime Environment", guardrail)
+        self.assertIn("Empyralis AI", guardrail)
+        self.assertNotIn("Empyralis Pro AI", guardrail)
+        self.assertNotIn("deepseek", guardrail.lower())
+        self.assertNotIn("deepseek-v4-pro", guardrail)
+        self.assertNotIn("If asked", guardrail)
+        self.assertNotIn("Do not", guardrail)
+
+    def test_user_owned_runtime_environment_does_not_override_model_identity(self) -> None:
+        guardrail = direct_chat_prompt_service.build_runtime_identity_guardrail(
+            provider="openai",
+            model="gpt-5.4",
+            user_owned_ai_label="connected AI account",
+        )
+
+        self.assertIn("## Runtime Environment", guardrail)
+        self.assertIn("this AI model", guardrail)
+        self.assertNotIn("connected AI account", guardrail)
+        self.assertNotIn("openai", guardrail.lower())
+        self.assertNotIn("gpt-5.4", guardrail)
+        self.assertNotIn("If asked", guardrail)
+        self.assertNotIn("Do not", guardrail)
+
     def test_build_proactive_suggestions_dedupes_limits_and_has_no_generic_fallback(self) -> None:
         suggestions = direct_chat_prompt_service.build_proactive_suggestions(
             "default",

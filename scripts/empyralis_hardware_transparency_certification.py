@@ -25,7 +25,11 @@ BACKEND_TESTS = [
     "server_modules/tests/test_transcript_events_service.py",
     "server_modules/tests/test_agent_turn.py",
     "server_modules/tests/test_hardware_action_broker_service.py",
+    "server_modules/tests/test_hardware_cloud_computer_adapter.py",
+    "server_modules/tests/test_hardware_gateway_adapter.py",
+    "server_modules/tests/test_hardware_self_hosted_node_adapter.py",
     "server_modules/tests/test_hardware_transcript_completion_certification.py",
+    "server_modules/tests/test_hardware_transparency_certification_runner.py",
     "server_modules/tests/test_runtime_runs_api_chat_stream.py",
     "server_modules/tests/test_thread_transcript_event_append.py",
     "server_modules/tests/test_virtual_computer_ephemeral_session.py",
@@ -517,6 +521,99 @@ def _assert_status(payload: dict[str, Any], expected: set[str], *, label: str) -
         raise CertificationError(f"{label} returned unexpected status: {status or payload}", payload)
 
 
+def _assert_runtime_session(
+    payload: dict[str, Any],
+    *,
+    runtime_target: str,
+    request_id: str | None = None,
+    access_mode: str | None = None,
+    states: set[str] | None = None,
+    device_or_node_id: str | None = None,
+) -> dict[str, Any]:
+    session = payload.get("runtime_session") if isinstance(payload.get("runtime_session"), dict) else {}
+    if not session:
+        raise CertificationError("hardware action did not return runtime_session", payload)
+    target = _text(session.get("canonical_runtime_target") or session.get("runtime_target"))
+    if target != runtime_target:
+        raise CertificationError(
+            f"runtime_session target mismatch: expected {runtime_target}, got {target}",
+            {"runtime_session": session, "payload_status": payload.get("status")},
+        )
+    if request_id and _text(session.get("request_id")) != request_id:
+        raise CertificationError(
+            "runtime_session request_id did not correlate to the assistant turn",
+            {"expected_request_id": request_id, "runtime_session": session},
+        )
+    if access_mode and _text(session.get("runtime_access_mode")) != access_mode:
+        raise CertificationError(
+            "runtime_session access mode mismatch",
+            {"expected_access_mode": access_mode, "runtime_session": session},
+        )
+    if states and _text(session.get("state")) not in states:
+        raise CertificationError(
+            f"runtime_session state mismatch: expected one of {sorted(states)}, got {_text(session.get('state'))}",
+            {"runtime_session": session},
+        )
+    if device_or_node_id:
+        ids = {
+            _text(session.get("gateway_id")),
+            _text(session.get("device_id")),
+            _text(session.get("runtime_node_id")),
+            _text(session.get("runtime_profile_id")),
+            _text(session.get("cloud_computer_session_id")),
+            _text(session.get("session_id")),
+        }
+        if device_or_node_id not in ids:
+            raise CertificationError(
+                "runtime_session did not include expected device/node/session id",
+                {"expected_id": device_or_node_id, "runtime_session": session},
+            )
+    return session
+
+
+def _cert_ids(*payloads: dict[str, Any]) -> dict[str, Any]:
+    ids: dict[str, Any] = {}
+    artifact_ids: list[str] = []
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        session = payload.get("runtime_session") if isinstance(payload.get("runtime_session"), dict) else {}
+        execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
+        for key in ("trace_id", "request_id", "run_id", "approval_id"):
+            token = _text(payload.get(key) or session.get(key) or execution.get(key))
+            if token and key not in ids:
+                ids[key] = token
+        session_id = _text(session.get("session_id") or payload.get("session_id"))
+        if session_id and "runtime_session_id" not in ids:
+            ids["runtime_session_id"] = session_id
+        for key in ("gateway_id", "device_id", "runtime_node_id", "runtime_profile_id", "cloud_computer_session_id", "self_hosted_command_id"):
+            token = _text(session.get(key) or execution.get(key))
+            if token and key not in ids:
+                ids[key] = token
+        for artifact_id in list(payload.get("artifacts") or session.get("artifacts") or []):
+            token = _text(artifact_id)
+            if token and token not in artifact_ids:
+                artifact_ids.append(token)
+    if artifact_ids:
+        ids["artifact_ids"] = artifact_ids
+    return ids
+
+
+def _missing_input_step(*, suite: str, name: str, missing: list[str], env: dict[str, str]) -> StepResult:
+    return StepResult(
+        name,
+        "FAIL",
+        ["scripts/empyralis_hardware_transparency_certification.py", "--suite", suite],
+        0.0,
+        f"{suite} suite requires {', '.join('--' + item for item in missing)}",
+        details={
+            "missing_flags": [f"--{item}" for item in missing],
+            "env_alternatives": env,
+            "setup": "Provide real enrolled hardware identifiers. Missing live hardware inputs are certification failures, not passes.",
+        },
+    )
+
+
 def automated_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
     python = sys.executable or "python3"
     results = [
@@ -564,6 +661,12 @@ def automated_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]
         _run_step(
             name="smoke_script_py_compile",
             command=[python, "-m", "py_compile", "scripts/empyralis_chat_transparency_live_smoke.py"],
+            timeout=30,
+            log_dir=log_dir,
+        ),
+        _run_step(
+            name="hardware_certification_runner_py_compile",
+            command=[python, "-m", "py_compile", "scripts/empyralis_hardware_transparency_certification.py"],
             timeout=30,
             log_dir=log_dir,
         ),
@@ -622,6 +725,13 @@ def cloud_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepRe
             cost_metadata={"source": "cloud_computer_certification"},
         )
         _assert_status(result, {"completed"}, label="cloud computer screenshot")
+        _assert_runtime_session(
+            result,
+            runtime_target="empyralis_cloud_computer",
+            request_id=seed["request_id"],
+            access_mode="full_access",
+            states={"ready"},
+        )
         events = _poll_transcript(
             client,
             workspace_id=workspace_id,
@@ -633,7 +743,7 @@ def cloud_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepRe
         _assert_safe_transcript_events(events)
         _assert_transcript_contains(events, event_type="artifact.created")
         _assert_transcript_contains(events, event_type="tool.result", runtime_target="empyralis_cloud_computer", status="completed")
-        return {"result": result, "transcript_events": events}
+        return {"ids": _cert_ids(result), "result": result, "transcript_events": events}
 
     def stop_step() -> dict[str, Any]:
         session_id = f"hrs-cloud-stop-{uuid.uuid4().hex[:12]}"
@@ -657,6 +767,14 @@ def cloud_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepRe
             },
         )
         _assert_status(created, {"completed"}, label="cloud computer resumable action")
+        _assert_runtime_session(
+            created,
+            runtime_target="empyralis_cloud_computer",
+            request_id=request_id,
+            access_mode="full_access",
+            states={"ready"},
+            device_or_node_id=session_id,
+        )
         stopped = _hardware_stop(
             client,
             workspace_id=workspace_id,
@@ -669,6 +787,13 @@ def cloud_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepRe
             target_request_id=request_id,
         )
         _assert_status(stopped, {"terminated"}, label="cloud computer stop")
+        _assert_runtime_session(
+            stopped,
+            runtime_target="empyralis_cloud_computer",
+            request_id=request_id,
+            states={"terminated"},
+            device_or_node_id=session_id,
+        )
         events = _poll_transcript(
             client,
             workspace_id=workspace_id,
@@ -678,7 +803,7 @@ def cloud_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepRe
             poll_interval=args.poll_interval,
         )
         _assert_transcript_contains(events, event_type="tool.result", runtime_target="empyralis_cloud_computer", status="terminated")
-        return {"created": created, "stopped": stopped, "transcript_events": events}
+        return {"ids": _cert_ids(created, stopped), "created": created, "stopped": stopped, "transcript_events": events}
 
     def quota_step() -> dict[str, Any]:
         request_id = f"cert-quota-{uuid.uuid4().hex[:12]}"
@@ -704,6 +829,15 @@ def cloud_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepRe
             cost_metadata=common_cost,
         )
         _assert_status(first, {"completed"}, label="cloud computer quota setup")
+        _assert_runtime_session(
+            first,
+            runtime_target="empyralis_cloud_computer",
+            request_id=request_id,
+            access_mode="full_access",
+            states={"ready"},
+            device_or_node_id=first_session,
+        )
+        second: dict[str, Any] = {}
         try:
             second = _hardware_execute(
                 client,
@@ -719,6 +853,13 @@ def cloud_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepRe
                 cost_metadata=common_cost,
             )
             _assert_status(second, {"failed", "degraded"}, label="cloud computer quota rejection")
+            _assert_runtime_session(
+                second,
+                runtime_target="empyralis_cloud_computer",
+                request_id=request_id,
+                access_mode="full_access",
+                states={"failed", "degraded"},
+            )
         finally:
             stopped = _hardware_stop(
                 client,
@@ -731,7 +872,8 @@ def cloud_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepRe
                 timeout=args.hardware_timeout,
                 target_request_id=request_id,
             )
-        return {"first": first, "second": second, "cleanup": stopped}
+        _assert_status(stopped, {"terminated"}, label="cloud computer quota cleanup")
+        return {"ids": _cert_ids(first, second, stopped), "first": first, "second": second, "cleanup": stopped}
 
     return [
         _live_step(name="cloud_computer_seed_chat_turn", command=command, log_dir=log_dir, fn=seed_step),
@@ -745,12 +887,11 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
     gateway_id = args.gateway_id or os.getenv("EMPYRALIS_CERT_GATEWAY_ID") or ""
     if not gateway_id:
         return [
-            StepResult(
-                "gateway_required_inputs",
-                "FAIL",
-                ["scripts/empyralis_hardware_transparency_certification.py", "--suite", "gateway", "--gateway-id", "..."],
-                0.0,
-                "gateway suite requires --gateway-id or EMPYRALIS_CERT_GATEWAY_ID",
+            _missing_input_step(
+                suite="gateway",
+                name="gateway_required_inputs",
+                missing=["gateway-id"],
+                env={"gateway-id": "EMPYRALIS_CERT_GATEWAY_ID"},
             )
         ]
     client, workspace_id, tenant_id = _authenticate(args, require_existing_workspace=True)
@@ -787,6 +928,22 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
             gateway_id=gateway_id,
         )
         _assert_status(result, expected, label=name)
+        expected_states = {
+            "completed": {"ready"},
+            "waiting_approval": {"waiting_approval"},
+            "offline": {"offline"},
+            "failed": {"failed"},
+            "degraded": {"degraded"},
+        }
+        states = set().union(*(expected_states.get(status, {status}) for status in expected))
+        _assert_runtime_session(
+            result,
+            runtime_target="user_device_gateway",
+            request_id=seed["request_id"],
+            access_mode=mode,
+            states=states,
+            device_or_node_id=gateway_id,
+        )
         events = _poll_transcript(
             client,
             workspace_id=workspace_id,
@@ -796,7 +953,7 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
             poll_interval=args.poll_interval,
         )
         _assert_safe_transcript_events(events)
-        return {"result": result, "transcript_events": events}
+        return {"ids": _cert_ids(result), "result": result, "transcript_events": events}
 
     def safe_actions_step() -> dict[str, Any]:
         shell = execute_gateway_action("gateway safe shell", "shell.exec", {"command": args.gateway_safe_command}, "default_guarded", {"completed"})
@@ -837,6 +994,14 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
         )
         expected = {"executed", "completed"} if decision == "approved" else {"rejected", "terminated"}
         _assert_status(resolved, expected, label=f"gateway approval {decision}")
+        if isinstance(resolved.get("runtime_session"), dict):
+            _assert_runtime_session(
+                resolved,
+                runtime_target="user_device_gateway",
+                request_id=seed["request_id"],
+                states={"ready", "terminated"},
+                device_or_node_id=gateway_id,
+            )
         events = _poll_transcript(
             client,
             workspace_id=workspace_id,
@@ -846,7 +1011,7 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
             poll_interval=args.poll_interval,
         )
         _assert_transcript_contains(events, event_type="approval.resolved")
-        return {"pending": pending, "resolved": resolved, "transcript_events": events}
+        return {"ids": _cert_ids(pending, resolved), "pending": pending, "resolved": resolved, "transcript_events": events}
 
     def autonomous_step() -> dict[str, Any]:
         payload = execute_gateway_action(
@@ -896,6 +1061,13 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
             )
             long_result = future.result(timeout=args.long_action_timeout + 5)
         _assert_status(stopped, {"terminated"}, label="gateway stop")
+        _assert_runtime_session(
+            stopped,
+            runtime_target="user_device_gateway",
+            request_id=request_id,
+            states={"terminated"},
+            device_or_node_id=gateway_id,
+        )
         events = _poll_transcript(
             client,
             workspace_id=workspace_id,
@@ -905,7 +1077,7 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
             poll_interval=args.poll_interval,
         )
         _assert_transcript_contains(events, event_type="tool.result", runtime_target="user_device_gateway", status="terminated")
-        return {"long_action": long_result, "stopped": stopped, "transcript_events": events}
+        return {"ids": _cert_ids(long_result, stopped), "long_action": long_result, "stopped": stopped, "transcript_events": events}
 
     def revoke_step() -> dict[str, Any]:
         if not args.allow_revoke:
@@ -929,7 +1101,16 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
             gateway_id=gateway_id,
         )
         _assert_status(blocked, {"offline", "failed", "degraded"}, label="revoked gateway follow-up")
-        return {"revoked": revoked, "blocked": blocked}
+        if isinstance(blocked.get("runtime_session"), dict):
+            _assert_runtime_session(
+                blocked,
+                runtime_target="user_device_gateway",
+                request_id=seed["request_id"],
+                access_mode="full_access",
+                states={"offline", "failed", "degraded"},
+                device_or_node_id=gateway_id,
+            )
+        return {"ids": _cert_ids(blocked), "revoked": revoked, "blocked": blocked}
 
     return [
         _live_step(name="gateway_doctor", command=command, log_dir=log_dir, fn=doctor_step),
@@ -951,12 +1132,15 @@ def self_hosted_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResul
     missing = [name for name, value in {"self-hosted-profile-id": profile_id, "self-hosted-node-token": node_token}.items() if not value]
     if missing:
         return [
-            StepResult(
-                "self_hosted_required_inputs",
-                "FAIL",
-                ["scripts/empyralis_hardware_transparency_certification.py", "--suite", "self-hosted"],
-                0.0,
-                f"self-hosted suite requires {', '.join('--' + item for item in missing)}",
+            _missing_input_step(
+                suite="self-hosted",
+                name="self_hosted_required_inputs",
+                missing=missing,
+                env={
+                    "self-hosted-profile-id": "EMPYRALIS_CERT_SELF_HOSTED_PROFILE_ID",
+                    "self-hosted-node-token": "EMPYRALIS_CERT_SELF_HOSTED_NODE_TOKEN",
+                    "self-hosted-node-id": "EMPYRALIS_CERT_SELF_HOSTED_NODE_ID",
+                },
             )
         ]
     client, workspace_id, tenant_id = _authenticate(args, require_existing_workspace=True)
@@ -1006,8 +1190,16 @@ def self_hosted_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResul
             node_id=node_id or None,
         )
         _assert_status(result, {"running"}, label="self-hosted enqueue")
+        _assert_runtime_session(
+            result,
+            runtime_target="self_hosted_node",
+            request_id=seed["request_id"],
+            access_mode="full_access",
+            states={"running"},
+            device_or_node_id=node_id or profile_id,
+        )
         running_command = result
-        return result
+        return {"ids": _cert_ids(result), "result": result}
 
     def claim_and_complete_step(status: str = "completed") -> dict[str, Any]:
         claimed = client.request(
@@ -1050,9 +1242,16 @@ def self_hosted_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResul
         _assert_transcript_contains(events, event_type="tool.result", runtime_target="self_hosted_node")
         if status == "completed":
             _assert_transcript_contains(events, event_type="artifact.created")
-        return {"claimed": claimed, "completed": completed, "transcript_events": events, "enqueued": running_command}
+        return {
+            "ids": _cert_ids(running_command, completed if isinstance(completed, dict) else {}),
+            "claimed": claimed,
+            "completed": completed,
+            "transcript_events": events,
+            "enqueued": running_command,
+        }
 
     def failure_step() -> dict[str, Any]:
+        nonlocal running_command
         failed = _hardware_execute(
             client,
             workspace_id=workspace_id,
@@ -1066,6 +1265,15 @@ def self_hosted_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResul
             node_id=node_id or None,
         )
         _assert_status(failed, {"running"}, label="self-hosted failure enqueue")
+        _assert_runtime_session(
+            failed,
+            runtime_target="self_hosted_node",
+            request_id=seed["request_id"],
+            access_mode="full_access",
+            states={"running"},
+            device_or_node_id=node_id or profile_id,
+        )
+        running_command = failed
         return claim_and_complete_step("failed")
 
     def stop_step() -> dict[str, Any]:
@@ -1087,6 +1295,14 @@ def self_hosted_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResul
             session_id=session_id,
         )
         _assert_status(enqueued, {"running"}, label="self-hosted long enqueue")
+        _assert_runtime_session(
+            enqueued,
+            runtime_target="self_hosted_node",
+            request_id=request_id,
+            access_mode="full_access",
+            states={"running"},
+            device_or_node_id=node_id or profile_id,
+        )
         stopped = _hardware_stop(
             client,
             workspace_id=workspace_id,
@@ -1100,6 +1316,13 @@ def self_hosted_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResul
             target_request_id=request_id,
         )
         _assert_status(stopped, {"terminated"}, label="self-hosted stop")
+        _assert_runtime_session(
+            stopped,
+            runtime_target="self_hosted_node",
+            request_id=request_id,
+            states={"terminated"},
+            device_or_node_id=node_id or profile_id,
+        )
         events = _poll_transcript(
             client,
             workspace_id=workspace_id,
@@ -1109,7 +1332,7 @@ def self_hosted_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResul
             poll_interval=args.poll_interval,
         )
         _assert_transcript_contains(events, event_type="tool.result", runtime_target="self_hosted_node", status="terminated")
-        return {"enqueued": enqueued, "stopped": stopped, "transcript_events": events}
+        return {"ids": _cert_ids(enqueued, stopped), "enqueued": enqueued, "stopped": stopped, "transcript_events": events}
 
     return [
         _live_step(name="self_hosted_heartbeat", command=command, log_dir=log_dir, fn=heartbeat_step),

@@ -62,6 +62,11 @@ function effectiveProviderLabel(metadata: Record<string, unknown>): string {
   const contextUsed = metadata.context_used && typeof metadata.context_used === 'object'
     ? metadata.context_used as Record<string, unknown>
     : null;
+  const billingSource = String(metadata.billing_source ?? contextUsed?.billing_source ?? '').trim();
+  const aiLabel = String(metadata.ai_label ?? contextUsed?.ai_label ?? '').trim();
+  if (billingSource === 'empyralis_credits' && aiLabel) {
+    return `${aiLabel} · Empyralis credits`;
+  }
   const provider = String(
     metadata.effective_provider
       ?? metadata.provider
@@ -286,7 +291,6 @@ const ThinkingRow = memo(({
     return (
       <article className={`app-chat-thinking-row${isStreaming ? ' app-chat-thinking-row--streaming' : ''}${isDimmed ? ' app-chat-thinking-row--dimmed' : ''}`}>
         <div className="app-chat-thinking-row__header">
-          <span className="app-chat-thinking-row__pulse" aria-hidden="true" />
           <span className="app-chat-thinking-row__label">Thinking</span>
         </div>
         <div className="app-chat-thinking-row__activity">{activityLine}</div>
@@ -379,7 +383,9 @@ export const ChatMessage = memo(({
           : stepStatus === 'error'
             ? <CircleAlert size={14} strokeWidth={2} />
             : <Wrench size={14} strokeWidth={1.9} />}
-        primary={String(message.metadata.tool_name ?? message.content ?? 'Tool')}
+        primary={stepStatus === 'done'
+          ? `Used ${String(message.metadata.tool_name ?? message.content ?? 'tool')}`
+          : String(message.metadata.tool_name ?? message.content ?? 'Tool')}
         secondary={stepStatus === 'done' ? 'Done' : stepStatus === 'error' ? 'Failed' : 'Running'}
         state={stepStatus === 'done' ? 'done' : stepStatus === 'error' ? 'error' : 'running'}
         dimmed={dimmed}
@@ -391,7 +397,7 @@ export const ChatMessage = memo(({
     return (
       <SystemInlineRow
         icon={<FileText size={14} strokeWidth={1.9} />}
-        primary={String(message.metadata.filename ?? message.content ?? 'File')}
+        primary="Read file"
         secondary={String(message.metadata.file_action ?? 'Read')}
         state="done"
         dimmed={message.metadata.step_dimmed === true}
@@ -404,7 +410,7 @@ export const ChatMessage = memo(({
     return (
       <SystemInlineRow
         icon={<Search size={14} strokeWidth={1.9} />}
-        primary={String(message.metadata.query ?? message.content ?? 'Search')}
+        primary={stepStatus === 'done' ? 'Searched web' : 'Searching web'}
         secondary={stepStatus === 'done' ? 'Done' : 'Searching'}
         state={stepStatus === 'done' ? 'done' : 'running'}
         dimmed={message.metadata.step_dimmed === true}

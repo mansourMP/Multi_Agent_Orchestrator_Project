@@ -18,7 +18,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
-  interpolate,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -32,7 +31,7 @@ import { AgentPayload } from "@/src/components/Renderer";
 import { ActionButton } from "@/src/components/system/ActionButton";
 import { MotionPressable } from "@/src/components/system/MotionPressable";
 import { buildAgentThreadFromInstall, getPrimaryAgent } from "@/src/lib/agents";
-import { MobileAuthExpiredError, mobileApi, type MobileThreadHistoryItem } from "@/src/lib/api";
+import { MobileAuthExpiredError, mobileApi, type EmpyralistStreamEvent, type MobileThreadHistoryItem } from "@/src/lib/api";
 import { useMobileChatContext, usePrimaryGatewayDoctor } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
 import { useChatStore } from "@/src/stores/chatStore";
@@ -72,10 +71,10 @@ type KinThinkingIndicatorProps = {
 };
 
 function KinThinkingIndicator({ theme }: KinThinkingIndicatorProps) {
-  const orbPulse = useSharedValue(0);
+  const textGlow = useSharedValue(0);
 
   useEffect(() => {
-    orbPulse.value = withRepeat(
+    textGlow.value = withRepeat(
       withTiming(1, {
         duration: MOBILE_MOTION_TIMINGS.slow,
         easing: MOBILE_MOTION_EASING.standard,
@@ -84,13 +83,12 @@ function KinThinkingIndicator({ theme }: KinThinkingIndicatorProps) {
       true,
     );
     return () => {
-      orbPulse.value = 0;
+      textGlow.value = 0;
     };
-  }, [orbPulse]);
+  }, [textGlow]);
 
-  const orbStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(orbPulse.value, [0, 1], [0.38, 1]),
-    transform: [{ scale: interpolate(orbPulse.value, [0, 1], [0.92, 1.12]) }],
+  const textStyle = useAnimatedStyle(() => ({
+    opacity: 0.64 + textGlow.value * 0.36,
   }));
 
   return (
@@ -102,27 +100,19 @@ function KinThinkingIndicator({ theme }: KinThinkingIndicatorProps) {
         alignSelf: "flex-start",
       }}
       >
-      <Animated.View
+      <Animated.Text
         style={[
           {
-            width: 6,
-            height: 6,
-            borderRadius: 3,
-            backgroundColor: theme.colors.textSecondary,
+            fontSize: 12.5,
+            fontWeight: "700",
+            color: theme.colors.textSecondary,
+            letterSpacing: 0,
           },
-          orbStyle,
+          textStyle,
         ]}
-      />
-      <Text
-        style={{
-          fontSize: 12.5,
-          fontWeight: "700",
-          color: theme.colors.textSecondary,
-          letterSpacing: -0.2,
-        }}
       >
         Thinking
-      </Text>
+      </Animated.Text>
     </View>
   );
 }
@@ -204,22 +194,123 @@ function collectMemoryFacts(value: unknown, limit = 3): string[] {
   return facts;
 }
 
+function streamEventStatus(value: unknown): "running" | "done" | "error" {
+  const status = String(value || "").trim().toLowerCase();
+  if (["done", "complete", "completed", "success", "succeeded"].includes(status)) {
+    return "done";
+  }
+  if (["error", "failed", "failure", "blocked", "denied", "offline", "degraded"].includes(status)) {
+    return "error";
+  }
+  return "running";
+}
+
+function streamEventData(payload: Record<string, unknown>): Record<string, unknown> {
+  return payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+    ? (payload.data as Record<string, unknown>)
+    : {};
+}
+
+function streamEventGroupKey(event: EmpyralistStreamEvent): string {
+  const payload = event.payload || {};
+  const explicitId =
+    String(payload.tool_call_id || payload.activity_event_id || payload.step_id || payload.trace_id || payload.id || "").trim();
+  if (explicitId) {
+    return `${event.event}:${explicitId}`;
+  }
+  const eventType = String(payload.event_type || payload.type || payload.kind || "").trim();
+  const title = String(payload.title || payload.label || payload.action || "").trim();
+  return `${event.event}:${eventType}:${title}`;
+}
+
+function compactStreamEventDetail(payload: Record<string, unknown>): string | undefined {
+  const candidates = [
+    payload.summary,
+    payload.detail,
+    payload.message,
+    payload.query,
+    payload.path,
+    payload.filename,
+    payload.command,
+    payload.url,
+    payload.status,
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate || "").replace(/\s+/g, " ").trim();
+    if (text) {
+      return text.length > 96 ? `${text.slice(0, 93)}...` : text;
+    }
+  }
+  return undefined;
+}
+
+function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null {
+  const payload = event.payload || {};
+  const data = streamEventData(payload);
+  const detailPayload = { ...payload, ...data };
+  const eventType = String(payload.event_type || payload.type || payload.kind || "").trim().toLowerCase();
+  const status = streamEventStatus(detailPayload.status || detailPayload.state || (eventType.includes("result") ? "done" : ""));
+  const explicitTitle = String(detailPayload.title || detailPayload.label || detailPayload.action || "").trim();
+  const toolName = String(detailPayload.tool_name || detailPayload.name || "").trim();
+  let speech = explicitTitle;
+
+  if (!speech) {
+    if (eventType.includes("approval")) {
+      speech = status === "done" ? "Approval resolved" : "Waiting for approval";
+    } else if (eventType.includes("screenshot") || eventType.includes("artifact")) {
+      speech = "Captured screenshot";
+    } else if (eventType.includes("search")) {
+      speech = status === "done" ? "Searched web" : "Searching web";
+    } else if (eventType.includes("browser")) {
+      speech = status === "done" ? "Used browser" : "Using browser";
+    } else if (eventType.includes("file")) {
+      speech = status === "done" ? "Read file" : "Reading file";
+    } else if (eventType.includes("shell") || eventType.includes("exec") || eventType.includes("command")) {
+      speech = status === "done" ? "Ran command" : "Running shell";
+    } else if (toolName) {
+      speech = status === "done" ? `Used ${toolName}` : `Using ${toolName}`;
+    } else if (event.event === "step") {
+      speech = status === "done" ? "Step complete" : "Working";
+    } else {
+      speech = status === "done" ? "Action complete" : "Working";
+    }
+  }
+
+  return {
+    intent: "assistant",
+    messageType: "tool",
+    toolStatus: status,
+    toolKind: eventType || event.event,
+    speech,
+    source: compactStreamEventDetail(detailPayload),
+  };
+}
+
 function buildTransparencyCards(payload: {
   actions?: unknown[];
   interventions?: unknown[];
+  stream_events?: EmpyralistStreamEvent[];
 }): AgentPayload[] {
   const cards: AgentPayload[] = [];
-  const pushCard = (title: string, detail?: string) => {
+  const pushCard = (title: string, detail?: string, status: AgentPayload["toolStatus"] = "done") => {
     const cleanTitle = title.trim();
     const cleanDetail = String(detail || "").trim();
     if (!cleanTitle || cards.some((item) => item.speech === cleanTitle && item.source === cleanDetail)) return;
     cards.push({
       intent: "assistant",
       messageType: "tool",
+      toolStatus: status,
       speech: cleanTitle,
       source: cleanDetail || undefined,
     });
   };
+
+  for (const event of Array.isArray(payload.stream_events) ? payload.stream_events : []) {
+    const card = buildStreamEventCard(event);
+    if (card) {
+      pushCard(card.speech, card.source, card.toolStatus);
+    }
+  }
 
   for (const item of Array.isArray(payload.interventions) ? payload.interventions : []) {
     const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
@@ -555,6 +646,23 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
 
     try {
       let streamedReply = "";
+      let nextStreamCardIndex = placeholderIndex + 1;
+      const streamCardIndexByKey = new Map<string, number>();
+      const upsertStreamEventCard = (event: EmpyralistStreamEvent) => {
+        const card = buildStreamEventCard(event);
+        if (!card) return;
+        const key = streamEventGroupKey(event);
+        const existingIndex = streamCardIndexByKey.get(key);
+        if (existingIndex != null) {
+          updateMessage(currentSessionId, existingIndex, card);
+          appendRunActivity(card.speech);
+          return;
+        }
+        addMessage(currentSessionId, card);
+        streamCardIndexByKey.set(key, nextStreamCardIndex);
+        nextStreamCardIndex += 1;
+        appendRunActivity(card.speech);
+      };
       const payload = await mobileApi.respondChat(
         session,
         {
@@ -575,6 +683,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
               speech: streamedReply,
             });
           },
+          onEvent: upsertStreamEventCard,
         },
       );
       const hasStructuredCards =
@@ -585,7 +694,10 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         speech: hasStructuredCards ? "" : (payload.reply || streamedReply || ""),
       });
 
-      for (const card of buildTransparencyCards(payload)) {
+      for (const card of buildTransparencyCards({
+        ...payload,
+        stream_events: (payload.stream_events || []).filter((event) => !streamCardIndexByKey.has(streamEventGroupKey(event))),
+      })) {
         addMessage(currentSessionId, card);
       }
 
@@ -653,6 +765,23 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         setIsLoading(true);
         setRunActivity(["Confirming", "Finishing up"]);
         let streamedReply = "";
+        let nextStreamCardIndex = placeholderIndex + 1;
+        const streamCardIndexByKey = new Map<string, number>();
+        const upsertStreamEventCard = (event: EmpyralistStreamEvent) => {
+          const card = buildStreamEventCard(event);
+          if (!card) return;
+          const key = streamEventGroupKey(event);
+          const existingIndex = streamCardIndexByKey.get(key);
+          if (existingIndex != null) {
+            updateMessage(activeSession.id, existingIndex, card);
+            appendRunActivity(card.speech);
+            return;
+          }
+          addMessage(activeSession.id, card);
+          streamCardIndexByKey.set(key, nextStreamCardIndex);
+          nextStreamCardIndex += 1;
+          appendRunActivity(card.speech);
+        };
         const payload = await mobileApi.respondChat(
           session,
           {
@@ -676,11 +805,18 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                 speech: streamedReply,
               });
             },
+            onEvent: upsertStreamEventCard,
           },
         );
         updateMessage(activeSession.id, placeholderIndex, {
           speech: payload.reply || streamedReply || "",
         });
+        for (const resultCard of buildTransparencyCards({
+          ...payload,
+          stream_events: (payload.stream_events || []).filter((event) => !streamCardIndexByKey.has(streamEventGroupKey(event))),
+        })) {
+          addMessage(activeSession.id, resultCard);
+        }
         setRunActivity([]);
         setIsLoading(false);
         showBanner("Done.", "success");
@@ -713,6 +849,13 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     const isUser = item.intent === "user";
 
     if (item.messageType === "tool") {
+      const iconName =
+        item.toolStatus === "running"
+          ? "ellipsis-horizontal-circle-outline"
+          : item.toolStatus === "error"
+            ? "alert-circle-outline"
+            : "checkmark-circle-outline";
+      const iconColor = item.toolStatus === "error" ? theme.colors.error : theme.colors.textSecondary;
       return (
         <View
           style={{
@@ -729,7 +872,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
             gap: 10,
           }}
         >
-          <Ionicons name="checkmark-circle-outline" size={18} color={theme.colors.textSecondary} />
+          <Ionicons name={iconName} size={18} color={iconColor} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text numberOfLines={1} style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
               {item.speech}

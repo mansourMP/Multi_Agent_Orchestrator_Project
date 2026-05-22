@@ -13,7 +13,6 @@ import {
   SquareTerminal,
   Wrench,
 } from 'lucide-react';
-import { AgentTransparencyTimeline } from '@/lib/workspace/transparency-timeline';
 
 import type { CodexTranscriptCell } from './cells';
 
@@ -66,6 +65,23 @@ function toolActivityLabel(name: string): string {
     return 'Searching web';
   }
   return humanizeToken(name) || 'Using tool';
+}
+
+function completedToolActivityLabel(name: string): string {
+  const runningLabel = toolActivityLabel(name);
+  if (runningLabel === 'Browser action') {
+    return 'Used browser';
+  }
+  if (runningLabel === 'Searching web') {
+    return 'Searched web';
+  }
+  if (runningLabel.startsWith('Sending ')) {
+    return runningLabel;
+  }
+  if (runningLabel.startsWith('Using ')) {
+    return runningLabel.replace(/^Using /, 'Used ');
+  }
+  return runningLabel;
 }
 
 function fileActivityLabel(action: string): string {
@@ -355,10 +371,6 @@ function SystemInlineRow({
   state: 'running' | 'done' | 'error';
   dimmed: boolean;
 }) {
-  if (state === 'done') {
-    return null;
-  }
-
   return (
     <article
       data-chat-role="system"
@@ -392,23 +404,11 @@ export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
   const timestamp = formatTimestamp(cell.createdAt);
   const effectiveLabel = providerLabel(cell);
   const text = cell.content.trim();
-  const transparencyEvents = (cell.metadata?.transparency_events as Array<Record<string, unknown>> | undefined) ?? [];
   return (
     <article data-chat-role="assistant" className="app-chat-message">
       <div className="app-chat-message__content">
         <MarkdownMessage text={text} />
       </div>
-      {transparencyEvents.length > 0 ? (
-        <div style={{ marginTop: 4 }}>
-          <AgentTransparencyTimeline
-            events={transparencyEvents as Array<{
-              event_id?: string; trace_id?: string; event_type: string;
-              title: string; summary?: string; status?: string;
-              timestamp?: string; tool_name?: string; channel?: string;
-            }>}
-          />
-        </div>
-      ) : null}
       {(timestamp || effectiveLabel || cell.isIncomplete) ? (
         <div className={`app-chat-message__meta${effectiveLabel || cell.isIncomplete ? ' app-chat-message__meta--visible' : ''}`}>
           {effectiveLabel ? (
@@ -445,7 +445,6 @@ export function ReasoningSummaryCell({
       className={`app-chat-thinking-row${cell.isStreaming ? ' app-chat-thinking-row--streaming' : ''}${cell.dimmed ? ' app-chat-thinking-row--dimmed' : ''}`}
     >
       <div className="app-chat-thinking-row__header">
-        <span className="app-chat-thinking-row__pulse" aria-hidden="true" />
         <span className="app-chat-thinking-row__label">Thinking</span>
       </div>
       <div className="app-chat-thinking-row__activity">{activityLine}</div>
@@ -462,7 +461,7 @@ export function ExecCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <SquareTerminal size={14} strokeWidth={1.9} />}
-      primary="Running shell"
+      primary={cell.status === 'done' ? 'Ran command' : cell.status === 'error' ? 'Command failed' : 'Running shell'}
       secondary={compactSystemDetail(cell.command, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running')}
       state={cell.status}
       dimmed={cell.dimmed === true}
@@ -479,7 +478,7 @@ export function ToolCallCell({ cell }: { cell: Extract<CodexTranscriptCell, { ki
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <Wrench size={14} strokeWidth={1.9} />}
-      primary={toolActivityLabel(cell.name || '')}
+      primary={cell.status === 'done' ? completedToolActivityLabel(cell.name || '') : toolActivityLabel(cell.name || '')}
       secondary={compactSystemDetail(cell.result, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : (cell.name || 'Running'))}
       state={cell.status}
       dimmed={cell.dimmed === true}
@@ -497,7 +496,7 @@ export function WebSearchCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <Search size={14} strokeWidth={1.9} />}
-      primary="Searching web"
+      primary={cell.status === 'done' ? 'Searched web' : 'Searching web'}
       secondary={compactSystemDetail(cell.query, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Searching')}
       state={state}
       dimmed={cell.dimmed === true}
@@ -514,7 +513,7 @@ export function FileChangeCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <FileText size={14} strokeWidth={1.9} />}
-      primary={fileActivityLabel(cell.action || '')}
+      primary={cell.status === 'done' ? fileActivityLabel(cell.action || '').replace(/^Reading /, 'Read ').replace(/^Updating /, 'Updated ') : fileActivityLabel(cell.action || '')}
       secondary={compactSystemDetail(cell.filename, cell.status === 'done' ? 'Done' : 'File')}
       state={cell.status}
       dimmed={cell.dimmed === true}
@@ -529,7 +528,7 @@ export function ScreenshotCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
       icon={cell.status === 'done'
         ? <Camera size={14} strokeWidth={1.9} />
         : <CircleAlert size={14} strokeWidth={2} />}
-      primary="Screenshot/artifact"
+      primary={cell.status === 'done' ? 'Captured screenshot' : 'Screenshot/artifact'}
       secondary={compactSystemDetail(cell.caption, cell.status === 'done' ? 'Captured' : 'Failed')}
       state={cell.status}
       dimmed={cell.dimmed === true}

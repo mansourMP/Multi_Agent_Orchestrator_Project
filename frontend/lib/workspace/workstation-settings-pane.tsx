@@ -220,6 +220,19 @@ function deriveActiveModelPath(
   if (selectedProfile) {
     const providerId = readString(selectedProfile.provider).toLowerCase();
     const provider = providers.find((item) => readString(item.id).toLowerCase() === providerId) ?? null;
+    const credentialPlane = readString(provider?.credential_plane).toLowerCase();
+    if (credentialPlane === 'platform_runtime') {
+      const selectedModel = readString(selectedProfile.model || provider?.default_model).toLowerCase();
+      const tierLabel = selectedModel === 'light' || selectedModel.includes('flash')
+        ? 'Light AI'
+        : selectedModel === 'max' || selectedModel.includes('reasoner')
+          ? 'Max AI'
+          : 'Pro AI';
+      return {
+        value: tierLabel,
+        hint: 'Empyralis credits',
+      };
+    }
     const providerLabel = readString(provider?.label, providerId || 'AI model');
     const modelLabel = readString(selectedProfile.model)
       || readString(provider?.default_model)
@@ -238,12 +251,14 @@ function deriveActiveModelPath(
       const policy = readString(provider.hosted_sage_ai_policy).toLowerCase();
       return policy === 'enabled_with_cap' || policy === 'allowed';
     }) ?? null;
-    const providerLabel = readString(hostedProvider?.label, 'Empyralis default model');
-    const modelLabel = readString(hostedProvider?.default_model)
-      || readString((Array.isArray(hostedProvider?.models) ? hostedProvider?.models[0]?.label : null))
-      || 'Default model';
+    const defaultModel = readString(hostedProvider?.default_model).toLowerCase();
+    const tierLabel = defaultModel.includes('flash')
+      ? 'Light AI'
+      : defaultModel.includes('reasoner')
+        ? 'Max AI'
+        : 'Pro AI';
     return {
-      value: `${providerLabel} · ${modelLabel}`,
+      value: tierLabel,
       hint: 'Empyralis credits',
     };
   }

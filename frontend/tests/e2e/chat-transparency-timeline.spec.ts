@@ -377,7 +377,8 @@ test.describe('chat transparency timeline', () => {
     await page.goto('/w/ws-1/sage');
 
     await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible();
-    await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('DeepSeek');
+    await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('Light');
+    await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('Empyralis credits');
     const composer = page.locator('[data-workstation-chat-composer="root"] textarea');
     await composer.fill('show me what you are doing');
     await composer.press('Enter');
@@ -385,11 +386,11 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="search"]')).toContainText('Searching web');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Running shell');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Reading file');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Browser action');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Used browser');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_telegram"]')).toContainText('Sending Telegram');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_whatsapp"]')).toContainText('Sending WhatsApp');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Screenshot/artifact');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Needs your OK');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval needed');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="done"]')).toContainText('Done');
 
     await expect(page.getByText(/inspect workspace state and decide next step/i)).toHaveCount(0);

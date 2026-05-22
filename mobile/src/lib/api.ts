@@ -203,11 +203,17 @@ export type EmpyralistChatAction = {
   goal?: string | null;
 };
 
+export type EmpyralistStreamEvent = {
+  event: "trace" | "step";
+  payload: Record<string, unknown>;
+};
+
 export type EmpyralistDirectChatResponse = {
   reply: string;
   actions: EmpyralistChatAction[];
   approvals?: Record<string, unknown>[];
   interventions?: AgentTurnIntervention[];
+  stream_events?: EmpyralistStreamEvent[];
   mode?: string;
   error?: string;
   context_used?: Record<string, unknown> | null;
@@ -723,11 +729,26 @@ function buildMobileRuntimeClient(session: MobileSession) {
 
 function normalizeEmpyralistChatResponse(payload: unknown): EmpyralistDirectChatResponse {
   const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const streamEvents = Array.isArray(record.stream_events)
+    ? (record.stream_events as unknown[])
+        .map((item) => {
+          const eventRecord = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+          const event = String(eventRecord.event || "").trim();
+          const payloadRecord = eventRecord.payload && typeof eventRecord.payload === "object"
+            ? (eventRecord.payload as Record<string, unknown>)
+            : {};
+          return event === "trace" || event === "step"
+            ? { event, payload: payloadRecord }
+            : null;
+        })
+        .filter((item): item is EmpyralistStreamEvent => Boolean(item))
+    : [];
   return {
     reply: typeof record.reply === "string" ? record.reply : "",
     actions: Array.isArray(record.actions) ? (record.actions as EmpyralistChatAction[]) : [],
     approvals: Array.isArray(record.approvals) ? (record.approvals as Record<string, unknown>[]) : [],
     interventions: Array.isArray(record.interventions) ? (record.interventions as AgentTurnIntervention[]) : [],
+    stream_events: streamEvents,
     mode: typeof record.mode === "string" ? record.mode : undefined,
     error: typeof record.error === "string" ? record.error : undefined,
     context_used: record.context_used && typeof record.context_used === "object"
@@ -740,7 +761,8 @@ function applyEmpyralistSseEvent(
   eventName: string,
   raw: string,
   onChunk?: (delta: string) => void,
-): { finalPayload?: EmpyralistDirectChatResponse; delta?: string } {
+  onEvent?: (event: EmpyralistStreamEvent) => void,
+): { finalPayload?: EmpyralistDirectChatResponse; delta?: string; streamEvent?: EmpyralistStreamEvent } {
   let parsed: unknown = raw;
   try {
     parsed = JSON.parse(raw);
@@ -764,12 +786,25 @@ function applyEmpyralistSseEvent(
     return { finalPayload: normalizeEmpyralistChatResponse(parsed) };
   }
 
+  if (eventName === "trace" || eventName === "step") {
+    const payload = parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : { value: String(parsed || "") };
+    const streamEvent: EmpyralistStreamEvent = {
+      event: eventName,
+      payload,
+    };
+    onEvent?.(streamEvent);
+    return { streamEvent };
+  }
+
   return {};
 }
 
 async function parseEmpyralistEventStream(
   response: Response,
   onChunk?: (delta: string) => void,
+  onEvent?: (event: EmpyralistStreamEvent) => void,
 ): Promise<EmpyralistDirectChatResponse> {
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("text/event-stream")) {
@@ -780,22 +815,33 @@ async function parseEmpyralistEventStream(
   const decoder = new TextDecoder();
   let finalPayload: EmpyralistDirectChatResponse | null = null;
   let streamedReply = "";
+  const streamEvents: EmpyralistStreamEvent[] = [];
   let buffer = "";
   let currentEvent = "message";
   let currentData: string[] = [];
 
   const dispatch = () => {
     if (currentData.length === 0) return;
-    const { finalPayload: nextFinal, delta } = applyEmpyralistSseEvent(
+    const { finalPayload: nextFinal, delta, streamEvent } = applyEmpyralistSseEvent(
       currentEvent,
       currentData.join("\n"),
       onChunk,
+      onEvent,
     );
     if (delta) {
       streamedReply += delta;
     }
+    if (streamEvent) {
+      streamEvents.push(streamEvent);
+    }
     if (nextFinal) {
-      finalPayload = nextFinal;
+      finalPayload = {
+        ...nextFinal,
+        stream_events: [
+          ...streamEvents,
+          ...(nextFinal.stream_events || []),
+        ],
+      };
     }
   };
 
@@ -847,7 +893,7 @@ async function parseEmpyralistEventStream(
     processBuffer(true);
   }
 
-  return finalPayload || { reply: streamedReply, actions: [] };
+  return finalPayload || { reply: streamedReply, actions: [], stream_events: streamEvents };
 }
 
 export const mobileApi = {
@@ -1214,7 +1260,7 @@ export const mobileApi = {
   async respondChat(
     session: MobileSession,
     payload: EmpyralistDirectChatRequest,
-    options?: { onChunk?: (delta: string) => void },
+    options?: { onChunk?: (delta: string) => void; onEvent?: (event: EmpyralistStreamEvent) => void },
   ) {
     const chatUrl = getEmpyralistChatEndpoint(session);
     const requestedProvider = String((payload.provider ?? getDefaultEmpyralistChatProvider()) || "").trim();
@@ -1266,7 +1312,7 @@ export const mobileApi = {
       throw new Error(await readResponseErrorMessage(response, fallback));
     }
 
-    return parseEmpyralistEventStream(response, options?.onChunk);
+    return parseEmpyralistEventStream(response, options?.onChunk, options?.onEvent);
   },
   getRun(session: MobileSession, runId: string) {
     return buildMobileRuntimeClient(session).getRunDetail(runId) as Promise<RunDetailResponse>;

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { Activity, Bot, Compass, LayoutGrid, Menu, Monitor, Package, Plus, Waypoints } from 'lucide-react';
+import { Activity, Bot, Compass, LayoutGrid, Menu, Monitor, Package, Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
@@ -39,7 +39,7 @@ import {
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
   sage: ['chat', 'activity', 'memory', 'integrations', 'tasks', 'artifacts'],
   studio: ['studio'],
-  gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
+  gateway: [],
   marketplace: ['marketplace'],
   applications: ['applications'],
   settings: ['settings'],
@@ -123,14 +123,13 @@ type ComputerConnectionStatus = {
 };
 
 const MOBILE_DESTINATION_NAV: readonly {
-  id: 'chat' | 'studio' | 'gateway' | 'marketplace' | 'applications' | 'activity';
+  id: 'chat' | 'studio' | 'marketplace' | 'applications' | 'activity';
   label: string;
   defaultRouteId: WorkspaceRouteId;
   icon: LucideIcon;
 }[] = [
   { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot },
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
-  { id: 'gateway', label: 'Computers', defaultRouteId: 'gateway', icon: Waypoints },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
   { id: 'applications', label: 'Applications', defaultRouteId: 'applications', icon: Package },
   { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },

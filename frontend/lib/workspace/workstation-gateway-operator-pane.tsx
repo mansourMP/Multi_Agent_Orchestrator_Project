@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { DataBadge } from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
+import { AppButton } from '@/lib/ui/primitives';
 import {
   FormField,
   FormGrid,
@@ -19,8 +20,6 @@ import {
   WorkstationSurfaceList,
   WorkstationSurfaceListItem,
   WorkstationSurfaceNotice,
-  WorkstationSurfaceStat,
-  WorkstationSurfaceStatGrid,
 } from '@/lib/workspace/workstation-surface-primitives';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
@@ -612,16 +611,6 @@ const GATEWAY_MODE_SUMMARIES = [
     description: 'Lets Sage continue through bounded local steps while destructive, external, and security actions remain gated.',
   },
 ] as const;
-
-function gatewayConnectionSummary(gateways: GatewayRegistrationRecord[]): string {
-  if (gateways.length === 0) {
-    return 'No computers connected';
-  }
-  const onlineCount = gateways.filter((gateway) =>
-    String(gateway.connection_status ?? gateway.status ?? '').trim().toLowerCase() === 'online',
-  ).length;
-  return onlineCount > 0 ? `${gateways.length} · ${onlineCount} online` : `${gateways.length} · Offline`;
-}
 
 function gatewayTrustSummary(selectedGateway: GatewayRegistrationRecord | null): {
   deviceLabel: string;
@@ -1721,47 +1710,96 @@ export function WorkstationGatewayOperatorPane({
 
   return (
     <div className="gateway-operator-pane app-stack-3">
-      <WorkstationSurfaceCard
-        title={normalDeviceTitle}
-        description={normalDeviceLine}
-        actions={(
-          <WorkstationActionButton
+      <section className="gateway-computer-sheet sage-computer-connect-modal">
+        <div className="gateway-computer-sheet__header">
+          <div>
+            <h2>Connect a computer</h2>
+            <p>One connection gives Sage the full local power layer. No capability picking here.</p>
+          </div>
+          <AppButton
             type="button"
-            tone="primary"
+            tone="ghost"
             onClick={() => {
-              setManageOpen(true);
+              router.push(`/w/${encodeURIComponent(workspaceId)}/integrations`);
             }}
           >
-            Manage
-          </WorkstationActionButton>
-        )}
-      >
-        {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
-        {errorMessage ? <WorkstationSurfaceNotice tone="danger">{errorMessage}</WorkstationSurfaceNotice> : null}
+            Close
+          </AppButton>
+        </div>
+        <div className="sage-computer-connect">
+          <div className="sage-computer-connect__hero">
+            <div className="sage-computer-connect__orb" aria-hidden="true">
+              <span>Connected Computer</span>
+            </div>
+            <div className="sage-computer-connect__copy">
+              <span className={`sage-computer-connect__status${myComputerStatus.id === 'online' ? ' sage-computer-connect__status--online' : ''}`}>
+                {myComputerStatus.id === 'online' ? 'Online and ready' : myComputerStatus.label}
+              </span>
+              <strong>Default local capability for Sage.</strong>
+              <p>
+                Browser, files, shell, screenshots, personal channels, and local models stay on the selected computer.
+                Sage can use them only through the governed runtime when you ask.
+              </p>
+            </div>
+          </div>
+          <div className="sage-computer-connect__capabilities" aria-label="Included local capabilities">
+            {['Browser', 'Files', 'Shell', 'Screenshots', 'Personal apps', 'Telegram/WhatsApp', 'Local AI'].map((label) => (
+              <span key={label}>{label}</span>
+            ))}
+          </div>
+          <div className="sage-computer-connect__state">
+            <div>
+              <span>Status</span>
+              <strong>{myComputerStatus.label}</strong>
+            </div>
+            <div>
+              <span>Trust</span>
+              <strong>{trustSummary.trustLabel}</strong>
+            </div>
+            <div>
+              <span>Last seen</span>
+              <strong>{trustSummary.lastSeenLabel}</strong>
+            </div>
+          </div>
+          <details className="sage-computer-connect__config">
+            <summary>Connection details</summary>
+            <p>
+              {selectedGateway
+                ? `${normalDeviceTitle} · ${normalDeviceLine}. Use Manage only for reconnecting, revoking access, manual setup, or diagnostics.`
+                : 'Connection details are only needed for setup or troubleshooting. Normal use starts from the connect button.'}
+            </p>
+          </details>
+        </div>
 
-        <WorkstationSurfaceStatGrid>
-          <WorkstationSurfaceStat
-            label="State"
-            value={<DataBadge tone={myComputerStatus.tone}>{myComputerStatus.label}</DataBadge>}
-            hint={myComputerStatus.detail}
-          />
-          <WorkstationSurfaceStat
-            label="Last seen"
-            value={trustSummary.lastSeenLabel}
-            hint={trustSummary.lastConnectedLabel}
-          />
-          <WorkstationSurfaceStat
-            label="Trust"
-            value={trustSummary.trustLabel}
-            hint="One revocable trust decision for local work; not a per-tool checklist"
-          />
-        </WorkstationSurfaceStatGrid>
+        {!diagnosticsSectionVisible ? (
+          <div className="gateway-computer-sheet__footer">
+            <AppButton
+              type="button"
+              tone="ghost"
+              onClick={() => {
+                router.push(`/w/${encodeURIComponent(workspaceId)}/sage`);
+              }}
+            >
+              Not now
+            </AppButton>
+            <AppButton
+              type="button"
+              onClick={() => {
+                setManageOpen(true);
+              }}
+            >
+              {selectedGateway ? 'Manage computer' : 'Connect a computer'}
+            </AppButton>
+          </div>
+        ) : null}
 
         {diagnosticsSectionVisible ? (
           <FormSection
           title="What Sage can use on the connected computer"
           description="Capability groups from the selected computer, shown without protocol or token detail."
         >
+          {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
+          {errorMessage ? <WorkstationSurfaceNotice tone="danger">{errorMessage}</WorkstationSurfaceNotice> : null}
           <WorkstationSurfaceList>
             {myComputerCapabilities.map((capability) => (
               <WorkstationSurfaceListItem
@@ -1925,55 +1963,7 @@ export function WorkstationGatewayOperatorPane({
             })}
           </WorkstationSurfaceList>
         ) : null}
-      </WorkstationSurfaceCard>
-
-      {!expandedDetailVisible ? (
-        <WorkstationSurfaceCard
-          title="Agent computer map"
-          description="Connected computers give agent surfaces one default local access layer; approvals are reserved for risky actions."
-        >
-          <WorkstationSurfaceList>
-            <WorkstationSurfaceListItem
-              title="Sage"
-              subtitle="Main agent"
-              description={
-                selectedGateway
-                  ? `${trustSummary.deviceLabel} · ${myComputerStatus.detail} Destructive changes, external sends, payments, account changes, and raw terminal commands still pause.`
-                  : 'No local computer is connected to the main agent.'
-              }
-              actions={(
-                <DataBadge tone={myComputerStatus.tone}>
-                  {myComputerStatus.label}
-                </DataBadge>
-              )}
-            />
-            <WorkstationSurfaceListItem
-              title="Agent Studio"
-              subtitle={`${activeRuntimeItems.length} active computer session${activeRuntimeItems.length === 1 ? '' : 's'}`}
-              description={
-                activeRuntimeItems.length > 0
-                  ? 'Studio agents with live local, cloud, or self-hosted computer sessions appear in Activity.'
-                  : 'Studio agents are not attached to a live computer session right now.'
-              }
-              actions={(
-                <DataBadge tone={activeRuntimeItems.length > 0 ? 'success' : 'neutral'}>
-                  {activeRuntimeItems.length > 0 ? 'Active' : 'None'}
-                </DataBadge>
-              )}
-            />
-            <WorkstationSurfaceListItem
-              title="Approvals"
-              subtitle={`${approvalsPendingCount} waiting`}
-              description="Risky local actions pause here instead of failing silently."
-              actions={(
-                <DataBadge tone={approvalsPendingCount > 0 ? 'warning' : 'success'}>
-                  {approvalsPendingCount > 0 ? 'Approval needed' : 'Clear'}
-                </DataBadge>
-              )}
-            />
-          </WorkstationSurfaceList>
-        </WorkstationSurfaceCard>
-      ) : null}
+      </section>
 
       <CommandSheet
         open={manageOpen}

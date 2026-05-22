@@ -149,7 +149,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'tasks',
-    label: 'Work',
+    label: 'Tasks',
     segment: 'tasks',
     legacySegments: ['heartbeat'],
     destinationId: 'sage',

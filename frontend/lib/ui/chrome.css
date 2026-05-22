@@ -843,16 +843,12 @@ textarea {
 
 .sage-work-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: var(--app-space-5);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--app-space-3);
   padding: var(--app-space-5);
   border: 1px solid color-mix(in srgb, var(--app-border-subtle) 84%, transparent);
   border-radius: calc(var(--app-radius-xl) + 2px);
-  background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--app-bg-panel) 92%, var(--app-accent-soft) 8%) 0%,
-      color-mix(in srgb, var(--app-surface-inset) 88%, var(--app-bg-panel) 12%) 100%);
+  background: color-mix(in srgb, var(--app-bg-panel) 92%, var(--app-surface-inset) 8%);
   box-shadow: var(--app-shadow-panel);
 }
 
@@ -884,6 +880,35 @@ textarea {
   flex-wrap: wrap;
   gap: var(--app-space-2);
   margin-top: var(--app-space-2);
+}
+
+.sage-task-empty-state {
+  display: grid;
+  justify-items: start;
+  gap: var(--app-space-3);
+  padding: var(--app-space-6);
+  border: 1px solid color-mix(in srgb, var(--app-border-subtle) 84%, transparent);
+  border-radius: calc(var(--app-radius-xl) + 2px);
+  background: color-mix(in srgb, var(--app-bg-panel) 92%, var(--app-surface-inset) 8%);
+  box-shadow: var(--app-shadow-panel);
+}
+
+.sage-task-empty-state h3 {
+  margin: 0;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-sans);
+  font-size: var(--app-font-18);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.sage-task-empty-state p {
+  max-width: 44rem;
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: var(--line-height-normal);
 }
 
 .sage-work-hero__metrics {
@@ -1035,6 +1060,11 @@ textarea {
 .sage-task-lane__items {
   display: grid;
   gap: var(--app-space-2);
+}
+
+.sage-task-list {
+  display: grid;
+  gap: var(--app-space-3);
 }
 
 .sage-task-row {
@@ -3630,21 +3660,6 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
   gap: 10px;
 }
 
-.app-chat-thinking-row::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
-  transform: translateX(-120%);
-}
-
-.app-chat-thinking-row--streaming::after {
-  opacity: 1;
-  animation: sage-thinking-row-sheen 2.6s ease-in-out infinite;
-}
-
 .app-chat-thinking-row--dimmed,
 .app-chat-system-row--dimmed {
   opacity: 0.4;
@@ -3678,38 +3693,13 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
 }
 
 .app-chat-thinking-row__pulse {
-  position: relative;
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text-primary) 90%, var(--text-secondary) 10%);
-  opacity: 0.86;
-  box-shadow:
-    0 0 10px 2px color-mix(in srgb, var(--text-primary) 18%, transparent),
-    0 0 24px 4px color-mix(in srgb, var(--text-secondary) 12%, transparent);
-  flex: 0 0 auto;
+  display: none;
 }
 
-.app-chat-thinking-row__pulse::before,
-.app-chat-thinking-row__pulse::after {
-  content: '';
-  position: absolute;
-  inset: -6px;
-  border-radius: inherit;
-  border: 1px solid color-mix(in srgb, var(--text-primary) 16%, transparent);
-  opacity: 0;
-}
-
-.app-chat-thinking-row--streaming .app-chat-thinking-row__pulse {
-  animation: sage-thinking-orb-pulse 1.35s ease-in-out infinite;
-}
-
-.app-chat-thinking-row--streaming .app-chat-thinking-row__pulse::before {
-  animation: sage-thinking-orb-ring 1.9s ease-out infinite;
-}
-
-.app-chat-thinking-row--streaming .app-chat-thinking-row__pulse::after {
-  animation: sage-thinking-orb-ring 1.9s ease-out 0.55s infinite;
+.app-chat-thinking-row--streaming .app-chat-thinking-row__label,
+.app-chat-thinking-row--streaming .app-chat-thinking-row__activity,
+.app-chat-system-row--running .app-chat-system-row__primary {
+  animation: sage-thinking-text-glow 1.7s ease-in-out infinite;
 }
 
 .app-chat-thinking-row__activity,
@@ -3882,46 +3872,16 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
   overflow-wrap: anywhere;
 }
 
-@keyframes sage-thinking-orb-pulse {
+@keyframes sage-thinking-text-glow {
   0%,
   100% {
-    transform: scale(0.92);
-    opacity: 0.62;
-    box-shadow:
-      0 0 8px 1px color-mix(in srgb, var(--text-primary) 14%, transparent),
-      0 0 18px 2px color-mix(in srgb, var(--text-secondary) 10%, transparent);
+    opacity: 0.72;
+    text-shadow: 0 0 0 transparent;
   }
 
   50% {
-    transform: scale(1.08);
     opacity: 1;
-    box-shadow:
-      0 0 14px 3px color-mix(in srgb, var(--text-primary) 24%, transparent),
-      0 0 34px 7px color-mix(in srgb, var(--text-secondary) 14%, transparent);
-  }
-}
-
-@keyframes sage-thinking-orb-ring {
-  0% {
-    transform: scale(0.35);
-    opacity: 0.58;
-  }
-
-  100% {
-    transform: scale(1.9);
-    opacity: 0;
-  }
-}
-
-@keyframes sage-thinking-row-sheen {
-  0%,
-  38% {
-    transform: translateX(-120%);
-  }
-
-  74%,
-  100% {
-    transform: translateX(120%);
+    text-shadow: 0 0 5px color-mix(in srgb, currentColor 34%, transparent);
   }
 }
 
@@ -3974,27 +3934,15 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
 }
 
 .app-chat-live-trace__orb {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 80%, white 20%);
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 24%, transparent);
-  flex: 0 0 auto;
-  animation: sage-thinking-orb-pulse 1.3s ease-in-out infinite;
+  display: none;
 }
 
 .app-chat-live-trace--complete .app-chat-live-trace__orb {
-  background: var(--color-success);
-  animation: none;
-  opacity: 0.9;
-  box-shadow: 0 0 14px 1px color-mix(in srgb, var(--color-success) 18%, transparent);
+  display: none;
 }
 
 .app-chat-live-trace--failed .app-chat-live-trace__orb {
-  background: var(--color-danger);
-  animation: none;
-  opacity: 0.92;
-  box-shadow: 0 0 12px 1px color-mix(in srgb, var(--color-danger) 18%, transparent);
+  display: none;
 }
 
 .app-chat-live-trace__copy {
@@ -4010,6 +3958,10 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
   font-weight: var(--app-weight-medium);
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+
+.app-chat-live-trace--running .app-chat-live-trace__title {
+  animation: sage-thinking-text-glow 1.7s ease-in-out infinite;
 }
 
 .app-chat-live-trace__meta {
@@ -5555,12 +5507,7 @@ textarea.app-field.app-chat-composer__textarea:focus-visible {
 }
 
 .app-chat-composer__busy-orb {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: currentColor;
-  box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 28%, transparent);
-  animation: app-chat-busy-orb 1.15s ease-in-out infinite;
+  display: none;
 }
 
 @keyframes app-chat-busy-orb {
@@ -15793,7 +15740,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
 
 .sage-computer-connect__state {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: var(--app-space-2);
 }
 
@@ -17892,6 +17839,52 @@ body.theme-light .sage-integrations-nav__bucket--active {
   .app-studio-shell .studio-template-card {
     aspect-ratio: auto;
   }
+}
+
+.gateway-computer-sheet {
+  align-self: start;
+  justify-self: center;
+  width: min(calc(100% - 48px), 1080px);
+  height: fit-content;
+  min-height: 0;
+  margin: clamp(56px, 12vh, 140px) auto 0;
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--app-border-subtle) 88%, transparent);
+  border-radius: var(--app-radius-xl);
+  background: color-mix(in srgb, var(--app-bg-panel) 92%, white 8%);
+  box-shadow: var(--app-shadow-panel);
+}
+
+.gateway-computer-sheet__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+  margin-bottom: var(--app-space-4);
+}
+
+.gateway-computer-sheet__header h2 {
+  margin: 0;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-sans);
+  font-size: var(--app-font-18);
+  font-weight: var(--app-weight-semibold);
+  line-height: var(--line-height-tight);
+  letter-spacing: 0;
+}
+
+.gateway-computer-sheet__header p {
+  margin: var(--app-space-1) 0 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: var(--line-height-normal);
+}
+
+.gateway-computer-sheet__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--app-space-2);
+  margin-top: 18px;
 }
 
 .gateway-operator-pane .app-surface-card {

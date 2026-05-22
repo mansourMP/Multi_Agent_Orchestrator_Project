@@ -37,6 +37,20 @@ function normalizeStepStatus(value: unknown): 'running' | 'done' | 'error' {
   return 'running';
 }
 
+function normalizeToolResultStatus(value: unknown): 'running' | 'done' | 'error' {
+  const normalized = readString(value).toLowerCase();
+  if (['done', 'complete', 'completed', 'success', 'succeeded'].includes(normalized)) {
+    return 'done';
+  }
+  if (['running', 'queued', 'waiting', 'waiting_approval', 'waiting-for-approval', 'pending'].includes(normalized)) {
+    return 'running';
+  }
+  if (['error', 'failed', 'failure', 'blocked', 'denied', 'offline', 'degraded'].includes(normalized)) {
+    return 'error';
+  }
+  return 'done';
+}
+
 function fileActionLabel(label: string, fallback: string): string {
   const lower = `${label} ${fallback}`.toLowerCase();
   if (lower.includes('read')) {
@@ -270,7 +284,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   }
 
   if (eventType === 'tool.result') {
-    const status = readString(data.status).toLowerCase() === 'error' ? 'error' : 'done';
+    const status = normalizeToolResultStatus(data.status);
     const toolName = readString(data.tool_name) || readString(data.name) || 'Tool';
     const input = toolInputRecord(data);
     const command = readString(input.command) || readString(input.cmd) || readString(data.command);
@@ -280,6 +294,13 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
     const combined = `${toolName} ${command} ${query} ${path}`;
     if (isShellToolName(toolName, command)) {
+      if (status === 'running') {
+        return [{
+          type: 'exec_started',
+          id,
+          command: result || command || 'Running shell',
+        }];
+      }
       return [{
         type: 'exec_result',
         id,
@@ -298,6 +319,13 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       }];
     }
     if (isSearchLabel(combined)) {
+      if (status === 'running') {
+        return [{
+          type: 'web_search_started',
+          id,
+          query: query || result || 'Searching web',
+        }];
+      }
       return [{
         type: 'web_search_result',
         id,
@@ -391,7 +419,9 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
 
   if (eventType === 'artifact.created') {
     const mimeType = readString(data.mime_type) || readString(data.mimeType);
-    if (mimeType.startsWith('image/')) {
+    const artifactKind = readString(data.kind).toLowerCase();
+    const artifactTitle = `${readString(data.title)} ${readString(data.label)}`.toLowerCase();
+    if (mimeType.startsWith('image/') || artifactKind.includes('screenshot') || artifactTitle.includes('screenshot')) {
       const artifactId = readString(data.artifact_id)
         || readString(data.artifactId)
         || readString(payload.item_id)
@@ -399,7 +429,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       return [{
         type: 'screenshot_captured',
         id: eventId('artifact', artifactId || payload.item_id, fallbackIndex),
-        caption: readString(data.title) || readString(data.label) || 'Image artifact captured',
+        caption: readString(data.title) || readString(data.label) || 'Screenshot captured',
         artifactId,
         width: readNumber(data.width),
         height: readNumber(data.height),

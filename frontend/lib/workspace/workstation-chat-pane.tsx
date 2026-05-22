@@ -211,11 +211,11 @@ function compactCreditEstimateLabel(estimate: ComposerPreRunCostEstimate): strin
 }
 
 function formatTitlebarCreditCount(value: number): string {
-  const rounded = Math.max(0, Math.round(value));
+  const rounded = Math.max(0, Math.floor(value));
   if (rounded >= 1_000_000) {
     return `${(rounded / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
   }
-  if (rounded >= 10_000) {
+  if (rounded >= 100_000) {
     return `${Math.round(rounded / 1_000)}K`;
   }
   return rounded.toLocaleString();
@@ -1408,11 +1408,13 @@ export function WorkstationChatPane() {
         connected: true,
       };
     }
-    const selectedProviderLabel = providerSummaryLabel({
-      provider: selectedProviderRecord,
-      providerLabel: selectedProviderContext.providerLabel,
-      modelLabel: selectedProviderContext.modelLabel,
-    }) || readString(selectedProviderContext.providerLabel);
+    const selectedProviderLabel = selectedModelOption.uiSection === 'empyralis'
+      ? `${selectedModelOption.label} · Empyralis credits`
+      : providerSummaryLabel({
+          provider: selectedProviderRecord,
+          providerLabel: selectedProviderContext.providerLabel,
+          modelLabel: selectedProviderContext.modelLabel,
+        }) || readString(selectedProviderContext.providerLabel);
     if (selectedProviderRecord) {
       const ready = providerReadyForChat(selectedProviderRecord, {
         gatewayToolingOnline,
@@ -1442,6 +1444,8 @@ export function WorkstationChatPane() {
     selectedProviderRecord,
     selectedProviderContext.modelLabel,
     selectedProviderContext.providerLabel,
+    selectedModelOption.label,
+    selectedModelOption.uiSection,
   ]);
   const runtimeStatus = useMemo(() => {
     const providerPath = providerPathLabel(selectedProviderRecord);
@@ -1922,16 +1926,14 @@ export function WorkstationChatPane() {
     if (hostedCreditState.monthlyCreditCap <= 0) {
       return '0 credits';
     }
-    const availableCredits = Math.max(hostedCreditState.totalAvailableCredits, hostedCreditState.monthlyCreditsRemaining);
-    return `${formatTitlebarCreditCount(availableCredits)} credits`;
-  }, [hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining, hostedCreditState.totalAvailableCredits]);
+    return `${formatTitlebarCreditCount(hostedCreditState.monthlyCreditsRemaining)} credits`;
+  }, [hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining]);
   const titlebarCreditDetail = useMemo(() => {
     if (hostedCreditState.monthlyCreditCap <= 0) {
       return 'Empyralis credits are not active for this workspace.';
     }
-    const availableCredits = Math.max(hostedCreditState.totalAvailableCredits, hostedCreditState.monthlyCreditsRemaining);
-    return `${Math.round(availableCredits).toLocaleString()} credits available. ${Math.round(hostedCreditState.monthlyCreditsRemaining).toLocaleString()} of ${Math.round(hostedCreditState.monthlyCreditCap).toLocaleString()} monthly refresh credits remaining.`;
-  }, [hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining, hostedCreditState.totalAvailableCredits]);
+    return `${Math.floor(hostedCreditState.monthlyCreditsRemaining).toLocaleString()} credits remaining. ${Math.floor(hostedCreditState.monthlyCreditCap).toLocaleString()} monthly refresh credits; ${Math.floor(hostedCreditState.creditBalanceCredits).toLocaleString()} rollover credits.`;
+  }, [hostedCreditState.creditBalanceCredits, hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining]);
   const recentThreadTitleById = useMemo(() => {
     const lookup = new Map<string, string>();
     for (const item of recentThreads) {
@@ -2745,6 +2747,14 @@ export function WorkstationChatPane() {
             )
           : connectorSetupNotice,
       );
+      if (normalizedResponse.status !== 'incomplete') {
+        services.queryClient.invalidate('chat:billing-summary');
+        services.queryClient.invalidate('chat:credit-usage-history');
+        await Promise.allSettled([
+          refreshBillingSummary(),
+          refreshCreditUsageHistory(),
+        ]);
+      }
     } catch (error) {
       updatePendingUserMessage(null);
       const normalizedError = error instanceof WorkstationClientError ? error : null;
@@ -2877,7 +2887,7 @@ export function WorkstationChatPane() {
                   <div className="workstation-titlebar__credits-card">
                     <div className="workstation-titlebar__credits-balance-row">
                       <span>Credits</span>
-                      <strong>{formatTitlebarCreditCount(Math.max(hostedCreditState.totalAvailableCredits, hostedCreditState.monthlyCreditsRemaining))}</strong>
+                      <strong>{formatTitlebarCreditCount(hostedCreditState.monthlyCreditsRemaining)}</strong>
                     </div>
                     <div className="workstation-titlebar__credits-balance-row">
                       <span>Monthly refresh</span>

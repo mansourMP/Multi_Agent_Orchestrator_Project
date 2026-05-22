@@ -678,7 +678,7 @@ function defaultPersonalChannelDraft(channel: PersonalCommunicationChannel): Per
 
 function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord | null): string {
   if (hostedSageAi.allowed && hostedProviderCard) {
-    return `${hostedProviderCard.label} hosted by Empyralis · ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left`;
+    return `${hostedAiTierLabel(hostedProviderCard)} · Empyralis credits · ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left`;
   }
   if (hostedSageAi.allowed) {
     return `${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left · hosted runtime not configured`;
@@ -703,8 +703,7 @@ function hostedCreditUsageLabel(hostedSageAi: HostedSageAiSnapshot): string {
 }
 
 function hostedProviderDetailLabel(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord): string {
-  const modelLabel = providerActiveModelLabel(hostedProviderCard);
-  return `Empyralis credits · ${hostedProviderCard.label} · ${modelLabel} · ${hostedCreditUsageLabel(hostedSageAi)}`;
+  return `${hostedAiTierLabel(hostedProviderCard)} · Empyralis credits · ${hostedCreditUsageLabel(hostedSageAi)}`;
 }
 
 function fallbackProviderCatalog(): ProviderSnapshot[] {
@@ -907,6 +906,19 @@ function providerActiveModelLabel(record: ProviderCardRecord | null): string {
     || 'No model selected';
 }
 
+function hostedAiTierLabel(record: ProviderCardRecord | null): string {
+  const metadata = profileMetadataRecord(record?.profile ?? null);
+  const explicitTier = readString(metadata.chat_model_tier || metadata.public_tier || metadata.model_tier).toLowerCase();
+  const selectedModel = readString(record?.profile?.model || record?.provider.defaultModel).toLowerCase();
+  if (explicitTier === 'light' || selectedModel === 'light' || selectedModel.includes('flash')) {
+    return 'Light AI';
+  }
+  if (explicitTier === 'max' || selectedModel === 'max' || selectedModel.includes('reasoner')) {
+    return 'Max AI';
+  }
+  return 'Pro AI';
+}
+
 function providerPathLabel(record: ProviderCardRecord): string {
   const providerId = readString(record.provider.id).toLowerCase();
   const credentialPlane = readString(record.provider.credentialPlane).toLowerCase();
@@ -964,7 +976,7 @@ function providerActiveSummaryLabel(
     return 'No AI model active';
   }
   if (activeProviderCard === hostedProviderCard && !explicitSelectedProfile) {
-    return `${activeProviderCard.label} through Empyralis credits`;
+    return `${hostedAiTierLabel(activeProviderCard)} through Empyralis credits`;
   }
   return `${activeProviderCard.label} through ${providerPathLabel(activeProviderCard)}`;
 }
@@ -3397,7 +3409,7 @@ export function WorkstationSageConnectorsPane({
     const showInlineKey = !isHostedSection && providerPickerDraftId === record.id && !pickerConnected && requiresSecret;
     const busy = busyCardId === record.id;
     const displayLabel = sectionId === 'hosted'
-      ? 'Empyralis default model'
+      ? hostedAiTierLabel(record)
       : record.provider.id === 'ollama_cloud'
         ? 'Ollama Cloud'
         : record.provider.id === 'ollama'

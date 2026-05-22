@@ -139,7 +139,7 @@ export type CodexChatEvent =
   | { type: 'assistant_delta'; id: string; delta: string; provider: string | null; model: string | null }
   | { type: 'assistant_final'; id: string; content: string; isIncomplete: boolean; provider: string | null; model: string | null }
   | { type: 'tool_started'; id: string; name: string }
-  | { type: 'tool_result'; id: string; name: string | null; status: 'done' | 'error'; result: string | null }
+  | { type: 'tool_result'; id: string; name: string | null; status: 'running' | 'done' | 'error'; result: string | null }
   | { type: 'exec_started'; id: string; command: string }
   | { type: 'exec_delta'; id: string; output: string }
   | { type: 'exec_result'; id: string; status: 'done' | 'error'; output: string | null; exitCode: number | null }

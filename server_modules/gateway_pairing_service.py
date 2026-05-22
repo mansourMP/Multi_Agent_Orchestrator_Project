@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
@@ -7,6 +8,7 @@ from fastapi import HTTPException
 from server_modules import (
     activity_ledger_service,
     auth,
+    execution_mode_policy,
     gateway_activity_service,
     gateway_state_repository,
 )
@@ -16,6 +18,10 @@ DEFAULT_GATEWAY_PAIRING_TTL_SECONDS = 15 * 60
 MIN_GATEWAY_PAIRING_TTL_SECONDS = 60
 MAX_GATEWAY_PAIRING_TTL_SECONDS = 60 * 60
 MAX_PENDING_GATEWAY_PAIRING_INTENTS = 3
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_gateway_pairing_ttl_seconds(ttl_seconds: Optional[int] = None) -> int:
@@ -28,6 +34,33 @@ def _normalize_gateway_pairing_ttl_seconds(ttl_seconds: Optional[int] = None) ->
     )
 
 
+def _runtime_access_pairing_metadata(
+    *,
+    runtime_access_mode: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    autonomous_agent_setup_warning_acknowledged: bool = False,
+) -> Dict[str, Any]:
+    source = dict(metadata or {})
+    raw_mode = runtime_access_mode or source.get("runtime_access_mode") or source.get("execution_mode")
+    resolved_mode = execution_mode_policy.normalize_runtime_access_mode(raw_mode)
+    warning_acknowledged = bool(
+        autonomous_agent_setup_warning_acknowledged
+        or source.get("autonomous_agent_setup_warning_acknowledged") is True
+    )
+    if resolved_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE and not warning_acknowledged:
+        raise ValueError("Autonomous Agent setup warning must be acknowledged before pairing this runtime.")
+    out = {
+        "runtime_access_mode": resolved_mode,
+        "runtime_access_label": execution_mode_policy.public_runtime_access_label(resolved_mode),
+    }
+    setup_warning = execution_mode_policy.runtime_access_setup_warning(resolved_mode)
+    if setup_warning:
+        out["runtime_access_setup_warning"] = setup_warning
+        out["autonomous_agent_setup_warning_acknowledged"] = True
+        out["autonomous_agent_setup_warning_acknowledged_at"] = _utc_now_iso()
+    return out
+
+
 def create_gateway_pairing_intent(
     *,
     tenant_id: str,
@@ -37,9 +70,18 @@ def create_gateway_pairing_intent(
     display_name: Optional[str] = None,
     platform: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    runtime_access_mode: Optional[str] = None,
+    autonomous_agent_setup_warning_acknowledged: bool = False,
     trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     merged_metadata = dict(metadata or {})
+    merged_metadata.update(
+        _runtime_access_pairing_metadata(
+            runtime_access_mode=runtime_access_mode,
+            metadata=metadata,
+            autonomous_agent_setup_warning_acknowledged=autonomous_agent_setup_warning_acknowledged,
+        )
+    )
     if trace_id:
         merged_metadata["trace_id"] = trace_id
     return gateway_state_repository.create_pairing_intent(

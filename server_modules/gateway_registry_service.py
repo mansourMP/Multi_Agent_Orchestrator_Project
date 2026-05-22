@@ -7,7 +7,7 @@ from urllib.parse import quote
 from fastapi import HTTPException
 from fastapi import Request
 
-from server_modules import auth, gateway_state_repository, session_service
+from server_modules import auth, execution_mode_policy, gateway_state_repository, session_service
 
 
 DEFAULT_GATEWAY_SESSION_TTL_SECONDS = 15 * 60
@@ -92,6 +92,10 @@ def _gateway_connection_payload(registration: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def gateway_registration_public_payload(registration: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = dict(registration.get("metadata") or {})
+    runtime_access_mode = execution_mode_policy.normalize_runtime_access_mode(
+        metadata.get("runtime_access_mode")
+    )
     return {
         "gateway_id": str(registration.get("gateway_id") or ""),
         "device_id": str(registration.get("device_id") or ""),
@@ -102,7 +106,13 @@ def gateway_registration_public_payload(registration: Dict[str, Any]) -> Dict[st
         "device_trust_state": str(registration.get("device_trust_state") or ""),
         "display_name": registration.get("display_name"),
         "platform": registration.get("platform"),
-        "metadata": dict(registration.get("metadata") or {}),
+        "metadata": metadata,
+        "runtime_access_mode": runtime_access_mode,
+        "runtime_access_label": execution_mode_policy.public_runtime_access_label(runtime_access_mode),
+        "runtime_access_setup_warning": execution_mode_policy.runtime_access_setup_warning(runtime_access_mode),
+        "autonomous_agent_setup_warning_acknowledged": bool(
+            metadata.get("autonomous_agent_setup_warning_acknowledged")
+        ),
         "capabilities": list(registration.get("capabilities") or []),
         "journal_cursor": int(registration.get("journal_cursor") or 0),
         "checkpoint_cursor": int(registration.get("checkpoint_cursor") or 0),

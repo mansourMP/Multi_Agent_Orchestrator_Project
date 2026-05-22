@@ -120,6 +120,20 @@ def normalize_runtime_access_mode(value: Any, *, execution_mode: Any = None) -> 
     return runtime_access_mode_for_execution_mode(execution_mode)
 
 
+def public_runtime_access_label(value: Any) -> str:
+    mode = normalize_runtime_access_mode(value)
+    if mode == FULL_RUNTIME_ACCESS_MODE:
+        return FULL_RUNTIME_ACCESS_PUBLIC_LABEL
+    return "Default"
+
+
+def runtime_access_setup_warning(value: Any) -> str | None:
+    mode = normalize_runtime_access_mode(value)
+    if mode == FULL_RUNTIME_ACCESS_MODE:
+        return str(MODE_DEFINITIONS["full_access"].get("setup_warning") or "").strip() or None
+    return None
+
+
 def mode_contract_for_target(target_id: str) -> List[Dict[str, Any]]:
     target = str(target_id or "").strip()
     allowed = set(RUNTIME_TARGET_MODE_MATRIX.get(target, ("default", "approval_mode")))

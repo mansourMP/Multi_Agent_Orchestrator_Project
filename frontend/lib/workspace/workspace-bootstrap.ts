@@ -43,7 +43,19 @@ export type WorkspaceBootstrapRuntimeTarget = {
   approvalMode?: string | null;
   defaultRuntimeAccessMode?: string | null;
   supportsFullAccess?: boolean;
+  executionModes?: WorkspaceBootstrapExecutionMode[];
   sampleAttachmentLabel?: string | null;
+};
+
+export type WorkspaceBootstrapExecutionMode = {
+  id: string;
+  label: string;
+  description?: string | null;
+  available: boolean;
+  runtimeAccessMode?: string | null;
+  requiresExplicitSelection?: boolean;
+  requiresOwnerApproval?: boolean;
+  setupWarning?: string | null;
 };
 
 export type WorkspaceBootstrapRuntime = {
@@ -145,6 +157,23 @@ function parseRuntimeTargets(value: unknown): WorkspaceBootstrapRuntimeTarget[] 
         approvalMode: typeof entry.approvalMode === 'string' ? entry.approvalMode : null,
         defaultRuntimeAccessMode: typeof entry.defaultRuntimeAccessMode === 'string' ? entry.defaultRuntimeAccessMode : null,
         supportsFullAccess: Boolean(entry.supportsFullAccess),
+        executionModes: Array.isArray(entry.executionModes)
+          ? entry.executionModes.flatMap((mode) => {
+              if (!isRecord(mode) || typeof mode.id !== 'string' || !mode.id.trim()) {
+                return [];
+              }
+              return [{
+                id: mode.id.trim(),
+                label: typeof mode.label === 'string' && mode.label.trim() ? mode.label.trim() : mode.id.trim(),
+                description: typeof mode.description === 'string' ? mode.description : null,
+                available: Boolean(mode.available),
+                runtimeAccessMode: typeof mode.runtimeAccessMode === 'string' ? mode.runtimeAccessMode : null,
+                requiresExplicitSelection: Boolean(mode.requiresExplicitSelection),
+                requiresOwnerApproval: Boolean(mode.requiresOwnerApproval),
+                setupWarning: typeof mode.setupWarning === 'string' ? mode.setupWarning : null,
+              }];
+            })
+          : [],
         sampleAttachmentLabel: typeof entry.sampleAttachmentLabel === 'string' ? entry.sampleAttachmentLabel : null,
       },
     ];

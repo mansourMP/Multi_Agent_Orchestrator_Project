@@ -369,6 +369,8 @@ class GatewayPairingIntentCreateRequest(BaseModel):
     )
     display_name: Optional[str] = None
     platform: Optional[str] = None
+    runtime_access_mode: Optional[str] = None
+    autonomous_agent_setup_warning_acknowledged: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -535,6 +537,8 @@ async def create_gateway_pairing_intent(
             display_name=payload.display_name,
             platform=payload.platform,
             metadata=payload.metadata,
+            runtime_access_mode=payload.runtime_access_mode,
+            autonomous_agent_setup_warning_acknowledged=payload.autonomous_agent_setup_warning_acknowledged,
         )
     except ValueError as exc:
         detail = str(exc)

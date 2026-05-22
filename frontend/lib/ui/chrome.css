@@ -17937,6 +17937,27 @@ body.theme-light .sage-integrations-nav__bucket--active {
   background: color-mix(in srgb, var(--accent-subtle) 20%, var(--app-surface-inset) 80%);
 }
 
+.gateway-runtime-access-warning {
+  display: grid;
+  gap: var(--app-space-2);
+  margin-top: var(--app-space-3);
+}
+
+.gateway-runtime-access-warning__ack {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--app-space-2);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: var(--line-height-normal);
+  cursor: pointer;
+}
+
+.gateway-runtime-access-warning__ack input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
 .gateway-pairing-command-card {
   display: grid;
   gap: var(--app-space-3);

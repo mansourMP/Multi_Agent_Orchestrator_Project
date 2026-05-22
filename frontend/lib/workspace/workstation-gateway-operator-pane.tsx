@@ -12,6 +12,7 @@ import {
   FormGrid,
   FormInput,
   FormReadout,
+  FormSelect,
   FormSection,
 } from '@/lib/ui/form-controls';
 import {
@@ -32,6 +33,10 @@ type GatewayRegistrationRecord = Record<string, unknown> & {
   connection_status?: string | null;
   device_trust_state?: string | null;
   capabilities?: unknown;
+  runtime_access_mode?: string | null;
+  runtime_access_label?: string | null;
+  runtime_access_setup_warning?: string | null;
+  autonomous_agent_setup_warning_acknowledged?: boolean | null;
   last_seen_at?: string | null;
 };
 
@@ -154,6 +159,8 @@ type WorkspaceRuntimeSessionsPayload = Record<string, unknown> & {
 type PairingDraft = {
   displayName: string;
   platform: string;
+  runtimeAccessMode: 'default_guarded' | 'full_access';
+  autonomousAgentWarningAccepted: boolean;
 };
 
 type ChannelDraft = {
@@ -378,12 +385,28 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
   }
   switch (String(session.runtime_binding ?? '').trim().toLowerCase()) {
     case 'my_computer_agent':
-      return 'Device access';
+      return 'Default';
     case 'cloud_computer_agent':
       return 'Autopilot capable';
     default:
       return 'Policy guarded';
   }
+}
+
+function runtimeAccessModeToken(value: unknown): 'default_guarded' | 'full_access' {
+  const token = readString(value, '').toLowerCase().replace(/[\s-]+/g, '_');
+  if (token === 'full_access' || token === 'autonomous_agent') {
+    return 'full_access';
+  }
+  return 'default_guarded';
+}
+
+function gatewayRuntimeAccessLabel(gateway: GatewayRegistrationRecord | null): string {
+  const explicit = readString(gateway?.runtime_access_label, '');
+  if (explicit) {
+    return explicit;
+  }
+  return runtimeAccessModeToken(gateway?.runtime_access_mode) === 'full_access' ? 'Autonomous Agent' : 'Default';
 }
 
 function browserTakeoverStatus(session: GatewayBrowserSessionRecord): string {
@@ -614,9 +637,9 @@ const GATEWAY_MODE_SUMMARIES = [
     description: 'Sage can use ordinary local context automatically. Risky actions always wait for approval.',
   },
   {
-    title: 'Device access',
-    subtitle: 'Autonomous',
-    description: 'Lets Sage continue through bounded local steps while destructive, external, and security actions remain gated.',
+    title: 'Autonomous Agent',
+    subtitle: 'Dedicated hardware',
+    description: 'Lets Sage operate a dedicated runtime without Empyralis action-by-action approval prompts.',
   },
 ] as const;
 
@@ -1026,6 +1049,8 @@ export function WorkstationGatewayOperatorPane({
   const [pairingDraft, setPairingDraft] = useState<PairingDraft>({
     displayName: 'My device',
     platform: 'macos',
+    runtimeAccessMode: 'default_guarded',
+    autonomousAgentWarningAccepted: false,
   });
   const [pairingIntent, setPairingIntent] = useState<GatewayPairingIntentRecord | null>(null);
   const [loadingRegistrations, setLoadingRegistrations] = useState(true);
@@ -1047,6 +1072,26 @@ export function WorkstationGatewayOperatorPane({
       gateways.find((gateway) => String(gateway.gateway_id ?? '').trim() === String(selectedGatewayId ?? '').trim()) ?? null,
     [gateways, selectedGatewayId],
   );
+  const gatewayRuntimeTarget = useMemo(
+    () => bootstrap.runtime.runtimeTargets.find((target) => target.id === 'local_companion') ?? null,
+    [bootstrap.runtime.runtimeTargets],
+  );
+  const gatewayExecutionModes = useMemo(
+    () => (gatewayRuntimeTarget?.executionModes ?? []).filter((mode) => mode.available),
+    [gatewayRuntimeTarget?.executionModes],
+  );
+  const autonomousAgentMode = useMemo(
+    () => gatewayExecutionModes.find((mode) =>
+      mode.id === 'full_access' || runtimeAccessModeToken(mode.runtimeAccessMode) === 'full_access') ?? null,
+    [gatewayExecutionModes],
+  );
+  const defaultAccessMode = useMemo(
+    () => gatewayExecutionModes.find((mode) =>
+      mode.id === 'default' || runtimeAccessModeToken(mode.runtimeAccessMode) === 'default_guarded') ?? null,
+    [gatewayExecutionModes],
+  );
+  const autonomousAgentAvailable = Boolean(autonomousAgentMode || gatewayRuntimeTarget?.supportsFullAccess);
+  const activeGatewayRuntimeAccessLabel = selectedGateway ? gatewayRuntimeAccessLabel(selectedGateway) : 'Not paired';
 
   const selectedGatewayCapabilities = useMemo(
     () => gatewayCapabilityLabels(selectedGateway),
@@ -1301,6 +1346,10 @@ export function WorkstationGatewayOperatorPane({
   }, [selectedGatewayId]);
 
   async function handleCreatePairingIntent() {
+    if (pairingDraft.runtimeAccessMode === 'full_access' && !pairingDraft.autonomousAgentWarningAccepted) {
+      setErrorMessage('Confirm Autonomous Agent mode before creating this computer connection.');
+      return;
+    }
     setBusyActionKey('pairing');
     setErrorMessage(null);
     try {
@@ -1316,6 +1365,10 @@ export function WorkstationGatewayOperatorPane({
             workspace_id: workspaceId,
             display_name: pairingDraft.displayName.trim() || undefined,
             platform: pairingDraft.platform || undefined,
+            runtime_access_mode: pairingDraft.runtimeAccessMode,
+            autonomous_agent_setup_warning_acknowledged: pairingDraft.runtimeAccessMode === 'full_access'
+              ? pairingDraft.autonomousAgentWarningAccepted
+              : false,
           }),
         },
       );
@@ -1634,7 +1687,7 @@ export function WorkstationGatewayOperatorPane({
     : approvalsPendingCount > 0
       ? 'Needs approval'
       : selectedGateway
-        ? 'Device access'
+        ? activeGatewayRuntimeAccessLabel
         : 'No active computer session';
   const selectedTakeoverStatus = browserItems[0]
     ? browserTakeoverStatus(browserItems[0])
@@ -1765,6 +1818,10 @@ export function WorkstationGatewayOperatorPane({
               <strong>{trustSummary.trustLabel}</strong>
             </div>
             <div>
+              <span>Mode</span>
+              <strong>{activeGatewayRuntimeAccessLabel}</strong>
+            </div>
+            <div>
               <span>Last seen</span>
               <strong>{trustSummary.lastSeenLabel}</strong>
             </div>
@@ -1828,7 +1885,7 @@ export function WorkstationGatewayOperatorPane({
         {manualSetupVisible ? (
           <FormSection
           title={`Connect or reconnect a ${pairingDeviceLabel}`}
-          description="Create a short-lived connection request when the selected computer is not connected, reconnecting, or revoked."
+          description="Choose how much autonomy this computer has before creating the short-lived connection request."
         >
           <FormGrid columns="repeat(2, minmax(0, 1fr))">
             <FormField label="Device label" hint="Human-readable name shown in operator surfaces.">
@@ -1847,11 +1904,64 @@ export function WorkstationGatewayOperatorPane({
               label="Platform"
               value={`${humanizeToken(pairingDraft.platform, 'Detected device')} · auto-detected`}
             />
+            <FormField
+              label="Runtime mode"
+              hint={pairingDraft.runtimeAccessMode === 'full_access'
+                ? 'For dedicated agent hardware. Empyralis will not ask per action.'
+                : 'For personal computers. Risky actions can still ask for approval.'}
+            >
+              <FormSelect
+                value={pairingDraft.runtimeAccessMode}
+                onChange={(event) => {
+                  const nextMode = runtimeAccessModeToken(event.currentTarget.value);
+                  setPairingDraft((current) => ({
+                    ...current,
+                    runtimeAccessMode: nextMode,
+                    autonomousAgentWarningAccepted: nextMode === 'full_access'
+                      ? current.autonomousAgentWarningAccepted
+                      : false,
+                  }));
+                  setPairingIntent(null);
+                }}
+              >
+                <option value="default_guarded">{defaultAccessMode?.label || 'Default'}</option>
+                <option value="full_access" disabled={!autonomousAgentAvailable}>
+                  {autonomousAgentMode?.label || 'Autonomous Agent'}
+                </option>
+              </FormSelect>
+            </FormField>
+            <FormReadout
+              label="Current mode"
+              value={selectedGateway ? activeGatewayRuntimeAccessLabel : 'Not paired'}
+            />
           </FormGrid>
+          {pairingDraft.runtimeAccessMode === 'full_access' ? (
+            <div className="gateway-runtime-access-warning">
+              <WorkstationSurfaceNotice tone="warning">
+                {autonomousAgentMode?.setupWarning
+                  || 'Autonomous Agent lets the AI operate this dedicated runtime without Empyralis asking for each action. Only enable it for hardware or cloud compute you intentionally dedicate to the agent.'}
+              </WorkstationSurfaceNotice>
+              <label className="gateway-runtime-access-warning__ack">
+                <input
+                  type="checkbox"
+                  checked={pairingDraft.autonomousAgentWarningAccepted}
+                  onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    setPairingDraft((current) => ({
+                      ...current,
+                      autonomousAgentWarningAccepted: checked,
+                    }));
+                    setPairingIntent(null);
+                  }}
+                />
+                <span>I understand this computer will run without Empyralis approval prompts.</span>
+              </label>
+            </div>
+          ) : null}
           <div className="settings-action-row">
             <WorkstationActionButton
               type="button"
-              disabled={busyActionKey === 'pairing'}
+              disabled={busyActionKey === 'pairing' || (pairingDraft.runtimeAccessMode === 'full_access' && !pairingDraft.autonomousAgentWarningAccepted)}
               onClick={() => {
               void handleCreatePairingIntent();
             }}
@@ -1876,7 +1986,7 @@ export function WorkstationGatewayOperatorPane({
                 description={mode.description}
                 actions={(
                   <DataBadge tone={mode.title === 'Default' ? 'success' : 'warning'}>
-                    {mode.title === 'Default' ? 'Safe default' : 'Owner approved'}
+                    {mode.title === 'Default' ? 'Safe default' : 'Owner enabled'}
                   </DataBadge>
                 )}
               />
@@ -1908,6 +2018,12 @@ export function WorkstationGatewayOperatorPane({
               <FormReadout
                 label="Platform"
                 value={humanizeToken(pairingIntent.platform, 'Unknown')}
+              />
+              <FormReadout
+                label="Runtime mode"
+                value={runtimeAccessModeToken(readRecord(pairingIntent.metadata).runtime_access_mode) === 'full_access'
+                  ? 'Autonomous Agent'
+                  : 'Default'}
               />
             </FormGrid>
             <div className="gateway-pairing-command-card">
@@ -2004,7 +2120,6 @@ export function WorkstationGatewayOperatorPane({
               onClick={() => {
                 setManageOpen(false);
                 setManualSetupVisible(true);
-                void handleCreatePairingIntent();
               }}
             >
               {busyActionKey === 'pairing' ? 'Creating connection…' : selectedGateway ? 'Reconnect' : 'Connect a computer'}
@@ -2028,9 +2143,6 @@ export function WorkstationGatewayOperatorPane({
               onClick={() => {
                 setManageOpen(false);
                 setManualSetupVisible(true);
-                if (!pairingIntent) {
-                  void handleCreatePairingIntent();
-                }
               }}
             >
               Manual setup

@@ -158,6 +158,20 @@ def _runtime_target_status_reason(target: Dict[str, Any]) -> str:
 def _runtime_target_payload(item: Dict[str, Any]) -> Dict[str, Any]:
     target_id = str(item.get("target_id") or "").strip()
     trust_profile = _runtime_target_trust_profile(item)
+    execution_modes = [
+        {
+            "id": str(mode.get("id") or "").strip(),
+            "label": str(mode.get("label") or "").strip() or str(mode.get("id") or "").strip(),
+            "description": str(mode.get("description") or "").strip() or None,
+            "available": bool(mode.get("available")),
+            "runtimeAccessMode": str(mode.get("runtime_access_mode") or "").strip() or None,
+            "requiresExplicitSelection": bool(mode.get("requires_explicit_selection")),
+            "requiresOwnerApproval": bool(mode.get("requires_owner_approval")),
+            "setupWarning": str(mode.get("setup_warning") or "").strip() or None,
+        }
+        for mode in list(item.get("execution_modes") or [])
+        if isinstance(mode, dict) and str(mode.get("id") or "").strip()
+    ]
     return {
         "id": target_id,
         "label": str(item.get("label") or "").strip() or target_id,
@@ -176,6 +190,7 @@ def _runtime_target_payload(item: Dict[str, Any]) -> Dict[str, Any]:
         "approvalMode": str(trust_profile.get("approval_mode") or "").strip() or None,
         "defaultRuntimeAccessMode": str(item.get("default_runtime_access_mode") or "").strip() or None,
         "supportsFullAccess": bool(item.get("supports_full_access")),
+        "executionModes": execution_modes,
         "sampleAttachmentLabel": str(item.get("sample_attachment_label") or "").strip() or None,
     }
 

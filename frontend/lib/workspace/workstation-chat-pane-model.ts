@@ -991,7 +991,7 @@ export function chatPermissionModeLabel(
     return 'Autopilot';
   }
   if (effectiveMode === 'device_access') {
-    return 'Device access';
+    return 'Default';
   }
   return 'Default';
 }
@@ -1008,7 +1008,7 @@ export function chatPermissionModeDetail(
     return 'Runs autonomously inside an isolated Empyralis computer with activity proof.';
   }
   if (effectiveMode === 'device_access') {
-    return 'Uses your computer with red-line approvals still enabled.';
+    return 'Uses your computer with sensitive actions still approval-gated.';
   }
   return runtimeTrustZone === 'user_owned_local'
     ? 'Asks before sensitive actions on your computer.'

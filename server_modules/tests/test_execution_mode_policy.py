@@ -58,6 +58,18 @@ class ExecutionModePolicyTests(unittest.TestCase):
                     execution_mode_policy.FULL_RUNTIME_ACCESS_MODE,
                 )
 
+    def test_runtime_access_public_helpers_keep_internal_mode_stable(self) -> None:
+        self.assertEqual(
+            execution_mode_policy.public_runtime_access_label("full_access"),
+            "Autonomous Agent",
+        )
+        self.assertIn(
+            "without Empyralis asking for each action",
+            execution_mode_policy.runtime_access_setup_warning("Autonomous Agent") or "",
+        )
+        self.assertEqual(execution_mode_policy.public_runtime_access_label("default_guarded"), "Default")
+        self.assertIsNone(execution_mode_policy.runtime_access_setup_warning("default_guarded"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,7 @@ from server_modules import (
     runtime_attachment_service,
     secret_redaction_service,
     session_service,
+    thread_service,
     virtual_computer_runtime,
 )
 from server_modules.capability_registry import canonical_capability_id, resolve_capability
@@ -591,6 +592,36 @@ def _session_view(session_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _runtime_session_with_correlation(
+    runtime_session: Dict[str, Any],
+    *,
+    payload: Optional[Dict[str, Any]] = None,
+    session_record: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    session = dict(runtime_session or {})
+    source = _dict(payload)
+    record = _dict(session_record)
+    for key in (
+        "tenant_id",
+        "workspace_id",
+        "thread_id",
+        "user_id",
+        "run_id",
+        "trace_id",
+        "request_id",
+        "capability_id",
+        "action_id",
+        "runtime_node_id",
+        "runtime_profile_id",
+    ):
+        if _text(session.get(key)):
+            continue
+        candidate = _text(source.get(key)) or _text(record.get(key))
+        if candidate:
+            session[key] = candidate
+    return session
+
+
 async def _create_runtime_session(
     *,
     tenant_id: str,
@@ -909,6 +940,25 @@ async def _emit_tool_result(
         for key, value in result_metadata.items()
         if value not in (None, "", [], {})
     }
+    trace_data = {
+        "status": _text(status),
+        "summary": _text(summary),
+        "artifact_ids": list(artifact_ids or []),
+    }
+    for key, value in {
+        "tool_name": resolved_capability_id,
+        "capability_id": resolved_capability_id,
+        "connector_id": "hardware_runtime",
+        "runtime_session_id": resolved_session_id,
+        "runtime_target": resolved_runtime_target,
+        "request_id": resolved_request_id,
+        "action_id": resolved_action_id,
+    }.items():
+        token = _text(value)
+        if token:
+            trace_data[key] = token
+    if result_metadata:
+        trace_data["metadata"] = result_metadata
     await agent_trace_service.emit_tool_result(
         trace_context,
         tool_call_id=tool_call_id,
@@ -925,17 +975,108 @@ async def _emit_tool_result(
         action_id=resolved_action_id or None,
         metadata=result_metadata,
     )
+    await _append_hardware_transcript_event(
+        session,
+        event_type="tool.result",
+        data=trace_data,
+        tool_call_id=tool_call_id,
+    )
 
 
-async def _emit_artifacts(trace_context: Any, artifact_ids: List[str], capability_id: str) -> None:
+async def _append_hardware_transcript_event(
+    runtime_session: Dict[str, Any],
+    *,
+    event_type: str,
+    data: Optional[Dict[str, Any]] = None,
+    tool_call_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+    approval_id: Optional[str] = None,
+) -> None:
+    session = _dict(runtime_session)
+    thread_id = _text(session.get("thread_id"))
+    if not thread_id:
+        return
+    payload: Dict[str, Any] = {
+        "event_type": _text(event_type),
+        "data": _dict(data),
+    }
+    if tool_call_id:
+        payload["tool_call_id"] = _text(tool_call_id)
+    if artifact_id:
+        payload["artifact_id"] = _text(artifact_id)
+    if approval_id:
+        payload["approval_id"] = _text(approval_id)
+    try:
+        await thread_service.append_assistant_turn_transcript_event(
+            tenant_id=_text(session.get("tenant_id")) or "default",
+            workspace_id=_text(session.get("workspace_id")) or "default",
+            thread_id=thread_id,
+            event_name="trace",
+            payload=payload,
+            request_id=_text(session.get("request_id")) or None,
+            trace_id=_text(session.get("trace_id")) or None,
+            run_id=_text(session.get("run_id")) or None,
+        )
+    except Exception:
+        return
+
+
+async def _emit_artifacts(
+    trace_context: Any,
+    artifact_ids: List[str],
+    capability_id: str,
+    *,
+    runtime_session: Optional[Dict[str, Any]] = None,
+) -> None:
     for artifact_id in artifact_ids:
+        title = f"{capability_id} artifact"
         await agent_trace_service.emit_artifact_created(
             trace_context,
             artifact_id=artifact_id,
             kind="hardware_action",
-            title=f"{capability_id} artifact",
+            title=title,
             mime_type=None,
         )
+        if isinstance(runtime_session, dict):
+            await _append_hardware_transcript_event(
+                runtime_session,
+                event_type="artifact.created",
+                data={
+                    "kind": "hardware_action",
+                    "title": title,
+                    "artifact_id": artifact_id,
+                    "capability_id": capability_id,
+                },
+                artifact_id=artifact_id,
+            )
+
+
+async def _emit_approval_resolved(
+    trace_context: Any,
+    runtime_session: Dict[str, Any],
+    *,
+    approval_id: str,
+    decision: str,
+    actor: str,
+    note: Optional[str],
+) -> None:
+    await agent_trace_service.emit_approval_resolved(
+        trace_context,
+        approval_id=approval_id,
+        decision=decision,
+        actor=_text(actor) or "user",
+        note=note,
+    )
+    await _append_hardware_transcript_event(
+        runtime_session,
+        event_type="approval.resolved",
+        data={
+            "approval_id": approval_id,
+            "decision": decision,
+            "actor": _text(actor) or "user",
+        },
+        approval_id=approval_id,
+    )
 
 
 def _artifact_ids_from_artifact_records(items: Any) -> List[str]:
@@ -1011,11 +1152,16 @@ async def _find_runtime_hardware_approval(
     metadata = _dict(record.get("metadata"))
     if _text(metadata.get("runtime_session_binding")) != HARDWARE_RUNTIME_SESSION_BINDING:
         return None
-    runtime_session = _session_view(_text(record.get("session_id")), metadata)
+    request_payload = _runtime_session_raw_approval_payload(metadata, token)
+    runtime_session = _runtime_session_with_correlation(
+        _session_view(_text(record.get("session_id")), metadata),
+        payload=request_payload,
+        session_record=record,
+    )
     approval = _runtime_session_approval_by_id(runtime_session, token)
     if not isinstance(approval, dict):
         return None
-    request_payload = _runtime_session_raw_approval_payload(metadata, token) or _dict(approval.get("request_payload"))
+    request_payload = request_payload or _dict(approval.get("request_payload"))
     return {
         "approval": approval,
         "request_payload": request_payload,
@@ -1158,11 +1304,12 @@ async def resolve_runtime_hardware_approval(
         thread_id=thread_id,
         run_id=run_id,
     )
-    await agent_trace_service.emit_approval_resolved(
+    await _emit_approval_resolved(
         trace_context,
+        runtime_session,
         approval_id=approval_id,
         decision=resolved_decision,
-        actor=_text(actor) or "user",
+        actor=actor,
         note=note,
     )
 
@@ -1305,7 +1452,11 @@ async def record_gateway_approval_resolution(
     if not session_id:
         return result
     session_record = await session_service.get_session(session_id) or {}
-    runtime_session = _session_view(session_id, _dict(session_record.get("metadata")) or request_payload)
+    runtime_session = _runtime_session_with_correlation(
+        _session_view(session_id, _dict(session_record.get("metadata")) or request_payload),
+        payload=request_payload,
+        session_record=session_record,
+    )
     trace_id = _text(request_payload.get("trace_id")) or _text(runtime_session.get("trace_id"))
     run_id = _text(request_payload.get("run_id")) or _text(runtime_session.get("run_id")) or session_id
     trace_context = await _resolve_trace_context(
@@ -1319,11 +1470,12 @@ async def record_gateway_approval_resolution(
     approval_id = _text(approval.get("approval_id"))
     decision = _text(approval.get("decision") or result.get("status")) or "resolved"
     if approval_id:
-        await agent_trace_service.emit_approval_resolved(
+        await _emit_approval_resolved(
             trace_context,
+            runtime_session,
             approval_id=approval_id,
             decision=decision,
-            actor=_text(actor) or "user",
+            actor=actor,
             note=note,
         )
     status = _text(result.get("status")).lower()
@@ -1332,7 +1484,7 @@ async def record_gateway_approval_resolution(
     if status in {"executed", "approved"} and isinstance(result.get("execution"), dict):
         execution = _dict(result.get("execution"))
         artifact_ids = _artifact_ids_from_execution(execution)
-        await _emit_artifacts(trace_context, artifact_ids, capability_id)
+        await _emit_artifacts(trace_context, artifact_ids, capability_id, runtime_session=runtime_session)
         summary = _execution_summary(capability_id, execution)
         runtime_session = await _update_runtime_session(
             runtime_session,
@@ -1398,7 +1550,11 @@ async def record_self_hosted_command_completion(completion: Dict[str, Any]) -> D
     if not session_id:
         return completion
     session_record = await session_service.get_session(session_id) or {}
-    runtime_session = _session_view(session_id, _dict(session_record.get("metadata")) or command_payload)
+    runtime_session = _runtime_session_with_correlation(
+        _session_view(session_id, _dict(session_record.get("metadata")) or command_payload),
+        payload=command_payload,
+        session_record=session_record,
+    )
     status = _text(completion.get("status")).lower()
     terminal_state = "ready" if status == "completed" else "failed"
     result_payload = _dict(completion.get("result_payload") or command.get("result_payload"))
@@ -1419,7 +1575,7 @@ async def record_self_hosted_command_completion(completion: Dict[str, Any]) -> D
         thread_id=_text(command_payload.get("thread_id")) or _text(runtime_session.get("thread_id")) or None,
         run_id=_text(command_payload.get("run_id")) or _text(runtime_session.get("run_id")) or session_id,
     )
-    await _emit_artifacts(trace_context, artifact_ids, capability_id)
+    await _emit_artifacts(trace_context, artifact_ids, capability_id, runtime_session=runtime_session)
     runtime_session = await _update_runtime_session(
         runtime_session,
         state=terminal_state,
@@ -1683,7 +1839,7 @@ async def _execute_cloud_computer_action(
         }
 
     artifact_ids = _runtime_artifact_ids_from_response(action_response)
-    await _emit_artifacts(trace_context, artifact_ids, capability_id)
+    await _emit_artifacts(trace_context, artifact_ids, capability_id, runtime_session=runtime_session)
     cost = _runtime_cost_metadata(action_response, runtime_choice=runtime_choice, provider_id=provider_id)
     summary = _cloud_computer_summary(capability_id, virtual_action, action_response)
     runtime_session = await _update_runtime_session(
@@ -2360,7 +2516,12 @@ async def execute_hardware_action(
         }
 
     artifact_ids = _artifact_ids_from_execution(execution)
-    await _emit_artifacts(resolved_trace_context, artifact_ids, resolved_capability_id)
+    await _emit_artifacts(
+        resolved_trace_context,
+        artifact_ids,
+        resolved_capability_id,
+        runtime_session=runtime_session,
+    )
     summary = _execution_summary(resolved_capability_id, execution)
     runtime_session = await _update_runtime_session(
         runtime_session,

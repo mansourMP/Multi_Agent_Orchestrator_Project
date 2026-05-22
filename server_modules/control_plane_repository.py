@@ -9224,6 +9224,135 @@ def _local_upsert_agent_turn(
         }
 
 
+def _agent_turn_matches_correlation(
+    turn: Dict[str, Any],
+    *,
+    request_id: Optional[str],
+    trace_id: Optional[str],
+    run_id: Optional[str],
+) -> bool:
+    metadata = _decode_json_object(turn.get("metadata"))
+    request_token = str(request_id or "").strip()
+    trace_token = str(trace_id or "").strip()
+    run_token = str(run_id or "").strip()
+    if request_token and request_token in {
+        str(turn.get("request_id") or "").strip(),
+        str(metadata.get("request_id") or "").strip(),
+        str(metadata.get("client_request_id") or "").strip(),
+    }:
+        return True
+    if trace_token and trace_token == str(metadata.get("trace_id") or "").strip():
+        return True
+    if run_token and run_token in {
+        str(turn.get("run_id") or "").strip(),
+        str(metadata.get("run_id") or "").strip(),
+    }:
+        return True
+    return False
+
+
+def _append_transcript_event_to_metadata(metadata: Any, transcript_event: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _decode_json_object(metadata)
+    events = [
+        dict(item)
+        for item in list(payload.get("transcript_events") or [])
+        if isinstance(item, dict)
+    ]
+    events.append(dict(transcript_event))
+    payload["transcript_events"] = events[-200:]
+    return payload
+
+
+async def append_agent_turn_transcript_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    thread_id: str,
+    transcript_event: Dict[str, Any],
+    request_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(transcript_event, dict) or not transcript_event:
+        return None
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_thread_id = str(thread_id or "").strip()
+    if not resolved_thread_id:
+        return None
+    if not any(str(item or "").strip() for item in (request_id, trace_id, run_id)):
+        return None
+    now = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            key = _local_agent_thread_key(resolved_tenant_id, resolved_workspace_id, resolved_thread_id)
+            with _LOCAL_AGENT_THREAD_LOCK:
+                turns = list(_LOCAL_AGENT_TURNS.get(key, []))
+                for turn in reversed(turns):
+                    if str(turn.get("role") or "").lower() != "assistant":
+                        continue
+                    if not _agent_turn_matches_correlation(
+                        turn,
+                        request_id=request_id,
+                        trace_id=trace_id,
+                        run_id=run_id,
+                    ):
+                        continue
+                    turn["metadata"] = _append_transcript_event_to_metadata(
+                        turn.get("metadata"),
+                        transcript_event,
+                    )
+                    turn["updated_at"] = _utc_now_iso()
+                    return {"turn": dict(turn)}
+            return None
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM agent_turns
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND thread_id = $3
+              AND role = 'assistant'
+            ORDER BY created_at DESC
+            LIMIT 50
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_thread_id,
+        )
+        matched: Optional[Dict[str, Any]] = None
+        for row in rows:
+            candidate = dict(row)
+            if _agent_turn_matches_correlation(
+                candidate,
+                request_id=request_id,
+                trace_id=trace_id,
+                run_id=run_id,
+            ):
+                matched = candidate
+                break
+        if matched is None:
+            return None
+        metadata = _append_transcript_event_to_metadata(matched.get("metadata"), transcript_event)
+        updated = await connection.fetchrow(
+            """
+            UPDATE agent_turns
+            SET metadata = $4::jsonb,
+                updated_at = $5::timestamptz
+            WHERE id = $1
+              AND tenant_id = $2
+              AND workspace_id = $3
+            RETURNING *
+            """,
+            str(matched.get("id") or "").strip(),
+            resolved_tenant_id,
+            resolved_workspace_id,
+            _to_json(metadata, default={}),
+            now,
+        )
+    return {"turn": dict(updated)} if updated is not None else None
+
+
 async def ensure_agent_thread(
     *,
     thread_id: str,

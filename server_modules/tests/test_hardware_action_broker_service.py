@@ -918,6 +918,10 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
                 "server_modules.hardware_action_broker_service.agent_trace_service.resume_trace",
                 new=AsyncMock(return_value=_trace()),
             ),
+            patch(
+                "server_modules.hardware_action_broker_service.thread_service.append_assistant_turn_transcript_event",
+                new=AsyncMock(return_value={"turn": {"id": "turn-assistant"}}),
+            ) as append_transcript,
         ):
             payload = await broker.record_self_hosted_command_completion(completion)
 
@@ -934,6 +938,14 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emit_result.await_args.kwargs["request_id"], "req-self-host")
         self.assertEqual(emit_result.await_args.kwargs["action_id"], "shell.exec")
         self.assertEqual(emit_result.await_args.kwargs["args_preview"]["command"], "uptime")
+        self.assertEqual(append_transcript.await_count, 2)
+        transcript_payloads = [call.kwargs["payload"] for call in append_transcript.await_args_list]
+        self.assertEqual(transcript_payloads[0]["event_type"], "artifact.created")
+        self.assertEqual(transcript_payloads[0]["artifact_id"], "artifact-self")
+        self.assertEqual(transcript_payloads[1]["event_type"], "tool.result")
+        self.assertEqual(transcript_payloads[1]["data"]["status"], "completed")
+        self.assertEqual(transcript_payloads[1]["data"]["runtime_session_id"], "hrs-self-host")
+        self.assertNotIn("arguments", transcript_payloads[1]["data"])
 
     async def test_gateway_approval_execution_updates_original_runtime_session(self) -> None:
         _create_patch, extend_patch, _started_patch, result_patch, artifact_patch, _approval_patch = self._session_patches()
@@ -1000,6 +1012,10 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
                 "server_modules.hardware_action_broker_service.agent_trace_service.emit_approval_resolved",
                 new=AsyncMock(return_value="evt-approval-resolved"),
             ) as emit_resolved,
+            patch(
+                "server_modules.hardware_action_broker_service.thread_service.append_assistant_turn_transcript_event",
+                new=AsyncMock(return_value={"turn": {"id": "turn-assistant"}}),
+            ) as append_transcript,
         ):
             payload = await broker.record_gateway_approval_resolution(result, actor="user-1")
 
@@ -1016,6 +1032,13 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emit_result.await_args.kwargs["request_id"], "req-gateway")
         self.assertEqual(emit_result.await_args.kwargs["action_id"], "shell.exec")
         self.assertEqual(emit_result.await_args.kwargs["args_preview"]["command"], "whoami")
+        self.assertEqual(append_transcript.await_count, 3)
+        transcript_payloads = [call.kwargs["payload"] for call in append_transcript.await_args_list]
+        self.assertEqual(transcript_payloads[0]["event_type"], "approval.resolved")
+        self.assertEqual(transcript_payloads[1]["event_type"], "artifact.created")
+        self.assertEqual(transcript_payloads[2]["event_type"], "tool.result")
+        self.assertEqual(transcript_payloads[2]["data"]["status"], "completed")
+        self.assertEqual(transcript_payloads[2]["data"]["runtime_target"], "user_device_gateway")
 
     async def test_cloud_computer_runtime_approval_resume_executes_stored_request(self) -> None:
         request_payload = {

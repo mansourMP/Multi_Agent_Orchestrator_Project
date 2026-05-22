@@ -347,6 +347,40 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(mock_execute.await_args.kwargs["request_id"], "req-1")
 
     @patch("server_modules.runtime_runtime_api._ensure_advanced_features_access")
+    @patch("server_modules.runtime_runtime_api.hardware_action_broker_service.stop_hardware_action")
+    def test_runtime_hardware_action_stop_route_stops_for_workspace_operator(self, mock_stop, mock_features_gate):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/hardware/actions/stop")]
+        mock_stop.return_value = {"status": "terminated", "runtime_session": {"session_id": "hrs-1"}}
+
+        result = self._run_async(
+            handler(
+                runtime_runtime_api.RuntimeHardwareActionStopPayload(
+                    workspace_id="default",
+                    run_id="run-1",
+                    runtime_target="empyralis_cloud_computer",
+                    thread_id="thread-1",
+                    request_id="req-1",
+                    target_request_id="req-tool-1",
+                    session_id="hrs-1",
+                    reason="certification_stop",
+                ),
+                current_user=self._current_user(),
+            )
+        )
+
+        self.assertEqual(result["status"], "terminated")
+        mock_features_gate.assert_called_once_with("default")
+        self.assertEqual(mock_stop.await_args.kwargs["tenant_id"], "default")
+        self.assertEqual(mock_stop.await_args.kwargs["workspace_id"], "default")
+        self.assertEqual(mock_stop.await_args.kwargs["runtime_target"], "empyralis_cloud_computer")
+        self.assertEqual(mock_stop.await_args.kwargs["thread_id"], "thread-1")
+        self.assertEqual(mock_stop.await_args.kwargs["request_id"], "req-1")
+        self.assertEqual(mock_stop.await_args.kwargs["target_request_id"], "req-tool-1")
+        self.assertEqual(mock_stop.await_args.kwargs["session_id"], "hrs-1")
+
+    @patch("server_modules.runtime_runtime_api._ensure_advanced_features_access")
     @patch("server_modules.runtime_runtime_api.hardware_action_broker_service.execute_hardware_action")
     def test_runtime_hardware_action_route_blocks_non_operator(self, mock_execute, mock_features_gate):
         app = _FakeApp()

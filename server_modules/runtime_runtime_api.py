@@ -131,6 +131,21 @@ class RuntimeHardwareActionExecutePayload(BaseModel):
     cost_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class RuntimeHardwareActionStopPayload(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    runtime_target: str = "user_device_gateway"
+    gateway_id: Optional[str] = None
+    node_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    target_request_id: Optional[str] = None
+    request_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    session_id: Optional[str] = None
+    reason: Optional[str] = None
+    timeout_seconds: Optional[int] = Field(default=None, ge=1, le=120)
+
+
 class RuntimeHeartbeatPayload(BaseModel):
     session_token: Optional[str] = None
     instance_id: Optional[str] = None
@@ -1259,6 +1274,38 @@ def register_runtime_routes(app) -> None:
                 execution_mode=payload.execution_mode,
                 require_approval=payload.require_approval,
                 cost_metadata=payload.cost_metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/runtime/hardware/actions/stop", dependencies=[Depends(require_api_key)])
+    async def stop_runtime_hardware_action(
+        payload: RuntimeHardwareActionStopPayload,
+        current_user: Dict[str, Any] = Depends(require_api_key),
+    ):
+        workspace_id = enforce_workspace_access(
+            current_user,
+            payload.workspace_id,
+            minimum_role="member",
+        )
+        _ensure_runtime_action_operator(current_user, workspace_id)
+        _ensure_advanced_features_access(workspace_id)
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        try:
+            return await hardware_action_broker_service.stop_hardware_action(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                run_id=payload.run_id,
+                runtime_target=payload.runtime_target,
+                gateway_id=payload.gateway_id,
+                node_id=payload.node_id,
+                trace_id=payload.trace_id,
+                target_request_id=payload.target_request_id,
+                request_id=payload.request_id,
+                thread_id=payload.thread_id,
+                reason=payload.reason,
+                session_id=payload.session_id,
+                timeout_seconds=payload.timeout_seconds,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error

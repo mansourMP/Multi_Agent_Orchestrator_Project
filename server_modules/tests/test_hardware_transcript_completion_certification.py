@@ -236,6 +236,55 @@ class HardwareTranscriptCompletionCertificationTests(unittest.IsolatedAsyncioTes
         self.assertEqual(events[0]["payload"]["artifact_id"], "artifact-cloud-cert")
         self.assertEqual(events[1]["payload"]["data"]["runtime_target"], "empyralis_cloud_computer")
 
+    async def test_stop_cancel_patches_original_assistant_turn_for_replay(self) -> None:
+        with (
+            patch("server_modules.control_plane_repository._scoped_connection", new=_local_control_plane_connection),
+            patch("server_modules.hardware_action_broker_service.session_service.extend_session", new=AsyncMock(return_value=None)),
+            patch("server_modules.hardware_action_broker_service.gateway_state_repository.get_gateway_registration", return_value={
+                "id": "gw-cert",
+                "gateway_id": "gw-cert",
+                "workspace_id": "ws-cert",
+                "tenant_id": "tenant-cert",
+                "device_trust_state": "trusted",
+                "status": "active",
+                "capabilities": ["shell.execute"],
+            }),
+            patch("server_modules.hardware_action_broker_service.gateway_protocol_service.gateway_connection_is_live", return_value=True),
+            patch("server_modules.hardware_action_broker_service.gateway_execution_service.interrupt_tool_via_gateway", new=AsyncMock(return_value={
+                "gateway_id": "gw-cert",
+                "request_id": "stop-request-cert",
+                "target_request_id": "chat-request-cert",
+                "interrupted": True,
+            })),
+            patch("server_modules.hardware_action_broker_service.agent_trace_service.resume_trace", new=AsyncMock(return_value=_trace(self.trace_id, self.thread_id, self.run_id))),
+            patch("server_modules.hardware_action_broker_service.agent_trace_service.emit_tool_result", new=AsyncMock(return_value="evt-stop")),
+        ):
+            await self._seed_assistant_turn()
+            payload = await broker.stop_hardware_action(
+                tenant_id="tenant-cert",
+                workspace_id="ws-cert",
+                runtime_target="user_device_gateway",
+                gateway_id="gw-cert",
+                run_id=self.run_id,
+                trace_id=self.trace_id,
+                request_id="chat-request-cert",
+                thread_id=self.thread_id,
+                target_request_id="chat-request-cert",
+                reason="certification_stop",
+                session_id="hrs-stop-cert",
+            )
+            events = await self._assistant_transcript_events()
+
+        self.assertEqual(payload["status"], "terminated")
+        self.assertEqual(payload["runtime_session"]["thread_id"], self.thread_id)
+        self.assertEqual(payload["runtime_session"]["state"], "terminated")
+        self.assertEqual([event["payload"]["event_type"] for event in events], ["tool.result"])
+        self.assertEqual(events[0]["payload"]["data"]["status"], "terminated")
+        self.assertEqual(events[0]["payload"]["data"]["runtime_target"], "user_device_gateway")
+        self.assertEqual(events[0]["payload"]["data"]["runtime_session_id"], "hrs-stop-cert")
+        self.assertNotIn("target_request_id", events[0]["payload"]["data"])
+        self.assertNotIn("request_id", events[0]["payload"]["data"])
+
 
 if __name__ == "__main__":
     unittest.main()

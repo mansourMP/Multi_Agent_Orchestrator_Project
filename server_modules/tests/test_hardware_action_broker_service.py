@@ -513,6 +513,50 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         emit_artifact.assert_not_awaited()
         emit_result.assert_awaited()
 
+    async def test_cloud_computer_passes_certification_control_metadata_to_runtime(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        cloud_runtime = _FakeCloudRuntime()
+        cloud_registry = _FakeCloudRuntimeRegistry(cloud_runtime)
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch,
+            patch(
+                "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",
+                return_value=cloud_registry,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="browser.open",
+                arguments={"url": "https://example.com"},
+                runtime_target="empyralis_cloud_computer",
+                runtime_access_mode="full_access",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-cloud-quota",
+                session_id="hrs-cloud-computer",
+                cost_metadata={
+                    "runtime_quota": {"provider_concurrency_limit": 1},
+                    "cost_quota": {"max_estimated_cost": 1.25},
+                    "computer_automation": {"provider_health": "healthy"},
+                    "ignored_user_field": {"raw": "should not reach runtime create"},
+                },
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        cloud_runtime.create_session.assert_awaited_once()
+        create_payload = cloud_runtime.create_session.await_args.args[0]
+        self.assertEqual(create_payload["runtime_quota"], {"provider_concurrency_limit": 1})
+        self.assertEqual(create_payload["cost_quota"], {"max_estimated_cost": 1.25})
+        self.assertEqual(create_payload["computer_automation"], {"provider_health": "healthy"})
+        self.assertNotIn("ignored_user_field", create_payload)
+
     async def test_cloud_computer_screenshot_streams_artifact_without_gateway(self) -> None:
         create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
         cloud_runtime = _FakeCloudRuntime()

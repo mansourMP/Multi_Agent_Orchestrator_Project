@@ -441,6 +441,15 @@ def _cloud_computer_session_persistence(cost_metadata: Optional[Dict[str, Any]])
     }
 
 
+def _cloud_computer_control_metadata(cost_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    metadata = _dict(cost_metadata)
+    return {
+        key: dict(metadata.get(key) or {})
+        for key in ("cost_quota", "runtime_quota", "computer_automation")
+        if isinstance(metadata.get(key), dict) and metadata.get(key)
+    }
+
+
 def _self_hosted_required_capabilities(capability_id: str) -> List[str]:
     if capability_id == "shell.execute":
         return ["shell.execute"]
@@ -1087,6 +1096,34 @@ async def _emit_approval_resolved(
             "actor": _text(actor) or "user",
         },
         approval_id=approval_id,
+    )
+
+
+async def _emit_hardware_stop_transcript_event(
+    runtime_session: Dict[str, Any],
+    *,
+    runtime_target: str,
+    target_request_id: Optional[str],
+    reason: Optional[str],
+) -> None:
+    session = _dict(runtime_session)
+    await _append_hardware_transcript_event(
+        session,
+        event_type="tool.result",
+        data={
+            "status": "terminated",
+            "summary": "Hardware action stopped.",
+            "tool_name": _text(session.get("capability_id")) or "tool.interrupt",
+            "capability_id": _text(session.get("capability_id")) or "tool.interrupt",
+            "connector_id": "hardware_runtime",
+            "runtime_session_id": _text(session.get("session_id")) or None,
+            "runtime_target": _text(runtime_target),
+            "request_id": _text(session.get("request_id")) or None,
+            "action_id": _text(session.get("action_id")) or "hardware.stop",
+            "target_request_id": _text(target_request_id) or None,
+            "reason": _text(reason) or "operator_requested_stop",
+        },
+        tool_call_id=_text(session.get("request_id")) or None,
     )
 
 
@@ -1761,6 +1798,7 @@ async def _execute_cloud_computer_action(
     provider_id = _text((_dict(cost_metadata).get("runtime_provider_id") or _dict(cost_metadata).get("provider_id"))) or None
     session_persistence = _cloud_computer_session_persistence(cost_metadata)
     session_mode = _text(session_persistence.get("session_mode") or session_persistence.get("mode")).lower()
+    control_metadata = _cloud_computer_control_metadata(cost_metadata)
     runtime_session_id = _text(runtime_session.get("session_id")) or _new_runtime_session_id()
     create_payload = {
         "tenant_id": _text(tenant_id) or "default",
@@ -1780,6 +1818,7 @@ async def _execute_cloud_computer_action(
         "require_session_token": False,
         "ephemeral_task": session_mode != virtual_computer_runtime.SESSION_PERSISTENCE_RESUMABLE,
         "session_persistence": session_persistence,
+        **control_metadata,
         "metadata": {
             "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
             "runtime_target": "empyralis_cloud_computer",
@@ -2584,6 +2623,7 @@ async def stop_hardware_action(
     trace_id: Optional[str] = None,
     target_request_id: Optional[str] = None,
     request_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
     reason: Optional[str] = None,
     session_id: Optional[str] = None,
     timeout_seconds: Optional[int] = None,
@@ -2634,6 +2674,9 @@ async def stop_hardware_action(
             "canonical_runtime_target": canonical_target_id,
             "runtime_fabric_target": canonical_target_id,
             "hardware_edge": _runtime_edge(canonical_target_id),
+            "tenant_id": _text(tenant_id) or "default",
+            "workspace_id": _text(workspace_id) or "default",
+            "thread_id": _text(thread_id) or None,
             "run_id": _text(run_id),
             "trace_id": resolved_trace_id,
             "request_id": resolved_request_id,
@@ -2650,6 +2693,12 @@ async def stop_hardware_action(
             audit_action="hardware_action.terminated",
             reason=_text(reason) or "operator_requested_stop",
             extra_metadata={"interrupt_request_id": resolved_request_id},
+        )
+        await _emit_hardware_stop_transcript_event(
+            session_view,
+            runtime_target=canonical_target_id,
+            target_request_id=target_request_id,
+            reason=reason,
         )
         return {
             "status": "terminated",
@@ -2716,6 +2765,9 @@ async def stop_hardware_action(
                 "canonical_runtime_target": canonical_target_id,
                 "runtime_fabric_target": canonical_target_id,
                 "hardware_edge": _runtime_edge(canonical_target_id),
+                "tenant_id": _text(tenant_id) or "default",
+                "workspace_id": _text(workspace_id) or "default",
+                "thread_id": _text(thread_id) or None,
                 "runtime_node_id": runtime_node_id,
                 "runtime_profile_id": runtime_profile_id,
                 "self_hosted_command_id": _text(command.get("id")),
@@ -2735,6 +2787,12 @@ async def stop_hardware_action(
                 audit_action="hardware_action.terminated",
                 reason=_text(reason) or "operator_requested_stop",
                 extra_metadata={"interrupt_request_id": resolved_request_id},
+            )
+            await _emit_hardware_stop_transcript_event(
+                session_view,
+                runtime_target=canonical_target_id,
+                target_request_id=target_request_id,
+                reason=reason,
             )
         return {
             "status": "terminated",
@@ -2797,6 +2855,9 @@ async def stop_hardware_action(
             "canonical_runtime_target": canonical_target_id,
             "runtime_fabric_target": canonical_target_id,
             "hardware_edge": _runtime_edge(canonical_target_id),
+            "tenant_id": _text(tenant_id) or "default",
+            "workspace_id": _text(workspace_id) or "default",
+            "thread_id": _text(thread_id) or None,
             "gateway_id": gateway_token,
             "run_id": _text(run_id),
             "trace_id": resolved_trace_id,
@@ -2814,6 +2875,12 @@ async def stop_hardware_action(
             audit_action="hardware_action.terminated",
             reason=_text(reason) or "operator_requested_stop",
             extra_metadata={"gateway_id": gateway_token, "interrupt_request_id": resolved_request_id},
+        )
+        await _emit_hardware_stop_transcript_event(
+            session_view,
+            runtime_target=canonical_target_id,
+            target_request_id=target_request_id,
+            reason=reason,
         )
     else:
         session_view = None

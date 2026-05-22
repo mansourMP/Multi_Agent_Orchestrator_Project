@@ -6,6 +6,8 @@ import uuid
 
 from server_modules import (
     agent_trace_service,
+    # Kept on the facade module for existing tests/operator monkeypatches while
+    # target execution lives in hardware_runtime_adapters.
     agent_registry_repository,
     execution_mode_policy,
     gateway_approval_service,
@@ -23,6 +25,11 @@ from server_modules import (
     virtual_computer_runtime,
 )
 from server_modules.capability_registry import resolve_capability
+from server_modules.hardware_runtime_adapters import (
+    cloud_computer_adapter,
+    gateway_adapter,
+    self_hosted_node_adapter,
+)
 
 
 HARDWARE_RUNTIME_SESSION_BINDING = "sage_hardware_action"
@@ -89,253 +96,7 @@ def _new_request_id() -> str:
 
 
 def get_cloud_computer_runtime_registry() -> virtual_computer_runtime.VirtualComputerRuntimeRegistry:
-    global _CLOUD_COMPUTER_RUNTIME_REGISTRY
-    if _CLOUD_COMPUTER_RUNTIME_REGISTRY is None:
-        _CLOUD_COMPUTER_RUNTIME_REGISTRY = virtual_computer_runtime.build_default_runtime_registry()
-    return _CLOUD_COMPUTER_RUNTIME_REGISTRY
-
-
-def _cloud_runtime_choice_for_action(capability_id: str, action_id: str, arguments: Dict[str, Any]) -> str:
-    action_token = _text(action_id).lower().replace("__", ".")
-    requested_action = _text(arguments.get("action") or arguments.get("virtual_action")).lower()
-    if capability_id == "shell.execute" or "shell" in action_token or requested_action == "run_command":
-        return virtual_computer_runtime.RUNTIME_CHOICE_VIRTUAL_CODE_SANDBOX
-    if capability_id.startswith("computer_control."):
-        return virtual_computer_runtime.RUNTIME_CHOICE_VIRTUAL_DESKTOP
-    return virtual_computer_runtime.RUNTIME_CHOICE_VIRTUAL_BROWSER
-
-
-def _cloud_computer_virtual_action(
-    *,
-    capability_id: str,
-    action_id: str,
-    arguments: Dict[str, Any],
-) -> tuple[str, Dict[str, Any], str]:
-    action_token = _text(action_id).lower().replace("__", ".")
-    requested_action = _text(arguments.get("action") or arguments.get("virtual_action")).lower()
-    requested_action = requested_action.replace("__", ".")
-    if capability_id == "screenshot.capture" or "screenshot" in action_token or requested_action in {"screenshot", "screen"}:
-        return virtual_computer_runtime.ACTION_SCREENSHOT, {}, "stream_screenshot"
-    if capability_id == "shell.execute" or requested_action in {"run_command", "shell.execute", "shell.exec"}:
-        command = _text(arguments.get("command") or arguments.get("script"))
-        return virtual_computer_runtime.ACTION_RUN_COMMAND, {"command": command}, "execute_action"
-    if capability_id == "computer_control.click" or requested_action in {"click", "computer.click"}:
-        return (
-            virtual_computer_runtime.ACTION_CLICK,
-            {
-                "x": arguments.get("x"),
-                "y": arguments.get("y"),
-                "target_text": arguments.get("target_text"),
-                "target_description": arguments.get("target_description"),
-            },
-            "execute_action",
-        )
-    if capability_id == "computer_control.type" or requested_action in {"type", "computer.type"}:
-        return (
-            virtual_computer_runtime.ACTION_TYPE,
-            {
-                "text": arguments.get("text") or arguments.get("value"),
-                "target_text": arguments.get("target_text"),
-                "target_description": arguments.get("target_description"),
-            },
-            "execute_action",
-        )
-    if capability_id == "computer_control.key" or requested_action in {"hotkey", "key", "press"}:
-        keys = arguments.get("keys") or arguments.get("key")
-        key_args = {"keys": keys} if isinstance(keys, list) else {"key": keys}
-        return virtual_computer_runtime.ACTION_HOTKEY, key_args, "execute_action"
-    if requested_action in {"scroll", "browser.scroll"}:
-        return (
-            virtual_computer_runtime.ACTION_SCROLL,
-            {
-                "delta_x": arguments.get("delta_x"),
-                "delta_y": arguments.get("delta_y"),
-            },
-            "execute_action",
-        )
-    if requested_action in {"wait", "browser.wait"}:
-        return (
-            virtual_computer_runtime.ACTION_WAIT,
-            {
-                "duration_ms": arguments.get("duration_ms"),
-                "seconds": arguments.get("seconds"),
-            },
-            "execute_action",
-        )
-    if requested_action in {"download", "download_file", "browser.download"} or "download" in action_token:
-        return (
-            virtual_computer_runtime.ACTION_DOWNLOAD_ARTIFACT,
-            {"url": arguments.get("url"), "artifact_type": arguments.get("artifact_type")},
-            "execute_action",
-        )
-    if capability_id == "browser_automation.interactive":
-        return (
-            virtual_computer_runtime.ACTION_OPEN_URL,
-            {"url": arguments.get("url") or arguments.get("start_url")},
-            "execute_action",
-        )
-    return "", {}, ""
-
-
-def _cloud_computer_approval_required(
-    *,
-    capability_id: str,
-    action_id: str,
-    virtual_action: str,
-    arguments: Dict[str, Any],
-    runtime_access_mode: str,
-    require_approval: Optional[bool],
-) -> bool:
-    if virtual_action == virtual_computer_runtime.ACTION_KILL_SWITCH:
-        return normalize_runtime_access_mode(runtime_access_mode) != FULL_RUNTIME_ACCESS_MODE
-    return _hardware_action_requires_software_approval(
-        runtime_access_mode=runtime_access_mode,
-        capability_id=capability_id,
-        action_id=action_id,
-        arguments=arguments,
-        require_approval=require_approval,
-        virtual_action=virtual_action,
-    )
-
-
-def _runtime_cost_metadata(response: Dict[str, Any], *, runtime_choice: str, provider_id: Optional[str]) -> Dict[str, Any]:
-    action_result = response.get("action_result") if isinstance(response.get("action_result"), dict) else {}
-    cost_metadata = {
-        "runtime_choice": runtime_choice,
-        "runtime_provider_id": _text(provider_id) or _text(response.get("runtime_provider_id")) or None,
-        "runtime_kind": _text(response.get("runtime_kind")) or None,
-        "cost_quota": response.get("cost_quota") if isinstance(response.get("cost_quota"), dict) else None,
-        "cost_usage": response.get("cost_usage") if isinstance(response.get("cost_usage"), dict) else None,
-        "action_cost_estimate": action_result.get("cost_estimate") if isinstance(action_result.get("cost_estimate"), dict) else None,
-    }
-    return {key: value for key, value in cost_metadata.items() if value not in (None, "", {})}
-
-
-def _cloud_computer_session_persistence(cost_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    metadata = _dict(cost_metadata)
-    requested = metadata.get("session_persistence") or metadata.get("runtime_session_persistence")
-    if isinstance(requested, dict) and requested:
-        return dict(requested)
-    return {
-        "session_mode": virtual_computer_runtime.SESSION_PERSISTENCE_EPHEMERAL,
-        "auto_terminate_on_task_complete": True,
-    }
-
-
-def _cloud_computer_control_metadata(cost_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    metadata = _dict(cost_metadata)
-    return {
-        key: dict(metadata.get(key) or {})
-        for key in ("cost_quota", "runtime_quota", "computer_automation")
-        if isinstance(metadata.get(key), dict) and metadata.get(key)
-    }
-
-
-def _self_hosted_required_capabilities(capability_id: str) -> List[str]:
-    if capability_id == "shell.execute":
-        return ["shell.execute"]
-    if capability_id.startswith("filesystem."):
-        return ["file_access"]
-    if capability_id == "browser_automation.interactive":
-        return ["browser.automation"]
-    if capability_id == "screenshot.capture" or capability_id.startswith("computer_control."):
-        return ["computer_control"]
-    return []
-
-
-def _self_hosted_capability_aliases(capability_id: str) -> set[str]:
-    if capability_id == "tool.interrupt":
-        return set()
-    if capability_id == "shell.execute":
-        return {"shell.execute", "terminal.exec", "shell", "command"}
-    if capability_id.startswith("filesystem."):
-        return {"file_access", "filesystem", "filesystem.read", "filesystem.write", "filesystem.read_write"}
-    if capability_id == "browser_automation.interactive":
-        return {"browser.automation", "browser_automation.interactive", "browser", "web"}
-    if capability_id == "screenshot.capture":
-        return {"screenshot.capture", "screenshot", "computer_control"}
-    if capability_id.startswith("computer_control."):
-        return {"computer_control", capability_id}
-    return {capability_id} if capability_id else set()
-
-
-def _self_hosted_attachment_matches_node(attachment: Dict[str, Any], node_token: str) -> bool:
-    if not node_token:
-        return True
-    candidate_values = {
-        _text(attachment.get("runtime_node_id")),
-        _text(attachment.get("runtime_id")),
-        _text(attachment.get("machine_id")),
-        _text(attachment.get("attachment_id")),
-        _text(attachment.get("runtime_profile_id")),
-        _text(attachment.get("runtime_profile_slug")),
-    }
-    return node_token in candidate_values
-
-
-def _self_hosted_capability_available(attachment: Dict[str, Any], capability_id: str) -> bool:
-    aliases = {item.lower() for item in _self_hosted_capability_aliases(capability_id)}
-    if not aliases:
-        return True
-    available = {
-        _text(item).lower()
-        for item in list(attachment.get("capabilities") or [])
-        if _text(item)
-    }
-    if not available:
-        return False
-    return bool(aliases & available)
-
-
-async def _select_self_hosted_attachment(
-    *,
-    tenant_id: str,
-    workspace_id: str,
-    node_id: Optional[str],
-    capability_id: str,
-) -> tuple[Optional[Dict[str, Any]], str]:
-    inventory = await runtime_attachment_service.list_workspace_runtime_attachments(
-        tenant_id=_text(tenant_id) or "default",
-        workspace_id=_text(workspace_id) or "default",
-    )
-    node_token = _text(node_id)
-    attachments = [
-        dict(item)
-        for item in list((inventory or {}).get("attachments") or [])
-        if isinstance(item, dict)
-        and _text(item.get("attachment_kind")) == "self_hosted_business_node"
-        and _self_hosted_attachment_matches_node(item, node_token)
-    ]
-    if not attachments:
-        return None, "self_hosted_node_not_found"
-    attachment = attachments[0]
-    try:
-        runtime_attachment_service.ensure_self_hosted_node_gate(
-            attachment=attachment,
-            workspace_id=_text(workspace_id) or "default",
-            required_capabilities=[],
-        )
-    except runtime_attachment_service.RuntimeAttachmentSelectionError as exc:
-        return attachment, exc.reason
-    if not _self_hosted_capability_available(attachment, capability_id):
-        return attachment, "self_hosted_node_capability_mismatch"
-    return attachment, ""
-
-
-def _cloud_computer_summary(capability_id: str, virtual_action: str, response: Dict[str, Any]) -> str:
-    action_result = response.get("action_result") if isinstance(response.get("action_result"), dict) else {}
-    if virtual_action == virtual_computer_runtime.ACTION_OPEN_URL:
-        session = response.get("session") if isinstance(response.get("session"), dict) else {}
-        url = _text(session.get("ui_current_url"))
-        return f"Used cloud computer browser: {url}" if url else "Used cloud computer browser."
-    if virtual_action == virtual_computer_runtime.ACTION_SCREENSHOT:
-        return "Captured cloud computer screenshot."
-    if virtual_action == virtual_computer_runtime.ACTION_RUN_COMMAND:
-        return "Ran command in cloud computer sandbox."
-    completed_action = _text(action_result.get("action") or virtual_action)
-    if completed_action:
-        return f"Cloud computer action completed: {completed_action}."
-    return f"{capability_id or 'cloud computer action'} completed."
+    return cloud_computer_adapter.get_cloud_computer_runtime_registry()
 
 
 async def _resolve_trace_context(
@@ -359,90 +120,6 @@ async def _resolve_trace_context(
         run_id=run_id,
         root_agent_id="sage",
     )
-
-
-def _find_gateway_registration(
-    *,
-    gateway_id: Optional[str],
-    workspace_id: str,
-) -> Optional[Dict[str, Any]]:
-    gateway_token = _text(gateway_id)
-    if gateway_token:
-        return gateway_state_repository.get_gateway_registration(gateway_token)
-    registrations = gateway_state_repository.list_workspace_gateway_registrations(
-        _text(workspace_id) or "default",
-        include_revoked=False,
-    )
-    active: List[Dict[str, Any]] = [
-        item
-        for item in registrations
-        if _text(item.get("status")).lower() == "active"
-        and _text(item.get("device_trust_state")).lower() != "revoked"
-    ]
-    for registration in active:
-        candidate_gateway_id = _text(registration.get("gateway_id"))
-        if candidate_gateway_id and gateway_protocol_service.gateway_connection_is_live(candidate_gateway_id):
-            return registration
-    return active[0] if active else None
-
-
-def _registration_is_usable(registration: Optional[Dict[str, Any]], *, workspace_id: str) -> tuple[bool, str]:
-    if not isinstance(registration, dict) or not registration:
-        return False, "gateway_registration_missing"
-    if _text(registration.get("status")).lower() != "active":
-        return False, "gateway_registration_inactive"
-    if _text(registration.get("device_trust_state")).lower() == "revoked":
-        return False, "gateway_device_revoked"
-    registration_workspace_id = _text(registration.get("workspace_id"))
-    if registration_workspace_id and registration_workspace_id != (_text(workspace_id) or "default"):
-        return False, "gateway_workspace_mismatch"
-    return True, ""
-
-
-def _execution_summary(capability_id: str, execution: Dict[str, Any]) -> str:
-    result = _dict(execution.get("result"))
-    summary = _text(result.get("summary") or execution.get("summary"))
-    if summary:
-        return summary
-    if capability_id == "shell.execute":
-        command = _text(result.get("command"))
-        exit_code = result.get("exit_code")
-        if command:
-            return f"Ran command: {command}"
-        if exit_code is not None:
-            return f"Shell command finished with exit code {exit_code}."
-    if capability_id.startswith("filesystem."):
-        path = _text(result.get("path"))
-        mode = _text(result.get("mode")) or "file"
-        if path:
-            return f"{mode.capitalize()} file action completed: {path}"
-    return f"{capability_id or 'hardware action'} completed."
-
-
-def _self_hosted_completion_summary(
-    *,
-    capability_id: str,
-    status: str,
-    result_payload: Dict[str, Any],
-    error: Optional[str],
-) -> str:
-    if _text(error):
-        return _text(error)
-    summary = _text(result_payload.get("summary") or result_payload.get("message") or result_payload.get("output_summary"))
-    if summary:
-        return summary
-    if capability_id == "shell.execute":
-        command = _text(result_payload.get("command"))
-        exit_code = result_payload.get("exit_code")
-        if command:
-            return f"Ran command: {command}" if status == "completed" else f"Command failed: {command}"
-        if exit_code is not None:
-            return f"Shell command finished with exit code {exit_code}."
-    if capability_id.startswith("filesystem."):
-        path = _text(result_payload.get("path"))
-        if path:
-            return f"File action completed: {path}" if status == "completed" else f"File action failed: {path}"
-    return "Self-hosted node action completed." if status == "completed" else "Self-hosted node action failed."
 
 
 def _runtime_session_approval_by_id(runtime_session: Dict[str, Any], approval_id: str) -> Optional[Dict[str, Any]]:
@@ -684,7 +361,7 @@ async def resolve_runtime_hardware_approval(
         audit_action="hardware_action.approval_approved",
     )
     if runtime_target == "empyralis_cloud_computer":
-        result = await _execute_cloud_computer_action(
+        result = await cloud_computer_adapter.execute_cloud_computer_action(
             tenant_id=_text(request_payload.get("tenant_id")) or _text(runtime_session.get("tenant_id")) or "default",
             workspace_id=_text(request_payload.get("workspace_id")) or _text(runtime_session.get("workspace_id")) or "default",
             user_id=_text(request_payload.get("user_id")) or _text(runtime_session.get("user_id")) or None,
@@ -701,9 +378,10 @@ async def resolve_runtime_hardware_approval(
             runtime_access_mode=runtime_access_mode,
             cost_metadata=_dict(runtime_session.get("billing")),
             tool_call_id=request_id,
+            runtime_registry_getter=get_cloud_computer_runtime_registry,
         )
     elif runtime_target == "self_hosted_node":
-        result = await _execute_self_hosted_node_action(
+        result = await self_hosted_node_adapter.execute_self_hosted_node_action(
             tenant_id=_text(request_payload.get("tenant_id")) or _text(runtime_session.get("tenant_id")) or "default",
             workspace_id=_text(request_payload.get("workspace_id")) or _text(runtime_session.get("workspace_id")) or "default",
             user_id=_text(request_payload.get("user_id")) or _text(runtime_session.get("user_id")) or None,
@@ -812,7 +490,7 @@ async def record_gateway_approval_resolution(
         execution = _dict(result.get("execution"))
         artifact_ids = _artifact_ids_from_execution(execution)
         await _emit_artifacts(trace_context, artifact_ids, capability_id, runtime_session=runtime_session)
-        summary = _execution_summary(capability_id, execution)
+        summary = gateway_adapter.execution_summary(capability_id, execution)
         runtime_session = await _update_runtime_session(
             runtime_session,
             state="ready",
@@ -869,628 +547,8 @@ async def record_gateway_approval_resolution(
 
 
 async def record_self_hosted_command_completion(completion: Dict[str, Any]) -> Dict[str, Any]:
-    command = _dict(completion.get("command"))
-    command_payload = _dict(command.get("command_payload"))
-    if _text(command_payload.get("runtime_session_binding")) != HARDWARE_RUNTIME_SESSION_BINDING:
-        return completion
-    session_id = _text(command_payload.get("runtime_session_id"))
-    if not session_id:
-        return completion
-    session_record = await session_service.get_session(session_id) or {}
-    runtime_session = _runtime_session_with_correlation(
-        _session_view(session_id, _dict(session_record.get("metadata")) or command_payload),
-        payload=command_payload,
-        session_record=session_record,
-    )
-    status = _text(completion.get("status")).lower()
-    terminal_state = "ready" if status == "completed" else "failed"
-    result_payload = _dict(completion.get("result_payload") or command.get("result_payload"))
-    error = _text(completion.get("error") or command.get("error")) or None
-    capability_id = _text(command_payload.get("capability_id")) or _text(runtime_session.get("capability_id"))
-    artifact_ids = _artifact_ids_from_artifact_records(completion.get("artifacts") or command.get("artifacts"))
-    summary = _self_hosted_completion_summary(
-        capability_id=capability_id,
-        status=status,
-        result_payload=result_payload,
-        error=error,
-    )
-    trace_context = await _resolve_trace_context(
-        None,
-        trace_id=_text(command_payload.get("trace_id")) or _text(runtime_session.get("trace_id")),
-        tenant_id=_text(command_payload.get("tenant_id")) or _text((session_record or {}).get("tenant_id")) or "default",
-        workspace_id=_text(command_payload.get("workspace_id")) or _text((session_record or {}).get("workspace_id")) or "default",
-        thread_id=_text(command_payload.get("thread_id")) or _text(runtime_session.get("thread_id")) or None,
-        run_id=_text(command_payload.get("run_id")) or _text(runtime_session.get("run_id")) or session_id,
-    )
-    await _emit_artifacts(trace_context, artifact_ids, capability_id, runtime_session=runtime_session)
-    runtime_session = await _update_runtime_session(
-        runtime_session,
-        state=terminal_state,
-        audit_action="hardware_action.completed" if status == "completed" else "hardware_action.failed",
-        reason=error,
-        artifacts=artifact_ids,
-        extra_metadata={
-            "runtime_node_id": _text(command_payload.get("runtime_node_id")) or None,
-            "runtime_profile_id": _text(command_payload.get("runtime_profile_id")) or None,
-            "self_hosted_command_id": _text(completion.get("command_id") or command.get("id")) or None,
-            "result_summary": summary,
-            "result_payload": result_payload,
-            "completion_status": status,
-        },
-    )
-    await _emit_tool_result(
-        trace_context,
-        tool_call_id=_text(command_payload.get("request_id")) or _text(runtime_session.get("request_id")) or session_id,
-        status="completed" if status == "completed" else "failed",
-        summary=summary,
-        artifact_ids=artifact_ids,
-        capability_id=capability_id,
-        arguments=_dict(command_payload.get("arguments")),
-        runtime_session=runtime_session,
-        runtime_target="self_hosted_node",
-        request_id=_text(command_payload.get("request_id")),
-        action_id=_text(command_payload.get("action_id")),
-        metadata={
-            "self_hosted_command_id": _text(completion.get("command_id") or command.get("id")),
-            "runtime_node_id": _text(command_payload.get("runtime_node_id")),
-            "runtime_profile_id": _text(command_payload.get("runtime_profile_id")),
-            "completion_status": status,
-        },
-    )
-    completion["runtime_session"] = runtime_session
-    completion["artifacts"] = artifact_ids
-    return completion
+    return await self_hosted_node_adapter.record_self_hosted_command_completion(completion)
 
-
-async def _execute_cloud_computer_action(
-    *,
-    tenant_id: str,
-    workspace_id: str,
-    user_id: Optional[str],
-    action_id: str,
-    capability_id: str,
-    arguments: Dict[str, Any],
-    runtime_session: Dict[str, Any],
-    run_id: str,
-    trace_id: str,
-    thread_id: Optional[str],
-    request_id: str,
-    trace_context: Any,
-    require_approval: Optional[bool],
-    runtime_access_mode: str,
-    cost_metadata: Optional[Dict[str, Any]],
-    tool_call_id: str,
-) -> Dict[str, Any]:
-    runtime_choice = _cloud_runtime_choice_for_action(capability_id, action_id, arguments)
-    virtual_action, virtual_action_args, dispatch = _cloud_computer_virtual_action(
-        capability_id=capability_id,
-        action_id=action_id,
-        arguments=arguments,
-    )
-    if not virtual_action or not dispatch:
-        reason = "cloud_computer_action_not_supported"
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state="degraded",
-            audit_action="hardware_action.degraded",
-            reason=reason,
-            extra_metadata={
-                "degraded_reason": reason,
-                "runtime_choice": runtime_choice,
-                "capability_id": capability_id,
-            },
-        )
-        await _emit_tool_result(
-            trace_context,
-            tool_call_id=tool_call_id,
-            status="degraded",
-            summary="Cloud computer target is available, but this action is not supported by the adapter yet.",
-            capability_id=capability_id,
-            arguments=arguments,
-            runtime_session=runtime_session,
-            runtime_target="empyralis_cloud_computer",
-            request_id=request_id,
-            action_id=action_id,
-            metadata={"runtime_choice": runtime_choice, "degraded_reason": reason},
-        )
-        return {
-            "status": "degraded",
-            "reason": reason,
-            "runtime_session": runtime_session,
-            "trace_id": trace_id,
-        }
-
-    if _cloud_computer_approval_required(
-        capability_id=capability_id,
-        action_id=action_id,
-        virtual_action=virtual_action,
-        arguments=arguments,
-        runtime_access_mode=runtime_access_mode,
-        require_approval=require_approval,
-    ):
-        approval = {
-            "approval_id": f"cloudapproval_{uuid.uuid4().hex}",
-            "status": "pending",
-            "kind": "cloud_computer_action",
-            "requested_at": _utc_now_iso(),
-            "request_payload": {
-                "runtime_target": "empyralis_cloud_computer",
-                "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
-                "runtime_session_id": _text(runtime_session.get("session_id")),
-                "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
-                "capability_id": capability_id,
-                "action_id": action_id,
-                "action": virtual_action,
-                "arguments": secret_redaction_service.sanitize_mapping(virtual_action_args),
-                "run_id": run_id,
-                "trace_id": trace_id,
-                "thread_id": _text(thread_id) or None,
-                "request_id": request_id,
-            },
-        }
-        approval_execution_payload = {
-            **approval["request_payload"],
-            "arguments": arguments,
-            "user_id": _text(user_id) or None,
-        }
-        await agent_trace_service.emit_approval_requested(
-            trace_context,
-            approval_id=approval["approval_id"],
-            kind="hardware_action",
-            title=f"Approve {capability_id}",
-            description=f"Approval required before running {capability_id} on the cloud computer.",
-            blocking_item_id=None,
-        )
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state="waiting_approval",
-            audit_action="hardware_action.approval_requested",
-            approvals=[approval],
-            extra_metadata={
-                "runtime_choice": runtime_choice,
-                "approval_id": approval["approval_id"],
-                "capability_id": capability_id,
-                "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
-                "approval_execution_payloads": {approval["approval_id"]: approval_execution_payload},
-            },
-        )
-        await _emit_tool_result(
-            trace_context,
-            tool_call_id=tool_call_id,
-            status="waiting_approval",
-            summary=f"Waiting for approval to run {capability_id} on the cloud computer.",
-            capability_id=capability_id,
-            arguments=virtual_action_args,
-            runtime_session=runtime_session,
-            runtime_target="empyralis_cloud_computer",
-            request_id=request_id,
-            action_id=virtual_action,
-            metadata={"runtime_choice": runtime_choice, "approval_id": approval["approval_id"]},
-        )
-        return {
-            "status": "waiting_approval",
-            "approval": approval,
-            "runtime_session": runtime_session,
-            "trace_id": trace_id,
-        }
-
-    provider_id = _text((_dict(cost_metadata).get("runtime_provider_id") or _dict(cost_metadata).get("provider_id"))) or None
-    session_persistence = _cloud_computer_session_persistence(cost_metadata)
-    session_mode = _text(session_persistence.get("session_mode") or session_persistence.get("mode")).lower()
-    control_metadata = _cloud_computer_control_metadata(cost_metadata)
-    runtime_session_id = _text(runtime_session.get("session_id")) or _new_runtime_session_id()
-    create_payload = {
-        "tenant_id": _text(tenant_id) or "default",
-        "workspace_id": _text(workspace_id) or "default",
-        "user_id": _text(user_id),
-        "agent_id": "sage",
-        "run_id": run_id,
-        "trace_id": trace_id,
-        "thread_id": _text(thread_id) or None,
-        "request_id": request_id,
-        "session_id": runtime_session_id,
-        "runtime_session_id": runtime_session_id,
-        "browser_session_id": runtime_session_id,
-        "runtime_choice": runtime_choice,
-        "runtime_provider_id": provider_id,
-        "source": HARDWARE_RUNTIME_SESSION_BINDING,
-        "require_session_token": False,
-        "ephemeral_task": session_mode != virtual_computer_runtime.SESSION_PERSISTENCE_RESUMABLE,
-        "session_persistence": session_persistence,
-        **control_metadata,
-        "metadata": {
-            "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
-            "runtime_target": "empyralis_cloud_computer",
-            "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
-            "capability_id": capability_id,
-        },
-    }
-    runtime = get_cloud_computer_runtime_registry().resolve(
-        runtime_choice,
-        preferred_provider_id=provider_id,
-    )
-    try:
-        session_payload = await runtime.create_session(create_payload)
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state="running",
-            audit_action="hardware_action.cloud_computer_selected",
-            extra_metadata={
-                "runtime_choice": runtime_choice,
-                "runtime_kind": _text(session_payload.get("runtime_kind")) or None,
-                "cloud_computer_session_id": _text(session_payload.get("session_id")) or runtime_session_id,
-            },
-        )
-        action_payload = {
-            **create_payload,
-            "session_id": _text(session_payload.get("session_id")) or runtime_session_id,
-            "runtime_session_id": _text(session_payload.get("session_id")) or runtime_session_id,
-            "browser_session_id": _text(session_payload.get("session_id")) or runtime_session_id,
-            "action": virtual_action,
-            "action_args": virtual_action_args,
-            "policy_metadata": {
-                "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
-                "capability_id": capability_id,
-            },
-        }
-        if dispatch == "stream_screenshot":
-            action_response = await runtime.stream_screenshot(action_payload)
-        else:
-            action_response = await runtime.execute_action(action_payload)
-    except Exception as exc:
-        message = str(exc)
-        state = "degraded" if "not configured" in message.lower() else "failed"
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state=state,
-            audit_action="hardware_action.failed",
-            reason=message,
-            extra_metadata={
-                "runtime_choice": runtime_choice,
-                "capability_id": capability_id,
-                "failure_reason": message,
-            },
-        )
-        await _emit_tool_result(
-            trace_context,
-            tool_call_id=tool_call_id,
-            status=state,
-            summary=message or "Cloud computer action failed.",
-            capability_id=capability_id,
-            arguments=virtual_action_args,
-            runtime_session=runtime_session,
-            runtime_target="empyralis_cloud_computer",
-            request_id=request_id,
-            action_id=virtual_action,
-            metadata={"runtime_choice": runtime_choice, "failure_reason": message},
-        )
-        return {
-            "status": state,
-            "reason": message,
-            "runtime_session": runtime_session,
-            "trace_id": trace_id,
-        }
-
-    artifact_ids = _runtime_artifact_ids_from_response(action_response)
-    await _emit_artifacts(trace_context, artifact_ids, capability_id, runtime_session=runtime_session)
-    cost = _runtime_cost_metadata(action_response, runtime_choice=runtime_choice, provider_id=provider_id)
-    summary = _cloud_computer_summary(capability_id, virtual_action, action_response)
-    runtime_session = await _update_runtime_session(
-        runtime_session,
-        state="ready",
-        audit_action="hardware_action.completed",
-        artifacts=artifact_ids,
-        extra_metadata={
-            "runtime_choice": runtime_choice,
-            "runtime_kind": _text(action_response.get("runtime_kind")) or None,
-            "cloud_computer_session_id": _text(action_response.get("session_id")) or runtime_session_id,
-            "result_summary": summary,
-            "execution_request_id": request_id,
-            "billing": cost,
-        },
-    )
-    await _emit_tool_result(
-        trace_context,
-        tool_call_id=tool_call_id,
-        status="completed",
-        summary=summary,
-        artifact_ids=artifact_ids,
-        capability_id=capability_id,
-        arguments=virtual_action_args,
-        runtime_session=runtime_session,
-        runtime_target="empyralis_cloud_computer",
-        request_id=request_id,
-        action_id=virtual_action,
-        metadata={"runtime_choice": runtime_choice, "cloud_computer_session_id": _text(action_response.get("session_id")) or runtime_session_id},
-    )
-    execution = {
-        "runtime_target": "empyralis_cloud_computer",
-        "canonical_runtime_target": "empyralis_cloud_computer",
-        "runtime_choice": runtime_choice,
-        "runtime_provider_id": provider_id,
-        "session": session_payload,
-        "result": action_response,
-        "capability_id": capability_id,
-        "action": virtual_action,
-        "run_id": run_id,
-        "trace_id": trace_id,
-        "request_id": request_id,
-        "cost_metadata": cost,
-    }
-    return {
-        "status": "completed",
-        "execution": execution,
-        "runtime_session": runtime_session,
-        "artifacts": artifact_ids,
-        "trace_id": trace_id,
-    }
-
-
-async def _execute_self_hosted_node_action(
-    *,
-    tenant_id: str,
-    workspace_id: str,
-    user_id: Optional[str],
-    node_id: Optional[str],
-    action_id: str,
-    capability_id: str,
-    arguments: Dict[str, Any],
-    runtime_session: Dict[str, Any],
-    run_id: str,
-    trace_id: str,
-    thread_id: Optional[str],
-    request_id: str,
-    trace_context: Any,
-    require_approval: Optional[bool],
-    runtime_access_mode: str,
-    tool_call_id: str,
-) -> Dict[str, Any]:
-    attachment, unavailable_reason = await _select_self_hosted_attachment(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        node_id=node_id,
-        capability_id=capability_id,
-    )
-    if unavailable_reason:
-        state = "offline" if unavailable_reason == "self_hosted_node_offline" else "degraded"
-        if unavailable_reason == "self_hosted_node_revoked":
-            state = "failed"
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state=state,
-            audit_action="hardware_action.self_hosted_unavailable",
-            reason=unavailable_reason,
-            extra_metadata={"unavailable_reason": unavailable_reason},
-        )
-        await _emit_tool_result(
-            trace_context,
-            tool_call_id=tool_call_id,
-            status=state,
-            summary="Self-hosted node is not available for this hardware action.",
-            capability_id=capability_id,
-            arguments=arguments,
-            runtime_session=runtime_session,
-            runtime_target="self_hosted_node",
-            request_id=request_id,
-            action_id=action_id,
-            metadata={"unavailable_reason": unavailable_reason},
-        )
-        return {
-            "status": state,
-            "reason": unavailable_reason,
-            "runtime_session": runtime_session,
-            "trace_id": trace_id,
-        }
-    attachment = dict(attachment or {})
-    runtime_node_id = _text(attachment.get("runtime_node_id") or attachment.get("runtime_id"))
-    runtime_profile_id = _text(attachment.get("runtime_profile_id"))
-    runtime_attachment_id = _text(attachment.get("attachment_id"))
-    node_kind = _text(attachment.get("node_kind"))
-    approval_required = _hardware_action_requires_software_approval(
-        runtime_access_mode=runtime_access_mode,
-        capability_id=capability_id,
-        action_id=action_id,
-        arguments=arguments,
-        require_approval=require_approval,
-    )
-    if approval_required:
-        approval = {
-            "approval_id": f"selfhostapproval_{uuid.uuid4().hex}",
-            "status": "pending",
-            "kind": "self_hosted_node_action",
-            "requested_at": _utc_now_iso(),
-            "request_payload": {
-                "runtime_target": "self_hosted_node",
-                "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
-                "runtime_session_id": _text(runtime_session.get("session_id")),
-                "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
-                "runtime_node_id": runtime_node_id,
-                "runtime_profile_id": runtime_profile_id,
-                "capability_id": capability_id,
-                "action_id": action_id,
-                "arguments": secret_redaction_service.sanitize_mapping(arguments),
-                "run_id": run_id,
-                "trace_id": trace_id,
-                "thread_id": _text(thread_id) or None,
-                "request_id": request_id,
-            },
-        }
-        approval_execution_payload = {
-            **approval["request_payload"],
-            "arguments": arguments,
-            "user_id": _text(user_id) or None,
-            "runtime_attachment_id": runtime_attachment_id,
-            "node_kind": node_kind or None,
-        }
-        await agent_trace_service.emit_approval_requested(
-            trace_context,
-            approval_id=approval["approval_id"],
-            kind="hardware_action",
-            title=f"Approve {capability_id}",
-            description=f"Approval required before running {capability_id} on the self-hosted node.",
-            blocking_item_id=None,
-        )
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state="waiting_approval",
-            audit_action="hardware_action.approval_requested",
-            approvals=[approval],
-            extra_metadata={
-                "runtime_node_id": runtime_node_id,
-                "runtime_profile_id": runtime_profile_id,
-                "approval_id": approval["approval_id"],
-                "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
-                "approval_execution_payloads": {approval["approval_id"]: approval_execution_payload},
-            },
-        )
-        await _emit_tool_result(
-            trace_context,
-            tool_call_id=tool_call_id,
-            status="waiting_approval",
-            summary=f"Waiting for approval to run {capability_id} on the self-hosted node.",
-            capability_id=capability_id,
-            arguments=arguments,
-            runtime_session=runtime_session,
-            runtime_target="self_hosted_node",
-            request_id=request_id,
-            action_id=action_id,
-            metadata={
-                "approval_id": approval["approval_id"],
-                "runtime_node_id": runtime_node_id,
-                "runtime_profile_id": runtime_profile_id,
-            },
-        )
-        return {
-            "status": "waiting_approval",
-            "approval": approval,
-            "runtime_session": runtime_session,
-            "trace_id": trace_id,
-        }
-
-    command_payload = {
-        "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
-        "runtime_session_id": _text(runtime_session.get("session_id")),
-        "runtime_target": "self_hosted_node",
-        "runtime_access_mode": normalize_runtime_access_mode(runtime_access_mode),
-        "runtime_node_id": runtime_node_id,
-        "runtime_profile_id": runtime_profile_id,
-        "runtime_attachment_id": runtime_attachment_id,
-        "node_kind": node_kind or None,
-        "workspace_id": _text(workspace_id) or "default",
-        "tenant_id": _text(tenant_id) or "default",
-        "user_id": _text(user_id) or None,
-        "run_id": run_id,
-        "trace_id": trace_id,
-        "thread_id": _text(thread_id) or None,
-        "request_id": request_id,
-        "capability_id": capability_id,
-        "action_id": action_id,
-        "arguments": arguments,
-        "required_capabilities": _self_hosted_required_capabilities(capability_id),
-    }
-    try:
-        enqueued = await agent_registry_repository.enqueue_self_hosted_runtime_command(
-            runtime_profile_id=runtime_profile_id,
-            tenant_id=_text(tenant_id) or "default",
-            workspace_id=_text(workspace_id) or "default",
-            runtime_node_id=runtime_node_id,
-            agent_id="sage",
-            command_type="hardware_action",
-            command_payload=command_payload,
-            requested_by_user_id=_text(user_id) or None,
-            ttl_seconds=agent_registry_repository.SELF_HOSTED_NODE_COMMAND_DEFAULT_TTL_SECONDS,
-        )
-    except Exception as exc:
-        message = str(exc)
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state="failed",
-            audit_action="hardware_action.failed",
-            reason=message,
-            extra_metadata={
-                "runtime_node_id": runtime_node_id,
-                "runtime_profile_id": runtime_profile_id,
-                "failure_reason": message,
-            },
-        )
-        await _emit_tool_result(
-            trace_context,
-            tool_call_id=tool_call_id,
-            status="failed",
-            summary=message or "Self-hosted node command enqueue failed.",
-            capability_id=capability_id,
-            arguments=arguments,
-            runtime_session=runtime_session,
-            runtime_target="self_hosted_node",
-            request_id=request_id,
-            action_id=action_id,
-            metadata={
-                "runtime_node_id": runtime_node_id,
-                "runtime_profile_id": runtime_profile_id,
-                "failure_reason": message,
-            },
-        )
-        return {
-            "status": "failed",
-            "reason": message,
-            "runtime_session": runtime_session,
-            "trace_id": trace_id,
-        }
-
-    command = _dict(enqueued.get("command"))
-    command_id = _text(command.get("id"))
-    summary = "Queued self-hosted node action."
-    runtime_session = await _update_runtime_session(
-        runtime_session,
-        state="running",
-        audit_action="hardware_action.self_hosted_command_enqueued",
-        extra_metadata={
-            "runtime_node_id": runtime_node_id,
-            "runtime_profile_id": runtime_profile_id,
-            "runtime_attachment_id": runtime_attachment_id,
-            "node_kind": node_kind or None,
-            "self_hosted_command_id": command_id,
-            "result_summary": summary,
-        },
-    )
-    await _emit_tool_result(
-        trace_context,
-        tool_call_id=tool_call_id,
-        status="running",
-        summary=summary,
-        capability_id=capability_id,
-        arguments=arguments,
-        runtime_session=runtime_session,
-        runtime_target="self_hosted_node",
-        request_id=request_id,
-        action_id=action_id,
-        metadata={
-            "runtime_node_id": runtime_node_id,
-            "runtime_profile_id": runtime_profile_id,
-            "runtime_attachment_id": runtime_attachment_id,
-            "self_hosted_command_id": command_id,
-        },
-    )
-    return {
-        "status": "running",
-        "execution": {
-            "runtime_target": "self_hosted_node",
-            "canonical_runtime_target": "self_hosted_node",
-            "runtime_node_id": runtime_node_id,
-            "runtime_profile_id": runtime_profile_id,
-            "runtime_attachment_id": runtime_attachment_id,
-            "command": command,
-            "command_enqueue": enqueued,
-            "capability_id": capability_id,
-            "action_id": action_id,
-            "run_id": run_id,
-            "trace_id": trace_id,
-            "request_id": request_id,
-        },
-        "runtime_session": runtime_session,
-        "artifacts": [],
-        "trace_id": trace_id,
-    }
 
 
 async def execute_hardware_action(
@@ -1633,7 +691,7 @@ async def execute_hardware_action(
         }
 
     if canonical_target_id == "empyralis_cloud_computer":
-        return await _execute_cloud_computer_action(
+        return await cloud_computer_adapter.execute_cloud_computer_action(
             tenant_id=_text(tenant_id) or "default",
             workspace_id=_text(workspace_id) or "default",
             user_id=user_id,
@@ -1650,10 +708,11 @@ async def execute_hardware_action(
             runtime_access_mode=resolved_runtime_access_mode,
             cost_metadata=cost_metadata,
             tool_call_id=tool_call_id,
+            runtime_registry_getter=get_cloud_computer_runtime_registry,
         )
 
     if canonical_target_id == "self_hosted_node":
-        return await _execute_self_hosted_node_action(
+        return await self_hosted_node_adapter.execute_self_hosted_node_action(
             tenant_id=_text(tenant_id) or "default",
             workspace_id=_text(workspace_id) or "default",
             user_id=user_id,
@@ -1672,226 +731,27 @@ async def execute_hardware_action(
             tool_call_id=tool_call_id,
         )
 
-    registration = _find_gateway_registration(
+    return await gateway_adapter.execute_gateway_action(
+        tenant_id=_text(tenant_id) or "default",
+        workspace_id=_text(workspace_id) or "default",
+        user_id=user_id,
         gateway_id=gateway_id,
-        workspace_id=_text(workspace_id) or "default",
-    )
-    usable, unusable_reason = _registration_is_usable(
-        registration,
-        workspace_id=_text(workspace_id) or "default",
-    )
-    if not usable:
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state="offline",
-            audit_action="hardware_action.offline",
-            reason=unusable_reason,
-            extra_metadata={"offline_reason": unusable_reason},
-        )
-        await _emit_tool_result(
-            resolved_trace_context,
-            tool_call_id=tool_call_id,
-            status="offline",
-            summary="Gateway is not available for this workspace.",
-            capability_id=resolved_capability_id,
-            arguments=args,
-            runtime_session=runtime_session,
-            runtime_target=canonical_target_id,
-            request_id=resolved_request_id,
-            action_id=_text(action_id),
-            metadata={"offline_reason": unusable_reason},
-        )
-        return {
-            "status": "offline",
-            "reason": unusable_reason,
-            "runtime_session": runtime_session,
-            "trace_id": resolved_trace_id,
-        }
-
-    gateway_token = _text((registration or {}).get("gateway_id"))
-    device_token = _text(device_id) or _text((registration or {}).get("device_id"))
-    runtime_session = await _update_runtime_session(
-        runtime_session,
-        state="running",
-        audit_action="hardware_action.gateway_selected",
-        extra_metadata={"gateway_id": gateway_token, "device_id": device_token},
-    )
-    if not gateway_protocol_service.gateway_connection_is_live(gateway_token):
-        reason = "gateway_offline"
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state="offline",
-            audit_action="hardware_action.offline",
-            reason=reason,
-            extra_metadata={"gateway_id": gateway_token, "device_id": device_token, "offline_reason": reason},
-        )
-        await _emit_tool_result(
-            resolved_trace_context,
-            tool_call_id=tool_call_id,
-            status="offline",
-            summary="Gateway is paired but currently offline.",
-            capability_id=resolved_capability_id,
-            arguments=args,
-            runtime_session=runtime_session,
-            runtime_target=canonical_target_id,
-            request_id=resolved_request_id,
-            action_id=_text(action_id),
-            metadata={"gateway_id": gateway_token, "device_id": device_token, "offline_reason": reason},
-        )
-        return {
-            "status": "offline",
-            "reason": reason,
-            "runtime_session": runtime_session,
-            "trace_id": resolved_trace_id,
-        }
-
-    approval_required = _hardware_action_requires_software_approval(
-        runtime_access_mode=resolved_runtime_access_mode,
-        capability_id=resolved_capability_id,
+        device_id=device_id,
         action_id=_text(action_id),
-        arguments=args,
-        require_approval=require_approval,
-    )
-    if approval_required:
-        approval = await gateway_approval_service.request_gateway_tool_approval(
-            registration=registration or {},
-            capability_id=resolved_capability_id,
-            arguments=args,
-            run_id=resolved_run_id,
-            trace_id=resolved_trace_id,
-            request_id=resolved_request_id,
-            runtime_session_id=_text(runtime_session.get("session_id")),
-            runtime_target=canonical_target_id,
-            runtime_access_mode=resolved_runtime_access_mode,
-            runtime_session_binding=HARDWARE_RUNTIME_SESSION_BINDING,
-            thread_id=thread_id,
-        )
-        approval_id = _text(approval.get("approval_id"))
-        if approval_id:
-            await agent_trace_service.emit_approval_requested(
-                resolved_trace_context,
-                approval_id=approval_id,
-                kind="hardware_action",
-                title=f"Approve {resolved_capability_id}",
-                description=f"Approval required before running {resolved_capability_id} on the selected runtime.",
-                blocking_item_id=None,
-            )
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state="waiting_approval",
-            audit_action="hardware_action.approval_requested",
-            approvals=[approval],
-            extra_metadata={
-                "gateway_id": gateway_token,
-                "device_id": device_token,
-                "approval_id": approval_id,
-                "runtime_access_mode": resolved_runtime_access_mode,
-            },
-        )
-        await _emit_tool_result(
-            resolved_trace_context,
-            tool_call_id=tool_call_id,
-            status="waiting_approval",
-            summary=f"Waiting for approval to run {resolved_capability_id}.",
-            capability_id=resolved_capability_id,
-            arguments=args,
-            runtime_session=runtime_session,
-            runtime_target=canonical_target_id,
-            request_id=resolved_request_id,
-            action_id=_text(action_id),
-            metadata={"gateway_id": gateway_token, "device_id": device_token, "approval_id": approval_id},
-        )
-        return {
-            "status": "waiting_approval",
-            "approval": approval,
-            "runtime_session": runtime_session,
-            "trace_id": resolved_trace_id,
-        }
-
-    try:
-        execution = await gateway_execution_service.execute_tool_via_gateway(
-            gateway_id=gateway_token,
-            capability_id=resolved_capability_id,
-            arguments=args,
-            run_id=resolved_run_id,
-            trace_id=resolved_trace_id,
-            workspace_id=_text(workspace_id) or "default",
-            timeout_seconds=int(timeout_seconds or gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS),
-            request_id=resolved_request_id,
-            runtime_access_mode=resolved_runtime_access_mode,
-            empyralis_approved=resolved_runtime_access_mode == FULL_RUNTIME_ACCESS_MODE,
-        )
-    except Exception as exc:
-        message = str(exc)
-        state = "offline" if "not currently connected" in message.lower() else "failed"
-        runtime_session = await _update_runtime_session(
-            runtime_session,
-            state=state,
-            audit_action="hardware_action.failed",
-            reason=message,
-            extra_metadata={"gateway_id": gateway_token, "device_id": device_token, "failure_reason": message},
-        )
-        await _emit_tool_result(
-            resolved_trace_context,
-            tool_call_id=tool_call_id,
-            status=state,
-            summary=message or "Hardware action failed.",
-            capability_id=resolved_capability_id,
-            arguments=args,
-            runtime_session=runtime_session,
-            runtime_target=canonical_target_id,
-            request_id=resolved_request_id,
-            action_id=_text(action_id),
-            metadata={"gateway_id": gateway_token, "device_id": device_token, "failure_reason": message},
-        )
-        return {
-            "status": state,
-            "reason": message,
-            "runtime_session": runtime_session,
-            "trace_id": resolved_trace_id,
-        }
-
-    artifact_ids = _artifact_ids_from_execution(execution)
-    await _emit_artifacts(
-        resolved_trace_context,
-        artifact_ids,
-        resolved_capability_id,
-        runtime_session=runtime_session,
-    )
-    summary = _execution_summary(resolved_capability_id, execution)
-    runtime_session = await _update_runtime_session(
-        runtime_session,
-        state="ready",
-        audit_action="hardware_action.completed",
-        artifacts=artifact_ids,
-        extra_metadata={
-            "gateway_id": gateway_token,
-            "device_id": device_token,
-            "result_summary": summary,
-            "execution_request_id": _text(execution.get("request_id")) or resolved_request_id,
-        },
-    )
-    await _emit_tool_result(
-        resolved_trace_context,
-        tool_call_id=tool_call_id,
-        status="completed",
-        summary=summary,
-        artifact_ids=artifact_ids,
         capability_id=resolved_capability_id,
         arguments=args,
         runtime_session=runtime_session,
-        runtime_target=canonical_target_id,
+        run_id=resolved_run_id,
+        trace_id=resolved_trace_id,
+        thread_id=thread_id,
         request_id=resolved_request_id,
-        action_id=_text(action_id),
-        metadata={"gateway_id": gateway_token, "device_id": device_token},
+        trace_context=resolved_trace_context,
+        require_approval=require_approval,
+        runtime_access_mode=resolved_runtime_access_mode,
+        timeout_seconds=timeout_seconds,
+        tool_call_id=tool_call_id,
+        runtime_target=canonical_target_id,
     )
-    return {
-        "status": "completed",
-        "execution": execution,
-        "runtime_session": runtime_session,
-        "artifacts": artifact_ids,
-        "trace_id": resolved_trace_id,
-    }
 
 
 async def stop_hardware_action(
@@ -1915,173 +775,33 @@ async def stop_hardware_action(
     resolved_trace_id = _text(trace_id) or f"trace_{uuid.uuid4().hex}"
     resolved_request_id = _text(request_id) or _new_request_id()
     if canonical_target_id == "empyralis_cloud_computer":
-        runtime_session_id = _text(session_id)
-        if not runtime_session_id:
-            return {
-                "status": "degraded",
-                "reason": "cloud_computer_session_id_required",
-                "runtime_target": target_ids["runtime_target"],
-                "canonical_runtime_target": canonical_target_id,
-                "trace_id": resolved_trace_id,
-            }
-        try:
-            runtime = get_cloud_computer_runtime_registry().resolve(
-                virtual_computer_runtime.RUNTIME_CHOICE_VIRTUAL_BROWSER
-            )
-            terminated = await runtime.terminate_session(
-                {
-                    "tenant_id": _text(tenant_id) or "default",
-                    "workspace_id": _text(workspace_id) or "default",
-                    "session_id": runtime_session_id,
-                    "runtime_session_id": runtime_session_id,
-                    "browser_session_id": runtime_session_id,
-                    "run_id": _text(run_id),
-                    "trace_id": resolved_trace_id,
-                    "request_id": resolved_request_id,
-                    "manual_terminate": True,
-                    "reason": _text(reason) or "operator_requested_stop",
-                }
-            )
-        except Exception as exc:
-            return {
-                "status": "failed",
-                "reason": str(exc),
-                "trace_id": resolved_trace_id,
-            }
-        session_view = {
-            "session_id": runtime_session_id,
-            "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
-            "state": "running",
-            "runtime_target": target_ids["runtime_target"],
-            "canonical_runtime_target": canonical_target_id,
-            "runtime_fabric_target": canonical_target_id,
-            "hardware_edge": _runtime_edge(canonical_target_id),
-            "tenant_id": _text(tenant_id) or "default",
-            "workspace_id": _text(workspace_id) or "default",
-            "thread_id": _text(thread_id) or None,
-            "run_id": _text(run_id),
-            "trace_id": resolved_trace_id,
-            "request_id": resolved_request_id,
-            "capability_id": "tool.interrupt",
-            "action_id": "hardware.stop",
-            "approvals": [],
-            "artifacts": [],
-            "audit_events": [],
-            "billing": {},
-        }
-        session_view = await _update_runtime_session(
-            session_view,
-            state="terminated",
-            audit_action="hardware_action.terminated",
-            reason=_text(reason) or "operator_requested_stop",
-            extra_metadata={"interrupt_request_id": resolved_request_id},
-        )
-        await _emit_hardware_stop_transcript_event(
-            session_view,
-            runtime_target=canonical_target_id,
+        return await cloud_computer_adapter.stop_cloud_computer_action(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            target_ids=target_ids,
+            trace_id=resolved_trace_id,
             target_request_id=target_request_id,
+            request_id=resolved_request_id,
+            thread_id=thread_id,
             reason=reason,
+            session_id=session_id,
+            runtime_registry_getter=get_cloud_computer_runtime_registry,
         )
-        return {
-            "status": "terminated",
-            "execution": terminated,
-            "runtime_session": session_view,
-            "trace_id": resolved_trace_id,
-        }
     if canonical_target_id == "self_hosted_node":
-        attachment, unavailable_reason = await _select_self_hosted_attachment(
-            tenant_id=_text(tenant_id) or "default",
-            workspace_id=_text(workspace_id) or "default",
+        return await self_hosted_node_adapter.stop_self_hosted_node_action(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            target_ids=target_ids,
             node_id=node_id,
-            capability_id="tool.interrupt",
+            trace_id=resolved_trace_id,
+            target_request_id=target_request_id,
+            request_id=resolved_request_id,
+            thread_id=thread_id,
+            reason=reason,
+            session_id=session_id,
         )
-        if unavailable_reason:
-            return {
-                "status": "offline" if unavailable_reason == "self_hosted_node_offline" else "degraded",
-                "reason": unavailable_reason,
-                "runtime_target": target_ids["runtime_target"],
-                "canonical_runtime_target": canonical_target_id,
-                "trace_id": resolved_trace_id,
-            }
-        attachment = dict(attachment or {})
-        runtime_node_id = _text(attachment.get("runtime_node_id") or attachment.get("runtime_id"))
-        runtime_profile_id = _text(attachment.get("runtime_profile_id"))
-        command_payload = {
-            "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
-            "runtime_session_id": _text(session_id) or None,
-            "runtime_target": "self_hosted_node",
-            "runtime_node_id": runtime_node_id,
-            "runtime_profile_id": runtime_profile_id,
-            "run_id": _text(run_id),
-            "trace_id": resolved_trace_id,
-            "request_id": resolved_request_id,
-            "target_request_id": _text(target_request_id) or None,
-            "reason": _text(reason) or "operator_requested_stop",
-        }
-        try:
-            enqueued = await agent_registry_repository.enqueue_self_hosted_runtime_command(
-                runtime_profile_id=runtime_profile_id,
-                tenant_id=_text(tenant_id) or "default",
-                workspace_id=_text(workspace_id) or "default",
-                runtime_node_id=runtime_node_id,
-                agent_id="sage",
-                command_type="cancel_runtime_action",
-                command_payload=command_payload,
-                requested_by_user_id=None,
-                ttl_seconds=agent_registry_repository.SELF_HOSTED_NODE_COMMAND_DEFAULT_TTL_SECONDS,
-            )
-        except Exception as exc:
-            return {
-                "status": "failed",
-                "reason": str(exc),
-                "trace_id": resolved_trace_id,
-            }
-        session_view = None
-        if _text(session_id):
-            command = _dict(enqueued.get("command"))
-            session_view = {
-                "session_id": _text(session_id),
-                "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
-                "state": "running",
-                "runtime_target": target_ids["runtime_target"],
-                "canonical_runtime_target": canonical_target_id,
-                "runtime_fabric_target": canonical_target_id,
-                "hardware_edge": _runtime_edge(canonical_target_id),
-                "tenant_id": _text(tenant_id) or "default",
-                "workspace_id": _text(workspace_id) or "default",
-                "thread_id": _text(thread_id) or None,
-                "runtime_node_id": runtime_node_id,
-                "runtime_profile_id": runtime_profile_id,
-                "self_hosted_command_id": _text(command.get("id")),
-                "run_id": _text(run_id),
-                "trace_id": resolved_trace_id,
-                "request_id": resolved_request_id,
-                "capability_id": "tool.interrupt",
-                "action_id": "hardware.stop",
-                "approvals": [],
-                "artifacts": [],
-                "audit_events": [],
-                "billing": {},
-            }
-            session_view = await _update_runtime_session(
-                session_view,
-                state="terminated",
-                audit_action="hardware_action.terminated",
-                reason=_text(reason) or "operator_requested_stop",
-                extra_metadata={"interrupt_request_id": resolved_request_id},
-            )
-            await _emit_hardware_stop_transcript_event(
-                session_view,
-                runtime_target=canonical_target_id,
-                target_request_id=target_request_id,
-                reason=reason,
-            )
-        return {
-            "status": "terminated",
-            "execution": enqueued,
-            "runtime_session": session_view,
-            "trace_id": resolved_trace_id,
-        }
     if canonical_target_id != "user_device_gateway":
         return {
             "status": "degraded",
@@ -2090,85 +810,17 @@ async def stop_hardware_action(
             "canonical_runtime_target": canonical_target_id,
             "trace_id": resolved_trace_id,
         }
-    registration = _find_gateway_registration(
+    return await gateway_adapter.stop_gateway_action(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        target_ids=target_ids,
         gateway_id=gateway_id,
-        workspace_id=_text(workspace_id) or "default",
+        trace_id=resolved_trace_id,
+        target_request_id=target_request_id,
+        request_id=resolved_request_id,
+        thread_id=thread_id,
+        reason=reason,
+        session_id=session_id,
+        timeout_seconds=timeout_seconds,
     )
-    usable, unusable_reason = _registration_is_usable(
-        registration,
-        workspace_id=_text(workspace_id) or "default",
-    )
-    if not usable:
-        return {
-            "status": "offline",
-            "reason": unusable_reason,
-            "trace_id": resolved_trace_id,
-        }
-    gateway_token = _text((registration or {}).get("gateway_id"))
-    if not gateway_protocol_service.gateway_connection_is_live(gateway_token):
-        return {
-            "status": "offline",
-            "reason": "gateway_offline",
-            "trace_id": resolved_trace_id,
-        }
-    try:
-        interrupted = await gateway_execution_service.interrupt_tool_via_gateway(
-            gateway_id=gateway_token,
-            run_id=_text(run_id),
-            trace_id=resolved_trace_id,
-            workspace_id=_text(workspace_id) or "default",
-            target_request_id=_text(target_request_id) or None,
-            reason=_text(reason) or "operator_requested_stop",
-            timeout_seconds=int(timeout_seconds or gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS),
-            request_id=resolved_request_id,
-        )
-    except Exception as exc:
-        return {
-            "status": "failed",
-            "reason": str(exc),
-            "trace_id": resolved_trace_id,
-        }
-    if _text(session_id):
-        session_view = {
-            "session_id": _text(session_id),
-            "runtime_session_binding": HARDWARE_RUNTIME_SESSION_BINDING,
-            "state": "running",
-            "runtime_target": target_ids["runtime_target"],
-            "canonical_runtime_target": canonical_target_id,
-            "runtime_fabric_target": canonical_target_id,
-            "hardware_edge": _runtime_edge(canonical_target_id),
-            "tenant_id": _text(tenant_id) or "default",
-            "workspace_id": _text(workspace_id) or "default",
-            "thread_id": _text(thread_id) or None,
-            "gateway_id": gateway_token,
-            "run_id": _text(run_id),
-            "trace_id": resolved_trace_id,
-            "request_id": resolved_request_id,
-            "capability_id": "tool.interrupt",
-            "action_id": "hardware.stop",
-            "approvals": [],
-            "artifacts": [],
-            "audit_events": [],
-            "billing": {},
-        }
-        session_view = await _update_runtime_session(
-            session_view,
-            state="terminated",
-            audit_action="hardware_action.terminated",
-            reason=_text(reason) or "operator_requested_stop",
-            extra_metadata={"gateway_id": gateway_token, "interrupt_request_id": resolved_request_id},
-        )
-        await _emit_hardware_stop_transcript_event(
-            session_view,
-            runtime_target=canonical_target_id,
-            target_request_id=target_request_id,
-            reason=reason,
-        )
-    else:
-        session_view = None
-    return {
-        "status": "terminated",
-        "execution": interrupted,
-        "runtime_session": session_view,
-        "trace_id": resolved_trace_id,
-    }

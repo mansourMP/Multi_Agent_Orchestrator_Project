@@ -878,13 +878,52 @@ async def _emit_tool_result(
     status: str,
     summary: str,
     artifact_ids: Optional[List[str]] = None,
+    capability_id: Optional[str] = None,
+    arguments: Optional[Dict[str, Any]] = None,
+    runtime_session: Optional[Dict[str, Any]] = None,
+    runtime_target: Optional[str] = None,
+    request_id: Optional[str] = None,
+    action_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
+    session = _dict(runtime_session)
+    resolved_capability_id = _text(capability_id) or _text(session.get("capability_id"))
+    resolved_runtime_target = (
+        _text(runtime_target)
+        or _text(session.get("canonical_runtime_target"))
+        or _text(session.get("runtime_target"))
+    )
+    resolved_session_id = _text(session.get("session_id")) or _text(session.get("runtime_session_id"))
+    resolved_request_id = _text(request_id) or _text(session.get("request_id")) or _text(tool_call_id)
+    resolved_action_id = _text(action_id) or _text(session.get("action_id"))
+    result_metadata = {
+        "hardware_action": True,
+        "runtime_access_mode": _text(session.get("runtime_access_mode")) or None,
+        "execution_mode": _text(session.get("execution_mode")) or None,
+        "state": _text(session.get("state")) or None,
+        "canonical_runtime_target": _text(session.get("canonical_runtime_target")) or None,
+        **_dict(metadata),
+    }
+    result_metadata = {
+        key: value
+        for key, value in result_metadata.items()
+        if value not in (None, "", [], {})
+    }
     await agent_trace_service.emit_tool_result(
         trace_context,
         tool_call_id=tool_call_id,
         status=status,
         summary=summary,
         artifact_ids=artifact_ids or [],
+        tool_name=resolved_capability_id or None,
+        capability_id=resolved_capability_id or None,
+        connector_id="hardware_runtime",
+        args_preview=secret_redaction_service.sanitize_mapping(_dict(arguments)),
+        runtime_session_id=resolved_session_id or None,
+        runtime_target=resolved_runtime_target or None,
+        request_id=resolved_request_id or None,
+        action_id=resolved_action_id or None,
+        metadata=result_metadata,
     )
 
 
@@ -999,6 +1038,13 @@ async def record_gateway_approval_resolution(
             status="completed",
             summary=summary,
             artifact_ids=artifact_ids,
+            capability_id=capability_id,
+            arguments=_dict(request_payload.get("arguments")),
+            runtime_session=runtime_session,
+            runtime_target=_text(request_payload.get("runtime_target")),
+            request_id=_text(request_payload.get("request_id")),
+            action_id=_text(request_payload.get("action_id") or request_payload.get("action")),
+            metadata={"approval_id": approval_id, "approval_decision": decision},
         )
         result["runtime_session"] = runtime_session
         result["artifacts"] = artifact_ids
@@ -1016,6 +1062,13 @@ async def record_gateway_approval_resolution(
             tool_call_id=tool_call_id,
             status="terminated",
             summary="Hardware action denied.",
+            capability_id=capability_id,
+            arguments=_dict(request_payload.get("arguments")),
+            runtime_session=runtime_session,
+            runtime_target=_text(request_payload.get("runtime_target")),
+            request_id=_text(request_payload.get("request_id")),
+            action_id=_text(request_payload.get("action_id") or request_payload.get("action")),
+            metadata={"approval_id": approval_id, "approval_decision": decision},
         )
         result["runtime_session"] = runtime_session
         return result
@@ -1074,6 +1127,18 @@ async def record_self_hosted_command_completion(completion: Dict[str, Any]) -> D
         status="completed" if status == "completed" else "failed",
         summary=summary,
         artifact_ids=artifact_ids,
+        capability_id=capability_id,
+        arguments=_dict(command_payload.get("arguments")),
+        runtime_session=runtime_session,
+        runtime_target="self_hosted_node",
+        request_id=_text(command_payload.get("request_id")),
+        action_id=_text(command_payload.get("action_id")),
+        metadata={
+            "self_hosted_command_id": _text(completion.get("command_id") or command.get("id")),
+            "runtime_node_id": _text(command_payload.get("runtime_node_id")),
+            "runtime_profile_id": _text(command_payload.get("runtime_profile_id")),
+            "completion_status": status,
+        },
     )
     completion["runtime_session"] = runtime_session
     completion["artifacts"] = artifact_ids
@@ -1123,6 +1188,13 @@ async def _execute_cloud_computer_action(
             tool_call_id=tool_call_id,
             status="degraded",
             summary="Cloud computer target is available, but this action is not supported by the adapter yet.",
+            capability_id=capability_id,
+            arguments=arguments,
+            runtime_session=runtime_session,
+            runtime_target="empyralis_cloud_computer",
+            request_id=request_id,
+            action_id=action_id,
+            metadata={"runtime_choice": runtime_choice, "degraded_reason": reason},
         )
         return {
             "status": "degraded",
@@ -1182,6 +1254,13 @@ async def _execute_cloud_computer_action(
             tool_call_id=tool_call_id,
             status="waiting_approval",
             summary=f"Waiting for approval to run {capability_id} on the cloud computer.",
+            capability_id=capability_id,
+            arguments=virtual_action_args,
+            runtime_session=runtime_session,
+            runtime_target="empyralis_cloud_computer",
+            request_id=request_id,
+            action_id=virtual_action,
+            metadata={"runtime_choice": runtime_choice, "approval_id": approval["approval_id"]},
         )
         return {
             "status": "waiting_approval",
@@ -1266,6 +1345,13 @@ async def _execute_cloud_computer_action(
             tool_call_id=tool_call_id,
             status=state,
             summary=message or "Cloud computer action failed.",
+            capability_id=capability_id,
+            arguments=virtual_action_args,
+            runtime_session=runtime_session,
+            runtime_target="empyralis_cloud_computer",
+            request_id=request_id,
+            action_id=virtual_action,
+            metadata={"runtime_choice": runtime_choice, "failure_reason": message},
         )
         return {
             "status": state,
@@ -1298,6 +1384,13 @@ async def _execute_cloud_computer_action(
         status="completed",
         summary=summary,
         artifact_ids=artifact_ids,
+        capability_id=capability_id,
+        arguments=virtual_action_args,
+        runtime_session=runtime_session,
+        runtime_target="empyralis_cloud_computer",
+        request_id=request_id,
+        action_id=virtual_action,
+        metadata={"runtime_choice": runtime_choice, "cloud_computer_session_id": _text(action_response.get("session_id")) or runtime_session_id},
     )
     execution = {
         "runtime_target": "empyralis_cloud_computer",
@@ -1363,6 +1456,13 @@ async def _execute_self_hosted_node_action(
             tool_call_id=tool_call_id,
             status=state,
             summary="Self-hosted node is not available for this hardware action.",
+            capability_id=capability_id,
+            arguments=arguments,
+            runtime_session=runtime_session,
+            runtime_target="self_hosted_node",
+            request_id=request_id,
+            action_id=action_id,
+            metadata={"unavailable_reason": unavailable_reason},
         )
         return {
             "status": state,
@@ -1428,6 +1528,17 @@ async def _execute_self_hosted_node_action(
             tool_call_id=tool_call_id,
             status="waiting_approval",
             summary=f"Waiting for approval to run {capability_id} on the self-hosted node.",
+            capability_id=capability_id,
+            arguments=arguments,
+            runtime_session=runtime_session,
+            runtime_target="self_hosted_node",
+            request_id=request_id,
+            action_id=action_id,
+            metadata={
+                "approval_id": approval["approval_id"],
+                "runtime_node_id": runtime_node_id,
+                "runtime_profile_id": runtime_profile_id,
+            },
         )
         return {
             "status": "waiting_approval",
@@ -1487,6 +1598,17 @@ async def _execute_self_hosted_node_action(
             tool_call_id=tool_call_id,
             status="failed",
             summary=message or "Self-hosted node command enqueue failed.",
+            capability_id=capability_id,
+            arguments=arguments,
+            runtime_session=runtime_session,
+            runtime_target="self_hosted_node",
+            request_id=request_id,
+            action_id=action_id,
+            metadata={
+                "runtime_node_id": runtime_node_id,
+                "runtime_profile_id": runtime_profile_id,
+                "failure_reason": message,
+            },
         )
         return {
             "status": "failed",
@@ -1516,6 +1638,18 @@ async def _execute_self_hosted_node_action(
         tool_call_id=tool_call_id,
         status="running",
         summary=summary,
+        capability_id=capability_id,
+        arguments=arguments,
+        runtime_session=runtime_session,
+        runtime_target="self_hosted_node",
+        request_id=request_id,
+        action_id=action_id,
+        metadata={
+            "runtime_node_id": runtime_node_id,
+            "runtime_profile_id": runtime_profile_id,
+            "runtime_attachment_id": runtime_attachment_id,
+            "self_hosted_command_id": command_id,
+        },
     )
     return {
         "status": "running",
@@ -1634,6 +1768,13 @@ async def execute_hardware_action(
             tool_call_id=tool_call_id,
             status="failed",
             summary="Hardware capability is not registered.",
+            capability_id=resolved_capability_id,
+            arguments=args,
+            runtime_session=runtime_session,
+            runtime_target=canonical_target_id,
+            request_id=resolved_request_id,
+            action_id=_text(action_id),
+            metadata={"failure_reason": reason},
         )
         return {
             "status": "failed",
@@ -1656,6 +1797,13 @@ async def execute_hardware_action(
             tool_call_id=tool_call_id,
             status="degraded",
             summary="Cloud chat remains available, but this hardware action needs a selected runtime target.",
+            capability_id=resolved_capability_id,
+            arguments=args,
+            runtime_session=runtime_session,
+            runtime_target=canonical_target_id,
+            request_id=resolved_request_id,
+            action_id=_text(action_id),
+            metadata={"degraded_reason": reason},
         )
         return {
             "status": "degraded",
@@ -1725,6 +1873,13 @@ async def execute_hardware_action(
             tool_call_id=tool_call_id,
             status="offline",
             summary="Gateway is not available for this workspace.",
+            capability_id=resolved_capability_id,
+            arguments=args,
+            runtime_session=runtime_session,
+            runtime_target=canonical_target_id,
+            request_id=resolved_request_id,
+            action_id=_text(action_id),
+            metadata={"offline_reason": unusable_reason},
         )
         return {
             "status": "offline",
@@ -1755,6 +1910,13 @@ async def execute_hardware_action(
             tool_call_id=tool_call_id,
             status="offline",
             summary="Gateway is paired but currently offline.",
+            capability_id=resolved_capability_id,
+            arguments=args,
+            runtime_session=runtime_session,
+            runtime_target=canonical_target_id,
+            request_id=resolved_request_id,
+            action_id=_text(action_id),
+            metadata={"gateway_id": gateway_token, "device_id": device_token, "offline_reason": reason},
         )
         return {
             "status": "offline",
@@ -1810,6 +1972,13 @@ async def execute_hardware_action(
             tool_call_id=tool_call_id,
             status="waiting_approval",
             summary=f"Waiting for approval to run {resolved_capability_id}.",
+            capability_id=resolved_capability_id,
+            arguments=args,
+            runtime_session=runtime_session,
+            runtime_target=canonical_target_id,
+            request_id=resolved_request_id,
+            action_id=_text(action_id),
+            metadata={"gateway_id": gateway_token, "device_id": device_token, "approval_id": approval_id},
         )
         return {
             "status": "waiting_approval",
@@ -1844,6 +2013,13 @@ async def execute_hardware_action(
             tool_call_id=tool_call_id,
             status=state,
             summary=message or "Hardware action failed.",
+            capability_id=resolved_capability_id,
+            arguments=args,
+            runtime_session=runtime_session,
+            runtime_target=canonical_target_id,
+            request_id=resolved_request_id,
+            action_id=_text(action_id),
+            metadata={"gateway_id": gateway_token, "device_id": device_token, "failure_reason": message},
         )
         return {
             "status": state,
@@ -1873,6 +2049,13 @@ async def execute_hardware_action(
         status="completed",
         summary=summary,
         artifact_ids=artifact_ids,
+        capability_id=resolved_capability_id,
+        arguments=args,
+        runtime_session=runtime_session,
+        runtime_target=canonical_target_id,
+        request_id=resolved_request_id,
+        action_id=_text(action_id),
+        metadata={"gateway_id": gateway_token, "device_id": device_token},
     )
     return {
         "status": "completed",

@@ -98,6 +98,7 @@ function toolInputRecord(data: Record<string, unknown>): Record<string, unknown>
   const candidates = [
     data.input,
     data.arguments,
+    data.args_preview,
     data.args,
     data.parameters,
   ];
@@ -246,7 +247,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   }
 
   if (eventType === 'tool.started') {
-    const toolName = readString(data.tool_name) || readString(data.name) || 'Tool';
+    const toolName = readString(data.tool_name) || readString(data.capability_id) || readString(data.name) || 'Tool';
     const input = toolInputRecord(data);
     const command = readString(input.command) || readString(input.cmd) || readString(data.command);
     const query = readString(input.query) || readString(data.query);
@@ -285,7 +286,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
 
   if (eventType === 'tool.result') {
     const status = normalizeToolResultStatus(data.status);
-    const toolName = readString(data.tool_name) || readString(data.name) || 'Tool';
+    const toolName = readString(data.tool_name) || readString(data.capability_id) || readString(data.name) || 'Tool';
     const input = toolInputRecord(data);
     const command = readString(input.command) || readString(input.cmd) || readString(data.command);
     const query = readString(input.query) || readString(data.query);
@@ -293,6 +294,19 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     const result = toolResultText(data);
     const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
     const combined = `${toolName} ${command} ${query} ${path}`;
+    const artifactIds = Array.isArray(data.artifact_ids) ? data.artifact_ids : [];
+    const artifactId = readString(artifactIds[0]);
+    if (combined.toLowerCase().includes('screenshot') && artifactId) {
+      return [{
+        type: 'screenshot_captured',
+        id: eventId('artifact', artifactId, fallbackIndex),
+        caption: result || 'Screenshot captured',
+        artifactId,
+        width: readNumber(data.width),
+        height: readNumber(data.height),
+        status: status === 'error' ? 'error' : 'done',
+      }];
+    }
     if (isShellToolName(toolName, command)) {
       if (status === 'running') {
         return [{
@@ -304,6 +318,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       return [{
         type: 'exec_result',
         id,
+        command: command || undefined,
         status,
         output: result,
         exitCode: readNumber(data.exit_code),

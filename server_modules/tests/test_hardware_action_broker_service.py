@@ -249,6 +249,15 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emit_started.await_args.kwargs["args_preview"]["api_key"], "[redacted]")
         emit_artifact.assert_awaited_once()
         emit_result.assert_awaited()
+        result_kwargs = emit_result.await_args.kwargs
+        self.assertEqual(result_kwargs["tool_name"], "browser_automation.interactive")
+        self.assertEqual(result_kwargs["capability_id"], "browser_automation.interactive")
+        self.assertEqual(result_kwargs["connector_id"], "hardware_runtime")
+        self.assertEqual(result_kwargs["runtime_session_id"], "hrs-gateway")
+        self.assertEqual(result_kwargs["runtime_target"], "user_device_gateway")
+        self.assertEqual(result_kwargs["request_id"], "req-1")
+        self.assertEqual(result_kwargs["action_id"], "browser.open")
+        self.assertEqual(result_kwargs["args_preview"]["api_key"], "[redacted]")
 
     async def test_gateway_offline_returns_offline_without_dispatch(self) -> None:
         create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
@@ -496,6 +505,9 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         cloud_runtime.execute_action.assert_not_awaited()
         emit_artifact.assert_awaited_once()
         self.assertEqual(emit_result.await_args.kwargs["artifact_ids"], ["artifact-cloud-shot"])
+        self.assertEqual(emit_result.await_args.kwargs["tool_name"], "screenshot.capture")
+        self.assertEqual(emit_result.await_args.kwargs["runtime_session_id"], "hrs-cloud-computer")
+        self.assertEqual(emit_result.await_args.kwargs["runtime_target"], "empyralis_cloud_computer")
 
     async def test_cloud_computer_risky_shell_waits_for_approval_without_execution(self) -> None:
         create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
@@ -667,6 +679,10 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(enqueue_kwargs["command_payload"]["arguments"]["command"], "printf hello")
         emit_result.assert_awaited()
         self.assertEqual(emit_result.await_args.kwargs["status"], "running")
+        self.assertEqual(emit_result.await_args.kwargs["tool_name"], "shell.execute")
+        self.assertEqual(emit_result.await_args.kwargs["runtime_session_id"], "hrs-self-host")
+        self.assertEqual(emit_result.await_args.kwargs["runtime_target"], "self_hosted_node")
+        self.assertEqual(emit_result.await_args.kwargs["args_preview"]["command"], "printf hello")
 
     async def test_self_hosted_node_risky_action_waits_for_approval_without_enqueue(self) -> None:
         create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
@@ -822,6 +838,8 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
                     "trace_id": "trace-1",
                     "request_id": "req-self-host",
                     "capability_id": "shell.execute",
+                    "action_id": "shell.exec",
+                    "arguments": {"command": "uptime"},
                     "runtime_node_id": "node-1",
                     "runtime_profile_id": "rprof-self",
                 },
@@ -869,6 +887,12 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         emit_artifact.assert_awaited_once()
         emit_result.assert_awaited_once()
         self.assertEqual(emit_result.await_args.kwargs["status"], "completed")
+        self.assertEqual(emit_result.await_args.kwargs["tool_name"], "shell.execute")
+        self.assertEqual(emit_result.await_args.kwargs["runtime_session_id"], "hrs-self-host")
+        self.assertEqual(emit_result.await_args.kwargs["runtime_target"], "self_hosted_node")
+        self.assertEqual(emit_result.await_args.kwargs["request_id"], "req-self-host")
+        self.assertEqual(emit_result.await_args.kwargs["action_id"], "shell.exec")
+        self.assertEqual(emit_result.await_args.kwargs["args_preview"]["command"], "uptime")
 
     async def test_gateway_approval_execution_updates_original_runtime_session(self) -> None:
         _create_patch, extend_patch, _started_patch, result_patch, artifact_patch, _approval_patch = self._session_patches()
@@ -889,6 +913,8 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
                     "trace_id": "trace-1",
                     "request_id": "req-gateway",
                     "capability_id": "shell.execute",
+                    "action_id": "shell.exec",
+                    "arguments": {"command": "whoami"},
                 },
             },
             "execution": {
@@ -943,6 +969,12 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         emit_artifact.assert_awaited_once()
         emit_result.assert_awaited_once()
         self.assertEqual(emit_result.await_args.kwargs["status"], "completed")
+        self.assertEqual(emit_result.await_args.kwargs["tool_name"], "shell.execute")
+        self.assertEqual(emit_result.await_args.kwargs["runtime_session_id"], "hrs-gateway")
+        self.assertEqual(emit_result.await_args.kwargs["runtime_target"], "user_device_gateway")
+        self.assertEqual(emit_result.await_args.kwargs["request_id"], "req-gateway")
+        self.assertEqual(emit_result.await_args.kwargs["action_id"], "shell.exec")
+        self.assertEqual(emit_result.await_args.kwargs["args_preview"]["command"], "whoami")
 
     async def test_stop_gateway_action_interrupts_and_marks_session_terminated(self) -> None:
         interrupt_mock = AsyncMock(

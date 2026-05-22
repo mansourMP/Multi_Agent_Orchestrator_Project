@@ -347,7 +347,7 @@ function applyCodexEvent(
       () => ({
         id: event.id,
         kind: 'exec',
-        command: 'Command',
+        command: event.command || 'Command',
         status: event.status,
         output: event.output,
         exitCode: event.exitCode,
@@ -355,6 +355,7 @@ function applyCodexEvent(
       }),
       (current) => ({
         ...current,
+        command: event.command || current.command,
         status: event.status,
         output: event.output ?? current.output,
         exitCode: event.exitCode,

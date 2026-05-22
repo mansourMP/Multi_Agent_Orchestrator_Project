@@ -142,7 +142,7 @@ export type CodexChatEvent =
   | { type: 'tool_result'; id: string; name: string | null; status: 'running' | 'done' | 'error'; result: string | null }
   | { type: 'exec_started'; id: string; command: string }
   | { type: 'exec_delta'; id: string; output: string }
-  | { type: 'exec_result'; id: string; status: 'done' | 'error'; output: string | null; exitCode: number | null }
+  | { type: 'exec_result'; id: string; command?: string; status: 'done' | 'error'; output: string | null; exitCode: number | null }
   | { type: 'web_search_started'; id: string; query: string }
   | { type: 'web_search_result'; id: string; query: string | null; status: 'done' | 'error'; result: string | null }
   | { type: 'file_change'; id: string; filename: string; action: string; status: 'running' | 'done' | 'error' }

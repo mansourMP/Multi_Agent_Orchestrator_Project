@@ -549,15 +549,42 @@ async def emit_tool_result(
     status: str,
     summary: Optional[str],
     artifact_ids: Optional[List[str]],
+    *,
+    tool_name: Optional[str] = None,
+    capability_id: Optional[str] = None,
+    connector_id: Optional[str] = None,
+    args_preview: Optional[Dict[str, Any]] = None,
+    runtime_session_id: Optional[str] = None,
+    runtime_target: Optional[str] = None,
+    request_id: Optional[str] = None,
+    action_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
+    data: Dict[str, Any] = {
+        "status": str(status or "").strip(),
+        "summary": str(summary or "").strip(),
+        "artifact_ids": list(artifact_ids or []),
+    }
+    for key, value in {
+        "tool_name": tool_name,
+        "capability_id": capability_id,
+        "connector_id": connector_id,
+        "runtime_session_id": runtime_session_id,
+        "runtime_target": runtime_target,
+        "request_id": request_id,
+        "action_id": action_id,
+    }.items():
+        token = str(value or "").strip()
+        if token:
+            data[key] = token
+    if isinstance(args_preview, dict) and args_preview:
+        data["args_preview"] = _normalized_payload(args_preview)
+    if isinstance(metadata, dict) and metadata:
+        data["metadata"] = _normalized_payload(metadata)
     return await emit(
         trace_context,
         "tool.result",
-        {
-            "status": str(status or "").strip(),
-            "summary": str(summary or "").strip(),
-            "artifact_ids": list(artifact_ids or []),
-        },
+        data,
         persisted=True,
         tool_call_id=tool_call_id,
     )

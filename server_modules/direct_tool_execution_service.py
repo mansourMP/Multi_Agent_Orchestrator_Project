@@ -152,6 +152,15 @@ def direct_tool_step_payload(
         label = "Capturing screenshot"
         kind = "screenshot"
         detail = detail or callbacks.compact_step_detail(arguments.get("path") or arguments.get("file_path") or "Current screen")
+    elif normalized_connector == "hardware":
+        label = "Using hardware runtime"
+        kind = "computer"
+        detail = detail or callbacks.compact_step_detail(
+            arguments.get("action")
+            or arguments.get("capability_id")
+            or arguments.get("runtime_target")
+            or "Hardware action"
+        )
     elif normalized_connector == "computer":
         kind = "computer"
         if normalized_action == "ocr":
@@ -303,6 +312,12 @@ def _infer_trace_capability_id(connector_id: str, action_id: str) -> Optional[st
         return "screenshot.capture"
     if normalized_connector == "computer" and normalized_action:
         return f"computer_control.{normalized_action}"
+    if normalized_connector == "hardware":
+        return str(
+            action_id
+            if action_id and action_id != "action"
+            else ""
+        ).strip() or None
     if normalized_action:
         return f"{normalized_connector}.{normalized_action}"
     return normalized_connector
@@ -532,8 +547,23 @@ def build_direct_tool_trace_metadata(
                 "height": 0,
             }
 
+    if normalized_connector == "hardware":
+        target_summary = (
+            str(payload.get("action") or payload.get("capability_id") or "").strip()
+            or str(payload.get("runtime_target") or "").strip()
+        )
+        browser_action = {
+            "action": str(payload.get("action") or normalized_action or "action").strip(),
+            "target_summary": _compact_trace_text(target_summary or "hardware action"),
+            "url": None,
+        }
+
     return {
-        "capability_id": _infer_trace_capability_id(normalized_connector, normalized_action),
+        "capability_id": (
+            str(payload.get("capability_id") or payload.get("action") or "").strip()
+            if normalized_connector == "hardware"
+            else _infer_trace_capability_id(normalized_connector, normalized_action)
+        ),
         "search_query": search_query,
         "search_results": search_results,
         "browser_action": browser_action,

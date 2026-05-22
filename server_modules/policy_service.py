@@ -1150,6 +1150,8 @@ def local_direct_tool_requires_approval(
         return True
     if normalized_connector == "file" and normalized_action == "write":
         return file_write_requires_approval(arguments)
+    if normalized_connector == "screenshot":
+        return True
     if normalized_connector == "computer":
         return True
     return False
@@ -1181,6 +1183,18 @@ def approval_required_for_direct_tool(
         return http_request_requires_approval(arguments.get("method") or "GET", arguments.get("url") or "")
     if normalized_connector_id == "browser":
         return browser_direct_tool_requires_approval(normalized_action_id)
+    if normalized_connector_id == "hardware":
+        capability_id = str(
+            arguments.get("capability_id")
+            or arguments.get("action")
+            or arguments.get("tool")
+            or ""
+        ).strip()
+        if capability_id:
+            from server_modules import gateway_approval_service
+
+            return gateway_approval_service.capability_requires_owner_approval(capability_id)
+        return True
     if normalized_connector_id in {"file", "shell", "screenshot", "computer"}:
         return local_direct_tool_requires_approval(
             normalized_connector_id,

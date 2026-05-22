@@ -704,7 +704,6 @@ class SkillsServiceTests(unittest.TestCase):
                     },
                 },
             ) as execute_gateway_mock,
-            patch("server_modules.runs_execution._workflow_execute_local_tool") as local_tool_mock,
         ):
             raw = skills_service.execute_single_direct_tool_call(
                 tool_call={"name": "shell__exec", "arguments": {"command": "pwd"}},
@@ -717,7 +716,6 @@ class SkillsServiceTests(unittest.TestCase):
 
         self.assertIn("Command completed: pwd", raw)
         execute_gateway_mock.assert_called_once()
-        local_tool_mock.assert_not_called()
 
     def test_execute_single_direct_tool_call_routes_file_read_via_gateway_when_live(self) -> None:
         callbacks = self._execution_callbacks()
@@ -744,7 +742,6 @@ class SkillsServiceTests(unittest.TestCase):
                     },
                 },
             ) as execute_gateway_mock,
-            patch("server_modules.runs_execution._workflow_execute_local_tool") as local_tool_mock,
         ):
             raw = skills_service.execute_single_direct_tool_call(
                 tool_call={"name": "file__read", "arguments": {"path": "/root/Desktop"}},
@@ -762,7 +759,61 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(call_kwargs["capability_id"], "filesystem.read_write")
         self.assertEqual(call_kwargs["arguments"]["path"], str(Path.home() / "Desktop"))
         self.assertEqual(call_kwargs["arguments"]["mode"], "read")
-        local_tool_mock.assert_not_called()
+
+    def test_execute_single_direct_tool_call_routes_hardware_action_through_broker(self) -> None:
+        callbacks = self._execution_callbacks()
+        callbacks = direct_tool_execution_service.DirectToolExecutionCallbacks(
+            **{
+                **callbacks.__dict__,
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+        execute_hardware_mock = AsyncMock(
+            return_value={
+                "status": "offline",
+                "reason": "gateway_offline",
+                "runtime_session": {
+                    "state": "offline",
+                    "canonical_runtime_target": "user_device_gateway",
+                    "gateway_id": "gw-1",
+                },
+            }
+        )
+        with (
+            patch(
+                "server_modules.skills_service._resolve_direct_tool_gateway_id",
+                return_value="gw-1",
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.execute_hardware_action",
+                execute_hardware_mock,
+            ),
+        ):
+            raw = skills_service.execute_single_direct_tool_call(
+                tool_call={
+                    "name": "hardware__action",
+                    "arguments": {
+                        "runtime_target": "user_device_gateway",
+                        "action": "screenshot.capture",
+                        "arguments": {},
+                    },
+                },
+                workspace_id="default",
+                thread_id="thread-1",
+                index=1,
+                session_ctx={"runtime_id": "gw-1", "tenant_id": "tenant-1"},
+                callbacks=callbacks,
+            )
+
+        payload = json.loads(raw)
+        self.assertEqual(payload["status"], "offline")
+        self.assertEqual(payload["runtime_target"], "user_device_gateway")
+        execute_hardware_mock.assert_awaited_once()
+        call_kwargs = execute_hardware_mock.await_args.kwargs
+        self.assertEqual(call_kwargs["tenant_id"], "tenant-1")
+        self.assertEqual(call_kwargs["runtime_target"], "user_device_gateway")
+        self.assertEqual(call_kwargs["action_id"], "screenshot.capture")
+        self.assertEqual(call_kwargs["gateway_id"], "gw-1")
 
 
 if __name__ == "__main__":

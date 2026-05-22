@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import uuid
 
 from server_modules.capability_registry import resolve_capability, workflow_tool_capability_id
@@ -608,6 +608,42 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
 
 def _builtin_tool_descriptors() -> List[ToolDescriptor]:
     return [
+        ToolDescriptor(
+            tool_name="hardware__action",
+            label="Hardware action",
+            connector_id="hardware",
+            action_id="action",
+            description=(
+                "Request a browser, file, shell, screenshot, or app action through an Empyralis runtime target. "
+                "Use runtime_target cloud_default for cloud-only chat, user_device_gateway for a paired user computer, "
+                "empyralis_cloud_computer for hosted desktop/sandbox work, or self_hosted_node for an enrolled node."
+            ),
+            requires_runtime=True,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "runtime_target": {
+                        "type": "string",
+                        "enum": [
+                            "cloud_default",
+                            "user_device_gateway",
+                            "empyralis_cloud_computer",
+                            "self_hosted_node",
+                        ],
+                        "description": "Target runtime. Omit to use the selected hardware runtime when available.",
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": "Capability/action such as file.read, shell.execute, screenshot.capture, browser.open, computer_control.click, or computer_control.launch_app.",
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Action-specific arguments, for example path, command, url, selector, text, x/y coordinates, or app name.",
+                    },
+                },
+                "required": ["action"],
+            },
+        ),
         ToolDescriptor(
             tool_name="memory_search",
             label="Memory search",
@@ -1763,6 +1799,43 @@ def _gateway_capability_for_direct_local_tool(connector_id: str, action_id: str)
     return ""
 
 
+def _runtime_target_from_direct_tool_context(
+    *,
+    explicit_target: Any = None,
+    gateway_id: Optional[str] = None,
+    session_ctx: Dict[str, Any] | None = None,
+) -> str:
+    explicit = str(explicit_target or "").strip()
+    if explicit:
+        return explicit
+    metadata = _direct_tool_session_metadata(session_ctx)
+    for key in (
+        "runtime_target",
+        "canonical_runtime_target",
+        "runtime_fabric_target",
+        "execution_target_runtime_target",
+        "execution_target",
+    ):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    if str(gateway_id or "").strip():
+        return "user_device_gateway"
+    return "cloud_default"
+
+
+def _tenant_id_from_direct_tool_context(session_ctx: Dict[str, Any] | None) -> str:
+    session_payload = session_ctx if isinstance(session_ctx, dict) else {}
+    agent_turn_request = session_payload.get("agent_turn_request") if isinstance(session_payload.get("agent_turn_request"), dict) else {}
+    metadata = _direct_tool_session_metadata(session_ctx)
+    return str(
+        session_payload.get("tenant_id")
+        or agent_turn_request.get("tenant_id")
+        or metadata.get("tenant_id")
+        or "default"
+    ).strip() or "default"
+
+
 def _gateway_arguments_for_direct_local_tool(
     connector_id: str,
     action_id: str,
@@ -1905,27 +1978,150 @@ def _format_gateway_direct_local_tool_result(
 
 def _execute_direct_tool_via_gateway(
     *,
-    gateway_id: str,
+    gateway_id: Optional[str],
     capability_id: str,
     arguments: Dict[str, Any],
     run_id: str,
     trace_id: str,
     workspace_id: str,
+    runtime_target: str = "user_device_gateway",
+    tenant_id: str = "default",
+    thread_id: str = "",
+    session_ctx: Dict[str, Any] | None = None,
+    require_approval: Optional[bool] = None,
     callbacks: Any,
 ) -> Dict[str, Any]:
-    from server_modules import gateway_execution_service
+    from server_modules import hardware_action_broker_service
 
+    trace_context = session_ctx.get("trace_context") if isinstance(session_ctx, dict) else None
     response = callbacks.run_async_tool_call(
-        gateway_execution_service.execute_tool_via_gateway(
+        hardware_action_broker_service.execute_hardware_action(
+            tenant_id=str(tenant_id or "default").strip() or "default",
+            workspace_id=str(workspace_id or "default").strip() or "default",
+            action_id=capability_id,
+            runtime_target=runtime_target,
             gateway_id=gateway_id,
             capability_id=capability_id,
             arguments=arguments,
             run_id=run_id,
             trace_id=trace_id,
-            workspace_id=workspace_id,
+            thread_id=thread_id,
+            trace_context=trace_context,
+            require_approval=require_approval,
         )
     )
-    return dict(response) if isinstance(response, dict) else {"result": response}
+    payload = dict(response) if isinstance(response, dict) else {"result": response}
+    if isinstance(payload.get("execution"), dict):
+        return dict(payload["execution"])
+    status = str(payload.get("status") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    if status in {"waiting_approval", "offline", "degraded", "failed"}:
+        return {
+            "gateway_id": str(gateway_id or "").strip(),
+            "capability_id": str(capability_id or "").strip(),
+            "run_id": str(run_id or "").strip(),
+            "result": {
+                "summary": reason or status or "Gateway hardware action did not complete.",
+                "status": status,
+            },
+        }
+    return payload
+
+
+def _format_hardware_action_result(payload: Dict[str, Any]) -> str:
+    runtime_session = payload.get("runtime_session") if isinstance(payload.get("runtime_session"), dict) else {}
+    summary = {
+        "status": str(payload.get("status") or "").strip(),
+        "reason": str(payload.get("reason") or "").strip() or None,
+        "runtime_target": str(runtime_session.get("canonical_runtime_target") or runtime_session.get("runtime_target") or "").strip() or None,
+        "runtime_state": str(runtime_session.get("state") or "").strip() or None,
+        "gateway_id": str(runtime_session.get("gateway_id") or "").strip() or None,
+        "device_id": str(runtime_session.get("device_id") or "").strip() or None,
+        "approval_id": str((payload.get("approval") if isinstance(payload.get("approval"), dict) else {}).get("approval_id") or "").strip() or None,
+        "artifacts": list(payload.get("artifacts") or []),
+    }
+    execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
+    if isinstance(execution.get("result"), dict):
+        summary["result"] = execution["result"]
+    return json.dumps({key: value for key, value in summary.items() if value not in (None, "", [])}, ensure_ascii=False)
+
+
+def _execute_hardware_action_tool_call(
+    *,
+    argument_payload: Dict[str, Any],
+    workspace_id: str,
+    thread_id: str,
+    index: int,
+    session_ctx: Dict[str, Any] | None,
+    callbacks: Any,
+) -> str:
+    from server_modules import hardware_action_broker_service
+
+    payload = dict(argument_payload or {})
+    action_id = str(
+        payload.get("action")
+        or payload.get("capability_id")
+        or payload.get("tool")
+        or payload.get("operation")
+        or ""
+    ).strip()
+    if not action_id:
+        raise RuntimeError("Tool 'hardware__action' requires an action.")
+    action_arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+    if not action_arguments:
+        action_arguments = {
+            key: value
+            for key, value in payload.items()
+            if key
+            not in {
+                "action",
+                "capability_id",
+                "tool",
+                "operation",
+                "arguments",
+                "runtime_target",
+                "gateway_id",
+                "device_id",
+                "node_id",
+            }
+        }
+    metadata = _direct_tool_session_metadata(session_ctx)
+    gateway_id = str(payload.get("gateway_id") or "").strip() or _resolve_direct_tool_gateway_id(
+        workspace_id,
+        session_ctx=session_ctx,
+    )
+    trace_context = session_ctx.get("trace_context") if isinstance(session_ctx, dict) else None
+    trace_id = (
+        str(getattr(trace_context, "trace_id", "") or "").strip()
+        or str(metadata.get("trace_id") or "").strip()
+        or f"trace_{uuid.uuid4().hex}"
+    )
+    run_id = str(payload.get("run_id") or "").strip() or (
+        f"direct_chat:{str(thread_id or 'thread').strip() or 'thread'}:hardware:{index}:{uuid.uuid4().hex}"
+    )
+    runtime_target = _runtime_target_from_direct_tool_context(
+        explicit_target=payload.get("runtime_target"),
+        gateway_id=gateway_id,
+        session_ctx=session_ctx,
+    )
+    result = callbacks.run_async_tool_call(
+        hardware_action_broker_service.execute_hardware_action(
+            tenant_id=_tenant_id_from_direct_tool_context(session_ctx),
+            workspace_id=str(workspace_id or "default").strip() or "default",
+            action_id=action_id,
+            capability_id=payload.get("capability_id"),
+            arguments=action_arguments,
+            runtime_target=runtime_target,
+            gateway_id=gateway_id,
+            device_id=str(payload.get("device_id") or "").strip() or None,
+            node_id=str(payload.get("node_id") or "").strip() or None,
+            run_id=run_id,
+            trace_id=trace_id,
+            thread_id=str(thread_id or "").strip(),
+            trace_context=trace_context,
+        )
+    )
+    return _format_hardware_action_result(dict(result) if isinstance(result, dict) else {"status": "completed", "execution": {"result": result}})
 
 
 def _safe_direct_shell_command(command: str) -> bool:
@@ -2001,16 +2197,14 @@ def _execute_safe_direct_local_tool_call(
     session_ctx: Dict[str, Any] | None,
     callbacks: Any,
 ) -> str:
-    from server_modules import runs_execution
-
     normalized_connector = str(connector_id or "").strip().lower()
     normalized_action = str(action_id or "").strip().lower()
-    if normalized_connector == "file" and normalized_action != "read":
+    if normalized_connector == "file" and normalized_action not in {"read", "write"}:
         _raise_direct_chat_tool_execution_blocked()
     if normalized_connector == "shell":
-        if normalized_action != "exec" or not _safe_direct_shell_command(str(argument_payload.get("command") or "")):
+        if normalized_action != "exec":
             _raise_direct_chat_tool_execution_blocked()
-    elif normalized_connector not in {"file"}:
+    elif normalized_connector not in {"file", "screenshot", "computer"}:
         _raise_direct_chat_tool_execution_blocked()
 
     gateway_capability_id = _gateway_capability_for_direct_local_tool(
@@ -2021,7 +2215,11 @@ def _execute_safe_direct_local_tool_call(
         workspace_id,
         session_ctx=session_ctx,
     )
-    if gateway_id and gateway_capability_id:
+    if gateway_capability_id:
+        session_payload = session_ctx if isinstance(session_ctx, dict) else {}
+        metadata = _direct_tool_session_metadata(session_ctx)
+        tenant_id = _tenant_id_from_direct_tool_context(session_ctx)
+        trace_context = session_payload.get("trace_context")
         gateway_arguments = _gateway_arguments_for_direct_local_tool(
             normalized_connector,
             normalized_action,
@@ -2030,7 +2228,18 @@ def _execute_safe_direct_local_tool_call(
         gateway_run_id = (
             f"direct_chat:{str(thread_id or 'thread').strip() or 'thread'}:{index}:{uuid.uuid4().hex}"
         )
-        gateway_trace_id = f"trace_{uuid.uuid4().hex}"
+        gateway_trace_id = (
+            str(getattr(trace_context, "trace_id", "") or "").strip()
+            or str(metadata.get("trace_id") or "").strip()
+            or f"trace_{uuid.uuid4().hex}"
+        )
+        approval_override: Optional[bool]
+        if normalized_connector == "file" and normalized_action == "read":
+            approval_override = False
+        elif normalized_connector == "shell" and _safe_direct_shell_command(str(argument_payload.get("command") or "")):
+            approval_override = False
+        else:
+            approval_override = None
         gateway_response = _execute_direct_tool_via_gateway(
             gateway_id=gateway_id,
             capability_id=gateway_capability_id,
@@ -2038,6 +2247,14 @@ def _execute_safe_direct_local_tool_call(
             run_id=gateway_run_id,
             trace_id=gateway_trace_id,
             workspace_id=str(workspace_id or "default").strip() or "default",
+            runtime_target=_runtime_target_from_direct_tool_context(
+                gateway_id=gateway_id,
+                session_ctx=session_ctx,
+            ),
+            tenant_id=tenant_id,
+            thread_id=str(thread_id or "").strip(),
+            session_ctx=session_ctx,
+            require_approval=approval_override,
             callbacks=callbacks,
         )
         return _format_gateway_direct_local_tool_result(
@@ -2067,6 +2284,8 @@ def _execute_safe_direct_local_tool_call(
         or metadata.get("tenant_id")
         or "default"
     ).strip() or "default"
+
+    from server_modules import runs_execution
 
     result = runs_execution._workflow_execute_local_tool(
         "direct-chat-local-tool",
@@ -2490,6 +2709,15 @@ def execute_single_direct_tool_call(
         )
         service_payload = result.get("service") if isinstance(result, dict) else result
         return json.dumps(service_payload, ensure_ascii=False)
+    if connector_id == "hardware" and action_id == "action":
+        return _execute_hardware_action_tool_call(
+            argument_payload=argument_payload if isinstance(argument_payload, dict) else {},
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            index=index,
+            session_ctx=session_ctx,
+            callbacks=callbacks,
+        )
     if connector_id in {"file", "shell", "screenshot", "computer"}:
         return _execute_safe_direct_local_tool_call(
             connector_id=connector_id,

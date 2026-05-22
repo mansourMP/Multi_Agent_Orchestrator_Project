@@ -303,7 +303,7 @@ def build_direct_tool_approval_response(
         if not services.approval_required_for_tool(connector_id, action_id, argument_payload, tool_capabilities):
             continue
         tool_input = str(argument_payload.get("input") or "").strip()
-        if connector_id in {"file", "shell", "screenshot", "http", "browser", "computer"}:
+        if connector_id in {"file", "shell", "screenshot", "http", "browser", "computer", "hardware"}:
             tool_input = json.dumps(argument_payload, ensure_ascii=False)
         approval_actions.append(
             {
@@ -355,6 +355,17 @@ def plan_tool_calls(
     file_requested = bool(path and _path_inspection_requested(compact, path))
     if file_requested and "file__read" in tool_names:
         planned.append({"name": "file__read", "arguments": {"path": path}})
+    elif file_requested and "hardware__action" in tool_names:
+        planned.append(
+            {
+                "name": "hardware__action",
+                "arguments": {
+                    "runtime_target": "user_device_gateway",
+                    "action": "file.read",
+                    "arguments": {"path": path},
+                },
+            }
+        )
 
     url = "" if file_requested else extract_first_url(message)
     browser_requested = bool(
@@ -377,6 +388,32 @@ def plan_tool_calls(
     )
     if shell_command and "shell__exec" in tool_names:
         planned.append({"name": "shell__exec", "arguments": {"command": shell_command}})
+    elif shell_command and "hardware__action" in tool_names:
+        planned.append(
+            {
+                "name": "hardware__action",
+                "arguments": {
+                    "runtime_target": "user_device_gateway",
+                    "action": "shell.execute",
+                    "arguments": {"command": shell_command},
+                },
+            }
+        )
+    if (
+        "hardware__action" in tool_names
+        and not planned
+        and any(token in compact for token in ("screenshot", "screen shot", "capture screen", "take a picture of my screen"))
+    ):
+        planned.append(
+            {
+                "name": "hardware__action",
+                "arguments": {
+                    "runtime_target": "user_device_gateway",
+                    "action": "screenshot.capture",
+                    "arguments": {},
+                },
+            }
+        )
     web_query = extract_web_query(message)
     if web_query and "web__search" in tool_names and not url:
         planned.append({"name": "web__search", "arguments": {"query": web_query}})

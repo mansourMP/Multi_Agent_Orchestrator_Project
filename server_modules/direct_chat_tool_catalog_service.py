@@ -321,13 +321,16 @@ def message_can_use_direct_local_tools(message: str, *, provider: str, tools: Li
     if not tools:
         return False
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
-    if message_requests_local_computer_tool(message, callbacks) and any(name.startswith("computer__") for name in tool_names):
+    hardware_tool_available = "hardware__action" in tool_names
+    if message_requests_local_computer_tool(message, callbacks) and (
+        any(name.startswith("computer__") for name in tool_names) or hardware_tool_available
+    ):
         return True
-    if message_requests_local_file_tool(message, callbacks) and {"file__read", "file__write"} & tool_names:
+    if message_requests_local_file_tool(message, callbacks) and (bool({"file__read", "file__write"} & tool_names) or hardware_tool_available):
         return True
-    if message_requests_local_shell_tool(message, callbacks) and "shell__exec" in tool_names:
+    if message_requests_local_shell_tool(message, callbacks) and ("shell__exec" in tool_names or hardware_tool_available):
         return True
-    if message_requests_local_screenshot_tool(message, callbacks) and "screenshot__capture" in tool_names:
+    if message_requests_local_screenshot_tool(message, callbacks) and ("screenshot__capture" in tool_names or hardware_tool_available):
         return True
     return False
 
@@ -345,6 +348,13 @@ def message_can_use_builtin_direct_tools(message: str, *, tools: List[Dict[str, 
     if "generate_image" in tool_names and message_requests_image_generation_tool(message, callbacks):
         return True
     if any(name.startswith("browser__") for name in tool_names) and message_requests_browser_tool(message, callbacks):
+        return True
+    if "hardware__action" in tool_names and (
+        message_requests_local_file_tool(message, callbacks)
+        or message_requests_local_shell_tool(message, callbacks)
+        or message_requests_local_screenshot_tool(message, callbacks)
+        or message_requests_local_computer_tool(message, callbacks)
+    ):
         return True
     if "llm__task" in tool_names and callbacks.mentions_any(compact, callbacks.llm_task_keywords):
         return True
@@ -370,7 +380,7 @@ def message_requests_tool_inventory(message: str) -> bool:
 def _tool_group_label(name: str) -> str:
     normalized = str(name or "").strip()
     connector = normalized.split("__", 1)[0] if "__" in normalized else normalized
-    if connector in {"file", "shell", "screenshot", "computer", "browser"}:
+    if connector in {"file", "shell", "screenshot", "computer", "browser", "hardware"}:
         return "Local machine"
     if connector in {"web", "http"}:
         return "Web"

@@ -205,6 +205,29 @@ class NoProviderServiceTests(unittest.TestCase):
             ],
         )
 
+    def test_plan_tool_calls_uses_hardware_action_when_specific_local_tool_is_absent(self) -> None:
+        tool_calls = no_provider_service.plan_tool_calls(
+            "Run `pwd`",
+            [{"name": "hardware__action"}],
+            compact_text=_compact_text,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+        )
+
+        self.assertEqual(
+            tool_calls,
+            [
+                {
+                    "name": "hardware__action",
+                    "arguments": {
+                        "runtime_target": "user_device_gateway",
+                        "action": "shell.execute",
+                        "arguments": {"command": "pwd"},
+                    },
+                }
+            ],
+        )
+
     def test_has_obvious_direct_tool_intent_detects_directory_and_memory_requests(self) -> None:
         self.assertTrue(
             no_provider_service.has_obvious_direct_tool_intent(

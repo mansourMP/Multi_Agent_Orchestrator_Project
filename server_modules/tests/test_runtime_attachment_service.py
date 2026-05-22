@@ -328,10 +328,26 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertTrue(targets["cloud_default"]["default_for_workspace"])
         self.assertEqual(targets["cloud_default"]["status"], "live")
         self.assertEqual(targets["local_companion"]["connection_mode"], "platform_relay")
+        self.assertEqual(targets["local_companion"]["canonical_target_id"], "user_device_gateway")
+        self.assertEqual(targets["local_companion"]["runtime_fabric_target"], "user_device_gateway")
+        self.assertEqual(targets["local_companion"]["hardware_edge"], "empyralis_gateway")
+        self.assertTrue(targets["local_companion"]["runtime_session_required"])
         self.assertFalse(targets["local_companion"]["direct_mobile_connection_required"])
         local_modes = {item["id"]: item for item in targets["local_companion"]["execution_modes"]}
         self.assertTrue(local_modes["full_access"]["available"])
         self.assertTrue(local_modes["full_access"]["requires_owner_approval"])
+        self.assertEqual(
+            payload["routing_contract"]["canonical_runtime_targets"],
+            [
+                "cloud_default",
+                "user_device_gateway",
+                "empyralis_cloud_computer",
+                "self_hosted_node",
+            ],
+        )
+        self.assertTrue(payload["routing_contract"]["hardware_actions_require_runtime_session"])
+        self.assertTrue(payload["routing_contract"]["hardware_actions_emit_transparency_events"])
+        self.assertTrue(payload["routing_contract"]["legacy_local_companion_deprecated_for_machine_control"])
 
     def test_list_workspace_runtime_attachments_maps_cloud_computer_profile(self) -> None:
         inventory = asyncio.run(
@@ -465,9 +481,12 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(event["credit_item_type"], "virtual_desktop_minutes")
         self.assertEqual(event["credit_quantity"], 4.0)
         self.assertEqual(event["runtime_target"], "sage_cloud_computer")
+        self.assertEqual(event["canonical_runtime_target"], "empyralis_cloud_computer")
+        self.assertEqual(event["runtime_fabric_target"], "empyralis_cloud_computer")
         self.assertEqual(event["surface"], "sage")
         self.assertEqual(event["thread_id"], "thread-1")
         self.assertEqual(event["metadata"]["runtime_type"], "cloud_computer")
+        self.assertEqual(event["metadata"]["canonical_runtime_target"], "empyralis_cloud_computer")
         unified = event["metadata"]["unified_credit_ledger_event"]
         self.assertEqual(unified["surface"], "sage")
         self.assertEqual(unified["credit_type"], "computer_runtime")
@@ -475,6 +494,23 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(unified["payer"], "platform_credits")
         self.assertEqual(unified["thread_id"], "thread-1")
         self.assertIn("payments", event["metadata"]["sensitive_actions_require_confirmation"])
+
+    def test_runtime_usage_credit_event_accepts_canonical_runtime_target_alias(self) -> None:
+        event = runtime_attachment_service.build_runtime_usage_credit_event(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            surface="sage",
+            runtime_target="empyralis_cloud_computer",
+            session_id="session-1",
+            started_at="2026-05-20T00:00:00Z",
+            ended_at="2026-05-20T00:02:00Z",
+            active_seconds=120,
+            billable_seconds=60,
+        )
+
+        self.assertEqual(event["runtime_target"], "sage_cloud_computer")
+        self.assertEqual(event["canonical_runtime_target"], "empyralis_cloud_computer")
+        self.assertEqual(event["metadata"]["runtime_fabric_target"], "empyralis_cloud_computer")
 
     def test_runtime_usage_credit_event_requires_session_and_valid_billable_seconds(self) -> None:
         with self.assertRaises(ValueError) as missing_session:

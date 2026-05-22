@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional
 import uuid
@@ -8,8 +9,11 @@ import uuid
 from server_modules import agent_trace_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_execution_service
+from server_modules import empyralis_model_tier_contract
+from server_modules import empyralis_model_tier_routing_service
 from server_modules import healthguide_safety_service
 from server_modules import response_leak_guard_service
+from server_modules import secret_redaction_service
 from server_modules.direct_chat_context_service import is_public_generation_error_message
 from server_modules.direct_chat_intervention_service import build_intervention
 from server_modules.direct_tool_config_service import run_async_tool_call
@@ -137,6 +141,139 @@ def _public_generation_error_reply(services: DirectChatGenerationServices, llm_e
     ):
         return reply
     return "Sage hit a temporary error while generating the response. Please try again in a moment."
+
+
+def _turn_metadata_from_session(session_ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(session_ctx, dict):
+        return {}
+    metadata: Dict[str, Any] = {}
+    turn_request = session_ctx.get("agent_turn_request")
+    if hasattr(turn_request, "context_hints") and isinstance(turn_request.context_hints, dict):
+        raw_metadata = turn_request.context_hints.get("metadata")
+        if isinstance(raw_metadata, dict):
+            metadata.update(raw_metadata)
+    raw_metadata = session_ctx.get("metadata")
+    if isinstance(raw_metadata, dict):
+        metadata.update(raw_metadata)
+    return metadata
+
+
+def _platform_paid_ai_identity(
+    *,
+    availability_payload: Dict[str, Any],
+    metadata: Dict[str, Any],
+    session_ctx: Optional[Dict[str, Any]],
+    requested_provider: str,
+    requested_model: str,
+    effective_provider: Optional[str],
+    effective_model: Optional[str],
+) -> Optional[Dict[str, str]]:
+    turn_metadata = {
+        **_turn_metadata_from_session(session_ctx),
+        **(metadata if isinstance(metadata, dict) else {}),
+    }
+    billing_source = str(
+        availability_payload.get("billing_source")
+        or turn_metadata.get("billing_source")
+        or ""
+    ).strip().lower()
+    credential_plane = str(availability_payload.get("credential_plane") or "").strip().lower()
+    public_tier = str(turn_metadata.get("ai_tier") or "").strip().lower().replace("-", "_")
+    if public_tier not in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS:
+        public_tier = empyralis_model_tier_routing_service.infer_migrated_public_tier_from_legacy_selection(
+            requested_provider=requested_provider or effective_provider,
+            requested_model=requested_model or effective_model,
+            metadata={
+                **turn_metadata,
+                **({"billing_source": billing_source} if billing_source else {}),
+                **({"credential_plane": credential_plane} if credential_plane else {}),
+            },
+        ) or ""
+    if (
+        credential_plane != "platform_runtime"
+        and billing_source != "empyralis_credits"
+        and public_tier not in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS
+    ):
+        return None
+    tier = empyralis_model_tier_contract.normalize_model_tier(public_tier or "pro", fallback="pro")
+    label = empyralis_model_tier_contract.model_tier_contract(tier).public_label
+    return {
+        "ai_tier": tier,
+        "ai_label": f"{label} AI",
+        "billing_source": "empyralis_credits",
+    }
+
+
+def _mask_platform_paid_final_payload(payload: Dict[str, Any], identity: Optional[Dict[str, str]]) -> Dict[str, Any]:
+    if not identity:
+        return payload
+    ai_label = str(identity.get("ai_label") or "Empyralis AI").strip() or "Empyralis AI"
+
+    def _sanitize_public_string(value: str) -> str:
+        sanitized = str(value)
+        replacements = [
+            (r"deepseek-v4-flash", "Light AI"),
+            (r"deepseek-v4-pro", "Pro AI"),
+            (r"deepseek", ai_label),
+        ]
+        for pattern, replacement in replacements:
+            sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+        return sanitized
+
+    def _sanitize_public_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(key): _sanitize_public_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [_sanitize_public_value(item) for item in value]
+        if isinstance(value, str):
+            return _sanitize_public_string(value)
+        return value
+
+    def _strip_internal_route(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(key): _strip_internal_route(item)
+                for key, item in value.items()
+                if str(key) not in {
+                    "provider",
+                    "model",
+                    "requested_provider",
+                    "requested_model",
+                    "effective_provider",
+                    "effective_model",
+                    "attempted_providers",
+                    "internal_provider",
+                    "internal_model",
+                    "pricing_source",
+                }
+            }
+        if isinstance(value, list):
+            return [_strip_internal_route(item) for item in value]
+        return value
+
+    masked = dict(payload)
+    masked["provider"] = None
+    masked["model"] = None
+    masked["attempted_providers"] = None
+    masked["usage_masked"] = _strip_internal_route(masked.get("usage_masked"))
+    masked["billing_source"] = identity["billing_source"]
+    masked["ai_tier"] = identity["ai_tier"]
+    masked["ai_label"] = identity["ai_label"]
+    context_used = masked.get("context_used")
+    if isinstance(context_used, dict):
+        masked["context_used"] = {
+            **context_used,
+            "requested_provider": None,
+            "effective_provider": None,
+            "requested_model": None,
+            "effective_model": None,
+            "provider_overridden": False,
+            "model_overridden": False,
+            "billing_source": identity["billing_source"],
+            "ai_tier": identity["ai_tier"],
+            "ai_label": identity["ai_label"],
+        }
+    return _sanitize_public_value(masked)
 
 
 def stream_provider_backed_direct_chat(
@@ -591,7 +728,7 @@ def stream_provider_backed_direct_chat(
                                     "tool_name": tool_name,
                                     "capability_id": tool_trace_metadata.get("capability_id"),
                                     "connector_id": connector_id or None,
-                                    "args_preview": argument_payload,
+                                    "args_preview": secret_redaction_service.sanitize_mapping(argument_payload),
                                 },
                                 persisted=True,
                                 item_id=tool_item_id,
@@ -936,35 +1073,45 @@ def stream_provider_backed_direct_chat(
                 _finish_trace(trace_context, outcome="success", final_message_id=assistant_message_id)
                 effective_provider = str(actual_provider or context.get("provider") or "").strip() or None
                 effective_model = str(actual_model or "").strip() or None
+                platform_paid_identity = _platform_paid_ai_identity(
+                    availability_payload=availability_payload,
+                    metadata=metadata,
+                    session_ctx=session_ctx,
+                    requested_provider=normalized_requested_provider,
+                    requested_model=normalized_requested_model,
+                    effective_provider=effective_provider,
+                    effective_model=effective_model,
+                )
+                final_response_payload = {
+                    "reply": final_reply,
+                    "actions": actions,
+                    "suggestions": proactive_suggestions,
+                    "mode": "answer_with_action" if actions else "answer",
+                    "usage_masked": usage_masked,
+                    "provider": actual_provider,
+                    "model": actual_model,
+                    "attempted_providers": attempted_providers,
+                    "error": llm_error,
+                    "response_leak_guard": leak_guard.metadata(),
+                    "context_used": services.build_context_used(
+                        workspace_id=normalized_workspace_id,
+                        requested_provider=normalized_requested_provider,
+                        effective_provider=effective_provider,
+                        requested_model=normalized_requested_model,
+                        effective_model=effective_model,
+                        reasoning_effort=normalized_reasoning_effort,
+                        connected_systems=connected_systems,
+                        tool_capabilities=tool_capabilities,
+                        prior_messages_used=prior_messages_used,
+                        history_mode=history_mode,
+                        run_created=False,
+                        fallback_used=False,
+                        fallback_reason=fallback_reason,
+                    ),
+                }
                 final_payload = {
                     "type": "final",
-                    "payload": {
-                        "reply": final_reply,
-                        "actions": actions,
-                        "suggestions": proactive_suggestions,
-                        "mode": "answer_with_action" if actions else "answer",
-                        "usage_masked": usage_masked,
-                        "provider": actual_provider,
-                        "model": actual_model,
-                        "attempted_providers": attempted_providers,
-                        "error": llm_error,
-                        "response_leak_guard": leak_guard.metadata(),
-                        "context_used": services.build_context_used(
-                            workspace_id=normalized_workspace_id,
-                            requested_provider=normalized_requested_provider,
-                            effective_provider=effective_provider,
-                            requested_model=normalized_requested_model,
-                            effective_model=effective_model,
-                            reasoning_effort=normalized_reasoning_effort,
-                            connected_systems=connected_systems,
-                            tool_capabilities=tool_capabilities,
-                            prior_messages_used=prior_messages_used,
-                            history_mode=history_mode,
-                            run_created=False,
-                            fallback_used=False,
-                            fallback_reason=fallback_reason,
-                        ),
-                    },
+                    "payload": _mask_platform_paid_final_payload(final_response_payload, platform_paid_identity),
                 }
                 yield final_payload
                 should_persist_final_reply = not is_public_generation_error_message(final_reply)
@@ -1052,33 +1199,43 @@ def stream_provider_backed_direct_chat(
     if trace_failed is not None:
         yield trace_failed
     _finish_trace(trace_context, outcome="partial", final_message_id=None)
+    platform_paid_identity = _platform_paid_ai_identity(
+        availability_payload=availability_payload,
+        metadata=metadata,
+        session_ctx=session_ctx,
+        requested_provider=normalized_requested_provider,
+        requested_model=normalized_requested_model,
+        effective_provider=effective_provider,
+        effective_model=effective_model,
+    )
+    final_error_payload = {
+        "reply": public_error_reply,
+        "actions": actions,
+        "interventions": [],
+        "suggestions": proactive_suggestions,
+        "mode": "answer_with_action" if actions else "answer",
+        "usage_masked": usage_masked,
+        "provider": actual_provider,
+        "model": actual_model,
+        "attempted_providers": attempted_providers,
+        "error": public_error_code,
+        "context_used": services.build_context_used(
+            workspace_id=normalized_workspace_id,
+            requested_provider=normalized_requested_provider,
+            effective_provider=effective_provider,
+            requested_model=normalized_requested_model,
+            effective_model=effective_model,
+            reasoning_effort=normalized_reasoning_effort,
+            connected_systems=connected_systems,
+            tool_capabilities=tool_capabilities,
+            prior_messages_used=prior_messages_used,
+            history_mode=history_mode,
+            run_created=False,
+            fallback_used=False,
+            fallback_reason=fallback_reason,
+        ),
+    }
     yield {
         "type": "final",
-        "payload": {
-            "reply": public_error_reply,
-            "actions": actions,
-            "interventions": [],
-            "suggestions": proactive_suggestions,
-            "mode": "answer_with_action" if actions else "answer",
-            "usage_masked": usage_masked,
-            "provider": actual_provider,
-            "model": actual_model,
-            "attempted_providers": attempted_providers,
-            "error": public_error_code,
-            "context_used": services.build_context_used(
-                workspace_id=normalized_workspace_id,
-                requested_provider=normalized_requested_provider,
-                effective_provider=effective_provider,
-                requested_model=normalized_requested_model,
-                effective_model=effective_model,
-                reasoning_effort=normalized_reasoning_effort,
-                connected_systems=connected_systems,
-                tool_capabilities=tool_capabilities,
-                prior_messages_used=prior_messages_used,
-                history_mode=history_mode,
-                run_created=False,
-                fallback_used=False,
-                fallback_reason=fallback_reason,
-            ),
-        },
+        "payload": _mask_platform_paid_final_payload(final_error_payload, platform_paid_identity),
     }

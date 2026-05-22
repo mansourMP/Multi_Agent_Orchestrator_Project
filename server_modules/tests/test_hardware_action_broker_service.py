@@ -1,0 +1,785 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import AsyncMock, patch
+
+from server_modules import hardware_action_broker_service as broker
+from server_modules.agent_trace_service import TraceContext
+
+
+def _trace() -> TraceContext:
+    return TraceContext(
+        trace_id="trace-1",
+        workspace_id="ws-1",
+        tenant_id="tenant-1",
+        thread_id="thread-1",
+        run_id="run-1",
+        root_agent_id="sage",
+    )
+
+
+def _registration() -> dict:
+    return {
+        "gateway_id": "gw-1",
+        "device_id": "device-1",
+        "tenant_id": "tenant-1",
+        "workspace_id": "ws-1",
+        "user_id": "user-1",
+        "status": "active",
+        "device_trust_state": "trusted",
+    }
+
+
+def _self_hosted_inventory(*, status: str = "online", online: bool = True, healthy: bool = True) -> dict:
+    return {
+        "tenant_id": "tenant-1",
+        "workspace_id": "ws-1",
+        "attachments": [
+            {
+                "attachment_id": "self_hosted_business_node:rprof-self",
+                "attachment_kind": "self_hosted_business_node",
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "runtime_profile_id": "rprof-self",
+                "runtime_profile_slug": "secure-node",
+                "runtime_id": "node-1",
+                "runtime_node_id": "node-1",
+                "machine_id": "machine-1",
+                "node_kind": "linux_server",
+                "self_hosted_node_status": status,
+                "owner_approved": True,
+                "max_concurrent_sessions": 2,
+                "capabilities": ["shell.execute", "file_access"],
+                "online": online,
+                "healthy": healthy,
+            }
+        ],
+    }
+
+
+class _FakeCloudRuntime:
+    def __init__(self) -> None:
+        self.create_session = AsyncMock(
+            return_value={
+                "session_id": "hrs-cloud-computer",
+                "status": "started",
+                "runtime_kind": "virtual_computer_runtime",
+                "cost_usage": {"estimated_cost": 0.01, "cost_unit": "runtime_unit"},
+            }
+        )
+        self.execute_action = AsyncMock(
+            return_value={
+                "session_id": "hrs-cloud-computer",
+                "status": "completed",
+                "runtime_kind": "virtual_computer_runtime",
+                "session": {"ui_current_url": "https://example.com"},
+                "action_result": {
+                    "ok": True,
+                    "action": "open_url",
+                    "cost_estimate": {"estimated_cost": 0.01, "cost_unit": "runtime_unit"},
+                },
+                "cost_usage": {"estimated_cost": 0.02, "cost_unit": "runtime_unit"},
+            }
+        )
+        self.stream_screenshot = AsyncMock(
+            return_value={
+                "session_id": "hrs-cloud-computer",
+                "status": "streaming",
+                "runtime_kind": "virtual_computer_runtime",
+                "artifact": {"artifact_id": "artifact-cloud-shot", "type": "screenshot"},
+                "streaming_ui": {"live_screenshot": {"artifact_id": "artifact-cloud-shot"}},
+                "cost_usage": {"estimated_cost": 0.03, "cost_unit": "runtime_unit"},
+            }
+        )
+        self.terminate_session = AsyncMock(
+            return_value={
+                "session_id": "hrs-cloud-computer",
+                "status": "terminated",
+                "runtime_kind": "virtual_computer_runtime",
+            }
+        )
+
+
+class _FakeCloudRuntimeRegistry:
+    def __init__(self, runtime: _FakeCloudRuntime) -> None:
+        self.runtime = runtime
+        self.resolve_calls: list[dict] = []
+
+    def resolve(self, runtime_choice, *, preferred_provider_id=None):
+        self.resolve_calls.append(
+            {
+                "runtime_choice": runtime_choice,
+                "preferred_provider_id": preferred_provider_id,
+            }
+        )
+        return self.runtime
+
+
+class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
+    def _session_patches(self):
+        return (
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.create_session",
+                new=AsyncMock(return_value="hrs-1"),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.extend_session",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_tool_started",
+                new=AsyncMock(return_value="evt-started"),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_tool_result",
+                new=AsyncMock(return_value="evt-result"),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_artifact_created",
+                new=AsyncMock(return_value="evt-artifact"),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_trace_service.emit_approval_requested",
+                new=AsyncMock(return_value="evt-approval"),
+            ),
+        )
+
+    async def test_cloud_default_hardware_action_returns_degraded_without_gateway_execution(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        execute_mock = AsyncMock()
+        with (
+            create_patch as create_session,
+            extend_patch,
+            started_patch,
+            result_patch as emit_result,
+            artifact_patch,
+            approval_patch,
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_execution_service.execute_tool_via_gateway",
+                execute_mock,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="screenshot.capture",
+                runtime_target="cloud_default",
+                run_id="run-1",
+                trace_id="trace-1",
+                thread_id="thread-1",
+                session_id="hrs-cloud",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "degraded")
+        self.assertEqual(payload["reason"], "hardware_action_requires_optional_runtime_target")
+        self.assertEqual(payload["runtime_session"]["state"], "degraded")
+        self.assertEqual(payload["runtime_session"]["canonical_runtime_target"], "cloud_default")
+        execute_mock.assert_not_awaited()
+        emit_result.assert_awaited()
+        create_kwargs = create_session.await_args.kwargs
+        self.assertEqual(create_kwargs["channel"], broker.HARDWARE_RUNTIME_CHANNEL)
+        self.assertEqual(create_kwargs["metadata"]["runtime_session_binding"], broker.HARDWARE_RUNTIME_SESSION_BINDING)
+        self.assertEqual(create_kwargs["metadata"]["state"], "degraded")
+
+    async def test_gateway_connected_action_routes_through_gateway_with_runtime_session_and_redacted_trace(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        execute_mock = AsyncMock(
+            return_value={
+                "gateway_id": "gw-1",
+                "device_id": "device-1",
+                "workspace_id": "ws-1",
+                "request_id": "req-1",
+                "capability_id": "browser_automation.interactive",
+                "run_id": "run-1",
+                "result": {
+                    "summary": "Used browser.",
+                    "artifacts": [{"id": "artifact-1"}],
+                },
+            }
+        )
+        with (
+            create_patch,
+            extend_patch,
+            started_patch as emit_started,
+            result_patch as emit_result,
+            artifact_patch as emit_artifact,
+            approval_patch,
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_state_repository.get_gateway_registration",
+                return_value=_registration(),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_protocol_service.gateway_connection_is_live",
+                return_value=True,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_approval_service.capability_requires_owner_approval",
+                return_value=False,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_execution_service.execute_tool_via_gateway",
+                execute_mock,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="browser.open",
+                arguments={"url": "https://example.com", "api_key": "sk-secret-token"},
+                runtime_target="user_device_gateway",
+                gateway_id="gw-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-1",
+                session_id="hrs-gateway",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["runtime_session"]["state"], "ready")
+        self.assertEqual(payload["runtime_session"]["gateway_id"], "gw-1")
+        self.assertIn("artifact-1", payload["artifacts"])
+        execute_mock.assert_awaited_once()
+        execute_kwargs = execute_mock.await_args.kwargs
+        self.assertEqual(execute_kwargs["gateway_id"], "gw-1")
+        self.assertEqual(execute_kwargs["capability_id"], "browser_automation.interactive")
+        self.assertEqual(execute_kwargs["request_id"], "req-1")
+        emit_started.assert_awaited()
+        self.assertEqual(emit_started.await_args.kwargs["args_preview"]["api_key"], "[redacted]")
+        emit_artifact.assert_awaited_once()
+        emit_result.assert_awaited()
+
+    async def test_gateway_offline_returns_offline_without_dispatch(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        execute_mock = AsyncMock()
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch,
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_state_repository.get_gateway_registration",
+                return_value=_registration(),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_protocol_service.gateway_connection_is_live",
+                return_value=False,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_execution_service.execute_tool_via_gateway",
+                execute_mock,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="shell.exec",
+                arguments={"command": "pwd"},
+                runtime_target="local_companion",
+                gateway_id="gw-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                session_id="hrs-offline",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "offline")
+        self.assertEqual(payload["reason"], "gateway_offline")
+        self.assertEqual(payload["runtime_session"]["state"], "offline")
+        execute_mock.assert_not_awaited()
+
+    async def test_gateway_risky_action_requests_approval_without_execution(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        approval = {
+            "approval_id": "gapproval-1",
+            "status": "pending",
+            "request_payload": {
+                "capability_id": "shell.execute",
+                "arguments": {"command": "echo hello", "password": "secret"},
+            },
+        }
+        request_approval_mock = AsyncMock(return_value=approval)
+        execute_mock = AsyncMock()
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch as emit_approval,
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_state_repository.get_gateway_registration",
+                return_value=_registration(),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_protocol_service.gateway_connection_is_live",
+                return_value=True,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_approval_service.capability_requires_owner_approval",
+                return_value=True,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_approval_service.request_gateway_tool_approval",
+                request_approval_mock,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_execution_service.execute_tool_via_gateway",
+                execute_mock,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="shell.exec",
+                arguments={"command": "echo hello", "password": "secret"},
+                runtime_target="user_device_gateway",
+                gateway_id="gw-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-1",
+                session_id="hrs-approval",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "waiting_approval")
+        self.assertEqual(payload["runtime_session"]["state"], "waiting_approval")
+        self.assertEqual(
+            payload["runtime_session"]["approvals"][0]["request_payload"]["arguments"]["password"],
+            "[redacted]",
+        )
+        request_approval_mock.assert_awaited_once()
+        execute_mock.assert_not_awaited()
+        emit_approval.assert_awaited_once()
+
+    async def test_cloud_computer_browser_action_uses_virtual_runtime_adapter(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        cloud_runtime = _FakeCloudRuntime()
+        cloud_registry = _FakeCloudRuntimeRegistry(cloud_runtime)
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch as emit_result,
+            artifact_patch as emit_artifact,
+            approval_patch,
+            patch(
+                "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",
+                return_value=cloud_registry,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="browser.open",
+                arguments={"url": "https://example.com"},
+                runtime_target="empyralis_cloud_computer",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-cloud",
+                session_id="hrs-cloud-computer",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["runtime_session"]["state"], "ready")
+        self.assertEqual(payload["runtime_session"]["canonical_runtime_target"], "empyralis_cloud_computer")
+        self.assertEqual(payload["runtime_session"]["runtime_choice"], "virtual_browser")
+        self.assertEqual(payload["execution"]["action"], "open_url")
+        self.assertEqual(cloud_registry.resolve_calls[0]["runtime_choice"], "virtual_browser")
+        cloud_runtime.create_session.assert_awaited_once()
+        cloud_runtime.execute_action.assert_awaited_once()
+        action_payload = cloud_runtime.execute_action.await_args.args[0]
+        self.assertEqual(action_payload["action"], "open_url")
+        self.assertEqual(action_payload["action_args"]["url"], "https://example.com")
+        cloud_runtime.stream_screenshot.assert_not_awaited()
+        emit_artifact.assert_not_awaited()
+        emit_result.assert_awaited()
+
+    async def test_cloud_computer_screenshot_streams_artifact_without_gateway(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        cloud_runtime = _FakeCloudRuntime()
+        cloud_registry = _FakeCloudRuntimeRegistry(cloud_runtime)
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch as emit_result,
+            artifact_patch as emit_artifact,
+            approval_patch,
+            patch(
+                "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",
+                return_value=cloud_registry,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="screenshot.capture",
+                runtime_target="empyralis_cloud_computer",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-cloud-shot",
+                session_id="hrs-cloud-computer",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["artifacts"], ["artifact-cloud-shot"])
+        self.assertEqual(payload["runtime_session"]["artifacts"], ["artifact-cloud-shot"])
+        self.assertEqual(cloud_registry.resolve_calls[0]["runtime_choice"], "virtual_browser")
+        cloud_runtime.create_session.assert_awaited_once()
+        cloud_runtime.stream_screenshot.assert_awaited_once()
+        cloud_runtime.execute_action.assert_not_awaited()
+        emit_artifact.assert_awaited_once()
+        self.assertEqual(emit_result.await_args.kwargs["artifact_ids"], ["artifact-cloud-shot"])
+
+    async def test_cloud_computer_risky_shell_waits_for_approval_without_execution(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        cloud_runtime = _FakeCloudRuntime()
+        cloud_registry = _FakeCloudRuntimeRegistry(cloud_runtime)
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch as emit_approval,
+            patch(
+                "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",
+                return_value=cloud_registry,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="shell.exec",
+                arguments={"command": "rm -rf /tmp/demo", "password": "secret"},
+                runtime_target="empyralis_cloud_computer",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-cloud-shell",
+                session_id="hrs-cloud-computer",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "waiting_approval")
+        self.assertEqual(payload["runtime_session"]["state"], "waiting_approval")
+        approval_args = payload["runtime_session"]["approvals"][0]["request_payload"]["arguments"]
+        self.assertNotIn("password", approval_args)
+        self.assertEqual(approval_args["command"], "rm -rf /tmp/demo")
+        self.assertEqual(cloud_registry.resolve_calls, [])
+        cloud_runtime.create_session.assert_not_awaited()
+        cloud_runtime.execute_action.assert_not_awaited()
+        emit_approval.assert_awaited_once()
+
+    async def test_cloud_computer_unsupported_file_action_returns_degraded(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        cloud_runtime = _FakeCloudRuntime()
+        cloud_registry = _FakeCloudRuntimeRegistry(cloud_runtime)
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch,
+            patch(
+                "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",
+                return_value=cloud_registry,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="file.read",
+                arguments={"path": "/tmp/demo.txt"},
+                runtime_target="empyralis_cloud_computer",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-cloud-file",
+                session_id="hrs-cloud-computer",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "degraded")
+        self.assertEqual(payload["reason"], "cloud_computer_action_not_supported")
+        self.assertEqual(payload["runtime_session"]["state"], "degraded")
+        self.assertEqual(cloud_registry.resolve_calls, [])
+        cloud_runtime.create_session.assert_not_awaited()
+
+    async def test_self_hosted_node_action_enqueues_command_after_gate(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        enqueue_mock = AsyncMock(
+            return_value={
+                "ok": True,
+                "runtime_profile_id": "rprof-self",
+                "runtime_node_id": "node-1",
+                "workspace_id": "ws-1",
+                "command": {
+                    "id": "shcmd-1",
+                    "state": "queued",
+                    "command_type": "hardware_action",
+                },
+            }
+        )
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch as emit_result,
+            artifact_patch,
+            approval_patch,
+            patch(
+                "server_modules.hardware_action_broker_service.runtime_attachment_service.list_workspace_runtime_attachments",
+                new=AsyncMock(return_value=_self_hosted_inventory()),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_registry_repository.enqueue_self_hosted_runtime_command",
+                enqueue_mock,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="shell.exec",
+                arguments={"command": "printf hello"},
+                runtime_target="self_hosted_node",
+                node_id="node-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-self-host",
+                session_id="hrs-self-host",
+                trace_context=_trace(),
+                require_approval=False,
+            )
+
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["runtime_session"]["state"], "running")
+        self.assertEqual(payload["runtime_session"]["runtime_node_id"], "node-1")
+        self.assertEqual(payload["runtime_session"]["runtime_profile_id"], "rprof-self")
+        self.assertEqual(payload["runtime_session"]["self_hosted_command_id"], "shcmd-1")
+        enqueue_mock.assert_awaited_once()
+        enqueue_kwargs = enqueue_mock.await_args.kwargs
+        self.assertEqual(enqueue_kwargs["runtime_profile_id"], "rprof-self")
+        self.assertEqual(enqueue_kwargs["runtime_node_id"], "node-1")
+        self.assertEqual(enqueue_kwargs["command_type"], "hardware_action")
+        self.assertEqual(enqueue_kwargs["command_payload"]["arguments"]["command"], "printf hello")
+        emit_result.assert_awaited()
+        self.assertEqual(emit_result.await_args.kwargs["status"], "running")
+
+    async def test_self_hosted_node_risky_action_waits_for_approval_without_enqueue(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        enqueue_mock = AsyncMock()
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch as emit_approval,
+            patch(
+                "server_modules.hardware_action_broker_service.runtime_attachment_service.list_workspace_runtime_attachments",
+                new=AsyncMock(return_value=_self_hosted_inventory()),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_registry_repository.enqueue_self_hosted_runtime_command",
+                enqueue_mock,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="shell.exec",
+                arguments={"command": "rm -rf /tmp/demo", "password": "secret"},
+                runtime_target="self_hosted_node",
+                node_id="node-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-self-approval",
+                session_id="hrs-self-host",
+                trace_context=_trace(),
+            )
+
+        self.assertEqual(payload["status"], "waiting_approval")
+        self.assertEqual(payload["runtime_session"]["state"], "waiting_approval")
+        self.assertEqual(
+            payload["runtime_session"]["approvals"][0]["request_payload"]["arguments"]["password"],
+            "[redacted]",
+        )
+        enqueue_mock.assert_not_awaited()
+        emit_approval.assert_awaited_once()
+
+    async def test_self_hosted_node_offline_returns_offline_without_enqueue(self) -> None:
+        create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()
+        enqueue_mock = AsyncMock()
+        with (
+            create_patch,
+            extend_patch,
+            started_patch,
+            result_patch,
+            artifact_patch,
+            approval_patch,
+            patch(
+                "server_modules.hardware_action_broker_service.runtime_attachment_service.list_workspace_runtime_attachments",
+                new=AsyncMock(return_value=_self_hosted_inventory(status="offline", online=False, healthy=False)),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_registry_repository.enqueue_self_hosted_runtime_command",
+                enqueue_mock,
+            ),
+        ):
+            payload = await broker.execute_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                action_id="shell.exec",
+                arguments={"command": "printf hello"},
+                runtime_target="self_hosted_node",
+                node_id="node-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="req-self-offline",
+                session_id="hrs-self-host",
+                trace_context=_trace(),
+                require_approval=False,
+            )
+
+        self.assertEqual(payload["status"], "offline")
+        self.assertEqual(payload["reason"], "self_hosted_node_offline")
+        enqueue_mock.assert_not_awaited()
+
+    async def test_stop_gateway_action_interrupts_and_marks_session_terminated(self) -> None:
+        interrupt_mock = AsyncMock(
+            return_value={
+                "gateway_id": "gw-1",
+                "device_id": "device-1",
+                "workspace_id": "ws-1",
+                "request_id": "stop-1",
+                "run_id": "run-1",
+                "interrupted": True,
+                "interrupt_count": 1,
+            }
+        )
+        with (
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.extend_session",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_state_repository.get_gateway_registration",
+                return_value=_registration(),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_protocol_service.gateway_connection_is_live",
+                return_value=True,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.gateway_execution_service.interrupt_tool_via_gateway",
+                interrupt_mock,
+            ),
+        ):
+            payload = await broker.stop_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                runtime_target="user_device_gateway",
+                gateway_id="gw-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="stop-1",
+                target_request_id="req-1",
+                reason="operator_requested_stop",
+                session_id="hrs-gateway",
+            )
+
+        self.assertEqual(payload["status"], "terminated")
+        self.assertEqual(payload["runtime_session"]["state"], "terminated")
+        interrupt_mock.assert_awaited_once()
+        interrupt_kwargs = interrupt_mock.await_args.kwargs
+        self.assertEqual(interrupt_kwargs["gateway_id"], "gw-1")
+        self.assertEqual(interrupt_kwargs["target_request_id"], "req-1")
+
+    async def test_stop_cloud_computer_action_terminates_virtual_runtime_session(self) -> None:
+        cloud_runtime = _FakeCloudRuntime()
+        cloud_registry = _FakeCloudRuntimeRegistry(cloud_runtime)
+        with (
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.extend_session",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",
+                return_value=cloud_registry,
+            ),
+        ):
+            payload = await broker.stop_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                runtime_target="empyralis_cloud_computer",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="stop-cloud",
+                reason="operator_requested_stop",
+                session_id="hrs-cloud-computer",
+            )
+
+        self.assertEqual(payload["status"], "terminated")
+        self.assertEqual(payload["runtime_session"]["state"], "terminated")
+        cloud_runtime.terminate_session.assert_awaited_once()
+        terminate_payload = cloud_runtime.terminate_session.await_args.args[0]
+        self.assertEqual(terminate_payload["session_id"], "hrs-cloud-computer")
+        self.assertTrue(terminate_payload["manual_terminate"])
+
+    async def test_stop_self_hosted_node_action_enqueues_cancel_command(self) -> None:
+        enqueue_mock = AsyncMock(
+            return_value={
+                "ok": True,
+                "runtime_profile_id": "rprof-self",
+                "runtime_node_id": "node-1",
+                "workspace_id": "ws-1",
+                "command": {
+                    "id": "shcmd-stop",
+                    "state": "queued",
+                    "command_type": "cancel_runtime_action",
+                },
+            }
+        )
+        with (
+            patch(
+                "server_modules.hardware_action_broker_service.session_service.extend_session",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.runtime_attachment_service.list_workspace_runtime_attachments",
+                new=AsyncMock(return_value=_self_hosted_inventory()),
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.agent_registry_repository.enqueue_self_hosted_runtime_command",
+                enqueue_mock,
+            ),
+        ):
+            payload = await broker.stop_hardware_action(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                runtime_target="self_hosted_node",
+                node_id="node-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                request_id="stop-self",
+                target_request_id="req-self-host",
+                reason="operator_requested_stop",
+                session_id="hrs-self-host",
+            )
+
+        self.assertEqual(payload["status"], "terminated")
+        self.assertEqual(payload["runtime_session"]["state"], "terminated")
+        enqueue_mock.assert_awaited_once()
+        enqueue_kwargs = enqueue_mock.await_args.kwargs
+        self.assertEqual(enqueue_kwargs["command_type"], "cancel_runtime_action")
+        self.assertEqual(enqueue_kwargs["command_payload"]["target_request_id"], "req-self-host")
+
+
+if __name__ == "__main__":
+    unittest.main()

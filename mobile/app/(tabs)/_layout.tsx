@@ -79,7 +79,7 @@ export default function TabsLayout() {
             chats: { active: "chatbubble-ellipses", inactive: "chatbubble-ellipses-outline" },
             kin: { active: "construct", inactive: "construct-outline" },
             "apps/index": { active: "compass", inactive: "compass-outline" },
-            "inbox/index": { active: "pulse", inactive: "pulse-outline" },
+            "inbox/index": { active: "mail", inactive: "mail-outline" },
             "profile/index": { active: "settings", inactive: "settings-outline" },
           };
           const iconSet = iconMap[route.name];
@@ -91,7 +91,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="chats" options={{ title: "Chat" }} />
       <Tabs.Screen name="kin" options={{ title: "Build" }} />
       <Tabs.Screen name="apps/index" options={{ href: null }} />
-      <Tabs.Screen name="inbox/index" options={{ title: "Activity" }} />
+      <Tabs.Screen name="inbox/index" options={{ title: "Inbox" }} />
       <Tabs.Screen name="profile/index" options={{ title: "Settings" }} />
     </Tabs>
   );

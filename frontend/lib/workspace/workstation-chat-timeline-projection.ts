@@ -69,7 +69,6 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'normalized_approval',
   'path',
   'query',
-  'request_id',
   'resolution',
   'runtime_access_mode',
   'runtime_session_id',
@@ -91,7 +90,6 @@ const SAFE_TRACE_METADATA_KEYS = new Set([
   'artifact_id',
   'code',
   'label',
-  'request_id',
   'runtime_access_mode',
   'runtime_session_id',
   'runtime_target',
@@ -99,6 +97,58 @@ const SAFE_TRACE_METADATA_KEYS = new Set([
   'summary',
   'title',
 ]);
+
+const SAFE_TRACE_EVENT_EXACT = new Set([
+  'artifact.created',
+  'approval.requested',
+  'approval.resolved',
+  'browser.action',
+  'browser.screenshot',
+  'computer.browser.action',
+  'screenshot.captured',
+  'search.query',
+  'search.results',
+  'tool.result',
+  'tool.started',
+  'trace.completed',
+  'trace.failed',
+]);
+
+const SAFE_TRACE_EVENT_PREFIXES = [
+  'approval.',
+  'artifact.',
+  'browser.',
+  'computer.',
+  'file.',
+  'gateway.',
+  'hardware.',
+  'runtime.',
+  'screenshot.',
+  'search.',
+  'shell.',
+  'tool.',
+];
+
+const SAFE_SENDISH_TRACE_TOKENS = ['telegram', 'whatsapp', 'gmail', 'email', 'mail', 'message.sent', 'message.queued'];
+const BLOCKED_TRACE_EVENTS = new Set([
+  'assistant.message.delta',
+  'final',
+  'message.delta',
+  'reasoning.summary.delta',
+  'trace.started',
+]);
+const BLOCKED_TRACE_EVENT_TOKENS = [
+  '.delta',
+  'audit',
+  'debug',
+  'internal',
+  'model',
+  'policy',
+  'prompt',
+  'provider',
+  'raw',
+  'reasoning',
+];
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -117,9 +167,40 @@ function looksInternalText(value: string): boolean {
   }
   const lowered = normalized.toLowerCase();
   return lowered.includes('activity_event_id')
+    || lowered.includes('chain of thought')
+    || lowered.includes('chain_of_thought')
+    || lowered.includes('deepseek')
+    || lowered.includes('model id')
+    || lowered.includes('model_id')
+    || lowered.includes('policy metadata')
+    || lowered.includes('policy_metadata')
+    || lowered.includes('provider id')
+    || lowered.includes('provider_id')
+    || lowered.includes('raw output')
     || lowered.includes('stacktrace')
+    || lowered.includes('system prompt')
+    || lowered.includes('system_prompt')
+    || lowered.includes('request id')
+    || lowered.includes('request_id')
+    || lowered.includes('trace id')
     || lowered.includes('trace_id')
     || lowered.includes('raw_');
+}
+
+function isSafeTraceEventType(eventType: string): boolean {
+  if (!eventType || BLOCKED_TRACE_EVENTS.has(eventType)) {
+    return false;
+  }
+  if (BLOCKED_TRACE_EVENT_TOKENS.some((token) => eventType.includes(token))) {
+    return false;
+  }
+  if (SAFE_TRACE_EVENT_EXACT.has(eventType)) {
+    return true;
+  }
+  if (SAFE_TRACE_EVENT_PREFIXES.some((prefix) => eventType.startsWith(prefix))) {
+    return true;
+  }
+  return SAFE_SENDISH_TRACE_TOKENS.some((token) => eventType.includes(token));
 }
 
 function safeScalar(value: unknown, key = ''): string | number | boolean | null {
@@ -181,7 +262,7 @@ function sanitizeSafeRecord(value: unknown, safeKeys: Set<string>, depth = 0): R
 
 function safeTraceProjectionEvent(record: Record<string, unknown>, index: number): TimelineProjectionEvent | null {
   const eventType = readString(record.event_type).toLowerCase();
-  if (!eventType || eventType === 'trace.started') {
+  if (!isSafeTraceEventType(eventType)) {
     return null;
   }
   const data = sanitizeSafeRecord(record.data ?? record.payload, SAFE_TRACE_DATA_KEYS);
@@ -301,7 +382,15 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
   const visibleTranscriptCells = useMemo(() => {
     const canonicalMessages = options.threadMessages.filter((message) => !options.isSyntheticTranscriptMessage(message));
     const nextCells: CodexTranscriptCell[] = [];
-    let insertedReplayProofCells = false;
+    let latestAssistantMessageId: string | null = null;
+    for (let index = canonicalMessages.length - 1; index >= 0; index -= 1) {
+      const candidate = canonicalMessages[index];
+      if (candidate?.role === 'assistant') {
+        latestAssistantMessageId = candidate.id;
+        break;
+      }
+    }
+    let insertedReplayProofForLatestAssistant = false;
     for (const message of canonicalMessages) {
       const cell = workstationMessageToCodexCell(message);
       if (options.isProviderGateTranscriptCell(cell)) {
@@ -310,7 +399,9 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
       if (!options.isSending && cell.kind === 'assistant') {
         const replayCells = replayProofCellsForMessage(message, options);
         if (replayCells.length > 0) {
-          insertedReplayProofCells = true;
+          if (message.id === latestAssistantMessageId) {
+            insertedReplayProofForLatestAssistant = true;
+          }
           nextCells.push(...replayCells);
         }
       }
@@ -320,7 +411,7 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
       nextCells.push(workstationMessageToCodexCell(options.pendingUserMessage));
     }
     const trailingCell = nextCells[nextCells.length - 1] ?? null;
-    const scrollableSystemCells = options.isSending || insertedReplayProofCells ? [] : projectedSystemCells;
+    const scrollableSystemCells = options.isSending || insertedReplayProofForLatestAssistant ? [] : projectedSystemCells;
     const shouldInsertStepsBeforeFinalAssistant = scrollableSystemCells.length > 0
       && trailingCell?.kind === 'assistant';
     if (shouldInsertStepsBeforeFinalAssistant && trailingCell) {

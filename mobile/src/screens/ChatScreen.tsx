@@ -6,6 +6,7 @@ import {
   Text,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   PanResponder,
@@ -34,7 +35,7 @@ import { buildAgentThreadFromInstall, getPrimaryAgent } from "@/src/lib/agents";
 import { MobileAuthExpiredError, mobileApi, type EmpyralistStreamEvent, type MobileThreadHistoryItem } from "@/src/lib/api";
 import { useMobileChatContext, usePrimaryGatewayDoctor } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
-import { transcriptStreamEventsFromMetadata } from "@/src/lib/transcriptEvents";
+import { normalizeTranscriptStreamEvent, transcriptStreamEventsFromMetadata } from "@/src/lib/transcriptEvents";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
@@ -304,6 +305,14 @@ function streamEventStatus(value: unknown, eventType = "", detailPayload: Record
   if (["error", "failed", "failure", "blocked", "denied", "deny", "rejected", "reject", "offline", "degraded", "cancelled", "canceled", "aborted"].includes(status)) {
     return "error";
   }
+  if (
+    normalizedEventType.includes("error")
+    || normalizedEventType.includes("failed")
+    || normalizedEventType.includes("blocked")
+    || normalizedEventType.includes("interrupted")
+  ) {
+    return "error";
+  }
   if (normalizedEventType.includes("approval.resolved")) {
     return "done";
   }
@@ -329,7 +338,7 @@ function streamEventGroupKey(event: EmpyralistStreamEvent): string {
   const payload = event.payload || {};
   const data = streamEventData(payload);
   const detailPayload = { ...payload, ...data };
-  const eventType = String(payload.event_type || payload.type || payload.kind || "").trim().toLowerCase();
+  const eventType = String(detailPayload.event_type || detailPayload.event || detailPayload.type || detailPayload.kind || "").trim().toLowerCase();
   const groupKind = eventType.includes("approval")
     ? "approval"
     : eventType.includes("artifact") || eventType.includes("screenshot")
@@ -382,11 +391,13 @@ function compactStreamEventDetail(payload: Record<string, unknown>): string | un
 }
 
 function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null {
-  const payload = event.payload || {};
+  const normalizedEvent = normalizeTranscriptStreamEvent(event);
+  if (!normalizedEvent) return null;
+  const payload = normalizedEvent.payload || {};
   const data = streamEventData(payload);
   const detailPayload = { ...payload, ...data };
   const metadata = readRecord(detailPayload.metadata);
-  const eventType = String(payload.event_type || payload.type || payload.kind || "").trim().toLowerCase();
+  const eventType = String(detailPayload.event_type || detailPayload.event || detailPayload.type || detailPayload.kind || "").trim().toLowerCase();
   const status = streamEventStatus(detailPayload.status || detailPayload.state, eventType, detailPayload);
   const explicitTitle = String(detailPayload.title || detailPayload.label || detailPayload.action || "").trim();
   const toolName = String(detailPayload.tool_name || detailPayload.name || detailPayload.capability_id || detailPayload.action_id || "").trim();
@@ -417,7 +428,11 @@ function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null
     } else if (eventType.includes("shell") || eventType.includes("exec") || eventType.includes("command") || toolToken.includes("shell") || toolToken.includes("command")) {
       speech = status === "done" ? "Ran command" : "Running shell";
     } else if (eventType.includes("hardware")) {
-      speech = status === "done" ? "Hardware action complete" : "Using hardware runtime";
+      speech = status === "done" ? "Hardware action complete" : status === "error" ? "Hardware action blocked" : "Using hardware runtime";
+    } else if (eventType.includes("error") || eventType.includes("failed")) {
+      speech = "Action failed";
+    } else if (eventType.includes("status") || eventType.includes("runtime")) {
+      speech = status === "done" ? "Status updated" : status === "error" ? "Action blocked" : "Checking status";
     } else if (toolName) {
       speech = status === "done" ? `Used ${toolName}` : `Using ${toolName}`;
     } else if (event.event === "step") {
@@ -434,6 +449,10 @@ function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null
     .filter(Boolean)
     .join(" · ");
   const source = [detail, runtimeDetail].filter(Boolean).join(" · ") || undefined;
+  const artifactUrl = String(detailPayload.url || "").trim();
+  const actions = artifactUrl && /^(https?:|file:)/i.test(artifactUrl)
+    ? [{ label: "Open", command: `open:${artifactUrl}` }]
+    : undefined;
 
   return {
     intent: "assistant",
@@ -442,6 +461,7 @@ function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null
     toolKind: eventType || event.event,
     speech,
     source,
+    actions,
   };
 }
 
@@ -451,7 +471,12 @@ function buildTransparencyCards(payload: {
   stream_events?: EmpyralistStreamEvent[];
 }, options?: { limit?: number }): AgentPayload[] {
   const cards: AgentPayload[] = [];
-  const pushCard = (title: string, detail?: string, status: AgentPayload["toolStatus"] = "done") => {
+  const pushCard = (
+    title: string,
+    detail?: string,
+    status: AgentPayload["toolStatus"] = "done",
+    actions?: AgentPayload["actions"],
+  ) => {
     const cleanTitle = title.trim();
     const cleanDetail = String(detail || "").trim();
     if (!cleanTitle || cards.some((item) => item.speech === cleanTitle && item.source === cleanDetail)) return;
@@ -461,13 +486,16 @@ function buildTransparencyCards(payload: {
       toolStatus: status,
       speech: cleanTitle,
       source: cleanDetail || undefined,
+      actions,
     });
   };
 
   for (const event of Array.isArray(payload.stream_events) ? payload.stream_events : []) {
-    const card = buildStreamEventCard(event);
+    const normalizedEvent = normalizeTranscriptStreamEvent(event);
+    if (!normalizedEvent) continue;
+    const card = buildStreamEventCard(normalizedEvent);
     if (card) {
-      pushCard(card.speech, card.source, card.toolStatus);
+      pushCard(card.speech, card.source, card.toolStatus, card.actions);
     }
   }
 
@@ -877,9 +905,11 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
       let nextStreamCardIndex = placeholderIndex + 1;
       const streamCardIndexByKey = new Map<string, number>();
       const upsertStreamEventCard = (event: EmpyralistStreamEvent) => {
-        const card = buildStreamEventCard(event);
+        const normalizedEvent = normalizeTranscriptStreamEvent(event);
+        if (!normalizedEvent) return;
+        const card = buildStreamEventCard(normalizedEvent);
         if (!card) return;
-        const key = streamEventGroupKey(event);
+        const key = streamEventGroupKey(normalizedEvent);
         const existingIndex = streamCardIndexByKey.get(key);
         if (existingIndex != null) {
           updateMessage(currentSessionId, existingIndex, card);
@@ -924,7 +954,10 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
 
       for (const card of buildTransparencyCards({
         ...payload,
-        stream_events: (payload.stream_events || []).filter((event) => !streamCardIndexByKey.has(streamEventGroupKey(event))),
+        stream_events: (payload.stream_events || []).filter((event) => {
+          const normalizedEvent = normalizeTranscriptStreamEvent(event);
+          return normalizedEvent ? !streamCardIndexByKey.has(streamEventGroupKey(normalizedEvent)) : false;
+        }),
       }, { limit: 4 })) {
         addMessage(currentSessionId, card);
       }
@@ -996,9 +1029,11 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         let nextStreamCardIndex = placeholderIndex + 1;
         const streamCardIndexByKey = new Map<string, number>();
         const upsertStreamEventCard = (event: EmpyralistStreamEvent) => {
-          const card = buildStreamEventCard(event);
+          const normalizedEvent = normalizeTranscriptStreamEvent(event);
+          if (!normalizedEvent) return;
+          const card = buildStreamEventCard(normalizedEvent);
           if (!card) return;
-          const key = streamEventGroupKey(event);
+          const key = streamEventGroupKey(normalizedEvent);
           const existingIndex = streamCardIndexByKey.get(key);
           if (existingIndex != null) {
             updateMessage(activeSession.id, existingIndex, card);
@@ -1041,7 +1076,10 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         });
         for (const resultCard of buildTransparencyCards({
           ...payload,
-          stream_events: (payload.stream_events || []).filter((event) => !streamCardIndexByKey.has(streamEventGroupKey(event))),
+          stream_events: (payload.stream_events || []).filter((event) => {
+            const normalizedEvent = normalizeTranscriptStreamEvent(event);
+            return normalizedEvent ? !streamCardIndexByKey.has(streamEventGroupKey(normalizedEvent)) : false;
+          }),
         }, { limit: 4 })) {
           addMessage(activeSession.id, resultCard);
         }
@@ -1072,6 +1110,14 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     setRunActivity([]);
     setIsLoading(false);
   };
+
+  const handleToolAction = React.useCallback((command: string) => {
+    const url = command.startsWith("open:") ? command.slice("open:".length).trim() : "";
+    if (!url) return;
+    void Linking.openURL(url).catch(() => {
+      showBanner("Could not open that artifact.", "error");
+    });
+  }, [showBanner]);
 
   const renderMessage = ({ item, index }: { item: AgentPayload; index: number }) => {
     const isUser = item.intent === "user";
@@ -1111,6 +1157,15 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
               </Text>
             ) : null}
           </View>
+          {item.actions?.map((action) => (
+            <ActionButton
+              key={action.command}
+              label={action.label}
+              variant="secondary"
+              onPress={() => handleToolAction(action.command)}
+              style={{ alignSelf: "center" }}
+            />
+          ))}
         </View>
       );
     }

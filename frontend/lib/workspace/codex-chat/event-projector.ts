@@ -168,6 +168,78 @@ function browserActionDisplay(action: string): string {
   return 'Browser action';
 }
 
+function traceStatus(value: unknown): 'running' | 'done' | 'error' {
+  return normalizeToolResultStatus(value);
+}
+
+function statusFromEventType(eventType: string, explicitStatus: unknown): 'running' | 'done' | 'error' {
+  const normalized = readString(explicitStatus).toLowerCase();
+  if (normalized) {
+    return traceStatus(normalized);
+  }
+  if (/started|queued|waiting|pending|running/.test(eventType)) {
+    return 'running';
+  }
+  if (/failed|failure|error|blocked|denied|offline|degraded/.test(eventType)) {
+    return 'error';
+  }
+  return 'done';
+}
+
+function shellCommandFromData(data: Record<string, unknown>): string {
+  const input = toolInputRecord(data);
+  return readString(data.command)
+    || readString(data.cmd)
+    || readString(data.summary)
+    || readString(input.command)
+    || readString(input.cmd);
+}
+
+function filePathFromData(data: Record<string, unknown>): string {
+  const input = toolInputRecord(data);
+  return readString(data.path)
+    || readString(data.file_path)
+    || readString(data.filename)
+    || readString(input.path)
+    || readString(input.file_path)
+    || readString(input.filename)
+    || readString(input.name);
+}
+
+function fileActionFromEventType(eventType: string, fallback: string): string {
+  if (eventType.includes('delete') || eventType.includes('remove')) {
+    return 'Delete';
+  }
+  if (eventType.includes('write') || eventType.includes('create') || eventType.includes('update') || eventType.includes('change')) {
+    return 'Write';
+  }
+  if (eventType.includes('rename') || eventType.includes('move')) {
+    return 'Move';
+  }
+  if (eventType.includes('open')) {
+    return 'Open';
+  }
+  return fileActionLabel(fallback, 'Read');
+}
+
+function runtimeStatusLabel(eventType: string, data: Record<string, unknown>): string {
+  const target = readString(data.runtime_target).toLowerCase();
+  const state = readString(data.state || data.status).toLowerCase();
+  if (state === 'offline' || eventType.includes('offline')) {
+    return target.includes('node') ? 'Node offline' : 'Gateway offline';
+  }
+  if (state === 'degraded' || eventType.includes('degraded')) {
+    return target.includes('node') ? 'Node degraded' : 'Runtime degraded';
+  }
+  if (eventType.includes('blocked')) {
+    return 'Action blocked';
+  }
+  if (eventType.includes('terminated') || eventType.includes('cancel') || eventType.includes('stop')) {
+    return 'Stopped';
+  }
+  return readString(data.label) || readString(data.title) || 'Runtime status';
+}
+
 function eventId(prefix: string, candidate: unknown, fallbackIndex: number): string {
   return readString(candidate) || `${prefix}:${fallbackIndex}`;
 }
@@ -263,9 +335,9 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   if (eventType === 'tool.started') {
     const toolName = readString(data.tool_name) || readString(data.capability_id) || readString(data.name) || 'Tool';
     const input = toolInputRecord(data);
-    const command = readString(input.command) || readString(input.cmd) || readString(data.command);
-    const query = readString(input.query) || readString(data.query);
-    const path = readString(input.path) || readString(input.file_path) || readString(input.filename) || readString(data.path);
+    const command = shellCommandFromData(data);
+    const query = readString(data.query) || readString(input.query);
+    const path = filePathFromData(data);
     const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
     const combined = `${toolName} ${command} ${query} ${path}`;
     if (isShellToolName(toolName, command)) {
@@ -302,9 +374,9 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     const status = normalizeToolResultStatus(data.status);
     const toolName = readString(data.tool_name) || readString(data.capability_id) || readString(data.name) || 'Tool';
     const input = toolInputRecord(data);
-    const command = readString(input.command) || readString(input.cmd) || readString(data.command);
-    const query = readString(input.query) || readString(data.query);
-    const path = readString(input.path) || readString(input.file_path) || readString(input.filename) || readString(data.path);
+    const command = shellCommandFromData(data);
+    const query = readString(data.query) || readString(input.query);
+    const path = filePathFromData(data);
     const result = toolResultText(data);
     const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
     const combined = `${toolName} ${command} ${query} ${path}`;
@@ -372,6 +444,35 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     }];
   }
 
+  if (eventType.startsWith('shell.')) {
+    const status = statusFromEventType(eventType, data.status || data.state);
+    const id = eventId('shell', payload.tool_call_id || payload.item_id || data.action_id, fallbackIndex);
+    const command = shellCommandFromData(data) || readString(data.detail) || 'Running shell';
+    if (status === 'running') {
+      return [{ type: 'exec_started', id, command }];
+    }
+    return [{
+      type: 'exec_result',
+      id,
+      command,
+      status: status === 'error' ? 'error' : 'done',
+      output: toolResultText(data),
+      exitCode: readNumber(data.exit_code),
+    }];
+  }
+
+  if (eventType.startsWith('file.')) {
+    const status = statusFromEventType(eventType, data.status || data.state);
+    const path = filePathFromData(data);
+    return [{
+      type: 'file_change',
+      id: eventId('file', payload.item_id || payload.tool_call_id || data.action_id || path, fallbackIndex),
+      filename: path || readString(data.summary) || 'File',
+      action: fileActionFromEventType(eventType, readString(data.action) || readString(data.label)),
+      status,
+    }];
+  }
+
   if (eventType === 'browser.action' || eventType === 'computer.browser.action') {
     const action = readString(data.action) || readString(data.kind) || readString(data.event) || 'Action';
     const summary = readString(data.summary) || readString(data.detail) || null;
@@ -381,6 +482,27 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       name: browserActionDisplay(action),
       status: readString(data.status).toLowerCase() === 'error' ? 'error' : 'done',
       result: summary,
+    }];
+  }
+
+  if (eventType.startsWith('runtime.') || eventType.startsWith('gateway.') || eventType.startsWith('hardware.')) {
+    const status = statusFromEventType(eventType, data.status || data.state);
+    const action = readString(data.action) || readString(data.capability_id) || readString(data.tool_name);
+    if (action && !eventType.includes('status') && !eventType.includes('session')) {
+      return [{
+        type: 'tool_result',
+        id: eventId('hardware', payload.item_id || payload.tool_call_id || data.action_id, fallbackIndex),
+        name: toolDisplayName(action),
+        status,
+        result: readString(data.summary) || readString(data.detail) || null,
+      }];
+    }
+    return [{
+      type: 'status',
+      id: eventId('runtime', payload.item_id || data.action_id || data.runtime_session_id, fallbackIndex),
+      label: runtimeStatusLabel(eventType, data),
+      detail: readString(data.summary) || readString(data.detail) || null,
+      status: status === 'error' ? 'error' : status === 'running' ? 'running' : 'done',
     }];
   }
 

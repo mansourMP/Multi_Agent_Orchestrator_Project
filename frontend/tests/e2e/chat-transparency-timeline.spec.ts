@@ -640,6 +640,43 @@ test.describe('chat transparency timeline', () => {
                 event: 'trace',
                 schema_version: 1,
                 payload: {
+                  event_type: 'file.read',
+                  item_id: 'file-hardware-1',
+                  data: {
+                    status: 'completed',
+                    path: 'reports/current-status.md',
+                    result: 'raw file body should stay hidden',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'gateway.offline',
+                  item_id: 'gateway-offline-1',
+                  data: {
+                    runtime_target: 'user_device_gateway',
+                    state: 'offline',
+                    summary: 'Gateway is unavailable.',
+                    raw_output: 'hidden gateway detail',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'assistant.message.delta',
+                  data: {
+                    text: 'hidden assistant delta',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
                   event_type: 'tool.result',
                   tool_call_id: 'req-hardware-1',
                   data: {
@@ -665,9 +702,15 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval approved');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Created artifact');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-hardware-1/);
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Read file');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('reports/current-status.md');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="gateway_offline"]')).toContainText(/Gateway offline/i);
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Ran command');
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'The hardware check completed.' })).toBeVisible();
     await expect(page.getByText(/trace-hardware-1/i)).toHaveCount(0);
     await expect(page.getByText(/hrs-hardware-1/i)).toHaveCount(0);
+    await expect(page.getByText(/raw file body should stay hidden/i)).toHaveCount(0);
+    await expect(page.getByText(/hidden gateway detail/i)).toHaveCount(0);
+    await expect(page.getByText(/hidden assistant delta/i)).toHaveCount(0);
   });
 });

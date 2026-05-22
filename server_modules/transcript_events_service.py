@@ -11,18 +11,38 @@ _BLOCKED_KEYS = {
     "args",
     "args_preview",
     "arguments",
+    "audit",
+    "audit_event",
+    "audit_event_id",
+    "audit_event_type",
+    "chain_of_thought",
     "context",
+    "debug",
+    "filters",
     "input",
     "messages",
+    "model",
+    "model_id",
+    "modelId",
     "output",
     "parameters",
+    "policy",
+    "policy_metadata",
     "prompt",
+    "provider",
+    "provider_id",
+    "providerId",
     "raw",
     "raw_input",
     "raw_output",
+    "reasoning",
     "result",
+    "request_id",
+    "requestId",
     "system_prompt",
     "text",
+    "trace_id",
+    "traceId",
     "tool_args",
 }
 _SAFE_DATA_KEYS = {
@@ -54,9 +74,7 @@ _SAFE_DATA_KEYS = {
     "name",
     "normalized_approval",
     "path",
-    "prompt",
     "query",
-    "request_id",
     "resolution",
     "runtime_access_mode",
     "runtime_session_id",
@@ -88,7 +106,6 @@ _SAFE_METADATA_KEYS = {
     "artifact_id",
     "code",
     "label",
-    "request_id",
     "runtime_access_mode",
     "runtime_session_id",
     "runtime_target",
@@ -97,6 +114,23 @@ _SAFE_METADATA_KEYS = {
     "title",
 }
 _STEP_BLOCKED_KINDS = {"thinking", "reasoning", "assistant", "message", "final", "chunk"}
+_STEP_SAFE_KINDS = {
+    "approval",
+    "artifact",
+    "browser",
+    "browser-observation",
+    "computer",
+    "connector",
+    "error",
+    "file",
+    "interrupted",
+    "runtime",
+    "screenshot",
+    "search",
+    "shell",
+    "status",
+    "tool",
+}
 _TRACE_EVENT_EXACT = {
     "artifact.created",
     "approval.requested",
@@ -110,6 +144,7 @@ _TRACE_EVENT_EXACT = {
     "tool.result",
     "tool.started",
     "trace.completed",
+    "trace.failed",
 }
 _TRACE_EVENT_PREFIXES = (
     "approval.",
@@ -133,6 +168,39 @@ _TRACE_EVENT_BLOCKED = {
     "reasoning.summary.delta",
     "trace.started",
 }
+_TRACE_EVENT_BLOCKED_TOKENS = (
+    ".delta",
+    "audit",
+    "debug",
+    "internal",
+    "model",
+    "policy",
+    "prompt",
+    "provider",
+    "raw",
+    "reasoning",
+)
+_INTERNAL_TEXT_TOKENS = (
+    "activity_event_id",
+    "chain of thought",
+    "chain_of_thought",
+    "deepseek",
+    "model id",
+    "model_id",
+    "policy metadata",
+    "policy_metadata",
+    "provider id",
+    "provider_id",
+    "raw output",
+    "raw_output",
+    "request id",
+    "request_id",
+    "stacktrace",
+    "system prompt",
+    "system_prompt",
+    "trace id",
+    "trace_id",
+)
 
 
 def _read_object(value: Any) -> Dict[str, Any]:
@@ -159,7 +227,7 @@ def _looks_internal_text(value: str) -> bool:
     if normalized.startswith("{") or normalized.startswith("["):
         return True
     lowered = normalized.lower()
-    return any(token in lowered for token in ("activity_event_id", "stacktrace", "trace_id", "raw_"))
+    return any(token in lowered for token in _INTERNAL_TEXT_TOKENS)
 
 
 def _sanitize_list(value: Any, *, safe_keys: set[str], depth: int) -> List[Any]:
@@ -251,6 +319,8 @@ def _is_transcript_trace_event(payload: Dict[str, Any]) -> bool:
     event_type = _read_string(payload.get("event_type")).lower()
     if not event_type or event_type in _TRACE_EVENT_BLOCKED:
         return False
+    if any(token in event_type for token in _TRACE_EVENT_BLOCKED_TOKENS):
+        return False
     if event_type in _TRACE_EVENT_EXACT:
         return True
     if event_type.startswith(_TRACE_EVENT_PREFIXES):
@@ -262,7 +332,9 @@ def _is_transcript_step_event(payload: Dict[str, Any]) -> bool:
     kind = _read_string(payload.get("kind")).lower()
     if kind in _STEP_BLOCKED_KINDS:
         return False
-    return bool(kind or _read_string(payload.get("label")) or _read_string(payload.get("detail")))
+    if kind:
+        return kind in _STEP_SAFE_KINDS
+    return False
 
 
 def build_transcript_event(event_name: Any, payload: Any) -> Optional[Dict[str, Any]]:

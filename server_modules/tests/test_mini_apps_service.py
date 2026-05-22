@@ -65,6 +65,36 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertFalse(contract["background_ai_allowed"])
         self.assertEqual(contract["runtime_access"], "none")
 
+    def test_state_persistence_uses_atomic_replace(self) -> None:
+        original_replace = mini_apps_service.os.replace
+        replacements: list[tuple[Path, Path]] = []
+
+        def wrapped_replace(source, target):
+            source_path = Path(source)
+            target_path = Path(target)
+            self.assertTrue(source_path.exists())
+            replacements.append((source_path, target_path))
+            return original_replace(source_path, target_path)
+
+        with patch.object(mini_apps_service.os, "replace", side_effect=wrapped_replace):
+            contract = mini_apps_service.upsert_mini_app_contract(
+                "ws-1",
+                "private_app",
+                label="Private App",
+                delivery_mode="hosted",
+                hosted_url="https://apps.example.com/private",
+                allowed_origins=["https://apps.example.com"],
+            )
+
+        self.assertEqual(contract["app_id"], "private_app")
+        self.assertEqual(len(replacements), 1)
+        state_file = mini_apps_service._mini_apps_state_path("ws-1")
+        self.assertEqual(replacements[0][1], state_file)
+        self.assertTrue(state_file.exists())
+        self.assertFalse(list(state_file.parent.glob("*.tmp")))
+        listing = mini_apps_service.list_mini_app_contracts("ws-1")
+        self.assertEqual(listing["items"][0]["app_id"], "private_app")
+
     def test_retrieve_records_filters_narrow_history(self) -> None:
         mini_apps_service.upsert_mini_app_contract(
             "ws-1",

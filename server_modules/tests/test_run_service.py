@@ -851,6 +851,61 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(settle_mock.await_args.kwargs["run_id"], "run-1")
         self.assertEqual(settle_mock.await_args.kwargs["status"], "completed")
 
+    def test_transition_live_run_status_skips_duplicate_cost_cap_settlement_key(self):
+        run = {
+            "run_id": "run-1",
+            "status": "running",
+            "_started_mono": 5.0,
+            "_deployed_agent_cost_cap_settlement_key": "run-1:completed",
+            "logs": queue.Queue(),
+            "usage_masked": {
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "prompt_tokens": 1000,
+                "completion_tokens": 1000,
+                "estimated_cost_usd": 1.25,
+            },
+            "context": {
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "metadata": {
+                    "deployed_agent_id": "dagent_1",
+                },
+            },
+        }
+
+        with (
+            patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: asyncio.run(awaitable)),
+            patch("server_modules.run_service.outbox_service.emit_run_transition_event"),
+            patch("server_modules.run_service.outbox_service.emit_artifact_created_event"),
+            patch("server_modules.run_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)),
+            patch(
+                "server_modules.run_service.deployed_agent_cost_cap_service.settle_deployed_agent_monthly_cost_cap",
+                new=AsyncMock(return_value={"applied": True}),
+            ) as settle_mock,
+        ):
+            transition_live_run_status(
+                "run-1",
+                "completed",
+                run=run,
+                now_mono=7.5,
+                now_iso="2026-04-06T00:00:00Z",
+                terminal_statuses={"completed", "failed", "timeout"},
+                local_queue_lock=__import__("threading").Lock(),
+                local_pending_run_ids=[],
+                local_claimed_runs={},
+                archive_run_if_terminal_fn=lambda run_id, payload: None,
+                remove_live_run_state_fn=lambda run_id: None,
+                sync_local_runtime_state_snapshot_fn=lambda: None,
+                persist_live_run_state_fn=lambda run_id, payload: None,
+                run_queue_index={},
+                metrics_add_fn=lambda key, value: None,
+                metrics_inc_fn=lambda key, value=1: None,
+            )
+
+        settle_mock.assert_not_awaited()
+        self.assertEqual(run["_deployed_agent_cost_cap_settlement_key"], "run-1:completed")
+
     def test_transition_live_run_status_continues_when_cost_cap_settlement_fails(self):
         run = {
             "run_id": "run-1",

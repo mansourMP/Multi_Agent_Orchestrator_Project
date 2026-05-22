@@ -361,8 +361,8 @@ def persist_direct_chat_hosted_usage_best_effort(
                 },
             )
         )
-    except Exception:
-        raise RuntimeError("Hosted AI usage cost ledger persistence failed.")
+    except Exception as exc:
+        raise RuntimeError("Hosted AI usage cost ledger persistence failed.") from exc
     if not isinstance(ledger_entry, dict):
         raise RuntimeError("Hosted AI usage cost ledger persistence failed.")
     try:
@@ -375,8 +375,8 @@ def persist_direct_chat_hosted_usage_best_effort(
                 source_event_id=_text(ledger_entry.get("id")) or request_id,
             )
         )
-    except Exception:
-        raise RuntimeError("Hosted AI unified credit ledger persistence failed.")
+    except Exception as exc:
+        raise RuntimeError("Hosted AI unified credit ledger persistence failed.") from exc
     if not isinstance(durable_event, dict):
         raise RuntimeError("Hosted AI unified credit ledger persistence failed.")
     try:
@@ -387,5 +387,5 @@ def persist_direct_chat_hosted_usage_best_effort(
             tenant_id=tenant_id,
             request_id=request_id,
         )
-    except Exception:
-        raise RuntimeError("Hosted AI credit debit failed.")
+    except Exception as exc:
+        raise RuntimeError("Hosted AI credit debit failed.") from exc

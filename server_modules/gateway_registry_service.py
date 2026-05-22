@@ -141,7 +141,6 @@ def build_gateway_ws_url(
     return (
         f"{scheme}://{netloc}/api/gateway/ws"
         f"?gateway_id={quote(str(gateway_id or '').strip())}"
-        f"&session_token={quote(str(session_token or '').strip())}"
     )
 
 

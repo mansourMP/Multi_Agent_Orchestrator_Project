@@ -313,7 +313,7 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
             "server_modules.billing_service.debit_workspace_credit_balance_for_hosted_usage",
             side_effect=RuntimeError("ledger unavailable"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "credit debit failed"):
+            with self.assertRaisesRegex(RuntimeError, "credit debit failed") as ctx:
                 direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
                     workspace_id="ws-1",
                     thread_id="thread-1",
@@ -337,6 +337,8 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
                     requested_model="deepseek-chat",
                     effective_model="deepseek-chat",
                 )
+        self.assertIsInstance(ctx.exception.__cause__, RuntimeError)
+        self.assertIn("ledger unavailable", str(ctx.exception.__cause__))
 
     def test_persist_direct_chat_hosted_usage_best_effort_surfaces_ledger_none(self) -> None:
         with patch(

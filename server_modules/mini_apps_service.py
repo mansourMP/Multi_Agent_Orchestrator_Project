@@ -186,10 +186,7 @@ def _default_app_entry(app_id: str) -> Dict[str, Any]:
 def _safe_read_state(workspace_id: str) -> Dict[str, Any]:
     path = _mini_apps_state_path(workspace_id)
     if not path.exists():
-        payload = _default_state()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        return payload
+        return _default_state()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -247,7 +244,22 @@ def _save_state(workspace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "updated_at": _utc_now_iso(),
         "apps": dict(payload.get("apps") or {}),
     }
-    path.write_text(json.dumps(normalized, indent=2, sort_keys=True), encoding="utf-8")
+    serialized = json.dumps(normalized, indent=2, sort_keys=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        handle.write(serialized)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, path)
+    try:
+        dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+    except Exception:
+        dir_fd = None
+    if dir_fd is not None:
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
     return normalized
 
 

@@ -270,6 +270,46 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         self.assertEqual(emitted[0]["approval_id"], "approval-1")
         self.assertEqual(emitted[0]["metadata"]["browser_session_profile"], "qa-browser")
 
+    def test_resolve_standalone_approval_does_not_leak_resolution_guards(self):
+        runtime_run_approval_service._APPROVAL_RESOLUTION_GUARDS.clear()
+        runtime_run_approval_service._APPROVAL_RESOLUTION_GUARD_REFS.clear()
+        resolved = {
+            "approval_id": "approval-1",
+            "status": "approved",
+        }
+
+        def approval_record(approval_id: str):
+            return {
+                "approval_id": approval_id,
+                "run_id": f"run-{approval_id}",
+                "trace_id": f"trace-{approval_id}",
+                "metadata": {"source_type": "deployed_agent", "tenant_id": "tenant-1", "workspace_id": "ws-1"},
+            }
+
+        with patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_get_approval_record",
+            side_effect=approval_record,
+        ), patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_resolve_approval_if_pending",
+            return_value=resolved,
+        ):
+            for approval_id in ("approval-1", "approval-2", "approval-3"):
+                runtime_run_approval_service.resolve_standalone_approval(
+                    approval_id,
+                    payload={"approval_id": approval_id, "resolution": "approved", "actor": "user-1", "reason": "ok"},
+                    current_user={"user_id": "user-1"},
+                    runs={},
+                    resolve_run_approval_fn=lambda *args, **kwargs: self.fail("standalone deployed-agent path should not need live run"),
+                    resolve_run_approval_callbacks={},
+                    record_approval_resolution_fn=lambda *args: None,
+                    emit_approval_resolved_event_fn=lambda **kwargs: {"event_id": "evt-1", "payload": kwargs},
+                )
+
+        self.assertEqual(runtime_run_approval_service._APPROVAL_RESOLUTION_GUARDS, {})
+        self.assertEqual(runtime_run_approval_service._APPROVAL_RESOLUTION_GUARD_REFS, {})
+
     def test_resolve_standalone_approval_falls_back_to_live_memory_when_repository_misses(self):
         recorded = []
         live_run = {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 import queue
 import threading
@@ -20,6 +21,7 @@ def _coerce_dict(value: Any) -> dict[str, Any]:
 
 _APPROVAL_RESOLUTION_GUARD_LOCK = threading.Lock()
 _APPROVAL_RESOLUTION_GUARDS: dict[str, threading.Lock] = {}
+_APPROVAL_RESOLUTION_GUARD_REFS: dict[str, int] = {}
 LOGGER = logging.getLogger(__name__)
 _RESOLVED_APPROVAL_STATUSES = {
     "resolved",
@@ -96,6 +98,30 @@ def _approval_resolution_guard(approval_id: str) -> threading.Lock:
             lock = threading.Lock()
             _APPROVAL_RESOLUTION_GUARDS[token] = lock
         return lock
+
+
+@contextmanager
+def _approval_resolution_guarded(approval_id: str):
+    token = str(approval_id or "").strip()
+    with _APPROVAL_RESOLUTION_GUARD_LOCK:
+        lock = _APPROVAL_RESOLUTION_GUARDS.get(token)
+        if lock is None:
+            lock = threading.Lock()
+            _APPROVAL_RESOLUTION_GUARDS[token] = lock
+        _APPROVAL_RESOLUTION_GUARD_REFS[token] = int(_APPROVAL_RESOLUTION_GUARD_REFS.get(token) or 0) + 1
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with _APPROVAL_RESOLUTION_GUARD_LOCK:
+            remaining = max(0, int(_APPROVAL_RESOLUTION_GUARD_REFS.get(token) or 0) - 1)
+            if remaining:
+                _APPROVAL_RESOLUTION_GUARD_REFS[token] = remaining
+            else:
+                _APPROVAL_RESOLUTION_GUARD_REFS.pop(token, None)
+            if remaining == 0 and _APPROVAL_RESOLUTION_GUARDS.get(token) is lock:
+                _APPROVAL_RESOLUTION_GUARDS.pop(token, None)
 
 
 def build_submit_run_decision_callbacks(
@@ -1180,7 +1206,7 @@ def resolve_standalone_approval(
     reason = str(payload.get("reason") or payload.get("note") or "")
     decision = "approve" if resolution == "approved" else "reject"
 
-    with _approval_resolution_guard(approval_token):
+    with _approval_resolution_guarded(approval_token):
         approval_record = run_state_repository.sync_get_approval_record(approval_token)
 
         # Fast path: standalone deployed-agent approvals do not require a live run.

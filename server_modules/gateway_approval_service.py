@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import os
 from typing import Any, Callable, Dict, Optional
 
 from server_modules import (
@@ -12,6 +13,16 @@ from server_modules import (
     secret_redaction_service,
 )
 from server_modules.capability_registry import canonical_capability_id, resolve_capability
+
+
+def _max_gateway_approval_retries() -> int:
+    raw = os.getenv("EMPYRALIS_GATEWAY_APPROVAL_MAX_RETRIES", "").strip()
+    if not raw:
+        return 3
+    try:
+        return max(0, int(raw))
+    except Exception:
+        return 3
 
 
 def _approval_expired(approval: Dict[str, Any], ttl_seconds: int) -> bool:
@@ -177,17 +188,32 @@ async def resolve_gateway_tool_approval(
     # execution failed after approval and can be retried by the owner.
     if current_status == "executed":
         return {"status": "executed", "approval": approval, "execution": approval.get("result_payload") or {}}
-    if current_status == "rejected":
+    if current_status in {"rejected", "failed"}:
         return {"status": current_status, "approval": approval}
+    gateway_id = str(registration.get("gateway_id") or "").strip()
     retrying_approved_execution = (
         current_status == "approved"
         and normalized_decision == "approved"
         and int(approval.get("retry_count") or 0) > 0
     )
+    if retrying_approved_execution and int(approval.get("retry_count") or 0) >= _max_gateway_approval_retries():
+        failed = gateway_state_repository.update_gateway_action_approval_decision(
+            approval_id=approval_id,
+            gateway_id=gateway_id,
+            status="failed",
+            decision="retry_exhausted",
+            actor="system",
+            note="Gateway approval retry limit exceeded. Request a new approval before retrying.",
+        ) or approval
+        return {
+            "status": "retry_exhausted",
+            "retryable": False,
+            "error": "Gateway approval retry limit exceeded. Request a new approval before retrying.",
+            "approval": failed,
+        }
     if current_status == "approved" and not retrying_approved_execution:
         return {"status": current_status, "approval": approval}
 
-    gateway_id = str(registration.get("gateway_id") or "").strip()
     resolved_actor = str(actor or "").strip() or "user"
 
     # --- TTL enforcement ---
@@ -293,6 +319,41 @@ async def resolve_gateway_tool_approval(
             gateway_id=gateway_id,
             error_message=str(exc),
         ) or resolved
+        if int(failed.get("retry_count") or 0) >= _max_gateway_approval_retries():
+            exhausted = gateway_state_repository.update_gateway_action_approval_decision(
+                approval_id=approval_id,
+                gateway_id=gateway_id,
+                status="failed",
+                decision="retry_exhausted",
+                actor="system",
+                note="Gateway approval retry limit exceeded. Request a new approval before retrying.",
+            ) or failed
+            gateway_state_repository.record_gateway_event(
+                gateway_id=gateway_id,
+                session_id=None,
+                direction="system",
+                frame_kind="event",
+                message_type="gateway.approval.retry_exhausted",
+                payload={"approval": exhausted, "error": str(exc)},
+            )
+            await gateway_activity_service.append_gateway_activity(
+                registration,
+                action="gateway_tool_retry_exhausted",
+                title="Gateway tool retry limit reached",
+                summary="Gateway approval retry limit exceeded. Request a new approval before retrying.",
+                status="failed",
+                event_class="blocked_action",
+                review_required=True,
+                payload={"approval_id": approval_id, "error": str(exc), "approval": exhausted},
+                metadata={"approval_id": approval_id},
+                trace_id=str(exhausted.get("trace_id") or "").strip() or None,
+            )
+            return {
+                "status": "retry_exhausted",
+                "retryable": False,
+                "error": "Gateway approval retry limit exceeded. Request a new approval before retrying.",
+                "approval": exhausted,
+            }
         gateway_state_repository.record_gateway_event(
             gateway_id=gateway_id,
             session_id=None,

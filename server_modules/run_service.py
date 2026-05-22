@@ -1920,17 +1920,21 @@ def transition_live_run_status(
                     _publish_local_completion_summary_bridge(run_id, run)
                 if str(previous or "").strip() != str(status or "").strip():
                     if str((context.get("metadata") if isinstance(context.get("metadata"), dict) else {}).get("deployed_agent_id") or "").strip():
-                        try:
-                            run_async_tool_call(
-                                deployed_agent_cost_cap_service.settle_deployed_agent_monthly_cost_cap(
-                                    run_id=run_id,
-                                    run=run,
-                                    status=status,
-                                    now_iso=now_iso,
+                        cost_cap_settlement_key = f"{run_id}:{status}"
+                        if run.get("_deployed_agent_cost_cap_settlement_key") != cost_cap_settlement_key:
+                            run["_deployed_agent_cost_cap_settlement_key"] = cost_cap_settlement_key
+                            try:
+                                run_async_tool_call(
+                                    deployed_agent_cost_cap_service.settle_deployed_agent_monthly_cost_cap(
+                                        run_id=run_id,
+                                        run=run,
+                                        status=status,
+                                        now_iso=now_iso,
+                                    )
                                 )
-                            )
-                        except Exception as exc:
-                            LOGGER.warning("Failed to settle deployed-agent cost cap for %s: %s", run_id, exc)
+                            except Exception as exc:
+                                run.pop("_deployed_agent_cost_cap_settlement_key", None)
+                                LOGGER.warning("Failed to settle deployed-agent cost cap for %s: %s", run_id, exc)
                     _emit_artifact_outbox_events(
                         run_id,
                         run=run,

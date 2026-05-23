@@ -37,6 +37,9 @@ const BLOCKED_KEYS = new Set([
   "raw_output",
   "reasoning",
   "result",
+  "request_id",
+  "requestId",
+  "specialist_id",
   "system_prompt",
   "text",
   "trace_id",
@@ -86,15 +89,17 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   "normalized_approval",
   "path",
   "query",
-  "request_id",
+  "result_summary",
   "resolution",
   "runtime_access_mode",
   "runtime_session_id",
   "runtime_target",
+  "specialist_name",
   "state",
   "status",
   "summary",
   "target_summary",
+  "task_summary",
   "title",
   "tool_call_id",
   "tool_name",
@@ -108,7 +113,6 @@ const SAFE_METADATA_KEYS = new Set([
   "artifact_id",
   "code",
   "label",
-  "request_id",
   "runtime_access_mode",
   "runtime_session_id",
   "runtime_target",
@@ -119,6 +123,24 @@ const SAFE_METADATA_KEYS = new Set([
 
 const SAFE_STEP_KEYS = new Set(["detail", "id", "kind", "label", "metadata", "status"]);
 const BLOCKED_STEP_KINDS = new Set(["thinking", "reasoning", "assistant", "message", "final", "chunk"]);
+const SAFE_STEP_KINDS = new Set([
+  "approval",
+  "artifact",
+  "browser",
+  "browser-observation",
+  "computer",
+  "connector",
+  "delegation",
+  "error",
+  "file",
+  "interrupted",
+  "runtime",
+  "screenshot",
+  "search",
+  "shell",
+  "status",
+  "tool",
+]);
 const TRACE_EVENT_EXACT = new Set([
   "artifact.created",
   "approval.requested",
@@ -126,6 +148,8 @@ const TRACE_EVENT_EXACT = new Set([
   "browser.action",
   "browser.screenshot",
   "computer.browser.action",
+  "delegation.finished",
+  "delegation.started",
   "screenshot.captured",
   "search.query",
   "search.results",
@@ -139,6 +163,7 @@ const TRACE_EVENT_PREFIXES = [
   "artifact.",
   "browser.",
   "computer.",
+  "delegation.",
   "file.",
   "gateway.",
   "hardware.",
@@ -299,7 +324,7 @@ function normalizeTranscriptPayload(event: TranscriptEventType, payload: JsonRec
 
   const kind = readText(payload.kind).toLowerCase();
   if (BLOCKED_STEP_KINDS.has(kind)) return null;
-  if (!kind && !readText(payload.label) && !readText(payload.detail)) return null;
+  if (!kind || !SAFE_STEP_KINDS.has(kind)) return null;
   const sanitized = sanitizeStepPayload(payload);
   return Object.keys(sanitized).length > 0 ? sanitized : null;
 }

@@ -1795,6 +1795,7 @@ export const mobileApi = {
     runId: string,
     approvalId: string,
     decision: "approved" | "held" | "rejected",
+    approvalScope: "once" | "session" = "once",
   ) {
     void runId;
     const mapped = decision === "approved" ? "approved" : "rejected";
@@ -1802,6 +1803,7 @@ export const mobileApi = {
       approval_id: approvalId,
       resolution: mapped,
       actor: "user",
+      approval_scope: mapped === "approved" ? approvalScope : undefined,
     }) as Promise<ApprovalResolveResponse>;
   },
 };

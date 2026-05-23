@@ -68,6 +68,16 @@ type ChatScreenProps = {
   specialistId?: string;
 };
 
+type MobileInspectorTab = "connections" | "tools" | "memory" | "files" | "thread";
+
+const MOBILE_INSPECTOR_TABS: Array<{ id: MobileInspectorTab; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
+  { id: "connections", label: "Connections", icon: "git-network-outline" },
+  { id: "tools", label: "Tools", icon: "construct-outline" },
+  { id: "memory", label: "Memory", icon: "albums-outline" },
+  { id: "files", label: "Files", icon: "folder-open-outline" },
+  { id: "thread", label: "Thread", icon: "chatbubble-ellipses-outline" },
+];
+
 type KinThinkingIndicatorProps = {
   theme: ReturnType<typeof useTheme>;
 };
@@ -346,6 +356,8 @@ function streamEventGroupKey(event: EmpyralistStreamEvent): string {
   const eventType = String(detailPayload.event_type || detailPayload.event || detailPayload.type || detailPayload.kind || "").trim().toLowerCase();
   const groupKind = eventType.includes("approval")
     ? "approval"
+    : eventType.includes("delegation")
+      ? "delegation"
     : eventType.includes("artifact") || eventType.includes("screenshot")
       ? "artifact"
       : eventType.includes("tool") || eventType.includes("browser") || eventType.includes("search") || eventType.includes("file") || eventType.includes("shell") || eventType.includes("exec")
@@ -376,8 +388,11 @@ function compactStreamEventDetail(payload: Record<string, unknown>): string | un
     payload.caption,
     payload.title,
     payload.summary,
+    payload.result_summary,
+    payload.task_summary,
     payload.detail,
     payload.message,
+    payload.specialist_name,
     payload.target_summary,
     payload.query,
     payload.path,
@@ -417,6 +432,11 @@ function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null
         : status === "error" || ["rejected", "reject", "denied", "deny"].includes(decision)
           ? "Approval denied"
           : "Waiting for approval";
+    } else if (eventType === "delegation.started") {
+      const specialistName = String(detailPayload.specialist_name || detailPayload.name || detailPayload.label || "").trim();
+      speech = `Delegated to ${specialistName || "Specialist"}`;
+    } else if (eventType === "delegation.finished") {
+      speech = status === "error" ? "Specialist failed" : "Specialist finished";
     } else if (eventType.includes("screenshot")) {
       speech = "Captured screenshot";
     } else if (eventType.includes("artifact")) {
@@ -587,9 +607,12 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
   const [cloudHistory, setCloudHistory] = useState<MobileThreadHistoryItem[]>([]);
   const [cloudHistoryLoading, setCloudHistoryLoading] = useState(false);
   const [cloudHistoryError, setCloudHistoryError] = useState<string | null>(null);
+  const [inspectorVisible, setInspectorVisible] = useState(false);
+  const [activeInspectorTab, setActiveInspectorTab] = useState<MobileInspectorTab>("connections");
   const { banner, showBanner } = useTransientBanner();
   const sage = getPrimaryAgent();
   const messagesListRef = useRef<FlatList<AgentPayload>>(null);
+  const activeTurnRef = useRef(0);
   const historyProgress = useRef(new LegacyAnimated.Value(0)).current;
   const embeddedMode = !sessionId;
   const requestedAgentId = String(specialistId || agentId || "").trim();
@@ -715,6 +738,15 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     }),
     [chatContextQuery.data?.runtimeAttachments, gatewayDoctor.doctor, gatewayDoctor.gateway],
   );
+  const proofCardCount = useMemo(
+    () => messages.filter((message) => message.messageType === "tool" || message.messageType === "approval").length,
+    [messages],
+  );
+
+  const openInspector = React.useCallback((tab: MobileInspectorTab = "connections") => {
+    setActiveInspectorTab(tab);
+    setInspectorVisible(true);
+  }, []);
 
   const scrollToBottom = React.useCallback((animated = true) => {
     requestAnimationFrame(() => {
@@ -895,6 +927,8 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     setInput("");
     setIsLoading(true);
     setRunActivity(["Thinking", "Writing a reply"]);
+    const turnRequestId = activeTurnRef.current + 1;
+    activeTurnRef.current = turnRequestId;
 
     if (!session?.runtimeKey) {
       setFailedMessageIndex(nextUserMessageIndex);
@@ -910,6 +944,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
       let nextStreamCardIndex = placeholderIndex + 1;
       const streamCardIndexByKey = new Map<string, number>();
       const upsertStreamEventCard = (event: EmpyralistStreamEvent) => {
+        if (activeTurnRef.current !== turnRequestId) return;
         const normalizedEvent = normalizeTranscriptStreamEvent(event);
         if (!normalizedEvent) return;
         const card = buildStreamEventCard(normalizedEvent);
@@ -940,6 +975,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         },
         {
           onChunk: (delta) => {
+            if (activeTurnRef.current !== turnRequestId) return;
             streamedReply += delta;
             appendRunActivity("Writing");
             updateMessage(currentSessionId, placeholderIndex, {
@@ -952,6 +988,10 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
       const hasStructuredCards =
         (Array.isArray(payload.approvals) && payload.approvals.length > 0) ||
         (Array.isArray(payload.interventions) && payload.interventions.length > 0);
+
+      if (activeTurnRef.current !== turnRequestId) {
+        return;
+      }
 
       updateMessage(currentSessionId, placeholderIndex, {
         speech: hasStructuredCards ? "" : (payload.reply || streamedReply || ""),
@@ -996,6 +1036,9 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
 
       setRunActivity([]);
     } catch (err) {
+      if (activeTurnRef.current !== turnRequestId) {
+        return;
+      }
       if (err instanceof MobileAuthExpiredError) {
         setFailedMessageIndex(nextUserMessageIndex);
         removeMessage(currentSessionId, placeholderIndex);
@@ -1010,16 +1053,27 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
       setRunActivity([]);
       showBanner(message, "error");
     } finally {
-      setIsLoading(false);
+      if (activeTurnRef.current === turnRequestId) {
+        setIsLoading(false);
+      }
     }
   };
 
-  const handleApprovalDecision = async (card: ApprovalCard, decision: "approved" | "rejected") => {
+  const stopCurrentTurn = React.useCallback(() => {
+    activeTurnRef.current += 1;
+    setIsLoading(false);
+    setRunActivity([]);
+    showBanner("Stopped.", "success");
+  }, [showBanner]);
+
+  const handleApprovalDecision = async (card: ApprovalCard, decision: "allow_once" | "allow_session" | "deny") => {
     if (!session?.runtimeKey) return;
+    const approved = decision === "allow_once" || decision === "allow_session";
+    const approvalScope = decision === "allow_session" ? "session" : "once";
     try {
       if (card.kind === "direct") {
         if (!activeSession?.id || !card.connector || !card.actionId || !card.input) return;
-        if (decision !== "approved") {
+        if (!approved) {
           showBanner("Noted.", "success");
           return;
         }
@@ -1101,10 +1155,11 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         session,
         card.runId,
         card.approvalId,
-        decision,
+        approved ? "approved" : "rejected",
+        approvalScope,
       );
       if (!activeSession?.id) return;
-      showBanner(decision === "approved" ? "Done." : "Noted.", "success");
+      showBanner(approved ? "Done." : "Noted.", "success");
     } catch (err) {
       console.warn("Approval resolution failed", err);
       setRunActivity([]);
@@ -1207,15 +1262,21 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           ) : null}
           <View style={{ flexDirection: "row", gap: SPACING.sm, marginTop: SPACING.md }}>
             <ActionButton
-              label="Allow"
+              label="Allow once"
               variant="primary"
-              onPress={() => handleApprovalDecision(item.approval!, "approved")}
+              onPress={() => handleApprovalDecision(item.approval!, "allow_once")}
               style={{ flex: 1 }}
             />
             <ActionButton
-              label="Not now"
+              label="Allow session"
               variant="secondary"
-              onPress={() => handleApprovalDecision(item.approval!, "rejected")}
+              onPress={() => handleApprovalDecision(item.approval!, "allow_session")}
+              style={{ flex: 1 }}
+            />
+            <ActionButton
+              label="Deny"
+              variant="secondary"
+              onPress={() => handleApprovalDecision(item.approval!, "deny")}
               style={{ flex: 1 }}
             />
           </View>
@@ -1306,6 +1367,172 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     );
   };
 
+  const InspectorAction = ({
+    label,
+    route,
+  }: {
+    label: string;
+    route: string;
+  }) => (
+    <TouchableOpacity
+      activeOpacity={0.86}
+      onPress={() => {
+        setInspectorVisible(false);
+        router.push(route as never);
+      }}
+      style={{
+        marginTop: 10,
+        alignSelf: "flex-start",
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.card,
+      }}
+    >
+      <Text style={{ fontSize: 12.5, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+
+  const InspectorCard = ({
+    eyebrow,
+    title,
+    body,
+    children,
+  }: {
+    eyebrow: string;
+    title: string;
+    body?: string;
+    children?: React.ReactNode;
+  }) => (
+    <View
+      style={{
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface,
+        paddingHorizontal: 14,
+        paddingVertical: 13,
+        gap: 5,
+      }}
+    >
+      <Text style={{ fontSize: 10.5, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary, letterSpacing: 0.7, textTransform: "uppercase" }}>
+        {eyebrow}
+      </Text>
+      <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+        {title}
+      </Text>
+      {body ? (
+        <Text style={{ fontSize: 12.5, lineHeight: 18, color: theme.colors.textSecondary }}>
+          {body}
+        </Text>
+      ) : null}
+      {children}
+    </View>
+  );
+
+  const renderInspectorContent = () => {
+    if (activeInspectorTab === "connections") {
+      return (
+        <>
+          <InspectorCard
+            eyebrow="AI path"
+            title={runtimePill.target === "Cloud" ? "Cloud" : runtimePill.target}
+            body="Sage starts in Cloud and uses Agent Computer only when connected work needs it."
+          >
+            <InspectorAction label="Open Connections" route="/integrations" />
+          </InspectorCard>
+          <InspectorCard
+            eyebrow="Agent Computer"
+            title={runtimePill.target.includes("Agent Computer") ? runtimePill.target : "Not selected"}
+            body="This Device, dedicated computers, Cloud Computer, and Server/VPS sources stay grouped as Agent Computer."
+          >
+            <InspectorAction label="Manage Agent Computer" route="/gateway" />
+          </InspectorCard>
+        </>
+      );
+    }
+    if (activeInspectorTab === "tools") {
+      return (
+        <>
+          <InspectorCard
+            eyebrow="Proof rows"
+            title={`${proofCardCount} in this chat`}
+            body="Commands, browser use, screenshots, artifacts, approvals, and specialists appear inline before Sage answers."
+          />
+          <InspectorCard
+            eyebrow="Approvals"
+            title={pendingGatewayApprovals > 0 ? `${pendingGatewayApprovals} waiting` : "None waiting"}
+            body="Guarded actions ask inside chat. Autonomous Agent hardware skips Empyralis per-action prompts."
+          >
+            <InspectorAction label="Review approvals" route="/approvals" />
+          </InspectorCard>
+        </>
+      );
+    }
+    if (activeInspectorTab === "memory") {
+      return (
+        <InspectorCard
+          eyebrow="Memory"
+          title={memoryFacts.length > 0 ? `${memoryFacts.length} visible fact${memoryFacts.length === 1 ? "" : "s"}` : "No visible memory capsule"}
+          body={memoryFacts[0] || "Saved profile facts and preferences stay out of the prompt unless relevant."}
+        >
+          <InspectorAction label="Manage memory" route="/memory" />
+        </InspectorCard>
+      );
+    }
+    if (activeInspectorTab === "files") {
+      return (
+        <InspectorCard
+          eyebrow="Files"
+          title="Artifacts and outputs"
+          body="Screenshots, generated files, and saved outputs open from inline proof cards or the library."
+        >
+          <InspectorAction label="Open library" route="/artifacts" />
+        </InspectorCard>
+      );
+    }
+    return (
+      <>
+        <InspectorCard
+          eyebrow="Thread"
+          title={activeSession.title || "Current chat"}
+          body={`${messages.length} message${messages.length === 1 ? "" : "s"} in this local view.`}
+        />
+        <InspectorCard
+          eyebrow="History"
+          title="Cloud replay"
+          body="Reopened cloud threads replay the same proof cards before the final answer."
+        >
+          <TouchableOpacity
+            activeOpacity={0.86}
+            onPress={() => {
+              setInspectorVisible(false);
+              openHistory();
+            }}
+            style={{
+              marginTop: 10,
+              alignSelf: "flex-start",
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.card,
+            }}
+          >
+            <Text style={{ fontSize: 12.5, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+              Open chats
+            </Text>
+          </TouchableOpacity>
+        </InspectorCard>
+      </>
+    );
+  };
+
   if (!activeSession) {
     return <View style={{ flex: 1, backgroundColor: theme.colors.background }} />;
   }
@@ -1384,7 +1611,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           ) : null}
           <TouchableOpacity
             activeOpacity={0.84}
-            onPress={() => router.push(runtimePill.target === "Cloud" ? "/status" : "/gateway")}
+            onPress={() => openInspector("connections")}
             style={{
               marginTop: 6,
               alignSelf: embeddedMode ? "center" : "flex-start",
@@ -1403,24 +1630,42 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           </TouchableOpacity>
         </View>
         {!historyVisible ? (
-          <MotionPressable
-            accessibilityRole="button"
-            accessibilityLabel="Start a new chat"
-            onPress={createNewThread}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 22,
-              alignItems: "center",
-              justifyContent: "center",
-              marginLeft: 10,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              backgroundColor: theme.colors.card,
-            }}
-          >
-            <Ionicons name="chatbubble-ellipses-outline" size={24} color={theme.colors.text} />
-          </MotionPressable>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginLeft: 10 }}>
+            <MotionPressable
+              accessibilityRole="button"
+              accessibilityLabel="Open Sage panel"
+              onPress={() => openInspector("connections")}
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 21,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.card,
+              }}
+            >
+              <Ionicons name="options-outline" size={22} color={theme.colors.text} />
+            </MotionPressable>
+            <MotionPressable
+              accessibilityRole="button"
+              accessibilityLabel="Start a new chat"
+              onPress={createNewThread}
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 21,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.card,
+              }}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={23} color={theme.colors.text} />
+            </MotionPressable>
+          </View>
         ) : null}
       </View>
       <View style={{ flex: 1 }}>
@@ -1491,7 +1736,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                 <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.5 }}>
                   Memory capsule
                 </Text>
-                <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/memory")}>
+                <TouchableOpacity activeOpacity={0.86} onPress={() => openInspector("memory")}>
                   <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
                     Edit
                   </Text>
@@ -1527,10 +1772,11 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         <View style={{ paddingBottom: 0 }}>
           <InputBar
             onSend={(text) => sendMessage(text)}
+            onStop={stopCurrentTurn}
+            onPlusPress={() => openInspector("connections")}
             isLoading={isLoading}
             prefilledPrompt={input}
             placeholder={requestedAgentId ? `Message ${activeAgent.label}` : "Ask Sage anything"}
-            textOnly
           />
         </View>
       </View>
@@ -1548,6 +1794,95 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           <TransientBanner message={banner.message} tone={banner.tone} />
         </View>
       ) : null}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={inspectorVisible}
+        onRequestClose={() => setInspectorVisible(false)}
+      >
+        <View style={StyleSheet.absoluteFillObject}>
+          <Pressable style={{ flex: 1, backgroundColor: "rgba(17, 24, 39, 0.22)" }} onPress={() => setInspectorVisible(false)} />
+          <View
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              paddingHorizontal: 16,
+              paddingTop: 14,
+              paddingBottom: Math.max(insets.bottom, 16),
+              borderTopLeftRadius: 28,
+              borderTopRightRadius: 28,
+              borderWidth: 1,
+              borderBottomWidth: 0,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.background,
+              maxHeight: "78%",
+              gap: 12,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={{ fontSize: 10.5, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary, letterSpacing: 0.7, textTransform: "uppercase" }}>
+                  Sage
+                </Text>
+                <Text numberOfLines={1} style={{ marginTop: 2, fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                  {MOBILE_INSPECTOR_TABS.find((tab) => tab.id === activeInspectorTab)?.label || "Panel"}
+                </Text>
+                <Text numberOfLines={1} style={{ marginTop: 2, fontSize: 12.5, color: theme.colors.textSecondary }}>
+                  Connections, tools, memory, files, and thread details stay here.
+                </Text>
+              </View>
+              <MotionPressable
+                accessibilityRole="button"
+                accessibilityLabel="Close Sage panel"
+                onPress={() => setInspectorVisible(false)}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  backgroundColor: theme.colors.card,
+                }}
+              >
+                <Ionicons name="close" size={22} color={theme.colors.text} />
+              </MotionPressable>
+            </View>
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              {MOBILE_INSPECTOR_TABS.map((tab) => {
+                const selected = activeInspectorTab === tab.id;
+                return (
+                  <TouchableOpacity
+                    key={tab.id}
+                    activeOpacity={0.86}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    onPress={() => setActiveInspectorTab(tab.id)}
+                    style={{
+                      flex: 1,
+                      minHeight: 42,
+                      borderRadius: 14,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderWidth: 1,
+                      borderColor: selected ? theme.colors.text : theme.colors.border,
+                      backgroundColor: selected ? theme.colors.cardHover : theme.colors.surface,
+                    }}
+                  >
+                    <Ionicons name={tab.icon} size={17} color={selected ? theme.colors.text : theme.colors.textSecondary} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <View style={{ gap: 10 }}>
+              {renderInspectorContent()}
+            </View>
+          </View>
+        </View>
+      </Modal>
       {embeddedMode ? (
         <>
           {!historyVisible ? (

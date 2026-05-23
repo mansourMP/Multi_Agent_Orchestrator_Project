@@ -390,6 +390,7 @@ export type ApprovalResolveRequest = {
   resolution: "approved" | "rejected";
   actor?: string;
   reason?: string | null;
+  approval_scope?: "once" | "session" | null;
 };
 
 export type ApprovalResolveResponse = Record<string, unknown> & {

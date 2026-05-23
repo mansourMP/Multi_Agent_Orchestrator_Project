@@ -586,6 +586,57 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             "We are closed for inventory. Please come back later.",
         )
 
+    async def test_create_draft_deployed_agent_works_in_local_mode_without_control_plane_pool(self) -> None:
+        workspace = {
+            **_workspace_record(),
+            "workspace_id": "ws-local-create",
+            "tenant_id": "tenant-local-create",
+        }
+        owner_user = {
+            **_owner_user(),
+            "workspace_access": {
+                "ws-local-create": {
+                    "workspace_id": "ws-local-create",
+                    "tenant_id": "tenant-local-create",
+                    "role": "owner",
+                }
+            },
+        }
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=workspace),
+            ),
+            patch(
+                "server_modules.control_plane_repository._scoped_connection",
+                new=_fake_scoped_connection(None),
+            ),
+            patch(
+                "server_modules.control_plane_repository.ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            created = await deployed_agent_service.create_draft_deployed_agent(
+                current_user=owner_user,
+                owner_workspace_id="ws-local-create",
+                name="Local Studio Agent",
+                runtime_target="cloud",
+            )
+            listed = await deployed_agent_service.list_deployed_agents(
+                current_user=owner_user,
+                owner_workspace_id="ws-local-create",
+            )
+
+        self.assertTrue(str(created["id"]).startswith("dagent_"))
+        self.assertTrue(str(created["backing_install_id"]).startswith("ainstall_"))
+        self.assertEqual(created["name"], "Local Studio Agent")
+        self.assertEqual(listed["items"][0]["id"], created["id"])
+
     async def test_create_draft_deployed_agent_normalizes_daily_limit_metadata(self) -> None:
         backing_install = _backing_install()
         persisted_row = _deployed_agent_row(

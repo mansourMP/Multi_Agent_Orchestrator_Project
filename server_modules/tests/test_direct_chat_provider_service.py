@@ -209,6 +209,20 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertEqual(provider, "codex_cli")
         self.assertEqual(credentials.get("auth_mode"), "oauth_token")
 
+    def test_preferred_provider_blocks_explicit_codex_when_runtime_unusable(self) -> None:
+        provider, credentials = direct_chat_provider_service.preferred_provider(
+            "default",
+            "openai-codex",
+            supported_providers=["openai", "codex_cli", "anthropic", "gemini"],
+            direct_chat_credentials_fn=lambda _workspace_id, provider: {"auth_mode": "oauth_token", "oauth_token": "token"} if provider == "codex_cli" else {},
+            supports_direct_message_native_chat_fn=lambda provider, credentials: provider == "codex_cli" and bool(credentials),
+            credential_auth_mode_fn=lambda _provider, credentials: str((credentials or {}).get("auth_mode") or ""),
+            provider_runtime_usable_fn=lambda _workspace_id, provider: provider != "codex_cli",
+        )
+
+        self.assertEqual(provider, "codex_cli")
+        self.assertEqual(credentials, {})
+
     def test_preferred_provider_keeps_explicit_selection_when_unavailable(self) -> None:
         provider, credentials = direct_chat_provider_service.preferred_provider(
             "default",

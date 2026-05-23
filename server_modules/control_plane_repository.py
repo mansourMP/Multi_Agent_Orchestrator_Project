@@ -61,6 +61,8 @@ _LOCAL_IDENTITY_LOCK = threading.Lock()
 _LOCAL_AGENT_THREAD_LOCK = threading.RLock()
 _LOCAL_AGENT_THREADS: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 _LOCAL_AGENT_TURNS: Dict[tuple[str, str, str], List[Dict[str, Any]]] = {}
+_LOCAL_DEPLOYED_AGENT_LOCK = threading.RLock()
+_LOCAL_DEPLOYED_AGENTS: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 WORKSPACE_LOOKUP_CACHE_TTL_SECONDS = max(
     float(os.getenv("ORION_WORKSPACE_LOOKUP_CACHE_TTL_SECONDS", "3")),
     0.5,
@@ -1648,6 +1650,99 @@ def _row_to_deployed_agent(row: Any) -> Optional[Dict[str, Any]]:
         "created_at": _iso(payload.get("created_at")),
         "updated_at": _iso(payload.get("updated_at")),
     }
+
+
+def _local_deployed_agent_key(tenant_id: str, workspace_id: str, deployed_agent_id: str) -> tuple[str, str, str]:
+    return (
+        str(tenant_id or "").strip(),
+        str(workspace_id or "").strip(),
+        str(deployed_agent_id or "").strip(),
+    )
+
+
+def _clone_local_deployed_agent(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    return _row_to_deployed_agent(dict(record))
+
+
+def _local_store_deployed_agent(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    key = _local_deployed_agent_key(
+        str(record.get("tenant_id") or ""),
+        str(record.get("owner_workspace_id") or ""),
+        str(record.get("id") or ""),
+    )
+    if not all(key):
+        return None
+    with _LOCAL_DEPLOYED_AGENT_LOCK:
+        _LOCAL_DEPLOYED_AGENTS[key] = dict(record)
+        return _clone_local_deployed_agent(_LOCAL_DEPLOYED_AGENTS[key])
+
+
+def _local_get_deployed_agent(
+    deployed_agent_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    owner_workspace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_id = str(deployed_agent_id or "").strip()
+    if not resolved_id:
+        return None
+    with _LOCAL_DEPLOYED_AGENT_LOCK:
+        for (tenant_key, workspace_key, agent_key), record in _LOCAL_DEPLOYED_AGENTS.items():
+            if agent_key != resolved_id:
+                continue
+            if tenant_id is not None and tenant_key != str(tenant_id or "").strip():
+                continue
+            if owner_workspace_id is not None and workspace_key != str(owner_workspace_id or "").strip():
+                continue
+            return _clone_local_deployed_agent(record)
+    return None
+
+
+def _local_get_deployed_agent_by_backing_install_id(
+    backing_install_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    owner_workspace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_install_id = str(backing_install_id or "").strip()
+    if not resolved_install_id:
+        return None
+    with _LOCAL_DEPLOYED_AGENT_LOCK:
+        for (tenant_key, workspace_key, _agent_key), record in _LOCAL_DEPLOYED_AGENTS.items():
+            if str(record.get("backing_install_id") or "").strip() != resolved_install_id:
+                continue
+            if tenant_id is not None and tenant_key != str(tenant_id or "").strip():
+                continue
+            if owner_workspace_id is not None and workspace_key != str(owner_workspace_id or "").strip():
+                continue
+            return _clone_local_deployed_agent(record)
+    return None
+
+
+def _local_list_deployed_agents_for_workspace(
+    owner_workspace_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    deployment_state: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    resolved_workspace_id = str(owner_workspace_id or "").strip()
+    resolved_tenant_id = str(tenant_id or "").strip()
+    resolved_state = str(deployment_state or "").strip().lower()
+    rows: List[Dict[str, Any]] = []
+    with _LOCAL_DEPLOYED_AGENT_LOCK:
+        for (tenant_key, workspace_key, _agent_key), record in _LOCAL_DEPLOYED_AGENTS.items():
+            if workspace_key != resolved_workspace_id:
+                continue
+            if resolved_tenant_id and tenant_key != resolved_tenant_id:
+                continue
+            if resolved_state and str(record.get("deployment_state") or "").strip().lower() != resolved_state:
+                continue
+            projected = _clone_local_deployed_agent(record)
+            if isinstance(projected, dict):
+                rows.append(projected)
+    rows.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or "")), reverse=True)
+    return rows[: max(1, int(limit))]
 
 
 def _row_to_deployed_agent_daily_message_usage(row: Any) -> Optional[Dict[str, Any]]:
@@ -5194,7 +5289,35 @@ async def create_deployed_agent(
     record_id = str(deployed_agent_id or f"dagent_{uuid.uuid4().hex[:16]}").strip()
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
-            return None
+            now = _utc_now_iso()
+            return _local_store_deployed_agent(
+                {
+                    "id": record_id,
+                    "tenant_id": resolved_tenant_id,
+                    "owner_workspace_id": resolved_workspace_id,
+                    "backing_install_id": resolved_install_id,
+                    "created_by_user_id": str(created_by_user_id or "").strip() or None,
+                    "name": resolved_name,
+                    "avatar": str(avatar or "").strip() or None,
+                    "persona": str(persona or "").strip(),
+                    "system_prompt": str(system_prompt or "").strip(),
+                    "deployment_state": str(deployment_state or "draft").strip().lower() or "draft",
+                    "channels": channels or {},
+                    "knowledge_sources": knowledge_sources or [],
+                    "runtime_target": str(runtime_target or "cloud").strip() or "cloud",
+                    "billing_plan": str(billing_plan or "free").strip() or "free",
+                    "is_public": False,
+                    "quality_stars": None,
+                    "cost_tier": None,
+                    "category": None,
+                    "metadata": metadata or {},
+                    "operational_state": operational_state or {},
+                    "last_deployed_at": None,
+                    "last_paused_at": None,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
         row = await connection.fetchrow(
             """
             INSERT INTO deployed_agents (
@@ -5408,7 +5531,11 @@ async def get_deployed_agent_by_id(
         }
     async with _scoped_connection(**scoped_kwargs) as connection:
         if connection is None:
-            return None
+            return _local_get_deployed_agent(
+                resolved_id,
+                tenant_id=tenant_id,
+                owner_workspace_id=owner_workspace_id,
+            )
         row = await connection.fetchrow(
             """
             SELECT *
@@ -8412,7 +8539,12 @@ async def list_deployed_agents_for_workspace(
         }
     async with _scoped_connection(**scoped_kwargs) as connection:
         if connection is None:
-            return []
+            return _local_list_deployed_agents_for_workspace(
+                resolved_workspace_id,
+                tenant_id=tenant_id,
+                deployment_state=deployment_state,
+                limit=limit,
+            )
         rows = await connection.fetch(
             """
             SELECT *
@@ -8590,7 +8722,11 @@ async def get_deployed_agent_by_backing_install_id(
         }
     async with _scoped_connection(**scoped_kwargs) as connection:
         if connection is None:
-            return None
+            return _local_get_deployed_agent_by_backing_install_id(
+                resolved_install_id,
+                tenant_id=tenant_id,
+                owner_workspace_id=owner_workspace_id,
+            )
         row = await connection.fetchrow(
             """
             SELECT *

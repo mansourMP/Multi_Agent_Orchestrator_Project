@@ -91,6 +91,56 @@ class TranscriptEventsServiceTests(unittest.TestCase):
             )
         )
 
+    def test_delegation_events_are_user_safe_proof(self) -> None:
+        started = service.build_transcript_event(
+            "trace",
+            {
+                "event_type": "delegation.started",
+                "item_id": "delegation-1",
+                "data": {
+                    "specialist_id": "specialist-secret",
+                    "specialist_name": "Research Specialist",
+                    "task_summary": "Check the public docs.",
+                    "prompt": "hidden child prompt",
+                    "provider": "deepseek",
+                    "raw_output": "hidden raw output",
+                },
+            },
+        )
+        finished = service.build_transcript_event(
+            "trace",
+            {
+                "event_type": "delegation.finished",
+                "item_id": "delegation-1",
+                "data": {
+                    "status": "completed",
+                    "result_summary": "Research Specialist found the answer.",
+                    "trace_id": "trace-secret",
+                    "request_id": "request-secret",
+                    "model_id": "deepseek-v4-pro",
+                },
+            },
+        )
+
+        self.assertIsNotNone(started)
+        self.assertIsNotNone(finished)
+        self.assertEqual(started["payload"]["event_type"], "delegation.started")
+        self.assertEqual(started["payload"]["data"]["specialist_name"], "Research Specialist")
+        self.assertEqual(started["payload"]["data"]["task_summary"], "Check the public docs.")
+        self.assertEqual(finished["payload"]["event_type"], "delegation.finished")
+        self.assertEqual(finished["payload"]["data"]["result_summary"], "Research Specialist found the answer.")
+        snapshot = repr([started, finished])
+        for token in (
+            "specialist-secret",
+            "hidden child prompt",
+            "hidden raw output",
+            "deepseek",
+            "deepseek-v4-pro",
+            "trace-secret",
+            "request-secret",
+        ):
+            self.assertNotIn(token, snapshot)
+
 
 if __name__ == "__main__":
     unittest.main()

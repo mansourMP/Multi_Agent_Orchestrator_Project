@@ -70,7 +70,7 @@ type ChatScreenProps = {
 
 type MobileInspectorTab = "connections" | "tools" | "memory" | "files" | "thread";
 
-const MOBILE_INSPECTOR_TABS: Array<{ id: MobileInspectorTab; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
+const MOBILE_INSPECTOR_TABS: { id: MobileInspectorTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { id: "connections", label: "Connections", icon: "git-network-outline" },
   { id: "tools", label: "Tools", icon: "construct-outline" },
   { id: "memory", label: "Memory", icon: "albums-outline" },
@@ -686,7 +686,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
   );
   const activeSession = agentSessions.find((item) => item.id === resolvedSessionId) ?? agentSessions[0];
   const currentSessionId = activeSession?.id ?? "";
-  const messages = activeSession?.messages || [];
+  const messages = useMemo(() => activeSession?.messages ?? [], [activeSession?.messages]);
   const lastMessageSpeech = messages[messages.length - 1]?.speech || "";
   const channelRole = activeSession?.runtimeRole || activeAgent.runtimeRole || (requestedAgentId ? "specialist" : "private-assistant");
 

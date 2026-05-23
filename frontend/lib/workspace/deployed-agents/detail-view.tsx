@@ -802,9 +802,6 @@ export const AgentDetailView = memo(({
           subtitle="Identity, launch readiness, and live performance signals."
           actions={(
             <div className="app-inline-actions app-inline-actions--tight">
-              <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
-                Edit profile
-              </AppButton>
               <AppButton
                 type="button"
                 onClick={onDeploy}

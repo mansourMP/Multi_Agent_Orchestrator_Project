@@ -263,6 +263,7 @@ export function WorkstationDeployedAgentsPane({
     () => String(searchParams.get('proof_agent') || searchParams.get('template') || '').trim(),
     [searchParams],
   );
+  const requestedCreateAgent = searchParams.get('createAgent') === '1';
   const requestedOverlayTab = useMemo(
     () => normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab')),
     [searchParams],
@@ -601,6 +602,20 @@ export function WorkstationDeployedAgentsPane({
     openCreateWizard(template.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestedProofAgentTemplateId, studioTemplates]);
+
+  useEffect(() => {
+    if (!requestedCreateAgent) {
+      return;
+    }
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('createAgent');
+    const query = params.toString();
+    const nextHref = query ? `${pathname}?${query}` : pathname;
+    setCurrentStudioSubview('agents');
+    openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id);
+    router.replace(nextHref, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedCreateAgent]);
 
   useEffect(() => {
     updateStudioPaneCache(workspaceId, {
@@ -1283,11 +1298,6 @@ export function WorkstationDeployedAgentsPane({
         )}
         title={studioTitle}
         subtitle={studioSubtitle}
-        actions={currentStudioSubview === 'agents' ? (
-          <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-            Add agent
-          </AppButton>
-        ) : undefined}
       >
         {visibleGlobalErrorMessage ? (
           <PlatformNotification
@@ -1309,15 +1319,14 @@ export function WorkstationDeployedAgentsPane({
 
         <WorkstationSplitWorkbench
           ariaLabel="Agents"
-          className="studio-agents-workbench"
-          mainHeader={currentStudioSubview === 'agents' ? (
-            <div className="studio-agents-workbench__header">
-              <span className="studio-agents-workbench__header-spacer" aria-hidden="true" />
-              <AppButton type="button" tone="primary" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                Add agent
-              </AppButton>
-            </div>
-          ) : undefined}
+          className={joinClassNames(
+            'studio-agents-workbench',
+          )}
+          resizableSidebar
+          sidebarResizeStorageKey={`empyralis:studio-agent-roster-width:${workspaceId}`}
+          sidebarDefaultWidth={330}
+          sidebarMinWidth={96}
+          sidebarMaxWidth={440}
           sidebar={(
             <AgentRosterSidebar
               showAgentsIndex={showAgentsIndex}

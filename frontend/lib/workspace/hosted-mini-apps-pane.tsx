@@ -5,13 +5,11 @@ import type { FormEvent } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Boxes,
   ExternalLink,
   Globe2,
   LockKeyhole,
   PackageOpen,
   Plus,
-  ShieldCheck,
   Sparkles,
 } from 'lucide-react';
 
@@ -128,33 +126,6 @@ function urlTargetsLocalDevelopment(url: URL): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host.endsWith('.local');
 }
 
-const installedSourceCards = [
-  {
-    title: 'Official apps',
-    label: 'Empyralis',
-    copy: 'Company-built app surfaces reviewed for this workspace.',
-    icon: Sparkles,
-  },
-  {
-    title: 'Private apps',
-    label: 'Created by me',
-    copy: 'Apps you connect by trusted HTTPS URL for this workspace.',
-    icon: LockKeyhole,
-  },
-  {
-    title: 'Reviewed apps',
-    label: 'Partners',
-    copy: 'Approved external apps with explicit bridge contracts and caps.',
-    icon: ShieldCheck,
-  },
-] as const;
-
-const permissionSummaryCards = [
-  { label: 'Runtime', value: 'Open only' },
-  { label: 'AI bridge', value: 'Consent first' },
-  { label: 'Local access', value: 'Closed' },
-] as const;
-
 export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -261,7 +232,7 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
             className={styles.secondaryAction}
             onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'installed', searchParams))}
           >
-            Back to installed
+            Back to apps
           </button>
         </section>
       );
@@ -320,32 +291,10 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
                 className={styles.secondaryAction}
                 onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'installed', searchParams))}
               >
-                Back to installed
+                Back to apps
               </button>
             </div>
           </form>
-        </section>
-      );
-    }
-
-    if (activeTab === 'permissions') {
-      return (
-        <section className={styles.permissionGrid} aria-label="Application permissions">
-          <article className={styles.permissionBlock}>
-            <p className={styles.permissionLabel}>Runtime</p>
-            <h2 className={styles.permissionTitle}>Open-session only</h2>
-            <p className={styles.permissionCopy}>Applications run when opened. Background access is not granted by default.</p>
-          </article>
-          <article className={styles.permissionBlock}>
-            <p className={styles.permissionLabel}>Bridge</p>
-            <h2 className={styles.permissionTitle}>Explicit contracts</h2>
-            <p className={styles.permissionCopy}>Apps need allowed origins and bridge contracts before they can reach platform APIs.</p>
-          </article>
-          <article className={styles.permissionBlock}>
-            <p className={styles.permissionLabel}>Local access</p>
-            <h2 className={styles.permissionTitle}>Closed</h2>
-            <p className={styles.permissionCopy}>Public apps do not get CLI, local computer, BYOK, or broad runtime access.</p>
-          </article>
         </section>
       );
     }
@@ -364,9 +313,9 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
               <PackageOpen aria-hidden="true" />
             </div>
             <div className={styles.commandCopy}>
-              <p className={styles.commandKicker}>Installed apps</p>
-              <h2 className={styles.commandTitle}>No applications installed</h2>
-              <p className={styles.commandText}>Add an official app or connect a private app URL.</p>
+              <p className={styles.commandKicker}>Apps</p>
+              <h2 className={styles.commandTitle}>No apps installed</h2>
+              <p className={styles.commandText}>Browse official apps or create a private workspace app.</p>
             </div>
             <div className={styles.actionRow}>
               <button
@@ -387,115 +336,83 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
               </button>
             </div>
           </div>
-          <div className={styles.statusGrid} aria-label="Application status">
-            <article className={styles.statusCard}>
-              <span className={styles.statusLabel}>Installed</span>
-              <strong className={styles.statusValue}>0</strong>
-              <span className={styles.statusHint}>Workspace apps</span>
-            </article>
-            <article className={styles.statusCard}>
-              <span className={styles.statusLabel}>Background</span>
-              <strong className={styles.statusValue}>Off</strong>
-              <span className={styles.statusHint}>Default policy</span>
-            </article>
-            <article className={styles.statusCard}>
-              <span className={styles.statusLabel}>Bridge</span>
-              <strong className={styles.statusValue}>0</strong>
-              <span className={styles.statusHint}>Active contracts</span>
-            </article>
-          </div>
-          <div className={styles.sourceGrid} aria-label="Application sources">
-            {installedSourceCards.map((source) => {
-              const Icon = source.icon;
-              return (
-                <button
-                  key={source.title}
-                  type="button"
-                  className={styles.sourceCard}
-                  onClick={() => router.replace(buildApplicationTabHref(
-                    workspaceId,
-                    source.title === 'Private apps' ? 'my_apps' : 'official',
-                    searchParams,
-                  ))}
-                >
-                  <span className={styles.sourceIcon}>
-                    <Icon aria-hidden="true" />
-                  </span>
-                  <span className={styles.sourceCopy}>
-                    <span className={styles.sourceLabel}>{source.label}</span>
-                    <strong>{source.title}</strong>
-                    <span>{source.copy}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
         </section>
       );
     }
     return (
-      <div className={styles.grid}>
-        {items.map((item) => (
-          <article key={item.app_id} className={styles.card}>
-            <div className={styles.header}>
-              <p className={styles.eyebrow}>Workspace application</p>
-              <h2 className={styles.cardTitle}>{item.label}</h2>
-              <p className={styles.copy}>{item.description || 'No description yet.'}</p>
-            </div>
-            <div className={styles.cardMeta}>
-              <span className={styles.chip}>{item.hosted_app?.embed?.kind || 'iframe'}</span>
-              <span className={styles.chip}>{item.permissions?.length || 0} permission(s)</span>
-              <span className={styles.chip}>
-                {item.hosted_app?.allowed_origins?.length || 0} allowed origin{(item.hosted_app?.allowed_origins?.length || 0) === 1 ? '' : 's'}
-              </span>
-              <span className={styles.chip}>
-                {bridgeContractCount(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts)} bridge contract{bridgeContractCount(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts) === 1 ? '' : 's'}
-              </span>
-              <span className={styles.chip}>Memory: {item.memory_scope === 'none_by_default' ? 'Denied by default' : item.memory_scope || 'Unknown'}</span>
-            </div>
-            <div className={styles.factStack}>
-              <div className={styles.factBlock}>
-                <p className={styles.factLabel}>Bridge</p>
-                <p className={styles.factValue}>
-                  {summarizeBridgeKinds(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts)}
-                </p>
+      <section className={styles.appsSection} aria-label="Installed applications">
+        <div className={styles.appsToolbar}>
+          <div>
+            <p className={styles.commandKicker}>Apps</p>
+            <h2 className={styles.sectionTitle}>Installed apps</h2>
+          </div>
+          <div className={styles.actionRow}>
+            <button
+              type="button"
+              className={styles.secondaryAction}
+              onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'official', searchParams))}
+            >
+              <Globe2 aria-hidden="true" />
+              Browse official
+            </button>
+            <button
+              type="button"
+              className={styles.primaryAction}
+              onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'my_apps', searchParams))}
+            >
+              <Plus aria-hidden="true" />
+              Create app
+            </button>
+          </div>
+        </div>
+        <div className={styles.grid}>
+          {items.map((item) => (
+            <article key={item.app_id} className={styles.card}>
+              <div className={styles.header}>
+                <p className={styles.eyebrow}>App</p>
+                <h2 className={styles.cardTitle}>{item.label}</h2>
+                <p className={styles.copy}>{item.description || 'No description yet.'}</p>
               </div>
-              <div className={styles.factBlock}>
-                <p className={styles.factLabel}>Memory boundary</p>
-                <p className={styles.factValue}>
-                  Sage memory is denied by default. Only explicit context-envelope classes cross the shell boundary.
-                </p>
+              <div className={styles.cardMeta}>
+                <span className={styles.chip}>{item.hosted_app?.embed?.kind || 'iframe'}</span>
+                <span className={styles.chip}>{item.permissions?.length || 0} permission(s)</span>
+                <span className={styles.chip}>
+                  {item.hosted_app?.allowed_origins?.length || 0} allowed origin{(item.hosted_app?.allowed_origins?.length || 0) === 1 ? '' : 's'}
+                </span>
+                <span className={styles.chip}>
+                  {bridgeContractCount(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts)} bridge contract{bridgeContractCount(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts) === 1 ? '' : 's'}
+                </span>
               </div>
-              <div className={styles.factBlock}>
-                <p className={styles.factLabel}>Denied by default</p>
-                <p className={styles.factValue}>
-                  {item.hosted_app?.bridge?.denied_by_default?.length
-                    ? item.hosted_app.bridge.denied_by_default.map(humanizeToken).slice(0, 3).join(' · ')
-                    : 'No implicit memory or runtime grants.'}
-                </p>
+              <div className={styles.factStack}>
+                <div className={styles.factBlock}>
+                  <p className={styles.factLabel}>Bridge</p>
+                  <p className={styles.factValue}>
+                    {summarizeBridgeKinds(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts)}
+                  </p>
+                </div>
               </div>
-            </div>
-            <div className={styles.linkRow}>
-              <Link
-                className={styles.linkButton}
-                href={`/w/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(item.app_id)}`}
-              >
-                Open
-              </Link>
-              {item.hosted_app?.hosted_url ? (
-                <a
-                  className={styles.linkSecondary}
-                  href={item.hosted_app.hosted_url}
-                  target="_blank"
-                  rel="noreferrer"
+              <div className={styles.linkRow}>
+                <Link
+                  className={styles.linkButton}
+                  href={`/w/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(item.app_id)}`}
                 >
-                  Source <ExternalLink aria-hidden="true" />
-                </a>
-              ) : null}
-            </div>
-          </article>
-        ))}
-      </div>
+                  Open
+                </Link>
+                {item.hosted_app?.hosted_url ? (
+                  <a
+                    className={styles.linkSecondary}
+                    href={item.hosted_app.hosted_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Source <ExternalLink aria-hidden="true" />
+                  </a>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
     );
   }, [
     activeTab,
@@ -515,24 +432,6 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
 
   return (
     <main className={styles.shell}>
-      <header className={styles.pageHeader}>
-        <div className={styles.headerIcon}>
-          <Boxes aria-hidden="true" />
-        </div>
-        <div className={styles.headerCopy}>
-          <p className={styles.eyebrow}>Applications</p>
-          <h1 className={styles.title}>Workspace apps</h1>
-          <p className={styles.copy}>Installed app surfaces for this workspace.</p>
-        </div>
-        <div className={styles.headerStats} aria-label="Application policy summary">
-          {permissionSummaryCards.map((item) => (
-            <div key={item.label} className={styles.headerStat}>
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-            </div>
-          ))}
-        </div>
-      </header>
       {content}
     </main>
   );

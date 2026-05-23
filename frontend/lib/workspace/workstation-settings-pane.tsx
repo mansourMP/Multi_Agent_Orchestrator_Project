@@ -15,6 +15,7 @@ import {
   joinClassNames,
 } from '@/lib/ui/primitives';
 import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
+import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationBillingPane } from '@/lib/workspace/workstation-billing-pane';
@@ -23,7 +24,7 @@ import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gate
 import { WorkstationPlatformAnalyticsPane } from '@/lib/workspace/workstation-platform-analytics-pane';
 import type { ProviderCatalogRecord, ProviderProfileRecord } from '@/lib/workspace/workstation-client';
 
-type SettingsSectionId = 'account' | 'devices' | 'usage' | 'billing' | 'privacy' | 'transparency';
+type SettingsSectionId = 'account' | 'appearance' | 'devices' | 'usage' | 'billing' | 'privacy' | 'transparency';
 
 const SETTINGS_SECTIONS: Array<{
   id: SettingsSectionId;
@@ -40,8 +41,15 @@ const SETTINGS_SECTIONS: Array<{
     description: 'Profile and plan.',
   },
   {
+    id: 'appearance',
+    label: 'Appearance',
+    eyebrow: 'Display',
+    title: 'Appearance',
+    description: 'Theme and interface density.',
+  },
+  {
     id: 'devices',
-    label: 'Devices',
+    label: 'Agent Computer',
     eyebrow: 'Agent Computer',
     title: 'Agent Computer',
     description: 'Optional computer power for browser, files, shell, screenshots, and apps.',
@@ -271,6 +279,7 @@ function deriveActiveModelPath(
 
 function isSettingsSectionId(value: string | null): value is SettingsSectionId {
   return value === 'account'
+    || value === 'appearance'
     || value === 'devices'
     || value === 'usage'
     || value === 'billing'
@@ -374,6 +383,7 @@ export function WorkstationSettingsPane() {
   const searchParams = useSearchParams();
   const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
+  const { state: accountShellState, actions: accountShellActions } = useAccountShell();
   const [selectedSection, setSelectedSection] = useState<SettingsSectionId>(() => {
     const requestedSection = searchParams.get('section');
     return isSettingsSectionId(requestedSection) ? requestedSection : 'account';
@@ -473,6 +483,7 @@ export function WorkstationSettingsPane() {
         : preferredRuntimeTarget.publicLabel || preferredRuntimeTarget.label
     : 'Cloud';
   const activeSection = SETTINGS_SECTIONS.find((section) => section.id === selectedSection) ?? SETTINGS_SECTIONS[0];
+  const currentThemePreference = accountShellState.globalTheme;
   const accountDisplayName = bootstrap.account.displayName?.trim() || 'Empyralis User';
   const accountEmail = bootstrap.account.email;
   const accountInitial = (accountDisplayName || accountEmail).charAt(0).toUpperCase();
@@ -539,7 +550,7 @@ export function WorkstationSettingsPane() {
         <aside className="settings-nav" aria-label="Settings sections">
           <div className="app-settings-sidebar__header">
             <h2 className="app-settings-sidebar__title">Settings</h2>
-            <p className="app-settings-sidebar__subtitle">Account, AI model, and trust controls.</p>
+            <p className="app-settings-sidebar__subtitle">Account, appearance, trust, and billing.</p>
           </div>
           {SETTINGS_SECTIONS.map((section) => (
             <button
@@ -652,6 +663,54 @@ export function WorkstationSettingsPane() {
                     title="Apple sign-in"
                     subtitle={authProviders.apple?.enabled === true ? 'Available for this workspace' : 'Coming soon on web'}
                     description="Apple will appear here as a real method once the web sign-in path is enabled."
+                  />
+                </AppSurfaceList>
+              </AppSurfaceCard>
+            </div>
+          ) : null}
+
+          {selectedSection === 'appearance' ? (
+            <div className="settings-section-stack">
+              <AppSurfaceCard
+                title="Theme"
+                description="Choose how Empyralis renders on this browser."
+              >
+                <div className="settings-choice-grid">
+                  {[
+                    { id: 'system' as const, label: 'System', detail: 'Follow this device.' },
+                    { id: 'light' as const, label: 'Light', detail: 'Bright surfaces and high contrast.' },
+                    { id: 'dark' as const, label: 'Dark', detail: 'Low-light interface.' },
+                  ].map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={joinClassNames(
+                        'settings-choice-card',
+                        currentThemePreference === option.id && 'settings-choice-card--selected',
+                      )}
+                      aria-pressed={currentThemePreference === option.id}
+                      onClick={() => accountShellActions.setGlobalTheme(option.id)}
+                    >
+                      <strong>{option.label}</strong>
+                      <span>{option.detail}</span>
+                    </button>
+                  ))}
+                </div>
+              </AppSurfaceCard>
+              <AppSurfaceCard
+                title="Interface"
+                description="Sage keeps the daily surface compact. Developer details expand only when a row or tool asks for them."
+              >
+                <AppSurfaceList>
+                  <AppSurfaceListItem
+                    title="Chat first"
+                    subtitle="Default"
+                    description="The transcript and composer stay central. Chat, History, Connections, Memory, Tasks, and Library stay in the top navigation."
+                  />
+                  <AppSurfaceListItem
+                    title="Progressive details"
+                    subtitle="Always available"
+                    description="Technical fields remain in expandable rows instead of a separate advanced product mode."
                   />
                 </AppSurfaceList>
               </AppSurfaceCard>

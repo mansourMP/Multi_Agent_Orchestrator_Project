@@ -789,6 +789,14 @@ function sortCredentials(credentials: VaultCredentialRecord[]): VaultCredentialR
     readString(right.updated_at ?? right.created_at).localeCompare(readString(left.updated_at ?? left.created_at)));
 }
 
+function compactNavInitials(label: string): string {
+  const words = label.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return `${words[0]?.[0] ?? ''}${words[1]?.[0] ?? ''}`.toUpperCase();
+  }
+  return label.trim().slice(0, 2).toUpperCase();
+}
+
 function isSecretlessConnection(providerId: string, profile: ProviderProfileRecord | null): boolean {
   const authMode = readString(profile?.auth_mode).toLowerCase();
   if (authMode === 'local_cli' || authMode === 'none') {
@@ -1671,7 +1679,7 @@ export function WorkstationSageConnectorsPane({
     void loadState()
       .catch((loadError) => {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Integrations are unavailable right now.');
+          setError(loadError instanceof Error ? loadError.message : 'Connections are unavailable right now.');
         }
       })
       .finally(() => {
@@ -2040,8 +2048,8 @@ export function WorkstationSageConnectorsPane({
     if (showProviders) {
       groups.push({
         id: 'ai',
-        label: 'AI',
-        description: 'Models, credits, and AI accounts.',
+        label: 'AI Accounts',
+        description: 'Empyralis credits and user-owned AI accounts.',
         detail: aiProviderSummary.activeLabel,
         countLabel: activeProviderCard ? 'Active' : 'Setup',
         statusTone: activeProviderCard ? 'connected' : 'warning',
@@ -2073,10 +2081,10 @@ export function WorkstationSageConnectorsPane({
     if (showPersonalSurface && thisComputerCards.length > 0) {
       groups.push({
         id: 'computers',
-        label: 'Computers',
-        description: 'Connected devices and local capability.',
-        detail: 'Selected computer, browser, files, and local apps.',
-        countLabel: `${thisComputerCards.length}`,
+        label: 'Agent Computer',
+        description: 'Optional computer power.',
+        detail: 'Computer control, phone app, and remote setup.',
+        countLabel: thisComputerCards.some((card) => card.statusTone === 'connected') ? 'Online' : 'Setup',
         statusTone: thisComputerCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'warning',
       });
     }
@@ -3243,8 +3251,8 @@ export function WorkstationSageConnectorsPane({
     return (
       <CommandSheet
         open={computerConnectOpen}
-        title="Connect a computer"
-        description="One connection gives Sage the full local power layer. No capability picking here."
+        title="Connect Agent Computer"
+        description="Choose a computer source for Sage. Cloud remains the default when no computer is connected."
         className="sage-computer-connect-modal"
         onClose={() => setComputerConnectOpen(false)}
         actions={(
@@ -3266,18 +3274,15 @@ export function WorkstationSageConnectorsPane({
         )}
       >
         <div className="sage-computer-connect">
-          <div className="sage-computer-connect__hero">
-            <div className="sage-computer-connect__orb" aria-hidden="true">
-              <span>Connected Computer</span>
-            </div>
+          <div className="sage-computer-connect__hero sage-computer-connect__hero--compact">
             <div className="sage-computer-connect__copy">
               <span className={joinClassNames('sage-computer-connect__status', connected && 'sage-computer-connect__status--online')}>
                 {statusLabel}
               </span>
-              <strong>Default local capability for Sage.</strong>
+              <strong>Agent Computer source.</strong>
               <p>
-                Browser, files, shell, screenshots, personal channels, and local models stay on the selected computer.
-                Sage can use them only through the governed runtime when you ask.
+                This Device and Dedicated Computer use the same gateway pairing path. Server/VPS and Cloud Computer stay
+                visible as separate sources so users understand where Sage is running work.
               </p>
             </div>
           </div>
@@ -3599,26 +3604,34 @@ export function WorkstationSageConnectorsPane({
             </AppButton>
           </div>
 
-          <div className="sage-ai-provider-sections">
-            {configurableSections.map((section) => (
-              <section key={section.id} className="sage-ai-provider-section">
-                <div className="sage-ai-provider-section__header">
-                  <strong>{section.id === 'local' ? 'Models on Connected Computer' : 'AI APIs'}</strong>
-                  <span>{section.items.length} option{section.items.length === 1 ? '' : 's'}</span>
-                </div>
-                {section.items.length > 0 ? (
-                  <div className="sage-ai-provider-grid">
-                    {section.items.map((record) => renderAiProviderChoiceCard(record, section))}
+          <details className="sage-progressive-disclosure" open={Boolean(explicitSelectedProfile)}>
+            <summary>
+              <span>
+                <strong>Use your own AI account</strong>
+                <small>Provider and local-model setup stays here when you need it.</small>
+              </span>
+            </summary>
+            <div className="sage-ai-provider-sections">
+              {configurableSections.map((section) => (
+                <section key={section.id} className="sage-ai-provider-section">
+                  <div className="sage-ai-provider-section__header">
+                    <strong>{section.id === 'local' ? 'Models on Agent Computer' : 'AI APIs'}</strong>
+                    <span>{section.items.length} option{section.items.length === 1 ? '' : 's'}</span>
                   </div>
-                ) : (
-                  <div className="sage-integrations-detail-card">
-                    <strong>{section.label}</strong>
-                    <span>No provider is available in this section yet.</span>
-                  </div>
-                )}
-              </section>
-            ))}
-          </div>
+                  {section.items.length > 0 ? (
+                    <div className="sage-ai-provider-grid">
+                      {section.items.map((record) => renderAiProviderChoiceCard(record, section))}
+                    </div>
+                  ) : (
+                    <div className="sage-integrations-detail-card">
+                      <strong>{section.label}</strong>
+                      <span>No provider is available in this section yet.</span>
+                    </div>
+                  )}
+                </section>
+              ))}
+            </div>
+          </details>
         </div>
       </section>
     );
@@ -3652,6 +3665,54 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderAgentComputerConnections() {
+    const device = personalCards.find((card) => card.id === 'device');
+    const connected = device?.statusTone === 'connected';
+    const statusTone = device?.statusTone ?? 'warning';
+    const statusClass = personalStatusClassName({ statusTone });
+    return (
+      <section className="sage-unified-section sage-agent-computer">
+        <p className="sage-unified-section__label">Agent Computer</p>
+        <p className="sage-unified-section__description">
+          Sage runs in Cloud by default. Connect a computer only when Sage needs local browser, files, apps, shell,
+          screenshots, or local AI.
+        </p>
+        <div className="sage-agent-computer__panel">
+          <div className="sage-agent-computer__setting">
+            <div className="sage-agent-computer__copy">
+              <strong>Computer</strong>
+              <span>This computer, a Mac mini, or a server uses the same connection setup. Keep the choice inside setup.</span>
+            </div>
+            <span className={joinClassNames('sage-unified-card__status', statusClass)}>
+              {connected ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
+              {device?.statusLabel ?? 'Not connected'}
+            </span>
+            <AppButton type="button" onClick={openComputerConnectSheet}>
+              {connected ? 'Manage' : 'Connect'}
+            </AppButton>
+          </div>
+          <div className="sage-agent-computer__setting">
+            <div className="sage-agent-computer__copy">
+              <strong>Phone app</strong>
+              <span>Use mobile for chat, notifications, and approvals. It is not a separate computer runtime.</span>
+            </div>
+            <span className="sage-unified-card__status sage-unified-card__status--connected">Built in</span>
+          </div>
+          <details className="sage-agent-computer__advanced">
+            <summary>Remote and SSH options</summary>
+            <p>
+              Cloud Computer and Server/VPS stay behind the computer setup flow, like Codex keeps SSH and remote device
+              details inside Connections settings.
+            </p>
+            <AppButton type="button" tone="ghost" onClick={() => openWorkspaceRoute('gateway')}>
+              Open computer settings
+            </AppButton>
+          </details>
+        </div>
+      </section>
+    );
+  }
+
   function renderIntegrationSidebar() {
     if (isLoading && integrationGroups.length === 0) {
       return (
@@ -3679,6 +3740,9 @@ export function WorkstationSageConnectorsPane({
               setExpandedCardId(null);
             }}
           >
+            <span className="sage-integrations-nav__icon" aria-hidden="true">
+              {compactNavInitials(group.label)}
+            </span>
             <span className="sage-integrations-nav__bucket-copy">
               <span className="sage-integrations-nav__label">{group.label}</span>
               <span className="sage-integrations-nav__detail">{group.detail}</span>
@@ -3694,12 +3758,12 @@ export function WorkstationSageConnectorsPane({
 
   function renderSelectedIntegrationDetail() {
     if (error) {
-      return <AppNotice tone="warning">Integrations could not refresh. Try again when ready.</AppNotice>;
+      return <AppNotice tone="warning">Connections could not refresh. Try again when ready.</AppNotice>;
     }
     if (!selectedIntegrationGroup) {
       return (
         <div className="sage-settings-empty">
-          No integrations available.
+          No connections available.
         </div>
       );
     }
@@ -3723,12 +3787,7 @@ export function WorkstationSageConnectorsPane({
           'No channel connectors are available for this surface yet.',
         );
       case 'computers':
-        return renderExternalCollection(
-          'Computers',
-          'Connect one selected computer for browser, files, local apps, personal channels, and local models.',
-          thisComputerCards,
-          'No computer capability is available for this surface yet.',
-        );
+        return renderAgentComputerConnections();
       case 'knowledge':
         return renderExternalCollection(
           'Knowledge',
@@ -3752,10 +3811,10 @@ export function WorkstationSageConnectorsPane({
         return (
           <section className="sage-unified-section">
             <p className="sage-unified-section__label">Developer tools</p>
-            <p className="sage-unified-section__description">Custom APIs, tool servers, and webhooks stay separate from everyday app connections.</p>
+            <p className="sage-unified-section__description">Custom APIs, tool servers, and webhooks stay collapsed until a technical user needs them.</p>
             <div className="sage-integrations-detail-card">
               <strong>MCP servers, custom APIs, and webhooks</strong>
-              <span>Use this lane for developer-owned integrations that should not be mixed with everyday apps and channels. MCP tools stay unavailable until reviewed here.</span>
+              <span>Use this lane for developer-owned connections that should not be mixed with everyday apps and channels. MCP tools stay unavailable until reviewed here.</span>
             </div>
             <div className="sage-unified-expand">
               <div className="sage-unified-expand__header">
@@ -3908,8 +3967,13 @@ export function WorkstationSageConnectorsPane({
     <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)} data-workstation-surface="integrations">
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
       <WorkstationSplitWorkbench
-        ariaLabel="Integrations"
+        ariaLabel="Connections"
         className="sage-integrations-workbench"
+        resizableSidebar
+        sidebarResizeStorageKey={`empyralis:connections-sidebar-width:${workspaceId}`}
+        sidebarDefaultWidth={330}
+        sidebarMinWidth={96}
+        sidebarMaxWidth={420}
         sidebar={renderIntegrationSidebar()}
       >
         {renderSelectedIntegrationDetail()}

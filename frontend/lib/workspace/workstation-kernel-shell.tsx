@@ -37,7 +37,7 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'activity', 'memory', 'integrations', 'tasks', 'artifacts'],
+  sage: ['chat', 'activity', 'integrations', 'memory', 'tasks', 'artifacts'],
   studio: ['studio'],
   gateway: [],
   marketplace: ['marketplace'],
@@ -95,6 +95,16 @@ function buildStudioTabHref(
   const query = params.toString();
   const baseHref = buildWorkspaceRouteHref(workspaceId, 'studio');
   return query ? `${baseHref}?${query}` : baseHref;
+}
+
+function buildStudioCreateAgentHref(
+  workspaceId: string,
+  searchParams: { toString: () => string },
+): string {
+  const params = new URLSearchParams(searchParams.toString());
+  params.set('createAgent', '1');
+  const query = params.toString();
+  return `${buildWorkspaceRouteHref(workspaceId, 'studio')}?${query}`;
 }
 
 type ThreadTurnRecord = Record<string, unknown> & {
@@ -550,7 +560,7 @@ export function WorkstationKernelShell({
               isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
             )}
           >
-            <span>{route.label}</span>
+            <span>{route.id === 'chat' ? 'Chat' : route.label}</span>
           </Link>
         )
       ))
@@ -586,7 +596,16 @@ export function WorkstationKernelShell({
           )}
           actions={(
             <>
-              {routeManifest.routeIndex.gateway ? (
+              {activeDestinationId === 'studio' ? (
+                <Link
+                  href={buildStudioCreateAgentHref(workspaceId, searchParams)}
+                  className="workstation-titlebar__link"
+                  title="Add agent"
+                >
+                  <Plus size={16} aria-hidden="true" />
+                  <span>Add agent</span>
+                </Link>
+              ) : routeManifest.routeIndex.gateway ? (
                 <Link
                   href={routeManifest.routeIndex.gateway.href}
                   className={joinClassNames(

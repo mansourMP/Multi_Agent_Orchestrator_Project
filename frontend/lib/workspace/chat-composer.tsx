@@ -6,13 +6,10 @@ import {
   ArrowUp,
   Brain,
   Check,
-  ChevronDown,
   ChevronRight,
   Mic,
   MicOff,
   Plus,
-  Settings2,
-  ShieldCheck,
   Square,
   X,
   type LucideIcon,
@@ -129,10 +126,6 @@ export function ChatComposer({
   onSubmit,
   onStop,
   onOpenIntegrations,
-  onOpenPermissionsAdvanced,
-  autonomyMode,
-  autonomyOptions,
-  onAutonomyModeChange,
   model,
   modelOptions,
   modelProviderLabel = null,
@@ -145,8 +138,6 @@ export function ChatComposer({
   placeholder = '',
   providerGateVisible = false,
   providerSummary = null,
-  showAutonomySelector = true,
-  autonomyFallbackLabel = 'Offline',
   busy = false,
   smallModelWarning = null,
   onDismissSmallModelWarning,
@@ -159,10 +150,6 @@ export function ChatComposer({
   onSubmit: () => void;
   onStop?: () => void;
   onOpenIntegrations?: () => void;
-  onOpenPermissionsAdvanced?: () => void;
-  autonomyMode: string;
-  autonomyOptions: ComposerOption[];
-  onAutonomyModeChange: (nextValue: string) => void;
   model: string;
   modelOptions: ComposerModelOption[];
   modelProviderLabel?: string | null;
@@ -179,8 +166,6 @@ export function ChatComposer({
     label: string;
     actionLabel?: string;
   } | null;
-  showAutonomySelector?: boolean;
-  autonomyFallbackLabel?: string;
   busy?: boolean;
   smallModelWarning?: string | null;
   onDismissSmallModelWarning?: () => void;
@@ -193,13 +178,11 @@ export function ChatComposer({
   const actionLauncherRef = useRef<HTMLDivElement | null>(null);
   const commandPaletteRef = useRef<HTMLDivElement | null>(null);
   const modelPanelRef = useRef<HTMLDivElement | null>(null);
-  const permissionPanelRef = useRef<HTMLDivElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const draftRef = useRef(draft);
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false);
   const [modelPanelOpen, setModelPanelOpen] = useState(false);
-  const [permissionPanelOpen, setPermissionPanelOpen] = useState(false);
   const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
@@ -235,11 +218,6 @@ export function ChatComposer({
   const modelMenuProviderLabel = productProviderLabel(modelProviderLabel, isHostedCreditsModel);
   const canOpenProviderPicker = typeof onOpenIntegrations === 'function';
   const selectedReasoningLabel = composerOptionLabel(reasoningOptions, reasoningEffort) || reasoningEffort || 'Auto';
-  const fallbackPermissionLabel = showAutonomySelector ? 'Default Guarded' : autonomyFallbackLabel;
-  const permissionLabel = composerOptionLabel(autonomyOptions, autonomyMode)
-    || (autonomyMode === 'autopilot' ? 'Autonomous Agent' : fallbackPermissionLabel);
-  const selectedPermissionOption = autonomyOptions.find((option) => option.value === autonomyMode) ?? null;
-  const permissionDetail = selectedPermissionOption?.detail ?? 'Controls how much Sage can do before asking.';
   const voiceSupported = typeof onVoiceTranscribe === 'function'
     && typeof window !== 'undefined'
     && typeof navigator !== 'undefined'
@@ -324,7 +302,7 @@ export function ChatComposer({
   }, [filteredSlashCommands.length, selectedCommandIndex]);
 
   useEffect(() => {
-    if (!actionPaletteOpen && !commandPaletteVisible && !modelPanelOpen && !permissionPanelOpen) {
+    if (!actionPaletteOpen && !commandPaletteVisible && !modelPanelOpen) {
       return undefined;
     }
     const handlePointerDown = (event: PointerEvent) => {
@@ -336,25 +314,22 @@ export function ChatComposer({
         actionLauncherRef.current?.contains(target)
         || commandPaletteRef.current?.contains(target)
         || modelPanelRef.current?.contains(target)
-        || permissionPanelRef.current?.contains(target)
       ) {
         return;
       }
       setActionPaletteOpen(false);
       setModelPanelOpen(false);
-      setPermissionPanelOpen(false);
       setCommandPaletteDismissed(true);
     };
     window.addEventListener('pointerdown', handlePointerDown);
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
     };
-  }, [actionPaletteOpen, commandPaletteVisible, modelPanelOpen, permissionPanelOpen]);
+  }, [actionPaletteOpen, commandPaletteVisible, modelPanelOpen]);
 
   const selectSlashCommand = (command: ComposerSlashCommand) => {
     setCommandPaletteDismissed(true);
     setActionPaletteOpen(false);
-    setPermissionPanelOpen(false);
     onSlashCommandSelect?.(command);
   };
 
@@ -435,11 +410,9 @@ export function ChatComposer({
     if (!nextDraft.startsWith('/')) {
       setCommandPaletteDismissed(true);
       setActionPaletteOpen(false);
-      setPermissionPanelOpen(false);
     } else {
       setActionPaletteOpen(false);
       setModelPanelOpen(false);
-      setPermissionPanelOpen(false);
       setCommandPaletteDismissed(false);
     }
     onDraftChange(nextDraft);
@@ -534,7 +507,7 @@ export function ChatComposer({
           <div
             className={joinClassNames(
               'app-chat-composer__toolbar-left',
-              (actionMenuVisible || commandPaletteVisible || modelPanelOpen || permissionPanelOpen)
+              (actionMenuVisible || commandPaletteVisible || modelPanelOpen)
                 && 'app-chat-composer__toolbar-left--menu-open',
             )}
           >
@@ -546,12 +519,11 @@ export function ChatComposer({
                   'app-chat-composer__icon-trigger',
                   providerGateVisible && 'app-chat-composer__provider-pill--warning',
                 )}
-                onClick={() => {
-                  setCommandPaletteDismissed(true);
-                  setModelPanelOpen(false);
-                  setPermissionPanelOpen(false);
-                  setActionPaletteOpen((current) => !current);
-                }}
+                  onClick={() => {
+                    setCommandPaletteDismissed(true);
+                    setModelPanelOpen(false);
+                    setActionPaletteOpen((current) => !current);
+                  }}
                 aria-expanded={actionMenuVisible}
                 aria-label={providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Add or connect'}
               >
@@ -652,89 +624,6 @@ export function ChatComposer({
                 </div>
               ) : null}
             </div>
-
-            {showAutonomySelector ? (
-              <div className="app-chat-composer__permission" ref={permissionPanelRef}>
-                <button
-                  type="button"
-                  className={joinClassNames(
-                    'app-chat-composer__permission-pill',
-                    autonomyMode === 'autopilot' && 'app-chat-composer__permission-pill--elevated',
-                  )}
-                  disabled={controlsDisabled || busy}
-                  aria-expanded={permissionPanelOpen}
-                  aria-label="Choose permissions"
-                  title={permissionDetail}
-                  onClick={() => {
-                    setActionPaletteOpen(false);
-                    setCommandPaletteDismissed(true);
-                    setModelPanelOpen(false);
-                    setPermissionPanelOpen((current) => !current);
-                  }}
-                >
-                  <ShieldCheck size={15} strokeWidth={2} aria-hidden="true" />
-                  <span>{permissionLabel}</span>
-                  <ChevronDown size={14} strokeWidth={2} aria-hidden="true" />
-                </button>
-
-                {permissionPanelOpen ? (
-                  <div className="app-chat-composer__permission-popover" role="dialog" aria-label="Permission settings">
-                    <div className="app-chat-composer__permission-summary">
-                      <strong>{permissionLabel}</strong>
-                      <span>{permissionDetail}</span>
-                    </div>
-                    <div className="app-chat-composer__permission-options" role="listbox" aria-label="Permission modes">
-                      {autonomyOptions.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={joinClassNames(
-                            'app-chat-composer__permission-option',
-                            option.value === autonomyMode && 'app-chat-composer__permission-option--selected',
-                          )}
-                          disabled={option.disabled}
-                          onClick={() => {
-                            onAutonomyModeChange(option.value);
-                            setPermissionPanelOpen(false);
-                          }}
-                          role="option"
-                          aria-selected={option.value === autonomyMode}
-                        >
-                          <span>
-                            <strong>{option.label}</strong>
-                            {option.detail ? <small>{option.detail}</small> : null}
-                          </span>
-                          {option.value === autonomyMode ? <ShieldCheck size={15} strokeWidth={2} aria-hidden="true" /> : null}
-                        </button>
-                      ))}
-                    </div>
-                    {typeof onOpenPermissionsAdvanced === 'function' ? (
-                    <button
-                      type="button"
-                      className="app-chat-composer__permission-advanced"
-                      onClick={() => {
-                        setPermissionPanelOpen(false);
-                        onOpenPermissionsAdvanced();
-                      }}
-                    >
-                      <Settings2 size={15} strokeWidth={2} aria-hidden="true" />
-                        <span>Privacy & permissions</span>
-                      <ChevronRight size={15} strokeWidth={1.9} aria-hidden="true" />
-                    </button>
-                  ) : null}
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <span
-                className="app-chat-composer__permission-pill app-chat-composer__permission-pill--static"
-                title={permissionDetail}
-              >
-                <ShieldCheck size={15} strokeWidth={2} aria-hidden="true" />
-                <span>{permissionLabel}</span>
-              </span>
-            )}
-
             <div className="app-chat-composer__model" ref={modelPanelRef}>
               <button
                 type="button"
@@ -745,7 +634,6 @@ export function ChatComposer({
                 onClick={() => {
                   setActionPaletteOpen(false);
                   setCommandPaletteDismissed(true);
-                  setPermissionPanelOpen(false);
                   setModelPanelOpen((current) => !current);
                 }}
               >

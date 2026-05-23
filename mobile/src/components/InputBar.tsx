@@ -19,10 +19,8 @@ interface InputBarProps {
   onStop?: () => void;
   onMediaUpload?: (formData: FormData) => void;
   onPlusPress?: () => void;
-  onPermissionPress?: () => void;
   onModelPress?: () => void;
   onRuntimePress?: () => void;
-  permissionLabel?: string;
   modelLabel?: string;
   runtimeLabel?: string;
   isLoading?: boolean;
@@ -36,10 +34,8 @@ export const InputBar: React.FC<InputBarProps> = ({
   onStop,
   onMediaUpload,
   onPlusPress,
-  onPermissionPress,
   onModelPress,
   onRuntimePress,
-  permissionLabel,
   modelLabel,
   runtimeLabel,
   isLoading,
@@ -147,12 +143,6 @@ export const InputBar: React.FC<InputBarProps> = ({
     <View style={styles.container}>
       {textOnly ? null : (
         <View style={styles.controls}>
-          {permissionLabel ? (
-            <MotionPressable onPress={onPermissionPress} style={styles.controlPill} disabled={!onPermissionPress}>
-              <Ionicons name="shield-checkmark-outline" size={14} color={theme.colors.textSecondary} />
-              <Text numberOfLines={1} style={styles.controlText}>{permissionLabel}</Text>
-            </MotionPressable>
-          ) : null}
           {modelLabel ? (
             <MotionPressable onPress={onModelPress} style={styles.controlPill} disabled={!onModelPress}>
               <Ionicons name="sparkles-outline" size={14} color={theme.colors.textSecondary} />

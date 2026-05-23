@@ -1939,7 +1939,7 @@ export function WorkstationGatewayOperatorPane({
             <div className="gateway-runtime-access-warning">
               <WorkstationSurfaceNotice tone="warning">
                 {autonomousAgentMode?.setupWarning
-                  || 'Autonomous Agent lets the AI operate this dedicated runtime without Empyralis asking for each action. Only enable it for hardware or cloud compute you intentionally dedicate to the agent.'}
+                  || 'Autonomous Agent lets the AI operate this dedicated runtime without Empyralis asking for each action. Owner binding, revocation, quota, offline state, stop/cancel, and OS or provider limits still apply.'}
               </WorkstationSurfaceNotice>
               <label className="gateway-runtime-access-warning__ack">
                 <input

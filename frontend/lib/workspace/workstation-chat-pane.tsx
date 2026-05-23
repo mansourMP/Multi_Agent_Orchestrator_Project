@@ -145,8 +145,6 @@ import {
   readExecutionTarget,
   resolveRuntimeTrustZone,
   buildChatPermissionPolicyContext,
-  chatPermissionModeDetail,
-  chatPermissionModeLabel,
   EMPYRALIS_TIER_SET,
   USER_OWNED_SECTION_LABELS,
   isProviderEligibleForModelSelector,
@@ -345,7 +343,6 @@ export function WorkstationChatPane() {
     machineTrust,
     setMachineTrust,
     autonomyMode,
-    setAutonomyMode,
     modelOptions,
     setModelOptions,
     selectedModel,
@@ -1487,30 +1484,6 @@ export function WorkstationChatPane() {
   const gatewayHref = useMemo(
     () => routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/gateway`,
     [bootstrap.workspace.id, routeManifest.routeIndex.gateway],
-  );
-  const settingsHref = useMemo(
-    () => routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/settings`,
-    [bootstrap.workspace.id, routeManifest.routeIndex.settings],
-  );
-  const autonomyOptions = useMemo(
-    () => {
-      const options = [
-        {
-          value: 'default',
-          label: 'Default Guarded',
-          detail: chatPermissionModeDetail('default', runtimeTrustZone),
-        },
-      ];
-      if (runtimeTrustZone !== 'user_owned_local') {
-        options.push({
-          value: 'autopilot',
-          label: chatPermissionModeLabel('autopilot', runtimeTrustZone),
-          detail: chatPermissionModeDetail('autopilot', runtimeTrustZone),
-        });
-      }
-      return options;
-    },
-    [runtimeTrustZone],
   );
   const composerModelOptions = useMemo(
     () => {
@@ -2911,16 +2884,6 @@ export function WorkstationChatPane() {
         onOpenIntegrations={() => {
           router.push(integrationsHref);
         }}
-        onOpenPermissionsAdvanced={() => {
-          router.push(`${settingsHref}?section=privacy`);
-        }}
-        autonomyMode={autonomyMode}
-        autonomyOptions={autonomyOptions}
-        onAutonomyModeChange={(nextValue) => {
-          if (nextValue === 'default' || nextValue === 'auto_review' || nextValue === 'autopilot') {
-            setAutonomyMode(nextValue);
-          }
-        }}
         model={effectiveSelectedModel}
         modelOptions={composerModelOptions}
         modelProviderLabel={runtimeStatus.label}
@@ -2957,8 +2920,6 @@ export function WorkstationChatPane() {
         onDismissSmallModelWarning={() => {
           setSmallModelWarningVisible(false);
         }}
-        showAutonomySelector={localCompanionConnected && runtimeTrustZone !== 'user_owned_local'}
-        autonomyFallbackLabel="Default Guarded"
       />
 
       <CommandSheet

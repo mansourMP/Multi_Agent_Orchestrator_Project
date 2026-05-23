@@ -2,7 +2,7 @@
 
 import React, { memo } from 'react';
 import { ChatComposer } from '@/lib/workspace/chat-composer';
-import type { ChatModelOption, ChatReasoningEffort } from './types';
+import type { ChatReasoningEffort } from './types';
 
 type ComposerOption = {
   value: string;
@@ -21,9 +21,6 @@ export interface SageComposerProps {
   onSendMessage: () => void;
   onStopStreaming: () => void;
   onOpenIntegrations: () => void;
-  autonomyMode: string;
-  autonomyOptions: ComposerOption[];
-  onAutonomyModeChange: (mode: string) => void;
   effectiveSelectedModel: string;
   composerModelOptions: ComposerModelOption[];
   modelProviderLabel?: string | null;
@@ -31,7 +28,6 @@ export interface SageComposerProps {
   reasoningEffort: ChatReasoningEffort;
   reasoningOptions: ComposerOption[];
   onReasoningEffortChange: (effort: string) => void;
-  selectedModelOption: ChatModelOption;
   contextWindowLabel: string | null;
   isSending: boolean;
   isPersistingModelSelection: boolean;
@@ -42,7 +38,6 @@ export interface SageComposerProps {
   smallModelWarningVisible: boolean;
   onDismissSmallModelWarning: () => void;
   preRunCostEstimate: Parameters<typeof ChatComposer>[0]['preRunCostEstimate'];
-  localCompanionConnected: boolean;
 }
 
 export const SageComposer = memo(function SageComposer(props: SageComposerProps) {
@@ -53,9 +48,6 @@ export const SageComposer = memo(function SageComposer(props: SageComposerProps)
       onSubmit={props.onSendMessage}
       onStop={props.onStopStreaming}
       onOpenIntegrations={props.onOpenIntegrations}
-      autonomyMode={props.autonomyMode}
-      autonomyOptions={props.autonomyOptions}
-      onAutonomyModeChange={props.onAutonomyModeChange}
       model={props.effectiveSelectedModel}
       modelOptions={props.composerModelOptions}
       modelProviderLabel={props.modelProviderLabel ?? null}
@@ -78,8 +70,6 @@ export const SageComposer = memo(function SageComposer(props: SageComposerProps)
         : null}
       preRunCostEstimate={props.preRunCostEstimate}
       onDismissSmallModelWarning={props.onDismissSmallModelWarning}
-      showAutonomySelector={props.localCompanionConnected}
-      autonomyFallbackLabel="Offline"
     />
   );
 });

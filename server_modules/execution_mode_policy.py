@@ -76,8 +76,8 @@ MODE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "requires_owner_approval": True,
         "setup_warning": (
             "Autonomous Agent lets the AI operate this dedicated runtime "
-            "without Empyralis asking for each action. "
-            "Only enable it for hardware or cloud compute you intentionally dedicate to the agent."
+            "without Empyralis asking for each action. Owner binding, revocation, quota, "
+            "offline state, stop/cancel, and OS or provider limits still apply."
         ),
     },
 }

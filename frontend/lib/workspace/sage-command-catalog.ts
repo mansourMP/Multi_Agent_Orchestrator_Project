@@ -65,7 +65,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     description: 'Show connected tools, apps, and callable capabilities.',
     actionKind: 'open_tools',
     icon: Puzzle,
-    keywords: ['integrations', 'tooling', 'actions', 'capabilities'],
+    keywords: ['connections', 'tooling', 'actions', 'capabilities'],
   },
   {
     id: 'runtime',
@@ -74,7 +74,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     description: 'Check which AI path Sage will use and where to manage it.',
     actionKind: 'open_runtime',
     icon: Cpu,
-    keywords: ['target', 'provider', 'local', 'cloud', 'deployment'],
+    keywords: ['target', 'provider', 'agent computer', 'cloud', 'deployment'],
   },
   {
     id: 'doctor',
@@ -91,7 +91,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
   {
     id: 'skills',
     title: 'Installed skills',
-    description: 'Open the skill catalog and inspect installed AI extensions.',
+    description: 'Open connected skills and reusable AI procedures.',
     routeId: 'integrations',
     icon: Puzzle,
     keywords: ['extensions', 'skills', 'install', 'tool server', 'playbook'],
@@ -122,8 +122,8 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
   },
   {
     id: 'integrations',
-    title: 'Integrations',
-    description: 'Open integrated services and third-party app connections.',
+    title: 'Connections',
+    description: 'Open apps, AI accounts, Agent Computer, and developer tool connections.',
     routeId: 'integrations',
     icon: LayoutGrid,
     keywords: ['connect', 'apps', 'providers', 'channels', 'services'],

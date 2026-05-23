@@ -1,10 +1,9 @@
-export type ApplicationSurfaceTabId = 'installed' | 'official' | 'my_apps' | 'permissions';
+export type ApplicationSurfaceTabId = 'installed' | 'official' | 'my_apps';
 
 export const APPLICATION_SURFACE_TABS: readonly { id: ApplicationSurfaceTabId; label: string }[] = [
-  { id: 'installed', label: 'Installed' },
+  { id: 'installed', label: 'Apps' },
   { id: 'official', label: 'Official' },
-  { id: 'my_apps', label: 'My apps' },
-  { id: 'permissions', label: 'Permissions' },
+  { id: 'my_apps', label: 'Create app' },
 ];
 
 export function normalizeApplicationSurfaceTabId(value: string | null | undefined): ApplicationSurfaceTabId {

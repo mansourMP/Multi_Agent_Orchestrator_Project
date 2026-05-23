@@ -160,6 +160,13 @@ function toolDisplayName(rawName: string): string {
   return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function specialistDisplayName(data: Record<string, unknown>): string {
+  return readString(data.specialist_name)
+    || readString(data.name)
+    || readString(data.label)
+    || 'Specialist';
+}
+
 function browserActionDisplay(action: string): string {
   const normalized = action.toLowerCase();
   if (!normalized) {
@@ -439,6 +446,32 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       type: 'tool_result',
       id,
       name: toolDisplayName(toolName),
+      status,
+      result,
+    }];
+  }
+
+  if (eventType === 'delegation.started') {
+    const specialistName = specialistDisplayName(data);
+    return [{
+      type: 'tool_result',
+      id: eventId('delegation-started', `${readString(payload.item_id) || readString(data.action_id) || specialistName}:started`, fallbackIndex),
+      name: `Delegated to ${specialistName}`,
+      status: 'done',
+      result: readString(data.task_summary) || readString(data.summary) || null,
+    }];
+  }
+
+  if (eventType === 'delegation.finished') {
+    const status = normalizeToolResultStatus(data.status);
+    const result = readString(data.result_summary)
+      || readString(data.summary)
+      || readString(data.detail)
+      || null;
+    return [{
+      type: 'tool_result',
+      id: eventId('delegation-finished', `${readString(payload.item_id) || readString(data.action_id) || readString(data.name) || 'specialist'}:finished`, fallbackIndex),
+      name: 'Specialist finished',
       status,
       result,
     }];

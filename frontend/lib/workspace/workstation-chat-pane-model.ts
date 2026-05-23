@@ -640,7 +640,7 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
   if (code.startsWith('google_workspace_') || combinedText.includes('google workspace')) {
     message = 'Connect Google Workspace to let Sage use Gmail, Calendar, or Drive actions. You can keep chatting normally.';
   } else if (code === 'local_setup_required' || combinedText.includes('my computer') || combinedText.includes('local computer')) {
-    message = 'Connect My Computer in Integrations before Sage uses local computer actions. You can keep chatting normally.';
+    message = 'Connect Agent Computer in Connections before Sage uses local computer actions. You can keep chatting normally.';
   } else if (
     code.startsWith('smtp_')
     || code.startsWith('email_connector_')
@@ -663,7 +663,7 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
     retryable: false,
     actions: [
       {
-        label: 'Open Integrations',
+        label: 'Open Connections',
         target: 'integrations',
       },
     ],
@@ -985,15 +985,15 @@ export function chatPermissionModeLabel(
 ): string {
   const effectiveMode = effectiveChatPermissionMode(mode, runtimeTrustZone);
   if (effectiveMode === 'auto_review') {
-    return 'Auto-review';
+    return 'Default Guarded';
   }
   if (effectiveMode === 'autopilot') {
-    return 'Autopilot';
+    return 'Autonomous Agent';
   }
   if (effectiveMode === 'device_access') {
-    return 'Default';
+    return 'Default Guarded';
   }
-  return 'Default';
+  return 'Default Guarded';
 }
 
 export function chatPermissionModeDetail(
@@ -1002,17 +1002,17 @@ export function chatPermissionModeDetail(
 ): string {
   const effectiveMode = effectiveChatPermissionMode(mode, runtimeTrustZone);
   if (effectiveMode === 'auto_review') {
-    return 'Safe actions continue; risky actions are checked by policy before asking you.';
+    return 'Safe actions continue. Sensitive actions use inline approval when needed.';
   }
   if (effectiveMode === 'autopilot') {
-    return 'Runs autonomously inside an isolated Empyralis computer with inline proof.';
+    return 'No Empyralis per-action prompts on dedicated agent hardware. Boundaries, audit, and stop still apply.';
   }
   if (effectiveMode === 'device_access') {
     return 'Uses your computer with sensitive actions still approval-gated.';
   }
   return runtimeTrustZone === 'user_owned_local'
-    ? 'Asks before sensitive actions on your computer.'
-    : 'Asks before sensitive actions in the cloud runtime.';
+    ? 'Safe actions run on your computer. Sensitive actions use inline approval.'
+    : 'Safe actions run directly. Sensitive actions use inline approval.';
 }
 
 export function buildChatPermissionPolicyContext({
@@ -1277,6 +1277,9 @@ export function isProviderEligibleForWorkspaceDefault(provider: ProviderCatalogR
     return false;
   }
   const state = readString(provider.state).toLowerCase();
+  if (readString(provider.id).toLowerCase() === 'openai-codex') {
+    return provider.usable === true || provider.active === true;
+  }
   if (provider.usable === true || provider.active === true) {
     if (provider.local_only === true) {
       return provider.usable === true;
@@ -1316,8 +1319,11 @@ export function providerRouteSuffix(provider: ProviderCatalogRecord | null | und
   const defaultAuthMode = readString(provider.default_auth_mode).toLowerCase();
   const runtimeSource = readString(provider.runtime_active_source).toLowerCase();
 
-  if (providerId === 'openai-codex' || runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
-    return 'CLI';
+  if (providerId === 'openai-codex') {
+    return 'This Device';
+  }
+  if (runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
+    return 'Subscription';
   }
   if (providerId === 'ollama' || provider.local_only === true || credentialPlane === 'local_runtime') {
     return 'Local';
@@ -1344,7 +1350,10 @@ export function providerPathLabel(provider: ProviderCatalogRecord | null | undef
   if (providerId === 'ollama') {
     return 'This Device · Ollama local';
   }
-  if (providerId === 'openai-codex' || runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
+  if (providerId === 'openai-codex') {
+    return 'Agent Computer · This Device';
+  }
+  if (runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
     return 'This Device';
   }
   if (providerId === 'ollama_cloud') {
@@ -1392,15 +1401,15 @@ export function providerFailureMessageForProvider(provider: ProviderCatalogRecor
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected computer in Integrations. Use Empyralis credits, connect a computer, or connect your own AI account.`;
+    return `${providerLabel} needs a connected computer in Connections. Use Empyralis credits, connect a computer, or connect your own AI account.`;
   }
   if (credentialPlane === 'workspace_connection') {
-    return 'Your AI account needs attention. Check the connection, quota, or selected model in Integrations.';
+    return 'Your AI account needs attention. Check the connection, quota, or selected model in Connections.';
   }
   if (credentialPlane === 'platform_runtime') {
     return 'Empyralis credits are active, but the hosted AI model is temporarily unavailable. Try again or switch model.';
   }
-  return 'The selected AI model is not available right now. Switch model or open Integrations.';
+  return 'The selected AI model is not available right now. Switch model or open Connections.';
 }
 
 export function providerFailureActionsForProvider(
@@ -1418,7 +1427,7 @@ export function providerFailureActionsForProvider(
     || normalized.includes('gateway offline');
   if (localOnly) {
     return [
-      { label: 'Open Integrations', target: 'integrations' },
+      { label: 'Open Connections', target: 'integrations' },
       { label: 'Choose AI Model', target: 'integrations' },
       { label: 'Use Empyralis credits', target: 'integrations' },
     ];
@@ -1527,13 +1536,17 @@ export function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
     ? record.providers.filter((item): item is ProviderCatalogRecord => Boolean(item) && typeof item === 'object')
     : [];
   const connectedProviders = sortLaunchChatProviders(providers.filter(isProviderEligibleForModelSelector));
+  const hasHostedProvider = connectedProviders.some((provider) => providerRouteKind(provider) === 'empyralis');
+  const effectiveProviders = tierPolicy.hostedAiEnabled && !hasHostedProvider
+    ? sortLaunchChatProviders([hostedCreditsFallbackProvider(), ...connectedProviders])
+    : connectedProviders;
 
-  if (connectedProviders.length === 0) {
+  if (effectiveProviders.length === 0) {
     return [disconnectedModelOption()];
   }
 
-  const hostedProviders = connectedProviders.filter((provider) => providerRouteKind(provider) === 'empyralis');
-  const userOwnedProviders = connectedProviders.filter((provider) => providerRouteKind(provider) !== 'empyralis');
+  const hostedProviders = effectiveProviders.filter((provider) => providerRouteKind(provider) === 'empyralis');
+  const userOwnedProviders = effectiveProviders.filter((provider) => providerRouteKind(provider) !== 'empyralis');
   const hostedProvider = hostedProviders[0] ?? null;
   const allowedHostedTiers = EMPYRALIS_TIER_IDS.filter((tierId) => tierPolicy.tierAllowed[tierId]);
   const tierOptions: ChatModelOption[] = hostedProvider ? allowedHostedTiers.map((tierId) => {
@@ -2305,10 +2318,10 @@ export function classifyStatusNotice(message: string): {
     return {
       tone: 'warning',
       title: 'This Device browser needed',
-      body: 'Localhost pages, signed-in sites, and private browser sessions stay on This Device. Open Integrations to manage device access.',
+      body: 'Localhost pages, signed-in sites, and private browser sessions stay on This Device. Open Connections to manage device access.',
       requiresLocalAccess: true,
       actionTarget: 'integrations',
-      actionLabel: 'Open Integrations',
+      actionLabel: 'Open Connections',
     };
   }
   if (isLocalCompanionGateMessage(message)) {
@@ -2318,7 +2331,7 @@ export function classifyStatusNotice(message: string): {
       body: message,
       requiresLocalAccess: true,
       actionTarget: 'integrations',
-      actionLabel: 'Open Integrations',
+      actionLabel: 'Open Connections',
     };
   }
   if (/^turn submitted/i.test(message)) {
@@ -2336,11 +2349,11 @@ export function classifyStatusNotice(message: string): {
       tone: 'warning',
       title: 'AI model attention needed',
       body: /api key|credential/i.test(message)
-        ? 'Check your AI model key or quota in Integrations.'
+        ? 'Check your AI model key or quota in Connections.'
         : 'Choose Empyralis credits, add an AI model key, or connect a computer.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
-      actionLabel: 'Open Integrations',
+      actionLabel: 'Open Connections',
     };
   }
   return {
@@ -2939,6 +2952,19 @@ export function resolvePersistedSelectedModelId({
         return readString(matchingOption.id);
       }
     }
+  }
+
+  const hostedTierOption = modelOptions.find((option) =>
+    option.uiSection === 'empyralis'
+    && EMPYRALIS_TIER_SET.has(readString(option.id).toLowerCase())
+  );
+  if (hostedTierOption) {
+    return readString(hostedTierOption.id);
+  }
+
+  const firstAvailableModelId = Array.from(availableModelIds)[0];
+  if (firstAvailableModelId) {
+    return firstAvailableModelId;
   }
 
   return 'default';

@@ -613,6 +613,35 @@ test.describe('chat transparency timeline', () => {
                 event: 'trace',
                 schema_version: 1,
                 payload: {
+                  event_type: 'delegation.started',
+                  item_id: 'delegation-hardware-1',
+                  data: {
+                    specialist_id: 'specialist-secret',
+                    specialist_name: 'Research Specialist',
+                    task_summary: 'Check the hardware result.',
+                    provider: 'deepseek',
+                    prompt: 'hidden child prompt',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'delegation.finished',
+                  item_id: 'delegation-hardware-1',
+                  data: {
+                    status: 'completed',
+                    result_summary: 'Research Specialist checked the result.',
+                    model_id: 'deepseek-v4-pro',
+                    trace_id: 'trace-child-secret',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
                   event_type: 'approval.resolved',
                   approval_id: 'approval-hardware-1',
                   data: {
@@ -702,6 +731,9 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval approved');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Created artifact');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-hardware-1/);
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="delegated_to_research_specialist"]')).toContainText('Delegated to Research Specialist');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="specialist_finished"]')).toContainText('Specialist finished');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="specialist_finished"]')).toContainText('Research Specialist checked the result.');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Read file');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('reports/current-status.md');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="gateway_offline"]')).toContainText(/Gateway offline/i);
@@ -712,5 +744,9 @@ test.describe('chat transparency timeline', () => {
     await expect(page.getByText(/raw file body should stay hidden/i)).toHaveCount(0);
     await expect(page.getByText(/hidden gateway detail/i)).toHaveCount(0);
     await expect(page.getByText(/hidden assistant delta/i)).toHaveCount(0);
+    await expect(page.getByText(/specialist-secret/i)).toHaveCount(0);
+    await expect(page.getByText(/hidden child prompt/i)).toHaveCount(0);
+    await expect(page.getByText(/deepseek-v4-pro/i)).toHaveCount(0);
+    await expect(page.getByText(/trace-child-secret/i)).toHaveCount(0);
   });
 });

@@ -150,8 +150,8 @@ export const DESIGN_SYSTEM_ELEVATION = {
     subtle: '0 4px 12px -10px rgba(0, 0, 0, 0.06)',
     panel: '0 16px 40px -28px rgba(32, 32, 32, 0.12), 0 0 0 1px rgba(32, 32, 32, 0.03)',
     focus: '0 0 0 2px rgba(32, 32, 32, 0.14)',
-    darkSubtle: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 8px 20px -20px rgba(4, 10, 13, 0.66)',
-    darkPanel: 'inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 26px 60px -38px rgba(2, 8, 10, 0.84)',
+    darkSubtle: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 8px 20px -20px rgba(0, 0, 0, 0.66)',
+    darkPanel: 'inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 26px 60px -38px rgba(0, 0, 0, 0.84)',
     darkFocus: '0 0 0 2px rgba(255, 255, 255, 0.14)',
   },
   mobile: {

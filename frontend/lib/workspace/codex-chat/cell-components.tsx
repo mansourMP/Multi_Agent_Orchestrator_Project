@@ -51,6 +51,12 @@ function toolActivityLabel(name: string): string {
   if (!normalized) {
     return 'Using tool';
   }
+  if (normalized.startsWith('delegated to ')) {
+    return `Delegated to ${name.trim().slice('delegated to '.length).trim() || 'specialist'}`;
+  }
+  if (normalized === 'specialist finished' || normalized.includes('specialist finished')) {
+    return 'Specialist finished';
+  }
   if (normalized.includes('telegram')) {
     return normalized.includes('sending') ? 'Sending Telegram' : 'Telegram';
   }
@@ -71,6 +77,9 @@ function toolActivityLabel(name: string): string {
 
 function completedToolActivityLabel(name: string): string {
   const runningLabel = toolActivityLabel(name);
+  if (runningLabel.startsWith('Delegated to ') || runningLabel === 'Specialist finished') {
+    return runningLabel;
+  }
   if (runningLabel === 'Browser action') {
     return 'Used browser';
   }

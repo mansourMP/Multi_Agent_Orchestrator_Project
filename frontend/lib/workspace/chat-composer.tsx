@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
   Brain,
+  Check,
   ChevronDown,
   ChevronRight,
   Mic,
@@ -17,7 +18,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-import { AppButton, AppSelect, joinClassNames } from '@/lib/ui/primitives';
+import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 
 type ComposerOption = {
   value: string;
@@ -82,13 +83,25 @@ function composerOptionLabel(options: ComposerModelOption[], value: string): str
   return '';
 }
 
+function flattenComposerOptions(options: ComposerModelOption[]): Array<ComposerOption & { groupLabel?: string }> {
+  return options.flatMap((option) => {
+    if (isComposerOptionGroup(option)) {
+      return option.options.map((nested) => ({
+        ...nested,
+        groupLabel: option.label,
+      }));
+    }
+    return [option];
+  });
+}
+
 function compactModelLabel(label: string, fallback: string): string {
   const normalized = label.trim() || fallback;
   const parts = normalized
     .split('·')
     .map((part) => part.trim())
     .filter(Boolean);
-  const routeSuffixes = new Set(['hosted', 'local', 'workspace key']);
+  const routeSuffixes = new Set(['hosted', 'local', 'workspace key', 'empyralis credits']);
   const visibleParts = parts.filter((part) => !routeSuffixes.has(part.toLowerCase()));
   if (visibleParts.length > 0 && visibleParts.length < parts.length) {
     return visibleParts.join(' · ');
@@ -99,6 +112,17 @@ function compactModelLabel(label: string, fallback: string): string {
   return normalized;
 }
 
+function productProviderLabel(label: string | null | undefined, hostedCredits: boolean): string | null {
+  const normalized = (label ?? '').trim();
+  if (hostedCredits) {
+    if (!normalized || normalized.toLowerCase() === 'empyralis credits') {
+      return 'Empyralis AI';
+    }
+    return normalized.replace(/\s*credits$/i, ' AI');
+  }
+  return normalized || null;
+}
+
 export function ChatComposer({
   draft,
   onDraftChange,
@@ -106,20 +130,16 @@ export function ChatComposer({
   onStop,
   onOpenIntegrations,
   onOpenPermissionsAdvanced,
-  runTarget,
-  runTargetOptions,
-  onRunTargetChange,
   autonomyMode,
   autonomyOptions,
   onAutonomyModeChange,
-  targetLabel,
   model,
   modelOptions,
+  modelProviderLabel = null,
   onModelChange,
   reasoningEffort,
   reasoningOptions,
   onReasoningEffortChange,
-  contextWindowLabel = null,
   controlsDisabled = false,
   sendDisabled = false,
   placeholder = '',
@@ -128,12 +148,8 @@ export function ChatComposer({
   showAutonomySelector = true,
   autonomyFallbackLabel = 'Offline',
   busy = false,
-  runtimeStatusLabel = 'Cloud',
-  runtimeStatusTone = 'neutral',
-  toolGroups = [],
   smallModelWarning = null,
   onDismissSmallModelWarning,
-  preRunCostEstimate = null,
   slashCommands = [],
   onSlashCommandSelect,
   onVoiceTranscribe,
@@ -144,15 +160,12 @@ export function ChatComposer({
   onStop?: () => void;
   onOpenIntegrations?: () => void;
   onOpenPermissionsAdvanced?: () => void;
-  runTarget: string;
-  runTargetOptions: ComposerOption[];
-  onRunTargetChange: (nextValue: string) => void;
   autonomyMode: string;
   autonomyOptions: ComposerOption[];
   onAutonomyModeChange: (nextValue: string) => void;
-  targetLabel: string;
   model: string;
   modelOptions: ComposerModelOption[];
+  modelProviderLabel?: string | null;
   onModelChange: (nextValue: string) => void;
   reasoningEffort: string;
   reasoningOptions: ComposerOption[];
@@ -169,9 +182,6 @@ export function ChatComposer({
   showAutonomySelector?: boolean;
   autonomyFallbackLabel?: string;
   busy?: boolean;
-  runtimeStatusLabel?: string;
-  runtimeStatusTone?: 'neutral' | 'warning' | 'success';
-  toolGroups?: ComposerToolGroup[];
   smallModelWarning?: string | null;
   onDismissSmallModelWarning?: () => void;
   preRunCostEstimate?: ComposerPreRunCostEstimate | null;
@@ -198,12 +208,31 @@ export function ChatComposer({
   const canSend = !busy && !sendDisabled && hasDraft;
   const canStop = busy && typeof onStop === 'function';
   const showSendButton = busy || hasDraft;
-  void runtimeStatusLabel;
-  void runtimeStatusTone;
-  void toolGroups;
   const selectedModelLabel = compactModelLabel(composerOptionLabel(modelOptions, model), model || 'Model');
+  const visibleModelOptions = useMemo(() => flattenComposerOptions(modelOptions), [modelOptions]);
+  const selectedModelOption = visibleModelOptions.find((option) => option.value === model) ?? null;
+  const hostedCreditOptions = useMemo(
+    () => visibleModelOptions.filter((option) => {
+      const groupLabel = (option.groupLabel ?? '').toLowerCase();
+      const label = compactModelLabel(option.label, option.value).toLowerCase();
+      return groupLabel === 'empyralis credits' || label === 'light' || label === 'pro' || label === 'max';
+    }),
+    [visibleModelOptions],
+  );
+  const selectedModelIsDefaultRoute = !selectedModelOption || selectedModelOption.value === 'default';
+  const isHostedCreditsModel = (selectedModelOption?.groupLabel ?? '').toLowerCase() === 'empyralis credits'
+    || (modelProviderLabel ?? '').toLowerCase() === 'empyralis credits'
+    || ['light', 'pro', 'max'].includes(selectedModelLabel.toLowerCase())
+    || (selectedModelIsDefaultRoute && hostedCreditOptions.length > 0);
+  const modelMenuOptions = isHostedCreditsModel && hostedCreditOptions.length > 0
+    ? hostedCreditOptions
+    : visibleModelOptions;
+  const modelMenuProviderLabel = productProviderLabel(modelProviderLabel, isHostedCreditsModel);
+  const canOpenProviderPicker = typeof onOpenIntegrations === 'function';
   const selectedReasoningLabel = composerOptionLabel(reasoningOptions, reasoningEffort) || reasoningEffort || 'Auto';
-  const permissionLabel = composerOptionLabel(autonomyOptions, autonomyMode) || (showAutonomySelector ? 'Default' : autonomyFallbackLabel);
+  const fallbackPermissionLabel = showAutonomySelector ? 'Default Guarded' : autonomyFallbackLabel;
+  const permissionLabel = composerOptionLabel(autonomyOptions, autonomyMode)
+    || (autonomyMode === 'autopilot' ? 'Autonomous Agent' : fallbackPermissionLabel);
   const selectedPermissionOption = autonomyOptions.find((option) => option.value === autonomyMode) ?? null;
   const permissionDetail = selectedPermissionOption?.detail ?? 'Controls how much Sage can do before asking.';
   const voiceSupported = typeof onVoiceTranscribe === 'function'
@@ -497,7 +526,13 @@ export function ChatComposer({
         ) : null}
 
         <div className="app-chat-composer__toolbar">
-          <div className="app-chat-composer__toolbar-left">
+          <div
+            className={joinClassNames(
+              'app-chat-composer__toolbar-left',
+              (actionMenuVisible || commandPaletteVisible || modelPanelOpen || permissionPanelOpen)
+                && 'app-chat-composer__toolbar-left--menu-open',
+            )}
+          >
             <div className="app-chat-composer__actions" ref={actionLauncherRef}>
               <button
                 type="button"
@@ -669,26 +704,29 @@ export function ChatComposer({
                       ))}
                     </div>
                     {typeof onOpenPermissionsAdvanced === 'function' ? (
-                      <button
-                        type="button"
-                        className="app-chat-composer__permission-advanced"
-                        onClick={() => {
-                          setPermissionPanelOpen(false);
-                          onOpenPermissionsAdvanced();
-                        }}
-                      >
-                        <Settings2 size={15} strokeWidth={2} aria-hidden="true" />
-                        <span>Advanced</span>
-                        <ChevronRight size={15} strokeWidth={1.9} aria-hidden="true" />
-                      </button>
-                    ) : null}
+                    <button
+                      type="button"
+                      className="app-chat-composer__permission-advanced"
+                      onClick={() => {
+                        setPermissionPanelOpen(false);
+                        onOpenPermissionsAdvanced();
+                      }}
+                    >
+                      <Settings2 size={15} strokeWidth={2} aria-hidden="true" />
+                        <span>Privacy & permissions</span>
+                      <ChevronRight size={15} strokeWidth={1.9} aria-hidden="true" />
+                    </button>
+                  ) : null}
                   </div>
                 ) : null}
               </div>
             ) : (
-              <span className="app-chat-composer__token app-chat-composer__token--static">
+              <span
+                className="app-chat-composer__permission-pill app-chat-composer__permission-pill--static"
+                title={permissionDetail}
+              >
                 <ShieldCheck size={15} strokeWidth={2} aria-hidden="true" />
-                {permissionLabel}
+                <span>{permissionLabel}</span>
               </span>
             )}
 
@@ -708,66 +746,97 @@ export function ChatComposer({
               >
                 <Brain size={15} strokeWidth={2} aria-hidden="true" />
                 <span>{selectedModelLabel}</span>
-                <span className="app-chat-composer__provider-pill-meta">{selectedReasoningLabel}</span>
               </button>
               {modelPanelOpen ? (
-                <div className="app-chat-composer__model-popover" role="dialog" aria-label="Model settings">
-                  <label className="app-chat-composer__model-field">
-                    <span>Model</span>
-                    <AppSelect
-                      aria-label="Model"
-                      value={model}
-                      onChange={(event) => {
-                        onModelChange(event.currentTarget.value);
-                      }}
-                      disabled={controlsDisabled || busy}
-                      className="app-chat-composer__model-select"
-                    >
-                      {modelOptions.map((option) => (
-                        isComposerOptionGroup(option) ? (
-                          <optgroup key={option.label} label={option.label}>
-                            {option.options.map((nested) => (
-                              <option key={nested.value} value={nested.value} disabled={nested.disabled}>
-                                {nested.label}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ) : (
-                          <option key={option.value} value={option.value} disabled={option.disabled}>
-                            {option.label}
-                          </option>
-                        )
-                      ))}
-                    </AppSelect>
-                  </label>
-                  <label className="app-chat-composer__model-field">
-                    <span>Reasoning</span>
-                    <AppSelect
-                      aria-label="Reasoning"
-                      value={reasoningEffort}
-                      onChange={(event) => {
-                        onReasoningEffortChange(event.currentTarget.value);
-                      }}
-                      disabled={controlsDisabled || busy || reasoningOptions.length <= 1}
-                      className="app-chat-composer__model-select"
-                    >
-                      {reasoningOptions.map((option) => (
-                        <option key={option.value} value={option.value} disabled={option.disabled}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </AppSelect>
-                  </label>
-                  {contextWindowLabel ? (
-                    <div className="app-chat-composer__model-readout">
-                      <span>Context</span>
-                      <strong>{contextWindowLabel}</strong>
+                <div
+                  className={joinClassNames(
+                    'app-chat-composer__model-popover',
+                    isHostedCreditsModel && 'app-chat-composer__model-popover--hosted',
+                  )}
+                  role="dialog"
+                  aria-label="Model settings"
+                >
+                  {!isHostedCreditsModel && reasoningOptions.length > 0 ? (
+                    <div className="app-chat-composer__model-menu-section">
+                      <span className="app-chat-composer__model-menu-title">Reasoning</span>
+                      <div className="app-chat-composer__model-menu-list" role="listbox" aria-label="Reasoning">
+                        {reasoningOptions.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={joinClassNames(
+                              'app-chat-composer__model-menu-row',
+                              option.value === reasoningEffort && 'app-chat-composer__model-menu-row--selected',
+                            )}
+                            disabled={controlsDisabled || busy || option.disabled}
+                            onClick={() => {
+                              onReasoningEffortChange(option.value);
+                              setModelPanelOpen(false);
+                            }}
+                            role="option"
+                            aria-selected={option.value === reasoningEffort}
+                          >
+                            <span>{option.label}</span>
+                            {option.value === reasoningEffort ? <Check size={16} strokeWidth={2} aria-hidden="true" /> : null}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
-                  {preRunCostEstimate ? (
+                  <div className="app-chat-composer__model-menu-section">
+                    {!isHostedCreditsModel ? <span className="app-chat-composer__model-menu-title">Model</span> : null}
+                    <div className="app-chat-composer__model-menu-list" role="listbox" aria-label="Model">
+                      {modelMenuOptions.map((option) => {
+                        const compactLabel = compactModelLabel(option.label, option.value);
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={joinClassNames(
+                              'app-chat-composer__model-menu-row',
+                              option.value === model && 'app-chat-composer__model-menu-row--selected',
+                            )}
+                            disabled={controlsDisabled || busy || option.disabled}
+                            onClick={() => {
+                              onModelChange(option.value);
+                              setModelPanelOpen(false);
+                            }}
+                            role="option"
+                            aria-selected={option.value === model}
+                          >
+                            <span>
+                              <strong>{compactLabel}</strong>
+                              {option.detail ? <small>{option.detail}</small> : null}
+                            </span>
+                            {option.value === model ? <Check size={16} strokeWidth={2} aria-hidden="true" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {modelMenuProviderLabel ? (
+                    <div className="app-chat-composer__model-menu-section">
+                      <div className="app-chat-composer__model-menu-separator" aria-hidden="true" />
+                      <button
+                        type="button"
+                        className="app-chat-composer__model-menu-row app-chat-composer__model-menu-row--provider"
+                        disabled={controlsDisabled || busy || !canOpenProviderPicker}
+                        onClick={() => {
+                          setModelPanelOpen(false);
+                          onOpenIntegrations?.();
+                        }}
+                      >
+                        <span>
+                          <strong>{modelMenuProviderLabel}</strong>
+                        </span>
+                        <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ) : null}
+                  {!isHostedCreditsModel && reasoningOptions.length <= 0 ? (
                     <div className="app-chat-composer__model-readout">
-                      <span>Estimate</span>
-                      <strong>{preRunCostEstimate.estimateLabel}</strong>
+                      <span>Reasoning</span>
+                      <strong>{selectedReasoningLabel}</strong>
                     </div>
                   ) : null}
                 </div>
@@ -812,55 +881,6 @@ export function ChatComposer({
         </div>
       </form>
 
-      <div className="app-chat-composer__rail" aria-label="Conversation runtime controls" hidden>
-        {runTargetOptions.length <= 1 ? (
-          <span className="app-chat-composer__token app-chat-composer__token--static">
-            {runTargetOptions[0]?.label ?? runTarget}
-          </span>
-        ) : (
-          <AppSelect
-            aria-label="Run target"
-            value={runTarget}
-            onChange={(event) => {
-              onRunTargetChange(event.currentTarget.value);
-            }}
-            disabled={controlsDisabled || busy}
-            className="app-chat-composer__token-select app-chat-composer__token-select--runtime"
-          >
-            {runTargetOptions.map((option) => (
-              <option key={option.value} value={option.value} disabled={option.disabled}>
-                {option.label}
-              </option>
-            ))}
-          </AppSelect>
-        )}
-
-        <span className="app-chat-composer__token app-chat-composer__token--static">
-          {targetLabel}
-        </span>
-
-        {showAutonomySelector ? (
-          <AppSelect
-            aria-label="Autonomy mode"
-            value={autonomyMode}
-            onChange={(event) => {
-              onAutonomyModeChange(event.currentTarget.value);
-            }}
-            disabled={controlsDisabled || busy}
-            className={`app-chat-composer__token-select app-chat-composer__token-select--autonomy${autonomyMode === 'autopilot' ? ' app-chat-composer__token-select--warning' : ''}`}
-          >
-            {autonomyOptions.map((option) => (
-              <option key={option.value} value={option.value} disabled={option.disabled}>
-                {option.label}
-              </option>
-            ))}
-          </AppSelect>
-        ) : (
-          <span className="app-chat-composer__token app-chat-composer__token--static">
-            {autonomyFallbackLabel}
-          </span>
-        )}
-      </div>
     </section>
   );
 }

@@ -208,7 +208,7 @@ export function ChatComposer({
   const canSend = !busy && !sendDisabled && hasDraft;
   const canStop = busy && typeof onStop === 'function';
   const showSendButton = busy || hasDraft;
-  const selectedModelLabel = compactModelLabel(composerOptionLabel(modelOptions, model), model || 'Model');
+  const rawSelectedModelLabel = compactModelLabel(composerOptionLabel(modelOptions, model), model || 'Model');
   const visibleModelOptions = useMemo(() => flattenComposerOptions(modelOptions), [modelOptions]);
   const selectedModelOption = visibleModelOptions.find((option) => option.value === model) ?? null;
   const hostedCreditOptions = useMemo(
@@ -222,8 +222,13 @@ export function ChatComposer({
   const selectedModelIsDefaultRoute = !selectedModelOption || selectedModelOption.value === 'default';
   const isHostedCreditsModel = (selectedModelOption?.groupLabel ?? '').toLowerCase() === 'empyralis credits'
     || (modelProviderLabel ?? '').toLowerCase() === 'empyralis credits'
-    || ['light', 'pro', 'max'].includes(selectedModelLabel.toLowerCase())
+    || ['light', 'pro', 'max'].includes(rawSelectedModelLabel.toLowerCase())
     || (selectedModelIsDefaultRoute && hostedCreditOptions.length > 0);
+  const selectedModelLabel = selectedModelIsDefaultRoute && hostedCreditOptions.length > 0
+    ? compactModelLabel(hostedCreditOptions[0]?.label ?? 'Light', 'Light')
+    : selectedModelIsDefaultRoute && visibleModelOptions.length <= 1
+      ? 'Connect AI'
+      : rawSelectedModelLabel;
   const modelMenuOptions = isHostedCreditsModel && hostedCreditOptions.length > 0
     ? hostedCreditOptions
     : visibleModelOptions;
@@ -736,7 +741,7 @@ export function ChatComposer({
                 className="app-chat-composer__provider-pill"
                 disabled={controlsDisabled || busy}
                 aria-expanded={modelPanelOpen}
-                aria-label="Choose model and reasoning"
+                aria-label="Choose AI model"
                 onClick={() => {
                   setActionPaletteOpen(false);
                   setCommandPaletteDismissed(true);

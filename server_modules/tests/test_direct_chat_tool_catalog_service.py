@@ -46,6 +46,14 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "file__read" for item in tools))
         self.assertTrue(any(item["name"] == "computer__click" for item in tools))
 
+    def test_builtin_tools_include_canonical_hardware_action(self) -> None:
+        tools = service.build_builtin_direct_chat_tools()
+
+        hardware_tool = next(item for item in tools if item["name"] == "hardware__action")
+        self.assertEqual(hardware_tool["connector_id"], "hardware")
+        self.assertIn("runtime_target", hardware_tool["parameters"]["properties"])
+        self.assertIn("action", hardware_tool["parameters"]["required"])
+
     def test_build_direct_chat_tools_uses_normalized_usable_write_actions(self) -> None:
         tools = service.build_direct_chat_tools(
             [
@@ -61,6 +69,16 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
             "Open /tmp/demo.txt",
             provider="codex_cli",
             tools=[{"name": "file__read"}],
+            callbacks=_callbacks(),
+        )
+
+        self.assertTrue(allowed)
+
+    def test_message_can_use_direct_local_tools_allows_hardware_action_fallback(self) -> None:
+        allowed = service.message_can_use_direct_local_tools(
+            "Take a screenshot of my screen",
+            provider="deepseek",
+            tools=[{"name": "hardware__action"}],
             callbacks=_callbacks(),
         )
 

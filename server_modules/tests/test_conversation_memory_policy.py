@@ -26,6 +26,40 @@ class ConversationMemoryPolicyTests(unittest.TestCase):
         self.assertEqual(profile.preserve_last_messages, 8)
         self.assertEqual(profile.summary_trigger_messages, 12)
 
+    def test_external_channel_budget_presets_are_model_aware(self) -> None:
+        compact = conversation_memory_policy.build_external_channel_memory_profile(
+            context_budget_preset="compact",
+            context_window_tokens=64_000,
+        )
+        standard = conversation_memory_policy.build_external_channel_memory_profile(
+            context_budget_preset="standard",
+            context_window_tokens=200_000,
+        )
+        max_profile = conversation_memory_policy.build_external_channel_memory_profile(
+            context_budget_preset="max",
+            context_window_tokens=1_000_000,
+        )
+
+        self.assertGreater(standard.max_prompt_tokens, compact.max_prompt_tokens)
+        self.assertGreater(max_profile.max_prompt_tokens, standard.max_prompt_tokens)
+        self.assertLess(max_profile.max_prompt_tokens, 1_000_000)
+        self.assertGreaterEqual(max_profile.preserve_last_messages, standard.preserve_last_messages)
+
+    def test_external_channel_budget_accepts_old_saved_preset_ids(self) -> None:
+        self.assertEqual(
+            conversation_memory_policy.normalize_context_budget_preset("balanced"),
+            "standard",
+        )
+        self.assertEqual(
+            conversation_memory_policy.normalize_context_budget_preset("deep"),
+            "extended",
+        )
+        extended = conversation_memory_policy.build_external_channel_memory_profile(
+            context_budget_preset="deep",
+            context_window_tokens=200_000,
+        )
+        self.assertGreater(extended.max_prompt_tokens, 0)
+
     def test_model_aware_policy_preserves_reserves_for_small_context(self) -> None:
         base = conversation_memory_policy.get_memory_policy_profile(
             conversation_memory_policy.DIRECT_CHAT_PROFILE

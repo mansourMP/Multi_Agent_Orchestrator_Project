@@ -98,6 +98,8 @@ export class GatewayCapabilityRouter {
       traceId,
       workspaceId,
       arguments: argumentsPayload,
+      runtimeAccessMode: String(payload.runtime_access_mode ?? "").trim() || undefined,
+      empyralisApproved: Boolean(payload.empyralis_approved),
     });
     return {
       request_id: frame.id,

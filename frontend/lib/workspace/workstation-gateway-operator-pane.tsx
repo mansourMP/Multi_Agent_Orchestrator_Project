@@ -6,11 +6,13 @@ import { useRouter } from 'next/navigation';
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { DataBadge } from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
+import { AppButton } from '@/lib/ui/primitives';
 import {
   FormField,
   FormGrid,
   FormInput,
   FormReadout,
+  FormSelect,
   FormSection,
 } from '@/lib/ui/form-controls';
 import {
@@ -19,8 +21,6 @@ import {
   WorkstationSurfaceList,
   WorkstationSurfaceListItem,
   WorkstationSurfaceNotice,
-  WorkstationSurfaceStat,
-  WorkstationSurfaceStatGrid,
 } from '@/lib/workspace/workstation-surface-primitives';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
@@ -33,6 +33,10 @@ type GatewayRegistrationRecord = Record<string, unknown> & {
   connection_status?: string | null;
   device_trust_state?: string | null;
   capabilities?: unknown;
+  runtime_access_mode?: string | null;
+  runtime_access_label?: string | null;
+  runtime_access_setup_warning?: string | null;
+  autonomous_agent_setup_warning_acknowledged?: boolean | null;
   last_seen_at?: string | null;
 };
 
@@ -137,6 +141,7 @@ type WorkspaceRuntimeSessionRecord = Record<string, unknown> & {
   runtime_attachment_id?: string | null;
   runtime_profile_id?: string | null;
   runtime_node_id?: string | null;
+  runtime_access_mode?: string | null;
   gateway_id?: string | null;
   owner_email?: string | null;
   owner_user_id?: string | null;
@@ -154,6 +159,8 @@ type WorkspaceRuntimeSessionsPayload = Record<string, unknown> & {
 type PairingDraft = {
   displayName: string;
   platform: string;
+  runtimeAccessMode: 'default_guarded' | 'full_access';
+  autonomousAgentWarningAccepted: boolean;
 };
 
 type ChannelDraft = {
@@ -246,11 +253,11 @@ function humanizeToken(value: unknown, fallback = 'Unknown'): string {
 function runtimeBindingLabel(value: unknown): string {
   switch (String(value ?? '').trim().toLowerCase()) {
     case 'cloud_computer_agent':
-      return 'Cloud computer';
+      return 'Cloud Computer';
     case 'my_computer_agent':
-      return 'My computer';
+      return 'This Device';
     case 'self_hosted_agent':
-      return 'Self-hosted computer';
+      return 'Server/VPS';
     default:
       return humanizeToken(value, 'Computer session');
   }
@@ -356,6 +363,13 @@ function runtimeSessionLaneLabel(session: WorkspaceRuntimeSessionRecord): string
 }
 
 function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord, pendingCount = 0): string {
+  const accessMode = readString(session.runtime_access_mode, '').toLowerCase().replace(/[\s-]+/g, '_');
+  if (accessMode === 'full_access' || accessMode === 'autonomous_agent') {
+    return 'Autonomous Agent';
+  }
+  if (accessMode === 'default_guarded') {
+    return pendingCount > 0 ? 'Needs approval' : 'Default Guarded';
+  }
   const explicitMode = readString(session.permission_mode ?? session.approval_mode, '');
   if (explicitMode) {
     return humanizeToken(explicitMode);
@@ -371,12 +385,28 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
   }
   switch (String(session.runtime_binding ?? '').trim().toLowerCase()) {
     case 'my_computer_agent':
-      return 'Device access';
+      return 'Default Guarded';
     case 'cloud_computer_agent':
       return 'Autopilot capable';
     default:
       return 'Policy guarded';
   }
+}
+
+function runtimeAccessModeToken(value: unknown): 'default_guarded' | 'full_access' {
+  const token = readString(value, '').toLowerCase().replace(/[\s-]+/g, '_');
+  if (token === 'full_access' || token === 'autonomous_agent') {
+    return 'full_access';
+  }
+  return 'default_guarded';
+}
+
+function gatewayRuntimeAccessLabel(gateway: GatewayRegistrationRecord | null): string {
+  const explicit = readString(gateway?.runtime_access_label, '');
+  if (explicit) {
+    return explicit;
+  }
+  return runtimeAccessModeToken(gateway?.runtime_access_mode) === 'full_access' ? 'Autonomous Agent' : 'Default Guarded';
 }
 
 function browserTakeoverStatus(session: GatewayBrowserSessionRecord): string {
@@ -602,26 +632,16 @@ const GATEWAY_PERMISSION_CHECKLIST = [
 
 const GATEWAY_MODE_SUMMARIES = [
   {
-    title: 'Default',
+    title: 'Default Guarded',
     subtitle: 'Safe',
     description: 'Sage can use ordinary local context automatically. Risky actions always wait for approval.',
   },
   {
-    title: 'Device access',
-    subtitle: 'Autonomous',
-    description: 'Lets Sage continue through bounded local steps while destructive, external, and security actions remain gated.',
+    title: 'Autonomous Agent',
+    subtitle: 'Dedicated hardware',
+    description: 'Lets Sage operate a dedicated runtime without Empyralis action-by-action approval prompts.',
   },
 ] as const;
-
-function gatewayConnectionSummary(gateways: GatewayRegistrationRecord[]): string {
-  if (gateways.length === 0) {
-    return 'No computers connected';
-  }
-  const onlineCount = gateways.filter((gateway) =>
-    String(gateway.connection_status ?? gateway.status ?? '').trim().toLowerCase() === 'online',
-  ).length;
-  return onlineCount > 0 ? `${gateways.length} · ${onlineCount} online` : `${gateways.length} · Offline`;
-}
 
 function gatewayTrustSummary(selectedGateway: GatewayRegistrationRecord | null): {
   deviceLabel: string;
@@ -632,8 +652,8 @@ function gatewayTrustSummary(selectedGateway: GatewayRegistrationRecord | null):
 } {
   return {
     deviceLabel: selectedGateway
-      ? readString(selectedGateway.display_name, 'Connected computer')
-      : 'Connected computer',
+      ? readString(selectedGateway.display_name, 'This Device')
+      : 'This Device',
     platformLabel: selectedGateway
       ? humanizeToken(selectedGateway.platform, 'Unknown platform')
       : 'Unknown platform',
@@ -725,13 +745,13 @@ function summarizeMyComputerCapabilities(
     {
       id: 'telegram',
       label: 'Telegram',
-      description: 'Use personal Telegram through this connected computer.',
+      description: 'Use personal Telegram through This Device.',
       available: hasTelegram,
     },
     {
       id: 'whatsapp',
       label: 'WhatsApp',
-      description: 'Use personal WhatsApp through this connected computer.',
+      description: 'Use personal WhatsApp through This Device.',
       available: hasWhatsApp,
     },
     {
@@ -918,7 +938,7 @@ function channelRecoveryLane(params: {
     id: 'channel_recovery',
     title: 'Channel recovery',
     subtitle: configured ? 'Standby' : 'Not configured',
-    description: 'Personal Channels are optional. Configure them here when Sage should use a connected computer to deliver messages.',
+    description: 'Personal Channels are optional. Configure them here when Sage should use This Device to deliver messages.',
     tone: configured ? 'neutral' : 'accent',
   };
 }
@@ -1029,6 +1049,8 @@ export function WorkstationGatewayOperatorPane({
   const [pairingDraft, setPairingDraft] = useState<PairingDraft>({
     displayName: 'My device',
     platform: 'macos',
+    runtimeAccessMode: 'default_guarded',
+    autonomousAgentWarningAccepted: false,
   });
   const [pairingIntent, setPairingIntent] = useState<GatewayPairingIntentRecord | null>(null);
   const [loadingRegistrations, setLoadingRegistrations] = useState(true);
@@ -1050,6 +1072,26 @@ export function WorkstationGatewayOperatorPane({
       gateways.find((gateway) => String(gateway.gateway_id ?? '').trim() === String(selectedGatewayId ?? '').trim()) ?? null,
     [gateways, selectedGatewayId],
   );
+  const gatewayRuntimeTarget = useMemo(
+    () => bootstrap.runtime.runtimeTargets.find((target) => target.id === 'local_companion') ?? null,
+    [bootstrap.runtime.runtimeTargets],
+  );
+  const gatewayExecutionModes = useMemo(
+    () => (gatewayRuntimeTarget?.executionModes ?? []).filter((mode) => mode.available),
+    [gatewayRuntimeTarget?.executionModes],
+  );
+  const autonomousAgentMode = useMemo(
+    () => gatewayExecutionModes.find((mode) =>
+      mode.id === 'full_access' || runtimeAccessModeToken(mode.runtimeAccessMode) === 'full_access') ?? null,
+    [gatewayExecutionModes],
+  );
+  const defaultAccessMode = useMemo(
+    () => gatewayExecutionModes.find((mode) =>
+      mode.id === 'default' || runtimeAccessModeToken(mode.runtimeAccessMode) === 'default_guarded') ?? null,
+    [gatewayExecutionModes],
+  );
+  const autonomousAgentAvailable = Boolean(autonomousAgentMode || gatewayRuntimeTarget?.supportsFullAccess);
+  const activeGatewayRuntimeAccessLabel = selectedGateway ? gatewayRuntimeAccessLabel(selectedGateway) : 'Not paired';
 
   const selectedGatewayCapabilities = useMemo(
     () => gatewayCapabilityLabels(selectedGateway),
@@ -1248,7 +1290,7 @@ export function WorkstationGatewayOperatorPane({
       if (cancelled) {
         return;
       }
-      setErrorMessage(error instanceof Error ? error.message : 'Connected computers are unavailable right now.');
+      setErrorMessage(error instanceof Error ? error.message : 'Device runtimes are unavailable right now.');
       setLoadingRegistrations(false);
     });
     return () => {
@@ -1304,6 +1346,10 @@ export function WorkstationGatewayOperatorPane({
   }, [selectedGatewayId]);
 
   async function handleCreatePairingIntent() {
+    if (pairingDraft.runtimeAccessMode === 'full_access' && !pairingDraft.autonomousAgentWarningAccepted) {
+      setErrorMessage('Confirm Autonomous Agent mode before creating this computer connection.');
+      return;
+    }
     setBusyActionKey('pairing');
     setErrorMessage(null);
     try {
@@ -1319,6 +1365,10 @@ export function WorkstationGatewayOperatorPane({
             workspace_id: workspaceId,
             display_name: pairingDraft.displayName.trim() || undefined,
             platform: pairingDraft.platform || undefined,
+            runtime_access_mode: pairingDraft.runtimeAccessMode,
+            autonomous_agent_setup_warning_acknowledged: pairingDraft.runtimeAccessMode === 'full_access'
+              ? pairingDraft.autonomousAgentWarningAccepted
+              : false,
           }),
         },
       );
@@ -1637,7 +1687,7 @@ export function WorkstationGatewayOperatorPane({
     : approvalsPendingCount > 0
       ? 'Needs approval'
       : selectedGateway
-        ? 'Device access'
+        ? activeGatewayRuntimeAccessLabel
         : 'No active computer session';
   const selectedTakeoverStatus = browserItems[0]
     ? browserTakeoverStatus(browserItems[0])
@@ -1721,47 +1771,100 @@ export function WorkstationGatewayOperatorPane({
 
   return (
     <div className="gateway-operator-pane app-stack-3">
-      <WorkstationSurfaceCard
-        title={normalDeviceTitle}
-        description={normalDeviceLine}
-        actions={(
-          <WorkstationActionButton
+      <section className="gateway-computer-sheet sage-computer-connect-modal">
+        <div className="gateway-computer-sheet__header">
+          <div>
+            <h2>Connect a computer</h2>
+            <p>One connection gives Sage the full local power layer. No capability picking here.</p>
+          </div>
+          <AppButton
             type="button"
-            tone="primary"
+            tone="ghost"
             onClick={() => {
-              setManageOpen(true);
+              router.push(`/w/${encodeURIComponent(workspaceId)}/integrations`);
             }}
           >
-            Manage
-          </WorkstationActionButton>
-        )}
-      >
-        {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
-        {errorMessage ? <WorkstationSurfaceNotice tone="danger">{errorMessage}</WorkstationSurfaceNotice> : null}
+            Close
+          </AppButton>
+        </div>
+        <div className="sage-computer-connect">
+          <div className="sage-computer-connect__hero">
+            <div className="sage-computer-connect__orb" aria-hidden="true">
+              <span>Connected Computer</span>
+            </div>
+            <div className="sage-computer-connect__copy">
+              <span className={`sage-computer-connect__status${myComputerStatus.id === 'online' ? ' sage-computer-connect__status--online' : ''}`}>
+                {myComputerStatus.id === 'online' ? 'Online and ready' : myComputerStatus.label}
+              </span>
+              <strong>Default local capability for Sage.</strong>
+              <p>
+                Browser, files, shell, screenshots, personal channels, and local models stay on the selected computer.
+                Sage can use them only through the governed runtime when you ask.
+              </p>
+            </div>
+          </div>
+          <div className="sage-computer-connect__capabilities" aria-label="Included local capabilities">
+            {['Browser', 'Files', 'Shell', 'Screenshots', 'Personal apps', 'Telegram/WhatsApp', 'Local AI'].map((label) => (
+              <span key={label}>{label}</span>
+            ))}
+          </div>
+          <div className="sage-computer-connect__state">
+            <div>
+              <span>Status</span>
+              <strong>{myComputerStatus.label}</strong>
+            </div>
+            <div>
+              <span>Trust</span>
+              <strong>{trustSummary.trustLabel}</strong>
+            </div>
+            <div>
+              <span>Mode</span>
+              <strong>{activeGatewayRuntimeAccessLabel}</strong>
+            </div>
+            <div>
+              <span>Last seen</span>
+              <strong>{trustSummary.lastSeenLabel}</strong>
+            </div>
+          </div>
+          <details className="sage-computer-connect__config">
+            <summary>Connection details</summary>
+            <p>
+              {selectedGateway
+                ? `${normalDeviceTitle} · ${normalDeviceLine}. Use Manage only for reconnecting, revoking access, manual setup, or diagnostics.`
+                : 'Connection details are only needed for setup or troubleshooting. Normal use starts from the connect button.'}
+            </p>
+          </details>
+        </div>
 
-        <WorkstationSurfaceStatGrid>
-          <WorkstationSurfaceStat
-            label="State"
-            value={<DataBadge tone={myComputerStatus.tone}>{myComputerStatus.label}</DataBadge>}
-            hint={myComputerStatus.detail}
-          />
-          <WorkstationSurfaceStat
-            label="Last seen"
-            value={trustSummary.lastSeenLabel}
-            hint={trustSummary.lastConnectedLabel}
-          />
-          <WorkstationSurfaceStat
-            label="Trust"
-            value={trustSummary.trustLabel}
-            hint="One revocable trust decision for local work; not a per-tool checklist"
-          />
-        </WorkstationSurfaceStatGrid>
+        {!diagnosticsSectionVisible ? (
+          <div className="gateway-computer-sheet__footer">
+            <AppButton
+              type="button"
+              tone="ghost"
+              onClick={() => {
+                router.push(`/w/${encodeURIComponent(workspaceId)}/sage`);
+              }}
+            >
+              Not now
+            </AppButton>
+            <AppButton
+              type="button"
+              onClick={() => {
+                setManageOpen(true);
+              }}
+            >
+              {selectedGateway ? 'Manage computer' : 'Connect a computer'}
+            </AppButton>
+          </div>
+        ) : null}
 
         {diagnosticsSectionVisible ? (
           <FormSection
-          title="What Sage can use on the connected computer"
+          title="What Sage can use on This Device"
           description="Capability groups from the selected computer, shown without protocol or token detail."
         >
+          {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
+          {errorMessage ? <WorkstationSurfaceNotice tone="danger">{errorMessage}</WorkstationSurfaceNotice> : null}
           <WorkstationSurfaceList>
             {myComputerCapabilities.map((capability) => (
               <WorkstationSurfaceListItem
@@ -1782,7 +1885,7 @@ export function WorkstationGatewayOperatorPane({
         {manualSetupVisible ? (
           <FormSection
           title={`Connect or reconnect a ${pairingDeviceLabel}`}
-          description="Create a short-lived connection request when the selected computer is not connected, reconnecting, or revoked."
+          description="Choose how much autonomy this computer has before creating the short-lived connection request."
         >
           <FormGrid columns="repeat(2, minmax(0, 1fr))">
             <FormField label="Device label" hint="Human-readable name shown in operator surfaces.">
@@ -1801,11 +1904,64 @@ export function WorkstationGatewayOperatorPane({
               label="Platform"
               value={`${humanizeToken(pairingDraft.platform, 'Detected device')} · auto-detected`}
             />
+            <FormField
+              label="Runtime mode"
+              hint={pairingDraft.runtimeAccessMode === 'full_access'
+                ? 'For dedicated agent hardware. Empyralis will not ask per action.'
+                : 'For personal computers. Risky actions can still ask for approval.'}
+            >
+              <FormSelect
+                value={pairingDraft.runtimeAccessMode}
+                onChange={(event) => {
+                  const nextMode = runtimeAccessModeToken(event.currentTarget.value);
+                  setPairingDraft((current) => ({
+                    ...current,
+                    runtimeAccessMode: nextMode,
+                    autonomousAgentWarningAccepted: nextMode === 'full_access'
+                      ? current.autonomousAgentWarningAccepted
+                      : false,
+                  }));
+                  setPairingIntent(null);
+                }}
+              >
+                <option value="default_guarded">{defaultAccessMode?.label || 'Default Guarded'}</option>
+                <option value="full_access" disabled={!autonomousAgentAvailable}>
+                  {autonomousAgentMode?.label || 'Autonomous Agent'}
+                </option>
+              </FormSelect>
+            </FormField>
+            <FormReadout
+              label="Current mode"
+              value={selectedGateway ? activeGatewayRuntimeAccessLabel : 'Not paired'}
+            />
           </FormGrid>
+          {pairingDraft.runtimeAccessMode === 'full_access' ? (
+            <div className="gateway-runtime-access-warning">
+              <WorkstationSurfaceNotice tone="warning">
+                {autonomousAgentMode?.setupWarning
+                  || 'Autonomous Agent lets the AI operate this dedicated runtime without Empyralis asking for each action. Owner binding, revocation, quota, offline state, stop/cancel, and OS or provider limits still apply.'}
+              </WorkstationSurfaceNotice>
+              <label className="gateway-runtime-access-warning__ack">
+                <input
+                  type="checkbox"
+                  checked={pairingDraft.autonomousAgentWarningAccepted}
+                  onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    setPairingDraft((current) => ({
+                      ...current,
+                      autonomousAgentWarningAccepted: checked,
+                    }));
+                    setPairingIntent(null);
+                  }}
+                />
+                <span>I understand this computer will run without Empyralis approval prompts.</span>
+              </label>
+            </div>
+          ) : null}
           <div className="settings-action-row">
             <WorkstationActionButton
               type="button"
-              disabled={busyActionKey === 'pairing'}
+              disabled={busyActionKey === 'pairing' || (pairingDraft.runtimeAccessMode === 'full_access' && !pairingDraft.autonomousAgentWarningAccepted)}
               onClick={() => {
               void handleCreatePairingIntent();
             }}
@@ -1819,7 +1975,7 @@ export function WorkstationGatewayOperatorPane({
         {diagnosticsSectionVisible ? (
           <FormSection
           title="How this trust lane works"
-          description="Connected computers are useful by default. Approval is reserved for risky local and external actions."
+          description="This Device is useful by default. Approval is reserved for risky local and external actions."
         >
           <WorkstationSurfaceList>
             {GATEWAY_MODE_SUMMARIES.map((mode) => (
@@ -1829,8 +1985,8 @@ export function WorkstationGatewayOperatorPane({
                 subtitle={mode.subtitle}
                 description={mode.description}
                 actions={(
-                  <DataBadge tone={mode.title === 'Default' ? 'success' : 'warning'}>
-                    {mode.title === 'Default' ? 'Safe default' : 'Owner approved'}
+                  <DataBadge tone={mode.title === 'Default Guarded' ? 'success' : 'warning'}>
+                    {mode.title === 'Default Guarded' ? 'Safe default' : 'Owner enabled'}
                   </DataBadge>
                 )}
               />
@@ -1863,6 +2019,12 @@ export function WorkstationGatewayOperatorPane({
                 label="Platform"
                 value={humanizeToken(pairingIntent.platform, 'Unknown')}
               />
+              <FormReadout
+                label="Runtime mode"
+                value={runtimeAccessModeToken(readRecord(pairingIntent.metadata).runtime_access_mode) === 'full_access'
+                  ? 'Autonomous Agent'
+                  : 'Default Guarded'}
+              />
             </FormGrid>
             <div className="gateway-pairing-command-card">
               <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
@@ -1889,7 +2051,7 @@ export function WorkstationGatewayOperatorPane({
         ) : null}
 
         {diagnosticsSectionVisible && loadingRegistrations && !registrationsTimedOut ? (
-          <WorkstationSurfaceNotice tone="neutral">Loading connected computers…</WorkstationSurfaceNotice>
+          <WorkstationSurfaceNotice tone="neutral">Loading device runtimes...</WorkstationSurfaceNotice>
         ) : diagnosticsSectionVisible && gateways.length === 0 ? (
           <EmptyPanel
             title="No computers connected"
@@ -1925,55 +2087,7 @@ export function WorkstationGatewayOperatorPane({
             })}
           </WorkstationSurfaceList>
         ) : null}
-      </WorkstationSurfaceCard>
-
-      {!expandedDetailVisible ? (
-        <WorkstationSurfaceCard
-          title="Agent computer map"
-          description="Connected computers give agent surfaces one default local access layer; approvals are reserved for risky actions."
-        >
-          <WorkstationSurfaceList>
-            <WorkstationSurfaceListItem
-              title="Sage"
-              subtitle="Main agent"
-              description={
-                selectedGateway
-                  ? `${trustSummary.deviceLabel} · ${myComputerStatus.detail} Destructive changes, external sends, payments, account changes, and raw terminal commands still pause.`
-                  : 'No local computer is connected to the main agent.'
-              }
-              actions={(
-                <DataBadge tone={myComputerStatus.tone}>
-                  {myComputerStatus.label}
-                </DataBadge>
-              )}
-            />
-            <WorkstationSurfaceListItem
-              title="Agent Studio"
-              subtitle={`${activeRuntimeItems.length} active computer session${activeRuntimeItems.length === 1 ? '' : 's'}`}
-              description={
-                activeRuntimeItems.length > 0
-                  ? 'Studio agents with live local, cloud, or self-hosted computer sessions appear in Activity.'
-                  : 'Studio agents are not attached to a live computer session right now.'
-              }
-              actions={(
-                <DataBadge tone={activeRuntimeItems.length > 0 ? 'success' : 'neutral'}>
-                  {activeRuntimeItems.length > 0 ? 'Active' : 'None'}
-                </DataBadge>
-              )}
-            />
-            <WorkstationSurfaceListItem
-              title="Approvals"
-              subtitle={`${approvalsPendingCount} waiting`}
-              description="Risky local actions pause here instead of failing silently."
-              actions={(
-                <DataBadge tone={approvalsPendingCount > 0 ? 'warning' : 'success'}>
-                  {approvalsPendingCount > 0 ? 'Approval needed' : 'Clear'}
-                </DataBadge>
-              )}
-            />
-          </WorkstationSurfaceList>
-        </WorkstationSurfaceCard>
-      ) : null}
+      </section>
 
       <CommandSheet
         open={manageOpen}
@@ -2006,7 +2120,6 @@ export function WorkstationGatewayOperatorPane({
               onClick={() => {
                 setManageOpen(false);
                 setManualSetupVisible(true);
-                void handleCreatePairingIntent();
               }}
             >
               {busyActionKey === 'pairing' ? 'Creating connection…' : selectedGateway ? 'Reconnect' : 'Connect a computer'}
@@ -2030,9 +2143,6 @@ export function WorkstationGatewayOperatorPane({
               onClick={() => {
                 setManageOpen(false);
                 setManualSetupVisible(true);
-                if (!pairingIntent) {
-                  void handleCreatePairingIntent();
-                }
               }}
             >
               Manual setup

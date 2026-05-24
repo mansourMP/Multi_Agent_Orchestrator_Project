@@ -47,6 +47,8 @@ struct ExecuteRequest {
     trace_id: String,
     workspace_id: String,
     arguments: Value,
+    runtime_access_mode: Option<String>,
+    empyralis_approved: Option<bool>,
     nonce: String,
     expires_at: String,
     signature: String,
@@ -239,7 +241,16 @@ async fn execute_capability(
     context: &execution::ExecutionContext,
 ) -> Result<Value> {
     match request.capability_id.as_str() {
-        "shell.execute" => capabilities::shell::execute(&request.arguments, context),
+        "shell.execute" => {
+            let arguments = request.arguments.clone();
+            let context = context.clone();
+            let trusted = trusted_shell_execution(request);
+            tokio::task::spawn_blocking(move || {
+                capabilities::shell::execute(&arguments, &context, trusted)
+            })
+            .await
+            .context("shell execution task failed")?
+        }
         "filesystem.read_write" => capabilities::filesystem::read_write(&request.arguments),
         "screenshot.capture" => capabilities::screenshot::capture(&request.arguments),
         "computer_control.ocr" => capabilities::ocr::read_screen_text(&request.arguments),
@@ -262,6 +273,16 @@ async fn execute_capability(
         "computer_control.speak" => capabilities::system::speak(&request.arguments),
         other => Err(anyhow::anyhow!("unsupported capability_id: {other}")),
     }
+}
+
+fn trusted_shell_execution(request: &ExecuteRequest) -> bool {
+    let mode = request
+        .runtime_access_mode
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    mode == "full_access" || request.empyralis_approved.unwrap_or(false)
 }
 
 fn verify_execute_request(state: &AppState, request: &ExecuteRequest) -> Result<(), String> {

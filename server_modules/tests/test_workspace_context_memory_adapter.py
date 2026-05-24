@@ -106,7 +106,35 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
         self.assertNotIn("Empyralis is a calm mobile-first AI product", rendered)
         self.assertEqual(payload["diagnostics"]["context_file_count"], 1)
 
-    def test_load_workspace_context_payload_includes_sage_memory_block(self):
+    def test_load_workspace_context_payload_skips_memory_blocks_for_unrelated_query(self):
+        with (
+            patch("server_modules.workspace_context_memory_adapter.read_workspace_context_files", return_value={}),
+            patch("server_modules.memory_service.get_recent_logs", return_value="Recent log") as recent_logs,
+            patch("server_modules.memory_service.semantic_search", return_value=[{"key": "timezone", "content": "Asia/Shanghai"}]) as semantic_search,
+            patch("server_modules.memory_service.get_memory", return_value="- timezone: Asia/Shanghai") as get_memory,
+            patch("server_modules.unified_memory_service.search_unified_memory_documents", return_value=[]) as unified_search,
+            patch("server_modules.sage_memory_service.build_sage_memory_context_block", return_value="Sage memory") as sage_memory,
+            patch("server_modules.sage_services_service.build_sage_services_memory_block", return_value="Sage services") as sage_services,
+            patch("server_modules.mini_apps_service.build_mini_apps_context_block", return_value="Mini App Summaries") as mini_apps,
+        ):
+            payload = workspace_context_memory_adapter.load_workspace_context_payload(
+                workspace_id="workspace-1",
+                memory_query="what model are you?",
+                policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
+            )
+
+        rendered = "\n\n".join(payload["contextual_blocks"])
+        self.assertEqual(rendered, "")
+        self.assertEqual(payload["diagnostics"]["memory_context_included"], 0)
+        recent_logs.assert_not_called()
+        semantic_search.assert_not_called()
+        get_memory.assert_not_called()
+        unified_search.assert_not_called()
+        sage_memory.assert_not_called()
+        sage_services.assert_not_called()
+        mini_apps.assert_not_called()
+
+    def test_load_workspace_context_payload_includes_sage_memory_block_for_relevant_query(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir) / "workspace-1"
             with (
@@ -134,12 +162,13 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
             ):
                 payload = workspace_context_memory_adapter.load_workspace_context_payload(
                     workspace_id=str(root),
+                    memory_query="what do you remember about my timezone?",
                     policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
                 )
 
         self.assertTrue(any("Sage memory" in block for block in payload["contextual_blocks"]))
 
-    def test_load_workspace_context_payload_includes_sage_services_memory_block(self):
+    def test_load_workspace_context_payload_includes_sage_services_memory_block_for_relevant_query(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir) / "workspace-1"
             with (
@@ -167,10 +196,56 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
             ):
                 payload = workspace_context_memory_adapter.load_workspace_context_payload(
                     workspace_id=str(root),
+                    memory_query="what flashcards are review due?",
                     policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
                 )
 
         self.assertTrue(any("Sage services" in block for block in payload["contextual_blocks"]))
+
+    def test_load_workspace_context_payload_force_skip_overrides_relevant_query(self):
+        with (
+            patch("server_modules.workspace_context_memory_adapter.read_workspace_context_files", return_value={}),
+            patch("server_modules.memory_service.get_recent_logs", return_value="Recent log") as recent_logs,
+            patch("server_modules.memory_service.get_memory", return_value="- timezone: Asia/Shanghai") as get_memory,
+            patch("server_modules.sage_memory_service.build_sage_memory_context_block", return_value="Sage memory") as sage_memory,
+            patch("server_modules.sage_services_service.build_sage_services_memory_block", return_value="Sage services"),
+            patch("server_modules.mini_apps_service.build_mini_apps_context_block", return_value="Mini App Summaries"),
+        ):
+            payload = workspace_context_memory_adapter.load_workspace_context_payload(
+                workspace_id="workspace-1",
+                memory_query="what do you remember about my timezone?",
+                include_memory_context=False,
+                policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
+            )
+
+        self.assertEqual(payload["contextual_blocks"], [])
+        self.assertEqual(payload["diagnostics"]["memory_context_included"], 0)
+        recent_logs.assert_not_called()
+        get_memory.assert_not_called()
+        sage_memory.assert_not_called()
+
+    def test_load_workspace_context_payload_force_include_preserves_explicit_context_load(self):
+        with (
+            patch("server_modules.workspace_context_memory_adapter.read_workspace_context_files", return_value={}),
+            patch("server_modules.memory_service.get_recent_logs", return_value="Recent log"),
+            patch("server_modules.memory_service.get_memory", return_value="- timezone: Asia/Shanghai"),
+            patch("server_modules.sage_memory_service.build_sage_memory_context_block", return_value="Sage memory"),
+            patch("server_modules.sage_services_service.build_sage_services_memory_block", return_value="Sage services"),
+            patch("server_modules.mini_apps_service.build_mini_apps_context_block", return_value="Mini App Summaries\n[Flashcards]\n- Review due."),
+        ):
+            payload = workspace_context_memory_adapter.load_workspace_context_payload(
+                workspace_id="workspace-1",
+                include_memory_context=True,
+                policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
+            )
+
+        rendered = "\n\n".join(payload["contextual_blocks"])
+        self.assertIn("Recent Daily Logs", rendered)
+        self.assertIn("Runtime Memory Facts", rendered)
+        self.assertIn("Sage Memory", rendered)
+        self.assertIn("Sage Services", rendered)
+        self.assertIn("Mini App Summaries", rendered)
+        self.assertEqual(payload["diagnostics"]["memory_context_included"], 1)
 
     def test_render_workspace_context_strips_red_facts_before_external_prompt(self):
         text = workspace_context_memory_adapter.render_workspace_context_text(
@@ -205,6 +280,7 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
         ):
             payload = workspace_context_memory_adapter.load_workspace_context_payload(
                 workspace_id="workspace-1",
+                memory_query="calorie tracking daily summary",
                 policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
             )
 
@@ -232,7 +308,7 @@ class WorkspaceContextMemoryAdapterTests(unittest.TestCase):
         ):
             payload = workspace_context_memory_adapter.load_workspace_context_payload(
                 workspace_id="workspace-1",
-                memory_query="inventory",
+                memory_query="remember inventory",
                 policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
             )
 

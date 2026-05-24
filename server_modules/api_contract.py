@@ -246,6 +246,7 @@ class ApiApprovalResolveRequest(BaseModel):
     resolution: Literal["approved", "rejected"]
     actor: str = "user"
     reason: Optional[str] = None
+    approval_scope: Optional[Literal["once", "session"]] = None
 
 
 class ApiApprovalResolveResponse(BaseModel):

@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 
+from server_modules import deployed_agent_virtual_runtime_service
 from server_modules.virtual_computer_runtime import InMemoryVirtualComputerRuntime
 
 
@@ -110,6 +111,68 @@ class VirtualComputerActionLayerTests(unittest.TestCase):
         )
         self.assertTrue((approved.get("action_result") or {}).get("policy", {}).get("approval_granted"))
         self.assertEqual((approved.get("action_result") or {}).get("policy", {}).get("risk_class"), "RED")
+
+    def test_full_access_risk_policy_skips_action_approval(self):
+        runtime = InMemoryVirtualComputerRuntime()
+        created = asyncio.run(runtime.create_session({"runtime_choice": "virtual_code_sandbox"}))
+        session_id = created.get("session_id")
+
+        result = asyncio.run(
+            runtime.execute_action(
+                {
+                    "session_id": session_id,
+                    "action": "run_command",
+                    "risk_policy": {"red_policy": "allow", "allow_orange_without_approval": True},
+                    "policy_metadata": {"owner_role": "member", "owner_is_admin": False},
+                    "action_args": {"command": "echo hello"},
+                }
+            )
+        )
+
+        policy = (result.get("action_result") or {}).get("policy", {})
+        self.assertFalse(policy.get("requires_approval"))
+        self.assertFalse(policy.get("approval_granted"))
+        self.assertEqual(policy.get("red_policy"), "allow")
+
+    def test_guarded_runtime_policy_requires_red_action_approval(self):
+        runtime = InMemoryVirtualComputerRuntime()
+        created = asyncio.run(runtime.create_session({"runtime_choice": "virtual_code_sandbox"}))
+        session_id = created.get("session_id")
+        risk_policy = deployed_agent_virtual_runtime_service._risk_policy_for_runtime_access_mode(
+            runtime_access_mode="default_guarded",
+            requires_owner_approval=True,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "requires explicit approval"):
+            asyncio.run(
+                runtime.execute_action(
+                    {
+                        "session_id": session_id,
+                        "action": "run_command",
+                        "risk_policy": risk_policy,
+                        "policy_metadata": {"owner_role": "owner", "owner_is_admin": True},
+                        "action_args": {"command": "echo guarded"},
+                    }
+                )
+            )
+
+        approved = asyncio.run(
+            runtime.execute_action(
+                {
+                    "session_id": session_id,
+                    "action": "run_command",
+                    "approval_id": "appr_guarded",
+                    "risk_policy": risk_policy,
+                    "policy_metadata": {"owner_role": "owner", "owner_is_admin": True},
+                    "action_args": {"command": "echo guarded"},
+                }
+            )
+        )
+
+        policy = (approved.get("action_result") or {}).get("policy", {})
+        self.assertTrue(policy.get("requires_approval"))
+        self.assertTrue(policy.get("approval_granted"))
+        self.assertEqual(policy.get("red_policy"), "owner_approval")
 
     def test_untrusted_page_text_is_wrapped(self):
         runtime = InMemoryVirtualComputerRuntime()

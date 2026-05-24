@@ -33,6 +33,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Local generated runtime/certification scratch
+.tmp/
+
 # OS files
 .DS_Store
 Thumbs.db

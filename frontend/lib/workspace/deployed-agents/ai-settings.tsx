@@ -2,12 +2,8 @@
 
 import { useState } from 'react';
 
-import {
-  FormField,
-  FormSelect,
-} from '@/lib/ui/form-controls';
+import { FormInput, FormSelect } from '@/lib/ui/form-controls';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
-import { DataBadge } from '@/lib/ui/data-table';
 import type {
   DetailConfigDraft,
   ProviderCatalogSnapshot,
@@ -15,13 +11,27 @@ import type {
 } from './types';
 import {
   STUDIO_AI_SOURCE_OPTIONS,
-  STUDIO_AI_TIER_OPTIONS,
 } from './constants';
 import {
-  humanizeToken,
   pickStudioModelForTier,
   providerReadyForStudio,
 } from './utils';
+
+const PLATFORM_MODEL_LABELS: Record<WizardState['aiTier'], string> = {
+  light: 'Light',
+  pro: 'Pro',
+  max: 'Max',
+};
+
+const REASONING_OPTIONS: ReadonlyArray<{
+  value: WizardState['aiTier'];
+  label: string;
+  hint: string;
+}> = [
+  { value: 'light', label: 'Medium', hint: 'Lower cost for routine replies.' },
+  { value: 'pro', label: 'Balanced', hint: 'Best default for customer support.' },
+  { value: 'max', label: 'High', hint: 'More reasoning when accuracy matters.' },
+];
 
 export function AgentAiSettingsSections({
   value,
@@ -32,7 +42,8 @@ export function AgentAiSettingsSections({
   onSelectProvider,
   onSelectModel,
   onRefreshProviderModels,
-  onOpenIntegrations,
+  onSaveProviderCredential,
+  isSavingProviderCredential = false,
 }: {
   value: DetailConfigDraft;
   providerCatalog: ProviderCatalogSnapshot[];
@@ -42,52 +53,26 @@ export function AgentAiSettingsSections({
   onSelectProvider: (nextProviderId: string) => void;
   onSelectModel: (nextModelId: string) => void;
   onRefreshProviderModels?: (providerId: string) => void;
-  onOpenIntegrations?: () => void;
+  onSaveProviderCredential?: (providerId: string, apiKey: string) => Promise<void>;
+  isSavingProviderCredential?: boolean;
 }) {
-  const [showModelBrowser, setShowModelBrowser] = useState(false);
+  const [providerCredentialDraft, setProviderCredentialDraft] = useState('');
+  const [providerCredentialError, setProviderCredentialError] = useState<string | null>(null);
   const usesEmpyralisCredits = value.aiSource === 'empyralis_credits';
   const usesWorkspaceApiKey = value.aiSource === 'workspace_api_key';
   const usesLocalModel = value.aiSource === 'local_model';
   const usesSubscriptionPassthrough = value.aiSource === 'subscription_passthrough';
   const selectedProvider = providerCatalog.find((provider) => provider.id === value.providerId) ?? null;
   const selectedModel = selectedProvider?.models.find((model) => model.id === value.modelId) ?? null;
-  const selectedTier = STUDIO_AI_TIER_OPTIONS.find((option) => option.value === value.aiTier) ?? STUDIO_AI_TIER_OPTIONS[1];
   const providerReady = usesEmpyralisCredits || usesSubscriptionPassthrough || providerReadyForStudio(selectedProvider);
   const readyProviders = providerCatalog.filter((provider) => providerReadyForStudio(provider));
-  const localProvider = providerCatalog.find((provider) =>
+  const localProviders = providerCatalog.filter((provider) =>
     provider.localSelfHostedCompatible || ['codex', 'codex_cli', 'local', 'local_ollama', 'ollama'].includes(provider.id),
-  ) ?? null;
+  );
+  const localProvider = localProviders[0] ?? null;
   const firstReadyProvider = readyProviders[0] ?? providerCatalog[0] ?? null;
-  const selectedRouteLabel = usesEmpyralisCredits
-    ? 'Empyralis credits'
-    : usesWorkspaceApiKey
-      ? providerReady
-        ? selectedProvider?.label ?? 'Workspace API key'
-        : selectedProvider
-          ? `Connect ${selectedProvider.label}`
-          : 'Connect API key'
-      : usesLocalModel
-        ? selectedProvider?.label ?? localProvider?.label ?? 'Local model'
-        : 'Subscription passthrough';
-  const selectedRouteDetail = usesEmpyralisCredits
-    ? 'Use the workspace credit balance. No API key is required for this agent.'
-    : usesWorkspaceApiKey
-      ? providerReady
-        ? 'Provider setup lives in Integrations. This agent will use the selected API account at runtime.'
-        : selectedProvider
-          ? 'Connect the provider account in Integrations before using it for customers.'
-          : 'Connect an API provider before using your own model route.'
-      : usesLocalModel
-        ? 'Uses an explicit local/computer model route. This should not spend Empyralis credits.'
-        : 'Reserved for supported subscription-backed local/coding routes. It does not use platform credits.';
-  const selectedModelLabel = usesEmpyralisCredits
-    ? `${selectedTier.label} quality`
-    : (selectedModel?.label ?? value.modelId) || (usesSubscriptionPassthrough ? 'Subscription default' : 'Choose a model');
-  const selectedModelDetail = usesEmpyralisCredits
-    ? 'Empyralis meters exact provider cost internally and charges simple workspace credits.'
-    : providerReady
-      ? `${selectedProvider?.label ?? selectedRouteLabel} route. Pricing follows the selected source.`
-      : 'Provider connection is required before this route can answer customers.';
+  const selectableProviders = usesLocalModel ? localProviders : providerCatalog;
+  const selectedReasoning = REASONING_OPTIONS.find((option) => option.value === value.aiTier) ?? REASONING_OPTIONS[1];
 
   function selectProviderModel(providerId: string, modelId: string) {
     onSelectProvider(providerId);
@@ -106,8 +91,56 @@ export function AgentAiSettingsSections({
     }
     if (nextSource === 'local_model' && localProvider) {
       selectProviderModel(localProvider.id, localProvider.defaultModel || localProvider.models[0]?.id || '');
+      return;
+    }
+    selectProviderModel('', '');
+  }
+
+  function handleAiSourceChange(nextSource: WizardState['aiSource']) {
+    if (nextSource === 'workspace_api_key' && !firstReadyProvider) {
+      onSelectAiSource(nextSource);
+      return;
+    }
+    selectAiSource(nextSource);
+  }
+
+  async function handleProviderCredentialSave() {
+    const providerId = selectedProvider?.id ?? value.providerId;
+    const apiKey = providerCredentialDraft.trim();
+    if (!providerId || !apiKey || !onSaveProviderCredential) {
+      return;
+    }
+    setProviderCredentialError(null);
+    try {
+      await onSaveProviderCredential(providerId, apiKey);
+      setProviderCredentialDraft('');
+    } catch (error) {
+      setProviderCredentialError(error instanceof Error ? error.message : 'API key could not be saved.');
     }
   }
+
+  const selectedSourceOption = STUDIO_AI_SOURCE_OPTIONS.find((option) => option.value === value.aiSource)
+    ?? STUDIO_AI_SOURCE_OPTIONS[0];
+  const providerLabel = usesEmpyralisCredits
+    ? 'Empyralis credits'
+    : usesSubscriptionPassthrough
+      ? selectedProvider?.label ?? 'Eligible subscription'
+      : selectedProvider?.label ?? (usesLocalModel ? 'Connect Agent Computer' : 'Choose provider');
+  const providerHint = usesEmpyralisCredits
+    ? 'Empyralis manages the provider behind platform credits.'
+    : usesSubscriptionPassthrough
+      ? 'Uses an eligible external subscription when available.'
+      : usesLocalModel
+        ? 'Uses a local or self-hosted model provider from an Agent Computer.'
+        : 'Uses a workspace credential shared across this workspace (not an agent-private secret).';
+  const modelLabel = usesEmpyralisCredits
+    ? `${PLATFORM_MODEL_LABELS[value.aiTier]} model`
+    : selectedModel?.label ?? (usesSubscriptionPassthrough ? 'Subscription default' : 'Choose model');
+  const modelHint = usesEmpyralisCredits
+    ? 'The exact provider route stays managed by Empyralis.'
+    : selectedProvider
+      ? `${selectedProvider.label} model used for this Business Agent.`
+      : 'Choose a provider before selecting a model.';
 
   return (
     <div
@@ -115,158 +148,156 @@ export function AgentAiSettingsSections({
       aria-busy={isLoadingProviderCatalog}
     >
       <section className="studio-ai-settings__route-overview" aria-label="AI route options">
-        <div className="studio-ai-settings__route-grid">
-          {STUDIO_AI_SOURCE_OPTIONS.map((option) => {
-            const selected = value.aiSource === option.value;
-            const badge = option.value === 'empyralis_credits'
-              ? 'Recommended'
-              : option.value === 'workspace_api_key'
-                ? readyProviders.length > 0 ? `${readyProviders.length} ready` : 'Connect'
-                : option.value === 'local_model'
-                  ? localProvider ? 'Available' : 'Needs computer'
-                  : 'Limited';
-            const badgeTone = option.value === 'empyralis_credits' || (option.value === 'workspace_api_key' && readyProviders.length > 0) || (option.value === 'local_model' && localProvider)
-              ? 'success'
-              : 'neutral';
-            return (
-              <button
-                key={option.value}
-                type="button"
-                className={joinClassNames('studio-ai-settings__route-option', selected && 'studio-ai-settings__route-option--selected')}
-                aria-pressed={selected}
-                onClick={() => {
-                  if (option.value === 'workspace_api_key' && !firstReadyProvider) {
-                    onSelectAiSource(option.value);
-                    onOpenIntegrations?.();
-                    return;
-                  }
-                  selectAiSource(option.value);
-                }}
-              >
-                <div className="studio-ai-settings__route-option-head">
-                  <span>{option.label}</span>
-                  <DataBadge tone={badgeTone}>{badge}</DataBadge>
-                </div>
-                <strong>{option.title}</strong>
-                <p>{option.hint}</p>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="studio-ai-settings__quality-card">
-          <div className="studio-actions__section-head">
-            <div>
-              <span>Quality</span>
-              <strong>Default answer quality</strong>
+        <section className="studio-ai-settings__settings-card">
+          <div className="studio-ai-settings__setting-row">
+            <div className="studio-ai-settings__setting-copy">
+              <span>AI source</span>
+              <strong>{selectedSourceOption.title}</strong>
+              <p>{selectedSourceOption.hint}</p>
             </div>
-            <small>{selectedTier.label}</small>
-          </div>
-          <div className="studio-ai-settings__tier-grid studio-ai-settings__tier-grid--segmented">
-            {STUDIO_AI_TIER_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={joinClassNames('studio-ai-settings__tier', value.aiTier === option.value && 'studio-ai-settings__tier--selected')}
-                onClick={() => onSelectTier(option.value)}
+            <div className="studio-ai-settings__setting-control">
+              <FormSelect
+                value={value.aiSource}
+                onChange={(event) => handleAiSourceChange(event.currentTarget.value as WizardState['aiSource'])}
               >
-                <strong>{option.label}</strong>
-                <span>{option.hint}</span>
-              </button>
-            ))}
+                {STUDIO_AI_SOURCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </FormSelect>
+            </div>
           </div>
-        </div>
 
-        <section className="studio-ai-settings__selected-card">
-          <div className="studio-ai-settings__selected-copy">
-            <span>Selected route</span>
-            <strong>{selectedRouteLabel}</strong>
-            <p>{selectedRouteDetail}</p>
+          <div className="studio-ai-settings__setting-row">
+            <div className="studio-ai-settings__setting-copy">
+              <span>Provider</span>
+              <strong>{providerLabel}</strong>
+              <p>{providerHint}</p>
+            </div>
+            <div className="studio-ai-settings__setting-control">
+              {usesEmpyralisCredits || usesSubscriptionPassthrough ? (
+                <div className="studio-ai-settings__static-value">{providerLabel}</div>
+              ) : selectableProviders.length > 0 ? (
+                <>
+                  <FormSelect
+                    value={value.providerId}
+                    onChange={(event) => {
+                      const nextProviderId = event.currentTarget.value;
+                      const provider = selectableProviders.find((item) => item.id === nextProviderId);
+                      const nextModelId = provider ? pickStudioModelForTier(provider, value.aiTier) : '';
+                      selectProviderModel(nextProviderId, nextModelId);
+                    }}
+                  >
+                    <option value="">Select provider</option>
+                    {selectableProviders.map((provider) => (
+                      <option key={provider.id} value={provider.id}>{provider.label}</option>
+                    ))}
+                  </FormSelect>
+                  {selectedProvider && onRefreshProviderModels ? (
+                    <AppButton type="button" tone="secondary" onClick={() => onRefreshProviderModels(selectedProvider.id)}>
+                      Refresh
+                    </AppButton>
+                  ) : null}
+                </>
+              ) : (
+                <div className="studio-ai-settings__static-value">
+                  {usesLocalModel ? 'Connect Agent Computer first' : 'Provider catalog unavailable'}
+                </div>
+              )}
+            </div>
           </div>
-          <div className="studio-ai-settings__selected-copy">
-            <span>Default model</span>
-            <strong>{selectedModelLabel}</strong>
-            <p>{selectedModelDetail}</p>
+
+          {usesWorkspaceApiKey ? (
+            <div className="studio-ai-settings__setting-row">
+              <div className="studio-ai-settings__setting-copy">
+                <span>API key</span>
+                <strong>{selectedProvider ? `${selectedProvider.label} key` : 'Choose provider first'}</strong>
+                <p>
+                  {selectedProvider
+                    ? 'Saved in the workspace vault as a workspace-level credential. Replace here to rotate the shared key for this provider.'
+                    : 'Select a provider above, then paste the key without leaving Studio.'}
+                </p>
+                {providerCredentialError ? (
+                  <p className="studio-ai-settings__inline-error">{providerCredentialError}</p>
+                ) : null}
+              </div>
+              <div className="studio-ai-settings__setting-control studio-ai-settings__credential-control">
+                <FormInput
+                  type="password"
+                  value={providerCredentialDraft}
+                  placeholder={selectedProvider ? `Paste ${selectedProvider.label} API key` : 'Choose provider first'}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  data-1p-ignore="true"
+                  data-lpignore="true"
+                  disabled={!selectedProvider || isSavingProviderCredential}
+                  onChange={(event) => setProviderCredentialDraft(event.currentTarget.value)}
+                />
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  disabled={!selectedProvider || !providerCredentialDraft.trim() || isSavingProviderCredential || !onSaveProviderCredential}
+                  onClick={() => {
+                    void handleProviderCredentialSave();
+                  }}
+                >
+                  {providerReady ? 'Replace key' : 'Save API key'}
+                </AppButton>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="studio-ai-settings__setting-row">
+            <div className="studio-ai-settings__setting-copy">
+              <span>Model</span>
+              <strong>{modelLabel}</strong>
+              <p>{modelHint}</p>
+            </div>
+            <div className="studio-ai-settings__setting-control">
+              {usesEmpyralisCredits ? (
+                <FormSelect
+                  value={value.aiTier}
+                  onChange={(event) => onSelectTier(event.currentTarget.value as WizardState['aiTier'])}
+                >
+                  {Object.entries(PLATFORM_MODEL_LABELS).map(([tier, label]) => (
+                    <option key={tier} value={tier}>{label}</option>
+                  ))}
+                </FormSelect>
+              ) : !usesSubscriptionPassthrough && selectedProvider ? (
+                <FormSelect
+                  value={value.modelId}
+                  onChange={(event) => onSelectModel(event.currentTarget.value)}
+                >
+                  {selectedProvider.models.map((model) => (
+                    <option key={model.id} value={model.id}>{model.label}</option>
+                  ))}
+                </FormSelect>
+              ) : (
+                <div className="studio-ai-settings__static-value">{providerReady ? modelLabel : 'Setup needed'}</div>
+              )}
+            </div>
           </div>
-          <div className="studio-ai-settings__selected-actions">
-            <DataBadge tone={providerReady ? 'success' : 'warning'}>{providerReady ? 'Ready' : 'Setup needed'}</DataBadge>
-            <AppButton type="button" tone="secondary" onClick={() => setShowModelBrowser((current) => !current)}>
-              {showModelBrowser ? 'Hide model list' : 'Change model'}
-            </AppButton>
+
+          <div className="studio-ai-settings__setting-row">
+            <div className="studio-ai-settings__setting-copy">
+              <span>Reasoning</span>
+              <strong>{selectedReasoning.label}</strong>
+              <p>{selectedReasoning.hint}</p>
+            </div>
+            <div className="studio-ai-settings__setting-control">
+              <FormSelect
+                value={value.aiTier}
+                onChange={(event) => onSelectTier(event.currentTarget.value as WizardState['aiTier'])}
+              >
+                {REASONING_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </FormSelect>
+            </div>
           </div>
         </section>
       </section>
-
-      {showModelBrowser ? (
-        <section className="studio-ai-settings__browser">
-          <div className="studio-actions__section-head">
-            <div>
-              <span>Model catalog</span>
-              <strong>Choose a connected API model</strong>
-            </div>
-            <small>{providerCatalog.length} provider{providerCatalog.length === 1 ? '' : 's'}</small>
-          </div>
-
-          {!usesEmpyralisCredits && !usesSubscriptionPassthrough ? (
-            <div className="studio-ai-settings__byok">
-              <FormField label="AI Provider" hint="Select the provider you have configured in Integrations.">
-                <FormSelect
-                  value={value.providerId}
-                  onChange={(event) => {
-                    const nextProviderId = event.currentTarget.value;
-                    const provider = providerCatalog.find((item) => item.id === nextProviderId);
-                    const nextModelId = provider ? pickStudioModelForTier(provider, value.aiTier) : '';
-                    selectProviderModel(nextProviderId, nextModelId);
-                  }}
-                >
-                  <option value="">Select a provider</option>
-                  {providerCatalog.map((p) => (
-                    <option key={p.id} value={p.id}>{p.label} ({humanizeToken(p.state)})</option>
-                  ))}
-                </FormSelect>
-              </FormField>
-
-              {selectedProvider && (
-                <FormField label="Model" hint="Choose the specific model from this provider.">
-                  <FormSelect
-                    value={value.modelId}
-                    onChange={(event) => onSelectModel(event.currentTarget.value)}
-                  >
-                    {selectedProvider.models.map(m => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
-                  </FormSelect>
-                </FormField>
-              )}
-
-              <div className="app-inline-actions">
-                {selectedProvider && onRefreshProviderModels ? (
-                  <AppButton type="button" tone="secondary" onClick={() => onRefreshProviderModels(selectedProvider.id)}>
-                    Refresh models
-                  </AppButton>
-                ) : null}
-                <p className="app-surface-field-help">
-                  To add a new provider, go to <button type="button" className="app-link-button" onClick={() => onOpenIntegrations?.()}>Integrations</button>.
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="studio-ai-settings__catalog-empty">
-              <strong>{usesSubscriptionPassthrough ? 'Using subscription passthrough' : 'Using Empyralis credits'}</strong>
-              <p>The direct model catalog is only needed when this agent uses a workspace API key or local model route.</p>
-              <AppButton type="button" tone="secondary" onClick={() => {
-                if (firstReadyProvider) {
-                  selectProviderModel(firstReadyProvider.id, firstReadyProvider.defaultModel || firstReadyProvider.models[0]?.id || '');
-                } else {
-                  onOpenIntegrations?.();
-                }
-              }}>
-                {firstReadyProvider ? 'Use connected provider' : 'Connect provider'}
-              </AppButton>
-            </div>
-          )}
-        </section>
-      ) : null}
     </div>
   );
 }

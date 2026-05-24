@@ -54,9 +54,10 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         current_user.update(overrides)
         return current_user
 
+    @patch("server_modules.local_queue.recover_orphaned_local_runs_on_startup")
     @patch("server_modules.outbox_service.get_outbox_delivery_status")
     @patch("server_modules.local_queue.handle_get_local_workers_status")
-    def test_runtime_status_payload_maps_worker_summary(self, mock_status, mock_outbox_status):
+    def test_runtime_status_payload_maps_worker_summary(self, mock_status, mock_outbox_status, mock_recover):
         mock_status.return_value = {
             "summary": {"known": 1, "online": 1, "idle": 1, "busy": 0, "offline": 0},
             "capability_queue": {"read_write_files": ["empyralis-tauri-local"]},
@@ -99,6 +100,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertIsNone(payload["items"][0]["current_lease_holder"])
         self.assertEqual(payload["items"][0]["permission_probe"]["screen_recording"]["status"], "granted")
         self.assertEqual(payload["items"][0]["control_state"], "active")
+        mock_recover.assert_called_once()
 
     @patch("server_modules.runtime_runtime_api.runtime_status_payload")
     def test_legacy_local_workers_status_payload_preserves_counts(self, mock_status_payload):
@@ -310,6 +312,107 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(mock_enqueue.await_args.kwargs["agent_id"], "agent-1")
         self.assertEqual(mock_enqueue.await_args.kwargs["command_payload"]["action"], "open_url")
         mock_features_gate.assert_called_once_with("default")
+
+    @patch("server_modules.runtime_runtime_api._ensure_advanced_features_access")
+    @patch("server_modules.runtime_runtime_api.hardware_action_broker_service.execute_hardware_action")
+    def test_runtime_hardware_action_route_executes_for_workspace_operator(self, mock_execute, mock_features_gate):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/hardware/actions/execute")]
+        mock_execute.return_value = {"status": "completed", "artifacts": ["artifact-1"]}
+
+        result = self._run_async(
+            handler(
+                runtime_runtime_api.RuntimeHardwareActionExecutePayload(
+                    workspace_id="default",
+                    action_id="screenshot.capture",
+                    runtime_target="empyralis_cloud_computer",
+                    runtime_access_mode="full_access",
+                    thread_id="thread-1",
+                    request_id="req-1",
+                ),
+                current_user=self._current_user(),
+            )
+        )
+
+        self.assertEqual(result["status"], "completed")
+        mock_features_gate.assert_called_once_with("default")
+        self.assertEqual(mock_execute.await_args.kwargs["tenant_id"], "default")
+        self.assertEqual(mock_execute.await_args.kwargs["workspace_id"], "default")
+        self.assertEqual(mock_execute.await_args.kwargs["user_id"], "owner-1")
+        self.assertEqual(mock_execute.await_args.kwargs["action_id"], "screenshot.capture")
+        self.assertEqual(mock_execute.await_args.kwargs["runtime_target"], "empyralis_cloud_computer")
+        self.assertEqual(mock_execute.await_args.kwargs["runtime_access_mode"], "full_access")
+        self.assertEqual(mock_execute.await_args.kwargs["thread_id"], "thread-1")
+        self.assertEqual(mock_execute.await_args.kwargs["request_id"], "req-1")
+
+    @patch("server_modules.runtime_runtime_api._ensure_advanced_features_access")
+    @patch("server_modules.runtime_runtime_api.hardware_action_broker_service.stop_hardware_action")
+    def test_runtime_hardware_action_stop_route_stops_for_workspace_operator(self, mock_stop, mock_features_gate):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/hardware/actions/stop")]
+        mock_stop.return_value = {"status": "terminated", "runtime_session": {"session_id": "hrs-1"}}
+
+        result = self._run_async(
+            handler(
+                runtime_runtime_api.RuntimeHardwareActionStopPayload(
+                    workspace_id="default",
+                    run_id="run-1",
+                    runtime_target="empyralis_cloud_computer",
+                    thread_id="thread-1",
+                    request_id="req-1",
+                    target_request_id="req-tool-1",
+                    session_id="hrs-1",
+                    reason="certification_stop",
+                ),
+                current_user=self._current_user(),
+            )
+        )
+
+        self.assertEqual(result["status"], "terminated")
+        mock_features_gate.assert_called_once_with("default")
+        self.assertEqual(mock_stop.await_args.kwargs["tenant_id"], "default")
+        self.assertEqual(mock_stop.await_args.kwargs["workspace_id"], "default")
+        self.assertEqual(mock_stop.await_args.kwargs["runtime_target"], "empyralis_cloud_computer")
+        self.assertEqual(mock_stop.await_args.kwargs["thread_id"], "thread-1")
+        self.assertEqual(mock_stop.await_args.kwargs["request_id"], "req-1")
+        self.assertEqual(mock_stop.await_args.kwargs["target_request_id"], "req-tool-1")
+        self.assertEqual(mock_stop.await_args.kwargs["session_id"], "hrs-1")
+
+    @patch("server_modules.runtime_runtime_api._ensure_advanced_features_access")
+    @patch("server_modules.runtime_runtime_api.hardware_action_broker_service.execute_hardware_action")
+    def test_runtime_hardware_action_route_blocks_non_operator(self, mock_execute, mock_features_gate):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/hardware/actions/execute")]
+
+        with self.assertRaises(HTTPException) as exc:
+            self._run_async(
+                handler(
+                    runtime_runtime_api.RuntimeHardwareActionExecutePayload(
+                        workspace_id="default",
+                        action_id="screenshot.capture",
+                        runtime_target="empyralis_cloud_computer",
+                    ),
+                    current_user=self._current_user(
+                        is_admin=False,
+                        role="member",
+                        workspace_access={
+                            "default": {
+                                "workspace_id": "default",
+                                "tenant_id": "default",
+                                "role": "member",
+                                "tenant_role": "member",
+                            }
+                        },
+                    ),
+                )
+            )
+
+        self.assertEqual(exc.exception.status_code, 403)
+        mock_features_gate.assert_not_called()
+        mock_execute.assert_not_called()
 
     @patch("server_modules.runtime_runtime_api._ensure_advanced_features_access")
     @patch("server_modules.runtime_runtime_api.agent_registry_repository.enqueue_self_hosted_runtime_command")

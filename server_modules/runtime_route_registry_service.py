@@ -525,8 +525,42 @@ def register_runtime_run_routes(
             request,
             invalid_detail="Approval resolution body must be an object.",
         )
-        from server_modules import outbox_service, run_state_repository
+        from server_modules import hardware_action_broker_service, outbox_service, run_state_repository
 
+        query_params = getattr(request, "query_params", {})
+        workspace_id = str(
+            query_params.get("workspace_id") if hasattr(query_params, "get") else ""
+        ).strip() or None
+        hardware_approval = await hardware_action_broker_service.get_runtime_hardware_approval(
+            approval_id,
+            workspace_id=workspace_id,
+        )
+        if isinstance(hardware_approval, dict):
+            _ensure_workspace_approvals_access(str(hardware_approval.get("workspace_id") or workspace_id or "default"))
+            decision = str(payload.get("decision") or payload.get("resolution") or "").strip().lower()
+            approved = decision in {"proceed", "approve", "approved", "yes", "y", "continue", "ok"}
+            result = await hardware_action_broker_service.resolve_runtime_hardware_approval(
+                approval_id,
+                decision="approved" if approved else "rejected",
+                actor=str((current_user or {}).get("user_id") or "user").strip() or "user",
+                note=str(payload.get("note") or payload.get("reason") or "").strip(),
+                workspace_id=workspace_id,
+                approval_scope=str(payload.get("approval_scope") or "").strip() or None,
+            )
+            status = str(result.get("status") or "").strip().lower()
+            resolution = "approved" if status in {"approved", "executed", "completed", "running"} else "rejected"
+            return {
+                "ok": True,
+                "source": "hardware_runtime",
+                "approval_id": approval_id,
+                "run_id": str(hardware_approval.get("run_id") or "").strip() or None,
+                "status": resolution,
+                "resolution": resolution,
+                "decision_kind": resolution,
+                "actor": str((current_user or {}).get("user_id") or "user").strip() or "user",
+                "runtime_session": result.get("runtime_session"),
+                "hardware_result": result,
+            }
         matched_run = run_state_repository.sync_find_live_run_by_approval_id(approval_id)
         if isinstance(matched_run, dict):
             _ensure_workspace_approvals_access(_run_workspace_id_for_approval(matched_run, matched_run))

@@ -357,49 +357,84 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
         self.assertIn("self_host_runtime", str(error.exception))
         self.assertIn("not present", str(error.exception))
 
-    def test_validate_mode_capability_matrix_requires_explicit_owner_approval_for_customer_runtime_modes(self):
-        with self.assertRaises(ValueError) as local_error:
-            contract.validate_mode_capability_matrix(
-                studio_agent_mode="my_computer_agent",
-                runtime_placement="customer_local",
-                runtime_target="local",
-                computer_automation={
-                    "enabled": True,
-                    "runtime_class": "local_browser",
-                    "allowed_domains": ["example.com"],
-                    "max_concurrent_sessions": 1,
-                    "daily_budget_usd": 5,
-                    "monthly_budget_usd": 25,
-                    "requires_owner_approval": False,
-                    "max_session_runtime_seconds": 900,
-                },
-                stage="create",
-            )
-        self.assertIn("my_computer_agent requires explicit owner approval", str(local_error.exception))
+    def test_normalize_computer_automation_keeps_guarded_mode_owner_approved(self):
+        normalized = contract.normalize_computer_automation_config(
+            {
+                "enabled": True,
+                "runtime_class": "local_browser",
+                "allowed_domains": ["example.com"],
+                "max_concurrent_sessions": 1,
+                "daily_budget_usd": 5,
+                "monthly_budget_usd": 25,
+                "runtime_access_mode": "default_guarded",
+                "requires_owner_approval": False,
+                "max_session_runtime_seconds": 900,
+            }
+        )
 
-        with self.assertRaises(ValueError) as hosted_error:
-            contract.validate_mode_capability_matrix(
-                studio_agent_mode="self_hosted_agent",
-                runtime_placement="customer_hosted",
-                runtime_target="self_hosted",
-                computer_automation={
-                    "enabled": True,
-                    "runtime_class": "virtual_code_sandbox",
-                    "allowed_domains": ["intranet.example"],
-                    "max_concurrent_sessions": 1,
-                    "daily_budget_usd": 5,
-                    "monthly_budget_usd": 25,
-                    "requires_owner_approval": False,
-                    "max_session_runtime_seconds": 900,
-                },
-                stage="create",
-                runtime_targets={
-                    "targets": [
-                        {"target_id": "self_host_runtime", "available": True, "online": True, "healthy": True},
-                    ]
-                },
-            )
-        self.assertIn("self_hosted_agent requires explicit owner approval", str(hosted_error.exception))
+        self.assertEqual(normalized["runtime_access_mode"], "default_guarded")
+        self.assertTrue(normalized["requires_owner_approval"])
+
+    def test_normalize_runtime_access_mode_fails_closed_for_omitted_and_unknown_values(self):
+        self.assertEqual(contract.normalize_runtime_access_mode(None), "default_guarded")
+        self.assertEqual(contract.normalize_runtime_access_mode("root-god-mode"), "default_guarded")
+        self.assertEqual(contract.normalize_runtime_access_mode("autonomous_agent"), "default_guarded")
+        self.assertEqual(contract.normalize_runtime_access_mode("autonomous"), "default_guarded")
+        self.assertEqual(
+            contract.normalize_runtime_access_mode(None, requires_owner_approval=False),
+            "default_guarded",
+        )
+
+    def test_normalize_computer_automation_requires_explicit_full_access_to_disable_owner_approval(self):
+        guarded = contract.normalize_computer_automation_config(
+            {
+                "enabled": True,
+                "runtime_class": "local_browser",
+                "allowed_domains": ["example.com"],
+                "max_concurrent_sessions": 1,
+                "daily_budget_usd": 5,
+                "monthly_budget_usd": 25,
+                "requires_owner_approval": False,
+                "max_session_runtime_seconds": 900,
+            }
+        )
+        full_access = contract.normalize_computer_automation_config(
+            {
+                "enabled": True,
+                "runtime_class": "local_browser",
+                "allowed_domains": ["example.com"],
+                "max_concurrent_sessions": 1,
+                "daily_budget_usd": 5,
+                "monthly_budget_usd": 25,
+                "runtime_access_mode": "full_access",
+                "requires_owner_approval": False,
+                "max_session_runtime_seconds": 900,
+            }
+        )
+
+        self.assertEqual(guarded["runtime_access_mode"], "default_guarded")
+        self.assertTrue(guarded["requires_owner_approval"])
+        self.assertEqual(full_access["runtime_access_mode"], "full_access")
+        self.assertFalse(full_access["requires_owner_approval"])
+
+    def test_validate_mode_capability_matrix_allows_autonomous_agent_computer_mode(self):
+        contract.validate_mode_capability_matrix(
+            studio_agent_mode="my_computer_agent",
+            runtime_placement="customer_local",
+            runtime_target="local",
+            computer_automation={
+                "enabled": True,
+                "runtime_class": "local_browser",
+                "allowed_domains": ["example.com"],
+                "max_concurrent_sessions": 1,
+                "daily_budget_usd": 5,
+                "monthly_budget_usd": 25,
+                "runtime_access_mode": "full_access",
+                "requires_owner_approval": False,
+                "max_session_runtime_seconds": 900,
+            },
+            stage="create",
+        )
 
     def test_marketplace_package_cannot_force_customer_runtime_without_installer_opt_in(self):
         payload = contract.normalize_runtime_supply_contract(

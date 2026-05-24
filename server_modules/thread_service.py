@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from server_modules import control_plane_repository
+from server_modules import control_plane_repository, transcript_events_service
 
 
 LOGGER = logging.getLogger(__name__)
@@ -106,6 +106,31 @@ async def record_assistant_turn(
         interventions=list(interventions or []),
         metadata=_coerce_dict(metadata),
         request_id=_request_id_from_metadata(metadata),
+    )
+
+
+async def append_assistant_turn_transcript_event(
+    *,
+    thread_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    event_name: str,
+    payload: Dict[str, Any],
+    request_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    transcript_event = transcript_events_service.build_transcript_event(event_name, payload)
+    if transcript_event is None:
+        return None
+    return await control_plane_repository.append_agent_turn_transcript_event(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        transcript_event=transcript_event,
+        request_id=request_id,
+        trace_id=trace_id,
+        run_id=run_id,
     )
 
 

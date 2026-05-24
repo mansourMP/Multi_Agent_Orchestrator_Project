@@ -1,10 +1,10 @@
 'use client';
 
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ListDetailPanel } from '@/lib/ui/list-detail';
 import { AnimatePresence, MotionTabPanel } from '@/lib/ui/motion';
-import { AppButton, AppSurfaceStat, AppSurfaceStatGrid, joinClassNames } from '@/lib/ui/primitives';
+import { AppButton, AppSurfaceStat, AppSurfaceStatGrid, AppTextarea, joinClassNames } from '@/lib/ui/primitives';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
@@ -25,7 +25,11 @@ import type {
 } from './types';
 import {
   CONTEXT_PRESET_OPTIONS,
+  DEFAULT_SAFE_AGENT_PERSONA_VALUES,
+  DEFAULT_SAFE_AGENT_SYSTEM_PROMPT_VALUES,
   SPECIALIST_CONNECTOR_CARDS,
+  SPECIALIST_OVERLAY_TABS,
+  normalizeContextPresetId,
 } from './constants';
 import {
   ContextPresetControl,
@@ -65,6 +69,22 @@ import {
   providerCatalogById,
 } from './utils';
 
+const SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS = ['.md', '.markdown', '.txt', '.csv', '.json'];
+const KNOWLEDGE_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
+const KNOWLEDGE_UPLOAD_MAX_MB = '2 MB';
+
+function isSupportedKnowledgeFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+function knowledgeSourceLines(value: string): string[] {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 export interface AgentDetailViewProps {
   selectedAgent: DeployedAgentRecord | null;
   overlayTab: SpecialistOverlayTabId;
@@ -72,9 +92,12 @@ export interface AgentDetailViewProps {
   onSaveDetailConfig: () => void;
   isSavingDetailConfig: boolean;
   onUpdateDetailConfig: (next: Partial<DetailConfigDraft>) => void;
+  onUploadKnowledgeFile: (file: File) => Promise<void>;
   providerCatalog: ProviderCatalogSnapshot[];
   isLoadingProviderCatalog: boolean;
   onRefreshProviderModels: (providerId: string) => void;
+  onSaveProviderCredential: (providerId: string, apiKey: string) => Promise<void>;
+  isSavingProviderCredential: boolean;
   workspaceId: string;
   services: any;
   bootstrap: any;
@@ -109,9 +132,12 @@ export const AgentDetailView = memo(({
   onSaveDetailConfig,
   isSavingDetailConfig,
   onUpdateDetailConfig,
+  onUploadKnowledgeFile,
   providerCatalog,
   isLoadingProviderCatalog,
   onRefreshProviderModels,
+  onSaveProviderCredential,
+  isSavingProviderCredential: isSavingProviderCredentialProp,
   workspaceId,
   services,
   bootstrap,
@@ -142,17 +168,16 @@ export const AgentDetailView = memo(({
   const [testChatSession, setTestChatSession] = useState<DeployedAgentTestChatSessionState>(
     () => createEmptyDeployedAgentTestChatSession(),
   );
-  const [knowledgeVerificationQuery, setKnowledgeVerificationQuery] = useState('');
-  const [knowledgeVerificationResult, setKnowledgeVerificationResult] = useState<Record<string, unknown> | null>(null);
-  const [knowledgeVerificationError, setKnowledgeVerificationError] = useState<string | null>(null);
-  const [isVerifyingKnowledge, setIsVerifyingKnowledge] = useState(false);
+  const [knowledgeSourceInput, setKnowledgeSourceInput] = useState('');
+  const [knowledgeFileError, setKnowledgeFileError] = useState<string | null>(null);
+  const [isUploadingKnowledgeFile, setIsUploadingKnowledgeFile] = useState(false);
+  const knowledgeFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setTestChatSession(createEmptyDeployedAgentTestChatSession());
-    setKnowledgeVerificationQuery('');
-    setKnowledgeVerificationResult(null);
-    setKnowledgeVerificationError(null);
-    setIsVerifyingKnowledge(false);
+    setKnowledgeSourceInput('');
+    setKnowledgeFileError(null);
+    setIsUploadingKnowledgeFile(false);
   }, [workspaceId, selectedAgentId]);
 
   const selectedAgentRuntimePlacement = useMemo(() => {
@@ -169,10 +194,17 @@ export const AgentDetailView = memo(({
     ? selectedAgent.knowledge_sources
     : [];
   const knowledgeSourceCount = selectedKnowledgeSources.length;
+  const draftKnowledgeSourceLines = detailConfigDraft
+    ? knowledgeSourceLines(detailConfigDraft.knowledgeSourceText)
+    : [];
+  const visibleKnowledgeSources = detailConfigDraft
+    ? draftKnowledgeSourceLines.map((uri, index) => ({ id: `draft-source-${index + 1}`, uri, label: uri, kind: uri.startsWith('knowledge://') ? 'file' : 'source' }))
+    : selectedKnowledgeSources;
+  const visibleKnowledgeSourceCount = visibleKnowledgeSources.length;
 
   const selectedContextPresetLabel = detailConfigDraft
-    ? CONTEXT_PRESET_OPTIONS.find((option) => option.id === detailConfigDraft.contextBudgetPreset)?.label ?? 'Balanced'
-    : 'Balanced';
+    ? CONTEXT_PRESET_OPTIONS.find((option) => option.id === normalizeContextPresetId(detailConfigDraft.contextBudgetPreset))?.label ?? 'Standard'
+    : 'Standard';
 
   const selectedAgentMemoryEnabled =
     readRecord(readRecord(selectedAgent?.config).memory_policy).memory_enabled === true ||
@@ -191,13 +223,25 @@ export const AgentDetailView = memo(({
     selectedAgentConfig.persona ??
     selectedAgentMetadata.persona,
   );
+  const selectedAgentInstructionsAreDefault = DEFAULT_SAFE_AGENT_SYSTEM_PROMPT_VALUES.includes(selectedAgentInstructionsText);
+  const selectedAgentPersonaIsDefault = DEFAULT_SAFE_AGENT_PERSONA_VALUES.includes(selectedAgentPersonaText);
+  const visibleAgentInstructionsText =
+    selectedAgentInstructionsAreDefault ? '' : selectedAgentInstructionsText;
+  const visibleAgentPersonaText =
+    selectedAgentPersonaIsDefault ? '' : selectedAgentPersonaText;
+  const detailInstructionsValue = detailConfigDraft
+    ? (DEFAULT_SAFE_AGENT_SYSTEM_PROMPT_VALUES.includes(detailConfigDraft.systemPrompt) ? '' : detailConfigDraft.systemPrompt)
+    : visibleAgentInstructionsText;
+  const detailPersonaValue = detailConfigDraft
+    ? (DEFAULT_SAFE_AGENT_PERSONA_VALUES.includes(detailConfigDraft.persona) ? '' : detailConfigDraft.persona)
+    : visibleAgentPersonaText;
 
   const selectedBudgetCycle = readBudgetCycle(selectedAgent);
   const selectedBudgetBurn = selectedAgentAnalytics?.currentBurnUsd ?? readNumber(selectedBudgetCycle.current_burn_usd);
 
   const selectedAgentModeLabel = selectedAgent
     ? runtimePlacementLabel(selectedAgentRuntimePlacement)
-    : 'Empyralis Cloud';
+    : 'Cloud worker';
 
   const overviewTrendValues = selectedAgentAnalytics
     ? [
@@ -370,40 +414,57 @@ export const AgentDetailView = memo(({
       tab: 'analytics' as SpecialistOverlayTabId,
     },
   ];
-  const knowledgeVerificationRecord = readRecord(knowledgeVerificationResult);
-  const knowledgeVerificationStatus = readString(knowledgeVerificationRecord.status);
-  const knowledgeVerificationMessage = readString(knowledgeVerificationRecord.message);
-  const knowledgeVerificationMatches = Array.isArray(knowledgeVerificationRecord.matched_sources)
-    ? knowledgeVerificationRecord.matched_sources
-    : [];
-  const knowledgeVerificationChunks = Array.isArray(knowledgeVerificationRecord.matched_chunks)
-    ? knowledgeVerificationRecord.matched_chunks
-    : [];
-  const knowledgeVerificationAvailable = knowledgeVerificationRecord.content_retrieval_available === true;
-  const canVerifyKnowledge = Boolean(
-    selectedAgentId &&
-    knowledgeSourceCount > 0 &&
-    knowledgeVerificationQuery.trim() &&
-    !isVerifyingKnowledge,
-  );
-  const handleVerifyKnowledge = async () => {
-    if (!selectedAgentId || !knowledgeVerificationQuery.trim() || isVerifyingKnowledge) {
+  const addKnowledgeReferenceToDraft = (reference: string) => {
+    const cleanReference = reference.trim();
+    if (!cleanReference || !detailConfigDraft) {
       return;
     }
-    setIsVerifyingKnowledge(true);
-    setKnowledgeVerificationError(null);
+    const currentLines = knowledgeSourceLines(detailConfigDraft.knowledgeSourceText);
+    if (currentLines.includes(cleanReference)) {
+      setKnowledgeSourceInput('');
+      return;
+    }
+    onUpdateDetailConfig({
+      knowledgeSourceText: [...currentLines, cleanReference].join('\n'),
+    });
+    setKnowledgeSourceInput('');
+  };
+  const handleKnowledgeReferenceSubmit = () => {
+    addKnowledgeReferenceToDraft(knowledgeSourceInput);
+  };
+  const handleKnowledgeFiles = async (files: FileList | File[]) => {
+    const nextFiles = Array.from(files);
+    if (!nextFiles.length) {
+      return;
+    }
+    if (!detailConfigDraft) {
+      setKnowledgeFileError('Open a Business Agent before adding files.');
+      return;
+    }
+    const unsupported = nextFiles.find((file) => !isSupportedKnowledgeFile(file));
+    if (unsupported) {
+      setKnowledgeFileError(`Unsupported file type: ${unsupported.name}. Use ${SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS.join(', ')}.`);
+      return;
+    }
+    setIsUploadingKnowledgeFile(true);
+    setKnowledgeFileError(null);
     try {
-      const result = await services.client.verifyDeployedAgentKnowledge({
-        deployedAgentId: selectedAgentId,
-        query: knowledgeVerificationQuery.trim(),
-        limit: 5,
-      });
-      setKnowledgeVerificationResult(result ?? null);
-    } catch (error: unknown) {
-      setKnowledgeVerificationResult(null);
-      setKnowledgeVerificationError(error instanceof Error ? error.message : 'Knowledge verification failed.');
+      const oversized = nextFiles.find((file) => file.size > KNOWLEDGE_UPLOAD_MAX_BYTES);
+      if (oversized) {
+        setKnowledgeFileError(`${oversized.name} exceeds ${KNOWLEDGE_UPLOAD_MAX_MB}. Reduce file size and retry.`);
+        return;
+      }
+
+      for (const file of nextFiles) {
+        await onUploadKnowledgeFile(file);
+      }
+    } catch (error) {
+      setKnowledgeFileError(error instanceof Error ? error.message : 'Knowledge file could not be uploaded.');
     } finally {
-      setIsVerifyingKnowledge(false);
+      setIsUploadingKnowledgeFile(false);
+      if (knowledgeFileInputRef.current) {
+        knowledgeFileInputRef.current.value = '';
+      }
     }
   };
 
@@ -420,11 +481,30 @@ export const AgentDetailView = memo(({
 
   return (
     <div className="app-stack-4 studio-agent-detail-motion">
+      {currentStudioSubview === 'agents' ? (
+        <nav className="studio-agent-detail-tabs studio-agent-detail-tabs--header" aria-label="Business Agent sections">
+          {SPECIALIST_OVERLAY_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={joinClassNames(
+                'studio-agent-detail-tabs__button',
+                overlayTab === tab.id && 'studio-agent-detail-tabs__button--active',
+              )}
+              aria-selected={overlayTab === tab.id}
+              onClick={() => onSelectTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      ) : null}
       <AnimatePresence mode="wait" initial={false}>
               {currentStudioSubview === 'agents' && overlayTab === 'chat' && (
         <MotionTabPanel key="chat" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail studio-panel--chat"
+          hideHeaderText
           eyebrow="Chat"
           title="Chat"
           subtitle="Private messages for checking the selected agent before live customer traffic."
@@ -450,6 +530,7 @@ export const AgentDetailView = memo(({
         <MotionTabPanel key="knowledge" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
+          hideHeaderText
           eyebrow="Knowledge"
           title="Agent knowledge"
           subtitle="Instructions and trusted sources this agent should use when answering."
@@ -467,51 +548,122 @@ export const AgentDetailView = memo(({
           )}
         >
           <div className="studio-agent-knowledge">
-            <section className="studio-agent-knowledge__section">
-              <div className="studio-agent-knowledge__section-head">
-                <div>
-                  <span>Instructions</span>
-                  <strong>Agent Purpose</strong>
-                </div>
-              </div>
-              <div className="studio-agent-knowledge__block">
-                <p>{selectedAgentInstructionsText || 'No custom instructions configured.'}</p>
-                <small>{selectedAgentPersonaText || 'No persona configured.'}</small>
+            <section className="studio-agent-knowledge__section studio-agent-knowledge__section--instructions">
+              <div className="studio-agent-knowledge__block studio-agent-knowledge__block--purpose">
+                {detailConfigDraft ? (
+                  <>
+                    <label className="studio-agent-knowledge__edit-field">
+                      <span>Purpose and behavior</span>
+                      <AppTextarea
+                        rows={5}
+                        value={detailInstructionsValue}
+                        onChange={(event) => onUpdateDetailConfig({ systemPrompt: event.currentTarget.value })}
+                        placeholder="Describe what this Business Agent should do, what it should answer, and when it should hand off to a human."
+                      />
+                    </label>
+                    <label className="studio-agent-knowledge__edit-field">
+                      <span>Tone</span>
+                      <AppTextarea
+                        rows={2}
+                        value={detailPersonaValue}
+                        onChange={(event) => onUpdateDetailConfig({ persona: event.currentTarget.value })}
+                        placeholder="Describe the voice and style this Business Agent should use."
+                      />
+                    </label>
+                    <div className="studio-agent-knowledge__block-actions">
+                      <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
+                        {isSavingDetailConfig ? 'Saving...' : 'Save instructions'}
+                      </AppButton>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p>{visibleAgentInstructionsText || 'No instructions configured yet.'}</p>
+                    <small>{visibleAgentPersonaText || 'No tone configured yet.'}</small>
+                  </>
+                )}
               </div>
             </section>
 
             <section className="studio-agent-knowledge__section">
               <div className="studio-agent-knowledge__section-head">
                 <div>
-                  <span>Knowledge Sources</span>
-                  <strong>Indexed Evidence</strong>
+                  <span>Knowledge</span>
+                  <strong>Files and sources</strong>
                 </div>
                 <div className="studio-agent-knowledge__status-pill">
-                  {knowledgeSourceCount > 0 ? 'Sources listed' : 'No data'}
+                  {visibleKnowledgeSourceCount > 0 ? `${visibleKnowledgeSourceCount} source${visibleKnowledgeSourceCount === 1 ? '' : 's'}` : 'No data'}
                 </div>
               </div>
 
-              <div className="studio-agent-knowledge__grid">
-                <div>
-                  <span>Sources</span>
-                  <strong>{knowledgeSourceCount} connected</strong>
+              {detailConfigDraft ? (
+                <div className="studio-agent-knowledge__source-tools">
+                  <button
+                    type="button"
+                    className="studio-agent-knowledge__dropzone"
+                    disabled={isUploadingKnowledgeFile}
+                    onClick={() => knowledgeFileInputRef.current?.click()}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      void handleKnowledgeFiles(event.dataTransfer.files);
+                    }}
+                  >
+                    <strong>{isUploadingKnowledgeFile ? 'Uploading file...' : 'Drop files here or choose files'}</strong>
+                    <span>{`Supports ${SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS.join(', ')} files up to ${KNOWLEDGE_UPLOAD_MAX_MB} (JSON request body limit).`}</span>
+                  </button>
+                  <input
+                    ref={knowledgeFileInputRef}
+                    type="file"
+                    multiple
+                    accept={SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS.join(',')}
+                    className="studio-agent-knowledge__file-input"
+                    onChange={(event) => {
+                      if (event.currentTarget.files) {
+                        void handleKnowledgeFiles(event.currentTarget.files);
+                      }
+                    }}
+                  />
+                  <div className="studio-agent-knowledge__source-form">
+                    <input
+                      type="text"
+                      value={knowledgeSourceInput}
+                      placeholder="Add a website, Google Sheet, file URI, or source reference..."
+                      aria-label="Knowledge source reference"
+                      onChange={(event) => setKnowledgeSourceInput(event.currentTarget.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          handleKnowledgeReferenceSubmit();
+                        }
+                      }}
+                    />
+                    <AppButton
+                      type="button"
+                      tone="secondary"
+                      disabled={!knowledgeSourceInput.trim()}
+                      onClick={handleKnowledgeReferenceSubmit}
+                    >
+                      Add source
+                    </AppButton>
+                  </div>
+                  {knowledgeFileError ? (
+                    <small className="studio-agent-knowledge__error" role="alert">{knowledgeFileError}</small>
+                  ) : null}
+                  <div className="studio-agent-knowledge__block-actions">
+                    <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
+                      {isSavingDetailConfig ? 'Saving...' : 'Save sources'}
+                    </AppButton>
+                  </div>
                 </div>
-                <div>
-                  <span>Context policy</span>
-                  <strong>{selectedContextPresetLabel}</strong>
-                </div>
-                <div>
-                  <span>Retrieval status</span>
-                  <strong>
-                    {knowledgeSourceCount > 0 ? 'Ready to verify' : 'Needs source'}
-                  </strong>
-                </div>
-              </div>
+              ) : null}
 
               <div className="studio-agent-knowledge__sources">
-                {selectedKnowledgeSources.length === 0 ? (
+                {visibleKnowledgeSources.length === 0 ? (
                   <div className="deployed-agents-overlay__empty">No knowledge sources connected yet.</div>
-                ) : selectedKnowledgeSources.map((source, index) => {
+                ) : visibleKnowledgeSources.map((source, index) => {
                   const record = readRecord(source);
                   const label = readString(record.label ?? record.uri ?? record.id, `Knowledge source ${index + 1}`);
                   return (
@@ -520,104 +672,22 @@ export const AgentDetailView = memo(({
                         <strong>{label}</strong>
                         <span>{readString(record.kind, humanizeToken(record.type, 'Source'))}</span>
                       </div>
-                      <DataBadge tone="success">Ready</DataBadge>
+                      <DataBadge tone={index < knowledgeSourceCount ? 'success' : 'neutral'}>
+                        {index < knowledgeSourceCount ? 'Saved' : 'Unsaved'}
+                      </DataBadge>
                     </div>
                   );
                 })}
               </div>
             </section>
 
-            <section className="studio-agent-knowledge__section">
-              <div className="studio-agent-knowledge__section-head">
-                <div>
-                  <span>Evidence test</span>
-                  <strong>Verify retrieval</strong>
-                </div>
-              </div>
-              <div className="studio-agent-knowledge__test-box">
-                <p>
-                  {knowledgeSourceCount > 0
-                    ? "Run a retrieval check against saved knowledge sources and inspect the grounded chunks used as evidence."
-                    : "Add at least one trusted source to enable retrieval testing."}
-                </p>
-                <div className="studio-agent-knowledge__test-input">
-                  <input
-                    type="text"
-                    value={knowledgeVerificationQuery}
-                    disabled={knowledgeSourceCount === 0 || isVerifyingKnowledge}
-                    placeholder={knowledgeSourceCount > 0 ? "Example: What is the refund policy?" : "Add sources first..."}
-                    aria-label="Knowledge retrieval test prompt"
-                    onChange={(event) => setKnowledgeVerificationQuery(event.currentTarget.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        void handleVerifyKnowledge();
-                      }
-                    }}
-                  />
-                  <AppButton
-                    type="button"
-                    tone="secondary"
-                    disabled={!canVerifyKnowledge}
-                    onClick={() => void handleVerifyKnowledge()}
-                  >
-                    {isVerifyingKnowledge ? 'Checking...' : 'Verify'}
-                  </AppButton>
-                </div>
-                {knowledgeVerificationError ? (
-                  <small role="alert">{knowledgeVerificationError}</small>
-                ) : null}
-                {knowledgeVerificationResult ? (
-                  <div className="studio-agent-knowledge__sources" aria-label="Knowledge verification result">
-                    <div className="studio-agent-knowledge__source">
-                      <div className="studio-agent-knowledge__source-main">
-                        <strong>{humanizeToken(knowledgeVerificationStatus, 'Verification result')}</strong>
-                        <span>{knowledgeVerificationMessage || 'Knowledge verification completed.'}</span>
-                      </div>
-                      <DataBadge tone={knowledgeVerificationStatus === 'retrieval_available' ? 'success' : 'warning'}>
-                        {knowledgeVerificationAvailable ? 'Grounded chunks' : 'Index needed'}
-                      </DataBadge>
-                    </div>
-                    {knowledgeVerificationChunks.length > 0 ? knowledgeVerificationChunks.map((chunk, index) => {
-                      const match = readRecord(chunk);
-                      const citation = readRecord(match.citation);
-                      const label = readString(citation.label ?? match.source_label ?? match.source_uri, `Retrieved chunk ${index + 1}`);
-                      const snippet = readString(match.chunk_text, 'Retrieved evidence');
-                      return (
-                        <div key={`${label}-chunk-${index}`} className="studio-agent-knowledge__source">
-                          <div className="studio-agent-knowledge__source-main">
-                            <strong>{label}</strong>
-                            <span>{snippet}</span>
-                          </div>
-                          <DataBadge tone="success">Evidence</DataBadge>
-                        </div>
-                      );
-                    }) : null}
-                    {knowledgeVerificationMatches.length > 0 ? knowledgeVerificationMatches.map((source, index) => {
-                      const match = readRecord(source);
-                      const label = readString(match.label ?? match.uri ?? match.path ?? match.id, `Matched source ${index + 1}`);
-                      return (
-                        <div key={`${label}-${index}`} className="studio-agent-knowledge__source">
-                          <div className="studio-agent-knowledge__source-main">
-                            <strong>{label}</strong>
-                            <span>{readString(match.source_kind, 'Source reference')}</span>
-                          </div>
-                          <DataBadge tone="success">Matched</DataBadge>
-                        </div>
-                      );
-                    }) : null}
-                  </div>
-                ) : null}
-              </div>
-            </section>
-
             {detailConfigDraft ? (
-              <div className="app-stack-2">
+              <section className="studio-agent-knowledge__section studio-agent-knowledge__section--depth">
                 <ContextPresetControl
                   value={detailConfigDraft.contextBudgetPreset}
                   onSelect={(nextValue) => onUpdateDetailConfig({ contextBudgetPreset: nextValue })}
                 />
-              </div>
+              </section>
             ) : null}
           </div>
         </ListDetailPanel>
@@ -628,6 +698,7 @@ export const AgentDetailView = memo(({
         <MotionTabPanel key="ai" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
+          hideHeaderText
           eyebrow="Model"
           title="AI route"
           subtitle="Choose whether this agent uses Empyralis credits or a connected API account."
@@ -656,7 +727,8 @@ export const AgentDetailView = memo(({
                    onUpdateDetailConfig({ modelId: nextModelId });
                 }}
                 onRefreshProviderModels={onRefreshProviderModels}
-                onOpenIntegrations={() => onSelectTab('connectors')}
+                onSaveProviderCredential={onSaveProviderCredential}
+                isSavingProviderCredential={isSavingProviderCredentialProp}
               />
             </>
           ) : null}
@@ -668,6 +740,7 @@ export const AgentDetailView = memo(({
         <MotionTabPanel key="tools" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
+          hideHeaderText
           eyebrow="Actions"
           title="Agent actions"
           subtitle="Choose what this agent may do with connected services."
@@ -699,6 +772,7 @@ export const AgentDetailView = memo(({
         <MotionTabPanel key="memory" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
+          hideHeaderText
           eyebrow="Memory"
           title="Agent memory"
           subtitle="Control what this agent can carry forward from customer conversations."
@@ -761,6 +835,7 @@ export const AgentDetailView = memo(({
         <MotionTabPanel key="connectors" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
+          hideHeaderText
           eyebrow="Integrations"
           title="Agent integrations"
           subtitle="Connect customer channels and trusted systems after the agent exists."
@@ -781,6 +856,7 @@ export const AgentDetailView = memo(({
         <MotionTabPanel key="analytics" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
+          hideHeaderText
           eyebrow="Results"
           title="Agent results"
           subtitle="Activity and outcome signals for the selected agent."
@@ -797,14 +873,12 @@ export const AgentDetailView = memo(({
         <MotionTabPanel key="overview" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
+          hideHeaderText
           eyebrow="Command Center"
           title={readString(selectedAgent.name, 'Assistant overview')}
           subtitle="Identity, launch readiness, and live performance signals."
           actions={(
             <div className="app-inline-actions app-inline-actions--tight">
-              <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
-                Edit profile
-              </AppButton>
               <AppButton
                 type="button"
                 onClick={onDeploy}

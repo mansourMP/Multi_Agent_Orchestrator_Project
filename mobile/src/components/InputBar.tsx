@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import {
   View,
+  Text,
   TextInput,
   StyleSheet,
   ActivityIndicator,
@@ -15,8 +16,13 @@ import { MotionPressable } from "./system/MotionPressable";
 
 interface InputBarProps {
   onSend: (text: string) => void;
+  onStop?: () => void;
   onMediaUpload?: (formData: FormData) => void;
   onPlusPress?: () => void;
+  onModelPress?: () => void;
+  onRuntimePress?: () => void;
+  modelLabel?: string;
+  runtimeLabel?: string;
   isLoading?: boolean;
   prefilledPrompt?: string;
   placeholder?: string;
@@ -25,8 +31,13 @@ interface InputBarProps {
 
 export const InputBar: React.FC<InputBarProps> = ({
   onSend,
+  onStop,
   onMediaUpload,
   onPlusPress,
+  onModelPress,
+  onRuntimePress,
+  modelLabel,
+  runtimeLabel,
   isLoading,
   prefilledPrompt,
   placeholder,
@@ -52,6 +63,14 @@ export const InputBar: React.FC<InputBarProps> = ({
       onSend(text.trim());
       setText("");
     }
+  };
+
+  const handlePrimaryAccessory = () => {
+    if (onPlusPress) {
+      onPlusPress();
+      return;
+    }
+    void pickImage();
   };
 
   const pickImage = async () => {
@@ -122,10 +141,26 @@ export const InputBar: React.FC<InputBarProps> = ({
 
   return (
     <View style={styles.container}>
+      {textOnly ? null : (
+        <View style={styles.controls}>
+          {modelLabel ? (
+            <MotionPressable onPress={onModelPress} style={styles.controlPill} disabled={!onModelPress}>
+              <Ionicons name="sparkles-outline" size={14} color={theme.colors.textSecondary} />
+              <Text numberOfLines={1} style={styles.controlText}>{modelLabel}</Text>
+            </MotionPressable>
+          ) : null}
+          {runtimeLabel ? (
+            <MotionPressable onPress={onRuntimePress} style={styles.controlPill} disabled={!onRuntimePress}>
+              <Ionicons name="desktop-outline" size={14} color={theme.colors.textSecondary} />
+              <Text numberOfLines={1} style={styles.controlText}>{runtimeLabel}</Text>
+            </MotionPressable>
+          ) : null}
+        </View>
+      )}
       <View style={styles.composer}>
         {textOnly ? null : (
-          <MotionPressable onPress={pickImage} style={styles.iconButton}>
-            <Ionicons name="attach" size={18} color={theme.colors.textSecondary} />
+          <MotionPressable onPress={handlePrimaryAccessory} style={styles.iconButton}>
+            <Ionicons name="add" size={20} color={theme.colors.textSecondary} />
           </MotionPressable>
         )}
 
@@ -142,12 +177,16 @@ export const InputBar: React.FC<InputBarProps> = ({
 
         {text.trim() || isLoading ? (
           <MotionPressable
-            onPress={handleSend} 
-            style={[styles.sendButton, !text.trim() && styles.sendButtonDisabled]}
-            disabled={!text.trim() || isLoading}
+            onPress={isLoading ? onStop : handleSend}
+            style={[styles.sendButton, isLoading && styles.stopButton, !text.trim() && !isLoading && styles.sendButtonDisabled]}
+            disabled={isLoading ? !onStop : !text.trim()}
           >
             {isLoading ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              onStop ? (
+                <Ionicons name="square" size={13} color="#FFFFFF" />
+              ) : (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              )
             ) : (
               <Ionicons name="arrow-up" size={16} color="#FFFFFF" />
             )}
@@ -177,6 +216,31 @@ const useStyles = (theme: any, insets: any) => StyleSheet.create({
     paddingBottom: Math.max(insets.bottom, 12) + 4,
     backgroundColor: "transparent",
     borderTopWidth: 0,
+  },
+  controls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 2,
+    paddingBottom: 8,
+  },
+  controlPill: {
+    maxWidth: "38%",
+    minHeight: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.card,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  controlText: {
+    flexShrink: 1,
+    color: theme.colors.textSecondary,
+    fontSize: 11.5,
+    fontFamily: "DMSans_700Bold",
   },
   composer: {
     flexDirection: "row",
@@ -223,5 +287,9 @@ const useStyles = (theme: any, insets: any) => StyleSheet.create({
   sendButtonDisabled: {
     backgroundColor: theme.colors.indicator,
     opacity: 0.6,
+  },
+  stopButton: {
+    borderRadius: 14,
+    backgroundColor: theme.colors.text,
   },
 });

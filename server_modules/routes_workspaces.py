@@ -544,8 +544,10 @@ async def workspace_sage_tool_policy_update(
 async def workspace_provider_credential_create(
     workspace_id: str,
     body: WorkspaceProviderCredentialUpsertRequest,
+    request: Request,
     current_user=Depends(get_current_user),
 ):
+    auth_module.validate_csrf(request)
     return await workspace_admin_service.upsert_workspace_provider_credential(
         workspace_id=workspace_id,
         current_user=current_user,
@@ -560,8 +562,10 @@ async def workspace_provider_credential_create(
 async def workspace_provider_credential_delete(
     workspace_id: str,
     body: WorkspaceProviderCredentialDeleteRequest,
+    request: Request,
     current_user=Depends(get_current_user),
 ):
+    auth_module.validate_csrf(request)
     return await workspace_admin_service.delete_workspace_provider_credential(
         workspace_id=workspace_id,
         current_user=current_user,
@@ -573,8 +577,10 @@ async def workspace_provider_credential_delete(
 async def workspace_provider_models_refresh(
     workspace_id: str,
     provider_id: str,
+    request: Request,
     current_user=Depends(get_current_user),
 ):
+    auth_module.validate_csrf(request)
     return await workspace_admin_service.refresh_workspace_provider_models(
         workspace_id=workspace_id,
         current_user=current_user,

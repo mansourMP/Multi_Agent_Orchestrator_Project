@@ -219,6 +219,45 @@ class AgentTraceServiceTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(emit_mock.await_args.args[1], expected_event_type)
                     self.assertEqual(emit_mock.await_args.kwargs.get("persisted"), expected_persisted)
 
+    async def test_tool_result_can_include_runtime_correlation_metadata(self) -> None:
+        context = agent_trace_service.TraceContext(
+            trace_id="trace_1",
+            workspace_id="ws-1",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id="run-1",
+            root_agent_id="sage",
+        )
+        with patch("server_modules.agent_trace_service.emit", new=AsyncMock(return_value="tevent_1")) as emit_mock:
+            await agent_trace_service.emit_tool_result(
+                context,
+                "tool-1",
+                "completed",
+                "Ran command.",
+                ["artifact-1"],
+                tool_name="shell.execute",
+                capability_id="shell.execute",
+                connector_id="hardware_runtime",
+                args_preview={"command": "uptime"},
+                runtime_session_id="hrs-1",
+                runtime_target="self_hosted_node",
+                request_id="req-1",
+                action_id="shell.exec",
+                metadata={"runtime_access_mode": "full_access"},
+            )
+
+        data = emit_mock.await_args.args[2]
+        self.assertEqual(data["tool_name"], "shell.execute")
+        self.assertEqual(data["capability_id"], "shell.execute")
+        self.assertEqual(data["connector_id"], "hardware_runtime")
+        self.assertEqual(data["args_preview"]["command"], "uptime")
+        self.assertEqual(data["runtime_session_id"], "hrs-1")
+        self.assertEqual(data["runtime_target"], "self_hosted_node")
+        self.assertEqual(data["request_id"], "req-1")
+        self.assertEqual(data["action_id"], "shell.exec")
+        self.assertEqual(data["metadata"]["runtime_access_mode"], "full_access")
+        self.assertEqual(emit_mock.await_args.kwargs.get("persisted"), True)
+
     async def test_service_never_raises_if_repository_fails(self) -> None:
         context = agent_trace_service.TraceContext(
             trace_id="trace_1",

@@ -120,34 +120,41 @@ def _runtime_target_status_label(target: Dict[str, Any]) -> str:
 
 def _runtime_target_status_reason(target: Dict[str, Any]) -> str:
     target_id = str(target.get("target_id") or "").strip()
-    label = str(target.get("label") or target_id or "Runtime").strip() or "Runtime"
+    label = str(
+        target.get("public_label")
+        or target.get("canonical_label")
+        or target.get("label")
+        or runtime_attachment_service.public_runtime_target_label(target_id)
+        or target_id
+        or "Runtime"
+    ).strip() or "Runtime"
     available = bool(target.get("available"))
     online = bool(target.get("online"))
     healthy = bool(target.get("healthy"))
     if target_id == "local_companion":
         if not available:
-            return "No Gateway is paired to this workspace yet, so Sage stays in cloud mode."
+            return "No device is paired to this workspace yet, so Sage stays in cloud mode."
         if not online:
-            return "Gateway is paired but offline, so Sage will not start device work until it reconnects."
+            return "This Device is paired but offline, so Sage will not start device work until it reconnects."
         if not healthy:
-            return "Gateway is connected but not healthy enough for device work yet."
-        return "Gateway is ready. Sensitive device actions still require explicit approval."
+            return "This Device is connected but not healthy enough for device work yet."
+        return "This Device is ready. Sensitive device actions follow the selected access mode."
     if target_id == "self_host_runtime":
         if not available:
-            return "No self-hosted node is configured for this workspace yet."
+            return "No Server/VPS runtime is configured for this workspace yet."
         if not online:
-            return "The self-hosted node is configured but currently offline."
+            return "The Server/VPS runtime is configured but currently offline."
         if not healthy:
-            return "The self-hosted node is reachable but needs attention before Sage can trust it."
-        return "The self-hosted node is ready under the workspace policy boundary."
+            return "The Server/VPS runtime is reachable but needs attention before Sage can trust it."
+        return "The Server/VPS runtime is ready under the workspace policy boundary."
     if target_id == "sage_cloud_computer":
         if not available:
-            return "Sage Cloud Computer is not enabled for this workspace. Sage will not allocate a hosted computer automatically."
+            return "Cloud Computer is not enabled for this workspace. Sage will not allocate a hosted computer automatically."
         if not online:
-            return "Sage Cloud Computer is configured but no hosted session is currently available."
+            return "Cloud Computer is configured but no hosted session is currently available."
         if not healthy:
-            return "Sage Cloud Computer is reachable but needs attention before hosted computer work can start."
-        return "Sage Cloud Computer is ready as an optional metered computer. Personal device work still requires a paired Gateway."
+            return "Cloud Computer is reachable but needs attention before hosted computer work can start."
+        return "Cloud Computer is ready as an optional metered computer. Personal device work still requires a paired device."
     if not available:
         return f"{label} is not available for this workspace right now."
     if not online or not healthy:
@@ -157,10 +164,34 @@ def _runtime_target_status_reason(target: Dict[str, Any]) -> str:
 
 def _runtime_target_payload(item: Dict[str, Any]) -> Dict[str, Any]:
     target_id = str(item.get("target_id") or "").strip()
+    canonical_id = str(item.get("canonical_target_id") or runtime_attachment_service.canonical_runtime_target_id(target_id)).strip()
+    public_label = str(
+        item.get("public_label")
+        or item.get("canonical_label")
+        or runtime_attachment_service.public_runtime_target_label(target_id)
+    ).strip() or target_id
     trust_profile = _runtime_target_trust_profile(item)
+    execution_modes = [
+        {
+            "id": str(mode.get("id") or "").strip(),
+            "label": str(mode.get("label") or "").strip() or str(mode.get("id") or "").strip(),
+            "description": str(mode.get("description") or "").strip() or None,
+            "available": bool(mode.get("available")),
+            "runtimeAccessMode": str(mode.get("runtime_access_mode") or "").strip() or None,
+            "requiresExplicitSelection": bool(mode.get("requires_explicit_selection")),
+            "requiresOwnerApproval": bool(mode.get("requires_owner_approval")),
+            "setupWarning": str(mode.get("setup_warning") or "").strip() or None,
+        }
+        for mode in list(item.get("execution_modes") or [])
+        if isinstance(mode, dict) and str(mode.get("id") or "").strip()
+    ]
     return {
         "id": target_id,
-        "label": str(item.get("label") or "").strip() or target_id,
+        "canonicalId": canonical_id,
+        "runtimeFabricTarget": canonical_id,
+        "legacyId": str(item.get("legacy_target_id") or "").strip() or None,
+        "publicLabel": public_label,
+        "label": public_label,
         "kind": _runtime_target_kind(target_id),
         "online": bool(item.get("online")),
         "preferred": bool(item.get("default_for_workspace")),
@@ -174,6 +205,9 @@ def _runtime_target_payload(item: Dict[str, Any]) -> Dict[str, Any]:
         "executionTarget": str(item.get("execution_target") or "").strip() or None,
         "trustTier": str(trust_profile.get("trust_tier") or "").strip() or None,
         "approvalMode": str(trust_profile.get("approval_mode") or "").strip() or None,
+        "defaultRuntimeAccessMode": str(item.get("default_runtime_access_mode") or "").strip() or None,
+        "supportsFullAccess": bool(item.get("supports_full_access")),
+        "executionModes": execution_modes,
         "sampleAttachmentLabel": str(item.get("sample_attachment_label") or "").strip() or None,
     }
 

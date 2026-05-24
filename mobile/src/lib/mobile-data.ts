@@ -203,6 +203,8 @@ function normalizeRuntimeAttachments(payload: unknown): MobileChatContextSnapsho
         label: typeof item.label === "string" ? item.label : undefined,
         runtime_id: typeof item.runtime_id === "string" ? item.runtime_id : undefined,
         machine_id: typeof item.machine_id === "string" ? item.machine_id : undefined,
+        runtime_access_mode: typeof item.runtime_access_mode === "string" ? item.runtime_access_mode : undefined,
+        runtime_access_label: typeof item.runtime_access_label === "string" ? item.runtime_access_label : undefined,
         online: typeof item.online === "boolean" ? item.online : undefined,
         healthy: typeof item.healthy === "boolean" ? item.healthy : undefined,
         status: typeof item.status === "string" ? item.status : undefined,

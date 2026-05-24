@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from server_modules import secret_redaction_service
+from server_modules import execution_mode_policy, secret_redaction_service
 
 
 EMPYRALIS_STATE_HOME = Path(
@@ -45,6 +45,15 @@ _SENSITIVE_GATEWAY_EVENT_KEYS = frozenset(
     }
 )
 _PERSONAL_MESSAGE_TEXT_KEYS = frozenset({"text", "delta", "content", "body"})
+_OWNER_RUNTIME_ACCESS_METADATA_KEYS = frozenset(
+    {
+        "runtime_access_mode",
+        "runtime_access_label",
+        "runtime_access_setup_warning",
+        "autonomous_agent_setup_warning_acknowledged",
+        "autonomous_agent_setup_warning_acknowledged_at",
+    }
+)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS gateway_pairing_intents (
@@ -256,6 +265,43 @@ def _json_loads(value: Any, *, default: Any) -> Any:
         return json.loads(value)
     except Exception:
         return default
+
+
+def _runtime_access_metadata_from_pairing(
+    *,
+    pairing_metadata: Dict[str, Any],
+    existing_metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    candidate_mode = pairing_metadata.get("runtime_access_mode") or existing_metadata.get("runtime_access_mode")
+    mode = execution_mode_policy.normalize_runtime_access_mode(candidate_mode)
+    out = {
+        "runtime_access_mode": mode,
+        "runtime_access_label": execution_mode_policy.public_runtime_access_label(mode),
+    }
+    setup_warning = execution_mode_policy.runtime_access_setup_warning(mode)
+    if setup_warning:
+        out["runtime_access_setup_warning"] = setup_warning
+        out["autonomous_agent_setup_warning_acknowledged"] = bool(
+            pairing_metadata.get("autonomous_agent_setup_warning_acknowledged")
+            or existing_metadata.get("autonomous_agent_setup_warning_acknowledged")
+        )
+        warning_acknowledged_at = (
+            pairing_metadata.get("autonomous_agent_setup_warning_acknowledged_at")
+            or existing_metadata.get("autonomous_agent_setup_warning_acknowledged_at")
+        )
+        if warning_acknowledged_at:
+            out["autonomous_agent_setup_warning_acknowledged_at"] = str(warning_acknowledged_at)
+    else:
+        out["autonomous_agent_setup_warning_acknowledged"] = False
+    return out
+
+
+def _strip_owner_runtime_access_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in dict(metadata or {}).items()
+        if key not in _OWNER_RUNTIME_ACCESS_METADATA_KEYS
+    }
 
 
 def _gateway_event_key_is_sensitive(key: str) -> bool:
@@ -679,7 +725,15 @@ def register_gateway_from_pairing(
                 or f"gateway_{uuid.uuid4().hex}"
             )
             merged_metadata = dict(existing.get("metadata") or {}) if existing else {}
-            merged_metadata.update(dict(metadata or {}))
+            pairing_metadata = dict(pairing.get("metadata") or {})
+            merged_metadata.update(pairing_metadata)
+            merged_metadata.update(_strip_owner_runtime_access_metadata(dict(metadata or {})))
+            merged_metadata.update(
+                _runtime_access_metadata_from_pairing(
+                    pairing_metadata=pairing_metadata,
+                    existing_metadata=dict(existing.get("metadata") or {}) if existing else {},
+                )
+            )
             merged_metadata.update(
                 {
                     "tenant_id": pairing["tenant_id"],

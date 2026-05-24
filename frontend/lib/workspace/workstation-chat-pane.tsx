@@ -13,18 +13,16 @@ import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { AppButton, AppNotice, AppShinyText } from '@/lib/ui/primitives';
 import { PlatformNotification } from '@/lib/ui/platform-notification';
-import { AppSurfaceStat, AppSurfaceStatGrid } from '@/lib/ui/primitives';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
 import {
   ChatComposer,
+  type ComposerActionMenuItem,
   type ComposerPreRunCostEstimate,
   type ComposerSlashCommand,
-  type ComposerToolGroup,
 } from '@/lib/workspace/chat-composer';
 import {
   SAGE_COMMAND_CATALOG,
   SAGE_WORKSPACE_COMMAND_CATALOG,
-  type SageCommandActionKind,
   type SageCommandMetadata,
   type SageWorkspaceCommandMetadata,
   resolveSageCommandBySlash,
@@ -34,7 +32,7 @@ import type {
   WorkstationChatMessageRecord,
 } from '@/lib/workspace/chat-message';
 import { CodexChatCell, type CodexApprovalAction } from '@/lib/workspace/codex-chat/cell-components';
-import type { CodexTranscriptCell } from '@/lib/workspace/codex-chat/cells';
+import type { CodexTranscriptCell, TimelineProjectionEvent } from '@/lib/workspace/codex-chat/cells';
 import {
   resolveModelContextWindow,
 } from '@/lib/workspace/model-capabilities';
@@ -101,7 +99,10 @@ import {
   loadChatMemorySnapshot,
   loadChatProfileSnapshot,
 } from '@/lib/workspace/workstation-chat-memory-loaders';
-import { useWorkstationTimelineProjection } from '@/lib/workspace/workstation-chat-timeline-projection';
+import {
+  safeTimelineEventsFromTraceReplay,
+  useWorkstationTimelineProjection,
+} from '@/lib/workspace/workstation-chat-timeline-projection';
 import {
   PRIMARY_THREAD_ID,
   CHAT_READ_TIMEOUT_MS,
@@ -145,8 +146,6 @@ import {
   readExecutionTarget,
   resolveRuntimeTrustZone,
   buildChatPermissionPolicyContext,
-  chatPermissionModeDetail,
-  chatPermissionModeLabel,
   EMPYRALIS_TIER_SET,
   USER_OWNED_SECTION_LABELS,
   isProviderEligibleForModelSelector,
@@ -173,7 +172,6 @@ import {
   upsertLiveActivityStep,
   normalizeStepEvent,
   settleLiveActivitySteps,
-  countArtifacts,
   localCompanionTarget,
   localDevicePlatformLabel,
   summarizeRuntimeCard,
@@ -188,14 +186,9 @@ import {
   hostedCreditsFallbackProvider,
   normalizeSageToolPolicy,
   normalizeConnectorVaultRecords,
-  toolPolicyEnabled,
-  hasConnectedConnector,
   defaultSageMemoryDraft,
   isTransientBackgroundReadError,
   shouldSuppressBackgroundRefreshNotice,
-  formatRelativeTime,
-  runPreviewLabel,
-  runContextTitle,
   resolveProviderModelContext,
   resolvePersistedSelectedModelId
 } from '@/lib/workspace/workstation-chat-pane-model';
@@ -205,17 +198,12 @@ import type {
   ChatRuntimeTrustZone
 } from '@/lib/workspace/workstation-chat-pane-model';
 
-function compactCreditEstimateLabel(estimate: ComposerPreRunCostEstimate): string {
-  const normalized = estimate.estimateLabel.trim().replace(/^estimated:\s*/i, '');
-  return normalized || estimate.estimateLabel;
-}
-
 function formatTitlebarCreditCount(value: number): string {
-  const rounded = Math.max(0, Math.round(value));
+  const rounded = Math.max(0, Math.floor(value));
   if (rounded >= 1_000_000) {
     return `${(rounded / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
   }
-  if (rounded >= 10_000) {
+  if (rounded >= 100_000) {
     return `${Math.round(rounded / 1_000)}K`;
   }
   return rounded.toLocaleString();
@@ -250,115 +238,17 @@ function formatCreditHistoryTime(value: string | null): string {
   });
 }
 
-function sageCommandSheetTitle(command: SageCommandActionKind | null): string {
-  switch (command) {
-    case 'open_status':
-      return "What's Sage doing?";
-    case 'open_proof':
-      return 'Show proof';
-    case 'open_usage':
-      return 'Credits and usage';
-    case 'open_tools':
-      return 'What Sage can use';
-    case 'open_runtime':
-      return 'AI setup';
-    case 'run_doctor':
-      return 'Check setup';
-    default:
-      return 'Sage action';
+function legacyTraceIdForReplay(message: WorkstationChatMessageRecord): string | null {
+  if (message.role.trim().toLowerCase() !== 'assistant') {
+    return null;
   }
-}
-
-function sageCommandSheetDescription(command: SageCommandActionKind | null): string {
-  switch (command) {
-    case 'open_status':
-      return 'Current health, readiness, approvals, and run state.';
-    case 'open_proof':
-      return 'Session evidence, computer proofs, artifacts, and audit trail.';
-    case 'open_usage':
-      return 'Credits, estimated cost, and recent conversation usage.';
-    case 'open_tools':
-      return 'Connected tools, apps, and callable capabilities Sage can use.';
-    case 'open_runtime':
-      return 'Which AI path Sage will use and where to manage it.';
-    case 'run_doctor':
-      return 'Connectivity checks for model, browser, tools, and gateway readiness.';
-    default:
-      return 'Quick control without sending a chat message.';
+  const metadata = readObject(message.metadata);
+  const transcriptEvents = Array.isArray(metadata.transcript_events) ? metadata.transcript_events : [];
+  if (transcriptEvents.length > 0) {
+    return null;
   }
-}
-
-function runtimeTrustZoneLabel(zone: ChatRuntimeTrustZone): string {
-  switch (zone) {
-    case 'owned_dedicated_runtime':
-      return 'Dedicated runtime';
-    case 'user_owned_local':
-      return 'User-owned computer';
-    case 'shared_cloud':
-    default:
-      return 'Shared cloud';
-  }
-}
-
-type SageCommandComputerProofSummary = {
-  id: string;
-  title: string;
-  summary: string;
-  occurredAt: string | null;
-  traceId: string | null;
-  runtimeSessionId: string | null;
-  deployedAgentId: string | null;
-  providerId: string | null;
-  artifactCount: number;
-};
-
-function readRecordList(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
-    : [];
-}
-
-function compactIdentifier(value: string | null, fallback: string): string {
-  if (!value) {
-    return fallback;
-  }
-  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-4)}` : value;
-}
-
-function latestComputerProofSummaryFromTimeline(timelineItems: Record<string, unknown>[]): SageCommandComputerProofSummary | null {
-  for (const event of timelineItems) {
-    const payload = readObject(event.payload);
-    const metadata = readObject(event.metadata);
-    const proof = readObject(payload.computer_proof ?? payload.latest_computer_proof ?? metadata.latest_computer_proof);
-    const artifacts = readRecordList(event.artifacts);
-    const screenshot = [...artifacts].reverse().find((artifact) => {
-      const kind = readString(artifact.artifact_type ?? artifact.type ?? artifact.kind).toLowerCase();
-      const contentType = readString(artifact.content_type ?? artifact.mime_type).toLowerCase();
-      return kind === 'screenshot' || contentType.startsWith('image/');
-    });
-
-    if (!Object.keys(proof).length && !screenshot) {
-      continue;
-    }
-
-    const appTitle = readString(proof.app_title ?? screenshot?.title);
-    const currentUrl = readString(proof.current_url ?? screenshot?.url);
-    const title = appTitle || currentUrl || readString(event.title) || 'Computer screen';
-    const summary = currentUrl || readString(event.summary) || 'Runtime screen and tool evidence were recorded.';
-
-    return {
-      id: readString(event.id) || readString(proof.artifact_uri) || 'computer-proof',
-      title,
-      summary,
-      occurredAt: readString(event.created_at) || readString(event.ts) || null,
-      traceId: readString(event.trace_id) || null,
-      runtimeSessionId: readString(proof.runtime_session_id ?? event.session_key) || null,
-      deployedAgentId: readString(proof.deployed_agent_id ?? metadata.deployed_agent_id ?? payload.deployed_agent_id) || null,
-      providerId: readString(proof.provider_id) || null,
-      artifactCount: artifacts.length,
-    };
-  }
-  return null;
+  const contextUsed = readObject(metadata.context_used);
+  return readString(metadata.trace_id) || readString(contextUsed.trace_id) || null;
 }
 
 export function WorkstationChatPane() {
@@ -369,8 +259,9 @@ export function WorkstationChatPane() {
   const notificationsConnectionState = useWorkstationStreamSelector((state) => state.notifications.connectionState);
   const desktop = useWorkstationDesktopBridge();
   const router = useRouter();
-  const [activeSageCommandPanel, setActiveSageCommandPanel] = useState<SageCommandActionKind | null>(null);
   const [workspaceCommandPaletteOpen, setWorkspaceCommandPaletteOpen] = useState(false);
+  const [legacyTraceEventsByTraceId, setLegacyTraceEventsByTraceId] = useState<Record<string, TimelineProjectionEvent[]>>({});
+  const pendingLegacyTraceIdsRef = useRef<Set<string>>(new Set());
   const actor = useMemo<WorkstationSessionActor>(() => ({
     type: 'user',
     id: bootstrap.account.id,
@@ -453,7 +344,6 @@ export function WorkstationChatPane() {
     machineTrust,
     setMachineTrust,
     autonomyMode,
-    setAutonomyMode,
     modelOptions,
     setModelOptions,
     selectedModel,
@@ -490,8 +380,6 @@ export function WorkstationChatPane() {
     setResolvingApprovalId,
     mutatingMemory,
     setMutatingMemory,
-    memoryFilter,
-    setMemoryFilter,
     isApprovalsSheetOpen,
     setIsApprovalsSheetOpen,
     isMemorySheetOpen,
@@ -507,7 +395,6 @@ export function WorkstationChatPane() {
   const [creditUsageHistory, setCreditUsageHistory] = useState<Record<string, unknown> | null>(null);
   const [isCreditUsageHistoryLoading, setIsCreditUsageHistoryLoading] = useState(false);
   const [titlebarCreditsOpen, setTitlebarCreditsOpen] = useState(false);
-  const [latestComputerProof, setLatestComputerProof] = useState<SageCommandComputerProofSummary | null>(null);
   const titlebarCreditsRef = useRef<HTMLDivElement | null>(null);
   const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
@@ -810,7 +697,6 @@ export function WorkstationChatPane() {
         timelineRequest,
       ]);
       writeOverview({ nextRuns, nextApprovals });
-      setLatestComputerProof(latestComputerProofSummaryFromTimeline(timelineItems));
       if (timelineItems.length > 0) {
         writeRecentThreads(deriveRecentThreads(timelineItems, activeThreadIdRef.current));
         return;
@@ -906,7 +792,11 @@ export function WorkstationChatPane() {
     }
   };
 
-  const handleResolveApproval = async (approvalId: string, resolution: 'approved' | 'rejected') => {
+  const handleResolveApproval = async (
+    approvalId: string,
+    resolution: 'approved' | 'rejected',
+    approvalScope: 'once' | 'session' = 'once',
+  ) => {
     if (!approvalId || resolvingApprovalId) {
       return;
     }
@@ -916,6 +806,7 @@ export function WorkstationChatPane() {
       await resolveWorkstationApproval(services.client, {
         approvalId,
         resolution,
+        approvalScope,
       });
       services.streams.touchActivity();
     } catch (error) {
@@ -930,7 +821,11 @@ export function WorkstationChatPane() {
   };
 
   const handleResolveCodexApproval = (approvalId: string, action: CodexApprovalAction) => {
-    void handleResolveApproval(approvalId, action === 'deny' ? 'rejected' : 'approved');
+    void handleResolveApproval(
+      approvalId,
+      action === 'deny' ? 'rejected' : 'approved',
+      action === 'allow_session' ? 'session' : 'once',
+    );
   };
 
   useEffect(() => {
@@ -1257,12 +1152,65 @@ export function WorkstationChatPane() {
     };
   }, [activeThreadId, bootstrap.workspace.id]);
 
+  useEffect(() => {
+    if (isSending) {
+      return undefined;
+    }
+    const traceIds = Array.from(new Set(
+      thread.messages
+        .map(legacyTraceIdForReplay)
+        .filter((traceId): traceId is string => Boolean(traceId)),
+    ));
+    const missingTraceIds = traceIds.filter((traceId) => (
+      legacyTraceEventsByTraceId[traceId] === undefined
+      && !pendingLegacyTraceIdsRef.current.has(traceId)
+    ));
+    if (missingTraceIds.length === 0) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    missingTraceIds.forEach((traceId) => {
+      pendingLegacyTraceIdsRef.current.add(traceId);
+    });
+
+    void Promise.all(missingTraceIds.map(async (traceId): Promise<[string, TimelineProjectionEvent[]]> => {
+      try {
+        const replay = await services.client.getTraceReplay({ traceId, allowMissing: true });
+        return [traceId, safeTimelineEventsFromTraceReplay(replay)];
+      } catch (error) {
+        void error;
+        // Legacy replay is a best-effort compatibility path. Chat history should
+        // stay usable even when old trace detail is unavailable.
+        return [traceId, []];
+      } finally {
+        pendingLegacyTraceIdsRef.current.delete(traceId);
+      }
+    })).then((entries) => {
+      if (cancelled) {
+        return;
+      }
+      setLegacyTraceEventsByTraceId((current) => {
+        const next = { ...current };
+        for (const [traceId, events] of entries) {
+          next[traceId] = events;
+        }
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isSending, legacyTraceEventsByTraceId, services.client, thread.messages]);
+
   const projectionOptions = useMemo(() => ({
     approvals,
     threadMessages: thread.messages,
     pendingUserMessage,
     isSending,
     liveTimelineEvents,
+    legacyTraceEventsByTraceId,
     showProjectedAssistant,
     isSyntheticTranscriptMessage,
     canonicalIncludesMessage,
@@ -1276,6 +1224,7 @@ export function WorkstationChatPane() {
     pendingUserMessage,
     isSending,
     liveTimelineEvents,
+    legacyTraceEventsByTraceId,
     showProjectedAssistant,
     isSyntheticTranscriptMessage,
     canonicalIncludesMessage,
@@ -1311,7 +1260,6 @@ export function WorkstationChatPane() {
     && visibleTranscriptCells.length === 0
     && !liveTrace;
   const latestRun = runs[0];
-  const artifactCount = useMemo(() => countArtifacts(thread.messages), [thread.messages]);
   const assistantTurnCount = useMemo(
     () => thread.messages.filter((message) => message.role !== 'user').length,
     [thread.messages],
@@ -1408,11 +1356,13 @@ export function WorkstationChatPane() {
         connected: true,
       };
     }
-    const selectedProviderLabel = providerSummaryLabel({
-      provider: selectedProviderRecord,
-      providerLabel: selectedProviderContext.providerLabel,
-      modelLabel: selectedProviderContext.modelLabel,
-    }) || readString(selectedProviderContext.providerLabel);
+    const selectedProviderLabel = selectedModelOption.uiSection === 'empyralis'
+      ? `${selectedModelOption.label} · Empyralis credits`
+      : providerSummaryLabel({
+          provider: selectedProviderRecord,
+          providerLabel: selectedProviderContext.providerLabel,
+          modelLabel: selectedProviderContext.modelLabel,
+        }) || readString(selectedProviderContext.providerLabel);
     if (selectedProviderRecord) {
       const ready = providerReadyForChat(selectedProviderRecord, {
         gatewayToolingOnline,
@@ -1431,7 +1381,7 @@ export function WorkstationChatPane() {
       };
     }
     return {
-      label: 'No AI model — Set up in Integrations',
+      label: 'No AI model — Set up in Connections',
       connected: false,
     };
   }, [
@@ -1442,6 +1392,8 @@ export function WorkstationChatPane() {
     selectedProviderRecord,
     selectedProviderContext.modelLabel,
     selectedProviderContext.providerLabel,
+    selectedModelOption.label,
+    selectedModelOption.uiSection,
   ]);
   const runtimeStatus = useMemo(() => {
     const providerPath = providerPathLabel(selectedProviderRecord);
@@ -1457,7 +1409,7 @@ export function WorkstationChatPane() {
       }
       if (selectedModelOption.uiSection === 'local_ai') {
         return {
-          label: localToolingOnline ? 'Connected computer' : 'Connected computer offline',
+          label: localToolingOnline ? 'This Device' : 'This Device offline',
           tone: localToolingOnline ? 'success' as const : 'warning' as const,
         };
       }
@@ -1470,10 +1422,10 @@ export function WorkstationChatPane() {
       return { label: 'No AI model', tone: 'warning' as const };
     }
     if (localProvider && !localToolingOnline) {
-      return { label: 'Connected computer offline', tone: 'warning' as const };
+      return { label: 'This Device offline', tone: 'warning' as const };
     }
     if (localProvider) {
-      return { label: providerPath ?? 'Connected computer', tone: 'success' as const };
+      return { label: providerPath ?? 'This Device', tone: 'success' as const };
     }
     if (providerPath === 'Empyralis credits') {
       return { label: 'Empyralis credits', tone: 'success' as const };
@@ -1495,152 +1447,18 @@ export function WorkstationChatPane() {
     }),
     [autonomyMode, machineTrust, runtimeTrustZone],
   );
-  const permissionPolicyLabel = useMemo(
-    () => chatPermissionModeLabel(autonomyMode, runtimeTrustZone),
-    [autonomyMode, runtimeTrustZone],
-  );
-  const computerControlSummary = useMemo(() => {
-    if (latestComputerProof) {
-      const proofAge = formatRelativeTime(latestComputerProof.occurredAt);
-      return {
-        statValue: 'Recorded',
-        statHint: `${proofAge} in Activity`,
-        title: latestComputerProof.title,
-        body: latestComputerProof.summary,
-        pills: [
-          latestComputerProof.providerId || runtimeTrustZoneLabel(runtimeTrustZone),
-          compactIdentifier(latestComputerProof.runtimeSessionId, 'Runtime session'),
-          latestComputerProof.artifactCount > 0
-            ? `${latestComputerProof.artifactCount} proof item${latestComputerProof.artifactCount === 1 ? '' : 's'}`
-            : 'Proof metadata',
-        ],
-      };
-    }
-
-    if (runtimeTrustZone === 'user_owned_local') {
-      return {
-        statValue: localToolingOnline ? 'Ready' : 'Offline',
-        statHint: localToolingOnline ? 'paired local computer' : 'connect local runtime',
-        title: localToolingOnline ? 'Sage can use this computer' : 'Connected computer is offline',
-        body: localToolingOnline
-          ? 'Local tools, browser actions, screenshots, and terminal work can be requested with approval policy attached.'
-          : 'Local computer actions stay unavailable until the paired runtime is online.',
-        pills: [
-          runtimeTrustZoneLabel(runtimeTrustZone),
-          localDevicePlatformLabel(null, readString(localRuntimeTarget?.label)),
-          permissionPolicyLabel,
-        ],
-      };
-    }
-
-    if (runtimeTrustZone === 'owned_dedicated_runtime') {
-      return {
-        statValue: 'Ready',
-        statHint: 'dedicated cloud computer',
-        title: 'Dedicated computer runtime',
-        body: 'Cloud computer work will return screenshots, artifacts, runtime session IDs, and activity proof when a run uses it.',
-        pills: [
-          runtimeTrustZoneLabel(runtimeTrustZone),
-          runtimeStatus.label,
-          permissionPolicyLabel,
-        ],
-      };
-    }
-
-    return {
-      statValue: gatewayToolingOnline ? 'Ready' : 'Not active',
-      statHint: gatewayToolingOnline ? 'tools can produce proof' : 'no computer proof yet',
-      title: gatewayToolingOnline ? 'Computer tools are available' : 'No computer proof yet',
-      body: gatewayToolingOnline
-        ? 'When Sage uses a browser or computer runtime, the proof appears in Activity instead of the chat transcript.'
-        : 'Server-only replies can still work, but no screen proof exists until Sage uses a browser or computer runtime.',
-      pills: [
-        runtimeTrustZoneLabel(runtimeTrustZone),
-        runtimeStatus.label,
-        permissionPolicyLabel,
-      ],
-    };
-  }, [
-    gatewayToolingOnline,
-    latestComputerProof,
-    localRuntimeTarget,
-    localToolingOnline,
-    permissionPolicyLabel,
-    runtimeStatus.label,
-    runtimeTrustZone,
-  ]);
-  const composerToolGroups = useMemo<ComposerToolGroup[]>(() => {
-    const localReason = localToolingOnline ? 'Available through this paired computer' : 'Requires a connected computer';
-    const telegramAvailable = hasConnectedConnector(connectorCredentials, ['telegram_bot']);
-    const telegramChannelEnabled = hasCapability('telegram_channel_enabled');
-    const whatsappChannelEnabled = hasCapability('whatsapp_channel_enabled');
-    const webSearchEnabled = toolPolicyEnabled(toolPolicy, 'web_search');
-    const fetchEnabled = toolPolicyEnabled(toolPolicy, 'http_request');
-    const fileEnabled = toolPolicyEnabled(toolPolicy, 'file_access');
-    const codeEnabled = toolPolicyEnabled(toolPolicy, 'code_execution');
-    const browserStatus = readString(readObject(browserGatewayDoctor?.browser).status).toLowerCase();
-    const browserEnabled = gatewayToolingOnline && browserStatus !== 'fail';
-    const telegramSendEnabled = localToolingOnline && (telegramAvailable || telegramChannelEnabled);
-    const whatsappSendEnabled = localToolingOnline && whatsappChannelEnabled;
-    return [
-      {
-        id: 'local-machine',
-        label: 'Connected computer',
-        items: [
-          { id: 'files', label: 'Files', detail: fileEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && fileEnabled },
-          { id: 'browser', label: 'Browser', detail: browserEnabled ? localReason : 'Browser is not connected', enabled: browserEnabled },
-          { id: 'screenshot', label: 'Screenshot', detail: browserEnabled ? localReason : 'Browser is not connected', enabled: browserEnabled },
-          { id: 'clipboard', label: 'Clipboard', detail: localReason, enabled: localToolingOnline },
-          { id: 'terminal', label: 'Terminal', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && codeEnabled },
-        ],
-      },
-      {
-        id: 'web',
-        label: 'Web',
-        items: [
-          { id: 'web-search', label: 'Search', detail: webSearchEnabled ? 'Automatic web lookup is allowed' : 'Blocked by workspace policy', enabled: webSearchEnabled },
-          { id: 'fetch-url', label: 'Fetch URL', detail: fetchEnabled ? 'Direct HTTP fetch is allowed' : 'Blocked by workspace policy', enabled: fetchEnabled },
-        ],
-      },
-      {
-        id: 'communication',
-        label: 'Communication',
-        items: [
-          {
-            id: 'telegram-send',
-            label: 'Telegram send',
-            detail: telegramSendEnabled
-              ? 'Available through this paired computer'
-              : (telegramChannelEnabled ? 'Connect your computer to send Telegram messages' : 'Telegram channel is disabled in this workspace'),
-            enabled: telegramSendEnabled,
-          },
-          {
-            id: 'whatsapp-send',
-            label: 'WhatsApp send',
-            detail: whatsappSendEnabled
-              ? 'Available through this paired computer'
-              : (whatsappChannelEnabled ? 'Connect your computer to send WhatsApp messages' : 'WhatsApp channel is disabled in this workspace'),
-            enabled: whatsappSendEnabled,
-          },
-        ],
-      },
-      {
-        id: 'data',
-        label: 'Data',
-        items: [
-          { id: 'code-execution', label: 'Code execution', detail: codeEnabled ? localReason : 'Blocked by workspace policy', enabled: localToolingOnline && codeEnabled },
-        ],
-      },
-    ];
-  }, [browserGatewayDoctor, connectorCredentials, gatewayToolingOnline, hasCapability, localToolingOnline, toolPolicy]);
   const integrationsHref = useMemo(
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
   );
-  const activityHref = useMemo(
-    () => routeManifest.routeIndex.activity?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/activity`,
-    [bootstrap.workspace.id, routeManifest.routeIndex.activity],
+  const studioHref = useMemo(
+    () => routeManifest.routeIndex.studio?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/studio`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.studio],
   );
+  const studioCreateAgentHref = useMemo(() => {
+    const separator = studioHref.includes('?') ? '&' : '?';
+    return `${studioHref}${separator}createAgent=1`;
+  }, [studioHref]);
   const approvalsHref = useMemo(
     () => routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`,
     [bootstrap.workspace.id, routeManifest.routeIndex.approvals],
@@ -1672,42 +1490,30 @@ export function WorkstationChatPane() {
     }),
     [routeManifest.routeIndex],
   );
+  const composerActionMenuItems = useMemo<ComposerActionMenuItem[]>(
+    () => [
+      {
+        id: 'create-business-agent',
+        title: 'Create Business Agent',
+        description: 'Create a worker for a customer, channel, or business workflow.',
+        onSelect: () => {
+          router.push(studioCreateAgentHref);
+        },
+      },
+      {
+        id: 'view-business-agents',
+        title: 'View Business Agents',
+        description: 'Open workers Sage can manage for business workflows.',
+        onSelect: () => {
+          router.push(studioHref);
+        },
+      },
+    ],
+    [router, studioCreateAgentHref, studioHref],
+  );
   const gatewayHref = useMemo(
     () => routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/gateway`,
     [bootstrap.workspace.id, routeManifest.routeIndex.gateway],
-  );
-  const settingsHref = useMemo(
-    () => routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/settings`,
-    [bootstrap.workspace.id, routeManifest.routeIndex.settings],
-  );
-  const runTargetOptions = useMemo(
-    () => [
-      {
-        value: 'local',
-        label: localCompanionOnline ? 'Local' : 'Local offline',
-      },
-    ],
-    [localCompanionOnline],
-  );
-  const autonomyOptions = useMemo(
-    () => [
-      {
-        value: 'default',
-        label: 'Default',
-        detail: chatPermissionModeDetail('default', runtimeTrustZone),
-      },
-      {
-        value: 'auto_review',
-        label: 'Auto-review',
-        detail: chatPermissionModeDetail('auto_review', runtimeTrustZone),
-      },
-      {
-        value: 'autopilot',
-        label: chatPermissionModeLabel('autopilot', runtimeTrustZone),
-        detail: chatPermissionModeDetail('autopilot', runtimeTrustZone),
-      },
-    ],
-    [runtimeTrustZone],
   );
   const composerModelOptions = useMemo(
     () => {
@@ -1758,21 +1564,6 @@ export function WorkstationChatPane() {
     })),
     [selectedModelOption.reasoningLevels],
   );
-  const composerTargetLabel = useMemo(() => {
-    const threadTitle = readString(thread.title);
-    if (
-      activeThreadId === PRIMARY_THREAD_ID
-      || !threadTitle
-      || threadTitle.toLowerCase() === 'chat'
-      || threadTitle.toLowerCase() === 'primary thread'
-    ) {
-      return 'main';
-    }
-    return threadTitle.length > 18 ? `${threadTitle.slice(0, 18).trim()}…` : threadTitle;
-  }, [activeThreadId, thread.title]);
-  const structuredServicesState = artifactCount > 0
-    ? `${artifactCount} attached output${artifactCount === 1 ? '' : 's'} in this thread`
-    : 'No app updates yet';
   const nextStepTitle = approvals.length > 0
     ? 'Approval is waiting'
     : latestRun
@@ -1789,11 +1580,24 @@ export function WorkstationChatPane() {
       return;
     }
     setDraft('');
-    setActiveSageCommandPanel(command.actionKind);
-    if (command.actionKind === 'run_doctor') {
-      void refreshBrowserGatewayReadiness();
+    switch (command.actionKind) {
+      case 'open_usage':
+        setTitlebarCreditsOpen(true);
+        void refreshCreditUsageHistory();
+        return;
+      case 'open_tools':
+      case 'open_runtime':
+        router.push(integrationsHref);
+        return;
+      case 'run_doctor':
+        void refreshBrowserGatewayReadiness();
+        setStatusMessage('Sage setup check refreshed.');
+        return;
+      case 'open_status':
+      default:
+        setStatusMessage(runtimeStatus.label);
     }
-  }, [refreshBrowserGatewayReadiness, setDraft]);
+  }, [integrationsHref, refreshBrowserGatewayReadiness, refreshCreditUsageHistory, router, runtimeStatus.label, setDraft, setStatusMessage]);
   const handleWorkspaceCommandSelect = useCallback((command: SageWorkspaceCommandMetadata) => {
     setWorkspaceCommandPaletteOpen(false);
     if (command.routeId === 'approvals') {
@@ -1808,33 +1612,7 @@ export function WorkstationChatPane() {
   const memoryMeta = assistantTurnCount > 0
     ? `${assistantTurnCount} Sage repl${assistantTurnCount === 1 ? 'y' : 'ies'} retained`
     : 'The first turn will establish memory';
-  const serviceTone = artifactCount > 0 ? 'success' : 'neutral';
-  const serviceTitle = artifactCount > 0 ? 'App updates are available' : 'No app updates yet';
-  const serviceBody = artifactCount > 0
-    ? 'Sage saved new output in this thread so you can keep building from it.'
-    : 'When Sage creates reusable output, it will show up here.';
   const memoryItems = memorySnapshot.items;
-  const pinnedMemoryCount = readNumber(memorySnapshot.summary.pinned_count, 0);
-  const totalMemoryCount = readNumber(memorySnapshot.summary.total_count, 0);
-  const memoryCardTitle = totalMemoryCount > 0 ? 'What Sage will carry forward' : 'No explicit memory saved yet';
-  const memoryCardBody = totalMemoryCount > 0
-    ? memoryItems.slice(0, 2).map((item) => `${readString(item.title)}: ${readString(item.summary || item.content)}`).join(' · ')
-    : 'Save profile facts, active work, app state, or long-term preferences here when you want Sage to carry them forward explicitly.';
-  const filteredMemoryItems = useMemo(
-    () => memoryItems.filter((item) => memoryFilter === 'all' || readString(item.category) === memoryFilter),
-    [memoryFilter, memoryItems],
-  );
-  const recentRunRows = useMemo(
-    () => runs.slice(0, 3).map((run) => ({
-      runId: readString(run.run_id) || null,
-      threadId: readString(run.thread_id) || null,
-      createdAt: readString(run.created_at) || null,
-      preview: runPreviewLabel(run),
-      title: runContextTitle(run),
-    })),
-    [runs],
-  );
-  const visibleMemoryItems = filteredMemoryItems.slice(0, 6);
   const pendingDeleteMemory = pendingDeleteMemoryId
     ? memoryItems.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null
     : null;
@@ -1892,7 +1670,7 @@ export function WorkstationChatPane() {
     if (!localToolingOnline) {
       pills.push({
         id: 'gateway',
-        label: 'Connected computer: Offline',
+        label: 'This Device: Offline',
         tone: 'danger',
         target: 'integrations',
       });
@@ -1922,16 +1700,14 @@ export function WorkstationChatPane() {
     if (hostedCreditState.monthlyCreditCap <= 0) {
       return '0 credits';
     }
-    const availableCredits = Math.max(hostedCreditState.totalAvailableCredits, hostedCreditState.monthlyCreditsRemaining);
-    return `${formatTitlebarCreditCount(availableCredits)} credits`;
-  }, [hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining, hostedCreditState.totalAvailableCredits]);
+    return `${formatTitlebarCreditCount(hostedCreditState.monthlyCreditsRemaining)} credits`;
+  }, [hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining]);
   const titlebarCreditDetail = useMemo(() => {
     if (hostedCreditState.monthlyCreditCap <= 0) {
       return 'Empyralis credits are not active for this workspace.';
     }
-    const availableCredits = Math.max(hostedCreditState.totalAvailableCredits, hostedCreditState.monthlyCreditsRemaining);
-    return `${Math.round(availableCredits).toLocaleString()} credits available. ${Math.round(hostedCreditState.monthlyCreditsRemaining).toLocaleString()} of ${Math.round(hostedCreditState.monthlyCreditCap).toLocaleString()} monthly refresh credits remaining.`;
-  }, [hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining, hostedCreditState.totalAvailableCredits]);
+    return `${Math.floor(hostedCreditState.monthlyCreditsRemaining).toLocaleString()} credits remaining. ${Math.floor(hostedCreditState.monthlyCreditCap).toLocaleString()} monthly refresh credits; ${Math.floor(hostedCreditState.creditBalanceCredits).toLocaleString()} rollover credits.`;
+  }, [hostedCreditState.creditBalanceCredits, hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining]);
   const recentThreadTitleById = useMemo(() => {
     const lookup = new Map<string, string>();
     for (const item of recentThreads) {
@@ -1976,58 +1752,6 @@ export function WorkstationChatPane() {
     || readString(readObject(billingSummary?.subscription).label)
     || 'Free';
   const perChatCreditHistoryAvailable = creditUsageHistory ? creditUsageHistory.per_chat_available !== false : true;
-  const commandToolTotals = useMemo(() => {
-    let total = 0;
-    let enabled = 0;
-    for (const group of composerToolGroups) {
-      for (const item of group.items) {
-        total += 1;
-        if (item.enabled) {
-          enabled += 1;
-        }
-      }
-    }
-    return { enabled, total };
-  }, [composerToolGroups]);
-  const commandDoctorRows = useMemo(() => {
-    const browserRecord = readObject(browserGatewayDoctor?.browser);
-    const providersRecord = readObject(browserGatewayDoctor?.providers);
-    const quotaRecord = readObject(browserGatewayDoctor?.quota);
-    return [
-      {
-        label: 'Gateway',
-        value: gatewayReadinessOnline ? 'Healthy' : readString(browserGatewayDoctor?.status) || 'Not connected',
-        tone: gatewayReadinessOnline ? 'success' : 'warning',
-      },
-      {
-        label: 'Browser',
-        value: readString(browserRecord.status) || (gatewayToolingOnline ? 'Ready' : 'Not connected'),
-        tone: gatewayToolingOnline ? 'success' : 'warning',
-      },
-      {
-        label: 'Model route',
-        value: activeProviderSummary.connected ? activeProviderSummary.label : 'Setup needed',
-        tone: activeProviderSummary.connected ? 'success' : 'warning',
-      },
-      {
-        label: 'Provider probe',
-        value: readString(providersRecord.status) || (activeProviderSummary.connected ? 'Ready' : 'No probe yet'),
-        tone: activeProviderSummary.connected ? 'success' : 'neutral',
-      },
-      {
-        label: 'Quota',
-        value: readString(quotaRecord.status) || (hostedCreditState.monthlyCreditCap > 0 ? 'Tracked' : 'Not tracked'),
-        tone: hostedCreditState.monthlyCreditCap > 0 ? 'success' : 'neutral',
-      },
-    ];
-  }, [
-    activeProviderSummary.connected,
-    activeProviderSummary.label,
-    browserGatewayDoctor,
-    gatewayReadinessOnline,
-    gatewayToolingOnline,
-    hostedCreditState.monthlyCreditCap,
-  ]);
   const showContextStrip = false;
   const showHeaderReadinessStrip = false;
 
@@ -2276,9 +2000,22 @@ export function WorkstationChatPane() {
     const sessionCommand = resolveSageCommandBySlash(outboundMessage);
     if (sessionCommand) {
       setDraft('');
-      setActiveSageCommandPanel(sessionCommand.actionKind);
-      if (sessionCommand.actionKind === 'run_doctor') {
-        void refreshBrowserGatewayReadiness();
+      switch (sessionCommand.actionKind) {
+        case 'open_usage':
+          setTitlebarCreditsOpen(true);
+          void refreshCreditUsageHistory();
+          break;
+        case 'open_tools':
+        case 'open_runtime':
+          router.push(integrationsHref);
+          break;
+        case 'run_doctor':
+          void refreshBrowserGatewayReadiness();
+          setStatusMessage('Sage setup check refreshed.');
+          break;
+        case 'open_status':
+        default:
+          setStatusMessage(runtimeStatus.label);
       }
       return;
     }
@@ -2745,6 +2482,14 @@ export function WorkstationChatPane() {
             )
           : connectorSetupNotice,
       );
+      if (normalizedResponse.status !== 'incomplete') {
+        services.queryClient.invalidate('chat:billing-summary');
+        services.queryClient.invalidate('chat:credit-usage-history');
+        await Promise.allSettled([
+          refreshBillingSummary(),
+          refreshCreditUsageHistory(),
+        ]);
+      }
     } catch (error) {
       updatePendingUserMessage(null);
       const normalizedError = error instanceof WorkstationClientError ? error : null;
@@ -2796,9 +2541,9 @@ export function WorkstationChatPane() {
         const serverFailure = (typeof normalizedError?.status === 'number' && normalizedError.status >= 500)
           || /bad gateway|gateway timeout|service unavailable|internal server error|server error/i.test(normalizedRawMessage);
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
-          ? 'Connected computer is needed for this request. Connect a computer and try again.'
+          ? 'This Device is needed for this request. Connect a device and try again.'
           : providerNeedsAttention
-            ? 'The selected AI path is not ready. Use Empyralis credits, connect your own AI account, connect a computer, or choose another model in Integrations.'
+            ? 'The selected AI path is not ready. Use Empyralis credits, connect your own AI account, connect a computer, or choose another model in Connections.'
             : approvalNeedsAttention
               ? 'Sage needs approval before using that capability. Review the pending request instead of retrying blindly.'
               : authNeedsAttention
@@ -2811,7 +2556,7 @@ export function WorkstationChatPane() {
                       ? 'The request could not reach the server. Check your connection and try again.'
                       : serverFailure
                         ? 'Sage hit a temporary server issue before it could reply. Try again in a moment.'
-                        : "Sage couldn't complete that turn. Try again or choose another AI model in Integrations.";
+                        : "Sage couldn't complete that turn. Try again or choose another AI model in Connections.";
         const providerNotice = providerNeedsAttention
           ? providerFailureNoticeForProvider(selectedProviderRecord, noticeMessage)
           : null;
@@ -2821,7 +2566,7 @@ export function WorkstationChatPane() {
             ? error.retryable
             : true,
           actions: localComputerNeedsAttention
-            ? [{ label: 'Open Integrations', target: 'integrations' }]
+            ? [{ label: 'Open Connections', target: 'integrations' }]
             : approvalNeedsAttention
               ? [{ label: 'Review approvals', target: 'approvals' }]
               : authNeedsAttention
@@ -2877,7 +2622,7 @@ export function WorkstationChatPane() {
                   <div className="workstation-titlebar__credits-card">
                     <div className="workstation-titlebar__credits-balance-row">
                       <span>Credits</span>
-                      <strong>{formatTitlebarCreditCount(Math.max(hostedCreditState.totalAvailableCredits, hostedCreditState.monthlyCreditsRemaining))}</strong>
+                      <strong>{formatTitlebarCreditCount(hostedCreditState.monthlyCreditsRemaining)}</strong>
                     </div>
                     <div className="workstation-titlebar__credits-balance-row">
                       <span>Monthly refresh</span>
@@ -2935,12 +2680,12 @@ export function WorkstationChatPane() {
               ) : (
                 <>
                   <button
-                    type="button"
-                    className="app-chat-context-strip__link"
-                    onClick={() => {
-                      router.push(integrationsHref);
-                    }}
-                  >
+                  type="button"
+                  className="app-chat-context-strip__link"
+                  onClick={() => {
+                    router.push(integrationsHref);
+                  }}
+                >
                     {activeProviderSummary.label}
                   </button>
                 </>
@@ -2978,7 +2723,11 @@ export function WorkstationChatPane() {
                   type="button"
                   className={`app-chat-readiness-pill app-chat-readiness-pill--${pill.tone}`}
                   onClick={() => {
-                    router.push(pill.target === 'gateway' ? gatewayHref : integrationsHref);
+                    if (pill.target === 'gateway') {
+                      router.push(gatewayHref);
+                      return;
+                    }
+                    router.push(integrationsHref);
                   }}
                 >
                   <span className="app-chat-readiness-pill__dot" aria-hidden="true" />
@@ -3061,31 +2810,7 @@ export function WorkstationChatPane() {
               ) : null}
 
               {showBlankTranscript ? (
-                <div className={`app-chat-empty-state${recentRunRows.length > 0 ? ' app-chat-empty-state--recent' : ''}`}>
-                  {recentRunRows.length > 0 ? (
-                    <div className="app-chat-empty-state__recent">
-                      {recentRunRows.map((run, index) => (
-                        <button
-                          key={run.runId ?? run.threadId ?? `${run.createdAt ?? 'run'}:${index}`}
-                          type="button"
-                          className="app-chat-empty-run-row"
-                          onClick={() => {
-                            void startNewThread({
-                              title: run.title,
-                              sourceRunId: run.runId,
-                              sourceThreadId: run.threadId,
-                            });
-                          }}
-                        >
-                          <span className="app-chat-empty-run-row__time">{formatRelativeTime(run.createdAt)}</span>
-                          <span className="app-chat-empty-run-row__preview" title={run.preview}>
-                            {run.preview}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
+                <div className="app-chat-empty-state" aria-hidden="true" />
               ) : null}
 
               {visibleTranscriptCells.map((cell, index) => (
@@ -3120,6 +2845,10 @@ export function WorkstationChatPane() {
                   onClick: () => {
                     const action = (sendFailureNotice.actions ?? [])[0];
                     setSendFailureNotice(null);
+                    if (action?.target === 'integrations') {
+                      router.push(integrationsHref);
+                      return;
+                    }
                     router.push(
                       action?.target === 'gateway'
                         ? gatewayHref
@@ -3182,25 +2911,13 @@ export function WorkstationChatPane() {
         onStop={stopStreamingResponse}
         slashCommands={sageSlashCommands}
         onSlashCommandSelect={handleSlashCommandSelect}
+        actionMenuItems={composerActionMenuItems}
         onOpenIntegrations={() => {
           router.push(integrationsHref);
         }}
-        onOpenPermissionsAdvanced={() => {
-          router.push(`${settingsHref}?section=privacy`);
-        }}
-        runTarget={selectedExecutionPlacement}
-        runTargetOptions={runTargetOptions}
-        onRunTargetChange={() => {}}
-        autonomyMode={autonomyMode}
-        autonomyOptions={autonomyOptions}
-        onAutonomyModeChange={(nextValue) => {
-          if (nextValue === 'default' || nextValue === 'auto_review' || nextValue === 'autopilot') {
-            setAutonomyMode(nextValue);
-          }
-        }}
-        targetLabel={composerTargetLabel}
         model={effectiveSelectedModel}
         modelOptions={composerModelOptions}
+        modelProviderLabel={runtimeStatus.label}
         onModelChange={handleModelChange}
         reasoningEffort={reasoningEffort}
         reasoningOptions={reasoningOptions}
@@ -3225,11 +2942,8 @@ export function WorkstationChatPane() {
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{
           label: activeProviderSummary.label,
-          actionLabel: 'Set up in Integrations',
+          actionLabel: 'Set up in Connections',
         }}
-        runtimeStatusLabel={runtimeStatus.label}
-        runtimeStatusTone={runtimeStatus.tone}
-        toolGroups={composerToolGroups}
         smallModelWarning={smallModelWarningVisible
           ? "You're using a small model. For best results with tools and complex tasks, we recommend switching to a larger model (7B+)."
           : null}
@@ -3237,8 +2951,6 @@ export function WorkstationChatPane() {
         onDismissSmallModelWarning={() => {
           setSmallModelWarningVisible(false);
         }}
-        showAutonomySelector={localCompanionConnected}
-        autonomyFallbackLabel="Offline"
       />
 
       <CommandSheet
@@ -3278,214 +2990,6 @@ export function WorkstationChatPane() {
               <span className="sage-workspace-command-palette__hint">Open</span>
             </button>
           ))}
-        </div>
-      </CommandSheet>
-
-      <CommandSheet
-        open={activeSageCommandPanel !== null}
-        title={sageCommandSheetTitle(activeSageCommandPanel)}
-        description={sageCommandSheetDescription(activeSageCommandPanel)}
-        onClose={() => {
-          setActiveSageCommandPanel(null);
-        }}
-        actions={(
-          <AppButton
-            type="button"
-            tone="secondary"
-            onClick={() => {
-              setActiveSageCommandPanel(null);
-            }}
-          >
-            Done
-          </AppButton>
-        )}
-      >
-        <div className="sage-command-panel">
-          {activeSageCommandPanel === 'open_status' ? (
-            <>
-              <AppSurfaceStatGrid>
-                <AppSurfaceStat label="Model route" value={activeProviderSummary.connected ? 'Ready' : 'Setup'} hint={activeProviderSummary.label} />
-                <AppSurfaceStat label="Runtime" value={runtimeStatus.label} hint={runtimeCard.meta} />
-                <AppSurfaceStat label="Approvals" value={approvals.length} hint={approvals.length === 1 ? 'request waiting' : 'requests waiting'} />
-                <AppSurfaceStat label="Latest run" value={latestRun ? readString(latestRun.status) || 'unknown' : 'Idle'} hint={latestRun ? runPreviewLabel(latestRun) : 'No active run attached'} />
-              </AppSurfaceStatGrid>
-              <AppNotice tone={readinessPills.length > 0 ? 'warning' : 'success'} className="sage-command-panel__notice">
-                <strong>{readinessPills.length > 0 ? 'Sage needs attention' : 'Sage is ready'}</strong>
-                <span>
-                  {readinessPills.length > 0
-                    ? readinessPills.map((pill) => pill.label).join(' · ')
-                    : 'Model, runtime, and approval state are not blocking the next turn.'}
-                </span>
-              </AppNotice>
-            </>
-          ) : null}
-
-          {activeSageCommandPanel === 'open_usage' ? (
-            <>
-              <AppSurfaceStatGrid>
-                <AppSurfaceStat label="Credits used" value={Math.round(hostedCreditState.monthlyCreditsUsed)} hint="this month" />
-                <AppSurfaceStat label="Credits left" value={Math.round(hostedCreditState.monthlyCreditsRemaining)} hint={hostedCreditState.monthlyCreditCap > 0 ? `${Math.round(hostedCreditState.monthlyCreditCap)} monthly cap` : 'no hosted cap loaded'} />
-                <AppSurfaceStat label="This draft" value={preRunCostEstimate ? compactCreditEstimateLabel(preRunCostEstimate) : '~0 credits'} hint={preRunCostEstimate?.detail ?? 'No hosted credit estimate yet'} />
-                <AppSurfaceStat label="Conversation" value={assistantTurnCount} hint={assistantTurnCount === 1 ? 'assistant reply retained' : 'assistant replies retained'} />
-              </AppSurfaceStatGrid>
-              {preRunCostEstimate?.warnings.length ? (
-                <AppNotice tone="warning" className="sage-command-panel__notice">
-                  <strong>Cost warnings</strong>
-                  <span>{preRunCostEstimate.warnings.join(' · ')}</span>
-                </AppNotice>
-              ) : null}
-            </>
-          ) : null}
-
-          {activeSageCommandPanel === 'open_proof' ? (
-            <>
-              <AppSurfaceStatGrid>
-                <AppSurfaceStat label="Computer proof" value={computerControlSummary.statValue} hint={computerControlSummary.statHint} />
-                <AppSurfaceStat label="Thread outputs" value={artifactCount} hint={artifactCount === 1 ? 'artifact in this thread' : 'artifacts in this thread'} />
-                <AppSurfaceStat label="Latest run" value={latestRun ? readString(latestRun.status) || 'unknown' : 'Idle'} hint={latestRun ? runPreviewLabel(latestRun) : 'No active run attached'} />
-                <AppSurfaceStat label="Approvals" value={approvals.length} hint="guarded actions recorded separately" />
-              </AppSurfaceStatGrid>
-              <section className={`sage-command-panel__hero sage-command-panel__hero--${latestComputerProof ? 'success' : 'neutral'}`}>
-                <span className="sage-command-panel__eyebrow">Computer control</span>
-                <h3>{computerControlSummary.title}</h3>
-                <p>{computerControlSummary.body}</p>
-                <div className="sage-command-panel__pills">
-                  {computerControlSummary.pills.map((pill) => (
-                    <span key={pill}>{pill}</span>
-                  ))}
-                </div>
-              </section>
-              <AppNotice tone="neutral" className="sage-command-panel__notice">
-                <strong>Proof stays outside the chat transcript</strong>
-                <span>Computer screenshots, tool artifacts, runtime sessions, approvals, and final outcomes are inspectable in Activity.</span>
-              </AppNotice>
-              <div className="app-inline-actions">
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    setActiveSageCommandPanel(null);
-                    router.push(activityHref);
-                  }}
-                >
-                  Open Activity proof
-                </AppButton>
-              </div>
-            </>
-          ) : null}
-
-          {activeSageCommandPanel === 'open_runtime' ? (
-            <>
-              <section className={`sage-command-panel__hero sage-command-panel__hero--${runtimeCard.tone}`}>
-                <span className="sage-command-panel__eyebrow">Runtime boundary</span>
-                <h3>{runtimeCard.title}</h3>
-                <p>{runtimeCard.body}</p>
-                <div className="sage-command-panel__pills">
-                  <span>{runtimeCard.preferredPill}</span>
-                  <span>{runtimeCard.localPill}</span>
-                  <span>{runtimeTrustZoneLabel(runtimeTrustZone)}</span>
-                </div>
-              </section>
-              <section className={`sage-command-panel__hero sage-command-panel__hero--${latestComputerProof ? 'success' : runtimeCard.tone}`}>
-                <span className="sage-command-panel__eyebrow">Computer transparency</span>
-                <h3>{computerControlSummary.title}</h3>
-                <p>{computerControlSummary.body}</p>
-                <div className="sage-command-panel__pills">
-                  {computerControlSummary.pills.map((pill) => (
-                    <span key={pill}>{pill}</span>
-                  ))}
-                </div>
-              </section>
-              <div className="app-inline-actions">
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    setActiveSageCommandPanel(null);
-                    router.push(gatewayHref);
-                  }}
-                >
-                  Open Computers
-                </AppButton>
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    setActiveSageCommandPanel(null);
-                    router.push(activityHref);
-                  }}
-                >
-                  Open Activity proof
-                </AppButton>
-              </div>
-            </>
-          ) : null}
-
-          {activeSageCommandPanel === 'open_tools' ? (
-            <>
-              <AppSurfaceStatGrid>
-                <AppSurfaceStat label="Enabled tools" value={`${commandToolTotals.enabled}/${commandToolTotals.total}`} hint="available from current policies" />
-                <AppSurfaceStat label="Computer" value={localToolingOnline ? 'Online' : 'Offline'} hint={localToolingOnline ? 'local tools can be requested' : 'computer tools require connection'} />
-                <AppSurfaceStat label="Browser" value={gatewayToolingOnline ? 'Ready' : 'Not ready'} hint="used for signed-in or private pages" />
-                <AppSurfaceStat label="Policy" value={permissionPolicyLabel} hint="red-line actions still pause for confirmation" />
-              </AppSurfaceStatGrid>
-              <div className="sage-command-panel__tool-groups">
-                {composerToolGroups.map((group) => (
-                  <section key={group.id} className="sage-command-panel__tool-group">
-                    <h3>{group.label}</h3>
-                    <div className="sage-command-panel__tool-list">
-                      {group.items.map((item) => (
-                        <div key={item.id} className="sage-command-panel__tool-row">
-                          <span className={`sage-command-panel__dot${item.enabled ? ' sage-command-panel__dot--success' : ''}`} aria-hidden="true" />
-                          <span>
-                            <strong>{item.label}</strong>
-                            <small>{item.detail}</small>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            </>
-          ) : null}
-
-          {activeSageCommandPanel === 'run_doctor' ? (
-            <>
-              <div className="sage-command-panel__doctor">
-                {commandDoctorRows.map((row) => (
-                  <div key={row.label} className="sage-command-panel__doctor-row">
-                    <span className={`sage-command-panel__dot sage-command-panel__dot--${row.tone}`} aria-hidden="true" />
-                    <span>
-                      <strong>{row.label}</strong>
-                      <small>{row.value}</small>
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <div className="app-inline-actions">
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    void refreshBrowserGatewayReadiness();
-                  }}
-                >
-                  Refresh checks
-                </AppButton>
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    setActiveSageCommandPanel(null);
-                    router.push(integrationsHref);
-                  }}
-                >
-                  Open Integrations
-                </AppButton>
-              </div>
-            </>
-          ) : null}
         </div>
       </CommandSheet>
 

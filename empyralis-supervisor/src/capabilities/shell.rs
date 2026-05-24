@@ -2,36 +2,65 @@ use crate::execution::ExecutionContext;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 struct ShellArguments {
     command: String,
 }
 
-pub fn execute(arguments: &Value, context: &ExecutionContext) -> Result<Value> {
+pub fn execute(
+    arguments: &Value,
+    context: &ExecutionContext,
+    trusted_execution: bool,
+) -> Result<Value> {
     let args: ShellArguments =
         serde_json::from_value(arguments.clone()).context("invalid shell.execute arguments")?;
     let command = args.command.trim();
     if command.is_empty() {
         bail!("command is required");
     }
-    if !safe_shell_command(command) {
+    if !trusted_execution && !safe_shell_command(command) {
         bail!("shell.execute command is not allowed");
     }
 
     context.check_cancelled()?;
     #[cfg(target_os = "windows")]
-    let output = Command::new("powershell")
+    let mut child = Command::new("powershell")
         .args(["-NoProfile", "-Command", command])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("failed to execute shell command")?;
 
     #[cfg(not(target_os = "windows"))]
-    let output = Command::new("/bin/zsh")
+    let mut child = Command::new("/bin/zsh")
         .args(["-lc", command])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("failed to execute shell command")?;
+
+    loop {
+        context.check_cancelled().or_else(|error| {
+            let _ = child.kill();
+            Err(error)
+        })?;
+        if child
+            .try_wait()
+            .context("failed to poll shell command")?
+            .is_some()
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let output = child
+        .wait_with_output()
+        .context("failed to collect shell command output")?;
 
     context.check_cancelled()?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();

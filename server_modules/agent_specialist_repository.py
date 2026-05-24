@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from server_modules import agent_registry_repository, control_plane_repository
@@ -20,6 +22,8 @@ CHANNEL_OWNERSHIP_CONFLICT_MESSAGE = "This channel already has an inbound owner.
 _INBOUND_OWNER_CHANNEL_KEYS = frozenset({"telegram", "whatsapp", "discord", "email", "phone", "web_chat"})
 _WEB_CHAT_DEFAULT_ENDPOINT_KEY = "workspace-default"
 _RUNTIME_MODES = frozenset({"hosted_secure", "local_secure", "privileged_device"})
+_LOCAL_SPECIALIST_LOCK = threading.RLock()
+_LOCAL_SPECIALIST_INSTALLS: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 
 
 class ChannelOwnershipConflictError(Exception):
@@ -272,6 +276,136 @@ def _manifest_projection_metadata(
     if extras:
         payload.update(_dict_json(extras))
     return payload
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _local_specialist_key(tenant_id: str, workspace_id: str, install_id: str) -> tuple[str, str, str]:
+    return (
+        str(tenant_id or "").strip(),
+        str(workspace_id or "").strip(),
+        str(install_id or "").strip(),
+    )
+
+
+def _clone_local_specialist_bundle(bundle: Dict[str, Any]) -> Dict[str, Any]:
+    return json.loads(json.dumps(bundle, ensure_ascii=False, default=str))
+
+
+def _build_local_specialist_bundle(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    install_id: str,
+    definition_id: str,
+    version_id: str,
+    manifest: AgentManifest,
+    created_by_user_id: Optional[str],
+    label: Optional[str],
+    runtime_profile_id: Optional[str],
+    runtime_mode: str,
+    tool_toggles: Optional[Dict[str, Any]],
+    connector_bindings: Optional[Dict[str, Any]],
+    channel_bindings: Optional[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]],
+    status: str = "draft",
+) -> Dict[str, Any]:
+    specialist_name = str(label or manifest.identity.name).strip() or manifest.identity.name
+    source = str(_dict_json(metadata).get("source") or "draft").strip() or "draft"
+    visibility = str(_dict_json(metadata).get("visibility") or "private").strip() or "private"
+    projection_metadata = _manifest_projection_metadata(
+        manifest,
+        source=source,
+        visibility=visibility,
+        extras=metadata,
+    )
+    projected_contract = agent_registry_repository.project_install_contract_fields(
+        install_id=install_id,
+        label=specialist_name,
+        agent_kind=agent_registry_repository.SPECIALIST_AGENT_KIND,
+        metadata=projection_metadata,
+    )
+    now = _utc_now_iso()
+    return {
+        "id": install_id,
+        "tenant_id": str(tenant_id or "").strip() or None,
+        "workspace_id": str(workspace_id or "").strip() or None,
+        "agent_definition_id": definition_id,
+        "agent_definition_version_id": version_id,
+        "installed_by_user_id": str(created_by_user_id or "").strip() or None,
+        "install_scope": "workspace",
+        "owner_user_id": str(created_by_user_id or "").strip() or None,
+        "thread_id": None,
+        "label": specialist_name,
+        "status": str(status or "draft").strip() or "draft",
+        "enabled": True,
+        "runtime_profile_id": _normalize_token(runtime_profile_id),
+        "runtime_mode": _normalize_runtime_mode(runtime_mode),
+        "compiled_workflow_version_id": None,
+        "compiled_workflow_id": None,
+        "root_folder_uri": None,
+        "tool_toggles": _dict_json(tool_toggles),
+        "folder_grants": [],
+        "connector_bindings": _dict_json(connector_bindings),
+        "memory_scope_overrides": {},
+        "policy_context_overrides": _manifest_policy_payload(manifest),
+        "metadata": projected_contract["metadata"],
+        "captain_identity": projected_contract["captain_identity"],
+        "specialist_mode": projected_contract["specialist_mode"],
+        "specialist_mode_contract": projected_contract["specialist_mode_contract"],
+        "created_at": now,
+        "updated_at": now,
+        "agent_definition": {
+            "id": definition_id,
+            "slug": f"{_slugify(specialist_name, fallback='specialist')}-local",
+            "name": specialist_name,
+            "description": str(manifest.identity.summary or "").strip(),
+            "agent_kind": agent_registry_repository.SPECIALIST_AGENT_KIND,
+            "visibility": "workspace",
+            "status": "draft",
+            "source_workflow_definition_id": None,
+            "metadata": {"source": "local_specialist"},
+        },
+        "agent_definition_version": {
+            "id": version_id,
+            "status": "draft",
+            "manifest": manifest.model_dump(mode="json"),
+            "capability_manifest": _manifest_capability_payload(manifest),
+            "memory_scope_manifest": {},
+            "policy_manifest": _manifest_policy_payload(manifest),
+            "placement_manifest": _manifest_placement_payload(runtime_profile_id, _normalize_runtime_mode(runtime_mode)),
+            "template_inputs_schema": {},
+            "metadata": {"source": "local_specialist"},
+            "compiled_workflow_version_id": None,
+        },
+        "runtime_profile": None,
+        "channel_bindings": _dict_json(channel_bindings),
+    }
+
+
+def _store_local_specialist_bundle(bundle: Dict[str, Any]) -> Dict[str, Any]:
+    key = _local_specialist_key(
+        str(bundle.get("tenant_id") or ""),
+        str(bundle.get("workspace_id") or ""),
+        str(bundle.get("id") or ""),
+    )
+    with _LOCAL_SPECIALIST_LOCK:
+        _LOCAL_SPECIALIST_INSTALLS[key] = _clone_local_specialist_bundle(bundle)
+        return _clone_local_specialist_bundle(_LOCAL_SPECIALIST_INSTALLS[key])
+
+
+def _get_local_specialist_bundle(
+    install_id: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    key = _local_specialist_key(tenant_id, workspace_id, install_id)
+    with _LOCAL_SPECIALIST_LOCK:
+        bundle = _LOCAL_SPECIALIST_INSTALLS.get(key)
+        return _clone_local_specialist_bundle(bundle) if isinstance(bundle, dict) else None
 
 
 def _parse_bible_text(bible_text: str) -> Dict[str, str]:
@@ -922,7 +1056,26 @@ async def create_workspace_specialist(
 
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         if connection is None:
-            return None
+            specialist_name = str(label or manifest.identity.name).strip() or manifest.identity.name
+            return _store_local_specialist_bundle(
+                _build_local_specialist_bundle(
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    install_id=f"ainstall_{uuid.uuid4().hex[:16]}",
+                    definition_id=f"agentdef_{uuid.uuid4().hex[:16]}",
+                    version_id=f"agentver_{uuid.uuid4().hex[:16]}",
+                    manifest=manifest,
+                    created_by_user_id=created_by_user_id,
+                    label=specialist_name,
+                    runtime_profile_id=_normalize_token(runtime_profile_id),
+                    runtime_mode=_normalize_runtime_mode(runtime_mode),
+                    tool_toggles=tool_toggles,
+                    connector_bindings=connector_bindings,
+                    channel_bindings=channel_bindings,
+                    metadata=metadata,
+                    status="draft",
+                )
+            )
         resolved_runtime_profile_id, resolved_runtime_mode = await _resolve_runtime_binding(
             connection,
             tenant_id=tenant_id,
@@ -1045,7 +1198,14 @@ async def get_workspace_specialist(
     tenant_id: str,
     workspace_id: str,
 ) -> Optional[Dict[str, Any]]:
-    return await agent_registry_repository.get_workspace_agent_install_bundle(
+    bundle = await agent_registry_repository.get_workspace_agent_install_bundle(
+        install_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+    )
+    if isinstance(bundle, dict):
+        return bundle
+    return _get_local_specialist_bundle(
         install_id,
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -1191,7 +1351,42 @@ async def update_workspace_specialist_manifest(
     channel_bindings = _dict_json(channel_bindings)
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         if connection is None:
-            return None
+            local_install = _get_local_specialist_bundle(
+                install_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+            )
+            if not isinstance(local_install, dict):
+                return None
+            current_metadata = _dict_json(local_install.get("metadata"))
+            merged_metadata = {**current_metadata, **metadata}
+            next_bundle = _build_local_specialist_bundle(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                install_id=install_id,
+                definition_id=str(local_install.get("agent_definition_id") or f"agentdef_{uuid.uuid4().hex[:16]}"),
+                version_id=str(local_install.get("agent_definition_version_id") or f"agentver_{uuid.uuid4().hex[:16]}"),
+                manifest=manifest,
+                created_by_user_id=updated_by_user_id or local_install.get("installed_by_user_id"),
+                label=str(local_install.get("label") or manifest.identity.name).strip() or manifest.identity.name,
+                runtime_profile_id=(
+                    _normalize_token(runtime_profile_id)
+                    if runtime_profile_id is not None
+                    else _normalize_token(local_install.get("runtime_profile_id"))
+                ),
+                runtime_mode=(
+                    _normalize_token(runtime_mode)
+                    if runtime_mode is not None
+                    else _normalize_token(local_install.get("runtime_mode")) or "hosted_secure"
+                ),
+                tool_toggles=tool_toggles or _dict_json(local_install.get("tool_toggles")),
+                connector_bindings={**_dict_json(local_install.get("connector_bindings")), **connector_bindings},
+                channel_bindings=channel_bindings or _dict_json(local_install.get("channel_bindings")),
+                metadata=merged_metadata,
+                status=str(merged_metadata.get("status") or local_install.get("status") or "draft").strip() or "draft",
+            )
+            next_bundle["created_at"] = local_install.get("created_at") or next_bundle.get("created_at")
+            return _store_local_specialist_bundle(next_bundle)
         install_row = await connection.fetchrow(
             """
             SELECT

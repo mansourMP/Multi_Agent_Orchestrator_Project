@@ -75,6 +75,26 @@ _FORBIDDEN_POLICY_OVERRIDE_KEYS = {
     "runtime_attachment_id",
     "self_hosted_runtime_binding",
 }
+
+
+def _risk_policy_for_runtime_access_mode(*, runtime_access_mode: Any = None, requires_owner_approval: Any = True) -> Dict[str, Any]:
+    access_mode = deployed_agent_runtime_contract_service.normalize_runtime_access_mode(
+        runtime_access_mode,
+        requires_owner_approval=requires_owner_approval,
+    )
+    if access_mode == deployed_agent_runtime_contract_service.RUNTIME_ACCESS_MODE_FULL_ACCESS:
+        return {
+            "red_policy": "allow",
+            "allow_orange_without_approval": True,
+            "deny_wins": True,
+            "deny_classes": [],
+        }
+    return {
+        "red_policy": "owner_approval" if bool(requires_owner_approval) else "block",
+        "allow_orange_without_approval": False,
+        "deny_wins": True,
+        "deny_classes": [],
+    }
 _RUNTIME_BINDING_CLOUD = "cloud_computer_agent"
 _RUNTIME_BINDING_LOCAL_GATEWAY = "my_computer_agent"
 _RUNTIME_BINDING_SELF_HOSTED = "self_hosted_agent"
@@ -602,12 +622,10 @@ def build_deployed_agent_virtual_runtime_payload(
     )
     recording_policy = _text(_coerce_dict(computer_safety_snapshot.get("screenshot_session_recording")).get("recording_policy")).lower()
     recording_retention_seconds = _recording_retention_seconds(config)
-    risk_policy = {
-        "red_policy": "owner_approval" if automation.requires_owner_approval else "block",
-        "allow_orange_without_approval": False,
-        "deny_wins": True,
-        "deny_classes": [],
-    }
+    risk_policy = _risk_policy_for_runtime_access_mode(
+        runtime_access_mode=automation.runtime_access_mode,
+        requires_owner_approval=automation.requires_owner_approval,
+    )
     network_policy = {
         "allowed_domains": allowed_domains,
         "denied_domains": [],
@@ -1105,12 +1123,10 @@ def build_deployed_agent_self_hosted_runtime_payload(
             "block_auto_download_without_approval": True,
             "enforce_domain_bound_credential_injection": True,
         },
-        "risk_policy": {
-            "red_policy": "owner_approval" if bool(approval_policy.get("requires_owner_approval", True)) else "block",
-            "allow_orange_without_approval": False,
-            "deny_wins": True,
-            "deny_classes": [],
-        },
+        "risk_policy": _risk_policy_for_runtime_access_mode(
+            runtime_access_mode=approval_policy.get("runtime_access_mode"),
+            requires_owner_approval=approval_policy.get("requires_owner_approval", True),
+        ),
         "runtime_quota": {
             "max_concurrent_sessions": int(max_concurrent_sessions),
             "provider_concurrency_limit": int(max_concurrent_sessions),

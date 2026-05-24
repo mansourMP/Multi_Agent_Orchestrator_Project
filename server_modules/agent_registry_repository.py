@@ -1509,6 +1509,11 @@ async def complete_self_hosted_runtime_command(
         "command_id": target_id,
         "status": normalized_status,
         "completed_at": now_iso,
+        "command": dict(resolved),
+        "result_payload": _dict_json(result_payload),
+        "artifacts": [dict(item) for item in list(artifacts or []) if isinstance(item, dict)],
+        "audit_references": [dict(item) for item in list(audit_references or []) if isinstance(item, dict)],
+        "error": str(error or "").strip() or None,
     }
 
 

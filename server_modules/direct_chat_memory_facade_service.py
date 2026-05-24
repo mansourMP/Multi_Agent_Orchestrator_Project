@@ -19,6 +19,7 @@ def direct_chat_memory_context_message(
             surface_kind=conversation_memory_facade_service.DIRECT_CHAT_SURFACE,
         ),
         DIRECT_CHAT_PROFILE,
+        metadata={"include_memory_context": True},
     )
     return workspace_context_memory_adapter.build_workspace_memory_context_message(
         system_prefix=system_prefix,

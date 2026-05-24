@@ -75,12 +75,12 @@ export function AgentInboxView({
         className="studio-panel studio-panel--inbox"
         eyebrow="Conversations"
         title="Live conversation inbox"
-        subtitle="Open customer sessions for the selected assistant, with filters for channel, handoff, and outcome."
+        subtitle="Open customer sessions for the selected Business Agent, with filters for channel, handoff, and outcome."
       >
         {!selectedAgent ? (
           <EmptyPanel
-            title="Select an assistant first"
-            body="Pick an assistant to open its inbox and review customer sessions."
+            title="Select a Business Agent first"
+            body="Pick a Business Agent to open its inbox and review customer sessions."
           />
         ) : isLoadingConversations ? (
           <>

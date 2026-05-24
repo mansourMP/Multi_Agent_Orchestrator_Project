@@ -52,7 +52,7 @@ export function AgentIntegrationsSections({
           <div>
             <span>Model providers</span>
             <strong>AI accounts this agent can use</strong>
-            <p>Connect API providers here. Studio agents use cloud API accounts only; personal and local routes stay with Sage.</p>
+            <p>Connect API providers here. Business Agents use cloud API accounts only; personal and local routes stay with Sage.</p>
           </div>
           <AppButton
             type="button"
@@ -81,7 +81,7 @@ export function AgentIntegrationsSections({
           })}
         </div>
         <div className="studio-agent-integrations__foot">
-          {connectedProviderCount > 0 ? `${connectedProviderCount} provider${connectedProviderCount === 1 ? '' : 's'} connected for Studio agents.` : 'Connect a model provider before launch.'}
+          {connectedProviderCount > 0 ? `${connectedProviderCount} provider${connectedProviderCount === 1 ? '' : 's'} connected for Business Agents.` : 'Connect a model provider before launch.'}
         </div>
       </section>
 
@@ -89,8 +89,8 @@ export function AgentIntegrationsSections({
         <div className="studio-agent-integrations__head">
           <div>
             <span>Runtime and deployment</span>
-            <strong>Where Studio agents can run</strong>
-            <p>Text/API agents use Empyralis Cloud by default. Computer and customer-owned deployments require explicit setup.</p>
+            <strong>Where Business Agents can run</strong>
+            <p>Business Agents use Cloud worker by default. Agent Computer and customer-owned deployments require explicit setup.</p>
           </div>
         </div>
         <div className="studio-agent-integrations__provider-grid">
@@ -107,7 +107,7 @@ export function AgentIntegrationsSections({
           ))}
         </div>
         <div className="studio-agent-integrations__foot">
-          Empyralis Cloud is the production default. Customer computers, cloud computers, and customer servers are separate deployment modes.
+          Cloud worker is the production default. This Device, Cloud Computer, and Server/VPS are Agent Computer options.
         </div>
       </section>
 

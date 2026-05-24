@@ -420,7 +420,7 @@ export function WorkstationSageHeartbeatPane() {
       : snapshot?.laneQueue.acceptingNewWork
         ? 'Ready'
         : 'Paused';
-  const activityHref = routeManifest.routeIndex.activity?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/activity`;
+  const chatHref = routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/sage`;
   const approvalsHref = routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`;
   const workerLaneRows = useMemo(() => {
     if (!snapshot) {
@@ -468,8 +468,8 @@ export function WorkstationSageHeartbeatPane() {
                   >
                     Refresh
                   </button>
-                  <Link href={activityHref} className="app-link-button app-link-button--secondary">
-                    Open Activity
+                  <Link href={chatHref} className="app-link-button app-link-button--secondary">
+                    Open chat
                   </Link>
                   <Link href={approvalsHref} className="app-link-button app-link-button--secondary">
                     Approvals
@@ -635,6 +635,7 @@ export function WorkstationSageHeartbeatPane() {
 }
 
 export function WorkstationSageWorkCenterPane() {
+  const { bootstrap, routeManifest } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
   const [snapshot, setSnapshot] = useState<HeartbeatSnapshot | null>(null);
@@ -656,7 +657,7 @@ export function WorkstationSageWorkCenterPane() {
     let cancelled = false;
     void refresh(true).catch((loadError) => {
       if (!cancelled) {
-        setError(loadError instanceof Error ? loadError.message : 'Work center is unavailable right now.');
+        setError(loadError instanceof Error ? loadError.message : 'Tasks are unavailable right now.');
         setIsLoading(false);
       }
     });
@@ -687,8 +688,7 @@ export function WorkstationSageWorkCenterPane() {
   const liveCount = snapshot?.queueOverview.runningNowCount ?? 0;
   const queuedCount = snapshot?.queueOverview.queuedCount ?? 0;
   const scheduledCount = snapshot?.exactJobs.length ?? 0;
-  const doneCount = snapshot?.queueOverview.lanes.done.length ?? 0;
-  const totalVisibleWork = liveCount + queuedCount + scheduledCount + doneCount;
+  const approvalCount = snapshot?.queueOverview.blockedOnApprovalCount ?? 0;
   const queueStateLabel = snapshot?.laneQueue.draining
     ? 'Draining'
     : snapshot?.queueOverview.quietHours.active
@@ -696,31 +696,16 @@ export function WorkstationSageWorkCenterPane() {
       : snapshot?.laneQueue.acceptingNewWork
         ? 'Ready'
         : 'Paused';
-  const queueSummaryRows = useMemo(() => {
-    if (!snapshot) {
-      return [];
-    }
-    const laneCopy: Array<{ id: ProductLaneId; title: string; empty: string }> = [
-      { id: 'now', title: 'Now', empty: 'Nothing is running right now.' },
-      { id: 'waiting', title: 'Waiting', empty: 'No queued work is waiting.' },
-      { id: 'scheduled', title: 'Scheduled', empty: 'No recurring work is scheduled yet.' },
-      { id: 'done', title: 'Done', empty: 'No recent governed work yet.' },
-    ];
-    return laneCopy.map(({ id, title, empty }) => {
-      const items = snapshot.queueOverview.lanes[id] ?? [];
-      const preview = items.slice(0, 3).map((item) => {
-        const detail = item.summary || item.statusLabel || (item.runId ? `Run ${item.runId}` : '');
-        return detail ? `${item.label} — ${detail}` : item.label;
-      });
-      return {
-        id,
-        title,
-        count: items.length,
-        subtitle: items.length === 1 ? '1 work item' : `${items.length} work items`,
-        description: preview.length > 0 ? preview.join(' · ') : empty,
-      };
-    });
-  }, [snapshot]);
+  const activeItems = snapshot?.queueOverview.lanes.now ?? [];
+  const waitingItems = snapshot?.queueOverview.lanes.waiting ?? [];
+  const approvalItems = snapshot?.queueOverview.lanes.needs_ok ?? [];
+  const recentItems = snapshot?.queueOverview.lanes.done ?? [];
+  const hasAnyTask = activeItems.length > 0
+    || waitingItems.length > 0
+    || approvalItems.length > 0
+    || recentItems.length > 0
+    || scheduledCount > 0;
+  const sageHref = routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/sage`;
 
   return (
     <WorkstationSurfaceRoot surface="sage-work-center">
@@ -735,18 +720,18 @@ export function WorkstationSageWorkCenterPane() {
           </div>
         ) : (
           <>
-            <section className="sage-work-hero" aria-label="Work center overview">
+            <section className="sage-work-hero" aria-label="Tasks overview">
               <div className="sage-work-hero__copy">
                 <span className="app-data-badge app-data-badge--accent">{queueStateLabel}</span>
-                <h2>Work</h2>
-                <p>Automated tasks and scheduled work for the main Sage agent.</p>
+                <h2>Tasks</h2>
+                <p>Scheduled and active work Sage is handling for you.</p>
                 <div className="sage-work-hero__actions">
                   <button
                     type="button"
-                    className="app-link-button app-link-button--secondary"
+                    className="app-link-button"
                     onClick={() => {
                       void refresh(true).catch((loadError) => {
-                        setError(loadError instanceof Error ? loadError.message : 'Work center is unavailable right now.');
+                        setError(loadError instanceof Error ? loadError.message : 'Tasks are unavailable right now.');
                         setIsLoading(false);
                       });
                     }}
@@ -755,85 +740,80 @@ export function WorkstationSageWorkCenterPane() {
                   </button>
                 </div>
               </div>
-              <div className="sage-work-hero__metrics" aria-label="Current work counts">
-                <div>
-                  <strong>{totalVisibleWork}</strong>
-                  <span>Total</span>
-                </div>
-                <div>
-                  <strong>{liveCount}</strong>
-                  <span>Live</span>
-                </div>
-                <div>
-                  <strong>{scheduledCount}</strong>
-                  <span>Scheduled</span>
-                </div>
-              </div>
             </section>
 
             <WorkstationSurfaceStatGrid>
               <WorkstationSurfaceStat
-                label="Running now"
+                label="Active"
                 value={snapshot.queueOverview.runningNowCount}
                 hint={snapshot.queueOverview.lanes.now[0]?.label || 'Nothing active right now.'}
               />
               <WorkstationSurfaceStat
                 label="Waiting"
                 value={snapshot.queueOverview.queuedCount}
-                hint="Queued task work"
+                hint={waitingItems[0]?.label || 'Nothing waiting.'}
+              />
+              <WorkstationSurfaceStat
+                label="Needs OK"
+                value={approvalCount}
+                hint={approvalItems[0]?.label || 'No approvals needed.'}
               />
               <WorkstationSurfaceStat
                 label="Scheduled"
                 value={snapshot.exactJobs.length}
-                hint={snapshot.nextAction ? `Next: ${snapshot.nextAction.name}` : 'No recurring work scheduled yet.'}
-              />
-              <WorkstationSurfaceStat
-                label="Next action"
-                value={snapshot.nextAction ? formatTimestamp(snapshot.nextAction.nextRunAt) : 'None'}
-                hint={snapshot.queueOverview.quietHours.label}
+                hint={snapshot.nextAction ? `Next: ${snapshot.nextAction.name}` : 'No scheduled tasks yet.'}
               />
             </WorkstationSurfaceStatGrid>
 
-            <WorkstationSurfaceCard
-              title="Live Work Board"
-              description={snapshot.laneQueue.acceptingNewWork
-                ? 'Current work, waiting work, scheduled items, and recent completions.'
-                : 'Queue is paused.'}
-            >
-              <div className="sage-task-lane-grid">
-                {queueSummaryRows.map((row) => {
-                  const laneItems = snapshot.queueOverview.lanes[row.id] ?? [];
-                  return (
-                    <section key={row.id} className="sage-task-lane" aria-label={row.title}>
-                      <header className="sage-task-lane__header">
-                        <div>
-                          <h3>{row.title}</h3>
-                          <p>{row.subtitle}</p>
-                        </div>
-                        <DataBadge tone={laneTone(row.id)}>{row.count}</DataBadge>
-                      </header>
-                      {laneItems.length > 0 ? (
-                        <div className="sage-task-lane__items">
-                          {laneItems.slice(0, 4).map((item) => (
-                            <article key={item.id} className="sage-task-row">
-                              <span className="sage-task-row__title">{item.label}</span>
-                              <span className="sage-task-row__meta">{laneStatusText(item)}</span>
-                              {item.summary ? <p>{item.summary}</p> : null}
-                            </article>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="sage-task-lane__empty">{row.description}</p>
-                      )}
-                    </section>
-                  );
-                })}
-              </div>
-            </WorkstationSurfaceCard>
+            {!hasAnyTask ? (
+              <section className="sage-task-empty-state" aria-label="No tasks">
+                <h3>No tasks yet.</h3>
+                <p>Ask Sage in chat to remind you, check something later, or run a recurring update.</p>
+                <Link href={sageHref} className="app-link-button app-link-button--primary">
+                  Open Sage
+                </Link>
+              </section>
+            ) : null}
+
+            {activeItems.length > 0 ? (
+              <WorkstationSurfaceCard
+                title="Active now"
+                description="Tasks Sage is handling right now."
+              >
+                <div className="sage-task-list">
+                  {activeItems.slice(0, 6).map((item) => (
+                    <WorkstationSurfaceListItem
+                      key={item.id}
+                      title={item.label}
+                      subtitle={laneStatusText(item)}
+                      description={item.summary || undefined}
+                    />
+                  ))}
+                </div>
+              </WorkstationSurfaceCard>
+            ) : null}
+
+            {waitingItems.length > 0 || approvalItems.length > 0 ? (
+              <WorkstationSurfaceCard
+                title="Waiting"
+                description="Tasks paused until time, capacity, or your approval is available."
+              >
+                <div className="sage-task-list">
+                  {[...approvalItems, ...waitingItems].slice(0, 8).map((item) => (
+                    <WorkstationSurfaceListItem
+                      key={item.id}
+                      title={item.label}
+                      subtitle={item.statusLabel || 'Waiting'}
+                      description={item.summary || undefined}
+                    />
+                  ))}
+                </div>
+              </WorkstationSurfaceCard>
+            ) : null}
 
             <WorkstationSurfaceCard
-              title="Upcoming automated tasks"
-              description={`${snapshot.queueOverview.quietHours.label}. Plan tier ${snapshot.planTier}.`}
+              title="Scheduled"
+              description={snapshot.nextAction ? `Next: ${snapshot.nextAction.name}` : 'Tasks you ask Sage to run later will appear here.'}
             >
               <div className="sage-schedule-grid">
                 <section className="sage-schedule-primary">
@@ -848,17 +828,35 @@ export function WorkstationSageWorkCenterPane() {
                         key={item.id || `${item.name}-${item.nextRunAt ?? 'none'}`}
                         title={item.name}
                         subtitle={formatTimestamp(item.nextRunAt)}
-                        description={`${item.scheduleKind} · ${item.wakeMode} · ${item.delivery}${item.pendingHeartbeat ? ' · waiting for heartbeat' : ''}`}
+                        description={item.delivery === 'announce' ? 'Sage will notify you.' : 'Scheduled task.'}
                       />
                     ))
                   ) : (
                     <WorkstationSurfaceNotice tone="neutral">
-                      No reminders or recurring schedules are active yet.
+                      No scheduled tasks yet.
                     </WorkstationSurfaceNotice>
                   )}
                 </div>
               </div>
             </WorkstationSurfaceCard>
+
+            {recentItems.length > 0 ? (
+              <WorkstationSurfaceCard
+                title="Recent"
+                description="Tasks Sage finished recently."
+              >
+                <div className="sage-task-list">
+                  {recentItems.slice(0, 6).map((item) => (
+                    <WorkstationSurfaceListItem
+                      key={item.id}
+                      title={item.label}
+                      subtitle={laneStatusText(item)}
+                      description={item.summary || undefined}
+                    />
+                  ))}
+                </div>
+              </WorkstationSurfaceCard>
+            ) : null}
           </>
         )}
       </main>

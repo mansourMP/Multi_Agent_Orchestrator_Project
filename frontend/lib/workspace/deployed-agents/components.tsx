@@ -1,5 +1,8 @@
 'use client';
 
+import { useRef, useState } from 'react';
+import { Check, ChevronDown } from 'lucide-react';
+
 import {
   DataBadge,
 } from '@/lib/ui/data-table';
@@ -23,6 +26,7 @@ import {
   RETENTION_PRESET_OPTIONS,
   STUDIO_DEFAULT_RUNTIME_PLACEMENT,
   STUDIO_RUNTIME_OPTIONS,
+  normalizeContextPresetId,
 } from './constants';
 import {
   formatTimestamp,
@@ -43,29 +47,97 @@ export function ContextPresetControl({
   value: string;
   onSelect: (nextValue: string) => void;
 }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [menuPlacement, setMenuPlacement] = useState<'down' | 'up'>('down');
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const normalizedValue = normalizeContextPresetId(value);
+  const selectedOption = CONTEXT_PRESET_OPTIONS.find((option) => option.id === normalizedValue) ?? CONTEXT_PRESET_OPTIONS[1] ?? CONTEXT_PRESET_OPTIONS[0];
+  const resolveMenuPlacement = () => {
+    const button = buttonRef.current;
+    if (!button) {
+      return 'down';
+    }
+    const buttonRect = button.getBoundingClientRect();
+    const menuHeight = CONTEXT_PRESET_OPTIONS.length * 38 + 10;
+    const spaceBelow = window.innerHeight - buttonRect.bottom;
+    const spaceAbove = buttonRect.top;
+    return spaceBelow < menuHeight && spaceAbove > spaceBelow ? 'up' : 'down';
+  };
+  const openMenu = () => {
+    setMenuPlacement(resolveMenuPlacement());
+    setIsOpen(true);
+  };
+  const toggleMenu = () => {
+    if (isOpen) {
+      setIsOpen(false);
+      return;
+    }
+    openMenu();
+  };
+
   return (
-    <div className="deployed-agents-context-presets">
-      <div className="deployed-agents-context-presets__label">Context policy</div>
-      <div className="deployed-agents-context-presets__grid" role="tablist" aria-label="Context policy presets">
-        {CONTEXT_PRESET_OPTIONS.map((option) => {
-          const selected = value === option.id;
-          return (
-            <button
-              key={option.id}
-              type="button"
-              className={joinClassNames(
-                'deployed-agents-context-presets__button',
-                selected && 'deployed-agents-context-presets__button--selected',
-              )}
-              role="tab"
-              aria-selected={selected}
-              onClick={() => onSelect(option.id)}
-            >
-              <strong className="deployed-agents-context-presets__title">{option.label}</strong>
-              <span className="deployed-agents-context-presets__description">{option.description}</span>
-            </button>
-          );
-        })}
+    <div className="deployed-agents-context-select">
+      <div className="deployed-agents-context-select__copy">
+        <div className="deployed-agents-context-select__label">Knowledge depth</div>
+        <p>Controls how much file and source context this Business Agent can use when answering.</p>
+        {normalizedValue === 'max' ? (
+          <p className="deployed-agents-context-select__warning">Max uses the largest safe context for the selected model and can cost more.</p>
+        ) : null}
+      </div>
+      <div className="deployed-agents-context-select__control">
+        <button
+          ref={buttonRef}
+          type="button"
+          className="deployed-agents-context-select__button"
+          aria-haspopup="menu"
+          aria-expanded={isOpen}
+          onClick={toggleMenu}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              setIsOpen(false);
+            }
+            if (event.key === 'ArrowDown') {
+              event.preventDefault();
+              openMenu();
+            }
+          }}
+        >
+          <span>{selectedOption.label}</span>
+          <ChevronDown aria-hidden="true" size={18} />
+        </button>
+        {isOpen ? (
+          <div
+            className={joinClassNames(
+              'deployed-agents-context-select__menu',
+              menuPlacement === 'up' && 'deployed-agents-context-select__menu--up',
+            )}
+            role="menu"
+            aria-label="Knowledge depth"
+          >
+            {CONTEXT_PRESET_OPTIONS.map((option) => {
+              const selected = normalizedValue === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={joinClassNames(
+                    'deployed-agents-context-select__option',
+                    selected && 'deployed-agents-context-select__option--selected',
+                  )}
+                  role="menuitemradio"
+                  aria-checked={selected}
+                  onClick={() => {
+                    onSelect(option.id);
+                    setIsOpen(false);
+                  }}
+                >
+                  <span>{option.label}</span>
+                  {selected ? <Check aria-hidden="true" size={18} /> : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -109,7 +181,7 @@ export function RetentionPresetControl({
 export function StudioTemplateCard({
   template,
   onSelect,
-  actionLabel = 'Create assistant',
+  actionLabel = 'Create Business Agent',
 }: {
   template: StudioTemplate;
   onSelect: (templateId: string) => void;
@@ -143,10 +215,10 @@ export function StudioTemplateCard({
 export function DeployedAgentsSkeleton() {
   return (
     <WorkstationSplitWorkbench
-      ariaLabel="Agents"
+      ariaLabel="Business Agents"
       className="studio-agents-workbench"
       sidebar={(
-        <ListDetailPanel eyebrow="Assistants" title="Loading assistants">
+        <ListDetailPanel eyebrow="Business Agents" title="Loading workers">
           <div className="app-stack-3">
             <SkeletonBlock height="3.5rem" />
             <SkeletonBlock height="3.5rem" />
@@ -157,7 +229,7 @@ export function DeployedAgentsSkeleton() {
       )}
     >
       <div className="app-stack-4">
-        <ListDetailPanel eyebrow="Detail" title="Loading assistant details">
+        <ListDetailPanel eyebrow="Detail" title="Loading Business Agent details">
           <div className="app-stack-4">
             <SkeletonBlock height="2rem" width="60%" />
             <AppSurfaceStatGrid>
@@ -283,11 +355,11 @@ export function RuntimeModeSelector({
         {renderRuntimeCard(defaultOption)}
       </div>
       {specialOptions.length > 0 ? (
-        <section className="studio-actions__section studio-actions__section--compact" aria-label="Special deployment modes">
+        <section className="studio-actions__section studio-actions__section--compact" aria-label="Agent Computer options">
           <div className="studio-actions__section-head">
             <div>
-              <span>Special deployment modes</span>
-              <strong>Use only when this agent needs a computer or customer-owned infrastructure</strong>
+              <span>Agent Computer options</span>
+              <strong>Use only when this worker needs a computer or customer-owned infrastructure</strong>
             </div>
           </div>
           <div className="deployed-agents-wizard__runtime-grid">

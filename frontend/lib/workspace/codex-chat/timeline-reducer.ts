@@ -139,6 +139,7 @@ function dimSystemCells(cells: CodexTranscriptCell[]): CodexTranscriptCell[] {
       || cell.kind === 'web_search'
       || cell.kind === 'file_change'
       || cell.kind === 'screenshot'
+      || cell.kind === 'artifact'
       || cell.kind === 'status'
     ) {
       return { ...cell, dimmed: true };
@@ -347,7 +348,7 @@ function applyCodexEvent(
       () => ({
         id: event.id,
         kind: 'exec',
-        command: 'Command',
+        command: event.command || 'Command',
         status: event.status,
         output: event.output,
         exitCode: event.exitCode,
@@ -355,6 +356,7 @@ function applyCodexEvent(
       }),
       (current) => ({
         ...current,
+        command: event.command || current.command,
         status: event.status,
         output: event.output ?? current.output,
         exitCode: event.exitCode,
@@ -458,7 +460,33 @@ function applyCodexEvent(
     return { activeCell: cell, streamStatus: event.status === 'error' ? 'error' : 'streaming' };
   }
 
+  if (event.type === 'artifact_created') {
+    const cell = updateCell(
+      cells,
+      indexById,
+      event.id,
+      () => ({
+        id: event.id,
+        kind: 'artifact' as const,
+        title: event.title,
+        artifactId: event.artifactId,
+        mimeType: event.mimeType,
+        status: event.status,
+        createdAt: nowIso(),
+      }),
+      (current) => ({
+        ...current,
+        title: event.title || current.title,
+        artifactId: event.artifactId || current.artifactId,
+        mimeType: event.mimeType || current.mimeType,
+        status: event.status,
+      }),
+    );
+    return { activeCell: cell, streamStatus: event.status === 'error' ? 'error' : 'streaming' };
+  }
+
   if (event.type === 'approval_request') {
+    const approvalStatus = event.status ?? 'waiting';
     const cell = updateCell<CodexApprovalRequestCell>(
       cells,
       indexById,
@@ -466,16 +494,16 @@ function applyCodexEvent(
       () => ({
         id: event.id,
         kind: 'approval_request',
-        prompt: event.prompt,
+        prompt: event.prompt || 'Approval resolved',
         actions: ['allow_once', 'allow_session', 'deny'],
-        status: 'waiting',
+        status: approvalStatus,
         createdAt: nowIso(),
         metadata: event.metadata,
       }),
       (current) => ({
         ...current,
         prompt: event.prompt || current.prompt,
-        status: 'waiting',
+        status: approvalStatus,
         metadata: {
           ...(current.metadata ?? {}),
           ...(event.metadata ?? {}),

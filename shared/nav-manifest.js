@@ -4,7 +4,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'tasks', 'artifacts', 'activity', 'approvals', 'notifications'],
+    childRouteIds: ['chat', 'memory', 'integrations', 'channels', 'tasks', 'artifacts', 'approvals', 'notifications'],
     direct: true,
   },
   {
@@ -33,7 +33,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
   },
   {
     id: 'gateway',
-    label: 'Computers',
+    label: 'Agent Computer',
     iconName: 'waypoints',
     defaultRouteId: 'gateway',
     childRouteIds: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
@@ -65,7 +65,7 @@ export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = {
   studio: 'Agents',
   marketplace: 'Discover',
   applications: 'Applications',
-  gateway: 'Computers',
+  gateway: 'Agent Computer',
   settings: 'Settings',
 };
 
@@ -136,7 +136,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/inbox/index',
       screenName: 'inbox/index',
       groupId: 'sage',
-      tabLabel: 'Activity',
+      tabLabel: 'Inbox',
       includeInBottomTabs: true,
     },
   },
@@ -145,11 +145,13 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     label: 'Activity',
     segment: 'activity',
     destinationId: 'sage',
-    web: {},
+    web: {
+      hiddenFromNavigation: true,
+    },
   },
   {
     id: 'tasks',
-    label: 'Work',
+    label: 'Tasks',
     segment: 'tasks',
     legacySegments: ['heartbeat'],
     destinationId: 'sage',
@@ -157,7 +159,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'integrations',
-    label: 'Integrations',
+    label: 'Connections',
     segment: 'integrations',
     destinationId: 'sage',
     web: {},
@@ -190,7 +192,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'channels',
-    label: 'Integrations',
+    label: 'Connections',
     segment: 'channels',
     destinationId: 'sage',
     web: {
@@ -263,7 +265,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'gateway',
-    label: 'Computers',
+    label: 'Agent Computer',
     segment: 'gateway',
     destinationId: 'gateway',
     web: {},
@@ -271,7 +273,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/gateway',
       screenName: 'gateway',
       groupId: 'gateway',
-      tabLabel: 'Computers',
+      tabLabel: 'Computer',
       includeInBottomTabs: false,
     },
   },

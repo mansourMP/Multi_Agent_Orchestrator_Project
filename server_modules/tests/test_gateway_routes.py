@@ -17,6 +17,7 @@ from starlette.websockets import WebSocketDisconnect
 from server_modules import (
     agent_computer_profile_service,
     auth,
+    gateway_protocol_service,
     kill_switch_gate,
     gateway_state_repository,
     personal_channels_repository,
@@ -275,6 +276,89 @@ class GatewayRoutesTests(unittest.TestCase):
         )
         self.assertEqual(registration_response.status_code, 200)
         return registration_response.json()
+
+    def test_pairing_intent_requires_autonomous_agent_warning_acknowledgement(self) -> None:
+        response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={
+                "workspace_id": "default",
+                "display_name": "Mansur Mac mini",
+                "platform": "macos",
+                "runtime_access_mode": "autonomous_agent",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Autonomous Agent setup warning", response.json()["detail"])
+
+    def test_pairing_runtime_access_mode_persists_to_gateway_registration(self) -> None:
+        pairing_response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={
+                "workspace_id": "default",
+                "display_name": "Mansur Mac mini",
+                "platform": "macos",
+                "runtime_access_mode": "Autonomous Agent",
+                "autonomous_agent_setup_warning_acknowledged": True,
+            },
+        )
+        self.assertEqual(pairing_response.status_code, 200)
+        pairing_payload = pairing_response.json()
+        self.assertEqual(pairing_payload["metadata"]["runtime_access_mode"], "full_access")
+
+        registration_response = self.client.post(
+            "/api/gateway/registrations",
+            json={
+                "pairing_token": pairing_payload["pairing_token"],
+                "device_id": "device-dedicated-1",
+                "display_name": "Mansur Mac mini",
+                "platform": "macos-arm64",
+                "capabilities": ["screen.read", "shell.execute"],
+                "metadata": {"runtime_access_mode": "default_guarded"},
+            },
+        )
+
+        self.assertEqual(registration_response.status_code, 200)
+        payload = registration_response.json()
+        self.assertEqual(payload["gateway"]["runtime_access_mode"], "full_access")
+        self.assertEqual(payload["gateway"]["runtime_access_label"], "Autonomous Agent")
+        self.assertTrue(payload["gateway"]["autonomous_agent_setup_warning_acknowledged"])
+        gateway_id = payload["gateway"]["gateway_id"]
+        registration = gateway_state_repository.get_gateway_registration(gateway_id)
+        self.assertEqual(registration["metadata"]["runtime_access_mode"], "full_access")
+
+    def test_gateway_registration_cannot_escalate_default_pairing_to_autonomous_agent(self) -> None:
+        pairing_response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={
+                "workspace_id": "default",
+                "display_name": "Mansur Mac",
+                "platform": "macos",
+                "runtime_access_mode": "default_guarded",
+            },
+        )
+        self.assertEqual(pairing_response.status_code, 200)
+        pairing_payload = pairing_response.json()
+
+        registration_response = self.client.post(
+            "/api/gateway/registrations",
+            json={
+                "pairing_token": pairing_payload["pairing_token"],
+                "device_id": "device-default-1",
+                "display_name": "Mansur Mac",
+                "platform": "macos-arm64",
+                "capabilities": ["screen.read"],
+                "metadata": {
+                    "runtime_access_mode": "full_access",
+                    "autonomous_agent_setup_warning_acknowledged": True,
+                },
+            },
+        )
+
+        self.assertEqual(registration_response.status_code, 200)
+        payload = registration_response.json()
+        self.assertEqual(payload["gateway"]["runtime_access_mode"], "default_guarded")
+        self.assertEqual(payload["gateway"]["runtime_access_label"], "Default Guarded")
 
     def test_dedicated_workstation_bind_creates_profile_and_readiness(self) -> None:
         registration_payload = self._register_gateway()
@@ -1992,7 +2076,7 @@ class GatewayRoutesTests(unittest.TestCase):
             websocket.receive_json()
 
             # Now send an oversized frame
-            oversized_payload = "x" * (300 * 1024)
+            oversized_payload = "x" * (gateway_protocol_service.MAX_GATEWAY_FRAME_BYTES + 1)
             websocket.send_text('{"kind":"request","id":"big-1","type":"gateway.heartbeat","scope":' + json.dumps(session_payload["scope"]) + ',"payload":"' + oversized_payload + '"}')
 
             error_response = websocket.receive_json()

@@ -6,6 +6,7 @@ import {
   Text,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   PanResponder,
@@ -18,7 +19,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
-  interpolate,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -32,9 +32,10 @@ import { AgentPayload } from "@/src/components/Renderer";
 import { ActionButton } from "@/src/components/system/ActionButton";
 import { MotionPressable } from "@/src/components/system/MotionPressable";
 import { buildAgentThreadFromInstall, getPrimaryAgent } from "@/src/lib/agents";
-import { MobileAuthExpiredError, mobileApi, type MobileThreadHistoryItem } from "@/src/lib/api";
+import { MobileAuthExpiredError, mobileApi, type EmpyralistStreamEvent, type MobileThreadHistoryItem } from "@/src/lib/api";
 import { useMobileChatContext, usePrimaryGatewayDoctor } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
+import { normalizeTranscriptStreamEvent, transcriptStreamEventsFromMetadata } from "@/src/lib/transcriptEvents";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
@@ -67,15 +68,25 @@ type ChatScreenProps = {
   specialistId?: string;
 };
 
+type MobileInspectorTab = "connections" | "tools" | "memory" | "files" | "thread";
+
+const MOBILE_INSPECTOR_TABS: { id: MobileInspectorTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { id: "connections", label: "Connections", icon: "git-network-outline" },
+  { id: "tools", label: "Tools", icon: "construct-outline" },
+  { id: "memory", label: "Memory", icon: "albums-outline" },
+  { id: "files", label: "Files", icon: "folder-open-outline" },
+  { id: "thread", label: "Thread", icon: "chatbubble-ellipses-outline" },
+];
+
 type KinThinkingIndicatorProps = {
   theme: ReturnType<typeof useTheme>;
 };
 
 function KinThinkingIndicator({ theme }: KinThinkingIndicatorProps) {
-  const orbPulse = useSharedValue(0);
+  const textGlow = useSharedValue(0);
 
   useEffect(() => {
-    orbPulse.value = withRepeat(
+    textGlow.value = withRepeat(
       withTiming(1, {
         duration: MOBILE_MOTION_TIMINGS.slow,
         easing: MOBILE_MOTION_EASING.standard,
@@ -84,13 +95,12 @@ function KinThinkingIndicator({ theme }: KinThinkingIndicatorProps) {
       true,
     );
     return () => {
-      orbPulse.value = 0;
+      textGlow.value = 0;
     };
-  }, [orbPulse]);
+  }, [textGlow]);
 
-  const orbStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(orbPulse.value, [0, 1], [0.38, 1]),
-    transform: [{ scale: interpolate(orbPulse.value, [0, 1], [0.92, 1.12]) }],
+  const textStyle = useAnimatedStyle(() => ({
+    opacity: 0.64 + textGlow.value * 0.36,
   }));
 
   return (
@@ -102,27 +112,19 @@ function KinThinkingIndicator({ theme }: KinThinkingIndicatorProps) {
         alignSelf: "flex-start",
       }}
       >
-      <Animated.View
+      <Animated.Text
         style={[
           {
-            width: 6,
-            height: 6,
-            borderRadius: 3,
-            backgroundColor: theme.colors.textSecondary,
+            fontSize: 12.5,
+            fontWeight: "700",
+            color: theme.colors.textSecondary,
+            letterSpacing: 0,
           },
-          orbStyle,
+          textStyle,
         ]}
-      />
-      <Text
-        style={{
-          fontSize: 12.5,
-          fontWeight: "700",
-          color: theme.colors.textSecondary,
-          letterSpacing: -0.2,
-        }}
       >
         Thinking
-      </Text>
+      </Animated.Text>
     </View>
   );
 }
@@ -171,6 +173,111 @@ function humanizeToken(value: string) {
     .join(" ");
 }
 
+function readText(value: unknown, fallback = "") {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function normalizeRuntimeAccessMode(value: unknown): "default_guarded" | "full_access" {
+  const token = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["full_access", "autonomous_agent", "trusted_full_access", "agent_owned_full_access"].includes(token)) {
+    return "full_access";
+  }
+  return "default_guarded";
+}
+
+function runtimeAccessModeLabel(value: unknown) {
+  return normalizeRuntimeAccessMode(value) === "full_access" ? "Autonomous Agent" : "Default Guarded";
+}
+
+function runtimeAccessModeFromRecord(record: Record<string, unknown> | null | undefined): string {
+  const source = readRecord(record);
+  const metadata = readRecord(source.metadata);
+  return readText(source.runtime_access_mode)
+    || readText(source.runtimeAccessMode)
+    || readText(source.runtime_access_label)
+    || readText(metadata.runtime_access_mode)
+    || readText(metadata.runtimeAccessMode)
+    || "";
+}
+
+function runtimeTargetLabelFromToken(value: unknown) {
+  const token = String(value ?? "").trim().toLowerCase();
+  if (token.includes("cloud_computer") || token.includes("browser_session")) return "Cloud Computer";
+  if (token.includes("self_host") || token.includes("node") || token.includes("vps")) return "Server/VPS";
+  if (token.includes("gateway") || token.includes("local") || token.includes("companion") || token.includes("user_device")) return "This Device";
+  if (token.includes("cloud")) return "Cloud";
+  return "";
+}
+
+function agentComputerPill(source: string, access: string) {
+  return `Agent Computer · ${source}${access ? ` · ${access}` : ""}`;
+}
+
+function localGatewayLabel(gateway: Record<string, unknown>) {
+  const label = [
+    gateway.display_name,
+    gateway.device_name,
+    gateway.platform,
+    gateway.device_id,
+  ].map((item) => String(item ?? "").trim()).find(Boolean) || "";
+  const token = label.toLowerCase();
+  if (token.includes("mac mini")) return "Mac mini";
+  if (token.includes("mac")) return "This Mac";
+  return label ? "This Device" : "This Device";
+}
+
+function runtimePillFromState(params: {
+  gateway: Record<string, unknown> | null | undefined;
+  doctor: Record<string, unknown> | null | undefined;
+  runtimeAttachments?: { attachments?: unknown[] } | null;
+}) {
+  const gateway = readRecord(params.gateway);
+  const doctor = readRecord(params.doctor);
+  const gatewayStatus = readText(doctor.status).toLowerCase()
+    || readText(gateway.status).toLowerCase()
+    || readText(gateway.connection_status).toLowerCase();
+  if (Object.keys(gateway).length > 0) {
+    const access = runtimeAccessModeLabel(runtimeAccessModeFromRecord(gateway));
+    if (["offline", "not_attached", "disconnected"].includes(gatewayStatus)) {
+      return { target: "Agent Computer · Offline", access: "" };
+    }
+    if (["degraded", "blocked", "unhealthy", "warn"].includes(gatewayStatus)) {
+      return { target: agentComputerPill("Degraded", access), access: "" };
+    }
+    return { target: agentComputerPill(localGatewayLabel(gateway), access), access: "" };
+  }
+
+  const attachments = Array.isArray(params.runtimeAttachments?.attachments)
+    ? (params.runtimeAttachments?.attachments ?? []).map((item) => readRecord(item))
+    : [];
+  const preferred = attachments.find((item) => {
+    const kind = readText(item.attachment_kind).toLowerCase();
+    return kind === "cloud_computer" || kind === "self_hosted_business_node" || kind === "local_companion";
+  });
+  if (preferred) {
+    const kind = readText(preferred.attachment_kind).toLowerCase();
+    const status = readText(preferred.status).toLowerCase();
+    const access = runtimeAccessModeLabel(runtimeAccessModeFromRecord(preferred));
+    if (kind === "cloud_computer") {
+      return { target: agentComputerPill(preferred.healthy === false ? "Cloud Computer degraded" : "Cloud Computer", access), access: "" };
+    }
+    if (kind === "self_hosted_business_node") {
+      if (preferred.online === false || status === "offline") return { target: "Agent Computer · Server/VPS offline", access: "" };
+      if (preferred.healthy === false || ["degraded", "unhealthy"].includes(status)) return { target: agentComputerPill("Server/VPS degraded", access), access: "" };
+      return { target: agentComputerPill("Server/VPS", access), access: "" };
+    }
+    return { target: preferred.online === false ? "Agent Computer · Offline" : agentComputerPill("This Device", access), access: "" };
+  }
+
+  return { target: "Cloud", access: "" };
+}
+
 function collectMemoryFacts(value: unknown, limit = 3): string[] {
   const facts: string[] = [];
   const pushFact = (candidate: unknown) => {
@@ -204,22 +311,218 @@ function collectMemoryFacts(value: unknown, limit = 3): string[] {
   return facts;
 }
 
+function streamEventStatus(value: unknown, eventType = "", detailPayload: Record<string, unknown> = {}): "running" | "done" | "error" {
+  const normalizedEventType = eventType.toLowerCase();
+  const status = String(value || detailPayload.decision || detailPayload.resolution || "").trim().toLowerCase();
+  if (["done", "complete", "completed", "success", "succeeded", "approved", "approve", "allowed", "accepted", "resolved", "executed"].includes(status)) {
+    return "done";
+  }
+  if (["error", "failed", "failure", "blocked", "denied", "deny", "rejected", "reject", "offline", "degraded", "cancelled", "canceled", "aborted"].includes(status)) {
+    return "error";
+  }
+  if (
+    normalizedEventType.includes("error")
+    || normalizedEventType.includes("failed")
+    || normalizedEventType.includes("blocked")
+    || normalizedEventType.includes("interrupted")
+  ) {
+    return "error";
+  }
+  if (normalizedEventType.includes("approval.resolved")) {
+    return "done";
+  }
+  if (
+    normalizedEventType.includes("result")
+    || normalizedEventType.includes("completed")
+    || normalizedEventType.includes("finished")
+    || normalizedEventType.includes("artifact.created")
+    || normalizedEventType.includes("screenshot")
+  ) {
+    return "done";
+  }
+  return "running";
+}
+
+function streamEventData(payload: Record<string, unknown>): Record<string, unknown> {
+  return payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+    ? (payload.data as Record<string, unknown>)
+    : {};
+}
+
+function streamEventGroupKey(event: EmpyralistStreamEvent): string {
+  const payload = event.payload || {};
+  const data = streamEventData(payload);
+  const detailPayload = { ...payload, ...data };
+  const eventType = String(detailPayload.event_type || detailPayload.event || detailPayload.type || detailPayload.kind || "").trim().toLowerCase();
+  const groupKind = eventType.includes("approval")
+    ? "approval"
+    : eventType.includes("delegation")
+      ? "delegation"
+    : eventType.includes("artifact") || eventType.includes("screenshot")
+      ? "artifact"
+      : eventType.includes("tool") || eventType.includes("browser") || eventType.includes("search") || eventType.includes("file") || eventType.includes("shell") || eventType.includes("exec")
+        ? "tool"
+        : event.event;
+  const explicitId = String(
+    detailPayload.approval_id
+    || detailPayload.artifact_id
+    || detailPayload.tool_call_id
+    || detailPayload.request_id
+    || detailPayload.item_id
+    || detailPayload.activity_event_id
+    || detailPayload.step_id
+    || detailPayload.runtime_session_id
+    || detailPayload.id
+    || "",
+  ).trim();
+  if (explicitId) {
+    return `${event.event}:${groupKind}:${explicitId}`;
+  }
+  const title = String(payload.title || payload.label || payload.action || "").trim();
+  return `${event.event}:${eventType}:${title}`;
+}
+
+function compactStreamEventDetail(payload: Record<string, unknown>): string | undefined {
+  const candidates = [
+    payload.description,
+    payload.caption,
+    payload.title,
+    payload.summary,
+    payload.result_summary,
+    payload.task_summary,
+    payload.detail,
+    payload.message,
+    payload.specialist_name,
+    payload.target_summary,
+    payload.query,
+    payload.path,
+    payload.filename,
+    payload.command,
+    payload.url,
+    payload.status,
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate || "").replace(/\s+/g, " ").trim();
+    if (text) {
+      return text.length > 96 ? `${text.slice(0, 93)}...` : text;
+    }
+  }
+  return undefined;
+}
+
+function buildStreamEventCard(event: EmpyralistStreamEvent): AgentPayload | null {
+  const normalizedEvent = normalizeTranscriptStreamEvent(event);
+  if (!normalizedEvent) return null;
+  const payload = normalizedEvent.payload || {};
+  const data = streamEventData(payload);
+  const detailPayload = { ...payload, ...data };
+  const metadata = readRecord(detailPayload.metadata);
+  const eventType = String(detailPayload.event_type || detailPayload.event || detailPayload.type || detailPayload.kind || "").trim().toLowerCase();
+  const status = streamEventStatus(detailPayload.status || detailPayload.state, eventType, detailPayload);
+  const explicitTitle = String(detailPayload.title || detailPayload.label || detailPayload.action || "").trim();
+  const toolName = String(detailPayload.tool_name || detailPayload.name || detailPayload.capability_id || detailPayload.action_id || "").trim();
+  const toolToken = `${eventType} ${toolName}`.toLowerCase();
+  const decision = String(detailPayload.decision || detailPayload.resolution || "").trim().toLowerCase();
+  let speech = explicitTitle;
+
+  if (!speech) {
+    if (eventType.includes("approval")) {
+      speech = status === "done"
+        ? "Approval approved"
+        : status === "error" || ["rejected", "reject", "denied", "deny"].includes(decision)
+          ? "Approval denied"
+          : "Waiting for approval";
+    } else if (eventType === "delegation.started") {
+      const specialistName = String(detailPayload.specialist_name || detailPayload.name || detailPayload.label || "").trim();
+      speech = `Delegated to ${specialistName || "Specialist"}`;
+    } else if (eventType === "delegation.finished") {
+      speech = status === "error" ? "Specialist failed" : "Specialist finished";
+    } else if (eventType.includes("screenshot")) {
+      speech = "Captured screenshot";
+    } else if (eventType.includes("artifact")) {
+      const artifactText = `${String(detailPayload.kind || "")} ${String(detailPayload.title || "")} ${String(detailPayload.mime_type || detailPayload.mimeType || "")}`.toLowerCase();
+      speech = artifactText.includes("screenshot") || artifactText.includes("image/")
+        ? "Captured screenshot"
+        : "Created artifact";
+    } else if (eventType.includes("search")) {
+      speech = status === "done" ? "Searched web" : "Searching web";
+    } else if (eventType.includes("browser") || toolToken.includes("browser")) {
+      speech = status === "done" ? "Used browser" : "Using browser";
+    } else if (eventType.includes("file") || toolToken.includes("file")) {
+      speech = status === "done" ? "Read file" : "Reading file";
+    } else if (eventType.includes("shell") || eventType.includes("exec") || eventType.includes("command") || toolToken.includes("shell") || toolToken.includes("command")) {
+      speech = status === "done" ? "Ran command" : "Running shell";
+    } else if (eventType.includes("hardware")) {
+      speech = status === "done" ? "Hardware action complete" : status === "error" ? "Hardware action blocked" : "Using hardware runtime";
+    } else if (eventType.includes("error") || eventType.includes("failed")) {
+      speech = "Action failed";
+    } else if (eventType.includes("status") || eventType.includes("runtime")) {
+      speech = status === "done" ? "Status updated" : status === "error" ? "Action blocked" : "Checking status";
+    } else if (toolName) {
+      speech = status === "done" ? `Used ${toolName}` : `Using ${toolName}`;
+    } else if (event.event === "step") {
+      speech = status === "done" ? "Step complete" : "Working";
+    } else {
+      speech = status === "done" ? "Action complete" : "Working";
+    }
+  }
+
+  const detail = compactStreamEventDetail(detailPayload);
+  const runtimeTarget = runtimeTargetLabelFromToken(detailPayload.runtime_target || metadata.runtime_target);
+  const runtimeAccess = runtimeAccessModeFromRecord({ ...detailPayload, metadata });
+  const runtimeDetail = [runtimeTarget, runtimeAccess ? runtimeAccessModeLabel(runtimeAccess) : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const source = [detail, runtimeDetail].filter(Boolean).join(" · ") || undefined;
+  const artifactUrl = String(detailPayload.url || "").trim();
+  const actions = artifactUrl && /^(https?:|file:)/i.test(artifactUrl)
+    ? [{ label: "Open", command: `open:${artifactUrl}` }]
+    : undefined;
+
+  return {
+    intent: "assistant",
+    messageType: "tool",
+    toolStatus: status,
+    toolKind: eventType || event.event,
+    speech,
+    source,
+    actions,
+  };
+}
+
 function buildTransparencyCards(payload: {
   actions?: unknown[];
   interventions?: unknown[];
-}): AgentPayload[] {
+  stream_events?: EmpyralistStreamEvent[];
+}, options?: { limit?: number }): AgentPayload[] {
   const cards: AgentPayload[] = [];
-  const pushCard = (title: string, detail?: string) => {
+  const pushCard = (
+    title: string,
+    detail?: string,
+    status: AgentPayload["toolStatus"] = "done",
+    actions?: AgentPayload["actions"],
+  ) => {
     const cleanTitle = title.trim();
     const cleanDetail = String(detail || "").trim();
     if (!cleanTitle || cards.some((item) => item.speech === cleanTitle && item.source === cleanDetail)) return;
     cards.push({
       intent: "assistant",
       messageType: "tool",
+      toolStatus: status,
       speech: cleanTitle,
       source: cleanDetail || undefined,
+      actions,
     });
   };
+
+  for (const event of Array.isArray(payload.stream_events) ? payload.stream_events : []) {
+    const normalizedEvent = normalizeTranscriptStreamEvent(event);
+    if (!normalizedEvent) continue;
+    const card = buildStreamEventCard(normalizedEvent);
+    if (card) {
+      pushCard(card.speech, card.source, card.toolStatus, card.actions);
+    }
+  }
 
   for (const item of Array.isArray(payload.interventions) ? payload.interventions : []) {
     const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
@@ -239,7 +542,43 @@ function buildTransparencyCards(payload: {
     pushCard(label, target);
   }
 
-  return cards.slice(0, 4);
+  const limit = Number(options?.limit || 0);
+  return limit > 0 ? cards.slice(0, limit) : cards;
+}
+
+function transcriptEventsFromTurn(turn: NonNullable<MobileThreadHistoryItem["turns"]>[number]): EmpyralistStreamEvent[] {
+  const metadata = readRecord(turn?.metadata);
+  return transcriptStreamEventsFromMetadata(metadata);
+}
+
+function buildCloudThreadMessages(item: MobileThreadHistoryItem): AgentPayload[] {
+  const turns = Array.isArray(item.turns) ? item.turns : [];
+  const orderedTurns = [...turns].sort((left, right) => {
+    const leftTime = parseCloudTimestamp(left?.created_at || left?.updated_at);
+    const rightTime = parseCloudTimestamp(right?.created_at || right?.updated_at);
+    return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
+  });
+  const messages: AgentPayload[] = [];
+  for (const turn of orderedTurns) {
+    const role = String(turn?.role || "").trim().toLowerCase();
+    const content = String(turn?.content || "").trim();
+    if (role === "user") {
+      if (content) {
+        messages.push({ intent: "user", speech: content });
+      }
+      continue;
+    }
+    if (role === "assistant") {
+      messages.push(...buildTransparencyCards({
+        stream_events: transcriptEventsFromTurn(turn),
+        interventions: turn.interventions,
+      }));
+      if (content) {
+        messages.push({ intent: "assistant", speech: content });
+      }
+    }
+  }
+  return messages;
 }
 
 export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScreenProps) {
@@ -256,6 +595,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     addMessage,
     removeMessage,
     updateMessage,
+    replaceSession,
     setActiveSession,
     setSessionTitle,
   } = useChatStore();
@@ -267,9 +607,12 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
   const [cloudHistory, setCloudHistory] = useState<MobileThreadHistoryItem[]>([]);
   const [cloudHistoryLoading, setCloudHistoryLoading] = useState(false);
   const [cloudHistoryError, setCloudHistoryError] = useState<string | null>(null);
+  const [inspectorVisible, setInspectorVisible] = useState(false);
+  const [activeInspectorTab, setActiveInspectorTab] = useState<MobileInspectorTab>("connections");
   const { banner, showBanner } = useTransientBanner();
   const sage = getPrimaryAgent();
   const messagesListRef = useRef<FlatList<AgentPayload>>(null);
+  const activeTurnRef = useRef(0);
   const historyProgress = useRef(new LegacyAnimated.Value(0)).current;
   const embeddedMode = !sessionId;
   const requestedAgentId = String(specialistId || agentId || "").trim();
@@ -300,7 +643,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     }
     return {
       id: source.agentId,
-      label: source.agentName || "Specialist",
+      label: source.agentName || "Business Agent",
       runtimeRole: source.runtimeRole,
       subtitle: source.title !== "New thread" ? source.title : undefined,
       specialistId: source.agentId,
@@ -324,7 +667,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     return {
       ...sage,
       id: requestedAgentId,
-      label: "Specialist",
+      label: "Business Agent",
       runtimeRole: "specialist",
       specialistId: requestedAgentId,
       provider: undefined,
@@ -343,7 +686,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
   );
   const activeSession = agentSessions.find((item) => item.id === resolvedSessionId) ?? agentSessions[0];
   const currentSessionId = activeSession?.id ?? "";
-  const messages = activeSession?.messages || [];
+  const messages = useMemo(() => activeSession?.messages ?? [], [activeSession?.messages]);
   const lastMessageSpeech = messages[messages.length - 1]?.speech || "";
   const channelRole = activeSession?.runtimeRole || activeAgent.runtimeRole || (requestedAgentId ? "specialist" : "private-assistant");
 
@@ -387,6 +730,23 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     ]),
     [chatContextQuery.data?.personalContext?.summary, chatContextQuery.data?.unifiedMemory?.summary],
   );
+  const runtimePill = useMemo(
+    () => runtimePillFromState({
+      gateway: gatewayDoctor.gateway,
+      doctor: gatewayDoctor.doctor,
+      runtimeAttachments: chatContextQuery.data?.runtimeAttachments,
+    }),
+    [chatContextQuery.data?.runtimeAttachments, gatewayDoctor.doctor, gatewayDoctor.gateway],
+  );
+  const proofCardCount = useMemo(
+    () => messages.filter((message) => message.messageType === "tool" || message.messageType === "approval").length,
+    [messages],
+  );
+
+  const openInspector = React.useCallback((tab: MobileInspectorTab = "connections") => {
+    setActiveInspectorTab(tab);
+    setInspectorVisible(true);
+  }, []);
 
   const scrollToBottom = React.useCallback((animated = true) => {
     requestAnimationFrame(() => {
@@ -471,6 +831,30 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     closeHistory(false);
   }, [activeAgent, closeHistory, createSession, setActiveSession, triggerActionHaptic]);
 
+  const openCloudThread = React.useCallback(
+    (item: MobileThreadHistoryItem) => {
+      const threadId = String(item.id || "").trim();
+      if (!threadId) return;
+      triggerDrawerHaptic();
+      const createdAt = parseCloudTimestamp(item.created_at);
+      const updatedAt = parseCloudTimestamp(item.last_turn_at || item.updated_at || item.created_at);
+      replaceSession({
+        id: threadId,
+        title: cloudThreadPreview(item),
+        agentId: activeAgent.id,
+        agentName: activeAgent.label,
+        runtimeRole: activeAgent.runtimeRole,
+        avatarColor: activeAgent.avatarColor,
+        icon: activeAgent.icon,
+        createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+        updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+        messages: buildCloudThreadMessages(item),
+      });
+      closeHistory(false);
+    },
+    [activeAgent, closeHistory, replaceSession, triggerDrawerHaptic],
+  );
+
   const edgeSwipeResponder = React.useMemo(
     () =>
       PanResponder.create({
@@ -543,6 +927,8 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     setInput("");
     setIsLoading(true);
     setRunActivity(["Thinking", "Writing a reply"]);
+    const turnRequestId = activeTurnRef.current + 1;
+    activeTurnRef.current = turnRequestId;
 
     if (!session?.runtimeKey) {
       setFailedMessageIndex(nextUserMessageIndex);
@@ -555,6 +941,26 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
 
     try {
       let streamedReply = "";
+      let nextStreamCardIndex = placeholderIndex + 1;
+      const streamCardIndexByKey = new Map<string, number>();
+      const upsertStreamEventCard = (event: EmpyralistStreamEvent) => {
+        if (activeTurnRef.current !== turnRequestId) return;
+        const normalizedEvent = normalizeTranscriptStreamEvent(event);
+        if (!normalizedEvent) return;
+        const card = buildStreamEventCard(normalizedEvent);
+        if (!card) return;
+        const key = streamEventGroupKey(normalizedEvent);
+        const existingIndex = streamCardIndexByKey.get(key);
+        if (existingIndex != null) {
+          updateMessage(currentSessionId, existingIndex, card);
+          appendRunActivity(card.speech);
+          return;
+        }
+        addMessage(currentSessionId, card);
+        streamCardIndexByKey.set(key, nextStreamCardIndex);
+        nextStreamCardIndex += 1;
+        appendRunActivity(card.speech);
+      };
       const payload = await mobileApi.respondChat(
         session,
         {
@@ -569,23 +975,35 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         },
         {
           onChunk: (delta) => {
+            if (activeTurnRef.current !== turnRequestId) return;
             streamedReply += delta;
             appendRunActivity("Writing");
             updateMessage(currentSessionId, placeholderIndex, {
               speech: streamedReply,
             });
           },
+          onEvent: upsertStreamEventCard,
         },
       );
       const hasStructuredCards =
         (Array.isArray(payload.approvals) && payload.approvals.length > 0) ||
         (Array.isArray(payload.interventions) && payload.interventions.length > 0);
 
+      if (activeTurnRef.current !== turnRequestId) {
+        return;
+      }
+
       updateMessage(currentSessionId, placeholderIndex, {
         speech: hasStructuredCards ? "" : (payload.reply || streamedReply || ""),
       });
 
-      for (const card of buildTransparencyCards(payload)) {
+      for (const card of buildTransparencyCards({
+        ...payload,
+        stream_events: (payload.stream_events || []).filter((event) => {
+          const normalizedEvent = normalizeTranscriptStreamEvent(event);
+          return normalizedEvent ? !streamCardIndexByKey.has(streamEventGroupKey(normalizedEvent)) : false;
+        }),
+      }, { limit: 4 })) {
         addMessage(currentSessionId, card);
       }
 
@@ -618,6 +1036,9 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
 
       setRunActivity([]);
     } catch (err) {
+      if (activeTurnRef.current !== turnRequestId) {
+        return;
+      }
       if (err instanceof MobileAuthExpiredError) {
         setFailedMessageIndex(nextUserMessageIndex);
         removeMessage(currentSessionId, placeholderIndex);
@@ -632,16 +1053,27 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
       setRunActivity([]);
       showBanner(message, "error");
     } finally {
-      setIsLoading(false);
+      if (activeTurnRef.current === turnRequestId) {
+        setIsLoading(false);
+      }
     }
   };
 
-  const handleApprovalDecision = async (card: ApprovalCard, decision: "approved" | "rejected") => {
+  const stopCurrentTurn = React.useCallback(() => {
+    activeTurnRef.current += 1;
+    setIsLoading(false);
+    setRunActivity([]);
+    showBanner("Stopped.", "success");
+  }, [showBanner]);
+
+  const handleApprovalDecision = async (card: ApprovalCard, decision: "allow_once" | "allow_session" | "deny") => {
     if (!session?.runtimeKey) return;
+    const approved = decision === "allow_once" || decision === "allow_session";
+    const approvalScope = decision === "allow_session" ? "session" : "once";
     try {
       if (card.kind === "direct") {
         if (!activeSession?.id || !card.connector || !card.actionId || !card.input) return;
-        if (decision !== "approved") {
+        if (!approved) {
           showBanner("Noted.", "success");
           return;
         }
@@ -653,6 +1085,25 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         setIsLoading(true);
         setRunActivity(["Confirming", "Finishing up"]);
         let streamedReply = "";
+        let nextStreamCardIndex = placeholderIndex + 1;
+        const streamCardIndexByKey = new Map<string, number>();
+        const upsertStreamEventCard = (event: EmpyralistStreamEvent) => {
+          const normalizedEvent = normalizeTranscriptStreamEvent(event);
+          if (!normalizedEvent) return;
+          const card = buildStreamEventCard(normalizedEvent);
+          if (!card) return;
+          const key = streamEventGroupKey(normalizedEvent);
+          const existingIndex = streamCardIndexByKey.get(key);
+          if (existingIndex != null) {
+            updateMessage(activeSession.id, existingIndex, card);
+            appendRunActivity(card.speech);
+            return;
+          }
+          addMessage(activeSession.id, card);
+          streamCardIndexByKey.set(key, nextStreamCardIndex);
+          nextStreamCardIndex += 1;
+          appendRunActivity(card.speech);
+        };
         const payload = await mobileApi.respondChat(
           session,
           {
@@ -676,11 +1127,21 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                 speech: streamedReply,
               });
             },
+            onEvent: upsertStreamEventCard,
           },
         );
         updateMessage(activeSession.id, placeholderIndex, {
           speech: payload.reply || streamedReply || "",
         });
+        for (const resultCard of buildTransparencyCards({
+          ...payload,
+          stream_events: (payload.stream_events || []).filter((event) => {
+            const normalizedEvent = normalizeTranscriptStreamEvent(event);
+            return normalizedEvent ? !streamCardIndexByKey.has(streamEventGroupKey(normalizedEvent)) : false;
+          }),
+        }, { limit: 4 })) {
+          addMessage(activeSession.id, resultCard);
+        }
         setRunActivity([]);
         setIsLoading(false);
         showBanner("Done.", "success");
@@ -694,10 +1155,11 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         session,
         card.runId,
         card.approvalId,
-        decision,
+        approved ? "approved" : "rejected",
+        approvalScope,
       );
       if (!activeSession?.id) return;
-      showBanner(decision === "approved" ? "Done." : "Noted.", "success");
+      showBanner(approved ? "Done." : "Noted.", "success");
     } catch (err) {
       console.warn("Approval resolution failed", err);
       setRunActivity([]);
@@ -709,10 +1171,25 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     setIsLoading(false);
   };
 
+  const handleToolAction = React.useCallback((command: string) => {
+    const url = command.startsWith("open:") ? command.slice("open:".length).trim() : "";
+    if (!url) return;
+    void Linking.openURL(url).catch(() => {
+      showBanner("Could not open that artifact.", "error");
+    });
+  }, [showBanner]);
+
   const renderMessage = ({ item, index }: { item: AgentPayload; index: number }) => {
     const isUser = item.intent === "user";
 
     if (item.messageType === "tool") {
+      const iconName =
+        item.toolStatus === "running"
+          ? "ellipsis-horizontal-circle-outline"
+          : item.toolStatus === "error"
+            ? "alert-circle-outline"
+            : "checkmark-circle-outline";
+      const iconColor = item.toolStatus === "error" ? theme.colors.error : theme.colors.textSecondary;
       return (
         <View
           style={{
@@ -729,7 +1206,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
             gap: 10,
           }}
         >
-          <Ionicons name="checkmark-circle-outline" size={18} color={theme.colors.textSecondary} />
+          <Ionicons name={iconName} size={18} color={iconColor} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text numberOfLines={1} style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
               {item.speech}
@@ -740,6 +1217,15 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
               </Text>
             ) : null}
           </View>
+          {item.actions?.map((action) => (
+            <ActionButton
+              key={action.command}
+              label={action.label}
+              variant="secondary"
+              onPress={() => handleToolAction(action.command)}
+              style={{ alignSelf: "center" }}
+            />
+          ))}
         </View>
       );
     }
@@ -776,15 +1262,21 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           ) : null}
           <View style={{ flexDirection: "row", gap: SPACING.sm, marginTop: SPACING.md }}>
             <ActionButton
-              label="Allow"
+              label="Allow once"
               variant="primary"
-              onPress={() => handleApprovalDecision(item.approval!, "approved")}
+              onPress={() => handleApprovalDecision(item.approval!, "allow_once")}
               style={{ flex: 1 }}
             />
             <ActionButton
-              label="Not now"
+              label="Allow session"
               variant="secondary"
-              onPress={() => handleApprovalDecision(item.approval!, "rejected")}
+              onPress={() => handleApprovalDecision(item.approval!, "allow_session")}
+              style={{ flex: 1 }}
+            />
+            <ActionButton
+              label="Deny"
+              variant="secondary"
+              onPress={() => handleApprovalDecision(item.approval!, "deny")}
               style={{ flex: 1 }}
             />
           </View>
@@ -875,6 +1367,172 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     );
   };
 
+  const InspectorAction = ({
+    label,
+    route,
+  }: {
+    label: string;
+    route: string;
+  }) => (
+    <TouchableOpacity
+      activeOpacity={0.86}
+      onPress={() => {
+        setInspectorVisible(false);
+        router.push(route as never);
+      }}
+      style={{
+        marginTop: 10,
+        alignSelf: "flex-start",
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.card,
+      }}
+    >
+      <Text style={{ fontSize: 12.5, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+
+  const InspectorCard = ({
+    eyebrow,
+    title,
+    body,
+    children,
+  }: {
+    eyebrow: string;
+    title: string;
+    body?: string;
+    children?: React.ReactNode;
+  }) => (
+    <View
+      style={{
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface,
+        paddingHorizontal: 14,
+        paddingVertical: 13,
+        gap: 5,
+      }}
+    >
+      <Text style={{ fontSize: 10.5, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary, letterSpacing: 0.7, textTransform: "uppercase" }}>
+        {eyebrow}
+      </Text>
+      <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+        {title}
+      </Text>
+      {body ? (
+        <Text style={{ fontSize: 12.5, lineHeight: 18, color: theme.colors.textSecondary }}>
+          {body}
+        </Text>
+      ) : null}
+      {children}
+    </View>
+  );
+
+  const renderInspectorContent = () => {
+    if (activeInspectorTab === "connections") {
+      return (
+        <>
+          <InspectorCard
+            eyebrow="AI path"
+            title={runtimePill.target === "Cloud" ? "Cloud" : runtimePill.target}
+            body="Sage starts in Cloud and uses Agent Computer only when connected work needs it."
+          >
+            <InspectorAction label="Open Connections" route="/integrations" />
+          </InspectorCard>
+          <InspectorCard
+            eyebrow="Agent Computer"
+            title={runtimePill.target.includes("Agent Computer") ? runtimePill.target : "Not selected"}
+            body="This Device, dedicated computers, Cloud Computer, and Server/VPS sources stay grouped as Agent Computer."
+          >
+            <InspectorAction label="Manage Agent Computer" route="/gateway" />
+          </InspectorCard>
+        </>
+      );
+    }
+    if (activeInspectorTab === "tools") {
+      return (
+        <>
+          <InspectorCard
+            eyebrow="Proof rows"
+            title={`${proofCardCount} in this chat`}
+            body="Commands, browser use, screenshots, artifacts, approvals, and delegated work appear inline before Sage answers."
+          />
+          <InspectorCard
+            eyebrow="Approvals"
+            title={pendingGatewayApprovals > 0 ? `${pendingGatewayApprovals} waiting` : "None waiting"}
+            body="Guarded actions ask inside chat. Autonomous Agent hardware skips Empyralis per-action prompts."
+          >
+            <InspectorAction label="Review approvals" route="/approvals" />
+          </InspectorCard>
+        </>
+      );
+    }
+    if (activeInspectorTab === "memory") {
+      return (
+        <InspectorCard
+          eyebrow="Memory"
+          title={memoryFacts.length > 0 ? `${memoryFacts.length} visible fact${memoryFacts.length === 1 ? "" : "s"}` : "No visible memory capsule"}
+          body={memoryFacts[0] || "Saved profile facts and preferences stay out of the prompt unless relevant."}
+        >
+          <InspectorAction label="Manage memory" route="/memory" />
+        </InspectorCard>
+      );
+    }
+    if (activeInspectorTab === "files") {
+      return (
+        <InspectorCard
+          eyebrow="Files"
+          title="Artifacts and outputs"
+          body="Screenshots, generated files, and saved outputs open from inline proof cards or the library."
+        >
+          <InspectorAction label="Open library" route="/artifacts" />
+        </InspectorCard>
+      );
+    }
+    return (
+      <>
+        <InspectorCard
+          eyebrow="Thread"
+          title={activeSession.title || "Current chat"}
+          body={`${messages.length} message${messages.length === 1 ? "" : "s"} in this local view.`}
+        />
+        <InspectorCard
+          eyebrow="History"
+          title="Cloud replay"
+          body="Reopened cloud threads replay the same proof cards before the final answer."
+        >
+          <TouchableOpacity
+            activeOpacity={0.86}
+            onPress={() => {
+              setInspectorVisible(false);
+              openHistory();
+            }}
+            style={{
+              marginTop: 10,
+              alignSelf: "flex-start",
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.card,
+            }}
+          >
+            <Text style={{ fontSize: 12.5, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+              Open chats
+            </Text>
+          </TouchableOpacity>
+        </InspectorCard>
+      </>
+    );
+  };
+
   if (!activeSession) {
     return <View style={{ flex: 1, backgroundColor: theme.colors.background }} />;
   }
@@ -948,29 +1606,66 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                 textAlign: embeddedMode ? "center" : "left",
               }}
             >
-              {String(channelRole || "specialist").replace(/[_-]+/g, " ")}
+              {requestedAgentId ? "Business Agent" : String(channelRole || "Sage").replace(/[_-]+/g, " ")}
             </Text>
           ) : null}
-        </View>
-        {!historyVisible ? (
-          <MotionPressable
-            accessibilityRole="button"
-            accessibilityLabel="Start a new chat"
-            onPress={createNewThread}
+          <TouchableOpacity
+            activeOpacity={0.84}
+            onPress={() => openInspector("connections")}
             style={{
-              width: 44,
-              height: 44,
-              borderRadius: 22,
-              alignItems: "center",
-              justifyContent: "center",
-              marginLeft: 10,
+              marginTop: 6,
+              alignSelf: embeddedMode ? "center" : "flex-start",
+              maxWidth: "100%",
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              borderRadius: 999,
               borderWidth: 1,
               borderColor: theme.colors.border,
-              backgroundColor: theme.colors.card,
+              backgroundColor: theme.colors.surface,
             }}
           >
-            <Ionicons name="chatbubble-ellipses-outline" size={24} color={theme.colors.text} />
-          </MotionPressable>
+            <Text numberOfLines={1} style={{ fontSize: 11.5, color: theme.colors.textSecondary, fontFamily: "DMSans_700Bold" }}>
+              {runtimePill.access ? `${runtimePill.target} · ${runtimePill.access}` : runtimePill.target}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        {!historyVisible ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginLeft: 10 }}>
+            <MotionPressable
+              accessibilityRole="button"
+              accessibilityLabel="Open Sage panel"
+              onPress={() => openInspector("connections")}
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 21,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.card,
+              }}
+            >
+              <Ionicons name="options-outline" size={22} color={theme.colors.text} />
+            </MotionPressable>
+            <MotionPressable
+              accessibilityRole="button"
+              accessibilityLabel="Start a new chat"
+              onPress={createNewThread}
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 21,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.card,
+              }}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={23} color={theme.colors.text} />
+            </MotionPressable>
+          </View>
         ) : null}
       </View>
       <View style={{ flex: 1 }}>
@@ -1041,7 +1736,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                 <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.5 }}>
                   Memory capsule
                 </Text>
-                <TouchableOpacity activeOpacity={0.86} onPress={() => router.push("/memory")}>
+                <TouchableOpacity activeOpacity={0.86} onPress={() => openInspector("memory")}>
                   <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
                     Edit
                   </Text>
@@ -1077,10 +1772,11 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         <View style={{ paddingBottom: 0 }}>
           <InputBar
             onSend={(text) => sendMessage(text)}
+            onStop={stopCurrentTurn}
+            onPlusPress={() => openInspector("connections")}
             isLoading={isLoading}
             prefilledPrompt={input}
             placeholder={requestedAgentId ? `Message ${activeAgent.label}` : "Ask Sage anything"}
-            textOnly
           />
         </View>
       </View>
@@ -1098,6 +1794,95 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           <TransientBanner message={banner.message} tone={banner.tone} />
         </View>
       ) : null}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={inspectorVisible}
+        onRequestClose={() => setInspectorVisible(false)}
+      >
+        <View style={StyleSheet.absoluteFillObject}>
+          <Pressable style={{ flex: 1, backgroundColor: "rgba(17, 24, 39, 0.22)" }} onPress={() => setInspectorVisible(false)} />
+          <View
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              paddingHorizontal: 16,
+              paddingTop: 14,
+              paddingBottom: Math.max(insets.bottom, 16),
+              borderTopLeftRadius: 28,
+              borderTopRightRadius: 28,
+              borderWidth: 1,
+              borderBottomWidth: 0,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.background,
+              maxHeight: "78%",
+              gap: 12,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={{ fontSize: 10.5, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary, letterSpacing: 0.7, textTransform: "uppercase" }}>
+                  Sage
+                </Text>
+                <Text numberOfLines={1} style={{ marginTop: 2, fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                  {MOBILE_INSPECTOR_TABS.find((tab) => tab.id === activeInspectorTab)?.label || "Panel"}
+                </Text>
+                <Text numberOfLines={1} style={{ marginTop: 2, fontSize: 12.5, color: theme.colors.textSecondary }}>
+                  Connections, tools, memory, files, and thread details stay here.
+                </Text>
+              </View>
+              <MotionPressable
+                accessibilityRole="button"
+                accessibilityLabel="Close Sage panel"
+                onPress={() => setInspectorVisible(false)}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  backgroundColor: theme.colors.card,
+                }}
+              >
+                <Ionicons name="close" size={22} color={theme.colors.text} />
+              </MotionPressable>
+            </View>
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              {MOBILE_INSPECTOR_TABS.map((tab) => {
+                const selected = activeInspectorTab === tab.id;
+                return (
+                  <TouchableOpacity
+                    key={tab.id}
+                    activeOpacity={0.86}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    onPress={() => setActiveInspectorTab(tab.id)}
+                    style={{
+                      flex: 1,
+                      minHeight: 42,
+                      borderRadius: 14,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderWidth: 1,
+                      borderColor: selected ? theme.colors.text : theme.colors.border,
+                      backgroundColor: selected ? theme.colors.cardHover : theme.colors.surface,
+                    }}
+                  >
+                    <Ionicons name={tab.icon} size={17} color={selected ? theme.colors.text : theme.colors.textSecondary} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <View style={{ gap: 10 }}>
+              {renderInspectorContent()}
+            </View>
+          </View>
+        </View>
+      </Modal>
       {embeddedMode ? (
         <>
           {!historyVisible ? (
@@ -1273,8 +2058,11 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                         const preview = cloudThreadPreview(item);
                         const occurredAt = item.last_turn_at || item.updated_at || item.created_at;
                         return (
-                          <View
+                          <MotionPressable
                             key={String(item.id || `thread-${preview}`)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open ${preview}`}
+                            onPress={() => openCloudThread(item)}
                             style={{
                               paddingVertical: 8,
                               paddingHorizontal: 10,
@@ -1301,7 +2089,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                             >
                               Thread {String(item.id || "").trim() || "unknown"}
                             </Text>
-                          </View>
+                          </MotionPressable>
                         );
                       })}
                     </View>

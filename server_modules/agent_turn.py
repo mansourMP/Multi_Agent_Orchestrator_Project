@@ -22,6 +22,7 @@ from server_modules import deployed_agent_virtual_runtime_service
 from server_modules import healthguide_safety_service
 from server_modules import session_service
 from server_modules import thread_service
+from server_modules import transcript_events_service
 from server_modules.telemetry import get_tracer, set_span_attributes
 
 
@@ -313,6 +314,26 @@ def _should_persist_direct_chat_result(result: Any) -> bool:
     reply = str(result.get("reply") or "").strip()
     interventions = result.get("interventions") if isinstance(result.get("interventions"), list) else []
     return bool(reply or interventions)
+
+
+def _assistant_turn_metadata_from_result(
+    result: Dict[str, Any],
+    *,
+    request_id: Optional[str],
+) -> Dict[str, Any]:
+    metadata = _metadata_dict(result.get("metadata"))
+    assistant_metadata: Dict[str, Any] = {
+        "request_id": request_id,
+        "result_metadata": metadata,
+    }
+    trace_id = _result_trace_id(result)
+    if trace_id:
+        assistant_metadata["trace_id"] = trace_id
+    stream_events = result.get("stream_events") if isinstance(result.get("stream_events"), list) else []
+    transcript_events = transcript_events_service.transcript_events_from_stream_events(stream_events)
+    if transcript_events:
+        assistant_metadata["transcript_events"] = transcript_events
+    return assistant_metadata
 
 
 def _direct_chat_request_metadata(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -1621,10 +1642,10 @@ async def agent_turn(
                     runtime_profile_id=runtime_profile_id,
                     approvals=list(result.get("approvals") or []) if isinstance(result.get("approvals"), list) else [],
                     interventions=list(result.get("interventions") or []) if isinstance(result.get("interventions"), list) else [],
-                    metadata={
-                        "request_id": assistant_request_id,
-                        "result_metadata": _metadata_dict(result.get("metadata")),
-                    },
+                    metadata=_assistant_turn_metadata_from_result(
+                        result,
+                        request_id=assistant_request_id,
+                    ),
                 )
                 set_span_attributes(
                     span,

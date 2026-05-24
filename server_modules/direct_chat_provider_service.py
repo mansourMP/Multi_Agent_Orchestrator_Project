@@ -548,6 +548,8 @@ def preferred_provider(
     requested = str(requested_provider or "").strip().lower()
     normalized_requested = "codex_cli" if requested == "openai-codex" else requested
     if normalized_requested in supported_providers:
+        if normalized_requested == "codex_cli" and not provider_runtime_usable_fn(normalized_workspace_id, "codex_cli"):
+            return normalized_requested, {}
         requested_credentials = direct_chat_credentials_fn(normalized_workspace_id, normalized_requested)
         if supports_direct_message_native_chat_fn(normalized_requested, requested_credentials):
             return normalized_requested, requested_credentials

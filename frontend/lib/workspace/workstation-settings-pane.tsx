@@ -15,6 +15,7 @@ import {
   joinClassNames,
 } from '@/lib/ui/primitives';
 import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
+import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationBillingPane } from '@/lib/workspace/workstation-billing-pane';
@@ -23,7 +24,7 @@ import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gate
 import { WorkstationPlatformAnalyticsPane } from '@/lib/workspace/workstation-platform-analytics-pane';
 import type { ProviderCatalogRecord, ProviderProfileRecord } from '@/lib/workspace/workstation-client';
 
-type SettingsSectionId = 'account' | 'devices' | 'usage' | 'billing' | 'privacy' | 'transparency';
+type SettingsSectionId = 'account' | 'appearance' | 'devices' | 'usage' | 'billing' | 'privacy' | 'transparency';
 
 const SETTINGS_SECTIONS: Array<{
   id: SettingsSectionId;
@@ -40,11 +41,18 @@ const SETTINGS_SECTIONS: Array<{
     description: 'Profile and plan.',
   },
   {
+    id: 'appearance',
+    label: 'Appearance',
+    eyebrow: 'Display',
+    title: 'Appearance',
+    description: 'Theme and interface density.',
+  },
+  {
     id: 'devices',
-    label: 'Devices',
-    eyebrow: 'Connected computers',
-    title: 'Connected computers',
-    description: 'Trusted computers, connection health, and local tool readiness.',
+    label: 'Agent Computer',
+    eyebrow: 'Agent Computer',
+    title: 'Agent Computer',
+    description: 'Optional computer power for browser, files, shell, screenshots, and apps.',
   },
   {
     id: 'usage',
@@ -220,12 +228,25 @@ function deriveActiveModelPath(
   if (selectedProfile) {
     const providerId = readString(selectedProfile.provider).toLowerCase();
     const provider = providers.find((item) => readString(item.id).toLowerCase() === providerId) ?? null;
+    const credentialPlane = readString(provider?.credential_plane).toLowerCase();
+    if (credentialPlane === 'platform_runtime') {
+      const selectedModel = readString(selectedProfile.model || provider?.default_model).toLowerCase();
+      const tierLabel = selectedModel === 'light' || selectedModel.includes('flash')
+        ? 'Light AI'
+        : selectedModel === 'max' || selectedModel.includes('reasoner')
+          ? 'Max AI'
+          : 'Pro AI';
+      return {
+        value: tierLabel,
+        hint: 'Empyralis credits',
+      };
+    }
     const providerLabel = readString(provider?.label, providerId || 'AI model');
     const modelLabel = readString(selectedProfile.model)
       || readString(provider?.default_model)
       || 'Default model';
     const routeLabel = provider?.local_only === true || providerId === 'ollama'
-      ? 'Connected computer'
+      ? 'This Device'
       : 'Your AI account';
     return {
       value: `${providerLabel} · ${modelLabel}`,
@@ -238,12 +259,14 @@ function deriveActiveModelPath(
       const policy = readString(provider.hosted_sage_ai_policy).toLowerCase();
       return policy === 'enabled_with_cap' || policy === 'allowed';
     }) ?? null;
-    const providerLabel = readString(hostedProvider?.label, 'Empyralis default model');
-    const modelLabel = readString(hostedProvider?.default_model)
-      || readString((Array.isArray(hostedProvider?.models) ? hostedProvider?.models[0]?.label : null))
-      || 'Default model';
+    const defaultModel = readString(hostedProvider?.default_model).toLowerCase();
+    const tierLabel = defaultModel.includes('flash')
+      ? 'Light AI'
+      : defaultModel.includes('reasoner')
+        ? 'Max AI'
+        : 'Pro AI';
     return {
-      value: `${providerLabel} · ${modelLabel}`,
+      value: tierLabel,
       hint: 'Empyralis credits',
     };
   }
@@ -256,6 +279,7 @@ function deriveActiveModelPath(
 
 function isSettingsSectionId(value: string | null): value is SettingsSectionId {
   return value === 'account'
+    || value === 'appearance'
     || value === 'devices'
     || value === 'usage'
     || value === 'billing'
@@ -359,6 +383,7 @@ export function WorkstationSettingsPane() {
   const searchParams = useSearchParams();
   const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
+  const { state: accountShellState, actions: accountShellActions } = useAccountShell();
   const [selectedSection, setSelectedSection] = useState<SettingsSectionId>(() => {
     const requestedSection = searchParams.get('section');
     return isSettingsSectionId(requestedSection) ? requestedSection : 'account';
@@ -447,13 +472,18 @@ export function WorkstationSettingsPane() {
     [bootstrap.runtime.runtimeTargets],
   );
   const preferredComputerLabel = preferredRuntimeTarget
-    ? preferredRuntimeTarget.id === 'local_companion'
-      ? 'Connected computer'
+    ? preferredRuntimeTarget.id === 'local_companion' || preferredRuntimeTarget.canonicalId === 'user_device_gateway'
+      ? 'Agent Computer · This Device'
       : preferredRuntimeTarget.id === 'sage_cloud_computer'
-        ? 'Cloud computer'
-        : preferredRuntimeTarget.label
+        || preferredRuntimeTarget.canonicalId === 'empyralis_cloud_computer'
+        ? 'Agent Computer · Cloud Computer'
+        : preferredRuntimeTarget.id === 'self_host_runtime'
+          || preferredRuntimeTarget.canonicalId === 'self_hosted_node'
+          ? 'Agent Computer · Server/VPS'
+        : preferredRuntimeTarget.publicLabel || preferredRuntimeTarget.label
     : 'Cloud';
   const activeSection = SETTINGS_SECTIONS.find((section) => section.id === selectedSection) ?? SETTINGS_SECTIONS[0];
+  const currentThemePreference = accountShellState.globalTheme;
   const accountDisplayName = bootstrap.account.displayName?.trim() || 'Empyralis User';
   const accountEmail = bootstrap.account.email;
   const accountInitial = (accountDisplayName || accountEmail).charAt(0).toUpperCase();
@@ -520,7 +550,7 @@ export function WorkstationSettingsPane() {
         <aside className="settings-nav" aria-label="Settings sections">
           <div className="app-settings-sidebar__header">
             <h2 className="app-settings-sidebar__title">Settings</h2>
-            <p className="app-settings-sidebar__subtitle">Account, AI model, and trust controls.</p>
+            <p className="app-settings-sidebar__subtitle">Account, appearance, trust, and billing.</p>
           </div>
           {SETTINGS_SECTIONS.map((section) => (
             <button
@@ -639,6 +669,54 @@ export function WorkstationSettingsPane() {
             </div>
           ) : null}
 
+          {selectedSection === 'appearance' ? (
+            <div className="settings-section-stack">
+              <AppSurfaceCard
+                title="Theme"
+                description="Choose how Empyralis renders on this browser."
+              >
+                <div className="settings-choice-grid">
+                  {[
+                    { id: 'system' as const, label: 'System', detail: 'Follow this device.' },
+                    { id: 'light' as const, label: 'Light', detail: 'Bright surfaces and high contrast.' },
+                    { id: 'dark' as const, label: 'Dark', detail: 'Low-light interface.' },
+                  ].map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={joinClassNames(
+                        'settings-choice-card',
+                        currentThemePreference === option.id && 'settings-choice-card--selected',
+                      )}
+                      aria-pressed={currentThemePreference === option.id}
+                      onClick={() => accountShellActions.setGlobalTheme(option.id)}
+                    >
+                      <strong>{option.label}</strong>
+                      <span>{option.detail}</span>
+                    </button>
+                  ))}
+                </div>
+              </AppSurfaceCard>
+              <AppSurfaceCard
+                title="Interface"
+                description="Sage keeps the daily surface compact. Developer details expand only when a row or tool asks for them."
+              >
+                <AppSurfaceList>
+                  <AppSurfaceListItem
+                    title="Chat first"
+                    subtitle="Default"
+                    description="The transcript and composer stay central. Chat, History, Connections, Memory, Tasks, and Library stay in the top navigation."
+                  />
+                  <AppSurfaceListItem
+                    title="Progressive details"
+                    subtitle="Always available"
+                    description="Technical fields remain in expandable rows instead of a separate advanced product mode."
+                  />
+                </AppSurfaceList>
+              </AppSurfaceCard>
+            </div>
+          ) : null}
+
           {selectedSection === 'devices' ? (
             <div className="settings-section-stack">
               <WorkstationDesktopStatus />
@@ -646,11 +724,11 @@ export function WorkstationSettingsPane() {
               <FormGrid>
                 <FormReadout label="Deployment mode" value={humanizeToken(bootstrap.runtime.deploymentMode)} />
                 <FormReadout
-                  label="Preferred computer target"
+                  label="Preferred runtime"
                   value={preferredComputerLabel}
                 />
                 <FormReadout
-                  label="Connected computer"
+                  label="This Device"
                   value={localCompanionTarget?.online ? 'Connected' : localCompanionTarget ? 'Available but offline' : 'Not detected'}
                 />
                 <FormReadout
@@ -662,7 +740,9 @@ export function WorkstationSettingsPane() {
                 {bootstrap.runtime.runtimeTargets.map((target) => (
                   <article key={target.id} className="settings-detail-card">
                     <div className="settings-detail-card__header">
-                      <strong className="settings-detail-card__title">{target.label}</strong>
+                      <strong className="settings-detail-card__title">
+                        {target.id === 'cloud_default' ? 'Cloud' : `Agent Computer · ${target.label}`}
+                      </strong>
                       <span className={`settings-status settings-status--${target.online && target.healthy ? 'ready' : target.available ? 'warning' : 'muted'}`}>
                         {target.statusLabel || humanizeToken(target.status)}
                       </span>
@@ -700,10 +780,10 @@ export function WorkstationSettingsPane() {
                 </article>
                 <article className="settings-detail-card">
                   <div className="settings-detail-card__header">
-                    <strong className="settings-detail-card__title">Connected computer boundary</strong>
+                    <strong className="settings-detail-card__title">This Device boundary</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Local files, browser, clipboard, screenshots, and terminal require an online connected computer with trusted device access.
+                    Local files, browser, clipboard, screenshots, and terminal require an online trusted device.
                   </p>
                 </article>
                 <article className="settings-detail-card">
@@ -770,7 +850,7 @@ export function WorkstationSettingsPane() {
                     <strong className="settings-detail-card__title">Customer-facing mode</strong>
                   </div>
                   <p className="settings-detail-card__body" style={{ fontSize: 13, color: 'var(--color-muted, #6b7280)', marginBottom: 12 }}>
-                    Customer-facing Studio agents can only use Quiet or Basic mode.
+                    Business Agents can only use Quiet or Basic mode.
                     They never see internal memory, policy details, or tool arguments.
                   </p>
                   <select

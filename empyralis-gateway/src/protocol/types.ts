@@ -105,6 +105,8 @@ export interface GatewayToolInvokePayload {
   run_id: string;
   trace_id: string;
   workspace_id: string;
+  runtime_access_mode?: string;
+  empyralis_approved?: boolean;
 }
 
 export interface GatewayToolInterruptPayload {

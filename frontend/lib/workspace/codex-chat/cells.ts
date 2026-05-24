@@ -82,6 +82,14 @@ export type CodexScreenshotCell = CodexCellBase & {
   status: 'done' | 'error';
 };
 
+export type CodexArtifactCell = CodexCellBase & {
+  kind: 'artifact';
+  title: string;
+  artifactId: string | null;
+  mimeType: string | null;
+  status: 'done' | 'error';
+};
+
 export type CodexApprovalRequestCell = CodexCellBase & {
   kind: 'approval_request';
   prompt: string;
@@ -111,6 +119,7 @@ export type CodexTranscriptCell =
   | CodexWebSearchCell
   | CodexFileChangeCell
   | CodexScreenshotCell
+  | CodexArtifactCell
   | CodexApprovalRequestCell
   | CodexStatusCell
   | CodexErrorCell;
@@ -139,15 +148,16 @@ export type CodexChatEvent =
   | { type: 'assistant_delta'; id: string; delta: string; provider: string | null; model: string | null }
   | { type: 'assistant_final'; id: string; content: string; isIncomplete: boolean; provider: string | null; model: string | null }
   | { type: 'tool_started'; id: string; name: string }
-  | { type: 'tool_result'; id: string; name: string | null; status: 'done' | 'error'; result: string | null }
+  | { type: 'tool_result'; id: string; name: string | null; status: 'running' | 'done' | 'error'; result: string | null }
   | { type: 'exec_started'; id: string; command: string }
   | { type: 'exec_delta'; id: string; output: string }
-  | { type: 'exec_result'; id: string; status: 'done' | 'error'; output: string | null; exitCode: number | null }
+  | { type: 'exec_result'; id: string; command?: string; status: 'done' | 'error'; output: string | null; exitCode: number | null }
   | { type: 'web_search_started'; id: string; query: string }
   | { type: 'web_search_result'; id: string; query: string | null; status: 'done' | 'error'; result: string | null }
   | { type: 'file_change'; id: string; filename: string; action: string; status: 'running' | 'done' | 'error' }
   | { type: 'screenshot_captured'; id: string; caption: string; artifactId: string | null; width: number | null; height: number | null; status: 'done' | 'error' }
-  | { type: 'approval_request'; id: string; prompt: string; metadata?: Record<string, unknown> }
+  | { type: 'artifact_created'; id: string; title: string; artifactId: string | null; mimeType: string | null; status: 'done' | 'error' }
+  | { type: 'approval_request'; id: string; prompt: string; status?: 'waiting' | 'done' | 'error'; metadata?: Record<string, unknown> }
   | { type: 'status'; id: string; label: string; detail: string | null; status: 'idle' | 'running' | 'done' | 'error' }
   | { type: 'error'; id: string; message: string; retryable: boolean };
 

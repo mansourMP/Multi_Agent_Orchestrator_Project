@@ -860,7 +860,7 @@ def _evaluate_action_policy_and_approval(
     deny_classes = set(_normalize_class_list(vc_risk_policy.get("deny_classes") or []))
     allow_orange_without_approval = bool(vc_risk_policy.get("allow_orange_without_approval"))
     red_policy = str(vc_risk_policy.get("red_policy") or "block").strip().lower()
-    if red_policy not in {"block", "owner_approval"}:
+    if red_policy not in {"block", "owner_approval", "allow"}:
         red_policy = "block"
     deny_wins = bool(vc_risk_policy.get("deny_wins", RISK_DENY_WINS_DEFAULT))
 
@@ -886,9 +886,11 @@ def _evaluate_action_policy_and_approval(
     if risk_class == RISK_CLASS_RED:
         if red_policy == "block":
             raise RuntimeError("Computer-use RED-risk action is blocked by policy.")
-        if not owner_or_admin:
+        if red_policy == "owner_approval" and not owner_or_admin:
             raise RuntimeError("Computer-use RED-risk action requires owner/admin mode.")
-        requires_approval = True
+        requires_approval = red_policy == "owner_approval"
+    if red_policy == "allow":
+        requires_approval = False
     if requires_approval and not approval_granted:
         raise RuntimeError(f"Computer-use action requires explicit approval before execution ({risk_class}).")
     return {
@@ -3694,6 +3696,25 @@ class InMemoryVirtualComputerRuntime:
         response = self._base_response(session)
         response["status"] = "streaming"
         response["artifact"] = artifact
+        if persistence_state is not None and persistence_state.profile.auto_terminate_on_task_complete:
+            if isolation is not None:
+                isolation.terminated = True
+                isolation.termination_reason = "ephemeral_auto_terminate"
+            if cost_state is not None:
+                cost_state.quota_terminated = True
+                cost_state.termination_reason = "ephemeral_auto_terminate"
+            session["state"] = RUNTIME_STATE_TERMINATED
+            self._identity_by_session.pop(session_id, None)
+            self._persistence_by_session.pop(session_id, None)
+            response = self._base_response(session)
+            response["status"] = "terminated"
+            response["auto_terminated"] = True
+            response["artifact"] = artifact
+            response["action_result"] = {
+                "ok": True,
+                "action": ACTION_SCREENSHOT,
+                "artifact": artifact,
+            }
         return response
 
     async def collect_artifact(self, payload: Dict[str, Any]) -> Dict[str, Any]:

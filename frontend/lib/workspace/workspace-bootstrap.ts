@@ -27,6 +27,10 @@ export type WorkspaceBootstrapEntitlements = {
 
 export type WorkspaceBootstrapRuntimeTarget = {
   id: string;
+  canonicalId?: string | null;
+  runtimeFabricTarget?: string | null;
+  legacyId?: string | null;
+  publicLabel?: string | null;
   label: string;
   kind: string;
   online: boolean;
@@ -41,7 +45,21 @@ export type WorkspaceBootstrapRuntimeTarget = {
   executionTarget?: string | null;
   trustTier?: string | null;
   approvalMode?: string | null;
+  defaultRuntimeAccessMode?: string | null;
+  supportsFullAccess?: boolean;
+  executionModes?: WorkspaceBootstrapExecutionMode[];
   sampleAttachmentLabel?: string | null;
+};
+
+export type WorkspaceBootstrapExecutionMode = {
+  id: string;
+  label: string;
+  description?: string | null;
+  available: boolean;
+  runtimeAccessMode?: string | null;
+  requiresExplicitSelection?: boolean;
+  requiresOwnerApproval?: boolean;
+  setupWarning?: string | null;
 };
 
 export type WorkspaceBootstrapRuntime = {
@@ -127,6 +145,10 @@ function parseRuntimeTargets(value: unknown): WorkspaceBootstrapRuntimeTarget[] 
     return [
       {
         id: requireString(entry.id, 'runtime.runtimeTargets[].id'),
+        canonicalId: typeof entry.canonicalId === 'string' ? entry.canonicalId : null,
+        runtimeFabricTarget: typeof entry.runtimeFabricTarget === 'string' ? entry.runtimeFabricTarget : null,
+        legacyId: typeof entry.legacyId === 'string' ? entry.legacyId : null,
+        publicLabel: typeof entry.publicLabel === 'string' ? entry.publicLabel : null,
         label: requireString(entry.label, 'runtime.runtimeTargets[].label'),
         kind: requireString(entry.kind, 'runtime.runtimeTargets[].kind'),
         online: Boolean(entry.online),
@@ -141,6 +163,25 @@ function parseRuntimeTargets(value: unknown): WorkspaceBootstrapRuntimeTarget[] 
         executionTarget: typeof entry.executionTarget === 'string' ? entry.executionTarget : null,
         trustTier: typeof entry.trustTier === 'string' ? entry.trustTier : null,
         approvalMode: typeof entry.approvalMode === 'string' ? entry.approvalMode : null,
+        defaultRuntimeAccessMode: typeof entry.defaultRuntimeAccessMode === 'string' ? entry.defaultRuntimeAccessMode : null,
+        supportsFullAccess: Boolean(entry.supportsFullAccess),
+        executionModes: Array.isArray(entry.executionModes)
+          ? entry.executionModes.flatMap((mode) => {
+              if (!isRecord(mode) || typeof mode.id !== 'string' || !mode.id.trim()) {
+                return [];
+              }
+              return [{
+                id: mode.id.trim(),
+                label: typeof mode.label === 'string' && mode.label.trim() ? mode.label.trim() : mode.id.trim(),
+                description: typeof mode.description === 'string' ? mode.description : null,
+                available: Boolean(mode.available),
+                runtimeAccessMode: typeof mode.runtimeAccessMode === 'string' ? mode.runtimeAccessMode : null,
+                requiresExplicitSelection: Boolean(mode.requiresExplicitSelection),
+                requiresOwnerApproval: Boolean(mode.requiresOwnerApproval),
+                setupWarning: typeof mode.setupWarning === 'string' ? mode.setupWarning : null,
+              }];
+            })
+          : [],
         sampleAttachmentLabel: typeof entry.sampleAttachmentLabel === 'string' ? entry.sampleAttachmentLabel : null,
       },
     ];

@@ -60,6 +60,7 @@ class SageMemoryRedStrippingTests(unittest.TestCase):
         ):
             payload = workspace_context_memory_adapter.load_workspace_context_payload(
                 workspace_id="workspace-1",
+                include_memory_context=True,
                 policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
             )
 
@@ -105,6 +106,7 @@ class SageMemoryRedStrippingTests(unittest.TestCase):
         ):
             payload = workspace_context_memory_adapter.load_workspace_context_payload(
                 workspace_id="workspace-1",
+                include_memory_context=True,
                 policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
             )
 
@@ -150,6 +152,7 @@ class SageMemoryRedStrippingTests(unittest.TestCase):
             payload = workspace_context_memory_adapter.load_workspace_context_payload(
                 workspace_id="workspace-1",
                 memory_query="pricing",
+                include_memory_context=True,
                 policy_profile=type("Profile", (), {"max_recent_log_days": 7, "semantic_retrieval_k": 5})(),
             )
 

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { Activity, Bot, Compass, LayoutGrid, Menu, Monitor, Package, Plus, Waypoints } from 'lucide-react';
+import { Bot, Compass, LayoutGrid, Menu, Monitor, Package, Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
@@ -25,11 +25,6 @@ import {
   persistActiveThread,
 } from '@/lib/workspace/workstation-chat-pane-model';
 import {
-  normalizeSpecialistOverlayTabId,
-  SPECIALIST_OVERLAY_TABS,
-} from '@/lib/workspace/deployed-agents/constants';
-import type { SpecialistOverlayTabId } from '@/lib/workspace/deployed-agents/types';
-import {
   buildWorkspaceRouteHref,
   getWorkspaceNavRouteDefinition,
   type WorkspaceNavDestinationId,
@@ -37,9 +32,9 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'activity', 'memory', 'integrations', 'tasks', 'artifacts'],
+  sage: ['chat', 'activity', 'integrations', 'memory', 'tasks', 'artifacts'],
   studio: ['studio'],
-  gateway: ['gateway', 'gatewayApprovals', 'gatewayActivity'],
+  gateway: [],
   marketplace: ['marketplace'],
   applications: ['applications'],
   settings: ['settings'],
@@ -65,9 +60,25 @@ const MARKETPLACE_TITLEBAR_FILTERS = [
 
 type MarketplaceTitlebarFilter = typeof MARKETPLACE_TITLEBAR_FILTERS[number]['id'];
 
+const STUDIO_TITLEBAR_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'live', label: 'Live' },
+  { id: 'draft', label: 'Draft' },
+  { id: 'needs_attention', label: 'Needs attention' },
+  { id: 'paused', label: 'Paused' },
+] as const;
+
+type StudioTitlebarFilter = typeof STUDIO_TITLEBAR_FILTERS[number]['id'];
+
 function normalizeMarketplaceTitlebarFilter(value: string | null): MarketplaceTitlebarFilter {
   return MARKETPLACE_TITLEBAR_FILTERS.some((filter) => filter.id === value)
     ? value as MarketplaceTitlebarFilter
+    : 'all';
+}
+
+function normalizeStudioTitlebarFilter(value: string | null): StudioTitlebarFilter {
+  return STUDIO_TITLEBAR_FILTERS.some((filter) => filter.id === value)
+    ? value as StudioTitlebarFilter
     : 'all';
 }
 
@@ -79,22 +90,32 @@ function buildMarketplaceCategoryHref(workspaceId: string, filter: MarketplaceTi
   return `${baseHref}?category=${encodeURIComponent(filter)}`;
 }
 
-function buildStudioTabHref(
+function buildStudioFilterHref(
   workspaceId: string,
-  tabId: SpecialistOverlayTabId,
+  filterId: StudioTitlebarFilter,
   searchParams: { toString: () => string },
 ): string {
   const params = new URLSearchParams(searchParams.toString());
-  if (tabId === 'overview') {
-    params.delete('tab');
-    params.delete('studioTab');
+  params.delete('tab');
+  params.delete('studioTab');
+  if (filterId === 'all') {
+    params.delete('studioFilter');
   } else {
-    params.set('tab', tabId);
-    params.delete('studioTab');
+    params.set('studioFilter', filterId);
   }
   const query = params.toString();
   const baseHref = buildWorkspaceRouteHref(workspaceId, 'studio');
   return query ? `${baseHref}?${query}` : baseHref;
+}
+
+function buildStudioCreateAgentHref(
+  workspaceId: string,
+  searchParams: { toString: () => string },
+): string {
+  const params = new URLSearchParams(searchParams.toString());
+  params.set('createAgent', '1');
+  const query = params.toString();
+  return `${buildWorkspaceRouteHref(workspaceId, 'studio')}?${query}`;
 }
 
 type ThreadTurnRecord = Record<string, unknown> & {
@@ -123,17 +144,15 @@ type ComputerConnectionStatus = {
 };
 
 const MOBILE_DESTINATION_NAV: readonly {
-  id: 'chat' | 'studio' | 'gateway' | 'marketplace' | 'applications' | 'activity';
+  id: 'chat' | 'studio' | 'marketplace' | 'applications';
   label: string;
   defaultRouteId: WorkspaceRouteId;
   icon: LucideIcon;
 }[] = [
   { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot },
   { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
-  { id: 'gateway', label: 'Computers', defaultRouteId: 'gateway', icon: Waypoints },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
   { id: 'applications', label: 'Applications', defaultRouteId: 'applications', icon: Package },
-  { id: 'activity', label: 'Activity', defaultRouteId: 'activity', icon: Activity },
 ];
 
 function readString(value: unknown, fallback = ''): string {
@@ -405,12 +424,8 @@ export function WorkstationKernelShell({
     return getWorkspaceNavRouteDefinition(activeRouteId).destinationId;
   }, [activeRouteId]);
   const activeMobileDestinationId = useMemo(() => {
-    if (
-      activeRouteId === 'activity'
-      || activeRouteId === 'approvals'
-      || activeRouteId === 'notifications'
-    ) {
-      return 'activity';
+    if (activeRouteId === 'activity' || activeRouteId === 'approvals' || activeRouteId === 'notifications') {
+      return 'chat';
     }
     if (
       activeDestinationId === 'studio'
@@ -488,7 +503,7 @@ export function WorkstationKernelShell({
     return false;
   };
   const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('category'));
-  const studioTab = normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab'));
+  const studioFilter = normalizeStudioTitlebarFilter(searchParams.get('studioFilter'));
   const applicationTab = normalizeApplicationSurfaceTabId(searchParams.get('tab') || searchParams.get('applicationTab'));
   const titlebarNavigation = activeDestinationId === 'marketplace'
     ? MARKETPLACE_TITLEBAR_FILTERS.map((filter) => (
@@ -505,20 +520,20 @@ export function WorkstationKernelShell({
       >
         <span>{filter.label}</span>
       </Link>
-    ))
+      ))
     : activeDestinationId === 'studio'
-      ? SPECIALIST_OVERLAY_TABS.map((tab) => (
+      ? STUDIO_TITLEBAR_FILTERS.map((filter) => (
         <Link
-          key={tab.id}
-          href={buildStudioTabHref(workspaceId, tab.id, searchParams)}
+          key={filter.id}
+          href={buildStudioFilterHref(workspaceId, filter.id, searchParams)}
           prefetch
-          aria-current={studioTab === tab.id ? 'page' : undefined}
+          aria-current={studioFilter === filter.id ? 'page' : undefined}
           className={joinClassNames(
             'workstation-titlebar__link',
-            studioTab === tab.id && 'workstation-titlebar__link--active',
+            studioFilter === filter.id && 'workstation-titlebar__link--active',
           )}
         >
-          <span>{tab.label}</span>
+          <span>{filter.label}</span>
         </Link>
       ))
     : activeDestinationId === 'applications'
@@ -556,7 +571,7 @@ export function WorkstationKernelShell({
               isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
             )}
           >
-            <span>{route.label}</span>
+            <span>{route.id === 'chat' ? 'Chat' : route.label}</span>
           </Link>
         )
       ))
@@ -592,7 +607,16 @@ export function WorkstationKernelShell({
           )}
           actions={(
             <>
-              {routeManifest.routeIndex.gateway ? (
+              {activeDestinationId === 'studio' ? (
+                <Link
+                  href={buildStudioCreateAgentHref(workspaceId, searchParams)}
+                  className="workstation-titlebar__link"
+                  title="Add Business Agent"
+                >
+                  <Plus size={16} aria-hidden="true" />
+                  <span>Add agent</span>
+                </Link>
+              ) : routeManifest.routeIndex.gateway ? (
                 <Link
                   href={routeManifest.routeIndex.gateway.href}
                   className={joinClassNames(

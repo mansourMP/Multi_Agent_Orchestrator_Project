@@ -13,6 +13,8 @@ from server_modules.agent_turn import (
 from server_modules import agent_trace_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_chat_generation_service
+from server_modules import empyralis_model_tier_contract
+from server_modules import empyralis_model_tier_routing_service
 from server_modules import direct_chat_provider_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_response_service
@@ -53,6 +55,106 @@ def _provider_chat_tools_for_message(message: str, tools: List[Dict[str, Any]], 
     if not tools:
         return []
     return tools
+
+
+def _turn_request_context_hints(turn_request: Any) -> Dict[str, Any]:
+    if isinstance(turn_request, dict):
+        value = turn_request.get("context_hints")
+    else:
+        value = getattr(turn_request, "context_hints", None)
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _request_id_from_turn_request(turn_request: Any) -> str:
+    hints = _turn_request_context_hints(turn_request)
+    metadata = hints.get("metadata") if isinstance(hints.get("metadata"), dict) else {}
+    if isinstance(turn_request, dict):
+        direct_request_id = turn_request.get("request_id")
+        direct_client_request_id = turn_request.get("client_request_id")
+    else:
+        direct_request_id = getattr(turn_request, "request_id", None)
+        direct_client_request_id = getattr(turn_request, "client_request_id", None)
+    for value in (
+        direct_request_id,
+        direct_client_request_id,
+        hints.get("request_id"),
+        hints.get("client_request_id"),
+        metadata.get("request_id"),
+        metadata.get("client_request_id"),
+    ):
+        token = str(value or "").strip()
+        if token:
+            return token
+    return ""
+
+
+def _runtime_identity_for_availability(
+    *,
+    availability_payload: Dict[str, Any],
+    requested_provider: str,
+    requested_model: str,
+    provider: str,
+    model: Optional[str],
+    session_ctx: Optional[Dict[str, Any]],
+) -> Dict[str, Optional[str]]:
+    metadata: Dict[str, Any] = {}
+    if isinstance(session_ctx, dict):
+        turn_request = session_ctx.get("agent_turn_request")
+        if hasattr(turn_request, "context_hints") and isinstance(turn_request.context_hints, dict):
+            raw_metadata = turn_request.context_hints.get("metadata")
+            if isinstance(raw_metadata, dict):
+                metadata.update(raw_metadata)
+        raw_metadata = session_ctx.get("metadata")
+        if isinstance(raw_metadata, dict):
+            metadata.update(raw_metadata)
+    billing_source = str(
+        availability_payload.get("billing_source")
+        or metadata.get("billing_source")
+        or ""
+    ).strip().lower() or None
+    credential_plane = str(availability_payload.get("credential_plane") or "").strip().lower()
+    public_tier = empyralis_model_tier_routing_service.infer_migrated_public_tier_from_legacy_selection(
+        requested_provider=requested_provider or provider,
+        requested_model=requested_model or model,
+        metadata={
+            **metadata,
+            **({"billing_source": billing_source} if billing_source else {}),
+            **({"credential_plane": credential_plane} if credential_plane else {}),
+        },
+    )
+    if (
+        credential_plane == "platform_runtime"
+        or billing_source == "empyralis_credits"
+        or public_tier in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS
+    ):
+        tier = empyralis_model_tier_contract.normalize_model_tier(public_tier or "pro", fallback="pro")
+        label = empyralis_model_tier_contract.model_tier_contract(tier).public_label
+        return {
+            "billing_source": "empyralis_credits",
+            "ai_tier": tier,
+            "ai_label": f"{label} AI",
+            "user_owned_ai_label": None,
+        }
+    if credential_plane == "local_runtime":
+        return {
+            "billing_source": billing_source,
+            "ai_tier": None,
+            "ai_label": None,
+            "user_owned_ai_label": "local AI",
+        }
+    if credential_plane in {"workspace_connection", "local_subscription"} or billing_source in {"user_api_key", "user_ai_account", "subscription_passthrough"}:
+        return {
+            "billing_source": billing_source,
+            "ai_tier": None,
+            "ai_label": None,
+            "user_owned_ai_label": "connected AI account",
+        }
+    return {
+        "billing_source": billing_source,
+        "ai_tier": None,
+        "ai_label": None,
+        "user_owned_ai_label": None,
+    }
 
 
 def _message_explicitly_names_direct_tool(message: str, services: DirectChatRuntimeServices) -> bool:
@@ -709,8 +811,16 @@ def build_direct_operator_reply(
             or str((session_ctx or {}).get("client_request_id") or "").strip()
             or f"direct-{uuid.uuid4().hex}"
         )
+    normalized_request_id = (
+        str((session_ctx or {}).get("request_id") or "").strip()
+        or str((session_ctx or {}).get("client_request_id") or "").strip()
+        or _request_id_from_turn_request(resolved_turn_request)
+        or normalized_thread_id
+    )
     generation_session_ctx = dict(session_ctx or {})
-    generation_session_ctx.setdefault("request_id", normalized_thread_id)
+    if normalized_request_id:
+        generation_session_ctx["request_id"] = normalized_request_id
+        generation_session_ctx["client_request_id"] = normalized_request_id
     generation_session_ctx.setdefault("tenant_id", normalized_workspace_id)
     generation_session_ctx.setdefault("workspace_id", normalized_workspace_id)
     normalized_requested_provider = prepared.normalized_requested_provider
@@ -1025,6 +1135,14 @@ def build_direct_operator_reply(
         "tools": generation_tools,
         "disable_provider_fallback": lock_selected_provider,
     }
+    runtime_identity = _runtime_identity_for_availability(
+        availability_payload=availability_payload,
+        requested_provider=normalized_requested_provider,
+        requested_model=normalized_requested_model,
+        provider=provider,
+        model=selected_model or None,
+        session_ctx=generation_session_ctx,
+    )
     metadata = {
         "provider": provider,
         "model": selected_model or None,
@@ -1033,6 +1151,9 @@ def build_direct_operator_reply(
         "thread_id": normalized_thread_id or None,
         "tools": generation_tools,
         "disable_provider_fallback": lock_selected_provider,
+        "billing_source": runtime_identity.get("billing_source"),
+        "ai_tier": runtime_identity.get("ai_tier"),
+        "ai_label": runtime_identity.get("ai_label"),
     }
     if direct_chat_credentials:
         metadata["credentials"] = direct_chat_credentials
@@ -1049,6 +1170,9 @@ def build_direct_operator_reply(
     identity_guardrail = direct_chat_prompt_service.build_runtime_identity_guardrail(
         provider=provider,
         model=selected_model or None,
+        billing_source=runtime_identity.get("billing_source"),
+        ai_tier=runtime_identity.get("ai_tier"),
+        user_owned_ai_label=runtime_identity.get("user_owned_ai_label"),
     )
     system_prompt = direct_chat_prompt_service.combine_workspace_context(
         system_prompt=system_prompt,
@@ -1116,6 +1240,10 @@ def build_chat_turn_event_stream(
 ) -> Iterator[Dict[str, Any]]:
     context = session_ctx if isinstance(session_ctx, dict) else {}
     meta = request_meta if isinstance(request_meta, dict) else {}
+    request_id = str(meta.get("request_id") or meta.get("client_request_id") or "").strip()
+    if request_id:
+        context["request_id"] = request_id
+        context["client_request_id"] = request_id
     trace_context = _resume_trace_context(
         session_ctx=context,
         request_meta=meta,

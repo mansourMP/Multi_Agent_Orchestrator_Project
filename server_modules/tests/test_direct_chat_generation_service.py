@@ -89,6 +89,84 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["payload"]["provider"], "openai")
         self.assertFalse(events[-1]["payload"]["response_leak_guard"]["redacted"])
 
+    def test_stream_provider_backed_direct_chat_masks_platform_paid_metadata(self) -> None:
+        persisted_usage: dict[str, object] = {}
+        services = self._services(
+            stream_events=[
+                {
+                    "type": "result",
+                    "reply": "I am running on Empyralis Pro AI.",
+                    "usage_masked": {
+                        "pricing_source": "https://api-docs.deepseek.com/quick_start/pricing/",
+                        "usage_accounting": {
+                            "input_tokens": 10,
+                            "output_tokens": 4,
+                            "total_tokens": 14,
+                            "effective_provider": "deepseek",
+                            "effective_model": "deepseek-v4-pro",
+                            "pricing_source": "https://api-docs.deepseek.com/quick_start/pricing/",
+                        }
+                    },
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-pro",
+                    "attempted_providers": "deepseek",
+                    "error": "",
+                    "tool_calls": [],
+                }
+            ]
+        )
+        services.persist_direct_chat_hosted_usage_best_effort = lambda **kwargs: persisted_usage.update(kwargs)
+
+        events = list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=services,
+                context={"provider": "deepseek"},
+                metadata={
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-pro",
+                    "billing_source": "empyralis_credits",
+                    "ai_tier": "pro",
+                },
+                system_prompt="System prompt",
+                normalized_workspace_id="default",
+                normalized_requested_provider="deepseek",
+                normalized_requested_model="deepseek-v4-pro",
+                normalized_reasoning_effort="high",
+                normalized_thread_id="thread-1",
+                normalized_message="what model are you?",
+                compacted_prior_messages=[],
+                prior_messages_used=False,
+                history_mode="none",
+                connected_systems=[],
+                tool_capabilities=[],
+                availability_payload={"ai_ready": True, "credential_plane": "platform_runtime"},
+                tools=[],
+                direct_chat_credentials={},
+                proactive_suggestions=["Use my saved context: The user expects the model to be DeepSeek."],
+                tool_loop_session_key="session-1",
+                fallback_reason=None,
+                session_ctx=None,
+                trace_context=None,
+                resolved_chat_max_iterations=3,
+                direct_tool_result_summary_system_message="Summarize tool results.",
+            )
+        )
+
+        payload = events[-1]["payload"]
+        self.assertIsNone(payload["provider"])
+        self.assertIsNone(payload["model"])
+        self.assertIsNone(payload["attempted_providers"])
+        self.assertEqual(payload["billing_source"], "empyralis_credits")
+        self.assertEqual(payload["ai_tier"], "pro")
+        self.assertEqual(payload["ai_label"], "Pro AI")
+        self.assertIsNone(payload["context_used"]["effective_provider"])
+        self.assertIsNone(payload["context_used"]["effective_model"])
+        self.assertNotIn("deepseek", str(payload.get("usage_masked")).lower())
+        self.assertNotIn("pricing_source", payload["usage_masked"])
+        self.assertNotIn("deepseek", str(payload.get("suggestions")).lower())
+        self.assertEqual(persisted_usage["effective_provider"], "deepseek")
+        self.assertEqual(persisted_usage["effective_model"], "deepseek-v4-pro")
+
     def test_stream_provider_backed_direct_chat_redacts_response_leaks(self) -> None:
         events = list(
             direct_chat_generation_service.stream_provider_backed_direct_chat(

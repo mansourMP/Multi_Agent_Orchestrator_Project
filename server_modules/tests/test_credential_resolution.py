@@ -158,6 +158,31 @@ class CredentialResolutionTests(unittest.TestCase):
             ["vault-default"],
         )
 
+    @patch("server_modules.provider_profiles._resolve_hosted_openai_bearer")
+    @patch("server_modules.provider_profiles.resolve_default_vault_credential")
+    @patch("server_modules.provider_profiles.resolve_vault_credential")
+    def test_build_candidates_includes_codex_token_vault_for_openai_codex(
+        self,
+        resolve_vault_credential_mock,
+        resolve_default_vault_credential_mock,
+        openai_bearer_mock,
+    ):
+        resolve_vault_credential_mock.side_effect = AssertionError("No profile credentials should be resolved.")
+        resolve_default_vault_credential_mock.side_effect = RuntimeError("No saved Codex credential.")
+        openai_bearer_mock.return_value = ("codex-token", "codex_token_vault")
+
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, {}, clear=True):
+            candidates = provider_profiles._build_provider_credential_candidates(
+                {"workspace_id": "ws-1"},
+                {},
+                "openai-codex",
+            )
+
+        self.assertEqual([candidate["label"] for candidate in candidates], ["env-openai-codex"])
+        self.assertEqual(candidates[0]["credentials"]["credential_type"], "codex_token")
+        self.assertEqual(candidates[0]["credentials"]["auth_mode"], "oauth_token")
+        self.assertEqual(candidates[0]["credentials"]["oauth_token"], "codex-token")
+
     @patch("server_modules.provider_profiles._openai_env_bearer_with_source")
     @patch("server_modules.provider_profiles.resolve_default_vault_credential")
     @patch("server_modules.provider_profiles.resolve_vault_credential")

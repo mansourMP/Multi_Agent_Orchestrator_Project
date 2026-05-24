@@ -495,7 +495,7 @@ class MemoryServiceTests(unittest.TestCase):
         agent_b_logs = memory_service.get_recent_logs("default", days=7, agent_install_id="install-b")
         agent_b_context = memory_service.direct_chat_workspace_context_text(
             "default",
-            memory_query="private",
+            memory_query="remember private",
             agent_install_id="install-b",
         )
 
@@ -662,7 +662,7 @@ class MemoryServiceTests(unittest.TestCase):
 
         text = memory_service.direct_chat_workspace_context_text(
             "default",
-            memory_query="private",
+            memory_query="remember private",
             agent_install_id="install-specialist",
         )
 

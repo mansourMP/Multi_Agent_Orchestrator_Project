@@ -7,6 +7,7 @@ import type { CodexTranscriptCell } from '@/lib/workspace/codex-chat/cells';
 import type { TimelineProjectionEvent } from '@/lib/workspace/codex-chat/timeline-reducer';
 import { projectCodexTimeline } from '@/lib/workspace/codex-chat/timeline-reducer';
 import { workstationMessageToCodexCell } from '@/lib/workspace/codex-chat/message-adapter';
+import { transcriptProjectionEventsFromMetadata } from '@/lib/workspace/transcript-event-contract';
 
 export type TimelineProjectionOptions = {
   approvals: (Record<string, unknown> & {
@@ -19,6 +20,7 @@ export type TimelineProjectionOptions = {
   pendingUserMessage: WorkstationChatMessageRecord | null;
   isSending: boolean;
   liveTimelineEvents: TimelineProjectionEvent[];
+  legacyTraceEventsByTraceId?: Record<string, TimelineProjectionEvent[]>;
   showProjectedAssistant: boolean;
   isSyntheticTranscriptMessage: (message: WorkstationChatMessageRecord) => boolean;
   canonicalIncludesMessage: (
@@ -33,6 +35,312 @@ export type TimelineProjectionOptions = {
   readString: (value: unknown) => string;
 };
 
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+const SAFE_TRACE_DATA_KEYS = new Set([
+  'action',
+  'action_id',
+  'approval_id',
+  'artifact_id',
+  'artifact_ids',
+  'artifactId',
+  'caption',
+  'capability_id',
+  'code',
+  'decision',
+  'delivery_transport',
+  'description',
+  'detail',
+  'event',
+  'exit_code',
+  'filename',
+  'height',
+  'id',
+  'kind',
+  'label',
+  'message',
+  'mime_type',
+  'mimeType',
+  'name',
+  'normalized_approval',
+  'path',
+  'query',
+  'result_summary',
+  'resolution',
+  'runtime_access_mode',
+  'runtime_session_id',
+  'runtime_target',
+  'specialist_name',
+  'state',
+  'status',
+  'summary',
+  'target_summary',
+  'task_summary',
+  'title',
+  'tool_call_id',
+  'tool_name',
+  'url',
+  'width',
+]);
+
+const SAFE_TRACE_METADATA_KEYS = new Set([
+  'action_id',
+  'approval_id',
+  'artifact_id',
+  'code',
+  'label',
+  'runtime_access_mode',
+  'runtime_session_id',
+  'runtime_target',
+  'status',
+  'summary',
+  'title',
+]);
+
+const SAFE_TRACE_EVENT_EXACT = new Set([
+  'artifact.created',
+  'approval.requested',
+  'approval.resolved',
+  'browser.action',
+  'browser.screenshot',
+  'computer.browser.action',
+  'delegation.finished',
+  'delegation.started',
+  'screenshot.captured',
+  'search.query',
+  'search.results',
+  'tool.result',
+  'tool.started',
+  'trace.completed',
+  'trace.failed',
+]);
+
+const SAFE_TRACE_EVENT_PREFIXES = [
+  'approval.',
+  'artifact.',
+  'browser.',
+  'computer.',
+  'delegation.',
+  'file.',
+  'gateway.',
+  'hardware.',
+  'runtime.',
+  'screenshot.',
+  'search.',
+  'shell.',
+  'tool.',
+];
+
+const SAFE_SENDISH_TRACE_TOKENS = ['telegram', 'whatsapp', 'gmail', 'email', 'mail', 'message.sent', 'message.queued'];
+const BLOCKED_TRACE_EVENTS = new Set([
+  'assistant.message.delta',
+  'final',
+  'message.delta',
+  'reasoning.summary.delta',
+  'trace.started',
+]);
+const BLOCKED_TRACE_EVENT_TOKENS = [
+  '.delta',
+  'audit',
+  'debug',
+  'internal',
+  'model',
+  'policy',
+  'prompt',
+  'provider',
+  'raw',
+  'reasoning',
+];
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function looksInternalText(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    (normalized.startsWith('{') && normalized.endsWith('}'))
+    || (normalized.startsWith('[') && normalized.endsWith(']'))
+  ) {
+    return true;
+  }
+  const lowered = normalized.toLowerCase();
+  return lowered.includes('activity_event_id')
+    || lowered.includes('chain of thought')
+    || lowered.includes('chain_of_thought')
+    || lowered.includes('deepseek')
+    || lowered.includes('model id')
+    || lowered.includes('model_id')
+    || lowered.includes('policy metadata')
+    || lowered.includes('policy_metadata')
+    || lowered.includes('provider id')
+    || lowered.includes('provider_id')
+    || lowered.includes('raw output')
+    || lowered.includes('stacktrace')
+    || lowered.includes('system prompt')
+    || lowered.includes('system_prompt')
+    || lowered.includes('request id')
+    || lowered.includes('request_id')
+    || lowered.includes('trace id')
+    || lowered.includes('trace_id')
+    || lowered.includes('raw_');
+}
+
+function isSafeTraceEventType(eventType: string): boolean {
+  if (!eventType || BLOCKED_TRACE_EVENTS.has(eventType)) {
+    return false;
+  }
+  if (BLOCKED_TRACE_EVENT_TOKENS.some((token) => eventType.includes(token))) {
+    return false;
+  }
+  if (SAFE_TRACE_EVENT_EXACT.has(eventType)) {
+    return true;
+  }
+  if (SAFE_TRACE_EVENT_PREFIXES.some((prefix) => eventType.startsWith(prefix))) {
+    return true;
+  }
+  return SAFE_SENDISH_TRACE_TOKENS.some((token) => eventType.includes(token));
+}
+
+function safeScalar(value: unknown, key = ''): string | number | boolean | null {
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/\0/g, '').trim();
+    if (
+      ['caption', 'description', 'detail', 'label', 'message', 'summary', 'title'].includes(key)
+      && looksInternalText(cleaned)
+    ) {
+      return null;
+    }
+    return cleaned.slice(0, 500);
+  }
+  return null;
+}
+
+function sanitizeSafeRecord(value: unknown, safeKeys: Set<string>, depth = 0): Record<string, unknown> {
+  const record = readRecord(value);
+  if (Object.keys(record).length === 0 || depth > 2) {
+    return {};
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (!safeKeys.has(key)) {
+      continue;
+    }
+    if (key === 'metadata') {
+      const metadata = sanitizeSafeRecord(item, SAFE_TRACE_METADATA_KEYS, depth + 1);
+      if (Object.keys(metadata).length > 0) {
+        sanitized[key] = metadata;
+      }
+      continue;
+    }
+    const scalar = safeScalar(item, key);
+    if (scalar !== null) {
+      sanitized[key] = scalar;
+      continue;
+    }
+    if (Array.isArray(item)) {
+      const values = item
+        .slice(0, 20)
+        .map((entry) => safeScalar(entry, key))
+        .filter((entry): entry is string | number | boolean => entry !== null);
+      if (values.length > 0) {
+        sanitized[key] = values;
+      }
+      continue;
+    }
+    const nested = sanitizeSafeRecord(item, key === 'normalized_approval' ? SAFE_TRACE_DATA_KEYS : safeKeys, depth + 1);
+    if (Object.keys(nested).length > 0) {
+      sanitized[key] = nested;
+    }
+  }
+  return sanitized;
+}
+
+function safeTraceProjectionEvent(record: Record<string, unknown>, index: number): TimelineProjectionEvent | null {
+  const eventType = readString(record.event_type).toLowerCase();
+  if (!isSafeTraceEventType(eventType)) {
+    return null;
+  }
+  const data = sanitizeSafeRecord(record.data ?? record.payload, SAFE_TRACE_DATA_KEYS);
+  const metadata = sanitizeSafeRecord(record.metadata, SAFE_TRACE_METADATA_KEYS);
+  const payload: Record<string, unknown> = {
+    event_type: eventType,
+    item_id: readString(record.item_id) || undefined,
+    tool_call_id: readString(record.tool_call_id) || undefined,
+    approval_id: readString(record.approval_id) || undefined,
+    artifact_id: readString(record.artifact_id) || undefined,
+    seq: typeof record.seq === 'number' ? record.seq : index,
+    ts: readString(record.ts) || undefined,
+  };
+  if (Object.keys(data).length > 0) {
+    payload.data = data;
+  }
+  if (Object.keys(metadata).length > 0) {
+    payload.metadata = metadata;
+  }
+  return { type: 'trace', payload };
+}
+
+export function safeTimelineEventsFromTraceReplay(replay: unknown): TimelineProjectionEvent[] {
+  const record = readRecord(replay);
+  const rawEvents = Array.isArray(record.events) ? record.events : [];
+  return rawEvents
+    .map((item, index) => safeTraceProjectionEvent(readRecord(item), index))
+    .filter((event): event is TimelineProjectionEvent => event !== null)
+    .slice(-200);
+}
+
+function traceIdFromMetadata(metadata: Record<string, unknown>): string {
+  const contextUsed = readRecord(metadata.context_used);
+  return readString(metadata.trace_id) || readString(contextUsed.trace_id);
+}
+
+function isProofCell(cell: CodexTranscriptCell): boolean {
+  return (
+    cell.kind === 'reasoning_summary'
+    || cell.kind === 'exec'
+    || cell.kind === 'tool'
+    || cell.kind === 'web_search'
+    || cell.kind === 'file_change'
+    || cell.kind === 'screenshot'
+    || cell.kind === 'artifact'
+    || cell.kind === 'approval_request'
+    || cell.kind === 'status'
+    || cell.kind === 'error'
+  );
+}
+
+function replayProofCellsForMessage(
+  message: WorkstationChatMessageRecord,
+  options: Pick<TimelineProjectionOptions, 'isProviderGateSystemCell' | 'legacyTraceEventsByTraceId'>,
+): CodexTranscriptCell[] {
+  const events = transcriptProjectionEventsFromMetadata(message.metadata);
+  const replayEvents = events.length > 0
+    ? events
+    : options.legacyTraceEventsByTraceId?.[traceIdFromMetadata(message.metadata)] ?? [];
+  if (replayEvents.length === 0) {
+    return [];
+  }
+  return projectCodexTimeline(replayEvents).cells
+    .filter((cell) => isProofCell(cell) && !options.isProviderGateSystemCell(cell))
+    .map((cell) => ({
+      ...cell,
+      id: `${message.id}:transcript:${cell.id}`,
+      createdAt: cell.createdAt || message.createdAt,
+      dimmed: cell.kind === 'approval_request' ? cell.dimmed : true,
+    }));
+}
+
 export function useWorkstationTimelineProjection(options: TimelineProjectionOptions) {
   const projectedTimelineProjection = useMemo(
     () => projectCodexTimeline(options.liveTimelineEvents),
@@ -42,19 +350,7 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
   const projectedTimelineCells = projectedTimelineProjection.cells;
 
   const projectedSystemCells = useMemo(
-    () => projectedTimelineCells.filter((cell) => (
-      (
-        cell.kind === 'reasoning_summary'
-        || cell.kind === 'exec'
-        || cell.kind === 'tool'
-        || cell.kind === 'web_search'
-        || cell.kind === 'file_change'
-        || cell.kind === 'screenshot'
-        || cell.kind === 'approval_request'
-        || cell.kind === 'status'
-        || cell.kind === 'error'
-      ) && !options.isProviderGateSystemCell(cell)
-    )),
+    () => projectedTimelineCells.filter((cell) => isProofCell(cell) && !options.isProviderGateSystemCell(cell)),
     [options, projectedTimelineCells],
   );
 
@@ -91,14 +387,37 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
 
   const visibleTranscriptCells = useMemo(() => {
     const canonicalMessages = options.threadMessages.filter((message) => !options.isSyntheticTranscriptMessage(message));
-    const nextCells = canonicalMessages
-      .map(workstationMessageToCodexCell)
-      .filter((cell) => !options.isProviderGateTranscriptCell(cell));
+    const nextCells: CodexTranscriptCell[] = [];
+    let latestAssistantMessageId: string | null = null;
+    for (let index = canonicalMessages.length - 1; index >= 0; index -= 1) {
+      const candidate = canonicalMessages[index];
+      if (candidate?.role === 'assistant') {
+        latestAssistantMessageId = candidate.id;
+        break;
+      }
+    }
+    let insertedReplayProofForLatestAssistant = false;
+    for (const message of canonicalMessages) {
+      const cell = workstationMessageToCodexCell(message);
+      if (options.isProviderGateTranscriptCell(cell)) {
+        continue;
+      }
+      if (!options.isSending && cell.kind === 'assistant') {
+        const replayCells = replayProofCellsForMessage(message, options);
+        if (replayCells.length > 0) {
+          if (message.id === latestAssistantMessageId) {
+            insertedReplayProofForLatestAssistant = true;
+          }
+          nextCells.push(...replayCells);
+        }
+      }
+      nextCells.push(cell);
+    }
     if (options.pendingUserMessage && !options.canonicalIncludesMessage(canonicalMessages, options.pendingUserMessage)) {
       nextCells.push(workstationMessageToCodexCell(options.pendingUserMessage));
     }
     const trailingCell = nextCells[nextCells.length - 1] ?? null;
-    const scrollableSystemCells = options.isSending ? [] : projectedSystemCells;
+    const scrollableSystemCells = options.isSending || insertedReplayProofForLatestAssistant ? [] : projectedSystemCells;
     const shouldInsertStepsBeforeFinalAssistant = scrollableSystemCells.length > 0
       && trailingCell?.kind === 'assistant';
     if (shouldInsertStepsBeforeFinalAssistant && trailingCell) {

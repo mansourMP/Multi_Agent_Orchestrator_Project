@@ -1,0 +1,13 @@
+title = "Empyralis gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic fixtures and historical docs intentionally contain fake tokens"
+paths = [
+  '''^docs/''',
+  '''^server_modules/quota_policy_service\.py$''',
+  '''^server_modules/tests/''',
+  '''^frontend/lib/skills\.ts$''',
+]

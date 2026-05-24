@@ -201,7 +201,7 @@ export default function ChatsScreen() {
   const sageSubtitle = sageSession?.messages[sageSession.messages.length - 1]?.speech?.trim()
     || "Your personal AI assistant";
   const headerSubtitle = connected
-    ? "Open Sage or anything you are building."
+    ? "Open Sage or the Business Agents you are building."
     : "Pair this phone with your workspace to load Sage and your builds.";
 
   return (
@@ -281,7 +281,7 @@ export default function ChatsScreen() {
           letterSpacing: 1.1,
         }}
       >
-        Your Builds
+        Business Agents
       </Text>
 
       <View style={{ marginTop: 10, gap: 10 }}>
@@ -311,10 +311,10 @@ export default function ChatsScreen() {
             }}
           >
             <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-              No builds yet
+              No Business Agents yet
             </Text>
             <Text style={{ marginTop: 4, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary }}>
-              Create a specialist in Studio and it will appear here as its own focused workspace.
+              Create a worker in Studio for a customer, channel, or business workflow.
             </Text>
           </View>
         )}

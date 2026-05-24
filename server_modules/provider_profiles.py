@@ -445,7 +445,7 @@ PROVIDER_CATALOG = {
         "default_model": "gpt-5.4",
         "models": ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2"],
         "provider_scopes": ["sage_personal"],
-        "note": "ChatGPT / Codex OAuth session for the Codex transport.",
+        "note": "ChatGPT / Codex subscription session through the user's Agent Computer.",
     },
     "anthropic": {
         "label": "Anthropic",
@@ -671,11 +671,11 @@ PROVIDER_GOVERNANCE_CATALOG = {
         "local_self_hosted_compatible": False,
     },
     "openai-codex": {
-        "privacy_posture": "Managed Codex transport tied to a saved ChatGPT / Codex session.",
+        "privacy_posture": "Codex transport tied to a ChatGPT / Codex session on the user's Agent Computer.",
         "jurisdiction": "United States",
         "residency": "Provider-managed cloud regions.",
-        "enterprise_risk_note": "Saved-session transports require tighter session lifecycle and audit controls than API-key providers.",
-        "capability_labels": ["Reasoning", "Codex transport", "Hosted API"],
+        "enterprise_risk_note": "Saved-session transports are machine-bound by default and require gateway presence, revocation, and audit controls.",
+        "capability_labels": ["Reasoning", "Codex transport", "Agent Computer"],
         "local_self_hosted_compatible": False,
     },
     "anthropic": {
@@ -1870,6 +1870,7 @@ def resolve_provider_adapter(provider: Any, credentials: Optional[Dict[str, Any]
 OPENAI_RESPONSES_URL = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
 OPENAI_ORG_ID = os.getenv("OPENAI_ORG_ID")
 OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID")
+OPENAI_CODEX_OAUTH_SOURCES = {"env_codex_oauth_token", "codex_token_vault"}
 OPENAI_CODEX_MODEL_CATALOG = [
     "gpt-5.4",
     "gpt-5.3-codex",
@@ -3273,6 +3274,24 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
                 seen_labels.add("vault-default-codex")
         except Exception:
             pass
+        if not workspace_only:
+            env_key, env_source = _resolve_hosted_openai_bearer(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                purpose="provider_candidate_resolution",
+            )
+            normalized_env_source = str(env_source or "").strip().lower()
+            if env_key and normalized_env_source in OPENAI_CODEX_OAUTH_SOURCES and "env-openai-codex" not in seen_labels:
+                candidates.append(
+                    {
+                        "source": "env",
+                        "credentials": _openai_env_credentials(env_key, env_source),
+                        "profile_id": None,
+                        "label": "env-openai-codex",
+                    }
+                )
+                seen_labels.add("env-openai-codex")
 
     if canonical_provider == "anthropic" and not workspace_only:
         env_key, _ = _resolve_hosted_provider_api_key(
@@ -3860,7 +3879,24 @@ def build_provider_runtime_truth(
         )
 
     codex_entry = _entry("openai-codex")
-    if openai_env_source in {"env_codex_oauth_token"}:
+    if openai_env_source == "codex_token_vault":
+        codex_gateway_live = workspace_live_gateway_available(requested_workspace_id)
+        if codex_gateway_live:
+            _register_provider_path(
+                codex_entry,
+                state="active",
+                source=openai_env_source,
+                detail="A ChatGPT / Codex subscription session is available through this Agent Computer.",
+            )
+        else:
+            _register_provider_path(
+                codex_entry,
+                state="configured",
+                source=openai_env_source,
+                detail="A ChatGPT / Codex session exists on this machine, but the paired Agent Computer gateway is offline.",
+                issue_code="local_gateway_required",
+            )
+    elif openai_env_source in OPENAI_CODEX_OAUTH_SOURCES:
         _register_provider_path(
             codex_entry,
             state="active",

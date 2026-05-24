@@ -35,6 +35,13 @@ COMPUTER_AUTOMATION_CLASSES = {
     "local_desktop",
 }
 
+RUNTIME_ACCESS_MODE_DEFAULT_GUARDED = "default_guarded"
+RUNTIME_ACCESS_MODE_FULL_ACCESS = "full_access"
+RUNTIME_ACCESS_MODES = {
+    RUNTIME_ACCESS_MODE_DEFAULT_GUARDED,
+    RUNTIME_ACCESS_MODE_FULL_ACCESS,
+}
+
 COMPUTER_SAFETY_REQUIRED_OWNER_APPROVAL_ACTIONS = {
     "send_external_messages",
     "make_purchases",
@@ -220,6 +227,15 @@ def _bool(value: Any, *, default: bool = False) -> bool:
     if not token:
         return default
     return token in {"1", "true", "yes", "on", "enabled"}
+
+
+def normalize_runtime_access_mode(value: Any = None, *, requires_owner_approval: Any = None) -> str:
+    token = _text(value).lower().replace("-", "_").replace(" ", "_")
+    if token == RUNTIME_ACCESS_MODE_FULL_ACCESS:
+        return RUNTIME_ACCESS_MODE_FULL_ACCESS
+    if token in {"default_guarded", "guarded", "default"}:
+        return RUNTIME_ACCESS_MODE_DEFAULT_GUARDED
+    return RUNTIME_ACCESS_MODE_DEFAULT_GUARDED
 
 
 def normalize_studio_ai_source(value: Any = None, *, fallback: Any = None) -> Dict[str, Any]:
@@ -569,6 +585,17 @@ def validate_mode_capability_matrix(
     if supply_mode and supply_mode != mode:
         errors.append(f"runtime_supply.studio_agent_mode must be {mode}, received {supply_mode}.")
 
+    runtime_access_mode = normalize_runtime_access_mode(
+        automation.get("runtime_access_mode"),
+        requires_owner_approval=automation.get("requires_owner_approval"),
+    )
+    requires_owner_approval = _bool(automation.get("requires_owner_approval"), default=True)
+    owner_approval_disabled_without_autonomy = (
+        automation.get("enabled")
+        and not requires_owner_approval
+        and runtime_access_mode != RUNTIME_ACCESS_MODE_FULL_ACCESS
+    )
+
     if mode == STUDIO_AGENT_MODE_TEXT:
         if automation.get("enabled"):
             errors.append("text_agent cannot enable computer automation.")
@@ -583,8 +610,8 @@ def validate_mode_capability_matrix(
                 errors.append(
                     "cloud_computer_agent computer automation must use virtual_browser, virtual_desktop, or virtual_code_sandbox."
                 )
-        if not bool(automation.get("requires_owner_approval")):
-            errors.append("cloud_computer_agent requires explicit owner approval for computer automation.")
+        if owner_approval_disabled_without_autonomy:
+            errors.append("cloud_computer_agent can disable owner approval only with runtime_access_mode=full_access.")
     elif mode == STUDIO_AGENT_MODE_MY_COMPUTER:
         if automation.get("enabled"):
             runtime_class = _text(automation.get("runtime_class")).lower()
@@ -592,11 +619,11 @@ def validate_mode_capability_matrix(
                 errors.append(
                     "my_computer_agent computer automation must use local_browser or local_desktop."
                 )
-        if not bool(automation.get("requires_owner_approval")):
-            errors.append("my_computer_agent requires explicit owner approval for computer automation.")
+        if owner_approval_disabled_without_autonomy:
+            errors.append("my_computer_agent can disable owner approval only with runtime_access_mode=full_access.")
     elif mode == STUDIO_AGENT_MODE_SELF_HOSTED:
-        if not bool(automation.get("requires_owner_approval")):
-            errors.append("self_hosted_agent requires explicit owner approval for computer automation.")
+        if owner_approval_disabled_without_autonomy:
+            errors.append("self_hosted_agent can disable owner approval only with runtime_access_mode=full_access.")
 
     if automation.get("enabled"):
         if len(list(automation.get("allowed_domains") or [])) == 0:
@@ -723,6 +750,10 @@ def normalize_computer_automation_config(value: Any) -> Dict[str, Any]:
         required_owner_approval_actions = _list_text(payload.get("required_owner_approval_actions"))
     else:
         required_owner_approval_actions = sorted(COMPUTER_SAFETY_REQUIRED_OWNER_APPROVAL_ACTIONS)
+    runtime_access_mode = normalize_runtime_access_mode(
+        payload.get("runtime_access_mode"),
+        requires_owner_approval=payload.get("requires_owner_approval"),
+    )
     return {
         "enabled": enabled,
         "runtime_class": runtime_class if enabled else None,
@@ -730,7 +761,8 @@ def normalize_computer_automation_config(value: Any) -> Dict[str, Any]:
         "max_concurrent_sessions": max_concurrent_sessions,
         "daily_budget_usd": daily_budget_usd if enabled else None,
         "monthly_budget_usd": monthly_budget_usd if enabled else None,
-        "requires_owner_approval": _bool(payload.get("requires_owner_approval"), default=True),
+        "runtime_access_mode": runtime_access_mode,
+        "requires_owner_approval": runtime_access_mode != RUNTIME_ACCESS_MODE_FULL_ACCESS,
         "idle_timeout_seconds": _positive_int(payload.get("idle_timeout_seconds"), default=300 if enabled else 0),
         "max_session_runtime_seconds": _positive_int(
             payload.get("max_session_runtime_seconds"),

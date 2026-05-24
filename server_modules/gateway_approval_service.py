@@ -121,7 +121,32 @@ async def request_gateway_tool_approval(
     run_id: str,
     trace_id: str,
     request_id: Optional[str] = None,
+    runtime_session_id: Optional[str] = None,
+    runtime_target: Optional[str] = None,
+    runtime_access_mode: Optional[str] = None,
+    runtime_session_binding: Optional[str] = None,
+    thread_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    request_payload = {
+        "capability_id": str(capability_id or "").strip(),
+        "arguments": dict(arguments or {}),
+        "run_id": str(run_id or "").strip(),
+        "trace_id": str(trace_id or "").strip() or None,
+        "request_id": str(request_id or "").strip() or None,
+        "tenant_id": str(registration.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(registration.get("workspace_id") or "").strip() or None,
+        "user_id": str(registration.get("user_id") or "").strip() or None,
+    }
+    if str(thread_id or "").strip():
+        request_payload["thread_id"] = str(thread_id or "").strip()
+    if str(runtime_session_id or "").strip():
+        request_payload["runtime_session_id"] = str(runtime_session_id or "").strip()
+    if str(runtime_target or "").strip():
+        request_payload["runtime_target"] = str(runtime_target or "").strip()
+    if str(runtime_access_mode or "").strip():
+        request_payload["runtime_access_mode"] = str(runtime_access_mode or "").strip()
+    if str(runtime_session_binding or "").strip():
+        request_payload["runtime_session_binding"] = str(runtime_session_binding or "").strip()
     approval = gateway_state_repository.create_gateway_action_approval(
         gateway_id=str(registration.get("gateway_id") or "").strip(),
         device_id=str(registration.get("device_id") or "").strip(),
@@ -132,13 +157,7 @@ async def request_gateway_tool_approval(
         run_id=str(run_id or "").strip(),
         trace_id=str(trace_id or "").strip() or None,
         request_id=str(request_id or "").strip() or None,
-        request_payload={
-            "capability_id": str(capability_id or "").strip(),
-            "arguments": dict(arguments or {}),
-            "run_id": str(run_id or "").strip(),
-            "trace_id": str(trace_id or "").strip() or None,
-            "request_id": str(request_id or "").strip() or None,
-        },
+        request_payload=request_payload,
     )
     approval = approval_contracts.attach_normalized_approval(
         approval,
@@ -302,17 +321,21 @@ async def resolve_gateway_tool_approval(
         )
 
     request_payload = dict(resolved.get("request_payload") or {})
+    execute_kwargs = {
+        "gateway_id": gateway_id,
+        "capability_id": str(request_payload.get("capability_id") or resolved.get("capability_id") or "").strip(),
+        "arguments": dict(request_payload.get("arguments") or {}),
+        "run_id": str(request_payload.get("run_id") or resolved.get("run_id") or "").strip(),
+        "trace_id": str(request_payload.get("trace_id") or resolved.get("trace_id") or "").strip(),
+        "workspace_id": str(registration.get("workspace_id") or "").strip(),
+        "timeout_seconds": int(timeout_seconds or 15),
+        "request_id": str(request_payload.get("request_id") or resolved.get("request_id") or "").strip() or None,
+    }
+    if execute_fn is gateway_execution_service.execute_tool_via_gateway:
+        execute_kwargs["runtime_access_mode"] = str(request_payload.get("runtime_access_mode") or "").strip() or None
+        execute_kwargs["empyralis_approved"] = True
     try:
-        execution = await execute_fn(
-            gateway_id=gateway_id,
-            capability_id=str(request_payload.get("capability_id") or resolved.get("capability_id") or "").strip(),
-            arguments=dict(request_payload.get("arguments") or {}),
-            run_id=str(request_payload.get("run_id") or resolved.get("run_id") or "").strip(),
-            trace_id=str(request_payload.get("trace_id") or resolved.get("trace_id") or "").strip(),
-            workspace_id=str(registration.get("workspace_id") or "").strip(),
-            timeout_seconds=int(timeout_seconds or 15),
-            request_id=str(request_payload.get("request_id") or resolved.get("request_id") or "").strip() or None,
-        )
+        execution = await execute_fn(**execute_kwargs)
     except (asyncio.TimeoutError, TimeoutError, RuntimeError, ValueError) as exc:
         failed = gateway_state_repository.mark_gateway_action_approval_execution_failed(
             approval_id=approval_id,

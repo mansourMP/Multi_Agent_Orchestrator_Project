@@ -240,6 +240,10 @@ class DeployedAgentMemoryServiceTests(unittest.IsolatedAsyncioTestCase):
                 "server_modules.deployed_agent_memory_service.activity_ledger_service.append_activity_event",
                 new=AsyncMock(),
             ) as append_activity_event_mock,
+            patch(
+                "server_modules.deployed_agent_memory_service.provider_profiles.context_window_for_model",
+                return_value=8_000,
+            ),
         ):
             persisted = await deployed_agent_memory_service.persist_deployed_agent_memory_snapshot(
                 tenant_id="tenant-1",

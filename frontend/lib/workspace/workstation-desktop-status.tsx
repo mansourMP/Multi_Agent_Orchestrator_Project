@@ -17,8 +17,8 @@ export function WorkstationDesktopStatus() {
   }
 
   const localCompanionLabel = desktop.localCompanion.present
-    ? `${desktop.localCompanion.label ?? 'Connected computer'} ${desktop.localCompanion.online ? 'ready' : 'needs attention'}`
-    : 'No connected computer attached to this workspace';
+    ? `${desktop.localCompanion.label ?? 'This Device'} ${desktop.localCompanion.online ? 'ready' : 'needs attention'}`
+    : 'No device attached to this workspace';
 
   return (
     <section

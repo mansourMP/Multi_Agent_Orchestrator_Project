@@ -58,6 +58,7 @@ const AgentRosterItem = memo(({
 
   const stateLabel = deploymentStateLabel(agent.deployment_state);
   const displayName = readString(agent.name, agentId);
+  const displayInitial = (displayName.trim().charAt(0) || 'A').toUpperCase();
   const latestActivityLabel = agentMetrics?.latestActivityLabel ?? 'Syncing recent activity';
 
   return (
@@ -70,6 +71,7 @@ const AgentRosterItem = memo(({
       aria-selected={selected}
       onClick={() => onSelectAgent(agentId)}
     >
+      <span className="studio-agents-nav__avatar" aria-hidden="true">{displayInitial}</span>
       <span className="studio-agents-nav__copy">
         <span className="studio-agents-nav__label">{displayName}</span>
         <span className="studio-agents-nav__detail">
@@ -86,11 +88,12 @@ const AgentRosterItem = memo(({
 AgentRosterItem.displayName = 'AgentRosterItem';
 
 export interface AgentRosterSidebarProps {
+  collapsed?: boolean;
   showAgentsIndex: boolean;
   recentlyCreatedAgentId: string | null;
   selectedAgent: DeployedAgentRecord | null;
   onDismissRecentlyCreated: () => void;
-  onOpenActivity: () => void;
+  onOpenChatProof: () => void;
   onOpenBilling: () => void;
   onExportAudit: (agentId: string) => void;
   onOpenAssistantDetail: (id: string) => void;
@@ -118,11 +121,12 @@ export interface AgentRosterSidebarProps {
 }
 
 export const AgentRosterSidebar = memo(({
+  collapsed = false,
   showAgentsIndex,
   recentlyCreatedAgentId,
   selectedAgent,
   onDismissRecentlyCreated,
-  onOpenActivity,
+  onOpenChatProof,
   onOpenBilling,
   onExportAudit,
   onOpenAssistantDetail,
@@ -155,91 +159,81 @@ export const AgentRosterSidebar = memo(({
     <div className="app-stack-4">
       {showAgentsIndex ? (
         <>
-          {recentlyCreatedAgentId && selectedAgent ? (
-            <ListDetailPanel
-              className="studio-panel studio-panel--demo-proof"
-              eyebrow="Next step"
-              title="Show proof in under a minute"
-              subtitle="Open activity to show customer work, then open billing and credits to show the revenue path."
-              actions={(
-                <div className="app-inline-actions app-inline-actions--tight">
-                  <AppButton type="button" tone="secondary" onClick={onDismissRecentlyCreated}>
-                    Dismiss
-                  </AppButton>
-                </div>
-              )}
-            >
-              <div className="app-inline-actions app-inline-actions--tight studio-inline-wrap">
-                <AppButton type="button" onClick={onOpenActivity}>
-                  Open Activity proof
-                </AppButton>
-                <AppButton type="button" tone="secondary" onClick={onOpenBilling}>
-                  Open billing & credits
-                </AppButton>
-                <AppButton
-                  type="button"
-                  tone="secondary"
+          {!collapsed ? (
+            <>
+              {recentlyCreatedAgentId && selectedAgent ? (
+                <ListDetailPanel
+                  className="studio-panel studio-panel--demo-proof"
+                  eyebrow="Next step"
+                  title="Show proof in under a minute"
+                  subtitle="Open the chat transcript to show customer work, then open billing and credits to show the revenue path."
+                  actions={(
+                    <div className="app-inline-actions app-inline-actions--tight">
+                      <AppButton type="button" tone="secondary" onClick={onDismissRecentlyCreated}>
+                        Dismiss
+                      </AppButton>
+                    </div>
+                  )}
+                >
+                  <div className="app-inline-actions app-inline-actions--tight studio-inline-wrap">
+                    <AppButton type="button" onClick={onOpenChatProof}>
+                      Open chat proof
+                    </AppButton>
+                    <AppButton type="button" tone="secondary" onClick={onOpenBilling}>
+                      Open billing & credits
+                    </AppButton>
+                    <AppButton
+                      type="button"
+                      tone="secondary"
                   onClick={() => onOpenAssistantDetail(recentlyCreatedAgentId)}
                 >
-                  Open assistant detail
+                  Open Business Agent detail
                 </AppButton>
-              </div>
-            </ListDetailPanel>
-          ) : null}
+                  </div>
+                </ListDetailPanel>
+              ) : null}
 
-          <ListDetailPanel
-            className="studio-panel studio-panel--demo-path"
-            eyebrow="Start here"
-            title="Create one working business assistant"
-            subtitle="Choose a common business job, add the facts it should trust, test privately, then go live."
-            actions={(
-              <AppButton type="button" tone="primary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                Create assistant
-              </AppButton>
-            )}
-          >
-            <div className="deployed-agents-card__badges" aria-label="Business assistant creation steps">
-              <span className="deployed-agents-card__badge">1. Pick business</span>
-              <span className="deployed-agents-card__badge">2. Add trusted info</span>
-              <span className="deployed-agents-card__badge">3. Test privately</span>
-              <span className="deployed-agents-card__badge">4. Go live</span>
-            </div>
-          </ListDetailPanel>
+              <ListDetailPanel
+                className="studio-panel studio-panel--demo-path"
+                eyebrow="Start here"
+                title="Create one working Business Agent"
+                subtitle="Choose a common business job, add the facts it should trust, test privately, then go live."
+                actions={(
+                  <AppButton type="button" tone="primary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+                    Create Business Agent
+                  </AppButton>
+                )}
+              >
+                <div className="deployed-agents-card__badges" aria-label="Business Agent creation steps">
+                  <span className="deployed-agents-card__badge">1. Pick business</span>
+                  <span className="deployed-agents-card__badge">2. Add trusted info</span>
+                  <span className="deployed-agents-card__badge">3. Test privately</span>
+                  <span className="deployed-agents-card__badge">4. Go live</span>
+                </div>
+              </ListDetailPanel>
 
-          <ListDetailPanel
-            className="studio-panel studio-panel--templates"
-            eyebrow="Templates"
-            title="What do you need?"
-            subtitle="Most owners start with one of these four paths: shop assistant, restaurant orders, dental receptionist, or support FAQ."
-            actions={currentStudioSubview === 'agents' ? (
-              <div className="app-inline-actions app-inline-actions--tight">
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  className="deployed-agents-tabbar__refresh"
-                  onClick={onRefreshAgents}
-                  aria-label="Refresh build"
-                  title="Refresh build"
-                >
-                  <RefreshCw size={14} strokeWidth={1.9} aria-hidden="true" />
-                </AppButton>
-              </div>
-            ) : undefined}
-          >
-            <div className="studio-template-grid" data-studio-template-grid="true">
-              {primaryStudioTemplates.map((template) => (
-                <StudioTemplateCard
-                  key={template.id}
-                  template={template}
-                  onSelect={onOpenCreateWizard}
-                />
-              ))}
-            </div>
-            {additionalStudioTemplates.length > 0 ? (
-              <details className="app-stack-3">
-                <summary>More assistant types</summary>
-                <div className="studio-template-grid" data-studio-template-grid="more">
-                  {additionalStudioTemplates.map((template) => (
+              <ListDetailPanel
+                className="studio-panel studio-panel--templates"
+                eyebrow="Templates"
+                title="What do you need?"
+                subtitle="Most owners start with one of these four paths: shop assistant, restaurant orders, dental receptionist, or support FAQ."
+                actions={currentStudioSubview === 'agents' ? (
+                  <div className="app-inline-actions app-inline-actions--tight">
+                    <AppButton
+                      type="button"
+                      tone="secondary"
+                      className="deployed-agents-tabbar__refresh"
+                      onClick={onRefreshAgents}
+                      aria-label="Refresh build"
+                      title="Refresh build"
+                    >
+                      <RefreshCw size={14} strokeWidth={1.9} aria-hidden="true" />
+                    </AppButton>
+                  </div>
+                ) : undefined}
+              >
+                <div className="studio-template-grid" data-studio-template-grid="true">
+                  {primaryStudioTemplates.map((template) => (
                     <StudioTemplateCard
                       key={template.id}
                       template={template}
@@ -247,12 +241,33 @@ export const AgentRosterSidebar = memo(({
                     />
                   ))}
                 </div>
-              </details>
-            ) : null}
-          </ListDetailPanel>
+                {additionalStudioTemplates.length > 0 ? (
+                  <details className="app-stack-3">
+                    <summary>More Business Agent templates</summary>
+                    <div className="studio-template-grid" data-studio-template-grid="more">
+                      {additionalStudioTemplates.map((template) => (
+                        <StudioTemplateCard
+                          key={template.id}
+                          template={template}
+                          onSelect={onOpenCreateWizard}
+                        />
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+              </ListDetailPanel>
+            </>
+          ) : null}
 
-          <div className={joinClassNames('studio-agents-nav', agents.length === 0 && 'studio-agents-nav--empty')} aria-label="Workspace agents">
-            {isAgentListPriming ? (
+          <div
+            className={joinClassNames(
+              'studio-agents-nav',
+              collapsed && 'studio-agents-nav--collapsed',
+              agents.length === 0 && 'studio-agents-nav--empty',
+            )}
+            aria-label="Business Agents"
+          >
+            {collapsed && agents.length === 0 ? null : isAgentListPriming ? (
               <div className="studio-agents-nav__loading">
                 <SkeletonBlock height="4.5rem" />
                 <SkeletonBlock height="4.5rem" />
@@ -261,26 +276,26 @@ export const AgentRosterSidebar = memo(({
             ) : isAgentListUnavailable ? (
               <div className="studio-agents-nav__empty">
                 <div className="studio-agents-nav__empty-copy">
-                  <strong>Could not load agents</strong>
-                  <span>Retry the agent list, or create a new workspace agent.</span>
+                  <strong>Could not load Business Agents</strong>
+                  <span>Retry the worker list, or create a new Business Agent.</span>
                 </div>
                 <div className="studio-agents-nav__empty-actions">
                   <AppButton type="button" tone="primary" onClick={onRefreshAgents}>
                     Retry
                   </AppButton>
                   <AppButton type="button" tone="secondary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                    Create agent
+                    Create Business Agent
                   </AppButton>
                 </div>
               </div>
             ) : agents.length === 0 ? (
               <div className="studio-agents-nav__empty">
                 <div className="studio-agents-nav__empty-copy">
-                  <strong>No agents yet</strong>
-                  <span>Create the first workspace agent.</span>
+                  <strong>No Business Agents yet</strong>
+                  <span>Create the first worker for a customer, channel, or business workflow.</span>
                 </div>
                 <AppButton type="button" tone="primary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                  Create agent
+                  Create Business Agent
                 </AppButton>
               </div>
             ) : (
@@ -308,7 +323,7 @@ export const AgentRosterSidebar = memo(({
           className="studio-panel studio-panel--readiness"
           eyebrow="Readiness"
           title="Launch readiness"
-          subtitle="The launch contract for this customer-facing text/API agent."
+          subtitle="The launch contract for this Business Agent."
           actions={selectedAgent ? (
             <AppButton
               type="button"
@@ -337,7 +352,7 @@ export const AgentRosterSidebar = memo(({
               </DataBadge>
             </div>
             <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-              <FormReadout label="Runtime type" value={selectedAgentRuntimePlacement === 'managed_cloud' ? 'Text/API cloud agent' : selectedAgentRuntimeOption.label} />
+              <FormReadout label="Runtime type" value={selectedAgentRuntimePlacement === 'managed_cloud' ? 'Cloud worker' : selectedAgentRuntimeOption.label} />
               <FormReadout label="Computer required" value={selectedAgentRuntimePlacement === 'managed_cloud' ? 'No' : 'Yes, setup required'} />
               <FormReadout label="Runtime owner" value={selectedAgentRuntimeOption.supplier === 'empyralis' ? 'Empyralis' : 'Customer'} />
               <FormReadout label="Cost posture" value={selectedAgentRuntimeOption.costRisk} />
@@ -376,7 +391,7 @@ export const AgentRosterSidebar = memo(({
                 <StateBanner
                   tone="success"
                   title="Self-hosted readiness passed"
-                  detail="This assistant runs on customer-hosted compute only. No silent fallback to platform-hosted compute."
+                  detail="This Business Agent runs on customer-hosted compute only. No silent fallback to platform-hosted compute."
                 />
               )}
             </div>

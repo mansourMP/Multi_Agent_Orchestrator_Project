@@ -24,6 +24,49 @@ _ROOT_CONTEXT_FILE_ORDER = (
 _CONTEXT_FILE_SECTION_CHAR_LIMIT = 12_000
 _CONTEXT_FILE_TOTAL_CHAR_LIMIT = 48_000
 _CONTEXT_FILE_MANIFEST_LIMIT = 60
+_MEMORY_RELEVANCE_MARKERS = (
+    "remember",
+    "memory",
+    "saved",
+    "preference",
+    "prefer",
+    "goal",
+    "procedure",
+    "identity",
+    "profile",
+    "prior",
+    "previous",
+    "earlier",
+    "before",
+    "decision",
+    "decide",
+    "decided",
+    "what were we",
+    "what did we",
+    "how i work",
+    "working style",
+    "reflection",
+    "self-improve",
+    "self improve",
+    "change how you",
+    "behave",
+    "soul",
+    "timezone",
+    "time zone",
+    "flashcard",
+    "flashcards",
+    "language coach",
+    "nutrition",
+    "calorie",
+    "calories",
+    "mini app",
+    "mini-app",
+    "daily log",
+    "journal",
+    "habit",
+    "deck",
+    "review due",
+)
 
 
 _RED_FACT_LINE_RE = re.compile(
@@ -64,6 +107,13 @@ def _append_external_safe_section(sections: List[str], title: str, content: str)
     sanitized = strip_red_facts_from_external_context(content)
     if sanitized:
         sections.append(f"{title}\n{sanitized}")
+
+
+def message_needs_memory_context(message: str) -> bool:
+    compact = " ".join(str(message or "").lower().split())
+    if not compact:
+        return False
+    return any(marker in compact for marker in _MEMORY_RELEVANCE_MARKERS)
 
 
 def _meaningful_context_file_content(filename: str, value: Any) -> str:
@@ -148,6 +198,7 @@ def load_workspace_context_payload(
     memory_query: str = "",
     agent_install_id: str | None = None,
     policy_profile: MemoryPolicyProfile,
+    include_memory_context: Optional[bool] = None,
 ) -> Dict[str, Any]:
     from server_modules import memory_service
 
@@ -167,41 +218,49 @@ def load_workspace_context_payload(
     context_file_sections, context_file_diagnostics = build_workspace_context_file_blocks(context_files)
     stable_sections.extend(context_file_sections)
 
-    recent_logs = memory_service.get_recent_logs(
-        workspace_id,
-        days=policy_profile.max_recent_log_days,
-        agent_install_id=agent_install_id,
-    )
-    if recent_logs:
-        _append_external_safe_section(retrieved_sections, "Recent Daily Logs", recent_logs[:6000].rstrip())
-
     normalized_query = str(memory_query or "").strip()
-    if normalized_query:
-        semantic_hits = list(
-            memory_service.semantic_search(
-                workspace_id,
-                normalized_query,
-                top_k=policy_profile.semantic_retrieval_k,
-                agent_install_id=agent_install_id,
-            )
-        )
-    if semantic_hits:
-        memory_facts = "\n".join(
-            f"- {str(item.get('key') or '').strip()}: {str(item.get('content') or '').strip()}"
-            for item in semantic_hits
-            if str(item.get("content") or "").strip()
-        ).strip()
-        memory_heading = "Retrieved Relevant Memory"
-    else:
-        memory_facts = memory_service.get_memory(workspace_id, agent_install_id=agent_install_id)
-        memory_heading = "Runtime Memory Facts"
-    if memory_facts:
-        sanitized_memory_facts = strip_red_facts_from_external_context(memory_facts)
-        if sanitized_memory_facts:
-            target_sections = retrieved_sections if semantic_hits else stable_sections
-            target_sections.append(f"{memory_heading}\n{sanitized_memory_facts}")
+    resolved_include_memory_context = (
+        bool(include_memory_context)
+        if include_memory_context is not None
+        else message_needs_memory_context(normalized_query)
+    )
 
-    if normalized_query:
+    if resolved_include_memory_context:
+        recent_logs = memory_service.get_recent_logs(
+            workspace_id,
+            days=policy_profile.max_recent_log_days,
+            agent_install_id=agent_install_id,
+        )
+        if recent_logs:
+            _append_external_safe_section(retrieved_sections, "Recent Daily Logs", recent_logs[:6000].rstrip())
+
+        if normalized_query:
+            semantic_hits = list(
+                memory_service.semantic_search(
+                    workspace_id,
+                    normalized_query,
+                    top_k=policy_profile.semantic_retrieval_k,
+                    agent_install_id=agent_install_id,
+                )
+            )
+
+        if semantic_hits:
+            memory_facts = "\n".join(
+                f"- {str(item.get('key') or '').strip()}: {str(item.get('content') or '').strip()}"
+                for item in semantic_hits
+                if str(item.get("content") or "").strip()
+            ).strip()
+            memory_heading = "Retrieved Relevant Memory"
+        else:
+            memory_facts = memory_service.get_memory(workspace_id, agent_install_id=agent_install_id)
+            memory_heading = "Runtime Memory Facts"
+        if memory_facts:
+            sanitized_memory_facts = strip_red_facts_from_external_context(memory_facts)
+            if sanitized_memory_facts:
+                target_sections = retrieved_sections if semantic_hits else stable_sections
+                target_sections.append(f"{memory_heading}\n{sanitized_memory_facts}")
+
+    if resolved_include_memory_context and normalized_query:
         try:
             from server_modules import unified_memory_service
 
@@ -224,7 +283,7 @@ def load_workspace_context_payload(
             if sanitized_knowledge:
                 retrieved_sections.append(f"Retrieved Knowledge Sources\n{sanitized_knowledge}")
 
-    if not agent_install_id:
+    if resolved_include_memory_context and not agent_install_id:
         try:
             from server_modules import sage_memory_service
 
@@ -270,6 +329,7 @@ def load_workspace_context_payload(
             "semantic_hit_count": len(semantic_hits),
             "knowledge_hit_count": len(knowledge_hits),
             "mini_app_summary_count": mini_app_summary_count,
+            "memory_context_included": int(resolved_include_memory_context),
             "stable_context_block_count": len(stable_sections),
             "retrieved_context_block_count": len(retrieved_sections),
         },

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 from contextlib import asynccontextmanager
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
@@ -586,6 +588,97 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             "We are closed for inventory. Please come back later.",
         )
 
+    async def test_create_draft_deployed_agent_works_in_local_mode_without_control_plane_pool(self) -> None:
+        workspace = {
+            **_workspace_record(),
+            "workspace_id": "ws-local-create",
+            "tenant_id": "tenant-local-create",
+        }
+        owner_user = {
+            **_owner_user(),
+            "workspace_access": {
+                "ws-local-create": {
+                    "workspace_id": "ws-local-create",
+                    "tenant_id": "tenant-local-create",
+                    "role": "owner",
+                }
+            },
+        }
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=workspace),
+            ),
+            patch(
+                "server_modules.control_plane_repository._scoped_connection",
+                new=_fake_scoped_connection(None),
+            ),
+            patch(
+                "server_modules.control_plane_repository.ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            created = await deployed_agent_service.create_draft_deployed_agent(
+                current_user=owner_user,
+                owner_workspace_id="ws-local-create",
+                name="Local Studio Agent",
+                runtime_target="cloud",
+            )
+            listed = await deployed_agent_service.list_deployed_agents(
+                current_user=owner_user,
+                owner_workspace_id="ws-local-create",
+            )
+
+        self.assertTrue(str(created["id"]).startswith("dagent_"))
+        self.assertTrue(str(created["backing_install_id"]).startswith("ainstall_"))
+        self.assertEqual(created["name"], "Local Studio Agent")
+        self.assertEqual(listed["items"][0]["id"], created["id"])
+
+    async def test_full_access_runtime_review_marker_uses_deployed_agent_audit_pattern(self) -> None:
+        deployed_agent = _deployed_agent_row(
+            metadata={
+                "studio_agent_mode": "my_computer_agent",
+                "computer_automation": {
+                    "enabled": True,
+                    "runtime_class": "local_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 5.0,
+                    "monthly_budget_usd": 25.0,
+                    "runtime_access_mode": "full_access",
+                    "requires_owner_approval": False,
+                    "max_session_runtime_seconds": 900,
+                },
+            }
+        )
+
+        with patch(
+            "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+            new=AsyncMock(return_value=None),
+        ) as audit_mock:
+            await deployed_agent_service._append_full_access_runtime_review_event(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                deployed_agent=deployed_agent,
+                lifecycle_action="updated",
+                actor_user_id="user-owner",
+            )
+
+        audit_mock.assert_awaited_once()
+        kwargs = audit_mock.await_args.kwargs
+        self.assertEqual(kwargs["actor_type"], "deployed_agent")
+        self.assertEqual(kwargs["actor_id"], "dagent_1")
+        self.assertEqual(kwargs["action"], "deployed_agent_full_access_review_required")
+        self.assertTrue(kwargs["review_required"])
+        self.assertEqual(kwargs["status"], "review_required")
+        self.assertEqual(kwargs["payload"]["runtime_access_mode"], "full_access")
+        self.assertEqual(kwargs["metadata"]["runtime_access_review"]["reason"], "full_access_runtime")
+
     async def test_create_draft_deployed_agent_normalizes_daily_limit_metadata(self) -> None:
         backing_install = _backing_install()
         persisted_row = _deployed_agent_row(
@@ -1003,7 +1096,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(persisted_kwargs["runtime_target"], "local")
         self.assertEqual(persisted_kwargs["billing_plan"], "pro")
         self.assertEqual(persisted_kwargs["metadata"]["platform_cta_label"], "Join now")
-        self.assertEqual(persisted_kwargs["metadata"]["context_budget_preset"], "deep")
+        self.assertEqual(persisted_kwargs["metadata"]["context_budget_preset"], "extended")
         self.assertEqual(persisted_kwargs["metadata"]["retention_preset"], "extended")
         self.assertTrue(persisted_kwargs["metadata"]["health_safety_enabled"])
         specialist_kwargs = create_specialist_mock.await_args.kwargs
@@ -1686,6 +1779,122 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(profile["memory"]["memory_enabled"])
         self.assertEqual(profile["actions"]["order_capture_mode"], "spreadsheet_append")
         self.assertEqual(profile["channel"]["primary"], "telegram_bot")
+
+    async def test_upload_deployed_agent_knowledge_file_writes_file_and_appends_source(self) -> None:
+        row = _deployed_agent_row()
+        row["knowledge_sources"] = []
+        captured_update: dict[str, object] = {}
+
+        async def fake_update_deployed_agent(**kwargs):
+            captured_update.update(kwargs)
+            return {
+                **row,
+                "knowledge_sources": kwargs["updates"]["knowledge_sources"],
+            }
+
+        with TemporaryDirectory() as tmp_dir:
+            knowledge_root = Path(tmp_dir) / "knowledge"
+            with (
+                patch(
+                    "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                    new=AsyncMock(return_value=_workspace_record()),
+                ),
+                patch(
+                    "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                    new=AsyncMock(return_value=row),
+                ),
+                patch(
+                    "server_modules.deployed_agent_service.workspace_context.workspace_knowledge_dir",
+                    return_value=knowledge_root,
+                ),
+                patch(
+                    "server_modules.deployed_agent_service.update_deployed_agent",
+                    new=AsyncMock(side_effect=fake_update_deployed_agent),
+                ),
+                patch(
+                    "server_modules.deployed_agent_service.knowledge_rag_service.ingest_workspace_knowledge_files",
+                    new=AsyncMock(return_value={"source_count": 1, "chunk_count": 1}),
+                ) as ingest_mock,
+            ):
+                result = await deployed_agent_service.upload_deployed_agent_knowledge_file(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    file_name="FAQ Sheet.md",
+                    content_text="# FAQ\nReturn policy",
+                )
+
+            source = result["knowledge_source"]
+            self.assertEqual(source["uri"], "knowledge://business-agents/dagent_1/FAQ-Sheet.md")
+            self.assertEqual(source["kind"], "file")
+            self.assertEqual(captured_update["updates"]["knowledge_sources"][0]["uri"], source["uri"])
+            self.assertEqual((knowledge_root / "business-agents" / "dagent_1" / "FAQ-Sheet.md").read_text(), "# FAQ\nReturn policy")
+            self.assertEqual(ingest_mock.await_args.kwargs["source_refs"], ["business-agents/dagent_1/FAQ-Sheet.md"])
+
+    async def test_upload_deployed_agent_knowledge_file_ingests_only_uploaded_agent_file(self) -> None:
+        row = _deployed_agent_row()
+        row["id"] = "dagent_b"
+        row["knowledge_sources"] = []
+        indexed_sources: list[str] = []
+
+        async def fake_update_deployed_agent(**kwargs):
+            return {
+                **row,
+                "knowledge_sources": kwargs["updates"]["knowledge_sources"],
+            }
+
+        async def fake_upsert_source(**kwargs):
+            indexed_sources.append(kwargs["source_uri"])
+            return {"id": kwargs["source_id"], "source_uri": kwargs["source_uri"]}
+
+        async def fake_replace_chunks(**kwargs):
+            return kwargs["chunks"]
+
+        with TemporaryDirectory() as tmp_dir:
+            knowledge_root = Path(tmp_dir) / "knowledge"
+            agent_a_root = knowledge_root / "business-agents" / "dagent_a"
+            agent_a_root.mkdir(parents=True)
+            (agent_a_root / "agent-a.md").write_text("Agent A confidential note", encoding="utf-8")
+            with (
+                patch(
+                    "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                    new=AsyncMock(return_value=_workspace_record()),
+                ),
+                patch(
+                    "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                    new=AsyncMock(return_value=row),
+                ),
+                patch(
+                    "server_modules.deployed_agent_service.workspace_context.workspace_knowledge_dir",
+                    return_value=knowledge_root,
+                ),
+                patch(
+                    "server_modules.deployed_agent_service.update_deployed_agent",
+                    new=AsyncMock(side_effect=fake_update_deployed_agent),
+                ),
+                patch(
+                    "server_modules.knowledge_rag_service.control_plane_repository.upsert_knowledge_source",
+                    new=AsyncMock(side_effect=fake_upsert_source),
+                ),
+                patch(
+                    "server_modules.knowledge_rag_service.control_plane_repository.replace_knowledge_source_chunks",
+                    new=AsyncMock(side_effect=fake_replace_chunks),
+                ),
+                patch(
+                    "server_modules.knowledge_rag_service._upsert_lancedb_source_chunks",
+                    return_value={"enabled": False, "stored": 1},
+                ),
+            ):
+                result = await deployed_agent_service.upload_deployed_agent_knowledge_file(
+                    deployed_agent_id="dagent_b",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    file_name="Agent B.md",
+                    content_text="Agent B only note",
+                )
+
+            self.assertEqual(result["ingestion"]["source_count"], 1)
+            self.assertEqual(indexed_sources, ["knowledge://business-agents/dagent_b/Agent-B.md"])
 
     def test_require_deployed_agent_admin_access_allows_owner(self) -> None:
         resolved = deployed_agent_service.require_deployed_agent_admin_access(

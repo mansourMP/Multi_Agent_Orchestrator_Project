@@ -131,7 +131,7 @@ class CrossAgentMemoryIsolationCertificationTests(unittest.IsolatedAsyncioTestCa
         )
         direct_context = memory_service.direct_chat_workspace_context_text(
             "default",
-            memory_query="private",
+            memory_query="remember private",
             agent_install_id="install-sage",
         )
         self.assertIn(sage_secret, direct_context)

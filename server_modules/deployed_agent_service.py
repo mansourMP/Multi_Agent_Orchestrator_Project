@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 import uuid
@@ -13,6 +15,7 @@ from server_modules import agent_specialist_repository
 from server_modules import auth as auth_module
 from server_modules import config_defaults_service
 from server_modules import control_plane_repository
+from server_modules import conversation_memory_policy
 from server_modules import deployed_agent_config_schema
 from server_modules import deployed_agent_runtime_contract_service
 from server_modules import deployed_agent_analytics_service
@@ -29,6 +32,7 @@ from server_modules import run_state_repository
 from server_modules import session_service
 from server_modules import shop_assistant_revenue_agent_service
 from server_modules import usage_accounting_service
+from server_modules import workspace_context
 from server_modules import workspace_config_schema
 from server_modules.connectors.autopilot_runtime_exports import _autopilot_connector_shell_service
 from server_modules.connectors.autopilot_status_service import AutopilotStatusService
@@ -538,6 +542,61 @@ async def _append_deployed_agent_audit_event(
         )
 
 
+def _config_has_full_runtime_access(config: deployed_agent_config_schema.DeployedAgentConfig) -> bool:
+    if not bool(config.computer_automation.enabled):
+        return False
+    return (
+        deployed_agent_runtime_contract_service.normalize_runtime_access_mode(
+            config.computer_automation.runtime_access_mode,
+            requires_owner_approval=config.computer_automation.requires_owner_approval,
+        )
+        == deployed_agent_runtime_contract_service.RUNTIME_ACCESS_MODE_FULL_ACCESS
+    )
+
+
+async def _append_full_access_runtime_review_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent: Dict[str, Any],
+    lifecycle_action: str,
+    actor_user_id: Optional[str] = None,
+) -> None:
+    if not isinstance(deployed_agent, dict):
+        return
+    config = _config_from_record(deployed_agent)
+    if not _config_has_full_runtime_access(config):
+        return
+    await _append_deployed_agent_audit_event(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        deployed_agent=deployed_agent,
+        action="deployed_agent_full_access_review_required",
+        title="Full access runtime review required",
+        summary=(
+            f"{_normalize_text(deployed_agent.get('name'), default='Deployed agent')} "
+            "uses full autonomous computer access."
+        ),
+        status="review_required",
+        review_required=True,
+        payload={
+            "lifecycle_action": lifecycle_action,
+            "runtime_access_mode": deployed_agent_runtime_contract_service.RUNTIME_ACCESS_MODE_FULL_ACCESS,
+            "studio_agent_mode": config.studio_agent_mode,
+            "runtime_target": config.runtime_target,
+            "computer_automation_enabled": True,
+        },
+        metadata={
+            "runtime_access_review": {
+                "required": True,
+                "reason": "full_access_runtime",
+                "lifecycle_action": lifecycle_action,
+            }
+        },
+        actor_user_id=actor_user_id,
+    )
+
+
 def _privacy_contract_snapshot(
     *,
     config: deployed_agent_config_schema.DeployedAgentConfig,
@@ -940,6 +999,7 @@ def _self_hosted_runtime_binding_payload(
         "filesystem_scope": _normalize_text(automation.filesystem_default_access, default="none"),
         "domain_allowlist": list(automation.allowed_domains or []),
         "approval_policy": {
+            "runtime_access_mode": _normalize_text(automation.runtime_access_mode, default="default_guarded"),
             "requires_owner_approval": bool(automation.requires_owner_approval),
             "required_owner_approval_actions": list(automation.required_owner_approval_actions or []),
             "sensitive_action_confirmation_required": bool(automation.sensitive_action_confirmation_required),
@@ -1662,6 +1722,119 @@ async def verify_deployed_agent_knowledge_retrieval(
     }
 
 
+def _safe_knowledge_filename(filename: Any) -> str:
+    raw = Path(str(filename or "").replace("\\", "/")).name.strip()
+    if not raw:
+        raise _http_bad_request("file_name is required.")
+    stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in raw)
+    stem = "-".join(part for part in stem.split("-") if part).strip(".")
+    if not stem:
+        raise _http_bad_request("file_name is invalid.")
+    suffix = Path(stem).suffix.lower()
+    if suffix not in knowledge_rag_service.SUPPORTED_KNOWLEDGE_EXTENSIONS:
+        supported = ", ".join(sorted(knowledge_rag_service.SUPPORTED_KNOWLEDGE_EXTENSIONS))
+        raise _http_bad_request(f"Unsupported knowledge file type. Supported files: {supported}.")
+    base = stem[: -len(suffix)] if suffix else stem
+    return f"{base[:150]}{suffix}"
+
+
+def _unique_knowledge_file_path(root: Path, filename: str, content_hash: str) -> Path:
+    candidate = root / filename
+    if not candidate.exists():
+        return candidate
+    path = Path(filename)
+    suffix = path.suffix
+    stem = path.name[: -len(suffix)] if suffix else path.name
+    return root / f"{stem[:120]}-{content_hash[:10]}{suffix}"
+
+
+async def upload_deployed_agent_knowledge_file(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    file_name: str,
+    content_text: str,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace not found.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        raise ValueError("Deployed agent not found.")
+
+    safe_filename = _safe_knowledge_filename(file_name)
+    raw_text = str(content_text or "")
+    if not raw_text.strip():
+        raise _http_bad_request("Knowledge file is empty.")
+    raw_bytes = raw_text.encode("utf-8")
+    max_bytes = knowledge_rag_service.DEFAULT_MAX_SOURCE_FILE_BYTES
+    if len(raw_bytes) > max_bytes:
+        raise _http_bad_request(f"Knowledge file exceeds max size ({len(raw_bytes)} bytes > {max_bytes} bytes).")
+
+    content_hash = hashlib.sha256(raw_bytes).hexdigest()
+    relative_root = Path("business-agents") / _normalize_text(deployed_agent_id, default="agent")
+    root = workspace_context.workspace_knowledge_dir(
+        workspace_id=resolved_workspace_id,
+        agent_install_id=None,
+    ) / relative_root
+    root.mkdir(parents=True, exist_ok=True)
+    destination = _unique_knowledge_file_path(root, safe_filename, content_hash)
+    destination.write_text(raw_text, encoding="utf-8")
+    relative_path = destination.relative_to(
+        workspace_context.workspace_knowledge_dir(workspace_id=resolved_workspace_id, agent_install_id=None)
+    ).as_posix()
+    source_uri = f"knowledge://{relative_path}"
+    source_ref = {
+        "id": f"knowledge-{content_hash[:16]}",
+        "uri": source_uri,
+        "label": safe_filename,
+        "kind": "file",
+        "path": f"knowledge/{relative_path}",
+    }
+
+    existing_sources = _normalize_knowledge_sources(deployed_agent.get("knowledge_sources") or [])
+    existing_uris = {
+        _normalize_text(item.get("uri") or item.get("path") or item.get("id"))
+        for item in existing_sources
+        if isinstance(item, dict)
+    }
+    next_sources = existing_sources if source_uri in existing_uris else [*existing_sources, source_ref]
+    if source_uri in existing_uris:
+        updated = project_deployed_agent(deployed_agent)
+    else:
+        updated = await update_deployed_agent(
+            deployed_agent_id=deployed_agent_id,
+            current_user=current_user,
+            owner_workspace_id=resolved_workspace_id,
+            updates={"knowledge_sources": next_sources},
+        )
+    ingestion_status = await knowledge_rag_service.ingest_workspace_knowledge_files(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        agent_id=deployed_agent_id,
+        user_id=_normalize_text((current_user or {}).get("user_id")),
+        source_refs=[relative_path],
+    )
+    return {
+        "workspace_id": resolved_workspace_id,
+        "tenant_id": tenant_id,
+        "deployed_agent_id": deployed_agent_id,
+        "knowledge_source": source_ref,
+        "deployed_agent": updated,
+        "ingestion": ingestion_status,
+    }
+
+
 def _derive_studio_specialist_profile(
     *,
     deployed_agent: Optional[Dict[str, Any]],
@@ -2056,7 +2229,9 @@ def _apply_workspace_admin_defaults_to_config(
         not _config_field_present(config_payload, "memory_policy", "context_budget_preset")
         and "context_budget_preset" not in owner_metadata
     ):
-        memory_policy["context_budget_preset"] = workspace_defaults.context_budget_preset
+        memory_policy["context_budget_preset"] = conversation_memory_policy.normalize_context_budget_preset(
+            workspace_defaults.context_budget_preset
+        )
     if (
         not _config_field_present(config_payload, "memory_policy", "retention_preset")
         and "retention_preset" not in owner_metadata
@@ -3392,6 +3567,13 @@ async def create_draft_deployed_agent(
         },
         actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
     )
+    await _append_full_access_runtime_review_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent=deployed_agent,
+        lifecycle_action="created",
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
     return project_deployed_agent(deployed_agent, include_internal=True)
 
 
@@ -4316,6 +4498,13 @@ async def update_deployed_agent(
         },
         actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
     )
+    await _append_full_access_runtime_review_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent=persisted,
+        lifecycle_action="updated",
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
     if state_changed and previous_state in {"paused", "suspended"} and current_state in {"private_test", "ready_for_review"}:
         await _append_deployed_agent_audit_event(
             tenant_id=tenant_id,
@@ -4519,6 +4708,13 @@ async def deploy_deployed_agent(
                 }
             ),
         },
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
+    await _append_full_access_runtime_review_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent={**persisted, "metadata": privacy_metadata},
+        lifecycle_action="deployed_live",
         actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
     )
     if _normalize_deployment_state(existing.get("deployment_state")) in {"paused", "suspended"}:

@@ -870,13 +870,13 @@ export function WorkstationRunsPane() {
           </div>
         ) : activityItems.length === 0 ? (
           <EmptyPanel
-            title="No activity yet"
-            body="When your assistants work, their actions will appear here. This includes chat history, tool runs, and channel messages."
+            title="No audit rows yet"
+            body="Normal user proof appears inline in chat. This owner/admin surface is for trace, runtime, billing, and artifact audit when deeper inspection is needed."
           />
         ) : (
           <div className="app-stack-4">
             <WorkstationSurfaceNotice tone="neutral">
-              Activity is your audit trail. It records every time an assistant uses a tool, sends a message, or reaches a final outcome.
+              Inline chat is the normal transparency surface. This owner/admin view keeps the deeper audit trail for trace, runtime, billing, and artifact inspection.
             </WorkstationSurfaceNotice>
 
             <WorkstationSurfaceStatGrid>

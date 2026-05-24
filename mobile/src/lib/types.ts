@@ -68,6 +68,8 @@ export type RuntimeAttachmentSummary = {
   label?: string;
   runtime_id?: string;
   machine_id?: string;
+  runtime_access_mode?: string;
+  runtime_access_label?: string;
   online?: boolean;
   healthy?: boolean;
   status?: string;

@@ -6,8 +6,16 @@ import type {
   WizardStepId,
 } from './types';
 
-export const DEFAULT_SAFE_AGENT_PERSONA = 'Helpful customer-facing assistant that answers clearly, stays within the configured business information, and asks a human for help when unsure.';
-export const DEFAULT_SAFE_AGENT_SYSTEM_PROMPT = 'Answer using the agent instructions and trusted knowledge sources. If the answer is not known, say so clearly and ask for a human follow-up. Do not invent prices, policies, availability, legal advice, medical advice, or financial advice.';
+export const DEFAULT_SAFE_AGENT_PERSONA = 'Helpful Business Agent that answers customers clearly, stays within the configured business information, and asks a human for help when unsure.';
+export const DEFAULT_SAFE_AGENT_SYSTEM_PROMPT = 'Answer using the Business Agent instructions and trusted knowledge sources. If the answer is not known, say so clearly and ask for a human follow-up. Do not invent prices, policies, availability, legal advice, medical advice, or financial advice.';
+export const DEFAULT_SAFE_AGENT_PERSONA_VALUES = [
+  DEFAULT_SAFE_AGENT_PERSONA,
+  'Helpful customer-facing assistant that answers clearly, stays within the configured business information, and asks a human for help when unsure.',
+];
+export const DEFAULT_SAFE_AGENT_SYSTEM_PROMPT_VALUES = [
+  DEFAULT_SAFE_AGENT_SYSTEM_PROMPT,
+  'Answer using the agent instructions and trusted knowledge sources. If the answer is not known, say so clearly and ask for a human follow-up. Do not invent prices, policies, availability, legal advice, medical advice, or financial advice.',
+];
 export const DEFAULT_SAFE_MONTHLY_COST_CAP_USD = '25';
 
 export const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
@@ -23,12 +31,12 @@ export const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   {
     id: 'knowledge',
     label: 'Knowledge',
-    description: 'Add the trusted information this assistant should use.',
+    description: 'Add the trusted information this Business Agent should use.',
   },
   {
     id: 'tools',
     label: 'Actions',
-    description: 'Choose what the assistant is allowed to do.',
+    description: 'Choose allowed actions and playbooks.',
   },
   {
     id: 'channels',
@@ -43,7 +51,7 @@ export const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   {
     id: 'safety',
     label: 'Safety',
-    description: 'Set boundaries for autonomous handling.',
+    description: 'Set owner handoff and customer handling boundaries.',
   },
   {
     id: 'test',
@@ -59,8 +67,8 @@ export const CREATE_AGENT_WIZARD_STEPS: Array<{
 }> = [
   {
     id: 'overview',
-    label: 'Create agent',
-    description: 'Name the agent. Memory, integrations, channels, and actions come after creation.',
+    label: 'Create Business Agent',
+    description: 'Name the worker. Memory, connections, channels, and actions come after creation.',
   },
 ];
 
@@ -92,25 +100,25 @@ export const STUDIO_AI_SOURCE_OPTIONS: ReadonlyArray<{
     value: 'empyralis_credits',
     label: 'Platform credits',
     title: 'Use Empyralis credits',
-    hint: 'Best default. Empyralis meters the provider cost and charges workspace credits.',
+    hint: 'Best default. Uses workspace credits.',
   },
   {
     value: 'workspace_api_key',
     label: 'Workspace API key',
     title: 'Use your API key',
-    hint: 'Runs through a connected provider account stored in the workspace vault.',
+    hint: 'Runs through a connected provider account.',
   },
   {
     value: 'local_model',
     label: 'Local model',
     title: 'Use local computer model',
-    hint: 'Uses the selected computer/local provider path when it is available.',
+    hint: 'Uses a paired computer or local provider.',
   },
   {
     value: 'subscription_passthrough',
     label: 'Subscription',
     title: 'Use subscription passthrough',
-    hint: 'Reserved for supported local/coding subscription routes. It is not Empyralis credits.',
+    hint: 'Reserved for eligible external subscriptions.',
   },
 ];
 
@@ -155,21 +163,21 @@ export const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
 }> = [
   {
     value: 'managed_cloud',
-    label: 'Empyralis Cloud',
+    label: 'Cloud worker',
     supplier: 'empyralis',
-    hint: 'Text/API agent for customer conversations. No virtual machine, browser, or computer control.',
+    hint: 'Default Business Agent runtime for customer conversations. No computer, browser, or shell access.',
     capabilities: 'Chat, memory, knowledge lookup, and approved API tools.',
-    runsWhere: 'Empyralis managed cloud. The agent calls the selected API model provider from the platform.',
+    runsWhere: 'Empyralis Cloud. The Business Agent calls the selected AI route from the platform.',
     privacy: 'High. No direct computer access surface.',
     costRisk: 'Predictable platform usage plus provider API cost.',
     setup: 'Default production path.',
-    bestFor: 'Support, FAQs, triage, and policy-safe assistants.',
+    bestFor: 'Support, FAQs, triage, and policy-safe business workers.',
   },
   {
     value: 'hosted_hardware_pool',
-    label: 'Empyralis Cloud Computer',
+    label: 'Agent Computer - Cloud Computer',
     supplier: 'empyralis',
-    hint: 'Agent with isolated browser/computer automation under policy controls.',
+    hint: 'Optional Agent Computer with isolated browser/computer automation.',
     capabilities: 'Browser, files, and task automation inside an isolated cloud session.',
     runsWhere: 'Isolated cloud computer managed by Empyralis.',
     privacy: 'Medium. Session activity can be logged for safety and audit.',
@@ -179,9 +187,9 @@ export const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'customer_local',
-    label: 'Customer Computer',
+    label: 'Agent Computer - This Device',
     supplier: 'customer',
-    hint: 'Agent uses a connected computer with explicit permissions.',
+    hint: 'Optional Agent Computer using a connected personal device.',
     capabilities: 'Local browser/files/terminal actions after explicit grants.',
     runsWhere: 'A connected computer registered to this workspace.',
     privacy: 'Very high data locality, with host-device trust responsibility.',
@@ -191,14 +199,14 @@ export const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'customer_hosted',
-    label: 'Customer Server',
+    label: 'Agent Computer - Server/VPS',
     supplier: 'customer',
-    hint: 'Agent runs on a customer-owned server or self-hosted node.',
+    hint: 'Optional Agent Computer using customer-owned server infrastructure.',
     capabilities: 'Customer-managed execution with workspace-scoped controls.',
     runsWhere: 'Customer-owned infrastructure registered to this workspace.',
     privacy: 'Highest control in your own environment.',
     costRisk: 'Variable, depends on your infrastructure.',
-    setup: 'Register and maintain a healthy self-hosted node.',
+    setup: 'Register and maintain a healthy Server/VPS runtime.',
     bestFor: 'Regulated environments and enterprise-owned operations.',
   },
 ];
@@ -208,9 +216,26 @@ export const STUDIO_APPROVAL_MODE_OPTIONS: ReadonlyArray<{
   label: string;
   hint: string;
 }> = [
-  { value: 'guarded', label: 'Guarded', hint: 'Escalate early and require more owner confirmation.' },
-  { value: 'balanced', label: 'Balanced', hint: 'Default approval posture for most assistants.' },
-  { value: 'autonomous', label: 'Autonomous', hint: 'Allow more automated handling before handoff.' },
+  { value: 'guarded', label: 'Guarded', hint: 'Escalate early and ask the owner sooner.' },
+  { value: 'balanced', label: 'Balanced', hint: 'Default handoff posture for most Business Agents.' },
+  { value: 'autonomous', label: 'Self-serve', hint: 'Handle more routine customer work before handoff.' },
+];
+
+export const STUDIO_RUNTIME_ACCESS_MODE_OPTIONS: ReadonlyArray<{
+  value: WizardState['runtimeAccessMode'];
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: 'default_guarded',
+    label: 'Default Guarded',
+    hint: 'Runs normal safe work; risky computer actions ask inline for owner approval.',
+  },
+  {
+    value: 'full_access',
+    label: 'Autonomous Agent',
+    hint: 'No Empyralis per-action approval prompts after setup warning; owner binding, revocation, quota, stop/cancel, and OS/provider limits still apply.',
+  },
 ];
 
 export const STUDIO_TOOL_OPTIONS: ReadonlyArray<{
@@ -299,16 +324,32 @@ export const CONTEXT_PRESET_OPTIONS: ReadonlyArray<{
     description: 'Lower cost',
   },
   {
-    id: 'balanced',
+    id: 'standard',
     label: 'Standard',
     description: 'Recommended',
   },
   {
-    id: 'deep',
-    label: 'Deep',
+    id: 'extended',
+    label: 'Extended',
     description: 'More source context',
   },
+  {
+    id: 'max',
+    label: 'Max',
+    description: 'Largest safe context',
+  },
 ];
+
+export function normalizeContextPresetId(value: string | null | undefined): string {
+  const token = String(value || '').trim().toLowerCase();
+  if (token === 'balanced') {
+    return 'standard';
+  }
+  if (token === 'deep') {
+    return 'extended';
+  }
+  return CONTEXT_PRESET_OPTIONS.some((option) => option.id === token) ? token : 'standard';
+}
 
 export const RETENTION_PRESET_OPTIONS: ReadonlyArray<{
   id: string;
@@ -420,7 +461,7 @@ export const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     knowledgePlaceholder: 'Paste product catalog links, spreadsheet references, pricing notes, or availability rules here.',
     selectedToolIds: ['spreadsheet_read', 'spreadsheet_append'],
     memoryEnabled: true,
-    contextBudgetPreset: 'balanced',
+    contextBudgetPreset: 'standard',
   },
   {
     id: 'restaurant_orders',
@@ -438,7 +479,7 @@ export const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     knowledgePlaceholder: 'Paste menu notes, Google Sheet references, or daily specials source here.',
     selectedToolIds: ['spreadsheet_read', 'spreadsheet_append'],
     memoryEnabled: true,
-    contextBudgetPreset: 'balanced',
+    contextBudgetPreset: 'standard',
   },
   {
     id: 'dental_receptionist',
@@ -456,7 +497,7 @@ export const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     knowledgePlaceholder: 'Paste clinic hours, services, insurance notes, booking rules, and emergency routing instructions here.',
     selectedToolIds: ['calendar_write', 'gmail_send'],
     memoryEnabled: true,
-    contextBudgetPreset: 'balanced',
+    contextBudgetPreset: 'standard',
   },
   {
     id: 'real_estate_leads',
@@ -474,7 +515,7 @@ export const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     knowledgePlaceholder: 'Paste listing sheet, neighborhood notes, or qualification rules here.',
     selectedToolIds: ['calendar_write', 'gmail_send', 'spreadsheet_append'],
     memoryEnabled: true,
-    contextBudgetPreset: 'balanced',
+    contextBudgetPreset: 'standard',
   },
   {
     id: 'support_faq',
@@ -510,7 +551,7 @@ export const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     knowledgePlaceholder: 'Add service list, booking rules, and availability source here.',
     selectedToolIds: ['calendar_write', 'gmail_send'],
     memoryEnabled: true,
-    contextBudgetPreset: 'balanced',
+    contextBudgetPreset: 'standard',
   },
   {
     id: 'spreadsheet_catalog',
@@ -546,7 +587,7 @@ export const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     knowledgePlaceholder: 'Paste product pages, pricing notes, or sales sheet references here.',
     selectedToolIds: ['spreadsheet_read', 'web_search', 'gmail_send'],
     memoryEnabled: true,
-    contextBudgetPreset: 'balanced',
+    contextBudgetPreset: 'standard',
   },
   {
     id: 'github_triage',
@@ -564,7 +605,7 @@ export const STUDIO_TEMPLATES: ReadonlyArray<StudioTemplate> = [
     knowledgePlaceholder: 'Paste repository, issue board, or release-note source references here.',
     selectedToolIds: ['http_request', 'gmail_send'],
     memoryEnabled: false,
-    contextBudgetPreset: 'deep',
+    contextBudgetPreset: 'extended',
   },
 ];
 
@@ -578,10 +619,10 @@ export const PRIMARY_STUDIO_TEMPLATE_ORDER = [
 export const PRIMARY_STUDIO_TEMPLATE_IDS = new Set<string>(PRIMARY_STUDIO_TEMPLATE_ORDER);
 export const CUSTOM_STUDIO_TEMPLATE: StudioTemplate = {
   id: 'custom_agent',
-  title: 'Custom Agent',
+  title: 'Custom Business Agent',
   category: 'Blank',
   icon: '+',
-  outcome: 'Build a private assistant from your own instructions.',
+  outcome: 'Build a private worker from your own instructions.',
   description: 'Start with a clean draft when none of the templates match the job.',
   setupTime: 'Custom setup',
   channelLabel: 'Choose later',
@@ -589,8 +630,8 @@ export const CUSTOM_STUDIO_TEMPLATE: StudioTemplate = {
   defaultName: '',
   persona: '',
   systemPrompt: '',
-  knowledgePlaceholder: 'Add the trusted sources this assistant should use.',
+  knowledgePlaceholder: 'Add the trusted sources this Business Agent should use.',
   selectedToolIds: [],
   memoryEnabled: false,
-  contextBudgetPreset: 'balanced',
+  contextBudgetPreset: 'standard',
 };

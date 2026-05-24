@@ -4,7 +4,7 @@ from server_modules import execution_mode_policy
 
 
 class ExecutionModePolicyTests(unittest.TestCase):
-    def test_full_access_is_only_available_for_local_companion(self) -> None:
+    def test_full_access_is_available_for_dedicated_runtime_targets(self) -> None:
         cloud_modes = {
             item["id"]: item
             for item in execution_mode_policy.mode_contract_for_target("sage_cloud_computer")
@@ -13,18 +13,63 @@ class ExecutionModePolicyTests(unittest.TestCase):
             item["id"]: item
             for item in execution_mode_policy.mode_contract_for_target("local_companion")
         }
+        self_hosted_modes = {
+            item["id"]: item
+            for item in execution_mode_policy.mode_contract_for_target("self_host_runtime")
+        }
 
-        self.assertFalse(cloud_modes["full_access"]["available"])
+        self.assertTrue(cloud_modes["full_access"]["available"])
+        self.assertEqual(cloud_modes["full_access"]["label"], "Autonomous Agent")
         self.assertTrue(cloud_modes["autopilot"]["available"])
+        self.assertFalse(cloud_modes["full_access"]["destructive_actions_require_approval"])
         self.assertTrue(local_modes["full_access"]["available"])
         self.assertTrue(local_modes["full_access"]["requires_owner_approval"])
+        self.assertTrue(self_hosted_modes["full_access"]["available"])
+        self.assertEqual(
+            self_hosted_modes["full_access"]["runtime_access_mode"],
+            execution_mode_policy.FULL_RUNTIME_ACCESS_MODE,
+        )
 
     def test_summary_declares_safety_boundary(self) -> None:
         summary = execution_mode_policy.routing_contract_summary()
 
-        self.assertEqual(summary["full_access_scope"], "local_companion_only")
-        self.assertTrue(summary["destructive_actions_require_approval"])
+        self.assertEqual(summary["default_guarded_public_label"], "Default Guarded")
+        self.assertEqual(summary["full_access_public_label"], "Autonomous Agent")
+        self.assertEqual(summary["autonomous_agent_runtime_access_mode"], "full_access")
+        self.assertEqual(summary["full_access_scope"], "dedicated_runtime_targets")
+        self.assertEqual(summary["destructive_actions_require_approval"], "default_guarded_only")
         self.assertIn("autopilot", summary["supported_execution_modes"])
+        self.assertIn("full_access", summary["supported_execution_modes"])
+        self.assertIn("full_access", summary["supported_runtime_access_modes"])
+
+    def test_autonomous_agent_aliases_normalize_to_full_access(self) -> None:
+        for alias in (
+            "autonomous_agent",
+            "Autonomous Agent",
+            "dedicated-agent",
+            "agent_owned_runtime",
+        ):
+            with self.subTest(alias=alias):
+                self.assertEqual(
+                    execution_mode_policy.normalize_runtime_access_mode(alias),
+                    execution_mode_policy.FULL_RUNTIME_ACCESS_MODE,
+                )
+                self.assertEqual(
+                    execution_mode_policy.runtime_access_mode_for_execution_mode(alias),
+                    execution_mode_policy.FULL_RUNTIME_ACCESS_MODE,
+                )
+
+    def test_runtime_access_public_helpers_keep_internal_mode_stable(self) -> None:
+        self.assertEqual(
+            execution_mode_policy.public_runtime_access_label("full_access"),
+            "Autonomous Agent",
+        )
+        self.assertIn(
+            "without Empyralis asking for each action",
+            execution_mode_policy.runtime_access_setup_warning("Autonomous Agent") or "",
+        )
+        self.assertEqual(execution_mode_policy.public_runtime_access_label("default_guarded"), "Default Guarded")
+        self.assertIsNone(execution_mode_policy.runtime_access_setup_warning("default_guarded"))
 
 
 if __name__ == "__main__":

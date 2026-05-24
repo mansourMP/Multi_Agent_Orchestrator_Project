@@ -3,12 +3,26 @@ import { expect, test } from '@playwright/test';
 
 import { loginAsOwner } from './support/auth';
 
-function installTransparencyTurnStub(page) {
-  return page.addInitScript(() => {
+function installTransparencyTurnStub(page, initialSavedState = null) {
+  return page.addInitScript((seedState) => {
     const originalFetch = window.fetch.bind(window);
     const encoder = new TextEncoder();
+    const storageKey = 'empyralis-transparency-turn-stub';
+    const savedState = (() => {
+      if (seedState && typeof seedState === 'object') {
+        return seedState;
+      }
+      try {
+        return JSON.parse(sessionStorage.getItem(storageKey) || '{}') || {};
+      } catch {
+        return {};
+      }
+    })();
     const state = {
-      persistedTurns: [] as Array<Record<string, unknown>>,
+      persistedTurns: Array.isArray(savedState.persistedTurns)
+        ? savedState.persistedTurns as Array<Record<string, unknown>>
+        : [] as Array<Record<string, unknown>>,
+      pendingTranscriptEvents: [] as Array<Record<string, unknown>>,
       providerProfiles: [
         {
           id: 'profile-deepseek',
@@ -21,6 +35,37 @@ function installTransparencyTurnStub(page) {
           },
         },
       ] as Array<Record<string, unknown>>,
+    };
+
+    const persistState = () => {
+      sessionStorage.setItem(storageKey, JSON.stringify({
+        persistedTurns: state.persistedTurns,
+      }));
+    };
+
+    const isTranscriptEvent = (event: string, payload: Record<string, unknown>) => {
+      if (event !== 'trace' && event !== 'step') {
+        return false;
+      }
+      const eventType = String(payload.event_type ?? '').toLowerCase();
+      return eventType !== 'reasoning.summary.delta' && eventType !== 'assistant.message.delta';
+    };
+
+    const sanitizeTranscriptPayload = (payload: Record<string, unknown>) => {
+      const nextPayload = { ...payload };
+      delete nextPayload.trace_id;
+      const data = nextPayload.data && typeof nextPayload.data === 'object' && !Array.isArray(nextPayload.data)
+        ? { ...(nextPayload.data as Record<string, unknown>) }
+        : {};
+      for (const key of ['args', 'args_preview', 'arguments', 'input', 'output', 'parameters', 'prompt', 'raw_output', 'result', 'text']) {
+        delete data[key];
+      }
+      const summary = String(data.summary ?? '').trim();
+      if (summary.startsWith('{') || summary.startsWith('[') || /activity_event_id|trace_id|raw_/i.test(summary)) {
+        delete data.summary;
+      }
+      nextPayload.data = data;
+      return nextPayload;
     };
 
     const jsonResponse = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), {
@@ -42,6 +87,27 @@ function installTransparencyTurnStub(page) {
             const next = events[index];
             index += 1;
             setTimeout(() => {
+              if (isTranscriptEvent(next.event, next.payload)) {
+                state.pendingTranscriptEvents.push({
+                  event: next.event,
+                  payload: sanitizeTranscriptPayload(next.payload),
+                });
+              }
+              if (next.event === 'final') {
+                state.persistedTurns.push({
+                  id: 'turn-assistant-1',
+                  role: 'assistant',
+                  status: 'completed',
+                  content: String(next.payload.reply ?? ''),
+                  created_at: new Date().toISOString(),
+                  metadata: {
+                    request_id: 'req-1',
+                    trace_id: 'trace-live-1',
+                    transcript_events: state.pendingTranscriptEvents,
+                  },
+                });
+                persistState();
+              }
               controller.enqueue(
                 encoder.encode(`event: ${next.event}\ndata: ${JSON.stringify(next.payload)}\n\n`),
               );
@@ -168,6 +234,7 @@ function installTransparencyTurnStub(page) {
             client_request_id: payload?.client_request_id ?? 'req-1',
           },
         });
+        persistState();
         return jsonResponse({
           id: 'primary',
           thread_id: 'primary',
@@ -213,8 +280,63 @@ function installTransparencyTurnStub(page) {
         return jsonResponse({ items: [] });
       }
 
+      if (url.includes('/api/agent-traces/trace-legacy-1')) {
+        return jsonResponse({
+          trace: {
+            id: 'trace-legacy-1',
+            workspace_id: 'ws-1',
+            thread_id: 'primary',
+            outcome: 'success',
+          },
+          events: [
+            {
+              id: 'legacy-event-1',
+              trace_id: 'trace-legacy-1',
+              seq: 1,
+              ts: '2026-05-23T10:00:00Z',
+              event_type: 'search.query',
+              tool_call_id: 'legacy-search',
+              data: {
+                query: 'legacy trace replay',
+                raw_output: 'hidden raw output',
+              },
+            },
+            {
+              id: 'legacy-event-2',
+              trace_id: 'trace-legacy-1',
+              seq: 2,
+              ts: '2026-05-23T10:00:01Z',
+              event_type: 'tool.result',
+              tool_call_id: 'legacy-shell',
+              data: {
+                tool_name: 'shell__exec',
+                input: {
+                  command: 'rm -rf hidden-raw-command',
+                },
+                status: 'done',
+                summary: 'Legacy command completed.',
+              },
+            },
+            {
+              id: 'legacy-event-3',
+              trace_id: 'trace-legacy-1',
+              seq: 3,
+              ts: '2026-05-23T10:00:02Z',
+              event_type: 'screenshot.captured',
+              item_id: 'legacy-shot',
+              data: {
+                artifact_id: 'legacy-artifact-1',
+                status: 'done',
+                summary: 'Legacy screenshot captured.',
+              },
+            },
+          ],
+        });
+      }
+
       if (url.includes('/api/turn')) {
         const reply = 'I reviewed the workspace activity and I am ready to continue.';
+        state.pendingTranscriptEvents = [];
         return eventStreamResponse([
           {
             delay: 30,
@@ -317,6 +439,7 @@ function installTransparencyTurnStub(page) {
               event_type: 'screenshot.captured',
               item_id: 'screenshot-1',
               data: {
+                artifact_id: 'artifact-screenshot-1',
                 status: 'done',
                 summary: 'Captured the settings panel.',
               },
@@ -332,6 +455,19 @@ function installTransparencyTurnStub(page) {
               data: {
                 approval_id: 'approval-1',
                 prompt: 'Send the Telegram message?',
+              },
+            },
+          },
+          {
+            delay: 40,
+            event: 'trace',
+            payload: {
+              trace_id: 'trace-live-1',
+              event_type: 'approval.resolved',
+              approval_id: 'approval-1',
+              data: {
+                decision: 'approved',
+                actor: 'owner',
               },
             },
           },
@@ -367,7 +503,7 @@ function installTransparencyTurnStub(page) {
 
       return originalFetch(input, init);
     };
-  });
+  }, initialSavedState);
 }
 
 test.describe('chat transparency timeline', () => {
@@ -377,19 +513,25 @@ test.describe('chat transparency timeline', () => {
     await page.goto('/w/ws-1/sage');
 
     await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible();
-    await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('DeepSeek');
+    await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('Light');
+    await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('Empyralis credits');
     const composer = page.locator('[data-workstation-chat-composer="root"] textarea');
+    await composer.fill('/');
+    await expect(page.locator('.app-chat-composer__command-list')).toBeVisible();
+    await expect(page.getByText('/proof')).toHaveCount(0);
+    await expect(page.getByRole('option', { name: /show proof/i })).toHaveCount(0);
     await composer.fill('show me what you are doing');
     await composer.press('Enter');
 
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="search"]')).toContainText('Searching web');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Running shell');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Reading file');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Browser action');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Used browser');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_telegram"]')).toContainText('Sending Telegram');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_whatsapp"]')).toContainText('Sending WhatsApp');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Screenshot/artifact');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Needs your OK');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-screenshot-1/);
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval approved');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="done"]')).toContainText('Done');
 
     await expect(page.getByText(/inspect workspace state and decide next step/i)).toHaveCount(0);
@@ -399,5 +541,212 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'Running shell' })).toHaveCount(0);
 
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible();
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="search"]')).toContainText('Searching web');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Running shell');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Reading file');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Used browser');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
+    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
+  });
+
+  test('replays older trace IDs inline without exposing raw trace data', async ({ page }) => {
+    await installTransparencyTurnStub(page, {
+      persistedTurns: [
+        {
+          id: 'turn-user-legacy',
+          role: 'user',
+          status: 'completed',
+          content: 'show legacy work',
+          created_at: '2026-05-23T10:00:00Z',
+          metadata: {},
+        },
+        {
+          id: 'turn-assistant-legacy',
+          role: 'assistant',
+          status: 'completed',
+          content: 'Legacy answer is ready.',
+          created_at: '2026-05-23T10:00:03Z',
+          metadata: {
+            trace_id: 'trace-legacy-1',
+          },
+        },
+      ],
+    });
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/sage');
+
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="search"]')).toContainText('legacy trace replay');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Ran command');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /legacy-artifact-1/);
+    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'Legacy answer is ready.' })).toBeVisible();
+    await expect(page.getByText(/trace-legacy-1/i)).toHaveCount(0);
+    await expect(page.getByText(/hidden raw output/i)).toHaveCount(0);
+    await expect(page.getByText(/rm -rf hidden-raw-command/i)).toHaveCount(0);
+  });
+
+  test('replays persisted hardware completion artifacts inside the chat transcript', async ({ page }) => {
+    await installTransparencyTurnStub(page, {
+      persistedTurns: [
+        {
+          id: 'turn-user-hardware',
+          role: 'user',
+          status: 'completed',
+          content: 'run the self-hosted check',
+          created_at: '2026-05-23T11:00:00Z',
+          metadata: {},
+        },
+        {
+          id: 'turn-assistant-hardware',
+          role: 'assistant',
+          status: 'completed',
+          content: 'The hardware check completed.',
+          created_at: '2026-05-23T11:00:03Z',
+          metadata: {
+            request_id: 'req-hardware-1',
+            trace_id: 'trace-hardware-1',
+            transcript_events: [
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'delegation.started',
+                  item_id: 'delegation-hardware-1',
+                  data: {
+                    specialist_id: 'specialist-secret',
+                    specialist_name: 'Research Specialist',
+                    task_summary: 'Check the hardware result.',
+                    provider: 'deepseek',
+                    prompt: 'hidden child prompt',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'delegation.finished',
+                  item_id: 'delegation-hardware-1',
+                  data: {
+                    status: 'completed',
+                    result_summary: 'Research Specialist checked the result.',
+                    model_id: 'deepseek-v4-pro',
+                    trace_id: 'trace-child-secret',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'approval.resolved',
+                  approval_id: 'approval-hardware-1',
+                  data: {
+                    approval_id: 'approval-hardware-1',
+                    decision: 'approved',
+                    actor: 'owner',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'artifact.created',
+                  artifact_id: 'artifact-hardware-1',
+                  data: {
+                    kind: 'hardware_action',
+                    title: 'Self-hosted output bundle',
+                    artifact_id: 'artifact-hardware-1',
+                    mime_type: 'application/json',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'file.read',
+                  item_id: 'file-hardware-1',
+                  data: {
+                    status: 'completed',
+                    path: 'reports/current-status.md',
+                    result: 'raw file body should stay hidden',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'gateway.offline',
+                  item_id: 'gateway-offline-1',
+                  data: {
+                    runtime_target: 'user_device_gateway',
+                    state: 'offline',
+                    summary: 'Gateway is unavailable.',
+                    raw_output: 'hidden gateway detail',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'assistant.message.delta',
+                  data: {
+                    text: 'hidden assistant delta',
+                  },
+                },
+              },
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'tool.result',
+                  tool_call_id: 'req-hardware-1',
+                  data: {
+                    status: 'completed',
+                    summary: 'Self-hosted command completed.',
+                    tool_name: 'shell.execute',
+                    capability_id: 'shell.execute',
+                    runtime_target: 'self_hosted_node',
+                    runtime_access_mode: 'full_access',
+                    runtime_session_id: 'hrs-hardware-1',
+                    request_id: 'req-hardware-1',
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/sage');
+
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval approved');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Created artifact');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-hardware-1/);
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="delegated_to_research_specialist"]')).toContainText('Delegated to Research Specialist');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="specialist_finished"]')).toContainText('Specialist finished');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="specialist_finished"]')).toContainText('Research Specialist checked the result.');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Read file');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('reports/current-status.md');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="gateway_offline"]')).toContainText(/Gateway offline/i);
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Ran command');
+    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'The hardware check completed.' })).toBeVisible();
+    await expect(page.getByText(/trace-hardware-1/i)).toHaveCount(0);
+    await expect(page.getByText(/hrs-hardware-1/i)).toHaveCount(0);
+    await expect(page.getByText(/raw file body should stay hidden/i)).toHaveCount(0);
+    await expect(page.getByText(/hidden gateway detail/i)).toHaveCount(0);
+    await expect(page.getByText(/hidden assistant delta/i)).toHaveCount(0);
+    await expect(page.getByText(/specialist-secret/i)).toHaveCount(0);
+    await expect(page.getByText(/hidden child prompt/i)).toHaveCount(0);
+    await expect(page.getByText(/deepseek-v4-pro/i)).toHaveCount(0);
+    await expect(page.getByText(/trace-child-secret/i)).toHaveCount(0);
   });
 });

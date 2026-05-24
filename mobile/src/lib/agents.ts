@@ -105,9 +105,9 @@ export function buildAgentThreadFromInstall(install: Record<string, any>): Agent
   const metadata = install?.metadata && typeof install.metadata === "object" ? install.metadata : {};
   const manifest = metadata.manifest && typeof metadata.manifest === "object" ? metadata.manifest : {};
   const identity = manifest.identity && typeof manifest.identity === "object" ? manifest.identity : {};
-  const label = String(install?.label || identity.name || "Specialist").trim();
+  const label = String(install?.label || identity.name || "Business Agent").trim();
   const role = String(identity.role || install?.runtime_role || install?.status || "").trim();
-  const summary = String(identity.summary || role || "Specialist channel").trim();
+  const summary = String(identity.summary || role || "Business workflow").trim();
   const deployedAgent = metadata.deployed_agent && typeof metadata.deployed_agent === "object"
     ? metadata.deployed_agent
     : {};

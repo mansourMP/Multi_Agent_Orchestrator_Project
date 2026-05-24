@@ -22,27 +22,67 @@ class ProviderCatalogTruthTests(unittest.TestCase):
         provider_profiles._server.ACP_MANAGER.reload_secondary_state()
         self._profiles_tmpdir.cleanup()
 
+    def _assert_codex_token_does_not_claim_direct_openai_is_ready(self, source: str, *, gateway_online: bool = True) -> None:
+        with patch("server_modules.provider_profiles._openai_env_bearer_with_source", return_value=("codex-token", source)), patch(
+            "server_modules.provider_profiles.workspace_live_gateway_available",
+            return_value=gateway_online,
+        ):
+            with patch.dict(provider_profiles._server.PROVIDER_PROFILES, {}, clear=True):
+                payload = provider_profiles.build_provider_runtime_truth("default")
+
+        providers = payload["providers_by_id"]
+        self.assertEqual(providers["openai"]["state"], "setup_required")
+        self.assertEqual(providers["openai"]["issue_code"], "direct_openai_credential_required")
+        self.assertEqual(providers["openai-codex"]["active_source"], source)
+        if source == "codex_token_vault" and not gateway_online:
+            self.assertEqual(providers["openai-codex"]["state"], "configured")
+            self.assertEqual(providers["openai-codex"]["issue_code"], "local_gateway_required")
+            self.assertFalse(providers["openai-codex"]["usable"])
+        else:
+            self.assertEqual(providers["openai-codex"]["state"], "active")
+            self.assertTrue(providers["openai-codex"]["usable"])
+
     @patch("server_modules.provider_profiles.resolve_default_vault_credential", side_effect=RuntimeError("missing"))
     @patch("server_modules.provider_profiles.gemini_cli_available", return_value=False)
     @patch(
         "server_modules.provider_profiles.claude_code_cli_status",
         return_value={"available": False, "logged_in": False, "message": "Claude Code CLI is not installed."},
     )
-    @patch("server_modules.provider_profiles._openai_env_bearer_with_source", return_value=("codex-token", "env_codex_oauth_token"))
-    def test_codex_token_does_not_claim_direct_openai_is_ready(
+    def test_codex_env_token_does_not_claim_direct_openai_is_ready(
         self,
-        _openai_env_mock,
         _claude_status_mock,
         _gemini_cli_mock,
         _resolve_default_mock,
     ) -> None:
-        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, {}, clear=True):
-            payload = provider_profiles.build_provider_runtime_truth("default")
+        self._assert_codex_token_does_not_claim_direct_openai_is_ready("env_codex_oauth_token")
 
-        providers = payload["providers_by_id"]
-        self.assertEqual(providers["openai"]["state"], "setup_required")
-        self.assertEqual(providers["openai"]["issue_code"], "direct_openai_credential_required")
-        self.assertEqual(providers["openai-codex"]["state"], "active")
+    @patch("server_modules.provider_profiles.resolve_default_vault_credential", side_effect=RuntimeError("missing"))
+    @patch("server_modules.provider_profiles.gemini_cli_available", return_value=False)
+    @patch(
+        "server_modules.provider_profiles.claude_code_cli_status",
+        return_value={"available": False, "logged_in": False, "message": "Claude Code CLI is not installed."},
+    )
+    def test_codex_token_vault_does_not_claim_direct_openai_is_ready(
+        self,
+        _claude_status_mock,
+        _gemini_cli_mock,
+        _resolve_default_mock,
+    ) -> None:
+        self._assert_codex_token_does_not_claim_direct_openai_is_ready("codex_token_vault")
+
+    @patch("server_modules.provider_profiles.resolve_default_vault_credential", side_effect=RuntimeError("missing"))
+    @patch("server_modules.provider_profiles.gemini_cli_available", return_value=False)
+    @patch(
+        "server_modules.provider_profiles.claude_code_cli_status",
+        return_value={"available": False, "logged_in": False, "message": "Claude Code CLI is not installed."},
+    )
+    def test_codex_token_vault_requires_local_gateway(
+        self,
+        _claude_status_mock,
+        _gemini_cli_mock,
+        _resolve_default_mock,
+    ) -> None:
+        self._assert_codex_token_does_not_claim_direct_openai_is_ready("codex_token_vault", gateway_online=False)
 
     @patch("server_modules.provider_profiles.resolve_default_vault_credential", side_effect=RuntimeError("missing"))
     @patch("server_modules.provider_profiles.gemini_cli_available", return_value=False)

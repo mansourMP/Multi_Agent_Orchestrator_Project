@@ -1595,6 +1595,7 @@ def direct_chat_memory_context_message(
         memory_query="",
         agent_install_id=agent_install_id,
         policy_profile=get_memory_policy_profile(DIRECT_CHAT_PROFILE),
+        include_memory_context=True,
     )
     return workspace_context_memory_adapter.build_workspace_memory_context_message(
         system_prefix=system_prefix,

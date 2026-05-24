@@ -19,6 +19,8 @@ export interface Action {
 export interface AgentPayload {
   intent: string;
   messageType?: "text" | "approval" | "tool";
+  toolStatus?: "running" | "done" | "error";
+  toolKind?: string;
   approval?: {
     kind?: "run" | "direct";
     action: string;

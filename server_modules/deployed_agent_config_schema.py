@@ -231,6 +231,7 @@ class DeployedAgentComputerAutomationPolicy(BaseModel):
     max_concurrent_sessions: int = 0
     daily_budget_usd: Optional[float] = None
     monthly_budget_usd: Optional[float] = None
+    runtime_access_mode: str = "default_guarded"
     requires_owner_approval: bool = True
     idle_timeout_seconds: int = 0
     max_session_runtime_seconds: int = 0

@@ -20,7 +20,13 @@ from server_modules.auth import (
     workspace_tenant_id,
 )
 from server_modules.runtime_common import require_api_key
-from server_modules import agent_registry_repository, demo_workflows, local_queue, machine_capability_check
+from server_modules import (
+    agent_registry_repository,
+    demo_workflows,
+    hardware_action_broker_service,
+    local_queue,
+    machine_capability_check,
+)
 from server_modules import outbox_service
 from server_modules import run_state_repository, runs_output, shared, telemetry
 from server_modules import billing_service, entitlements_service
@@ -102,6 +108,42 @@ class SelfHostedNodeCommandResultPayload(BaseModel):
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     audit_references: List[Dict[str, Any]] = Field(default_factory=list)
     error: Optional[str] = None
+
+
+class RuntimeHardwareActionExecutePayload(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    action_id: str = Field(min_length=1)
+    runtime_target: str = "cloud_default"
+    capability_id: Optional[str] = None
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+    gateway_id: Optional[str] = None
+    device_id: Optional[str] = None
+    node_id: Optional[str] = None
+    run_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    request_id: Optional[str] = None
+    session_id: Optional[str] = None
+    timeout_seconds: Optional[int] = Field(default=None, ge=1, le=120)
+    runtime_access_mode: Optional[str] = None
+    execution_mode: Optional[str] = None
+    require_approval: Optional[bool] = None
+    cost_metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RuntimeHardwareActionStopPayload(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    runtime_target: str = "user_device_gateway"
+    gateway_id: Optional[str] = None
+    node_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    target_request_id: Optional[str] = None
+    request_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    session_id: Optional[str] = None
+    reason: Optional[str] = None
+    timeout_seconds: Optional[int] = Field(default=None, ge=1, le=120)
 
 
 class RuntimeHeartbeatPayload(BaseModel):
@@ -192,6 +234,13 @@ def _ensure_advanced_features_access(workspace_id: str) -> None:
             status_code=403,
             detail="Advanced runtime controls are not included in this workspace plan.",
         )
+
+
+def _ensure_runtime_action_operator(current_user: Dict[str, Any], workspace_id: str) -> None:
+    role = workspace_role(current_user, workspace_id)
+    if role in {"owner", "admin"} or bool((current_user or {}).get("is_admin")):
+        return
+    raise HTTPException(status_code=403, detail="Workspace owner or admin role is required.")
 
 
 class MachineEnrollmentStatePayload(BaseModel):
@@ -1176,7 +1225,7 @@ def register_runtime_routes(app) -> None:
         payload: SelfHostedNodeCommandResultPayload,
     ):
         try:
-            return await agent_registry_repository.complete_self_hosted_runtime_command(
+            result = await agent_registry_repository.complete_self_hosted_runtime_command(
                 runtime_profile_id=runtime_profile_id,
                 node_session_token=payload.node_session_token,
                 command_id=command_id,
@@ -1185,6 +1234,78 @@ def register_runtime_routes(app) -> None:
                 artifacts=payload.artifacts,
                 audit_references=payload.audit_references,
                 error=payload.error,
+            )
+            return await hardware_action_broker_service.record_self_hosted_command_completion(result)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/runtime/hardware/actions/execute", dependencies=[Depends(require_api_key)])
+    async def execute_runtime_hardware_action(
+        payload: RuntimeHardwareActionExecutePayload,
+        current_user: Dict[str, Any] = Depends(require_api_key),
+    ):
+        workspace_id = enforce_workspace_access(
+            current_user,
+            payload.workspace_id,
+            minimum_role="member",
+        )
+        _ensure_runtime_action_operator(current_user, workspace_id)
+        _ensure_advanced_features_access(workspace_id)
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        try:
+            return await hardware_action_broker_service.execute_hardware_action(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                user_id=str((current_user or {}).get("user_id") or "").strip() or None,
+                action_id=payload.action_id,
+                arguments=payload.arguments,
+                runtime_target=payload.runtime_target,
+                capability_id=payload.capability_id,
+                gateway_id=payload.gateway_id,
+                device_id=payload.device_id,
+                node_id=payload.node_id,
+                run_id=payload.run_id,
+                trace_id=payload.trace_id,
+                thread_id=payload.thread_id,
+                request_id=payload.request_id,
+                session_id=payload.session_id,
+                timeout_seconds=payload.timeout_seconds,
+                runtime_access_mode=payload.runtime_access_mode,
+                execution_mode=payload.execution_mode,
+                require_approval=payload.require_approval,
+                cost_metadata=payload.cost_metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/runtime/hardware/actions/stop", dependencies=[Depends(require_api_key)])
+    async def stop_runtime_hardware_action(
+        payload: RuntimeHardwareActionStopPayload,
+        current_user: Dict[str, Any] = Depends(require_api_key),
+    ):
+        workspace_id = enforce_workspace_access(
+            current_user,
+            payload.workspace_id,
+            minimum_role="member",
+        )
+        _ensure_runtime_action_operator(current_user, workspace_id)
+        _ensure_advanced_features_access(workspace_id)
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        try:
+            return await hardware_action_broker_service.stop_hardware_action(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                run_id=payload.run_id,
+                runtime_target=payload.runtime_target,
+                gateway_id=payload.gateway_id,
+                node_id=payload.node_id,
+                trace_id=payload.trace_id,
+                target_request_id=payload.target_request_id,
+                request_id=payload.request_id,
+                thread_id=payload.thread_id,
+                reason=payload.reason,
+                session_id=payload.session_id,
+                timeout_seconds=payload.timeout_seconds,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error

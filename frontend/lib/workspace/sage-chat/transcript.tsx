@@ -36,37 +36,15 @@ export const SageTranscript = memo(function SageTranscript({
   resolvingApprovalId,
   onResolveApproval,
   showBlankTranscript,
-  recentRunRows,
-  onStartNewThread,
-  formatRelativeTime,
+  recentRunRows: _recentRunRows,
+  onStartNewThread: _onStartNewThread,
+  formatRelativeTime: _formatRelativeTime,
 }: SageTranscriptProps) {
   return (
     <ScrollRegion className="app-chat-thread__scroll">
       <div className="app-chat-thread__body">
         {showBlankTranscript && (
-          <div className={`app-chat-empty-state${recentRunRows.length > 0 ? ' app-chat-empty-state--recent' : ''}`}>
-            {recentRunRows.length > 0 && (
-              <div className="app-chat-empty-state__recent">
-                {recentRunRows.map((run, index) => (
-                  <button
-                    key={run.runId ?? run.threadId ?? `${run.createdAt ?? 'run'}:${index}`}
-                    type="button"
-                    className="app-chat-empty-run-row"
-                    onClick={() => onStartNewThread({
-                      title: run.title,
-                      sourceRunId: run.runId,
-                      sourceThreadId: run.threadId,
-                    })}
-                  >
-                    <span className="app-chat-empty-run-row__time">{formatRelativeTime(run.createdAt)}</span>
-                    <span className="app-chat-empty-run-row__preview" title={run.preview}>
-                      {run.preview}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <div className="app-chat-empty-state" aria-hidden="true" />
         )}
 
         {visibleTranscriptCells.map((cell, index) => (

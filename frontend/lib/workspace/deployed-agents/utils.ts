@@ -29,7 +29,9 @@ import type {
 import {
   CUSTOM_STUDIO_TEMPLATE,
   DEFAULT_SAFE_AGENT_PERSONA,
+  DEFAULT_SAFE_AGENT_PERSONA_VALUES,
   DEFAULT_SAFE_AGENT_SYSTEM_PROMPT,
+  DEFAULT_SAFE_AGENT_SYSTEM_PROMPT_VALUES,
   DEFAULT_SAFE_MONTHLY_COST_CAP_USD,
   DEFAULT_STUDIO_TEMPLATE,
   PRIMARY_STUDIO_TEMPLATE_IDS,
@@ -41,6 +43,7 @@ import {
   STUDIO_RUNTIME_OPTIONS,
   STUDIO_TEMPLATES,
   STUDIO_TOOL_OPTIONS,
+  normalizeContextPresetId,
 } from './constants';
 
 export const studioPaneCache = new Map<string, StudioPaneCache>();
@@ -148,7 +151,7 @@ export function normalizeRuntimeAttachments(payload: unknown): RuntimeAttachment
       attachmentKind: readString(item.attachment_kind),
       runtimeProfileId: readString(item.runtime_profile_id),
       runtimeNodeId: readString(item.runtime_node_id),
-      label: readString(item.label, 'Self-hosted node'),
+      label: readString(item.label, 'Server/VPS'),
       online: readBoolean(item.online),
       healthy: readBoolean(item.healthy),
       ownerApproved: readBoolean(item.owner_approved),
@@ -163,7 +166,7 @@ export function normalizeRuntimeAttachments(payload: unknown): RuntimeAttachment
 
 export function selfHostedNodeGateReason(node: RuntimeAttachmentSnapshot | null): string | null {
   if (!node) {
-    return 'Select a self-hosted node.';
+    return 'Select a Server/VPS runtime.';
   }
   if (!node.runtimeProfileId) {
     return 'Selected node is missing its binding id.';
@@ -480,15 +483,15 @@ export function mapStudioSeedToTemplate(seed: StudioProofAgentSeedRecord): Studi
   return {
     id: normalizeTemplateToken(slug),
     title: name,
-    category: readString(seed.category, 'Specialist'),
+    category: readString(seed.category, 'Business Agent'),
     icon: name
       .split(/\s+/)
       .filter(Boolean)
       .slice(0, 2)
       .map((part) => part.charAt(0).toUpperCase())
       .join('') || 'AI',
-    outcome: readString(seed.description, 'Customize and deploy this assistant.'),
-    description: readString(seed.description, 'Backend-defined assistant template.'),
+    outcome: readString(seed.description, 'Customize and deploy this Business Agent.'),
+    description: readString(seed.description, 'Backend-defined Business Agent template.'),
     setupTime: '5 min setup',
     channelLabel: channels.map((item) => readString(item.label, readString(item.channel_key))).filter(Boolean).slice(0, 3).join(' / ') || 'Choose later',
     requiredConnectors: requiredConnectors.length ? requiredConnectors.slice(0, 4) : ['Connect live data'],
@@ -500,7 +503,7 @@ export function mapStudioSeedToTemplate(seed: StudioProofAgentSeedRecord): Studi
       : 'Add trusted docs, spreadsheets, URLs, or live data sources here.',
     selectedToolIds: selectedToolIds.length ? selectedToolIds : ['web_search'],
     memoryEnabled: true,
-    contextBudgetPreset: readString(runtime.tier).includes('hosted') ? 'balanced' : 'deep',
+    contextBudgetPreset: readString(runtime.tier).includes('hosted') ? 'standard' : 'extended',
   };
 }
 
@@ -872,6 +875,23 @@ export function normalizeRuntimePlacement(value: unknown): WizardState['runtimeP
   return 'managed_cloud';
 }
 
+export function normalizeRuntimeAccessMode(value: unknown, legacyRequiresOwnerApproval?: unknown): WizardState['runtimeAccessMode'] {
+  const token = readString(value).toLowerCase().replace(/[-\s]+/g, '_');
+  if (token === 'full_access' || token === 'autonomous_agent' || token === 'autonomous') {
+    return 'full_access';
+  }
+  if (token === 'default_guarded' || token === 'guarded' || token === 'default') {
+    return 'default_guarded';
+  }
+  if (
+    legacyRequiresOwnerApproval === false
+    || readString(legacyRequiresOwnerApproval).toLowerCase() === 'false'
+  ) {
+    return 'full_access';
+  }
+  return 'default_guarded';
+}
+
 export function runtimeTargetForPlacement(value: WizardState['runtimePlacement']): string {
   if (value === 'customer_local') {
     return 'local';
@@ -888,7 +908,7 @@ export function runtimeSupplierForPlacement(value: WizardState['runtimePlacement
 
 export function runtimePlacementLabel(value: unknown): string {
   const placement = normalizeRuntimePlacement(value);
-  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Empyralis Cloud';
+  return STUDIO_RUNTIME_OPTIONS.find((item) => item.value === placement)?.label ?? 'Cloud worker';
 }
 
 export function testRuntimeModeForPlacement(value: unknown): string {
@@ -1190,11 +1210,8 @@ export function buildWizardState(agent?: DeployedAgentRecord | null): WizardStat
   return {
     name: readString(agent?.name),
     avatar: readString(agent?.avatar),
-    persona: readString(agent?.persona, DEFAULT_SAFE_AGENT_PERSONA),
-    systemPrompt: readString(
-      agent?.system_prompt,
-      DEFAULT_SAFE_AGENT_SYSTEM_PROMPT,
-    ),
+    persona: agent ? readString(agent.persona) : DEFAULT_SAFE_AGENT_PERSONA,
+    systemPrompt: agent ? readString(agent.system_prompt) : DEFAULT_SAFE_AGENT_SYSTEM_PROMPT,
     knowledgeSourceText: serializeKnowledgeSources(agent?.knowledge_sources),
     aiTier,
     aiSource,
@@ -1212,6 +1229,10 @@ export function buildWizardState(agent?: DeployedAgentRecord | null): WizardStat
     computerAutomationMaxSessions: readIntegerString(computerAutomation.max_concurrent_sessions) || '1',
     computerAutomationDailyBudgetUsd: readPositiveDecimalString(computerAutomation.daily_budget_usd),
     computerAutomationMonthlyBudgetUsd: readPositiveDecimalString(computerAutomation.monthly_budget_usd),
+    runtimeAccessMode: normalizeRuntimeAccessMode(
+      computerAutomation.runtime_access_mode,
+      computerAutomation.requires_owner_approval,
+    ),
     approvalMode,
     customerChannel,
     telegramEnabled: customerChannel === 'telegram' && telegram.enabled === true,
@@ -1238,7 +1259,7 @@ export function buildWizardState(agent?: DeployedAgentRecord | null): WizardStat
     memoryEnabled: agent
       ? memoryPolicy.memory_enabled === true || metadata.memory_enabled === true
       : false,
-    contextBudgetPreset: readString(memoryPolicy.context_budget_preset ?? metadata.context_budget_preset, 'balanced'),
+    contextBudgetPreset: normalizeContextPresetId(readString(memoryPolicy.context_budget_preset ?? metadata.context_budget_preset, 'standard')),
     retentionPreset: readString(memoryPolicy.retention_preset ?? metadata.retention_preset, 'standard'),
     healthSafetyEnabled: safetyPolicy.health_safety_enabled === true || metadata.health_safety_enabled === true,
     healthSafetyAssistantName: readString(safetyPolicy.assistant_name ?? metadata.health_safety_assistant_name),
@@ -1264,8 +1285,8 @@ export function buildWizardState(agent?: DeployedAgentRecord | null): WizardStat
 export function buildCreateDraftWizardState(state: WizardState): WizardState {
   return {
     ...state,
-    persona: DEFAULT_SAFE_AGENT_PERSONA,
-    systemPrompt: DEFAULT_SAFE_AGENT_SYSTEM_PROMPT,
+    persona: '',
+    systemPrompt: '',
     knowledgeSourceText: '',
     selectedToolIds: [],
     memoryEnabled: false,
@@ -1282,6 +1303,7 @@ export function buildCreateDraftWizardState(state: WizardState): WizardState {
     selfHostedPrivacyAccepted: false,
     selfHostedSafetyAccepted: false,
     computerAutomationEnabled: false,
+    runtimeAccessMode: 'default_guarded',
     monthlyCostCapUsd: state.monthlyCostCapUsd || DEFAULT_SAFE_MONTHLY_COST_CAP_USD,
     dailyMessageLimit: '',
     upgradeCtaLabel: '',
@@ -1337,6 +1359,9 @@ export function buildDeploymentConfig(state: WizardState): Record<string, unknow
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
   const runtimeSupplier = runtimeSupplierForPlacement(state.runtimePlacement);
+  const runtimeAccessMode = state.computerAutomationEnabled
+    ? state.runtimeAccessMode
+    : 'default_guarded';
   const computerAutomation = {
     enabled: state.computerAutomationEnabled,
     runtime_class: state.computerAutomationEnabled ? state.computerAutomationRuntimeClass : null,
@@ -1344,7 +1369,8 @@ export function buildDeploymentConfig(state: WizardState): Record<string, unknow
     max_concurrent_sessions: state.computerAutomationEnabled && automationMaxSessions ? Number(automationMaxSessions) : 0,
     daily_budget_usd: state.computerAutomationEnabled && automationDailyBudget ? Number(automationDailyBudget) : null,
     monthly_budget_usd: state.computerAutomationEnabled && automationMonthlyBudget ? Number(automationMonthlyBudget) : null,
-    requires_owner_approval: true,
+    runtime_access_mode: runtimeAccessMode,
+    requires_owner_approval: runtimeAccessMode !== 'full_access',
   };
   return {
     runtime_placement: state.runtimePlacement,
@@ -1394,7 +1420,7 @@ export function buildDeploymentConfig(state: WizardState): Record<string, unknow
     },
     memory_policy: {
       memory_enabled: state.memoryEnabled,
-      context_budget_preset: state.contextBudgetPreset,
+      context_budget_preset: normalizeContextPresetId(state.contextBudgetPreset),
       retention_preset: state.retentionPreset,
     },
     safety_policy: {
@@ -1419,6 +1445,9 @@ export function buildDeploymentConfig(state: WizardState): Record<string, unknow
 export function buildDetailConfigDraft(agent?: DeployedAgentRecord | null): DetailConfigDraft {
   const state = buildWizardState(agent);
   return {
+    persona: DEFAULT_SAFE_AGENT_PERSONA_VALUES.includes(state.persona) ? '' : state.persona,
+    systemPrompt: DEFAULT_SAFE_AGENT_SYSTEM_PROMPT_VALUES.includes(state.systemPrompt) ? '' : state.systemPrompt,
+    knowledgeSourceText: state.knowledgeSourceText,
     aiTier: state.aiTier,
     aiSource: state.aiSource,
     providerId: state.providerId,
@@ -1662,7 +1691,7 @@ export function summarizeStudioErrorMessage(message: string | null): string | nu
     return null;
   }
   if (normalized.toLowerCase() === 'sage cannot run that request in this workspace right now.') {
-    return 'Agents Studio cannot load that workspace data right now. Refresh, or check workspace access if it keeps happening.';
+    return 'Business Agents cannot load that workspace data right now. Refresh, or check workspace access if it keeps happening.';
   }
   if (
     normalized.length > 220
@@ -1677,7 +1706,7 @@ export function isWizardScopedError(message: string | null): boolean {
   const normalized = readString(message).toLowerCase();
   return Boolean(normalized) && (
     normalized.includes('self-hosted mode requires selecting')
-    || normalized.includes('select a self-hosted node')
+    || normalized.includes('select a server/vps runtime')
     || normalized.includes('accept the privacy contract')
     || normalized.includes('accept the safety contract')
     || normalized.includes('daily message limit')

@@ -37,6 +37,34 @@ function normalizeStepStatus(value: unknown): 'running' | 'done' | 'error' {
   return 'running';
 }
 
+function normalizeToolResultStatus(value: unknown): 'running' | 'done' | 'error' {
+  const normalized = readString(value).toLowerCase();
+  if (['done', 'complete', 'completed', 'success', 'succeeded'].includes(normalized)) {
+    return 'done';
+  }
+  if (['running', 'queued', 'waiting', 'waiting_approval', 'waiting-for-approval', 'pending'].includes(normalized)) {
+    return 'running';
+  }
+  if (['error', 'failed', 'failure', 'blocked', 'denied', 'offline', 'degraded'].includes(normalized)) {
+    return 'error';
+  }
+  return 'done';
+}
+
+function normalizeApprovalStatus(eventType: string, data: Record<string, unknown>): 'waiting' | 'done' | 'error' {
+  const token = readString(data.decision || data.resolution || data.status).toLowerCase();
+  if (['rejected', 'reject', 'denied', 'deny', 'no', 'cancel', 'cancelled', 'canceled', 'stopped', 'aborted', 'failed', 'error'].includes(token)) {
+    return 'error';
+  }
+  if (
+    eventType.includes('resolved')
+    || ['approved', 'approve', 'allowed', 'allow_once', 'allow_session', 'accepted', 'proceed', 'executed', 'done', 'resolved'].includes(token)
+  ) {
+    return 'done';
+  }
+  return 'waiting';
+}
+
 function fileActionLabel(label: string, fallback: string): string {
   const lower = `${label} ${fallback}`.toLowerCase();
   if (lower.includes('read')) {
@@ -84,6 +112,7 @@ function toolInputRecord(data: Record<string, unknown>): Record<string, unknown>
   const candidates = [
     data.input,
     data.arguments,
+    data.args_preview,
     data.args,
     data.parameters,
   ];
@@ -131,12 +160,91 @@ function toolDisplayName(rawName: string): string {
   return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function specialistDisplayName(data: Record<string, unknown>): string {
+  return readString(data.specialist_name)
+    || readString(data.name)
+    || readString(data.label)
+    || 'Specialist';
+}
+
 function browserActionDisplay(action: string): string {
   const normalized = action.toLowerCase();
   if (!normalized) {
     return 'Browser action';
   }
   return 'Browser action';
+}
+
+function traceStatus(value: unknown): 'running' | 'done' | 'error' {
+  return normalizeToolResultStatus(value);
+}
+
+function statusFromEventType(eventType: string, explicitStatus: unknown): 'running' | 'done' | 'error' {
+  const normalized = readString(explicitStatus).toLowerCase();
+  if (normalized) {
+    return traceStatus(normalized);
+  }
+  if (/started|queued|waiting|pending|running/.test(eventType)) {
+    return 'running';
+  }
+  if (/failed|failure|error|blocked|denied|offline|degraded/.test(eventType)) {
+    return 'error';
+  }
+  return 'done';
+}
+
+function shellCommandFromData(data: Record<string, unknown>): string {
+  const input = toolInputRecord(data);
+  return readString(data.command)
+    || readString(data.cmd)
+    || readString(data.summary)
+    || readString(input.command)
+    || readString(input.cmd);
+}
+
+function filePathFromData(data: Record<string, unknown>): string {
+  const input = toolInputRecord(data);
+  return readString(data.path)
+    || readString(data.file_path)
+    || readString(data.filename)
+    || readString(input.path)
+    || readString(input.file_path)
+    || readString(input.filename)
+    || readString(input.name);
+}
+
+function fileActionFromEventType(eventType: string, fallback: string): string {
+  if (eventType.includes('delete') || eventType.includes('remove')) {
+    return 'Delete';
+  }
+  if (eventType.includes('write') || eventType.includes('create') || eventType.includes('update') || eventType.includes('change')) {
+    return 'Write';
+  }
+  if (eventType.includes('rename') || eventType.includes('move')) {
+    return 'Move';
+  }
+  if (eventType.includes('open')) {
+    return 'Open';
+  }
+  return fileActionLabel(fallback, 'Read');
+}
+
+function runtimeStatusLabel(eventType: string, data: Record<string, unknown>): string {
+  const target = readString(data.runtime_target).toLowerCase();
+  const state = readString(data.state || data.status).toLowerCase();
+  if (state === 'offline' || eventType.includes('offline')) {
+    return target.includes('node') ? 'Node offline' : 'Gateway offline';
+  }
+  if (state === 'degraded' || eventType.includes('degraded')) {
+    return target.includes('node') ? 'Node degraded' : 'Runtime degraded';
+  }
+  if (eventType.includes('blocked')) {
+    return 'Action blocked';
+  }
+  if (eventType.includes('terminated') || eventType.includes('cancel') || eventType.includes('stop')) {
+    return 'Stopped';
+  }
+  return readString(data.label) || readString(data.title) || 'Runtime status';
 }
 
 function eventId(prefix: string, candidate: unknown, fallbackIndex: number): string {
@@ -232,11 +340,11 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   }
 
   if (eventType === 'tool.started') {
-    const toolName = readString(data.tool_name) || readString(data.name) || 'Tool';
+    const toolName = readString(data.tool_name) || readString(data.capability_id) || readString(data.name) || 'Tool';
     const input = toolInputRecord(data);
-    const command = readString(input.command) || readString(input.cmd) || readString(data.command);
-    const query = readString(input.query) || readString(data.query);
-    const path = readString(input.path) || readString(input.file_path) || readString(input.filename) || readString(data.path);
+    const command = shellCommandFromData(data);
+    const query = readString(data.query) || readString(input.query);
+    const path = filePathFromData(data);
     const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
     const combined = `${toolName} ${command} ${query} ${path}`;
     if (isShellToolName(toolName, command)) {
@@ -270,19 +378,40 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   }
 
   if (eventType === 'tool.result') {
-    const status = readString(data.status).toLowerCase() === 'error' ? 'error' : 'done';
-    const toolName = readString(data.tool_name) || readString(data.name) || 'Tool';
+    const status = normalizeToolResultStatus(data.status);
+    const toolName = readString(data.tool_name) || readString(data.capability_id) || readString(data.name) || 'Tool';
     const input = toolInputRecord(data);
-    const command = readString(input.command) || readString(input.cmd) || readString(data.command);
-    const query = readString(input.query) || readString(data.query);
-    const path = readString(input.path) || readString(input.file_path) || readString(input.filename) || readString(data.path);
+    const command = shellCommandFromData(data);
+    const query = readString(data.query) || readString(input.query);
+    const path = filePathFromData(data);
     const result = toolResultText(data);
     const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
     const combined = `${toolName} ${command} ${query} ${path}`;
+    const artifactIds = Array.isArray(data.artifact_ids) ? data.artifact_ids : [];
+    const artifactId = readString(artifactIds[0]);
+    if (combined.toLowerCase().includes('screenshot') && artifactId) {
+      return [{
+        type: 'screenshot_captured',
+        id: eventId('artifact', artifactId, fallbackIndex),
+        caption: result || 'Screenshot captured',
+        artifactId,
+        width: readNumber(data.width),
+        height: readNumber(data.height),
+        status: status === 'error' ? 'error' : 'done',
+      }];
+    }
     if (isShellToolName(toolName, command)) {
+      if (status === 'running') {
+        return [{
+          type: 'exec_started',
+          id,
+          command: result || command || 'Running shell',
+        }];
+      }
       return [{
         type: 'exec_result',
         id,
+        command: command || undefined,
         status,
         output: result,
         exitCode: readNumber(data.exit_code),
@@ -298,6 +427,13 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       }];
     }
     if (isSearchLabel(combined)) {
+      if (status === 'running') {
+        return [{
+          type: 'web_search_started',
+          id,
+          query: query || result || 'Searching web',
+        }];
+      }
       return [{
         type: 'web_search_result',
         id,
@@ -315,6 +451,61 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     }];
   }
 
+  if (eventType === 'delegation.started') {
+    const specialistName = specialistDisplayName(data);
+    return [{
+      type: 'tool_result',
+      id: eventId('delegation-started', `${readString(payload.item_id) || readString(data.action_id) || specialistName}:started`, fallbackIndex),
+      name: `Delegated to ${specialistName}`,
+      status: 'done',
+      result: readString(data.task_summary) || readString(data.summary) || null,
+    }];
+  }
+
+  if (eventType === 'delegation.finished') {
+    const status = normalizeToolResultStatus(data.status);
+    const result = readString(data.result_summary)
+      || readString(data.summary)
+      || readString(data.detail)
+      || null;
+    return [{
+      type: 'tool_result',
+      id: eventId('delegation-finished', `${readString(payload.item_id) || readString(data.action_id) || readString(data.name) || 'specialist'}:finished`, fallbackIndex),
+      name: 'Specialist finished',
+      status,
+      result,
+    }];
+  }
+
+  if (eventType.startsWith('shell.')) {
+    const status = statusFromEventType(eventType, data.status || data.state);
+    const id = eventId('shell', payload.tool_call_id || payload.item_id || data.action_id, fallbackIndex);
+    const command = shellCommandFromData(data) || readString(data.detail) || 'Running shell';
+    if (status === 'running') {
+      return [{ type: 'exec_started', id, command }];
+    }
+    return [{
+      type: 'exec_result',
+      id,
+      command,
+      status: status === 'error' ? 'error' : 'done',
+      output: toolResultText(data),
+      exitCode: readNumber(data.exit_code),
+    }];
+  }
+
+  if (eventType.startsWith('file.')) {
+    const status = statusFromEventType(eventType, data.status || data.state);
+    const path = filePathFromData(data);
+    return [{
+      type: 'file_change',
+      id: eventId('file', payload.item_id || payload.tool_call_id || data.action_id || path, fallbackIndex),
+      filename: path || readString(data.summary) || 'File',
+      action: fileActionFromEventType(eventType, readString(data.action) || readString(data.label)),
+      status,
+    }];
+  }
+
   if (eventType === 'browser.action' || eventType === 'computer.browser.action') {
     const action = readString(data.action) || readString(data.kind) || readString(data.event) || 'Action';
     const summary = readString(data.summary) || readString(data.detail) || null;
@@ -324,6 +515,27 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       name: browserActionDisplay(action),
       status: readString(data.status).toLowerCase() === 'error' ? 'error' : 'done',
       result: summary,
+    }];
+  }
+
+  if (eventType.startsWith('runtime.') || eventType.startsWith('gateway.') || eventType.startsWith('hardware.')) {
+    const status = statusFromEventType(eventType, data.status || data.state);
+    const action = readString(data.action) || readString(data.capability_id) || readString(data.tool_name);
+    if (action && !eventType.includes('status') && !eventType.includes('session')) {
+      return [{
+        type: 'tool_result',
+        id: eventId('hardware', payload.item_id || payload.tool_call_id || data.action_id, fallbackIndex),
+        name: toolDisplayName(action),
+        status,
+        result: readString(data.summary) || readString(data.detail) || null,
+      }];
+    }
+    return [{
+      type: 'status',
+      id: eventId('runtime', payload.item_id || data.action_id || data.runtime_session_id, fallbackIndex),
+      label: runtimeStatusLabel(eventType, data),
+      detail: readString(data.summary) || readString(data.detail) || null,
+      status: status === 'error' ? 'error' : status === 'running' ? 'running' : 'done',
     }];
   }
 
@@ -391,7 +603,9 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
 
   if (eventType === 'artifact.created') {
     const mimeType = readString(data.mime_type) || readString(data.mimeType);
-    if (mimeType.startsWith('image/')) {
+    const artifactKind = readString(data.kind).toLowerCase();
+    const artifactTitle = `${readString(data.title)} ${readString(data.label)}`.toLowerCase();
+    if (mimeType.startsWith('image/') || artifactKind.includes('screenshot') || artifactTitle.includes('screenshot')) {
       const artifactId = readString(data.artifact_id)
         || readString(data.artifactId)
         || readString(payload.item_id)
@@ -399,19 +613,25 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       return [{
         type: 'screenshot_captured',
         id: eventId('artifact', artifactId || payload.item_id, fallbackIndex),
-        caption: readString(data.title) || readString(data.label) || 'Image artifact captured',
+        caption: readString(data.title) || readString(data.label) || 'Screenshot captured',
         artifactId,
         width: readNumber(data.width),
         height: readNumber(data.height),
         status: 'done',
       }];
     }
+    const artifactId = readString(data.artifact_id)
+      || readString(data.artifactId)
+      || readString(payload.artifact_id)
+      || readString(payload.item_id)
+      || null;
     return [{
-      type: 'status',
-      id: eventId('artifact', data.artifact_id || data.artifactId || payload.item_id, fallbackIndex),
-      label: 'Done',
-      detail: readString(data.title) || readString(data.label) || readString(data.mime_type) || null,
-      status: 'done',
+      type: 'artifact_created',
+      id: eventId('artifact', artifactId || payload.item_id, fallbackIndex),
+      title: readString(data.title) || readString(data.label) || readString(data.mime_type) || 'Artifact created',
+      artifactId,
+      mimeType: mimeType || null,
+      status: readString(data.status).toLowerCase() === 'error' ? 'error' : 'done',
     }];
   }
 
@@ -441,18 +661,33 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     const normalizedApproval = data.normalized_approval && typeof data.normalized_approval === 'object'
       ? data.normalized_approval as Record<string, unknown>
       : {};
-    const approvalId = data.approval_id || data.id || normalizedApproval.approval_id || normalizedApproval.id || payload.item_id;
+    const approvalId = data.approval_id
+      || payload.approval_id
+      || data.id
+      || normalizedApproval.approval_id
+      || normalizedApproval.id
+      || payload.item_id;
+    const status = normalizeApprovalStatus(eventType, {
+      ...normalizedApproval,
+      ...data,
+    });
     return [{
       type: 'approval_request',
       id: eventId('approval', approvalId, fallbackIndex),
       prompt: readString(data.prompt)
         || readString(data.message)
+        || readString(data.title)
+        || readString(data.description)
         || readString(normalizedApproval.action)
-        || 'Approval required',
+        || (status === 'waiting' ? 'Approval required' : ''),
+      status,
       metadata: {
         ...data,
         ...normalizedApproval,
-        approval_id: readString(data.approval_id) || readString(normalizedApproval.approval_id) || readString(normalizedApproval.id),
+        approval_id: readString(data.approval_id)
+          || readString(payload.approval_id)
+          || readString(normalizedApproval.approval_id)
+          || readString(normalizedApproval.id),
         code: readString(data.code) || readString(normalizedApproval.code),
       },
     }];

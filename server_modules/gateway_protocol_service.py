@@ -14,7 +14,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 PROTOCOL_VERSION = "v1alpha2"
 SUPPORTED_PROTOCOL_VERSIONS = {"v1alpha2"}
 DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS = 15
-MAX_GATEWAY_FRAME_BYTES = 256 * 1024
+MAX_GATEWAY_FRAME_BYTES = 16 * 1024 * 1024
 MAX_GATEWAY_JSON_DEPTH = 32
 
 from server_modules import (
@@ -192,20 +192,27 @@ async def dispatch_tool_invoke(
     workspace_id: str,
     timeout_seconds: int = DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS,
     request_id: Optional[str] = None,
+    runtime_access_mode: Optional[str] = None,
+    empyralis_approved: bool = False,
 ) -> Dict[str, Any]:
     assert_not_killed(gateway_id=gateway_id, trace_id=trace_id)
     connection = _get_live_connection(gateway_id)
     if connection is None:
         raise ValueError("Gateway is not currently connected.")
+    payload = {
+        "capability_id": str(capability_id or "").strip(),
+        "arguments": dict(arguments or {}),
+        "run_id": str(run_id or "").strip(),
+        "trace_id": str(trace_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip(),
+    }
+    if str(runtime_access_mode or "").strip():
+        payload["runtime_access_mode"] = str(runtime_access_mode or "").strip()
+    if empyralis_approved:
+        payload["empyralis_approved"] = True
     response = await connection.send_request(
         message_type="tool.invoke",
-        payload={
-            "capability_id": str(capability_id or "").strip(),
-            "arguments": dict(arguments or {}),
-            "run_id": str(run_id or "").strip(),
-            "trace_id": str(trace_id or "").strip(),
-            "workspace_id": str(workspace_id or "").strip(),
-        },
+        payload=payload,
         timeout_seconds=timeout_seconds,
         request_id=request_id,
     )

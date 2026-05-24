@@ -8,14 +8,15 @@ import {
   Check,
   CircleAlert,
   FileText,
+  Paperclip,
   Search,
   ShieldCheck,
   SquareTerminal,
   Wrench,
 } from 'lucide-react';
-import { AgentTransparencyTimeline } from '@/lib/workspace/transparency-timeline';
 
 import type { CodexTranscriptCell } from './cells';
+import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 
 export type CodexApprovalAction = 'allow_once' | 'allow_session' | 'deny';
 
@@ -50,6 +51,12 @@ function toolActivityLabel(name: string): string {
   if (!normalized) {
     return 'Using tool';
   }
+  if (normalized.startsWith('delegated to ')) {
+    return `Delegated to ${name.trim().slice('delegated to '.length).trim() || 'specialist'}`;
+  }
+  if (normalized === 'specialist finished' || normalized.includes('specialist finished')) {
+    return 'Specialist finished';
+  }
   if (normalized.includes('telegram')) {
     return normalized.includes('sending') ? 'Sending Telegram' : 'Telegram';
   }
@@ -66,6 +73,26 @@ function toolActivityLabel(name: string): string {
     return 'Searching web';
   }
   return humanizeToken(name) || 'Using tool';
+}
+
+function completedToolActivityLabel(name: string): string {
+  const runningLabel = toolActivityLabel(name);
+  if (runningLabel.startsWith('Delegated to ') || runningLabel === 'Specialist finished') {
+    return runningLabel;
+  }
+  if (runningLabel === 'Browser action') {
+    return 'Used browser';
+  }
+  if (runningLabel === 'Searching web') {
+    return 'Searched web';
+  }
+  if (runningLabel.startsWith('Sending ')) {
+    return runningLabel;
+  }
+  if (runningLabel.startsWith('Using ')) {
+    return runningLabel.replace(/^Using /, 'Used ');
+  }
+  return runningLabel;
 }
 
 function fileActivityLabel(action: string): string {
@@ -347,6 +374,7 @@ function SystemInlineRow({
   secondary,
   state,
   dimmed,
+  action,
 }: {
   icon: ReactNode;
   kind: string;
@@ -354,11 +382,8 @@ function SystemInlineRow({
   secondary: string;
   state: 'running' | 'done' | 'error';
   dimmed: boolean;
+  action?: ReactNode;
 }) {
-  if (state === 'done') {
-    return null;
-  }
-
   return (
     <article
       data-chat-role="system"
@@ -368,6 +393,7 @@ function SystemInlineRow({
       <span className="app-chat-system-row__icon" aria-hidden="true">{icon}</span>
       <span className="app-chat-system-row__primary">{primary}</span>
       <span className="app-chat-system-row__secondary">{secondary}</span>
+      {action ? <span className="app-chat-system-row__action">{action}</span> : null}
     </article>
   );
 }
@@ -392,23 +418,11 @@ export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
   const timestamp = formatTimestamp(cell.createdAt);
   const effectiveLabel = providerLabel(cell);
   const text = cell.content.trim();
-  const transparencyEvents = (cell.metadata?.transparency_events as Array<Record<string, unknown>> | undefined) ?? [];
   return (
     <article data-chat-role="assistant" className="app-chat-message">
       <div className="app-chat-message__content">
         <MarkdownMessage text={text} />
       </div>
-      {transparencyEvents.length > 0 ? (
-        <div style={{ marginTop: 4 }}>
-          <AgentTransparencyTimeline
-            events={transparencyEvents as Array<{
-              event_id?: string; trace_id?: string; event_type: string;
-              title: string; summary?: string; status?: string;
-              timestamp?: string; tool_name?: string; channel?: string;
-            }>}
-          />
-        </div>
-      ) : null}
       {(timestamp || effectiveLabel || cell.isIncomplete) ? (
         <div className={`app-chat-message__meta${effectiveLabel || cell.isIncomplete ? ' app-chat-message__meta--visible' : ''}`}>
           {effectiveLabel ? (
@@ -445,7 +459,6 @@ export function ReasoningSummaryCell({
       className={`app-chat-thinking-row${cell.isStreaming ? ' app-chat-thinking-row--streaming' : ''}${cell.dimmed ? ' app-chat-thinking-row--dimmed' : ''}`}
     >
       <div className="app-chat-thinking-row__header">
-        <span className="app-chat-thinking-row__pulse" aria-hidden="true" />
         <span className="app-chat-thinking-row__label">Thinking</span>
       </div>
       <div className="app-chat-thinking-row__activity">{activityLine}</div>
@@ -462,7 +475,7 @@ export function ExecCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <SquareTerminal size={14} strokeWidth={1.9} />}
-      primary="Running shell"
+      primary={cell.status === 'done' ? 'Ran command' : cell.status === 'error' ? 'Command failed' : 'Running shell'}
       secondary={compactSystemDetail(cell.command, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running')}
       state={cell.status}
       dimmed={cell.dimmed === true}
@@ -479,7 +492,7 @@ export function ToolCallCell({ cell }: { cell: Extract<CodexTranscriptCell, { ki
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <Wrench size={14} strokeWidth={1.9} />}
-      primary={toolActivityLabel(cell.name || '')}
+      primary={cell.status === 'done' ? completedToolActivityLabel(cell.name || '') : toolActivityLabel(cell.name || '')}
       secondary={compactSystemDetail(cell.result, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : (cell.name || 'Running'))}
       state={cell.status}
       dimmed={cell.dimmed === true}
@@ -497,7 +510,7 @@ export function WebSearchCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <Search size={14} strokeWidth={1.9} />}
-      primary="Searching web"
+      primary={cell.status === 'done' ? 'Searched web' : 'Searching web'}
       secondary={compactSystemDetail(cell.query, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Searching')}
       state={state}
       dimmed={cell.dimmed === true}
@@ -514,7 +527,7 @@ export function FileChangeCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
           : <FileText size={14} strokeWidth={1.9} />}
-      primary={fileActivityLabel(cell.action || '')}
+      primary={cell.status === 'done' ? fileActivityLabel(cell.action || '').replace(/^Reading /, 'Read ').replace(/^Updating /, 'Updated ') : fileActivityLabel(cell.action || '')}
       secondary={compactSystemDetail(cell.filename, cell.status === 'done' ? 'Done' : 'File')}
       state={cell.status}
       dimmed={cell.dimmed === true}
@@ -523,16 +536,45 @@ export function FileChangeCell({ cell }: { cell: Extract<CodexTranscriptCell, { 
 }
 
 export function ScreenshotCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'screenshot' }> }) {
+  const services = useWorkspaceServices();
+  const artifactHref = cell.artifactId ? services.client.artifactDownloadUrl(cell.artifactId) : null;
   return (
     <SystemInlineRow
       kind="artifact"
       icon={cell.status === 'done'
         ? <Camera size={14} strokeWidth={1.9} />
         : <CircleAlert size={14} strokeWidth={2} />}
-      primary="Screenshot/artifact"
+      primary={cell.status === 'done' ? 'Captured screenshot' : 'Screenshot/artifact'}
       secondary={compactSystemDetail(cell.caption, cell.status === 'done' ? 'Captured' : 'Failed')}
       state={cell.status}
       dimmed={cell.dimmed === true}
+      action={artifactHref ? (
+        <Link href={artifactHref} target="_blank" rel="noreferrer">
+          Open
+        </Link>
+      ) : null}
+    />
+  );
+}
+
+export function ArtifactCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'artifact' }> }) {
+  const services = useWorkspaceServices();
+  const artifactHref = cell.artifactId ? services.client.artifactDownloadUrl(cell.artifactId) : null;
+  return (
+    <SystemInlineRow
+      kind="artifact"
+      icon={cell.status === 'done'
+        ? <Paperclip size={14} strokeWidth={1.9} />
+        : <CircleAlert size={14} strokeWidth={2} />}
+      primary={cell.status === 'done' ? 'Created artifact' : 'Artifact failed'}
+      secondary={compactSystemDetail(cell.title || cell.mimeType, cell.status === 'done' ? 'Created' : 'Failed')}
+      state={cell.status}
+      dimmed={cell.dimmed === true}
+      action={artifactHref ? (
+        <Link href={artifactHref} target="_blank" rel="noreferrer">
+          Open
+        </Link>
+      ) : null}
     />
   );
 }
@@ -554,6 +596,26 @@ export function ApprovalCell({
   const approvalCode = typeof cell.metadata?.code === 'string' && cell.metadata.code.trim()
     ? cell.metadata.code.trim()
     : approvalId;
+  const decision = typeof cell.metadata?.decision === 'string'
+    ? cell.metadata.decision.trim().toLowerCase()
+    : typeof cell.metadata?.resolution === 'string'
+      ? cell.metadata.resolution.trim().toLowerCase()
+      : '';
+  const denied = cell.status === 'error' && /reject|deny|denied|rejected|cancel|stop|abort|no/.test(decision);
+  const primary = cell.status === 'waiting'
+    ? 'Approval needed'
+    : cell.status === 'done'
+      ? 'Approval approved'
+      : denied
+        ? 'Approval denied'
+        : 'Approval failed';
+  const fallback = cell.status === 'waiting'
+    ? 'Choose 1 allow once, 2 allow session, or 3 deny'
+    : cell.status === 'done'
+      ? 'Approved'
+      : denied
+        ? 'Denied'
+        : 'Failed';
   const resolving = Boolean(resolvingApprovalId && resolvingApprovalId === approvalId);
   const canResolve = Boolean(approvalId && onResolveApproval && cell.status === 'waiting');
   return (
@@ -566,12 +628,9 @@ export function ApprovalCell({
         <ShieldCheck size={14} strokeWidth={1.9} />
       </span>
       <div className="app-chat-approval-cell__copy">
-        <span className="app-chat-system-row__primary">Approval needed</span>
+        <span className="app-chat-system-row__primary">{primary}</span>
         <span className="app-chat-system-row__secondary">
-          {compactSystemDetail(
-            cell.prompt,
-            cell.status === 'waiting' ? 'Choose 1 allow once, 2 allow session, or 3 deny' : cell.status === 'done' ? 'Done' : 'Failed',
-          )}
+          {compactSystemDetail(cell.prompt, fallback)}
           {approvalCode ? ` · Code ${approvalCode}` : ''}
         </span>
       </div>
@@ -678,6 +737,8 @@ export function CodexChatCell({
       return <FileChangeCell cell={cell} />;
     case 'screenshot':
       return <ScreenshotCell cell={cell} />;
+    case 'artifact':
+      return <ArtifactCell cell={cell} />;
     case 'approval_request':
       return (
         <ApprovalCell

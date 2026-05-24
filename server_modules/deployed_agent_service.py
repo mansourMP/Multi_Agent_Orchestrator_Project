@@ -538,6 +538,61 @@ async def _append_deployed_agent_audit_event(
         )
 
 
+def _config_has_full_runtime_access(config: deployed_agent_config_schema.DeployedAgentConfig) -> bool:
+    if not bool(config.computer_automation.enabled):
+        return False
+    return (
+        deployed_agent_runtime_contract_service.normalize_runtime_access_mode(
+            config.computer_automation.runtime_access_mode,
+            requires_owner_approval=config.computer_automation.requires_owner_approval,
+        )
+        == deployed_agent_runtime_contract_service.RUNTIME_ACCESS_MODE_FULL_ACCESS
+    )
+
+
+async def _append_full_access_runtime_review_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent: Dict[str, Any],
+    lifecycle_action: str,
+    actor_user_id: Optional[str] = None,
+) -> None:
+    if not isinstance(deployed_agent, dict):
+        return
+    config = _config_from_record(deployed_agent)
+    if not _config_has_full_runtime_access(config):
+        return
+    await _append_deployed_agent_audit_event(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        deployed_agent=deployed_agent,
+        action="deployed_agent_full_access_review_required",
+        title="Full access runtime review required",
+        summary=(
+            f"{_normalize_text(deployed_agent.get('name'), default='Deployed agent')} "
+            "uses full autonomous computer access."
+        ),
+        status="review_required",
+        review_required=True,
+        payload={
+            "lifecycle_action": lifecycle_action,
+            "runtime_access_mode": deployed_agent_runtime_contract_service.RUNTIME_ACCESS_MODE_FULL_ACCESS,
+            "studio_agent_mode": config.studio_agent_mode,
+            "runtime_target": config.runtime_target,
+            "computer_automation_enabled": True,
+        },
+        metadata={
+            "runtime_access_review": {
+                "required": True,
+                "reason": "full_access_runtime",
+                "lifecycle_action": lifecycle_action,
+            }
+        },
+        actor_user_id=actor_user_id,
+    )
+
+
 def _privacy_contract_snapshot(
     *,
     config: deployed_agent_config_schema.DeployedAgentConfig,
@@ -3392,6 +3447,13 @@ async def create_draft_deployed_agent(
         },
         actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
     )
+    await _append_full_access_runtime_review_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent=deployed_agent,
+        lifecycle_action="created",
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
     return project_deployed_agent(deployed_agent, include_internal=True)
 
 
@@ -4316,6 +4378,13 @@ async def update_deployed_agent(
         },
         actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
     )
+    await _append_full_access_runtime_review_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent=persisted,
+        lifecycle_action="updated",
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
     if state_changed and previous_state in {"paused", "suspended"} and current_state in {"private_test", "ready_for_review"}:
         await _append_deployed_agent_audit_event(
             tenant_id=tenant_id,
@@ -4519,6 +4588,13 @@ async def deploy_deployed_agent(
                 }
             ),
         },
+        actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
+    await _append_full_access_runtime_review_event(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent={**persisted, "metadata": privacy_metadata},
+        lifecycle_action="deployed_live",
         actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
     )
     if _normalize_deployment_state(existing.get("deployment_state")) in {"paused", "suspended"}:

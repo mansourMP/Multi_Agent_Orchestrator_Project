@@ -637,6 +637,46 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created["name"], "Local Studio Agent")
         self.assertEqual(listed["items"][0]["id"], created["id"])
 
+    async def test_full_access_runtime_review_marker_uses_deployed_agent_audit_pattern(self) -> None:
+        deployed_agent = _deployed_agent_row(
+            metadata={
+                "studio_agent_mode": "my_computer_agent",
+                "computer_automation": {
+                    "enabled": True,
+                    "runtime_class": "local_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 5.0,
+                    "monthly_budget_usd": 25.0,
+                    "runtime_access_mode": "full_access",
+                    "requires_owner_approval": False,
+                    "max_session_runtime_seconds": 900,
+                },
+            }
+        )
+
+        with patch(
+            "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+            new=AsyncMock(return_value=None),
+        ) as audit_mock:
+            await deployed_agent_service._append_full_access_runtime_review_event(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                deployed_agent=deployed_agent,
+                lifecycle_action="updated",
+                actor_user_id="user-owner",
+            )
+
+        audit_mock.assert_awaited_once()
+        kwargs = audit_mock.await_args.kwargs
+        self.assertEqual(kwargs["actor_type"], "deployed_agent")
+        self.assertEqual(kwargs["actor_id"], "dagent_1")
+        self.assertEqual(kwargs["action"], "deployed_agent_full_access_review_required")
+        self.assertTrue(kwargs["review_required"])
+        self.assertEqual(kwargs["status"], "review_required")
+        self.assertEqual(kwargs["payload"]["runtime_access_mode"], "full_access")
+        self.assertEqual(kwargs["metadata"]["runtime_access_review"]["reason"], "full_access_runtime")
+
     async def test_create_draft_deployed_agent_normalizes_daily_limit_metadata(self) -> None:
         backing_install = _backing_install()
         persisted_row = _deployed_agent_row(

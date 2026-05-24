@@ -85,6 +85,43 @@ def _stable_source_id(*, tenant_id: str, workspace_id: str, agent_id: Optional[s
     return f"ksrc_{_sha256_text(seed)[:24]}"
 
 
+def _normalize_ingestion_source_ref(ref: Any) -> str:
+    normalized = str(ref or "").replace("\\", "/").strip()
+    if normalized.startswith("knowledge://"):
+        normalized = normalized[len("knowledge://") :]
+    elif normalized.startswith("knowledge/"):
+        normalized = normalized[len("knowledge/") :]
+    return normalized.strip("/")
+
+
+def _build_ingestion_source_filter(
+    source_refs: Optional[Iterable[Any]],
+) -> Optional[tuple[set[str], set[str]]]:
+    exact_paths: set[str] = set()
+    subtree_prefixes: set[str] = set()
+    for ref in list(source_refs or []):
+        normalized = _normalize_ingestion_source_ref(ref)
+        if not normalized:
+            continue
+        suffix = Path(normalized).suffix.lower()
+        if suffix in SUPPORTED_KNOWLEDGE_EXTENSIONS:
+            exact_paths.add(normalized)
+        else:
+            subtree_prefixes.add(normalized.rstrip("/") + "/")
+    if not exact_paths and not subtree_prefixes:
+        return None
+    return exact_paths, subtree_prefixes
+
+
+def _matches_ingestion_source_filter(rel_path: str, source_filter: Optional[tuple[set[str], set[str]]]) -> bool:
+    if source_filter is None:
+        return True
+    exact_paths, subtree_prefixes = source_filter
+    if rel_path in exact_paths:
+        return True
+    return any(rel_path.startswith(prefix) for prefix in subtree_prefixes)
+
+
 def _stable_chunk_id(source_id: str, chunk_index: int, chunk_text: str) -> str:
     return f"kchk_{_sha256_text(f'{source_id}:{chunk_index}:{chunk_text}')[:24]}"
 
@@ -399,12 +436,16 @@ async def ingest_workspace_knowledge_files(
     workspace_id: str,
     agent_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    source_refs: Optional[Iterable[Any]] = None,
 ) -> Dict[str, Any]:
     root = workspace_context.workspace_knowledge_dir(workspace_id=workspace_id, agent_install_id=None)
+    source_filter = _build_ingestion_source_filter(source_refs)
     files = [
         path
         for path in sorted(root.rglob("*"))
-        if path.is_file() and path.suffix.lower() in SUPPORTED_KNOWLEDGE_EXTENSIONS
+        if path.is_file()
+        and path.suffix.lower() in SUPPORTED_KNOWLEDGE_EXTENSIONS
+        and _matches_ingestion_source_filter(path.relative_to(root).as_posix(), source_filter)
     ]
     ingested_sources: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []

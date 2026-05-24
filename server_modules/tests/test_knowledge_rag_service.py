@@ -77,6 +77,44 @@ async def test_ingest_workspace_knowledge_files_chunks_and_records(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_ingest_workspace_knowledge_files_filters_to_matching_sources(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    knowledge_dir = tmp_path / "knowledge"
+    (knowledge_dir / "business-agents" / "agent-a").mkdir(parents=True)
+    (knowledge_dir / "business-agents" / "agent-b").mkdir(parents=True)
+    (knowledge_dir / "business-agents" / "agent-a" / "a.md").write_text("Agent A private policy", encoding="utf-8")
+    (knowledge_dir / "business-agents" / "agent-b" / "b.md").write_text("Agent B public policy", encoding="utf-8")
+    (knowledge_dir / "business-agents" / "agent-b" / "extra.txt").write_text("Agent B hours", encoding="utf-8")
+    (knowledge_dir / "shared.md").write_text("Shared workspace note", encoding="utf-8")
+    indexed_sources: list[str] = []
+
+    async def fake_upsert_source(**kwargs):
+        indexed_sources.append(kwargs["source_uri"])
+        return {"id": kwargs["source_id"], "source_uri": kwargs["source_uri"]}
+
+    async def fake_replace_chunks(**kwargs):
+        return kwargs["chunks"]
+
+    monkeypatch.setattr(knowledge_rag_service.workspace_context, "workspace_knowledge_dir", lambda **_: knowledge_dir)
+    monkeypatch.setattr(knowledge_rag_service.control_plane_repository, "upsert_knowledge_source", fake_upsert_source)
+    monkeypatch.setattr(knowledge_rag_service.control_plane_repository, "replace_knowledge_source_chunks", fake_replace_chunks)
+    monkeypatch.setattr(knowledge_rag_service, "_upsert_lancedb_source_chunks", lambda source_id, chunks: {"enabled": False, "stored": len(chunks)})
+
+    result = await knowledge_rag_service.ingest_workspace_knowledge_files(
+        tenant_id="tenant-1",
+        workspace_id="ws-1",
+        agent_id="agent-b",
+        user_id="user-1",
+        source_refs=["knowledge://business-agents/agent-b"],
+    )
+
+    assert result["source_count"] == 2
+    assert indexed_sources == [
+        "knowledge://business-agents/agent-b/b.md",
+        "knowledge://business-agents/agent-b/extra.txt",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ingest_workspace_knowledge_files_skips_oversized_sources(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir()

@@ -92,6 +92,12 @@ class DeployedAgentKnowledgeVerifyRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=10)
 
 
+class DeployedAgentKnowledgeFileUploadRequest(BaseModel):
+    workspace_id: str
+    file_name: str
+    content_text: str
+
+
 def _raise_for_value_error(error: ValueError, *, default_status: int = 400) -> None:
     message = str(error)
     if "transition" in message.lower() or "live deployment" in message.lower():
@@ -384,6 +390,29 @@ async def verify_deployed_agent_knowledge(
             owner_workspace_id=body.workspace_id,
             query=body.query,
             limit=body.limit,
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        _raise_for_value_error(error)
+    return payload
+
+
+@router.post("/deployed-agents/{deployed_agent_id}/knowledge/files")
+async def upload_deployed_agent_knowledge_file(
+    deployed_agent_id: str,
+    body: DeployedAgentKnowledgeFileUploadRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    try:
+        payload = await deployed_agent_service.upload_deployed_agent_knowledge_file(
+            deployed_agent_id=deployed_agent_id,
+            current_user=current_user,
+            owner_workspace_id=body.workspace_id,
+            file_name=body.file_name,
+            content_text=body.content_text,
         )
     except HTTPException:
         raise

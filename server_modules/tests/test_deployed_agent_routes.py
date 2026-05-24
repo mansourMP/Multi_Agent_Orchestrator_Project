@@ -1742,3 +1742,49 @@ async def test_deployed_agent_evaluate_route_rejects_missing_csrf(monkeypatch: p
 
     assert response.status_code == 403
     assert "csrf" in response.text.lower() or "CSRF" in response.text
+
+
+@pytest.mark.anyio
+async def test_upload_deployed_agent_knowledge_file_route(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = _owner_user
+
+    captured: dict[str, object] = {}
+
+    async def fake_upload_deployed_agent_knowledge_file(**kwargs):
+        captured.update(kwargs)
+        return {
+            "workspace_id": kwargs["owner_workspace_id"],
+            "deployed_agent_id": kwargs["deployed_agent_id"],
+            "knowledge_source": {
+                "id": "knowledge-1",
+                "uri": "knowledge://business-agents/dagent_1/faq.md",
+                "label": "faq.md",
+                "kind": "file",
+            },
+            "deployed_agent": {
+                **_created_payload(),
+                "knowledge_sources": [
+                    {"id": "knowledge-1", "uri": "knowledge://business-agents/dagent_1/faq.md"}
+                ],
+            },
+        }
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "upload_deployed_agent_knowledge_file",
+        fake_upload_deployed_agent_knowledge_file,
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/deployed-agents/dagent_1/knowledge/files",
+            json={"workspace_id": "ws-1", "file_name": "faq.md", "content_text": "# FAQ"},
+        )
+
+    assert response.status_code == 200
+    assert captured["deployed_agent_id"] == "dagent_1"
+    assert captured["owner_workspace_id"] == "ws-1"
+    assert captured["file_name"] == "faq.md"
+    assert captured["content_text"] == "# FAQ"
+    assert response.json()["knowledge_source"]["uri"] == "knowledge://business-agents/dagent_1/faq.md"

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 import uuid
@@ -29,6 +31,7 @@ from server_modules import run_state_repository
 from server_modules import session_service
 from server_modules import shop_assistant_revenue_agent_service
 from server_modules import usage_accounting_service
+from server_modules import workspace_context
 from server_modules import workspace_config_schema
 from server_modules.connectors.autopilot_runtime_exports import _autopilot_connector_shell_service
 from server_modules.connectors.autopilot_status_service import AutopilotStatusService
@@ -1714,6 +1717,119 @@ async def verify_deployed_agent_knowledge_retrieval(
         "retrieved_chunk_ids": list(retrieval.get("retrieved_chunk_ids") or []),
         "metadata": metadata,
         "checked_at": _utc_now_iso(),
+    }
+
+
+def _safe_knowledge_filename(filename: Any) -> str:
+    raw = Path(str(filename or "").replace("\\", "/")).name.strip()
+    if not raw:
+        raise _http_bad_request("file_name is required.")
+    stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in raw)
+    stem = "-".join(part for part in stem.split("-") if part).strip(".")
+    if not stem:
+        raise _http_bad_request("file_name is invalid.")
+    suffix = Path(stem).suffix.lower()
+    if suffix not in knowledge_rag_service.SUPPORTED_KNOWLEDGE_EXTENSIONS:
+        supported = ", ".join(sorted(knowledge_rag_service.SUPPORTED_KNOWLEDGE_EXTENSIONS))
+        raise _http_bad_request(f"Unsupported knowledge file type. Supported files: {supported}.")
+    base = stem[: -len(suffix)] if suffix else stem
+    return f"{base[:150]}{suffix}"
+
+
+def _unique_knowledge_file_path(root: Path, filename: str, content_hash: str) -> Path:
+    candidate = root / filename
+    if not candidate.exists():
+        return candidate
+    path = Path(filename)
+    suffix = path.suffix
+    stem = path.name[: -len(suffix)] if suffix else path.name
+    return root / f"{stem[:120]}-{content_hash[:10]}{suffix}"
+
+
+async def upload_deployed_agent_knowledge_file(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    file_name: str,
+    content_text: str,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace not found.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        raise ValueError("Deployed agent not found.")
+
+    safe_filename = _safe_knowledge_filename(file_name)
+    raw_text = str(content_text or "")
+    if not raw_text.strip():
+        raise _http_bad_request("Knowledge file is empty.")
+    raw_bytes = raw_text.encode("utf-8")
+    max_bytes = knowledge_rag_service.DEFAULT_MAX_SOURCE_FILE_BYTES
+    if len(raw_bytes) > max_bytes:
+        raise _http_bad_request(f"Knowledge file exceeds max size ({len(raw_bytes)} bytes > {max_bytes} bytes).")
+
+    content_hash = hashlib.sha256(raw_bytes).hexdigest()
+    relative_root = Path("business-agents") / _normalize_text(deployed_agent_id, default="agent")
+    root = workspace_context.workspace_knowledge_dir(
+        workspace_id=resolved_workspace_id,
+        agent_install_id=None,
+    ) / relative_root
+    root.mkdir(parents=True, exist_ok=True)
+    destination = _unique_knowledge_file_path(root, safe_filename, content_hash)
+    destination.write_text(raw_text, encoding="utf-8")
+    relative_path = destination.relative_to(
+        workspace_context.workspace_knowledge_dir(workspace_id=resolved_workspace_id, agent_install_id=None)
+    ).as_posix()
+    source_uri = f"knowledge://{relative_path}"
+    source_ref = {
+        "id": f"knowledge-{content_hash[:16]}",
+        "uri": source_uri,
+        "label": safe_filename,
+        "kind": "file",
+        "path": f"knowledge/{relative_path}",
+    }
+
+    existing_sources = _normalize_knowledge_sources(deployed_agent.get("knowledge_sources") or [])
+    existing_uris = {
+        _normalize_text(item.get("uri") or item.get("path") or item.get("id"))
+        for item in existing_sources
+        if isinstance(item, dict)
+    }
+    next_sources = existing_sources if source_uri in existing_uris else [*existing_sources, source_ref]
+    if source_uri in existing_uris:
+        updated = project_deployed_agent(deployed_agent)
+    else:
+        updated = await update_deployed_agent(
+            deployed_agent_id=deployed_agent_id,
+            current_user=current_user,
+            owner_workspace_id=resolved_workspace_id,
+            updates={"knowledge_sources": next_sources},
+        )
+    ingestion_status = await knowledge_rag_service.ingest_workspace_knowledge_files(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        agent_id=deployed_agent_id,
+        user_id=_normalize_text((current_user or {}).get("user_id")),
+        source_refs=[relative_path],
+    )
+    return {
+        "workspace_id": resolved_workspace_id,
+        "tenant_id": tenant_id,
+        "deployed_agent_id": deployed_agent_id,
+        "knowledge_source": source_ref,
+        "deployed_agent": updated,
+        "ingestion": ingestion_status,
     }
 
 

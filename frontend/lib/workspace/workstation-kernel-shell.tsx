@@ -504,6 +504,7 @@ export function WorkstationKernelShell({
   };
   const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('category'));
   const studioFilter = normalizeStudioTitlebarFilter(searchParams.get('studioFilter'));
+  const studioAgentDetailActive = activeDestinationId === 'studio' && Boolean(searchParams.get('agent'));
   const applicationTab = normalizeApplicationSurfaceTabId(searchParams.get('tab') || searchParams.get('applicationTab'));
   const titlebarNavigation = activeDestinationId === 'marketplace'
     ? MARKETPLACE_TITLEBAR_FILTERS.map((filter) => (
@@ -522,7 +523,9 @@ export function WorkstationKernelShell({
       </Link>
       ))
     : activeDestinationId === 'studio'
-      ? STUDIO_TITLEBAR_FILTERS.map((filter) => (
+      ? studioAgentDetailActive
+        ? null
+        : STUDIO_TITLEBAR_FILTERS.map((filter) => (
         <Link
           key={filter.id}
           href={buildStudioFilterHref(workspaceId, filter.id, searchParams)}
@@ -535,7 +538,7 @@ export function WorkstationKernelShell({
         >
           <span>{filter.label}</span>
         </Link>
-      ))
+        ))
     : activeDestinationId === 'applications'
       ? APPLICATION_SURFACE_TABS.map((tab) => (
         <Link
@@ -586,6 +589,7 @@ export function WorkstationKernelShell({
       className={joinClassNames(
         'workstation-shell',
         activeDestinationId === 'sage' && 'workstation-shell--sage',
+        studioAgentDetailActive && 'workstation-shell--studio-agent-detail',
         activeRouteId === 'chat' && 'workstation-shell--chat',
       )}
     >

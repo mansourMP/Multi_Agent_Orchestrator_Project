@@ -5,13 +5,6 @@ import type { Dispatch, KeyboardEvent, SetStateAction } from "react";
 import { ArrowUp, Loader2 } from "lucide-react";
 import { ChatMessage, type WorkstationChatMessageRecord } from "@/lib/workspace/chat-message";
 
-const CHANNELS: ReadonlyArray<{ value: string; label: string; disabled?: boolean }> = [
-  { value: "test", label: "Test (No customer send)" },
-  { value: "telegram", label: "Telegram Bot (Simulated test only)" },
-  { value: "whatsapp", label: "WhatsApp Business (Roadmap)", disabled: true },
-  { value: "web_widget", label: "Web Chat (Roadmap)", disabled: true },
-] as const;
-
 interface TestTurnResult {
   reply: string;
   policy_decisions: Array<Record<string, unknown>>;
@@ -116,7 +109,7 @@ export function DeployedAgentTestTurnPane({
   onResetSession: () => void;
 }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
-  const { message, channel, loading, turns } = session;
+  const { message, loading, turns } = session;
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -145,7 +138,7 @@ export function DeployedAgentTestTurnPane({
       turns: [
         ...current.turns,
         { id: turnId + "-user", role: "user", content: trimmedMessage, createdAt: new Date().toISOString() },
-        { id: responseTurnId, role: "agent", content: "Checking the agent response...", tone: "loading", createdAt: new Date().toISOString() },
+        { id: responseTurnId, role: "agent", content: "Thinking with this agent...", tone: "loading", createdAt: new Date().toISOString() },
       ],
     }));
     try {
@@ -154,13 +147,13 @@ export function DeployedAgentTestTurnPane({
         body: {
           workspace_id: workspaceId,
           message: trimmedMessage,
-          channel,
+          channel: "test",
           runtime_mode: runtimeMode,
           recent_messages: recentMessages,
         },
       });
       if (!res) {
-        throw new Error("Test turn returned an empty response");
+        throw new Error("Workspace chat returned an empty response");
       }
       const result = res as unknown as TestTurnResult;
       onSessionChange((current) => ({
@@ -172,7 +165,7 @@ export function DeployedAgentTestTurnPane({
         )),
       }));
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Test turn failed";
+      const errorMessage = err instanceof Error ? err.message : "Workspace chat failed";
       onSessionChange((current) => ({
         ...current,
         turns: current.turns.map((turn) => (
@@ -211,39 +204,27 @@ export function DeployedAgentTestTurnPane({
           value={message}
           onChange={(e) => onSessionChange((current) => ({ ...current, message: e.target.value }))}
           onKeyDown={handleComposerKeyDown}
-          placeholder="Type a private test message..."
+          placeholder="Message this agent privately..."
           rows={2}
         />
-        <div className="deployed-agent-chat__toolbar" aria-label="Private test controls">
+        <div className="deployed-agent-chat__toolbar" aria-label="Workspace chat controls">
           <div className="deployed-agent-chat__controls">
-            <span className="deployed-agent-chat__test-pill">Private test</span>
+            <span className="deployed-agent-chat__test-pill">Private workspace chat · no customer send</span>
             <button
               className="deployed-agent-chat__reset"
               type="button"
               onClick={onResetSession}
               disabled={loading || turns.length === 0}
             >
-              New test
+              New chat
             </button>
-            <label className="deployed-agent-chat__select-shell">
-              <span>Channel</span>
-              <select
-                aria-label="Test channel"
-                value={channel}
-                onChange={(e) => onSessionChange((current) => ({ ...current, channel: e.target.value }))}
-              >
-                {CHANNELS.map((c) => (
-                  <option key={c.value} value={c.value} disabled={Boolean(c.disabled)}>{c.label}</option>
-                ))}
-              </select>
-            </label>
           </div>
           <button
             className="deployed-agent-chat__send"
             type="button"
             onClick={handleRun}
             disabled={loading || !message.trim()}
-            aria-label={loading ? "Sending private test message" : "Send private test message"}
+            aria-label={loading ? "Sending private workspace chat message" : "Send private workspace chat message"}
           >
             {loading ? <Loader2 aria-hidden="true" /> : <ArrowUp aria-hidden="true" />}
           </button>
@@ -270,18 +251,18 @@ function RunMeta({ result }: { result: TestTurnResult }) {
   return (
     <details className="deployed-agent-chat__meta-details">
       <summary>Run details</summary>
-      <div className="deployed-agent-chat__meta" aria-label="Private test result">
+      <div className="deployed-agent-chat__meta" aria-label="Workspace chat run details">
         {result.approval_required ? (
           <span className="deployed-agent-chat__badge--alert">Approval required</span>
         ) : (
           <span>No approval needed</span>
         )}
         <span>{toolsUsed.length > 0 ? toolsUsed.length.toString() + " tool" + (toolsUsed.length === 1 ? "" : "s") + " used" : "No tools used"}</span>
-        <span>{memoryApplied ? "Memory checked" : "Memory off for test"}</span>
+        <span>{memoryApplied ? "Memory checked" : "Memory off for chat"}</span>
         {modelLabel ? <span>{modelLabel}</span> : null}
         <span>{instructionsApplied ? "Instructions applied" : "No custom instructions"}</span>
         <span>{personaApplied ? "Persona applied" : "No persona"}</span>
-        <span>{recentCount > 0 ? recentCount.toString() + " prior message" + (recentCount === 1 ? "" : "s") : "New test context"}</span>
+        <span>{recentCount > 0 ? recentCount.toString() + " prior message" + (recentCount === 1 ? "" : "s") : "New chat context"}</span>
         {contextTruncated ? <span>Context trimmed</span> : null}
         {policies.length > 0 ? <span>{policies.length.toString()} polic{policies.length === 1 ? "y" : "ies"} applied</span> : null}
         {events.length > 0 ? <span>{events.length.toString()} transparency event{events.length === 1 ? "" : "s"}</span> : null}

@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { RefreshCw } from 'lucide-react';
+import { ChevronLeft, RefreshCw } from 'lucide-react';
 
 import {
+  ListDetailPanel,
   ListDetailShell,
 } from '@/lib/ui/list-detail';
 import { PlatformNotification } from '@/lib/ui/platform-notification';
@@ -12,6 +13,7 @@ import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StudioIcon } from '@/lib/ui/icons';
 import type {
+  ConnectedExternalAgentRecord,
   DeployedAgentAnalyticsRecord,
   DeployedAgentConversationDetail,
   DeployedAgentConversationRecord,
@@ -28,7 +30,6 @@ import type {
   AgentOperationalMetrics,
   ConversationFilters,
   DetailConfigDraft,
-  LaunchReadinessItem,
   ProviderCatalogSnapshot,
   RuntimeAttachmentSnapshot,
   SpecialistOverlayTabId,
@@ -44,8 +45,12 @@ import {
   DEFAULT_SAFE_AGENT_SYSTEM_PROMPT,
   DEFAULT_STUDIO_TEMPLATE,
   normalizeSpecialistOverlayTabId,
+  PRIMARY_STUDIO_TEMPLATE_IDS,
   STUDIO_TEMPLATES,
 } from './deployed-agents/constants';
+import {
+  StudioTemplateCard,
+} from './deployed-agents/components';
 import {
   AgentWizard,
 } from './deployed-agents/wizard';
@@ -53,34 +58,42 @@ import {
   AgentDetailView,
 } from './deployed-agents/detail-view';
 import {
+  AgentComputerDetailView,
+} from './deployed-agents/agent-computer-detail';
+import {
+  ConnectedExternalAgentDetailView,
+  createEmptyExternalAgentChatSession,
+  type ExternalAgentChatSessionState,
+} from './deployed-agents/external-agent-detail';
+import {
   AgentInboxView,
 } from './deployed-agents/inbox-view';
 import {
   AgentRosterSidebar,
 } from './deployed-agents/roster-sidebar';
 import {
+  createEmptyDeployedAgentTestChatSession,
+  type DeployedAgentTestChatSessionState,
+} from './workstation-deployed-agent-test-turn-pane';
+import {
   studioPaneCache,
   updateStudioPaneCache,
   readString,
   readPositiveDecimalString,
   readRecord,
-  readNumber,
   readItems,
   normalizeRuntimeAttachments,
   selfHostedNodeGateReason,
-  selfHostedNodeHealthLabel,
   normalizeProviderCatalog,
   normalizeAgentAnalytics,
   normalizeTelegramReadiness,
   selectedProviderId,
   selectedModelId,
   providerCatalogById,
-  formatDeploymentModelLabel,
   agentModelDeployBlocker,
   normalizeWizardAiTier,
   normalizeRuntimePlacement,
   runtimeTargetForPlacement,
-  runtimePlacementLabel,
   testRuntimeModeForPlacement,
   inferAiTierFromProviderModel,
   pickStudioModelForTier,
@@ -96,7 +109,6 @@ import {
   upsertAgentRecord,
   summarizeStudioErrorMessage,
   isWizardScopedError,
-  studioRuntimeOption,
   listEnabledChannels,
   hasEnabledChannel,
   normalizeTemplateToken,
@@ -160,6 +172,117 @@ function agentMatchesStudioRosterFilter(agent: DeployedAgentRecord, filter: Stud
   return true;
 }
 
+function agentMatchesStudioRosterQuery(agent: DeployedAgentRecord, query: string): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return true;
+  }
+  const config = readRecord(agent.config);
+  const metadata = readRecord(agent.metadata);
+  const searchable = [
+    agent.name,
+    agent.persona,
+    agent.system_prompt,
+    agent.deployment_state,
+    agent.runtime_target,
+    config.runtime_placement,
+    metadata.runtime_placement,
+    metadata.customer_channel,
+    selectedProviderId(agent),
+    selectedModelId(agent),
+    ...listEnabledChannels(agent.channels),
+  ]
+    .map((value) => readString(value).toLowerCase())
+    .filter(Boolean);
+  return searchable.some((value) => value.includes(normalizedQuery));
+}
+
+const STUDIO_ROSTER_FILTER_IDS: ReadonlyArray<StudioRosterFilterId> = [
+  'all',
+  'live',
+  'draft',
+  'needs_attention',
+  'paused',
+];
+
+function buildStudioRosterFilterCounts(agents: DeployedAgentRecord[]): Record<StudioRosterFilterId, number> {
+  return STUDIO_ROSTER_FILTER_IDS.reduce((counts, filter) => {
+    counts[filter] = agents.filter((agent) => agentMatchesStudioRosterFilter(agent, filter)).length;
+    return counts;
+  }, {
+    all: 0,
+    live: 0,
+    draft: 0,
+    needs_attention: 0,
+    paused: 0,
+  } as Record<StudioRosterFilterId, number>);
+}
+
+function StudioAgentStartPanel({
+  studioTemplates,
+  onOpenCreateWizard,
+}: {
+  studioTemplates: StudioTemplate[];
+  onOpenCreateWizard: (templateId: string) => void;
+}) {
+  const primaryStudioTemplates = studioTemplates.filter((template) => PRIMARY_STUDIO_TEMPLATE_IDS.has(template.id));
+  const additionalStudioTemplates = studioTemplates.filter((template) => !PRIMARY_STUDIO_TEMPLATE_IDS.has(template.id));
+
+  return (
+    <div className="studio-agent-start app-stack-4" aria-label="Create Business Agent">
+      <ListDetailPanel
+        className="studio-panel studio-panel--start"
+        eyebrow="Start here"
+        title="Create one working Business Agent"
+        subtitle="Choose the business job, add the facts it should trust, test privately, then go live."
+        actions={(
+          <AppButton type="button" tone="primary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
+            Add agent
+          </AppButton>
+        )}
+      >
+        <div className="studio-agent-start__steps" aria-label="Business Agent creation steps">
+          <span>1. Pick job</span>
+          <span>2. Add instructions</span>
+          <span>3. Add knowledge</span>
+          <span>4. Test and deploy</span>
+        </div>
+      </ListDetailPanel>
+
+      <ListDetailPanel
+        className="studio-panel studio-panel--templates"
+        eyebrow="Templates"
+        title="What do you need?"
+        subtitle="Start from a common business workflow, then tune model, actions, memory, and channels after the agent exists."
+      >
+        <div className="studio-template-grid" data-studio-template-grid="true">
+          {primaryStudioTemplates.map((template) => (
+            <StudioTemplateCard
+              key={template.id}
+              template={template}
+              onSelect={onOpenCreateWizard}
+            />
+          ))}
+        </div>
+        {additionalStudioTemplates.length > 0 ? (
+          <details className="app-stack-3">
+            <summary>More Business Agent templates</summary>
+            <div className="studio-template-grid" data-studio-template-grid="more">
+              {additionalStudioTemplates.map((template) => (
+                <StudioTemplateCard
+                  key={template.id}
+                  template={template}
+                  onSelect={onOpenCreateWizard}
+                />
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </ListDetailPanel>
+    </div>
+  );
+}
+
 export function WorkstationDeployedAgentsPane({
   initialSubview = 'agents',
 }: {
@@ -176,10 +299,17 @@ export function WorkstationDeployedAgentsPane({
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogSnapshot[]>(() => cachedStudioPane?.providerCatalog ?? []);
   const [studioTemplates, setStudioTemplates] = useState<StudioTemplate[]>(() => [...STUDIO_TEMPLATES]);
   const [agents, setAgents] = useState<DeployedAgentRecord[]>([]);
+  const [connectedExternalAgents, setConnectedExternalAgents] = useState<ConnectedExternalAgentRecord[]>([]);
+  const [externalAgentSurfaceError, setExternalAgentSurfaceError] = useState<string | null>(null);
   const [connectorVaultIds, setConnectorVaultIds] = useState<Set<string>>(() => new Set(cachedStudioPane?.connectorVaultIds ?? []));
   const [agentMetricsById, setAgentMetricsById] = useState<Record<string, AgentOperationalMetrics>>(() => cachedStudioPane?.agentMetricsById ?? {});
   const [agentAnalyticsById, setAgentAnalyticsById] = useState<Record<string, AgentAnalyticsSnapshot>>(() => cachedStudioPane?.agentAnalyticsById ?? {});
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedExternalAgentId, setSelectedExternalAgentId] = useState<string | null>(null);
+  const [selectedAgentComputerId, setSelectedAgentComputerId] = useState<string | null>(null);
+  const [testChatSessionsByAgentId, setTestChatSessionsByAgentId] = useState<Record<string, DeployedAgentTestChatSessionState>>({});
+  const [externalAgentChatSessionsById, setExternalAgentChatSessionsById] = useState<Record<string, ExternalAgentChatSessionState>>({});
+  const [mobileAgentDetailOpen, setMobileAgentDetailOpen] = useState(false);
   const [overlayAgentId, setOverlayAgentId] = useState<string | null>(null);
   const [overlayTab, setOverlayTab] = useState<SpecialistOverlayTabId>(() => (
     normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab'))
@@ -210,11 +340,11 @@ export function WorkstationDeployedAgentsPane({
   const [detailConfigDraft, setDetailConfigDraft] = useState<DetailConfigDraft | null>(null);
   const [isSavingDetailConfig, setIsSavingDetailConfig] = useState(false);
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
-  const [busyAuditExportAgentId, setBusyAuditExportAgentId] = useState<string | null>(null);
   const [busyExternalUserId, setBusyExternalUserId] = useState<string | null>(null);
   const [recentlyCreatedAgentId, setRecentlyCreatedAgentId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [studioRosterQuery, setStudioRosterQuery] = useState('');
   const [conversationFilters, setConversationFilters] = useState<ConversationFilters>({
     channel: 'all',
     escalationState: 'all',
@@ -225,6 +355,14 @@ export function WorkstationDeployedAgentsPane({
     () => selectedAgentDetail ?? agents.find((item) => readString(item.id) === selectedAgentId) ?? null,
     [agents, selectedAgentDetail, selectedAgentId],
   );
+  const selectedExternalAgent = useMemo(
+    () => connectedExternalAgents.find((item) => readString(item.id) === selectedExternalAgentId) ?? null,
+    [connectedExternalAgents, selectedExternalAgentId],
+  );
+  const selectedAgentComputer = useMemo(
+    () => runtimeAttachments.find((item) => item.attachmentId === selectedAgentComputerId || item.runtimeProfileId === selectedAgentComputerId) ?? null,
+    [runtimeAttachments, selectedAgentComputerId],
+  );
   const selectedAgentMetrics = useMemo(
     () => (selectedAgentId ? agentMetricsById[selectedAgentId] ?? null : null),
     [agentMetricsById, selectedAgentId],
@@ -233,6 +371,55 @@ export function WorkstationDeployedAgentsPane({
     () => selectedAgentAnalytics ?? (selectedAgentId ? agentAnalyticsById[selectedAgentId] ?? null : null),
     [agentAnalyticsById, selectedAgentAnalytics, selectedAgentId],
   );
+  const selectedAgentTestChatSession = selectedAgentId
+    ? testChatSessionsByAgentId[selectedAgentId] ?? createEmptyDeployedAgentTestChatSession()
+    : createEmptyDeployedAgentTestChatSession();
+  const handleSelectedAgentTestChatSessionChange = useCallback((updater: SetStateAction<DeployedAgentTestChatSessionState>) => {
+    if (!selectedAgentId) {
+      return;
+    }
+    setTestChatSessionsByAgentId((current) => {
+      const previous = current[selectedAgentId] ?? createEmptyDeployedAgentTestChatSession();
+      const next = typeof updater === 'function'
+        ? (updater as (value: DeployedAgentTestChatSessionState) => DeployedAgentTestChatSessionState)(previous)
+        : updater;
+      return {
+        ...current,
+        [selectedAgentId]: next,
+      };
+    });
+  }, [selectedAgentId]);
+  const handleResetSelectedAgentTestChatSession = useCallback(() => {
+    if (!selectedAgentId) {
+      return;
+    }
+    setTestChatSessionsByAgentId((current) => ({
+      ...current,
+      [selectedAgentId]: createEmptyDeployedAgentTestChatSession(),
+    }));
+  }, [selectedAgentId]);
+  const selectedExternalAgentChatSession = selectedExternalAgentId
+    ? externalAgentChatSessionsById[selectedExternalAgentId] ?? createEmptyExternalAgentChatSession()
+    : createEmptyExternalAgentChatSession();
+  const handleSelectedExternalAgentChatSessionChange = useCallback((updater: SetStateAction<ExternalAgentChatSessionState>) => {
+    if (!selectedExternalAgentId) {
+      return;
+    }
+    setExternalAgentChatSessionsById((current) => {
+      const previous = current[selectedExternalAgentId] ?? createEmptyExternalAgentChatSession();
+      const next = typeof updater === 'function'
+        ? (updater as (value: ExternalAgentChatSessionState) => ExternalAgentChatSessionState)(previous)
+        : updater;
+      return {
+        ...current,
+        [selectedExternalAgentId]: next,
+      };
+    });
+  }, [selectedExternalAgentId]);
+  useEffect(() => {
+    setTestChatSessionsByAgentId({});
+    setExternalAgentChatSessionsById({});
+  }, [workspaceId]);
   const providerCatalogIndex = useMemo(
     () => providerCatalogById(providerCatalog),
     [providerCatalog],
@@ -319,19 +506,66 @@ export function WorkstationDeployedAgentsPane({
     () => normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab')),
     [searchParams],
   );
-  const selectOverlayTab = useCallback((nextTab: SpecialistOverlayTabId) => {
-    setOverlayTab(nextTab);
+  const replaceStudioQuery = useCallback((mutate: (params: URLSearchParams) => void) => {
     const params = new URLSearchParams(searchParams.toString());
-    if (nextTab === 'overview') {
-      params.delete('tab');
-      params.delete('studioTab');
-    } else {
-      params.set('tab', nextTab);
-      params.delete('studioTab');
-    }
+    mutate(params);
     const query = params.toString();
     router.replace(`${pathname}${query ? `?${query}` : ''}`, { scroll: false });
   }, [pathname, router, searchParams]);
+
+  const selectOverlayTab = useCallback((nextTab: SpecialistOverlayTabId) => {
+    setOverlayTab(nextTab);
+    replaceStudioQuery((params) => {
+      if (nextTab === 'overview') {
+        params.delete('tab');
+        params.delete('studioTab');
+      } else {
+        params.set('tab', nextTab);
+        params.delete('studioTab');
+      }
+    });
+  }, [replaceStudioQuery]);
+  const selectStudioRosterFilter = useCallback((nextFilter: StudioRosterFilterId) => {
+    setSelectedExternalAgentId(null);
+    setSelectedAgentComputerId(null);
+    replaceStudioQuery((params) => {
+      params.delete('agent');
+      params.delete('tab');
+      params.delete('studioTab');
+      if (nextFilter === 'all') {
+        params.delete('studioFilter');
+      } else {
+        params.set('studioFilter', nextFilter);
+      }
+    });
+  }, [replaceStudioQuery]);
+  const openSelectedAgentDetail = useCallback((agentId: string) => {
+    const normalizedAgentId = readString(agentId);
+    if (!normalizedAgentId) {
+      return;
+    }
+    setOverlayTab('overview');
+    setSelectedExternalAgentId(null);
+    setSelectedAgentComputerId(null);
+    replaceStudioQuery((params) => {
+      params.set('agent', normalizedAgentId);
+      params.delete('tab');
+      params.delete('studioTab');
+      params.delete('createAgent');
+    });
+  }, [replaceStudioQuery]);
+  const closeSelectedAgentDetail = useCallback(() => {
+    setOverlayTab('overview');
+    setOverlayAgentId(null);
+    setSelectedAgentId(null);
+    setSelectedExternalAgentId(null);
+    setSelectedAgentComputerId(null);
+    replaceStudioQuery((params) => {
+      params.delete('agent');
+      params.delete('tab');
+      params.delete('studioTab');
+    });
+  }, [replaceStudioQuery]);
 
   useEffect(() => {
     setOverlayTab(requestedOverlayTab);
@@ -413,6 +647,32 @@ export function WorkstationDeployedAgentsPane({
       setErrorMessage(error instanceof Error ? error.message : 'Server/VPS inventory is unavailable.');
     } finally {
       setIsLoadingRuntimeAttachments(false);
+    }
+  }
+
+  async function refreshConnectedExternalAgents() {
+    try {
+      const payload = await services.client.listStudioAgentSurfaces();
+      setExternalAgentSurfaceError(null);
+      const nextExternalAgents = Array.isArray(payload?.connected_external_agents)
+        ? payload.connected_external_agents.filter((item): item is ConnectedExternalAgentRecord => Boolean(item) && typeof item === 'object')
+        : [];
+      setConnectedExternalAgents(nextExternalAgents);
+      setSelectedExternalAgentId((current) => {
+        if (!current || nextExternalAgents.some((item) => readString(item.id) === current)) {
+          return current;
+        }
+        return null;
+      });
+    } catch (error) {
+      setExternalAgentSurfaceError(error instanceof Error ? error.message : 'Studio agent surface contract did not load.');
+      try {
+        const payload = await services.client.listConnectedExternalAgents();
+        setConnectedExternalAgents(readItems<ConnectedExternalAgentRecord>(payload));
+      } catch (fallbackError) {
+        setExternalAgentSurfaceError(fallbackError instanceof Error ? fallbackError.message : 'Connected-agent contract did not load.');
+        setConnectedExternalAgents([]);
+      }
     }
   }
 
@@ -612,6 +872,7 @@ export function WorkstationDeployedAgentsPane({
 
   useEffect(() => {
     void refreshAgents();
+    void refreshConnectedExternalAgents();
     void refreshStudioTemplates();
     void loadRuntimeAttachments();
     const handle = window.setTimeout(() => {
@@ -636,8 +897,18 @@ export function WorkstationDeployedAgentsPane({
     }
     setCurrentStudioSubview('agents');
     setSelectedAgentId(requestedAgentId);
+    setSelectedExternalAgentId(null);
+    setSelectedAgentComputerId(null);
+    setMobileAgentDetailOpen(true);
     setOverlayAgentId(null);
   }, [agents, requestedAgentId]);
+
+  useEffect(() => {
+    if (requestedAgentId) {
+      return;
+    }
+    setMobileAgentDetailOpen(false);
+  }, [requestedAgentId]);
 
   useEffect(() => {
     const normalizedRequestedTemplateId = normalizeTemplateToken(requestedProofAgentTemplateId);
@@ -852,12 +1123,17 @@ export function WorkstationDeployedAgentsPane({
     setAgents((current) => upsertAgentRecord(current, record));
     setSelectedAgentDetail(record);
     setSelectedAgentId(recordId || null);
+    setMobileAgentDetailOpen(true);
     setIsWizardOpen(false);
 
     if (wizardMode === 'create') {
       setSelectedAgentAnalytics(null);
       setOverlayAgentId(null);
-      selectOverlayTab('overview');
+      if (recordId) {
+        openSelectedAgentDetail(recordId);
+      } else {
+        selectOverlayTab('overview');
+      }
       setRecentlyCreatedAgentId(recordId || null);
       setStatusMessage(`Created agent ${readString(record.name)}.`);
       if (recordId) {
@@ -1106,7 +1382,6 @@ export function WorkstationDeployedAgentsPane({
     } : current);
   }
 
-  const activeChannels = listEnabledChannels(selectedAgent?.channels);
   const studioTitle = currentStudioSubview === 'agents'
     ? 'Business Agents'
     : currentStudioSubview === 'inbox'
@@ -1117,13 +1392,20 @@ export function WorkstationDeployedAgentsPane({
     : currentStudioSubview === 'inbox'
       ? 'Customer sessions and handoffs for Business Agents already working.'
       : 'Go-live checks and spending guardrails for Business Agents.';
-  const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
-  const showReadinessPanel = currentStudioSubview === 'deploy';
+  const showAgentsIndex = true;
   const visibleErrorMessage = isWizardScopedError(errorMessage) ? null : summarizeStudioErrorMessage(errorMessage);
   const isRecoverableLoadTimeout = Boolean(visibleErrorMessage && /too long to respond|timed out/i.test(visibleErrorMessage));
   const isWorkspaceLoadAccessError =
     visibleErrorMessage === 'Business Agents cannot load that workspace data right now. Refresh, or check workspace access if it keeps happening.';
-  const hasVisibleAgentWorkspace = Boolean(selectedAgent || agents.length > 0);
+  const hasSelectedStudioObject = Boolean(selectedAgent || selectedExternalAgent || selectedAgentComputer);
+  const selectedStudioObjectName = selectedAgent
+    ? readString(selectedAgent.name, 'Selected agent')
+    : selectedExternalAgent
+      ? readString(selectedExternalAgent.name ?? selectedExternalAgent.label, 'Connected agent')
+      : selectedAgentComputer
+        ? readString(selectedAgentComputer.label, 'Agent Computer')
+        : 'Selected object';
+  const hasVisibleAgentWorkspace = Boolean(hasSelectedStudioObject || agents.length > 0 || connectedExternalAgents.length > 0 || runtimeAttachments.length > 0);
   const isAgentListUnavailable = Boolean(visibleErrorMessage && !isRecoverableLoadTimeout && !isLoadingAgents && agents.length === 0);
   const isAgentListPriming = agents.length === 0 && (
     isLoadingAgents
@@ -1142,86 +1424,6 @@ export function WorkstationDeployedAgentsPane({
     () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'sage_cloud_computer' && target.available),
     [bootstrap.runtime.runtimeTargets],
   );
-  const selectedAgentRuntimeOption = studioRuntimeOption(selectedAgentRuntimePlacement);
-  const selectedAgentRuntimeBlocker = useMemo(() => {
-    if (selectedAgentRuntimePlacement === 'managed_cloud') {
-      return null;
-    }
-    if (selectedAgentRuntimePlacement === 'hosted_hardware_pool' && !hasCloudComputerAvailableTarget) {
-      return 'Empyralis Cloud Computer is not enabled for this workspace.';
-    }
-    if (selectedAgentRuntimePlacement === 'customer_local' && !hasGatewayOnlineTarget) {
-      return 'Connect a customer computer before this agent can run there.';
-    }
-    if (selectedAgentRuntimePlacement === 'customer_hosted') {
-      return selectedAgentSelfHostedDeployBlocker;
-    }
-    return null;
-  }, [
-    hasCloudComputerAvailableTarget,
-    hasGatewayOnlineTarget,
-    selectedAgentRuntimePlacement,
-    selectedAgentSelfHostedDeployBlocker,
-  ]);
-  const selectedAgentLaunchReadinessItems = useMemo<LaunchReadinessItem[]>(() => {
-    const config = readRecord(selectedAgent?.config);
-    const metadata = readRecord(selectedAgent?.metadata);
-    const commercePolicy = readRecord(config.commerce_policy ?? metadata.commerce_policy);
-    const monthlyCostCapUsd = readNumber(commercePolicy.monthly_cost_cap_usd ?? metadata.monthly_cost_cap_usd);
-    const dailyMessageLimit = readNumber(
-      config.daily_message_limit
-      ?? metadata.daily_message_limit
-      ?? commercePolicy.daily_message_limit,
-    );
-    const instructionText = readString(selectedAgent?.system_prompt ?? config.system_prompt ?? metadata.system_prompt);
-    const memoryPolicy = readRecord(config.memory_policy);
-    const memoryEnabled = memoryPolicy.memory_enabled === true || metadata.memory_enabled === true;
-    return [
-      {
-        id: 'runtime',
-        label: 'Runtime',
-        detail: selectedAgentRuntimeBlocker || `${selectedAgentRuntimeOption.label} is ready for this agent.`,
-        ok: !selectedAgentRuntimeBlocker,
-      },
-      {
-        id: 'model',
-        label: 'Model provider',
-        detail: selectedAgentModelDeployBlocker || formatDeploymentModelLabel(selectedAgent, providerCatalogIndex),
-        ok: !selectedAgentModelDeployBlocker,
-      },
-      {
-        id: 'instructions',
-        label: 'Instructions',
-        detail: instructionText.trim() ? 'Behavior instructions are configured.' : 'Add instructions before a customer sees this agent.',
-        ok: instructionText.trim().length > 0,
-      },
-      {
-        id: 'channel',
-        label: 'Customer channel',
-        detail: activeChannels.length > 0 ? `${activeChannels.join(', ')} connected.` : 'Connect Telegram or another customer channel before launch.',
-        ok: activeChannels.length > 0,
-      },
-      {
-        id: 'memory',
-        label: 'Memory policy',
-        detail: memoryEnabled ? 'Customer memory is enabled.' : 'Customer memory is off; the agent will use recent conversation context only.',
-        ok: true,
-      },
-      {
-        id: 'limits',
-        label: 'Usage limits',
-        detail: monthlyCostCapUsd || dailyMessageLimit ? 'Cost or message limits are configured.' : 'Default production limits apply.',
-        ok: true,
-      },
-    ];
-  }, [
-    activeChannels,
-    providerCatalogIndex,
-    selectedAgent,
-    selectedAgentModelDeployBlocker,
-    selectedAgentRuntimeBlocker,
-    selectedAgentRuntimeOption.label,
-  ]);
 
   async function handleDeleteExternalUserData() {
     const agentId = readString(selectedAgent?.id);
@@ -1265,68 +1467,67 @@ export function WorkstationDeployedAgentsPane({
     }
   }
 
-  const handleOpenChatProof = useStableEvent(() => {
-    router.push(`/w/${encodeURIComponent(workspaceId)}/sage`);
-  });
-
-  const handleOpenBilling = useStableEvent(() => {
-    router.push(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`);
-  });
-
-  const handleExportAudit = useStableEvent(async (agentId: string) => {
-    const cleanAgentId = readString(agentId, '');
-    if (!cleanAgentId) {
-      setErrorMessage('Select a Business Agent before exporting its audit log.');
-      return;
-    }
-    setBusyAuditExportAgentId(cleanAgentId);
-    setErrorMessage(null);
-    try {
-      const payload = await services.client.exportDeployedAgentAudit({
-        deployedAgentId: cleanAgentId,
-        limit: 500,
-      });
-      const agentLabel = readString(
-        selectedAgent?.id === cleanAgentId ? selectedAgent?.name : agents.find((item) => readString(item.id, '') === cleanAgentId)?.name,
-        cleanAgentId,
-      )
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '') || cleanAgentId;
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `${agentLabel}-audit.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      URL.revokeObjectURL(url);
-      setStatusMessage('Audit export downloaded.');
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Audit export could not be downloaded.');
-    } finally {
-      setBusyAuditExportAgentId(null);
-    }
-  });
-
-  const handleOpenAssistantDetail = useStableEvent((id: string) => {
-    setSelectedAgentId(id);
-    setOverlayAgentId(null);
-    selectOverlayTab('overview');
-  });
-
   const handleRefreshAgentsEvent = useStableEvent(() => {
     void Promise.all([
       refreshProviderCatalog(),
       refreshAgents({ preserveSelection: true }),
+      refreshConnectedExternalAgents(),
+      loadRuntimeAttachments(),
     ]);
   });
 
   const handleSelectAgent = useStableEvent((id: string) => {
     setSelectedAgentId(id);
+    setSelectedExternalAgentId(null);
+    setSelectedAgentComputerId(null);
+    setMobileAgentDetailOpen(true);
     setOverlayAgentId(null);
-    selectOverlayTab('overview');
+    openSelectedAgentDetail(id);
+  });
+
+  const handleSelectExternalAgent = useStableEvent((id: string) => {
+    setSelectedExternalAgentId(id);
+    setSelectedAgentId(null);
+    setSelectedAgentDetail(null);
+    setSelectedAgentComputerId(null);
+    setMobileAgentDetailOpen(true);
+    setOverlayAgentId(null);
+    setOverlayTab('overview');
+    replaceStudioQuery((params) => {
+      params.delete('agent');
+      params.delete('tab');
+      params.delete('studioTab');
+      params.delete('createAgent');
+    });
+  });
+
+  const handleSelectAgentComputer = useStableEvent((id: string) => {
+    setSelectedAgentComputerId(id);
+    setSelectedAgentId(null);
+    setSelectedAgentDetail(null);
+    setSelectedExternalAgentId(null);
+    setMobileAgentDetailOpen(true);
+    setOverlayAgentId(null);
+    setOverlayTab('overview');
+    replaceStudioQuery((params) => {
+      params.delete('agent');
+      params.delete('tab');
+      params.delete('studioTab');
+      params.delete('createAgent');
+    });
+  });
+
+  const handleExternalAgentUpdated = useStableEvent((record: ConnectedExternalAgentRecord) => {
+    const recordId = readString(record.id);
+    if (!recordId) {
+      return;
+    }
+    setConnectedExternalAgents((current) => {
+      const exists = current.some((item) => readString(item.id) === recordId);
+      return exists
+        ? current.map((item) => readString(item.id) === recordId ? record : item)
+        : [record, ...current];
+    });
   });
 
   const handleSaveDetailConfigEvent = useStableEvent(() => {
@@ -1416,10 +1617,42 @@ export function WorkstationDeployedAgentsPane({
   const overlayMemoryEntries = overlayMemoryAgentId
     ? agentMemoryById[overlayMemoryAgentId] ?? []
     : [];
-  const filteredAgents = useMemo(
-    () => agents.filter((agent) => agentMatchesStudioRosterFilter(agent, studioRosterFilter)),
-    [agents, studioRosterFilter],
+  const searchedAgents = useMemo(
+    () => agents.filter((agent) => agentMatchesStudioRosterQuery(agent, studioRosterQuery)),
+    [agents, studioRosterQuery],
   );
+  const studioRosterFilterCounts = useMemo(
+    () => buildStudioRosterFilterCounts(searchedAgents),
+    [searchedAgents],
+  );
+  const filteredAgents = useMemo(
+    () => searchedAgents.filter((agent) => agentMatchesStudioRosterFilter(agent, studioRosterFilter)),
+    [searchedAgents, studioRosterFilter],
+  );
+  const filteredConnectedExternalAgents = useMemo(() => {
+    const normalizedQuery = studioRosterQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return connectedExternalAgents;
+    }
+    return connectedExternalAgents.filter((agent) => [
+      agent.name,
+      agent.label,
+      agent.provider_kind,
+      agent.connection_state,
+    ].some((value) => readString(value).toLowerCase().includes(normalizedQuery)));
+  }, [connectedExternalAgents, studioRosterQuery]);
+  const filteredAgentComputers = useMemo(() => {
+    const normalizedQuery = studioRosterQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return runtimeAttachments;
+    }
+    return runtimeAttachments.filter((computer) => [
+      computer.label,
+      computer.status,
+      computer.nodeKind,
+      computer.runtimeProfileId,
+    ].some((value) => readString(value).toLowerCase().includes(normalizedQuery)));
+  }, [runtimeAttachments, studioRosterQuery]);
 
   return (
     <WorkstationSurfaceRoot surface="deployed-agents">
@@ -1447,12 +1680,22 @@ export function WorkstationDeployedAgentsPane({
             detail={statusMessage}
             onClose={() => setStatusMessage(null)}
           />
+        ) : externalAgentSurfaceError ? (
+          <PlatformNotification
+            tone="warning"
+            title="Connected-agent surface is degraded"
+            detail="Native agents remain available, but connected agents and Agent Computers may be incomplete until the Studio contract loads."
+            onClose={() => setExternalAgentSurfaceError(null)}
+          >
+            {externalAgentSurfaceError}
+          </PlatformNotification>
         ) : null}
 
         <WorkstationSplitWorkbench
           ariaLabel="Agents"
           className={joinClassNames(
             'studio-agents-workbench',
+            hasSelectedStudioObject && mobileAgentDetailOpen && 'studio-agents-workbench--detail-open',
           )}
           resizableSidebar
           sidebarResizeStorageKey={`empyralis:studio-agent-roster-width:${workspaceId}`}
@@ -1462,38 +1705,31 @@ export function WorkstationDeployedAgentsPane({
           sidebar={(
             <AgentRosterSidebar
               showAgentsIndex={showAgentsIndex}
-              recentlyCreatedAgentId={recentlyCreatedAgentId}
-              selectedAgent={selectedAgent}
-              onDismissRecentlyCreated={handleDismissRecentlyCreated}
-              onOpenChatProof={handleOpenChatProof}
-              onOpenBilling={handleOpenBilling}
-              onExportAudit={handleExportAudit}
-              onOpenAssistantDetail={handleOpenAssistantDetail}
               onOpenCreateWizard={handleOpenCreateWizard}
-              currentStudioSubview={currentStudioSubview}
               onRefreshAgents={handleRefreshAgentsEvent}
-              studioTemplates={studioTemplates}
               agents={filteredAgents}
+              connectedExternalAgents={filteredConnectedExternalAgents}
+              agentComputers={filteredAgentComputers}
               selectedAgentId={selectedAgentId}
-              busyAuditExportAgentId={busyAuditExportAgentId}
+              selectedExternalAgentId={selectedExternalAgentId}
+              selectedAgentComputerId={selectedAgentComputerId}
               onSelectAgent={handleSelectAgent}
+              onSelectExternalAgent={handleSelectExternalAgent}
+              onSelectAgentComputer={handleSelectAgentComputer}
               agentMetricsById={agentMetricsById}
               isAgentListPriming={isAgentListPriming}
               isAgentListUnavailable={isAgentListUnavailable}
-              showReadinessPanel={showReadinessPanel}
-              activeChannels={activeChannels}
-              selectedAgentModelDeployBlocker={selectedAgentModelDeployBlocker}
-              selectedAgentRuntimeOption={selectedAgentRuntimeOption}
-              selectedAgentRuntimeBlocker={selectedAgentRuntimeBlocker}
-              selectedAgentRuntimePlacement={selectedAgentRuntimePlacement}
-              selectedAgentLaunchReadinessItems={selectedAgentLaunchReadinessItems}
-              selectedAgentSelfHostedNode={selectedAgentSelfHostedNode}
-              selectedAgentSelfHostedDeployBlocker={selectedAgentSelfHostedDeployBlocker}
-              selfHostedNodeHealthLabel={selfHostedNodeHealthLabel}
+              rosterSearchQuery={studioRosterQuery}
+              onChangeRosterSearch={setStudioRosterQuery}
+              rosterFilter={studioRosterFilter}
+              onChangeRosterFilter={selectStudioRosterFilter}
+              rosterFilterCounts={studioRosterFilterCounts}
+              totalAgentCount={agents.length}
+              visibleAgentCount={filteredAgents.length}
             />
           )}
         >
-          {currentStudioSubview === 'agents' && !selectedAgent ? (
+          {(currentStudioSubview === 'agents' || currentStudioSubview === 'deploy') && !hasSelectedStudioObject ? (
             isAgentListPriming || isAgentListUnavailable ? (
               <div className="studio-agent-detail-empty" data-loading={isAgentListPriming} aria-label="Agent detail">
                 {isAgentListPriming ? (
@@ -1516,18 +1752,15 @@ export function WorkstationDeployedAgentsPane({
                   </>
                 ) : null}
               </div>
-            ) : agents.length === 0 ? (
-              <div className="studio-agent-detail-empty" aria-label="No Business Agents">
-                <strong>No Business Agents yet</strong>
-                <span>Create a worker to configure knowledge, model, actions, channels, and test chat.</span>
-                <AppButton type="button" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                  Create Business Agent
-                </AppButton>
-              </div>
-            ) : filteredAgents.length === 0 ? (
+            ) : agents.length === 0 && connectedExternalAgents.length === 0 && runtimeAttachments.length === 0 ? (
+              <StudioAgentStartPanel
+                studioTemplates={studioTemplates}
+                onOpenCreateWizard={handleOpenCreateWizard}
+              />
+            ) : filteredAgents.length === 0 && filteredConnectedExternalAgents.length === 0 && filteredAgentComputers.length === 0 ? (
               <div className="studio-agent-detail-empty" aria-label="No matching Business Agents">
-                <strong>No Business Agents match this filter</strong>
-                <span>Choose another Studio filter or create a new Business Agent.</span>
+                <strong>No Studio objects match this filter</strong>
+                <span>Adjust search or status filters to bring agents and runtime resources back into the roster.</span>
                 <AppButton type="button" tone="secondary" onClick={handleRefreshAgentsEvent}>
                   Refresh
                 </AppButton>
@@ -1535,51 +1768,151 @@ export function WorkstationDeployedAgentsPane({
             ) : (
               <div className="app-watermark">
                 <StudioIcon className="app-watermark__icon" size={48} />
-                <div className="app-watermark__text">Select a Business Agent to view configuration and signals</div>
+                <div className="app-watermark__text">Select a native agent, connected agent, or Agent Computer</div>
               </div>
             )
           ) : null}
 
-          {currentStudioSubview === 'agents' && selectedAgent && (
-            <AgentDetailView
-              selectedAgent={selectedAgent}
-              overlayTab={overlayTab}
-              detailConfigDraft={detailConfigDraft}
-              onSaveDetailConfig={handleSaveDetailConfigEvent}
-              isSavingDetailConfig={isSavingDetailConfig}
-              onUpdateDetailConfig={handleUpdateDetailConfig}
-              onUploadKnowledgeFile={handleUploadKnowledgeFile}
-              providerCatalog={providerCatalog}
-              isLoadingProviderCatalog={isLoadingProviderCatalog}
-              onRefreshProviderModels={handleRefreshProviderModelsEvent}
-              onSaveProviderCredential={handleSaveProviderCredential}
-              isSavingProviderCredential={isSavingProviderCredential}
-              workspaceId={workspaceId}
-              services={services}
-              bootstrap={bootstrap}
-              runtimeAttachments={runtimeAttachments}
-              selectedAgentAnalytics={selectedAnalytics}
-              isLoadingAnalytics={isLoadingAnalytics}
-              selectedAgentMetrics={selectedAgentMetrics}
-              selectedTelegramReadiness={selectedTelegramReadiness}
-              isLoadingTelegramReadiness={isLoadingTelegramReadiness}
-              onOpenEditWizard={openEditWizard}
-              onDeploy={handleDeploy}
-              onPause={handlePause}
-              busyAgentId={busyAgentId}
-              hasGatewayOnlineTarget={hasGatewayOnlineTarget}
-              hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
-              isLoadingDetail={isLoadingDetail}
-              overlayMemoryEntries={overlayMemoryEntries}
-              isLoadingOverlayMemory={isLoadingOverlayMemory}
-              currentStudioSubview={currentStudioSubview}
-              onSelectTab={selectOverlayTab}
-              connectorVaultIds={connectorVaultIds}
-              selectedAgentModelDeployBlocker={selectedAgentModelDeployBlocker}
-              selectedAgentSelfHostedDeployBlocker={selectedAgentSelfHostedDeployBlocker}
-              selectedStudioTemplate={selectedStudioTemplate}
-              onOpenCreateWizard={handleOpenCreateWizard}
-            />
+          {(currentStudioSubview === 'agents' || currentStudioSubview === 'deploy') && selectedAgent && (
+            <div className="app-stack-4">
+              <div className="studio-agent-mobile-return">
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    setMobileAgentDetailOpen(false);
+                    closeSelectedAgentDetail();
+                  }}
+                >
+                  <ChevronLeft size={16} strokeWidth={2.1} aria-hidden="true" />
+                  Back
+                </AppButton>
+                <span className="studio-agent-mobile-return__agent-name">
+                  {readString(selectedAgent.name, 'Selected agent')}
+                </span>
+              </div>
+              {recentlyCreatedAgentId === readString(selectedAgent.id) ? (
+                <ListDetailPanel
+                  className="studio-panel studio-panel--demo-proof"
+                  eyebrow="Next step"
+                  title="Chat with this agent"
+                  subtitle="Open a private workspace chat, confirm the model route and knowledge, then deploy when the checklist is clear."
+                  actions={(
+                    <div className="app-inline-actions app-inline-actions--tight">
+                      <AppButton type="button" tone="secondary" onClick={handleDismissRecentlyCreated}>
+                        Dismiss
+                      </AppButton>
+                    </div>
+                  )}
+                >
+                  <div className="app-inline-actions app-inline-actions--tight studio-inline-wrap">
+                    <AppButton type="button" onClick={() => selectOverlayTab('chat')}>
+                      Chat with this agent
+                    </AppButton>
+                    <AppButton type="button" tone="secondary" onClick={() => selectOverlayTab('ai')}>
+                      Check model route
+                    </AppButton>
+                    <AppButton type="button" tone="secondary" onClick={() => selectOverlayTab('connectors')}>
+                      Connect channel
+                    </AppButton>
+                  </div>
+                </ListDetailPanel>
+              ) : null}
+              <AgentDetailView
+                selectedAgent={selectedAgent}
+                overlayTab={overlayTab}
+                detailConfigDraft={detailConfigDraft}
+                onSaveDetailConfig={handleSaveDetailConfigEvent}
+                isSavingDetailConfig={isSavingDetailConfig}
+                onUpdateDetailConfig={handleUpdateDetailConfig}
+                onUploadKnowledgeFile={handleUploadKnowledgeFile}
+                providerCatalog={providerCatalog}
+                isLoadingProviderCatalog={isLoadingProviderCatalog}
+                onRefreshProviderModels={handleRefreshProviderModelsEvent}
+                onSaveProviderCredential={handleSaveProviderCredential}
+                isSavingProviderCredential={isSavingProviderCredential}
+                workspaceId={workspaceId}
+                services={services}
+                bootstrap={bootstrap}
+                runtimeAttachments={runtimeAttachments}
+                selectedAgentAnalytics={selectedAnalytics}
+                isLoadingAnalytics={isLoadingAnalytics}
+                selectedAgentMetrics={selectedAgentMetrics}
+                selectedTelegramReadiness={selectedTelegramReadiness}
+                isLoadingTelegramReadiness={isLoadingTelegramReadiness}
+                onOpenEditWizard={openEditWizard}
+                onDeploy={handleDeploy}
+                onPause={handlePause}
+                busyAgentId={busyAgentId}
+                hasGatewayOnlineTarget={hasGatewayOnlineTarget}
+                hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
+                isLoadingDetail={isLoadingDetail}
+                overlayMemoryEntries={overlayMemoryEntries}
+                isLoadingOverlayMemory={isLoadingOverlayMemory}
+                currentStudioSubview={currentStudioSubview}
+                onSelectTab={selectOverlayTab}
+                connectorVaultIds={connectorVaultIds}
+                selectedAgentModelDeployBlocker={selectedAgentModelDeployBlocker}
+                selectedAgentSelfHostedDeployBlocker={selectedAgentSelfHostedDeployBlocker}
+                selectedStudioTemplate={selectedStudioTemplate}
+                onOpenCreateWizard={handleOpenCreateWizard}
+                testChatSession={selectedAgentTestChatSession}
+                onTestChatSessionChange={handleSelectedAgentTestChatSessionChange}
+                onResetTestChatSession={handleResetSelectedAgentTestChatSession}
+              />
+            </div>
+          )}
+
+          {(currentStudioSubview === 'agents' || currentStudioSubview === 'deploy') && selectedExternalAgent && (
+            <div className="app-stack-4">
+              <div className="studio-agent-mobile-return">
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    setMobileAgentDetailOpen(false);
+                    closeSelectedAgentDetail();
+                  }}
+                >
+                  <ChevronLeft size={16} strokeWidth={2.1} aria-hidden="true" />
+                  Back
+                </AppButton>
+                <span className="studio-agent-mobile-return__agent-name">
+                  {selectedStudioObjectName}
+                </span>
+              </div>
+              <ConnectedExternalAgentDetailView
+                externalAgent={selectedExternalAgent}
+                overlayTab={overlayTab}
+                onSelectTab={selectOverlayTab}
+                services={services}
+                chatSession={selectedExternalAgentChatSession}
+                onChatSessionChange={handleSelectedExternalAgentChatSessionChange}
+                onExternalAgentUpdated={handleExternalAgentUpdated}
+              />
+            </div>
+          )}
+
+          {(currentStudioSubview === 'agents' || currentStudioSubview === 'deploy') && selectedAgentComputer && (
+            <div className="app-stack-4">
+              <div className="studio-agent-mobile-return">
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    setMobileAgentDetailOpen(false);
+                    closeSelectedAgentDetail();
+                  }}
+                >
+                  <ChevronLeft size={16} strokeWidth={2.1} aria-hidden="true" />
+                  Back
+                </AppButton>
+                <span className="studio-agent-mobile-return__agent-name">
+                  {selectedStudioObjectName}
+                </span>
+              </div>
+              <AgentComputerDetailView computer={selectedAgentComputer} />
+            </div>
           )}
 
           {currentStudioSubview === 'inbox' && (

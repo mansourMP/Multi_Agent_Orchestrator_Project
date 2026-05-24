@@ -876,18 +876,13 @@ export function normalizeRuntimePlacement(value: unknown): WizardState['runtimeP
 }
 
 export function normalizeRuntimeAccessMode(value: unknown, legacyRequiresOwnerApproval?: unknown): WizardState['runtimeAccessMode'] {
+  void legacyRequiresOwnerApproval;
   const token = readString(value).toLowerCase().replace(/[-\s]+/g, '_');
-  if (token === 'full_access' || token === 'autonomous_agent' || token === 'autonomous') {
+  if (token === 'full_access') {
     return 'full_access';
   }
   if (token === 'default_guarded' || token === 'guarded' || token === 'default') {
     return 'default_guarded';
-  }
-  if (
-    legacyRequiresOwnerApproval === false
-    || readString(legacyRequiresOwnerApproval).toLowerCase() === 'false'
-  ) {
-    return 'full_access';
   }
   return 'default_guarded';
 }
@@ -1285,12 +1280,8 @@ export function buildWizardState(agent?: DeployedAgentRecord | null): WizardStat
 export function buildCreateDraftWizardState(state: WizardState): WizardState {
   return {
     ...state,
-    persona: '',
-    systemPrompt: '',
-    knowledgeSourceText: '',
     selectedToolIds: [],
     memoryEnabled: false,
-    customerChannel: 'draft',
     telegramEnabled: false,
     telegramConnectorId: '',
     telegramEndpointKey: '',

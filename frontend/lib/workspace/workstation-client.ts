@@ -312,6 +312,47 @@ export type DeployedAgentRecord = Record<string, unknown> & {
   updated_at?: string | null;
 };
 
+export type ConnectedExternalAgentRecord = Record<string, unknown> & {
+  id?: string | null;
+  surface_kind?: 'connected_external_agent' | string | null;
+  studio_object_type?: string | null;
+  workspace_id?: string | null;
+  tenant_id?: string | null;
+  name?: string | null;
+  label?: string | null;
+  description?: string | null;
+  provider_kind?: string | null;
+  status?: string | null;
+  enabled?: boolean | null;
+  connection_state?: string | null;
+  trust_state?: string | null;
+  endpoint_refs?: Record<string, unknown> | null;
+  secret_ref?: string | null;
+  capability_manifest?: Record<string, unknown> | null;
+  manifest?: Record<string, unknown> | null;
+  last_error?: string | null;
+  last_manifest_refresh_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type StudioAgentComputerRecord = Record<string, unknown> & {
+  id?: string | null;
+  surface_kind?: 'agent_computer' | string | null;
+  name?: string | null;
+  status?: string | null;
+  record?: Record<string, unknown> | null;
+};
+
+export type StudioAgentSurfacesPayload = Record<string, unknown> & {
+  workspace_id?: string | null;
+  tenant_id?: string | null;
+  native_studio_agents?: Record<string, unknown>[] | null;
+  connected_external_agents?: ConnectedExternalAgentRecord[] | null;
+  agent_computers?: StudioAgentComputerRecord[] | null;
+  items?: Record<string, unknown>[] | null;
+};
+
 export type DeployedAgentMemoryRecord = Record<string, unknown> & {
   id?: string | null;
   channel?: string | null;
@@ -746,6 +787,12 @@ export type WorkstationClientPaths = {
     insightId: string,
     action: DeployedAgentBusinessInsightAction,
   ) => string;
+  studioAgentSurfaces: string;
+  studioExternalAgents: string;
+  studioExternalAgent: (externalAgentId: string) => string;
+  studioExternalAgentRefreshManifest: (externalAgentId: string) => string;
+  studioExternalAgentChatTurn: (externalAgentId: string) => string;
+  studioExternalAgentDisconnect: (externalAgentId: string) => string;
   deployedAgentMemory: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentConversations: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentConversationDetail: (deployedAgentId: string, sessionId: string) => string;
@@ -1006,6 +1053,34 @@ export type WorkstationClient = {
     allowMissing?: boolean;
   }) => Promise<Record<string, unknown> | null>;
   listDeployedAgents: (options?: { deploymentState?: string | null }) => Promise<Record<string, unknown>>;
+  listStudioAgentSurfaces: () => Promise<StudioAgentSurfacesPayload>;
+  listConnectedExternalAgents: () => Promise<Record<string, unknown>>;
+  createConnectedExternalAgent: (options: {
+    name: string;
+    providerKind?: string | null;
+    endpoints?: Record<string, unknown> | null;
+    manifest?: Record<string, unknown> | null;
+    secretRef?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  updateConnectedExternalAgent: (options: {
+    externalAgentId: string;
+    name?: string | null;
+    providerKind?: string | null;
+    endpoints?: Record<string, unknown> | null;
+    manifest?: Record<string, unknown> | null;
+    secretRef?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  refreshConnectedExternalAgentManifest: (options: {
+    externalAgentId: string;
+  }) => Promise<Record<string, unknown> | null>;
+  chatTurnConnectedExternalAgent: (options: {
+    externalAgentId: string;
+    message: string;
+    recentMessages?: Record<string, unknown>[];
+  }) => Promise<Record<string, unknown> | null>;
+  disconnectConnectedExternalAgent: (options: {
+    externalAgentId: string;
+  }) => Promise<Record<string, unknown> | null>;
   createDeployedAgent: (options: {
     name: string;
     avatar?: string | null;
@@ -1449,6 +1524,18 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/business-insights/${encodeURIComponent(insightId)}/${action}${buildQueryString({
         workspace_id: workspaceId,
       })}`,
+    studioAgentSurfaces:
+      `/api/studio/agent-surfaces${buildQueryString({ workspace_id: workspaceId })}`,
+    studioExternalAgents:
+      `/api/studio/external-agents${buildQueryString({ workspace_id: workspaceId })}`,
+    studioExternalAgent: (externalAgentId) =>
+      `/api/studio/external-agents/${encodeURIComponent(externalAgentId)}${buildQueryString({ workspace_id: workspaceId })}`,
+    studioExternalAgentRefreshManifest: (externalAgentId) =>
+      `/api/studio/external-agents/${encodeURIComponent(externalAgentId)}/refresh-manifest`,
+    studioExternalAgentChatTurn: (externalAgentId) =>
+      `/api/studio/external-agents/${encodeURIComponent(externalAgentId)}/chat-turn`,
+    studioExternalAgentDisconnect: (externalAgentId) =>
+      `/api/studio/external-agents/${encodeURIComponent(externalAgentId)}/disconnect`,
     deployedAgentMemory: (deployedAgentId, limit = 50, offset = 0) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/memory${buildQueryString({
         workspace_id: workspaceId,
@@ -2992,6 +3079,88 @@ export function createWorkstationClient(
         path: paths.deployedAgents(deploymentState),
         policy: AGENT_STUDIO_READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    listStudioAgentSurfaces: () =>
+      requestJson<StudioAgentSurfacesPayload>({
+        path: paths.studioAgentSurfaces,
+        policy: AGENT_STUDIO_READ_REQUEST_POLICY,
+      }) as Promise<StudioAgentSurfacesPayload>,
+    listConnectedExternalAgents: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioExternalAgents,
+        policy: AGENT_STUDIO_READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    createConnectedExternalAgent: ({ name, providerKind = 'custom', endpoints = {}, manifest = {}, secretRef = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioExternalAgents,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            name,
+            provider_kind: providerKind,
+            endpoints: endpoints ?? {},
+            manifest: manifest ?? {},
+            secret_ref: secretRef ?? null,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    updateConnectedExternalAgent: ({ externalAgentId, name, providerKind, endpoints, manifest, secretRef }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioExternalAgent(externalAgentId),
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            name: name ?? undefined,
+            provider_kind: providerKind ?? undefined,
+            endpoints: endpoints ?? undefined,
+            manifest: manifest ?? undefined,
+            secret_ref: secretRef ?? undefined,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    refreshConnectedExternalAgentManifest: ({ externalAgentId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioExternalAgentRefreshManifest(externalAgentId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    chatTurnConnectedExternalAgent: ({ externalAgentId, message, recentMessages = [] }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioExternalAgentChatTurn(externalAgentId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            message,
+            recent_messages: Array.isArray(recentMessages) ? recentMessages : [],
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    disconnectConnectedExternalAgent: ({ externalAgentId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioExternalAgentDisconnect(externalAgentId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     createDeployedAgent: ({
       name,
       avatar,

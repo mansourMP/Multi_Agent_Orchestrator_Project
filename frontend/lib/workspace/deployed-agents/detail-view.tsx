@@ -1,6 +1,17 @@
 'use client';
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import {
+  BarChart3,
+  BookOpen,
+  Brain,
+  Cable,
+  LayoutDashboard,
+  MessageSquareText,
+  Route,
+  Zap,
+  type LucideIcon,
+} from 'lucide-react';
 
 import { ListDetailPanel } from '@/lib/ui/list-detail';
 import { AnimatePresence, MotionTabPanel } from '@/lib/ui/motion';
@@ -27,6 +38,8 @@ import {
   CONTEXT_PRESET_OPTIONS,
   DEFAULT_SAFE_AGENT_PERSONA_VALUES,
   DEFAULT_SAFE_AGENT_SYSTEM_PROMPT_VALUES,
+  AGENT_STUDIO_OBJECT_LABELS,
+  AGENT_VISIBILITY_LABELS,
   SPECIALIST_CONNECTOR_CARDS,
   SPECIALIST_OVERLAY_TABS,
   normalizeContextPresetId,
@@ -40,7 +53,6 @@ import { AgentActionCapabilitySections } from './action-settings';
 import { AgentIntegrationsSections } from './integration-settings';
 import { AgentPlaygroundPanel } from './playground-panel';
 import {
-  createEmptyDeployedAgentTestChatSession,
   type DeployedAgentTestChatSessionState,
 } from '@/lib/workspace/workstation-deployed-agent-test-turn-pane';
 import {
@@ -72,6 +84,17 @@ import {
 const SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS = ['.md', '.markdown', '.txt', '.csv', '.json'];
 const KNOWLEDGE_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 const KNOWLEDGE_UPLOAD_MAX_MB = '2 MB';
+
+const AGENT_SECTION_ICONS: Record<SpecialistOverlayTabId, LucideIcon> = {
+  overview: LayoutDashboard,
+  chat: MessageSquareText,
+  knowledge: BookOpen,
+  ai: Route,
+  tools: Zap,
+  memory: Brain,
+  connectors: Cable,
+  analytics: BarChart3,
+};
 
 function isSupportedKnowledgeFile(file: File): boolean {
   const name = file.name.toLowerCase();
@@ -123,6 +146,9 @@ export interface AgentDetailViewProps {
   selectedAgentSelfHostedDeployBlocker: string | null;
   selectedStudioTemplate: any;
   onOpenCreateWizard: (templateId: string) => void;
+  testChatSession: DeployedAgentTestChatSessionState;
+  onTestChatSessionChange: Dispatch<SetStateAction<DeployedAgentTestChatSessionState>>;
+  onResetTestChatSession: () => void;
 }
 
 export const AgentDetailView = memo(({
@@ -163,18 +189,17 @@ export const AgentDetailView = memo(({
   selectedAgentSelfHostedDeployBlocker,
   selectedStudioTemplate,
   onOpenCreateWizard,
+  testChatSession,
+  onTestChatSessionChange,
+  onResetTestChatSession,
 }: AgentDetailViewProps) => {
   const selectedAgentId = readString(selectedAgent?.id);
-  const [testChatSession, setTestChatSession] = useState<DeployedAgentTestChatSessionState>(
-    () => createEmptyDeployedAgentTestChatSession(),
-  );
   const [knowledgeSourceInput, setKnowledgeSourceInput] = useState('');
   const [knowledgeFileError, setKnowledgeFileError] = useState<string | null>(null);
   const [isUploadingKnowledgeFile, setIsUploadingKnowledgeFile] = useState(false);
   const knowledgeFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    setTestChatSession(createEmptyDeployedAgentTestChatSession());
     setKnowledgeSourceInput('');
     setKnowledgeFileError(null);
     setIsUploadingKnowledgeFile(false);
@@ -316,6 +341,9 @@ export const AgentDetailView = memo(({
     readString(readRecord(selectedAgent?.metadata).system_prompt).trim(),
   );
   const channelReady = listEnabledChannels(selectedAgent?.channels).length > 0;
+  const selectedAgentVisibilityLabel = selectedAgentState === 'live' && channelReady
+    ? AGENT_VISIBILITY_LABELS.public_channel
+    : AGENT_VISIBILITY_LABELS.private_workspace;
   const runtimeReady = !selectedAgentSelfHostedDeployBlocker;
   const telegramReady = !selectedAgentNeedsTelegramReadiness || selectedTelegramReadiness?.readyForLive === true;
   const deployBlockers = [
@@ -326,6 +354,7 @@ export const AgentDetailView = memo(({
       : null,
   ].filter((item): item is string => Boolean(item));
   const knowledgeReady = knowledgeSourceCount > 0;
+  const launchReady = deployBlockers.length === 0 && modelReady && instructionsReady && knowledgeReady && channelReady && runtimeReady && telegramReady;
   const readinessItems = [
     {
       label: 'Model',
@@ -363,9 +392,26 @@ export const AgentDetailView = memo(({
       ready: true,
       tab: 'memory' as SpecialistOverlayTabId,
     },
+    {
+      label: 'Workspace chat',
+      detail: selectedAgentId ? 'Private owner chat is ready.' : 'Save the agent before chatting.',
+      ready: Boolean(selectedAgentId),
+      tab: 'chat' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Deploy state',
+      detail: selectedAgentState === 'live' ? 'Receiving customer traffic.' : launchReady ? 'Ready for go-live.' : 'Resolve setup blockers first.',
+      ready: selectedAgentState === 'live' || launchReady,
+      tab: 'overview' as SpecialistOverlayTabId,
+    },
+    {
+      label: 'Usage',
+      detail: `${formatUsd(selectedBudgetBurn)} used this month.`,
+      ready: true,
+      tab: 'analytics' as SpecialistOverlayTabId,
+    },
   ];
   const readyCount = readinessItems.filter((item) => item.ready).length;
-  const launchReady = deployBlockers.length === 0 && modelReady && instructionsReady && knowledgeReady && channelReady && runtimeReady && telegramReady;
   const launchTitle = selectedAgentState === 'live'
     ? 'Live and serving customers'
     : launchReady
@@ -374,7 +420,7 @@ export const AgentDetailView = memo(({
   const launchDetail = selectedAgentState === 'live'
     ? 'This agent can receive customer traffic.'
     : launchReady
-      ? 'Production-safe defaults are set. Test once, then deploy when ready.'
+      ? 'Production-safe defaults are set. Chat with it privately, then deploy when ready.'
       : deployBlockers[0] || 'Finish the required setup before customer traffic.';
   const setupCards = [
     {
@@ -481,33 +527,45 @@ export const AgentDetailView = memo(({
 
   return (
     <div className="app-stack-4 studio-agent-detail-motion">
-      {currentStudioSubview === 'agents' ? (
-        <nav className="studio-agent-detail-tabs studio-agent-detail-tabs--header" aria-label="Business Agent sections">
-          {SPECIALIST_OVERLAY_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              className={joinClassNames(
-                'studio-agent-detail-tabs__button',
-                overlayTab === tab.id && 'studio-agent-detail-tabs__button--active',
-              )}
-              aria-selected={overlayTab === tab.id}
-              onClick={() => onSelectTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      ) : null}
-      <AnimatePresence mode="wait" initial={false}>
+      <div className={joinClassNames(
+        'studio-agent-detail-layout',
+        currentStudioSubview !== 'agents' && 'studio-agent-detail-layout--single',
+      )}>
+        {currentStudioSubview === 'agents' ? (
+          <nav className="studio-agent-detail-tabs studio-agent-detail-tabs--rail" role="tablist" aria-label="Business Agent sections">
+            {SPECIALIST_OVERLAY_TABS.map((tab) => {
+              const SectionIcon = AGENT_SECTION_ICONS[tab.id];
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  className={joinClassNames(
+                    'studio-agent-detail-tabs__button',
+                    overlayTab === tab.id && 'studio-agent-detail-tabs__button--active',
+                  )}
+                  aria-label={tab.label}
+                  aria-selected={overlayTab === tab.id}
+                  title={tab.label}
+                  onClick={() => onSelectTab(tab.id)}
+                >
+                  <SectionIcon size={15} strokeWidth={2} aria-hidden="true" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        ) : null}
+        <div className="studio-agent-detail-content">
+        <AnimatePresence mode="wait" initial={false}>
               {currentStudioSubview === 'agents' && overlayTab === 'chat' && (
         <MotionTabPanel key="chat" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail studio-panel--chat"
           hideHeaderText
           eyebrow="Chat"
-          title="Chat"
-          subtitle="Private messages for checking the selected agent before live customer traffic."
+          title="Workspace chat"
+          subtitle="Chat privately with this agent. Messages stay in Studio and never send to customer channels."
         >
           {selectedAgentId && workspaceId ? (
             <AgentPlaygroundPanel
@@ -516,11 +574,11 @@ export const AgentDetailView = memo(({
               client={services.client}
               runtimeMode={testRuntimeModeForPlacement(selectedAgentRuntimePlacement)}
               session={testChatSession}
-              onSessionChange={setTestChatSession}
-              onResetSession={() => setTestChatSession(createEmptyDeployedAgentTestChatSession())}
+              onSessionChange={onTestChatSessionChange}
+              onResetSession={onResetTestChatSession}
             />
           ) : (
-            <EmptyPanel title="Agent is not ready yet" body="Save the agent first, then test it here." />
+            <EmptyPanel title="Agent is not ready yet" body="Save the agent first, then chat with it here." />
           )}
         </ListDetailPanel>
         </MotionTabPanel>
@@ -923,6 +981,19 @@ export const AgentDetailView = memo(({
                   </div>
                   <strong>{launchTitle}</strong>
                   <p>{launchDetail}</p>
+                  <div className="studio-agent-overview__identity-chips" aria-label="Agent scope">
+                    <span>{AGENT_STUDIO_OBJECT_LABELS.studio_agent}</span>
+                    <span>{selectedAgentVisibilityLabel}</span>
+                    <span>{selectedAgentModeLabel}</span>
+                  </div>
+                  <div className="studio-agent-overview__hero-actions">
+                    <AppButton type="button" onClick={() => onSelectTab('chat')}>
+                      Chat with this agent
+                    </AppButton>
+                    <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
+                      Edit setup
+                    </AppButton>
+                  </div>
                 </div>
                 <div className="studio-agent-overview__hero-metrics">
                   <div className="studio-agent-overview__hero-metric">
@@ -1119,6 +1190,8 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
         </AnimatePresence>
+        </div>
+      </div>
     </div>
   );
 });

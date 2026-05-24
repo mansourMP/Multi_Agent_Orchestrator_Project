@@ -98,27 +98,27 @@ export const STUDIO_AI_SOURCE_OPTIONS: ReadonlyArray<{
 }> = [
   {
     value: 'empyralis_credits',
-    label: 'Platform credits',
+    label: 'Empyralis credits',
     title: 'Use Empyralis credits',
-    hint: 'Best default. Uses workspace credits.',
+    hint: 'Recommended route for most Business Agents. Empyralis manages the provider behind workspace credits.',
   },
   {
     value: 'workspace_api_key',
     label: 'Workspace API key',
-    title: 'Use your API key',
-    hint: 'Runs through a connected provider account.',
+    title: 'Use a workspace API key',
+    hint: 'Runs through a provider credential saved for this workspace, not an agent-private secret.',
   },
   {
     value: 'local_model',
-    label: 'Local model',
-    title: 'Use local computer model',
-    hint: 'Uses a paired computer or local provider.',
+    label: 'Local or self-hosted',
+    title: 'Use a local or self-hosted model',
+    hint: 'Uses a paired Agent Computer or local provider for developer-controlled inference.',
   },
   {
     value: 'subscription_passthrough',
-    label: 'Subscription',
-    title: 'Use subscription passthrough',
-    hint: 'Reserved for eligible external subscriptions.',
+    label: 'Personal subscription',
+    title: 'Use a personal subscription',
+    hint: 'Reserved for eligible external subscription routes when the workspace policy allows it.',
   },
 ];
 
@@ -386,6 +386,20 @@ export const SPECIALIST_OVERLAY_TABS: Array<{
   { id: 'connectors', label: 'Integrations' },
   { id: 'analytics', label: 'Results' },
 ];
+
+export const AGENT_STUDIO_OBJECT_LABELS = {
+  studio_agent: 'Studio Agent',
+  connected_external_agent: 'Connected Agent',
+  agent_computer: 'Agent Computer',
+  external_agent_reserved: 'External Agent',
+  group_reserved: 'Agent Group',
+} as const;
+
+export const AGENT_VISIBILITY_LABELS = {
+  private_workspace: 'Private workspace',
+  public_channel: 'Public channel',
+  reserved: 'Reserved',
+} as const;
 
 export function normalizeSpecialistOverlayTabId(value: string | null | undefined): SpecialistOverlayTabId {
   const normalized = String(value || '').trim();

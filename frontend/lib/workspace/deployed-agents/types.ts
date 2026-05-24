@@ -5,8 +5,10 @@ import type {
   DeployedAgentMemoryRecord,
   DeployedAgentRecord,
   DeployedAgentTelegramReadinessRecord,
+  ConnectedExternalAgentRecord,
   ProviderCatalogModelRecord,
   ProviderCatalogRecord,
+  StudioAgentComputerRecord,
 } from '@/lib/workspace/workstation-client';
 
 export type WizardMode = 'create' | 'edit';
@@ -14,6 +16,11 @@ export type WizardStepId = 'overview' | 'knowledge' | 'tools' | 'channels' | 'me
 export type StudioSubview = 'agents' | 'inbox' | 'deploy';
 export type AgentRosterFilterId = 'all' | 'text' | 'computer' | 'connected' | 'draft';
 export type SpecialistOverlayTabId = 'overview' | 'chat' | 'knowledge' | 'ai' | 'tools' | 'memory' | 'connectors' | 'analytics';
+export type StudioSurfaceKind = 'native_studio_agent' | 'connected_external_agent' | 'agent_computer' | 'agent_group_reserved';
+export type AgentStudioObjectType = 'studio_agent' | 'connected_external_agent' | 'agent_computer' | 'external_agent_reserved' | 'group_reserved';
+export type AgentVisibilityKind = 'private_workspace' | 'public_channel' | 'reserved';
+export type StudioConnectedExternalAgent = ConnectedExternalAgentRecord;
+export type StudioAgentComputerSurface = StudioAgentComputerRecord;
 
 export type StudioTemplate = {
   id: string;

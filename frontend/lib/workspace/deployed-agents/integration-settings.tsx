@@ -9,6 +9,7 @@ import type {
   RuntimeAttachmentSnapshot,
 } from './types';
 import {
+  AGENT_STUDIO_OBJECT_LABELS,
   STUDIO_RUNTIME_OPTIONS,
 } from './constants';
 import {
@@ -52,7 +53,7 @@ export function AgentIntegrationsSections({
           <div>
             <span>Model providers</span>
             <strong>AI accounts this agent can use</strong>
-            <p>Connect API providers here. Business Agents use cloud API accounts only; personal and local routes stay with Sage.</p>
+            <p>Connect workspace API providers here. Personal subscription and local routes stay visible in Model, but require the matching workspace policy and runtime setup.</p>
           </div>
           <AppButton
             type="button"
@@ -108,6 +109,35 @@ export function AgentIntegrationsSections({
         </div>
         <div className="studio-agent-integrations__foot">
           Cloud worker is the production default. This Device, Cloud Computer, and Server/VPS are Agent Computer options.
+        </div>
+      </section>
+
+      <section className="studio-agent-integrations__section" aria-label="Advanced agent platform">
+        <div className="studio-agent-integrations__head">
+          <div>
+            <span>Advanced agent platform</span>
+            <strong>External agents and groups</strong>
+            <p>Native Studio Agents are available now. External runtimes and groups are reserved here so they stay governed, private, and approval-gated when they arrive.</p>
+          </div>
+        </div>
+        <div className="studio-agent-integrations__provider-grid">
+          <article className="studio-agent-integrations__provider-card studio-agent-integrations__provider-card--reserved">
+            <div>
+              <strong>Connect {AGENT_STUDIO_OBJECT_LABELS.external_agent_reserved}</strong>
+              <span>Register an external runtime with identity, heartbeat, capability manifest, owner approval, logs, and revocation.</span>
+            </div>
+            <span className="studio-agent-integrations__status">Reserved</span>
+          </article>
+          <article className="studio-agent-integrations__provider-card studio-agent-integrations__provider-card--reserved">
+            <div>
+              <strong>{AGENT_STUDIO_OBJECT_LABELS.group_reserved}</strong>
+              <span>Organize multiple agents later without adding group routing, schemas, or result aggregation in this pass.</span>
+            </div>
+            <span className="studio-agent-integrations__status">Coming later</span>
+          </article>
+        </div>
+        <div className="studio-agent-integrations__foot">
+          External agents start private, unverified, approval-gated, and revocable. Customer channels still live under channel setup.
         </div>
       </section>
 

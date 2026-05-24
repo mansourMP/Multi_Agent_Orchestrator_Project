@@ -33,6 +33,33 @@ const REASONING_OPTIONS: ReadonlyArray<{
   { value: 'max', label: 'High', hint: 'More reasoning when accuracy matters.' },
 ];
 
+const AI_ROUTE_DETAILS: Record<WizardState['aiSource'], {
+  audience: string;
+  status: string;
+  description: string;
+}> = {
+  empyralis_credits: {
+    audience: 'Recommended',
+    status: 'Managed credits',
+    description: 'Best for normal Studio users. Empyralis handles the provider route and bills against workspace credits.',
+  },
+  workspace_api_key: {
+    audience: 'Bring your own key',
+    status: 'Workspace credential',
+    description: 'Best when the business already has an API provider account and wants usage billed there.',
+  },
+  local_model: {
+    audience: 'Developer/local',
+    status: 'Agent Computer route',
+    description: 'Best for technical workspaces that operate a local or self-hosted model runtime.',
+  },
+  subscription_passthrough: {
+    audience: 'Personal subscription',
+    status: 'Policy-gated route',
+    description: 'Best only when an eligible external subscription route is allowed for this workspace.',
+  },
+};
+
 export function AgentAiSettingsSections({
   value,
   providerCatalog,
@@ -121,6 +148,7 @@ export function AgentAiSettingsSections({
 
   const selectedSourceOption = STUDIO_AI_SOURCE_OPTIONS.find((option) => option.value === value.aiSource)
     ?? STUDIO_AI_SOURCE_OPTIONS[0];
+  const selectedRouteDetail = AI_ROUTE_DETAILS[selectedSourceOption.value];
   const providerLabel = usesEmpyralisCredits
     ? 'Empyralis credits'
     : usesSubscriptionPassthrough
@@ -148,25 +176,51 @@ export function AgentAiSettingsSections({
       aria-busy={isLoadingProviderCatalog}
     >
       <section className="studio-ai-settings__route-overview" aria-label="AI route options">
-        <section className="studio-ai-settings__settings-card">
-          <div className="studio-ai-settings__setting-row">
-            <div className="studio-ai-settings__setting-copy">
-              <span>AI source</span>
-              <strong>{selectedSourceOption.title}</strong>
-              <p>{selectedSourceOption.hint}</p>
-            </div>
-            <div className="studio-ai-settings__setting-control">
-              <FormSelect
-                value={value.aiSource}
-                onChange={(event) => handleAiSourceChange(event.currentTarget.value as WizardState['aiSource'])}
-              >
-                {STUDIO_AI_SOURCE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </FormSelect>
-            </div>
+        <section className="studio-ai-settings__selected-card">
+          <div className="studio-ai-settings__selected-copy">
+            <span>Selected route</span>
+            <strong>{selectedSourceOption.title}</strong>
+            <p>{selectedSourceOption.hint}</p>
           </div>
+          <div className="studio-ai-settings__selected-copy">
+            <span>{selectedRouteDetail.audience}</span>
+            <strong>{modelLabel}</strong>
+            <p>{providerLabel} · {selectedRouteDetail.status}</p>
+          </div>
+          <div className="studio-ai-settings__selected-actions">
+            <AppButton type="button" tone="secondary" disabled>
+              Active
+            </AppButton>
+          </div>
+        </section>
 
+        <div className="studio-ai-settings__route-grid">
+          {STUDIO_AI_SOURCE_OPTIONS.map((option) => {
+            const routeDetail = AI_ROUTE_DETAILS[option.value];
+            const selected = value.aiSource === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={joinClassNames(
+                  'studio-ai-settings__route-option',
+                  selected && 'studio-ai-settings__route-option--selected',
+                )}
+                aria-pressed={selected}
+                onClick={() => handleAiSourceChange(option.value)}
+              >
+                <span className="studio-ai-settings__route-option-head">
+                  <span>{routeDetail.audience}</span>
+                  <span>{selected ? 'Selected' : routeDetail.status}</span>
+                </span>
+                <strong>{option.title}</strong>
+                <p>{routeDetail.description}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        <section className="studio-ai-settings__settings-card">
           <div className="studio-ai-settings__setting-row">
             <div className="studio-ai-settings__setting-copy">
               <span>Provider</span>

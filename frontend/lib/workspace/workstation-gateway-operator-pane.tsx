@@ -364,7 +364,7 @@ function runtimeSessionLaneLabel(session: WorkspaceRuntimeSessionRecord): string
 
 function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord, pendingCount = 0): string {
   const accessMode = readString(session.runtime_access_mode, '').toLowerCase().replace(/[\s-]+/g, '_');
-  if (accessMode === 'full_access' || accessMode === 'autonomous_agent') {
+  if (accessMode === 'full_access') {
     return 'Autonomous Agent';
   }
   if (accessMode === 'default_guarded') {
@@ -395,7 +395,7 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
 
 function runtimeAccessModeToken(value: unknown): 'default_guarded' | 'full_access' {
   const token = readString(value, '').toLowerCase().replace(/[\s-]+/g, '_');
-  if (token === 'full_access' || token === 'autonomous_agent') {
+  if (token === 'full_access') {
     return 'full_access';
   }
   return 'default_guarded';

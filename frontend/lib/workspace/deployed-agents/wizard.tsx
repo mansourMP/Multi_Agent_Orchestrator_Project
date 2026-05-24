@@ -227,7 +227,7 @@ export function AgentWizard({
       setIsTelegramSetupOpen(false);
       void loadTelegramReadiness(mode === 'edit' ? editAgentId : null);
     }
-  }, [open, mode, initialState, selectedAgent, editAgentId, templateId]);
+  }, [open, mode, initialState, editAgentId, templateId]);
 
   useEffect(() => {
     if (!open || !isTelegramSetupOpen) {
@@ -286,7 +286,7 @@ export function AgentWizard({
           persona: stateForSave.persona,
           systemPrompt: stateForSave.systemPrompt,
           channels: {},
-          knowledgeSources: [],
+          knowledgeSources: parseKnowledgeSources(stateForSave.knowledgeSourceText),
           runtimeTarget: 'cloud',
           billingPlan: 'free',
           config: {
@@ -314,7 +314,8 @@ export function AgentWizard({
             },
           },
           metadata: {
-            customer_channel: 'draft',
+            customer_channel: stateForSave.customerChannel,
+            preferred_customer_channel: stateForSave.customerChannel,
             runtime_placement: 'managed_cloud',
             runtime_supplier: 'empyralis',
             computer_automation_enabled: false,
@@ -545,11 +546,44 @@ export function AgentWizard({
             mode === 'create' ? (
               <div className="deployed-agents-wizard__create-draft">
                 <div className="deployed-agents-wizard__quickstart">
-                  <FormField label="Business Agent name" hint="The name your team sees in the worker list.">
-                    <FormInput
-                      value={wizardState.name}
-                      onChange={(event) => setWizardField('name', event.currentTarget.value)}
-                      placeholder="New Business Agent"
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormReadout label="Template" value={selectedStudioTemplate.title} />
+                    <FormReadout label="Use case" value={selectedStudioTemplate.outcome} />
+                  </FormGrid>
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Business Agent name" hint="The name your team sees in the worker list.">
+                      <FormInput
+                        value={wizardState.name}
+                        onChange={(event) => setWizardField('name', event.currentTarget.value)}
+                        placeholder="New Business Agent"
+                      />
+                    </FormField>
+                    <FormField label="Primary channel" hint="This is a setup preference. Live channel binding happens after creation.">
+                      <FormSelect
+                        value={wizardState.customerChannel}
+                        onChange={(event) => setWizardField('customerChannel', event.currentTarget.value as WizardState['customerChannel'])}
+                      >
+                        <option value="draft">Decide later</option>
+                        <option value="telegram">Telegram</option>
+                        <option value="whatsapp">WhatsApp</option>
+                        <option value="web_widget">Web widget</option>
+                      </FormSelect>
+                    </FormField>
+                  </FormGrid>
+                  <FormField label="Initial instructions" hint="What should this Business Agent do, and when should it hand off to a human?">
+                    <FormTextarea
+                      rows={5}
+                      value={wizardState.systemPrompt}
+                      onChange={(event) => setWizardField('systemPrompt', event.currentTarget.value)}
+                      placeholder={selectedStudioTemplate.systemPrompt}
+                    />
+                  </FormField>
+                  <FormField label="Optional trusted source" hint="Paste a file URI, URL, sheet reference, or leave empty and add files later.">
+                    <FormTextarea
+                      rows={3}
+                      value={wizardState.knowledgeSourceText}
+                      onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
+                      placeholder={selectedStudioTemplate.knowledgePlaceholder}
                     />
                   </FormField>
                 </div>

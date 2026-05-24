@@ -107,6 +107,8 @@ def gateway_registration_public_payload(registration: Dict[str, Any]) -> Dict[st
         "display_name": registration.get("display_name"),
         "platform": registration.get("platform"),
         "metadata": metadata,
+        "agent_computer_policy_id": metadata.get("agent_computer_policy_id"),
+        "agent_computer_emergency_stop": metadata.get("agent_computer_emergency_stop"),
         "runtime_access_mode": runtime_access_mode,
         "runtime_access_label": execution_mode_policy.public_runtime_access_label(runtime_access_mode),
         "runtime_access_setup_warning": execution_mode_policy.runtime_access_setup_warning(runtime_access_mode),

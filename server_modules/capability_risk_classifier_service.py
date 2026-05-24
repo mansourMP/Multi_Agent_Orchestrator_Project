@@ -332,6 +332,7 @@ def classify_capability_risk(
         contract,
         capability=normalized_capability,
         requested_domain=_target_domain(target_url=target_url, payload=payload),
+        requested_path=target_path,
     )
     if policy_decision.blocked:
         return CapabilityRiskDecision(

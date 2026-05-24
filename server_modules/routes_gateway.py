@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
@@ -9,7 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette import status
 from pydantic import BaseModel, Field
 
-from server_modules.auth import enforce_workspace_access, workspace_tenant_id
+from server_modules.auth import enforce_workspace_access, validate_csrf, workspace_tenant_id
 from server_modules.kill_switch_gate import assert_not_killed, KillSwitchBlockedError
 from server_modules.gateway_quota_enforcement import (
     evaluate_gateway_quota,
@@ -25,8 +26,13 @@ from server_modules.safety_error_contract import (
     to_http_status,
 )
 from server_modules.agent_computer_policy_service import (
+    AgentComputerPolicyError,
     build_default_agent_computer_policy,
+    effective_agent_computer_policy,
+    get_saved_agent_computer_policy,
     normalize_agent_computer_policy,
+    upsert_agent_computer_policy,
+    validate_agent_computer_policy as validate_agent_computer_policy_contract,
 )
 from server_modules.capability_risk_classifier_service import (
     DECISION_APPROVAL_REQUIRED,
@@ -38,6 +44,7 @@ from server_modules.capability_risk_classifier_service import (
 from server_modules.runtime_common import require_api_key
 from server_modules import (
     agent_approval_memory_service,
+    agent_computer_profile_service,
     dedicated_workstation_setup_service,
     gateway_browser_service,
     gateway_execution_service,
@@ -48,6 +55,7 @@ from server_modules import (
     gateway_registry_service,
     gateway_state_repository,
     hardware_action_broker_service,
+    kill_switch_gate,
     safe_mode_service,
     security_audit_service,
 )
@@ -59,6 +67,10 @@ LOGGER = logging.getLogger(__name__)
 router = APIRouter()
 GATEWAY_WS_SAFE_SUBPROTOCOL = "empyralis.gateway.v1"
 GATEWAY_WS_TOKEN_SUBPROTOCOL_PREFIX = "empyralis.gateway.session."
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _gateway_ws_query_token_allowed() -> bool:
@@ -209,8 +221,18 @@ def _gateway_policy_from_registration(registration: Dict[str, Any]):
     )
     if isinstance(policy_payload, dict):
         return normalize_agent_computer_policy(policy_payload)
+    policy_id = str(metadata.get("agent_computer_policy_id") or "").strip()
+    workspace_id = str(registration.get("workspace_id") or "").strip()
+    if policy_id and workspace_id:
+        saved_policy = get_saved_agent_computer_policy(workspace_id=workspace_id, policy_id=policy_id)
+        if saved_policy is not None:
+            return saved_policy
     gateway_token = str(registration.get("gateway_id") or "").strip() or "default"
-    return build_default_agent_computer_policy(policy_id=f"gateway:{gateway_token}")
+    runtime_access_mode = str(metadata.get("runtime_access_mode") or "").strip().lower()
+    return build_default_agent_computer_policy(
+        autonomy_mode="trusted_workstation" if runtime_access_mode == "full_access" else "ask_every_time",
+        policy_id=policy_id or f"gateway:{gateway_token}",
+    )
 
 
 def _emit_gateway_approval_memory_used(
@@ -408,6 +430,17 @@ class DedicatedWorkstationControlRequest(BaseModel):
     trace_id: Optional[str] = Field(default=None, max_length=200)
 
 
+class AgentComputerPolicyRequest(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    policy: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentComputerControlRequest(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    reason: Optional[str] = Field(default=None, max_length=500)
+    trace_id: Optional[str] = Field(default=None, max_length=200)
+
+
 class GatewayToolExecuteRequest(BaseModel):
     capability_id: str = Field(min_length=1)
     arguments: Dict[str, Any] = Field(default_factory=dict)
@@ -496,6 +529,119 @@ def _accessible_gateway_registration(
     return registration, resolved_workspace_id
 
 
+def _policy_id_for_agent_computer(*, computer_id: str, profile: Optional[Any], registration: Optional[Dict[str, Any]]) -> str:
+    if profile is not None and str(getattr(profile, "policy_id", "") or "").strip():
+        return str(getattr(profile, "policy_id") or "").strip()
+    metadata = registration.get("metadata") if isinstance((registration or {}).get("metadata"), dict) else {}
+    configured = str(metadata.get("agent_computer_policy_id") or "").strip()
+    if configured:
+        return configured
+    return f"agent-computer:{str(computer_id or '').strip()}"
+
+
+def _runtime_access_mode_for_agent_computer(*, profile: Optional[Any], registration: Optional[Dict[str, Any]]) -> str:
+    metadata = registration.get("metadata") if isinstance((registration or {}).get("metadata"), dict) else {}
+    return str(metadata.get("runtime_access_mode") or "").strip().lower() or "default_guarded"
+
+
+def _accessible_agent_computer(
+    computer_id: str,
+    current_user,
+    *,
+    workspace_id: str,
+    minimum_role: str = "owner",
+) -> tuple[str, Optional[Any], Optional[Dict[str, Any]], str]:
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role=minimum_role,
+    )
+    profile = agent_computer_profile_service.get_agent_computer_profile(
+        workspace_id=resolved_workspace_id,
+        profile_id=computer_id,
+    )
+    registration = None
+    if profile is not None and str(getattr(profile, "gateway_id", "") or "").strip():
+        registration = gateway_state_repository.get_gateway_registration(str(getattr(profile, "gateway_id") or "").strip())
+        if registration and str(registration.get("workspace_id") or "").strip() != resolved_workspace_id:
+            raise HTTPException(status_code=403, detail="Agent Computer registration is not accessible for this workspace.")
+    if profile is None:
+        registration = gateway_state_repository.get_gateway_registration(computer_id)
+        if not registration:
+            raise HTTPException(status_code=404, detail="Agent Computer was not found.")
+        registration_workspace_id = str(registration.get("workspace_id") or "").strip() or "default"
+        if registration_workspace_id != resolved_workspace_id:
+            raise HTTPException(status_code=403, detail="Agent Computer is not accessible for this workspace.")
+    policy_id = _policy_id_for_agent_computer(computer_id=computer_id, profile=profile, registration=registration)
+    return resolved_workspace_id, profile, registration, policy_id
+
+
+def _agent_computer_policy_response(
+    *,
+    computer_id: str,
+    workspace_id: str,
+    policy_id: str,
+    profile: Optional[Any],
+    registration: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    runtime_access_mode = _runtime_access_mode_for_agent_computer(profile=profile, registration=registration)
+    policy, saved = effective_agent_computer_policy(
+        workspace_id=workspace_id,
+        policy_id=policy_id,
+        runtime_access_mode=runtime_access_mode,
+    )
+    gateway_id = str((registration or {}).get("gateway_id") or getattr(profile, "gateway_id", "") or "").strip()
+    kill_decision = kill_switch_gate.evaluate_kill_switch(
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+    )
+    return {
+        "computer_id": str(computer_id or "").strip(),
+        "workspace_id": workspace_id,
+        "policy_id": policy_id,
+        "saved": bool(saved),
+        "runtime_access_mode": runtime_access_mode,
+        "custom_policy_ready": bool(saved),
+        "policy": policy.as_dict(),
+        "effective_policy": policy.as_dict(),
+        "computer": profile.as_dict() if profile is not None else None,
+        "gateway_id": gateway_id or None,
+        "emergency_stop": {
+            "active": bool(kill_decision.blocked and kill_decision.scope == "gateway"),
+            "reason": kill_decision.reason or None,
+            "detail": kill_decision.detail or None,
+        },
+        "safety_summary": {
+            "agent_computer_public_name": "Agent Computer",
+            "full_access_requires_literal_mode": runtime_access_mode == "full_access",
+            "custom_without_saved_policy_is_guarded": not saved and runtime_access_mode == "custom",
+        },
+    }
+
+
+def _persist_agent_computer_policy_binding(
+    *,
+    computer_id: str,
+    workspace_id: str,
+    policy_id: str,
+    profile: Optional[Any],
+    registration: Optional[Dict[str, Any]],
+) -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
+    if profile is not None:
+        payload = profile.as_dict()
+        payload["policy_id"] = policy_id
+        profile = agent_computer_profile_service.upsert_agent_computer_profile(payload)
+    if registration is not None:
+        registration = gateway_state_repository.update_gateway_registration_state(
+            gateway_id=str(registration.get("gateway_id") or computer_id).strip(),
+            metadata={
+                "agent_computer_policy_id": policy_id,
+                "agent_computer_policy_saved_at": _utc_now_iso(),
+            },
+        ) or registration
+    return profile, registration
+
+
 async def _shutdown_revoked_live_gateway_connection(gateway_id: str, *, reason: str) -> bool:
     get_connection = getattr(gateway_protocol_service, "_get_live_connection", None)
     unregister_connection = getattr(gateway_protocol_service, "_unregister_live_connection", None)
@@ -514,6 +660,181 @@ async def _shutdown_revoked_live_gateway_connection(gateway_id: str, *, reason: 
     if callable(unregister_connection):
         unregister_connection(gateway_id=gateway_id, session_id=session_id, reason=reason)
     return True
+
+
+@router.get("/agent-computers/{computer_id}/policy")
+async def get_agent_computer_policy(
+    computer_id: str,
+    workspace_id: str = Query(..., min_length=1),
+    current_user=Depends(require_api_key),
+):
+    resolved_workspace_id, profile, registration, policy_id = _accessible_agent_computer(
+        computer_id,
+        current_user,
+        workspace_id=workspace_id,
+        minimum_role="owner",
+    )
+    return _agent_computer_policy_response(
+        computer_id=computer_id,
+        workspace_id=resolved_workspace_id,
+        policy_id=policy_id,
+        profile=profile,
+        registration=registration,
+    )
+
+
+@router.post("/agent-computers/{computer_id}/policy/validate")
+async def validate_agent_computer_policy_route(
+    computer_id: str,
+    body: AgentComputerPolicyRequest,
+    request: Request,
+    current_user=Depends(require_api_key),
+):
+    validate_csrf(request)
+    resolved_workspace_id, profile, registration, policy_id = _accessible_agent_computer(
+        computer_id,
+        current_user,
+        workspace_id=body.workspace_id,
+        minimum_role="owner",
+    )
+    candidate = dict(body.policy or {})
+    candidate["policy_id"] = str(candidate.get("policy_id") or policy_id).strip() or policy_id
+    try:
+        policy = validate_agent_computer_policy_contract(candidate)
+    except AgentComputerPolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        **_agent_computer_policy_response(
+            computer_id=computer_id,
+            workspace_id=resolved_workspace_id,
+            policy_id=policy.policy_id,
+            profile=profile,
+            registration=registration,
+        ),
+        "valid": True,
+        "policy": policy.as_dict(),
+        "effective_policy": policy.as_dict(),
+    }
+
+
+@router.put("/agent-computers/{computer_id}/policy")
+async def update_agent_computer_policy(
+    computer_id: str,
+    body: AgentComputerPolicyRequest,
+    request: Request,
+    current_user=Depends(require_api_key),
+):
+    validate_csrf(request)
+    resolved_workspace_id, profile, registration, policy_id = _accessible_agent_computer(
+        computer_id,
+        current_user,
+        workspace_id=body.workspace_id,
+        minimum_role="owner",
+    )
+    candidate = dict(body.policy or {})
+    candidate["policy_id"] = str(candidate.get("policy_id") or policy_id).strip() or policy_id
+    try:
+        policy = upsert_agent_computer_policy(
+            workspace_id=resolved_workspace_id,
+            policy=candidate,
+        )
+        profile, registration = _persist_agent_computer_policy_binding(
+            computer_id=computer_id,
+            workspace_id=resolved_workspace_id,
+            policy_id=policy.policy_id,
+            profile=profile,
+            registration=registration,
+        )
+    except AgentComputerPolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _agent_computer_policy_response(
+        computer_id=computer_id,
+        workspace_id=resolved_workspace_id,
+        policy_id=policy.policy_id,
+        profile=profile,
+        registration=registration,
+    )
+
+
+@router.post("/agent-computers/{computer_id}/emergency-stop")
+async def emergency_stop_agent_computer(
+    computer_id: str,
+    body: AgentComputerControlRequest,
+    request: Request,
+    current_user=Depends(require_api_key),
+):
+    validate_csrf(request)
+    resolved_workspace_id, profile, registration, policy_id = _accessible_agent_computer(
+        computer_id,
+        current_user,
+        workspace_id=body.workspace_id,
+        minimum_role="owner",
+    )
+    gateway_id = str((registration or {}).get("gateway_id") or getattr(profile, "gateway_id", "") or "").strip()
+    if not gateway_id:
+        raise HTTPException(status_code=400, detail="Agent Computer emergency stop requires a bound computer connection.")
+    reason = str(body.reason or "").strip() or "Agent Computer emergency stop."
+    kill_switch_gate.set_kill_switch(f"{kill_switch_gate.GATEWAY_KILL_PREFIX}{gateway_id}")
+    latest_session = gateway_state_repository.get_latest_gateway_session(gateway_id, include_revoked=False)
+    if latest_session:
+        gateway_state_repository.mark_gateway_session_disconnected(
+            str(latest_session.get("session_id") or "").strip(),
+            reason=reason,
+        )
+    registration = gateway_state_repository.update_gateway_registration_state(
+        gateway_id=gateway_id,
+        metadata={
+            "agent_computer_emergency_stop": {
+                "active": True,
+                "reason": reason,
+                "stopped_by_user_id": str((current_user or {}).get("user_id") or "").strip() or None,
+            }
+        },
+    ) or registration
+    await _shutdown_revoked_live_gateway_connection(gateway_id, reason="agent computer emergency stop")
+    return _agent_computer_policy_response(
+        computer_id=computer_id,
+        workspace_id=resolved_workspace_id,
+        policy_id=policy_id,
+        profile=profile,
+        registration=registration,
+    )
+
+
+@router.post("/agent-computers/{computer_id}/clear-emergency-stop")
+async def clear_agent_computer_emergency_stop(
+    computer_id: str,
+    body: AgentComputerControlRequest,
+    request: Request,
+    current_user=Depends(require_api_key),
+):
+    validate_csrf(request)
+    resolved_workspace_id, profile, registration, policy_id = _accessible_agent_computer(
+        computer_id,
+        current_user,
+        workspace_id=body.workspace_id,
+        minimum_role="owner",
+    )
+    gateway_id = str((registration or {}).get("gateway_id") or getattr(profile, "gateway_id", "") or "").strip()
+    if not gateway_id:
+        raise HTTPException(status_code=400, detail="Agent Computer emergency stop requires a bound computer connection.")
+    kill_switch_gate.clear_kill_switch(f"{kill_switch_gate.GATEWAY_KILL_PREFIX}{gateway_id}")
+    registration = gateway_state_repository.update_gateway_registration_state(
+        gateway_id=gateway_id,
+        metadata={
+            "agent_computer_emergency_stop": {
+                "active": False,
+                "cleared_by_user_id": str((current_user or {}).get("user_id") or "").strip() or None,
+            }
+        },
+    ) or registration
+    return _agent_computer_policy_response(
+        computer_id=computer_id,
+        workspace_id=resolved_workspace_id,
+        policy_id=policy_id,
+        profile=profile,
+        registration=registration,
+    )
 
 
 @router.post("/gateway/pairings/intents")
@@ -819,7 +1140,11 @@ async def execute_gateway_tool(
     if risk_decision.decision == DECISION_BLOCK:
         _block_gateway_risk_decision(risk_decision=risk_decision)
 
+    registration_metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+    explicit_full_access = str(registration_metadata.get("runtime_access_mode") or "").strip().lower() == "full_access"
     requires_owner_approval = gateway_approval_service.capability_requires_owner_approval(body.capability_id)
+    if explicit_full_access and risk_decision.decision != DECISION_APPROVAL_REQUIRED:
+        requires_owner_approval = False
     remembered_approval_rule = None
     if risk_decision.decision == DECISION_APPROVAL_REQUIRED or requires_owner_approval:
         remembered_approval_rule = _consume_gateway_approval_memory(
@@ -1069,6 +1394,10 @@ async def start_gateway_browser_session(
         None,
         reviewed_approval_required=reviewed_required,
     )
+    registration_metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+    explicit_full_access = str(registration_metadata.get("runtime_access_mode") or "").strip().lower() == "full_access"
+    if explicit_full_access and risk_decision.decision != DECISION_APPROVAL_REQUIRED:
+        browser_start_requires_approval = False
     remembered_approval_rule = None
     if risk_decision.decision == DECISION_APPROVAL_REQUIRED or browser_start_requires_approval:
         remembered_approval_rule = _consume_gateway_approval_memory(
@@ -1215,6 +1544,10 @@ async def execute_gateway_browser_action(
         body.action,
         reviewed_approval_required=reviewed_required,
     )
+    registration_metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+    explicit_full_access = str(registration_metadata.get("runtime_access_mode") or "").strip().lower() == "full_access"
+    if explicit_full_access and risk_decision.decision != DECISION_APPROVAL_REQUIRED:
+        browser_action_requires_approval = False
     remembered_approval_rule = None
     if risk_decision.decision == DECISION_APPROVAL_REQUIRED or browser_action_requires_approval:
         remembered_approval_rule = _consume_gateway_approval_memory(

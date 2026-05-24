@@ -11,6 +11,7 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -163,6 +164,131 @@ class GatewayRoutesTests(unittest.TestCase):
         )
         self.assertEqual(second_registration.status_code, 400)
         self.assertIn("no longer active", second_registration.json()["detail"].lower())
+
+    def _register_gateway_with_mode(
+        self,
+        *,
+        workspace_id: str = "default",
+        runtime_access_mode: str = "default_guarded",
+        warning_ack: bool = False,
+        gateway_id: str | None = None,
+    ) -> dict:
+        pairing_response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={
+                "workspace_id": workspace_id,
+                "display_name": "Test Device",
+                "platform": "macos",
+                "runtime_access_mode": runtime_access_mode,
+                "autonomous_agent_setup_warning_acknowledged": warning_ack,
+            },
+        )
+        self.assertEqual(pairing_response.status_code, 200)
+        registration_response = self.client.post(
+            "/api/gateway/registrations",
+            json={
+                "pairing_token": pairing_response.json()["pairing_token"],
+                "device_id": f"device-{uuid.uuid4().hex}",
+                "gateway_id": gateway_id,
+                "display_name": "Test Device",
+                "platform": "macos-arm64",
+                "capabilities": ["file.write", "browser.read"],
+            },
+        )
+        self.assertEqual(registration_response.status_code, 200)
+        return registration_response.json()
+
+    def test_agent_computer_policy_mutations_require_csrf(self) -> None:
+        registration_payload = self._register_gateway_with_mode()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+
+        with patch.object(routes_gateway, "validate_csrf", side_effect=HTTPException(status_code=403, detail="CSRF validation failed.")):
+            response = self.client.put(
+                f"/api/agent-computers/{gateway_id}/policy",
+                json={
+                    "workspace_id": "default",
+                    "policy": {"autonomy_mode": "trusted_workstation"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("csrf", response.text.lower())
+
+    def test_agent_computer_policy_save_and_emergency_stop_routes(self) -> None:
+        registration_payload = self._register_gateway_with_mode(gateway_id="gateway-policy-test")
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+
+        initial = self.client.get(
+            f"/api/agent-computers/{gateway_id}/policy",
+            params={"workspace_id": "default"},
+        )
+        self.assertEqual(initial.status_code, 200)
+        self.assertFalse(initial.json()["saved"])
+        self.assertEqual(initial.json()["policy"]["autonomy_mode"], "ask_every_time")
+
+        saved = self.client.put(
+            f"/api/agent-computers/{gateway_id}/policy",
+            json={
+                "workspace_id": "default",
+                "policy": {
+                    "autonomy_mode": "trusted_workstation",
+                    "filesystem_scope": ["/Users/mansur/Work"],
+                    "blocked_filesystem_scope": ["/Users/mansur/Work/secrets"],
+                    "domain_allowlist": ["example.com"],
+                    "approval_ttl_seconds": 3600,
+                },
+            },
+        )
+        self.assertEqual(saved.status_code, 200)
+        payload = saved.json()
+        self.assertTrue(payload["saved"])
+        self.assertEqual(payload["policy"]["autonomy_mode"], "trusted_workstation")
+        self.assertEqual(payload["policy"]["filesystem_scope"], ["/Users/mansur/Work"])
+
+        stopped = self.client.post(
+            f"/api/agent-computers/{gateway_id}/emergency-stop",
+            json={"workspace_id": "default", "reason": "test stop"},
+        )
+        self.assertEqual(stopped.status_code, 200)
+        self.assertTrue(stopped.json()["emergency_stop"]["active"])
+        with self.assertRaises(kill_switch_gate.KillSwitchBlockedError):
+            kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
+
+        cleared = self.client.post(
+            f"/api/agent-computers/{gateway_id}/clear-emergency-stop",
+            json={"workspace_id": "default"},
+        )
+        self.assertEqual(cleared.status_code, 200)
+        self.assertFalse(cleared.json()["emergency_stop"]["active"])
+        kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
+
+    def test_full_access_literal_skips_owner_prompt_for_policy_allowed_gateway_action(self) -> None:
+        registration_payload = self._register_gateway_with_mode(
+            runtime_access_mode="full_access",
+            warning_ack=True,
+            gateway_id="gateway-full-access-test",
+        )
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+
+        with patch.object(routes_gateway.gateway_execution_service, "execute_tool_via_gateway", new=AsyncMock(return_value={"status": "completed"})) as execute_mock, patch.object(
+            routes_gateway.gateway_approval_service,
+            "request_gateway_tool_approval",
+            new=AsyncMock(return_value={"approval_id": "approval-1"}),
+        ) as approval_mock:
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/tools/execute",
+                json={
+                    "workspace_id": "default",
+                    "capability_id": "file.write",
+                    "arguments": {"path": "/Users/mansur/Work/report.md"},
+                    "run_id": "run-1",
+                    "interactive_approvals": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        execute_mock.assert_awaited_once()
+        approval_mock.assert_not_awaited()
 
     def test_expired_session_token_is_rejected(self) -> None:
         from server_modules import gateway_state_repository

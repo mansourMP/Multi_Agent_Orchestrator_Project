@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping
 
 from server_modules.deployed_agent_runtime_contract_service import (
@@ -9,6 +12,7 @@ from server_modules.deployed_agent_runtime_contract_service import (
     STUDIO_AGENT_MODE_TEXT,
     normalize_studio_agent_mode,
 )
+from server_modules import workspace_context
 
 
 AUTONOMY_READ_ONLY = "read_only"
@@ -144,11 +148,18 @@ class AgentComputerPolicy:
     blocked_capabilities: tuple[str, ...] = field(default_factory=tuple)
     domain_allowlist: tuple[str, ...] = field(default_factory=tuple)
     filesystem_scope: tuple[str, ...] = field(default_factory=tuple)
+    blocked_filesystem_scope: tuple[str, ...] = field(default_factory=tuple)
     terminal_policy: str = "blocked"
     external_message_policy: str = "draft_only"
     credential_policy: str = "never_expose"
     screenshot_retention: str = "off"
     cloud_storage_policy: str = "approval_required"
+    browser_access_policy: str = "approval_required"
+    app_access_policy: str = "approval_required"
+    network_policy: str = "approval_required"
+    max_runtime_seconds: int = 0
+    max_budget_cents: int = 0
+    emergency_stop_enabled: bool = True
     approval_ttl_seconds: int = 900
     remembered_approval_rules: tuple[Dict[str, Any], ...] = field(default_factory=tuple)
 
@@ -162,11 +173,18 @@ class AgentComputerPolicy:
             "blocked_capabilities": list(self.blocked_capabilities),
             "domain_allowlist": list(self.domain_allowlist),
             "filesystem_scope": list(self.filesystem_scope),
+            "blocked_filesystem_scope": list(self.blocked_filesystem_scope),
             "terminal_policy": self.terminal_policy,
             "external_message_policy": self.external_message_policy,
             "credential_policy": self.credential_policy,
             "screenshot_retention": self.screenshot_retention,
             "cloud_storage_policy": self.cloud_storage_policy,
+            "browser_access_policy": self.browser_access_policy,
+            "app_access_policy": self.app_access_policy,
+            "network_policy": self.network_policy,
+            "max_runtime_seconds": self.max_runtime_seconds,
+            "max_budget_cents": self.max_budget_cents,
+            "emergency_stop_enabled": self.emergency_stop_enabled,
             "approval_ttl_seconds": self.approval_ttl_seconds,
             "remembered_approval_rules": list(self.remembered_approval_rules),
         }
@@ -267,6 +285,18 @@ def _ordered_dicts(values: Any) -> tuple[Dict[str, Any], ...]:
     return tuple(out)
 
 
+def _bounded_int(value: Any, *, default: int = 0, minimum: int = 0, maximum: int = 2_147_483_647) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    return max(minimum, min(parsed, maximum))
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _default_capability_sets(mode: str) -> tuple[set[str], set[str], set[str]]:
     if mode == AUTONOMY_EMERGENCY_STOP:
         return set(), set(), set(CAPABILITY_CLASSES)
@@ -338,6 +368,7 @@ def build_default_agent_computer_policy(
         blocked_capabilities=tuple(sorted(blocked - allowed)),
         domain_allowlist=_ordered_strings(domain_allowlist),
         filesystem_scope=_ordered_strings(filesystem_scope),
+        blocked_filesystem_scope=tuple(),
         terminal_policy=(
             "allowlist"
             if mode == AUTONOMY_TRUSTED_WORKSTATION
@@ -348,6 +379,12 @@ def build_default_agent_computer_policy(
         external_message_policy="approved_contacts" if mode == AUTONOMY_TRUSTED_WORKSTATION else "draft_only",
         screenshot_retention="session_only" if mode in {AUTONOMY_SAFE_AUTOPILOT, AUTONOMY_TRUSTED_WORKSTATION} else "off",
         cloud_storage_policy="approval_required",
+        browser_access_policy="allow" if mode == AUTONOMY_TRUSTED_WORKSTATION else "approval_required",
+        app_access_policy="approval_required",
+        network_policy="allowlist" if domain_allowlist else "approval_required",
+        max_runtime_seconds=0,
+        max_budget_cents=0,
+        emergency_stop_enabled=True,
     )
 
 
@@ -374,11 +411,18 @@ def normalize_agent_computer_policy(payload: Mapping[str, Any] | None) -> AgentC
         blocked_capabilities=blocked,
         domain_allowlist=base.domain_allowlist,
         filesystem_scope=base.filesystem_scope,
+        blocked_filesystem_scope=_ordered_strings(data.get("blocked_filesystem_scope") or data.get("blocked_folders") or []),
         terminal_policy=str(data.get("terminal_policy") or base.terminal_policy).strip() or base.terminal_policy,
         external_message_policy=str(data.get("external_message_policy") or base.external_message_policy).strip() or base.external_message_policy,
         credential_policy=str(data.get("credential_policy") or base.credential_policy).strip() or base.credential_policy,
         screenshot_retention=str(data.get("screenshot_retention") or base.screenshot_retention).strip() or base.screenshot_retention,
         cloud_storage_policy=str(data.get("cloud_storage_policy") or base.cloud_storage_policy).strip() or base.cloud_storage_policy,
+        browser_access_policy=str(data.get("browser_access_policy") or base.browser_access_policy).strip() or base.browser_access_policy,
+        app_access_policy=str(data.get("app_access_policy") or base.app_access_policy).strip() or base.app_access_policy,
+        network_policy=str(data.get("network_policy") or base.network_policy).strip() or base.network_policy,
+        max_runtime_seconds=_bounded_int(data.get("max_runtime_seconds"), default=base.max_runtime_seconds, maximum=30 * 24 * 60 * 60),
+        max_budget_cents=_bounded_int(data.get("max_budget_cents"), default=base.max_budget_cents, maximum=1_000_000_00),
+        emergency_stop_enabled=bool(data.get("emergency_stop_enabled", base.emergency_stop_enabled)),
         approval_ttl_seconds=max(int(data.get("approval_ttl_seconds") or base.approval_ttl_seconds), 60),
         remembered_approval_rules=_ordered_dicts(data.get("remembered_approval_rules")),
     )
@@ -406,11 +450,39 @@ def _domain_allowed(policy: AgentComputerPolicy, requested_domain: Any) -> bool:
     return False
 
 
+def _path_matches_scope(path: str, scope: str) -> bool:
+    clean_path = str(path or "").strip()
+    clean_scope = str(scope or "").strip()
+    if not clean_path or not clean_scope:
+        return False
+    normalized_path = clean_path.rstrip("/")
+    normalized_scope = clean_scope.rstrip("/")
+    return normalized_path == normalized_scope or normalized_path.startswith(f"{normalized_scope}/")
+
+
+def _path_allowed(policy: AgentComputerPolicy, requested_path: Any) -> bool:
+    path = str(requested_path or "").strip()
+    if not path:
+        return True
+    for blocked in policy.blocked_filesystem_scope:
+        if _path_matches_scope(path, blocked):
+            return False
+    explicit_scopes = [
+        scope
+        for scope in policy.filesystem_scope
+        if str(scope or "").startswith(("/", "~"))
+    ]
+    if not explicit_scopes:
+        return True
+    return any(_path_matches_scope(path, scope) for scope in explicit_scopes)
+
+
 def evaluate_agent_computer_request(
     policy: AgentComputerPolicy | Mapping[str, Any] | None,
     *,
     capability: Any,
     requested_domain: Any = None,
+    requested_path: Any = None,
 ) -> AgentComputerPolicyDecision:
     contract = policy if isinstance(policy, AgentComputerPolicy) else normalize_agent_computer_policy(policy)
     token = normalize_capability_class(capability)
@@ -419,6 +491,12 @@ def evaluate_agent_computer_request(
             decision=DECISION_BLOCK,
             capability=token,
             reason="domain_not_allowed",
+        )
+    if token.startswith("file.") and not _path_allowed(contract, requested_path):
+        return AgentComputerPolicyDecision(
+            decision=DECISION_BLOCK,
+            capability=token,
+            reason="filesystem_scope_not_allowed",
         )
     decision = decision_for_capability(contract, token)
     if decision == DECISION_ALLOW:
@@ -446,6 +524,15 @@ def validate_agent_computer_policy(
             continue
         if not str(scope).startswith(("/", "~")):
             raise AgentComputerPolicyError(f"Filesystem scope must be explicit, received '{scope}'.")
+    for scope in contract.blocked_filesystem_scope:
+        if not str(scope).startswith(("/", "~")):
+            raise AgentComputerPolicyError(f"Blocked filesystem scope must be explicit, received '{scope}'.")
+    if contract.network_policy not in {"allow", "allowlist", "approval_required", "blocked"}:
+        raise AgentComputerPolicyError(f"Unsupported network policy '{contract.network_policy}'.")
+    if contract.browser_access_policy not in {"allow", "approval_required", "blocked"}:
+        raise AgentComputerPolicyError(f"Unsupported browser access policy '{contract.browser_access_policy}'.")
+    if contract.app_access_policy not in {"allow", "approval_required", "blocked"}:
+        raise AgentComputerPolicyError(f"Unsupported app access policy '{contract.app_access_policy}'.")
     if studio_agent_mode is not None:
         mode = normalize_studio_agent_mode(studio_agent_mode, strict=True)
         if mode == STUDIO_AGENT_MODE_TEXT:
@@ -476,3 +563,87 @@ def agent_computer_policy_from_deployed_agent_record(record: Mapping[str, Any] |
         domain_allowlist=automation.get("allowed_domains") or (),
         filesystem_scope=automation.get("filesystem_scope") or (),
     )
+
+
+def _policy_state_file(workspace_id: str) -> Path:
+    return workspace_context.workspace_scope_dir(str(workspace_id or "").strip()) / "agent_computer_policies.json"
+
+
+def _default_policy_state() -> Dict[str, Any]:
+    return {"version": 1, "updated_at": _utc_now_iso(), "policies": {}}
+
+
+def _read_policy_state(workspace_id: str) -> Dict[str, Any]:
+    path = _policy_state_file(workspace_id)
+    if not path.exists():
+        payload = _default_policy_state()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        return payload
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Failed to read agent computer policy state.") from exc
+    if not isinstance(raw, dict):
+        raise RuntimeError("Agent computer policy state must be an object.")
+    if not isinstance(raw.get("policies"), dict):
+        raw["policies"] = {}
+    return raw
+
+
+def _write_policy_state(workspace_id: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
+    path = _policy_state_file(workspace_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    next_payload = dict(payload)
+    next_payload["updated_at"] = _utc_now_iso()
+    path.write_text(json.dumps(next_payload, indent=2, sort_keys=True), encoding="utf-8")
+    return next_payload
+
+
+def get_saved_agent_computer_policy(*, workspace_id: str, policy_id: str) -> AgentComputerPolicy | None:
+    workspace = str(workspace_id or "").strip()
+    token = str(policy_id or "").strip()
+    if not workspace or not token:
+        return None
+    raw = _read_policy_state(workspace).get("policies", {}).get(token)
+    if not isinstance(raw, Mapping):
+        return None
+    return validate_agent_computer_policy(raw)
+
+
+def upsert_agent_computer_policy(*, workspace_id: str, policy: Mapping[str, Any] | AgentComputerPolicy) -> AgentComputerPolicy:
+    workspace = str(workspace_id or "").strip()
+    if not workspace:
+        raise AgentComputerPolicyError("workspace_id is required.")
+    contract = validate_agent_computer_policy(policy)
+    try:
+        state = _read_policy_state(workspace)
+        policies = state.setdefault("policies", {})
+        existing = policies.get(contract.policy_id)
+        payload = contract.as_dict()
+        if isinstance(existing, Mapping):
+            payload["created_at"] = str(existing.get("created_at") or "").strip() or _utc_now_iso()
+        else:
+            payload["created_at"] = _utc_now_iso()
+        payload["updated_at"] = _utc_now_iso()
+        policies[contract.policy_id] = payload
+        _write_policy_state(workspace, state)
+    except AgentComputerPolicyError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Failed to persist agent computer policy.") from exc
+    return contract
+
+
+def effective_agent_computer_policy(
+    *,
+    workspace_id: str,
+    policy_id: str,
+    runtime_access_mode: Any = None,
+) -> tuple[AgentComputerPolicy, bool]:
+    saved = get_saved_agent_computer_policy(workspace_id=workspace_id, policy_id=policy_id)
+    if saved is not None:
+        return saved, True
+    mode = str(runtime_access_mode or "").strip().lower()
+    autonomy_mode = AUTONOMY_TRUSTED_WORKSTATION if mode == "full_access" else AUTONOMY_ASK_EVERY_TIME
+    return build_default_agent_computer_policy(autonomy_mode=autonomy_mode, policy_id=policy_id), False

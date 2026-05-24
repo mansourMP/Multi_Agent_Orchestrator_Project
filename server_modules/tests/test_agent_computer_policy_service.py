@@ -1,4 +1,7 @@
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from server_modules import agent_computer_policy_service as policy
 
@@ -106,6 +109,35 @@ class AgentComputerPolicyServiceTests(unittest.TestCase):
         self.assertEqual(denied.reason, "domain_not_allowed")
         self.assertEqual(allowed.decision, "allow")
 
+    def test_evaluate_blocks_path_outside_custom_filesystem_scope(self) -> None:
+        contract = policy.normalize_agent_computer_policy(
+            {
+                "autonomy_mode": "trusted_workstation",
+                "filesystem_scope": ["/Users/mansur/Allowed"],
+                "blocked_filesystem_scope": ["/Users/mansur/Allowed/secrets"],
+            }
+        )
+
+        allowed = policy.evaluate_agent_computer_request(
+            contract,
+            capability="file.write",
+            requested_path="/Users/mansur/Allowed/report.md",
+        )
+        blocked_nested = policy.evaluate_agent_computer_request(
+            contract,
+            capability="file.write",
+            requested_path="/Users/mansur/Allowed/secrets/token.txt",
+        )
+        blocked_outside = policy.evaluate_agent_computer_request(
+            contract,
+            capability="file.write",
+            requested_path="/Users/mansur/Other/file.txt",
+        )
+
+        self.assertEqual(allowed.decision, "allow")
+        self.assertEqual(blocked_nested.reason, "filesystem_scope_not_allowed")
+        self.assertEqual(blocked_outside.reason, "filesystem_scope_not_allowed")
+
     def test_evaluate_returns_approval_scope_for_risky_action(self) -> None:
         contract = policy.build_default_agent_computer_policy(autonomy_mode="ask_every_time")
 
@@ -128,6 +160,43 @@ class AgentComputerPolicyServiceTests(unittest.TestCase):
                     "filesystem_scope": ["Desktop"],
                 }
             )
+
+    def test_validate_rejects_implicit_blocked_filesystem_scope(self) -> None:
+        with self.assertRaises(policy.AgentComputerPolicyError):
+            policy.validate_agent_computer_policy(
+                {
+                    "blocked_filesystem_scope": ["Secrets"],
+                }
+            )
+
+    def test_persisted_policy_is_workspace_scoped_and_custom_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "ws-1"
+            with patch("server_modules.agent_computer_policy_service.workspace_context.workspace_scope_dir", return_value=root):
+                saved = policy.upsert_agent_computer_policy(
+                    workspace_id="ws-1",
+                    policy={
+                        "policy_id": "agent-computer:gw-1",
+                        "autonomy_mode": "trusted_workstation",
+                        "filesystem_scope": ["/Users/mansur/Work"],
+                        "domain_allowlist": ["example.com"],
+                    },
+                )
+                loaded = policy.get_saved_agent_computer_policy(
+                    workspace_id="ws-1",
+                    policy_id="agent-computer:gw-1",
+                )
+                fallback, fallback_saved = policy.effective_agent_computer_policy(
+                    workspace_id="ws-1",
+                    policy_id="missing",
+                    runtime_access_mode="custom",
+                )
+
+        self.assertEqual(saved.policy_id, "agent-computer:gw-1")
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.autonomy_mode, "trusted_workstation")
+        self.assertFalse(fallback_saved)
+        self.assertEqual(fallback.autonomy_mode, "ask_every_time")
 
     def test_deployed_agent_record_uses_config_policy_over_metadata(self) -> None:
         contract = policy.agent_computer_policy_from_deployed_agent_record(

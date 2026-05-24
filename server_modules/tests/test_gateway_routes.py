@@ -277,19 +277,19 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertEqual(registration_response.status_code, 200)
         return registration_response.json()
 
-    def test_pairing_intent_requires_autonomous_agent_warning_acknowledgement(self) -> None:
+    def test_pairing_intent_requires_full_access_warning_acknowledgement(self) -> None:
         response = self.client.post(
             "/api/gateway/pairings/intents",
             json={
                 "workspace_id": "default",
                 "display_name": "Mansur Mac mini",
                 "platform": "macos",
-                "runtime_access_mode": "autonomous_agent",
+                "runtime_access_mode": "full_access",
             },
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Autonomous Agent setup warning", response.json()["detail"])
+        self.assertIn("Autonomous Full Access setup warning", response.json()["detail"])
 
     def test_pairing_runtime_access_mode_persists_to_gateway_registration(self) -> None:
         pairing_response = self.client.post(
@@ -298,7 +298,7 @@ class GatewayRoutesTests(unittest.TestCase):
                 "workspace_id": "default",
                 "display_name": "Mansur Mac mini",
                 "platform": "macos",
-                "runtime_access_mode": "Autonomous Agent",
+                "runtime_access_mode": "full_access",
                 "autonomous_agent_setup_warning_acknowledged": True,
             },
         )
@@ -321,13 +321,30 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertEqual(registration_response.status_code, 200)
         payload = registration_response.json()
         self.assertEqual(payload["gateway"]["runtime_access_mode"], "full_access")
-        self.assertEqual(payload["gateway"]["runtime_access_label"], "Autonomous Agent")
+        self.assertEqual(payload["gateway"]["runtime_access_label"], "Autonomous Full Access")
         self.assertTrue(payload["gateway"]["autonomous_agent_setup_warning_acknowledged"])
         gateway_id = payload["gateway"]["gateway_id"]
         registration = gateway_state_repository.get_gateway_registration(gateway_id)
         self.assertEqual(registration["metadata"]["runtime_access_mode"], "full_access")
 
-    def test_gateway_registration_cannot_escalate_default_pairing_to_autonomous_agent(self) -> None:
+    def test_pairing_custom_runtime_access_mode_is_guarded_and_labeled(self) -> None:
+        pairing_response = self.client.post(
+            "/api/gateway/pairings/intents",
+            json={
+                "workspace_id": "default",
+                "display_name": "Mansur Custom Mac",
+                "platform": "macos",
+                "runtime_access_mode": "custom",
+            },
+        )
+
+        self.assertEqual(pairing_response.status_code, 200)
+        pairing_payload = pairing_response.json()
+        self.assertEqual(pairing_payload["metadata"]["runtime_access_mode"], "custom")
+        self.assertEqual(pairing_payload["metadata"]["runtime_access_label"], "Custom")
+        self.assertNotIn("autonomous_agent_setup_warning_acknowledged", pairing_payload["metadata"])
+
+    def test_gateway_registration_cannot_escalate_default_pairing_to_full_access(self) -> None:
         pairing_response = self.client.post(
             "/api/gateway/pairings/intents",
             json={

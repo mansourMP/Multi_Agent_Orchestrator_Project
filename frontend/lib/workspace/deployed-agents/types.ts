@@ -61,7 +61,7 @@ export type WizardState = {
   computerAutomationMaxSessions: string;
   computerAutomationDailyBudgetUsd: string;
   computerAutomationMonthlyBudgetUsd: string;
-  runtimeAccessMode: 'default_guarded' | 'full_access';
+  runtimeAccessMode: 'default_guarded' | 'custom' | 'full_access';
   approvalMode: 'guarded' | 'balanced' | 'autonomous';
   customerChannel: 'telegram' | 'whatsapp' | 'web_widget' | 'draft';
   telegramEnabled: boolean;

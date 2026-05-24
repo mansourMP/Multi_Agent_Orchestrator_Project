@@ -881,6 +881,9 @@ export function normalizeRuntimeAccessMode(value: unknown, legacyRequiresOwnerAp
   if (token === 'full_access') {
     return 'full_access';
   }
+  if (token === 'custom') {
+    return 'custom';
+  }
   if (token === 'default_guarded' || token === 'guarded' || token === 'default') {
     return 'default_guarded';
   }

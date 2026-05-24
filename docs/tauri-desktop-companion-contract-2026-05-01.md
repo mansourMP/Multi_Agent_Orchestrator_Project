@@ -43,9 +43,9 @@ The desktop companion should surface these states consistently across Tauri, web
 - `Gateway offline`: no trusted device is currently available for local tools.
 - `Supervisor unhealthy`: gateway exists but local execution is not ready.
 - `Approval needed`: local action is blocked until the owner approves or denies.
-- `Full Access active`: local-companion-only elevated session approved by the device owner.
+- `Autonomous Full Access active`: dedicated Agent Computer session approved by the device owner.
 
-Cloud Computer never uses `Full Access`; it uses metered sandbox/autopilot policy.
+Cloud Computer never uses physical-machine access semantics; it uses metered sandbox/autopilot policy.
 
 ## Launch Gate
 
@@ -69,4 +69,4 @@ Before a public desktop release:
 - diagnostics export without secrets
 - crash-safe gateway restart
 - explicit device revoke flow
-- local permission review before Full Access
+- local permission review before Autonomous Full Access

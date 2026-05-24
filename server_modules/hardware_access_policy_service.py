@@ -9,6 +9,7 @@ from server_modules.capability_registry import canonical_capability_id, resolve_
 
 DEFAULT_GUARDED_RUNTIME_ACCESS_MODE = execution_mode_policy.GUARDED_RUNTIME_ACCESS_MODE
 FULL_RUNTIME_ACCESS_MODE = execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+CUSTOM_RUNTIME_ACCESS_MODE = execution_mode_policy.CUSTOM_RUNTIME_ACCESS_MODE
 
 CAPABILITY_ALIASES = {
     "browser": "browser_automation.interactive",
@@ -92,11 +93,20 @@ def normalize_runtime_access_mode(value: Any = None, *, execution_mode: Any = No
 
 def runtime_access_metadata(runtime_access_mode: str, execution_mode: Optional[str]) -> Dict[str, Any]:
     mode = normalize_runtime_access_mode(runtime_access_mode, execution_mode=execution_mode)
+    if mode == FULL_RUNTIME_ACCESS_MODE:
+        default_execution_mode = "full_access"
+        approval_mode = "no_empyralis_action_approvals"
+    elif mode == CUSTOM_RUNTIME_ACCESS_MODE:
+        default_execution_mode = "custom"
+        approval_mode = "custom_policy_guarded"
+    else:
+        default_execution_mode = "default"
+        approval_mode = "default_guarded"
     return {
         "runtime_access_mode": mode,
-        "execution_mode": _text(execution_mode) or ("full_access" if mode == FULL_RUNTIME_ACCESS_MODE else "default"),
+        "execution_mode": _text(execution_mode) or default_execution_mode,
         "permission_mode": mode,
-        "approval_mode": "no_empyralis_action_approvals" if mode == FULL_RUNTIME_ACCESS_MODE else "default_guarded",
+        "approval_mode": approval_mode,
         "empyralis_action_approvals_enabled": mode != FULL_RUNTIME_ACCESS_MODE,
     }
 

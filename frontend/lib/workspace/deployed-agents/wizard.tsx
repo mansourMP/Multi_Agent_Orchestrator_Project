@@ -173,6 +173,11 @@ export function AgentWizard({
     [selectedTelegramReadiness, wizardState.telegramConnectorId],
   );
 
+  const selectedRuntimeAccessModeOption = useMemo(
+    () => STUDIO_RUNTIME_ACCESS_MODE_OPTIONS.find((option) => option.value === wizardState.runtimeAccessMode) ?? STUDIO_RUNTIME_ACCESS_MODE_OPTIONS[0],
+    [wizardState.runtimeAccessMode],
+  );
+
   const hasGatewayOnlineTarget = useMemo(
     () => bootstrap.runtime.runtimeTargets.some((target: any) => target.id === 'local_companion' && target.online),
     [bootstrap.runtime.runtimeTargets],
@@ -1117,7 +1122,7 @@ export function AgentWizard({
                       <option value="enabled">On</option>
                     </FormSelect>
                   </FormField>
-                  <FormField label="Access mode" hint="Default Guarded asks inline only for risky computer actions. Autonomous Agent skips Empyralis per-action prompts after setup warning.">
+                  <FormField label="Access mode" hint={selectedRuntimeAccessModeOption?.hint ?? 'Choose the computer access boundary for this agent.'}>
                     <FormSelect
                       value={wizardState.runtimeAccessMode}
                       disabled={!wizardState.computerAutomationEnabled}

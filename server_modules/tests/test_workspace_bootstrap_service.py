@@ -68,10 +68,10 @@ def test_runtime_target_payload_exposes_cloud_computer_as_optional_metered_runti
                 },
                 {
                     "id": "full_access",
-                    "label": "Autonomous Agent",
+                    "label": "Autonomous Full Access",
                     "available": True,
                     "runtime_access_mode": "full_access",
-                    "setup_warning": "Autonomous Agent lets the AI operate this dedicated runtime.",
+                    "setup_warning": "Autonomous Full Access lets Sage operate this dedicated runtime.",
                 },
             ],
         }
@@ -84,7 +84,7 @@ def test_runtime_target_payload_exposes_cloud_computer_as_optional_metered_runti
     assert payload["statusLabel"] == "Not enabled"
     assert payload["trustTier"] == "hosted_cloud_computer"
     assert payload["supportsFullAccess"] is True
-    assert payload["executionModes"][1]["label"] == "Autonomous Agent"
+    assert payload["executionModes"][1]["label"] == "Autonomous Full Access"
     assert payload["executionModes"][1]["runtimeAccessMode"] == "full_access"
     assert "dedicated runtime" in payload["executionModes"][1]["setupWarning"]
     assert "will not allocate a hosted computer automatically" in payload["statusReason"]
@@ -167,11 +167,11 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
                         },
                         {
                             "id": "full_access",
-                            "label": "Autonomous Agent",
+                            "label": "Autonomous Full Access",
                             "available": True,
                             "runtime_access_mode": "full_access",
                             "requires_owner_approval": True,
-                            "setup_warning": "Autonomous Agent lets the AI operate this dedicated runtime.",
+                            "setup_warning": "Autonomous Full Access lets Sage operate this dedicated runtime.",
                         },
                     ],
                     "sample_attachment_label": "Mansur Mac mini",
@@ -227,7 +227,7 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
     assert "will not start device work" in payload["runtime"]["runtimeTargets"][1]["statusReason"]
     assert payload["runtime"]["runtimeTargets"][1]["approvalMode"] == "explicit_owner_approval"
     assert payload["runtime"]["runtimeTargets"][1]["supportsFullAccess"] is True
-    assert payload["runtime"]["runtimeTargets"][1]["executionModes"][1]["label"] == "Autonomous Agent"
+    assert payload["runtime"]["runtimeTargets"][1]["executionModes"][1]["label"] == "Autonomous Full Access"
     assert payload["runtime"]["runtimeTargets"][1]["executionModes"][1]["requiresOwnerApproval"] is True
     assert payload["runtime"]["runtimeTargets"][1]["sampleAttachmentLabel"] == "Mansur Mac mini"
     assert payload["shellHints"]["defaultRoute"] == "/w/ws-1/chat"

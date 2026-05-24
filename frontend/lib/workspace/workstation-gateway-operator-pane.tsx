@@ -156,10 +156,12 @@ type WorkspaceRuntimeSessionsPayload = Record<string, unknown> & {
   items?: WorkspaceRuntimeSessionRecord[];
 };
 
+type RuntimeAccessMode = 'default_guarded' | 'custom' | 'full_access';
+
 type PairingDraft = {
   displayName: string;
   platform: string;
-  runtimeAccessMode: 'default_guarded' | 'full_access';
+  runtimeAccessMode: RuntimeAccessMode;
   autonomousAgentWarningAccepted: boolean;
 };
 
@@ -365,7 +367,10 @@ function runtimeSessionLaneLabel(session: WorkspaceRuntimeSessionRecord): string
 function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord, pendingCount = 0): string {
   const accessMode = readString(session.runtime_access_mode, '').toLowerCase().replace(/[\s-]+/g, '_');
   if (accessMode === 'full_access') {
-    return 'Autonomous Agent';
+    return 'Autonomous Full Access';
+  }
+  if (accessMode === 'custom') {
+    return 'Custom';
   }
   if (accessMode === 'default_guarded') {
     return pendingCount > 0 ? 'Needs approval' : 'Default Guarded';
@@ -393,10 +398,13 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
   }
 }
 
-function runtimeAccessModeToken(value: unknown): 'default_guarded' | 'full_access' {
+function runtimeAccessModeToken(value: unknown): RuntimeAccessMode {
   const token = readString(value, '').toLowerCase().replace(/[\s-]+/g, '_');
   if (token === 'full_access') {
     return 'full_access';
+  }
+  if (token === 'custom') {
+    return 'custom';
   }
   return 'default_guarded';
 }
@@ -406,7 +414,14 @@ function gatewayRuntimeAccessLabel(gateway: GatewayRegistrationRecord | null): s
   if (explicit) {
     return explicit;
   }
-  return runtimeAccessModeToken(gateway?.runtime_access_mode) === 'full_access' ? 'Autonomous Agent' : 'Default Guarded';
+  const mode = runtimeAccessModeToken(gateway?.runtime_access_mode);
+  if (mode === 'full_access') {
+    return 'Autonomous Full Access';
+  }
+  if (mode === 'custom') {
+    return 'Custom';
+  }
+  return 'Default Guarded';
 }
 
 function browserTakeoverStatus(session: GatewayBrowserSessionRecord): string {
@@ -637,9 +652,14 @@ const GATEWAY_MODE_SUMMARIES = [
     description: 'Sage can use ordinary local context automatically. Risky actions always wait for approval.',
   },
   {
-    title: 'Autonomous Agent',
+    title: 'Autonomous Full Access',
     subtitle: 'Dedicated hardware',
-    description: 'Lets Sage operate a dedicated runtime without Empyralis action-by-action approval prompts.',
+    description: 'Lets Sage run allowed computer actions on dedicated hardware without Empyralis per-action prompts.',
+  },
+  {
+    title: 'Custom',
+    subtitle: 'Policy-defined',
+    description: 'Choose allowed folders, terminal/network rules, approval memory, budget, and emergency stop behavior.',
   },
 ] as const;
 
@@ -1085,6 +1105,11 @@ export function WorkstationGatewayOperatorPane({
       mode.id === 'full_access' || runtimeAccessModeToken(mode.runtimeAccessMode) === 'full_access') ?? null,
     [gatewayExecutionModes],
   );
+  const customAccessMode = useMemo(
+    () => gatewayExecutionModes.find((mode) =>
+      mode.id === 'custom' || runtimeAccessModeToken(mode.runtimeAccessMode) === 'custom') ?? null,
+    [gatewayExecutionModes],
+  );
   const defaultAccessMode = useMemo(
     () => gatewayExecutionModes.find((mode) =>
       mode.id === 'default' || runtimeAccessModeToken(mode.runtimeAccessMode) === 'default_guarded') ?? null,
@@ -1347,7 +1372,7 @@ export function WorkstationGatewayOperatorPane({
 
   async function handleCreatePairingIntent() {
     if (pairingDraft.runtimeAccessMode === 'full_access' && !pairingDraft.autonomousAgentWarningAccepted) {
-      setErrorMessage('Confirm Autonomous Agent mode before creating this computer connection.');
+      setErrorMessage('Confirm Autonomous Full Access before creating this computer connection.');
       return;
     }
     setBusyActionKey('pairing');
@@ -1907,8 +1932,10 @@ export function WorkstationGatewayOperatorPane({
             <FormField
               label="Runtime mode"
               hint={pairingDraft.runtimeAccessMode === 'full_access'
-                ? 'For dedicated agent hardware. Empyralis will not ask per action.'
-                : 'For personal computers. Risky actions can still ask for approval.'}
+                ? 'For dedicated agent hardware. Empyralis will not ask for each allowed action.'
+                : pairingDraft.runtimeAccessMode === 'custom'
+                  ? 'Policy-defined. Starts approval-gated until a custom policy is saved.'
+                  : 'For personal computers. Risky actions can still ask for approval.'}
             >
               <FormSelect
                 value={pairingDraft.runtimeAccessMode}
@@ -1926,7 +1953,10 @@ export function WorkstationGatewayOperatorPane({
               >
                 <option value="default_guarded">{defaultAccessMode?.label || 'Default Guarded'}</option>
                 <option value="full_access" disabled={!autonomousAgentAvailable}>
-                  {autonomousAgentMode?.label || 'Autonomous Agent'}
+                  {autonomousAgentMode?.label || 'Autonomous Full Access'}
+                </option>
+                <option value="custom">
+                  {customAccessMode?.label || 'Custom'}
                 </option>
               </FormSelect>
             </FormField>
@@ -1939,7 +1969,7 @@ export function WorkstationGatewayOperatorPane({
             <div className="gateway-runtime-access-warning">
               <WorkstationSurfaceNotice tone="warning">
                 {autonomousAgentMode?.setupWarning
-                  || 'Autonomous Agent lets the AI operate this dedicated runtime without Empyralis asking for each action. Owner binding, revocation, quota, offline state, stop/cancel, and OS or provider limits still apply.'}
+                  || 'Autonomous Full Access lets Sage operate this dedicated runtime without Empyralis asking for each allowed action. Stop, revoke, quotas, audit, OS permissions, blocked actions, offline state, and provider limits still apply.'}
               </WorkstationSurfaceNotice>
               <label className="gateway-runtime-access-warning__ack">
                 <input
@@ -1954,9 +1984,14 @@ export function WorkstationGatewayOperatorPane({
                     setPairingIntent(null);
                   }}
                 />
-                <span>I understand this computer will run without Empyralis approval prompts.</span>
+                <span>I understand this computer will run allowed actions without Empyralis approval prompts.</span>
               </label>
             </div>
+          ) : null}
+          {pairingDraft.runtimeAccessMode === 'custom' ? (
+            <WorkstationSurfaceNotice tone="neutral">
+              Custom starts approval-gated. Use it for policy-defined access to folders, terminal/network rules, app/browser access, approval memory, budget, and emergency stop behavior.
+            </WorkstationSurfaceNotice>
           ) : null}
           <div className="settings-action-row">
             <WorkstationActionButton
@@ -1983,12 +2018,12 @@ export function WorkstationGatewayOperatorPane({
                 key={mode.title}
                 title={mode.title}
                 subtitle={mode.subtitle}
-                description={mode.description}
-                actions={(
-                  <DataBadge tone={mode.title === 'Default Guarded' ? 'success' : 'warning'}>
-                    {mode.title === 'Default Guarded' ? 'Safe default' : 'Owner enabled'}
-                  </DataBadge>
-                )}
+                  description={mode.description}
+                  actions={(
+                    <DataBadge tone={mode.title === 'Default Guarded' ? 'success' : mode.title === 'Custom' ? 'neutral' : 'warning'}>
+                      {mode.title === 'Default Guarded' ? 'Safe default' : mode.title === 'Custom' ? 'Policy-defined' : 'Owner enabled'}
+                    </DataBadge>
+                  )}
               />
             ))}
           </WorkstationSurfaceList>
@@ -2015,16 +2050,18 @@ export function WorkstationGatewayOperatorPane({
                 label="Suggested device"
                 value={readString(pairingIntent.display_name, 'Unlabeled device')}
               />
-              <FormReadout
-                label="Platform"
-                value={humanizeToken(pairingIntent.platform, 'Unknown')}
-              />
-              <FormReadout
-                label="Runtime mode"
-                value={runtimeAccessModeToken(readRecord(pairingIntent.metadata).runtime_access_mode) === 'full_access'
-                  ? 'Autonomous Agent'
-                  : 'Default Guarded'}
-              />
+                <FormReadout
+                  label="Platform"
+                  value={humanizeToken(pairingIntent.platform, 'Unknown')}
+                />
+                <FormReadout
+                  label="Runtime mode"
+                  value={runtimeAccessModeToken(readRecord(pairingIntent.metadata).runtime_access_mode) === 'full_access'
+                    ? 'Autonomous Full Access'
+                    : runtimeAccessModeToken(readRecord(pairingIntent.metadata).runtime_access_mode) === 'custom'
+                      ? 'Custom'
+                      : 'Default Guarded'}
+                />
             </FormGrid>
             <div className="gateway-pairing-command-card">
               <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">

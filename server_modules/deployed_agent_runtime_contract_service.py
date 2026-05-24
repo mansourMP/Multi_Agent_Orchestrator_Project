@@ -37,9 +37,11 @@ COMPUTER_AUTOMATION_CLASSES = {
 
 RUNTIME_ACCESS_MODE_DEFAULT_GUARDED = "default_guarded"
 RUNTIME_ACCESS_MODE_FULL_ACCESS = "full_access"
+RUNTIME_ACCESS_MODE_CUSTOM = "custom"
 RUNTIME_ACCESS_MODES = {
     RUNTIME_ACCESS_MODE_DEFAULT_GUARDED,
     RUNTIME_ACCESS_MODE_FULL_ACCESS,
+    RUNTIME_ACCESS_MODE_CUSTOM,
 }
 
 COMPUTER_SAFETY_REQUIRED_OWNER_APPROVAL_ACTIONS = {
@@ -233,6 +235,8 @@ def normalize_runtime_access_mode(value: Any = None, *, requires_owner_approval:
     token = _text(value).lower().replace("-", "_").replace(" ", "_")
     if token == RUNTIME_ACCESS_MODE_FULL_ACCESS:
         return RUNTIME_ACCESS_MODE_FULL_ACCESS
+    if token == RUNTIME_ACCESS_MODE_CUSTOM:
+        return RUNTIME_ACCESS_MODE_CUSTOM
     if token in {"default_guarded", "guarded", "default"}:
         return RUNTIME_ACCESS_MODE_DEFAULT_GUARDED
     return RUNTIME_ACCESS_MODE_DEFAULT_GUARDED

@@ -4,13 +4,17 @@ This document freezes the runtime vocabulary for new product and implementation 
 
 ## Product Concepts
 
-Normal users should see two concepts only:
+Normal users should see these concepts only:
 
 - Runtime target: `Cloud`, `Agent Computer`
 - Agent Computer source: `This Device`, `Dedicated Computer`, `Cloud Computer`, `Server/VPS`
-- Access mode: `Default Guarded`, `Autonomous Agent`
+- Access mode: `Default Guarded`, `Autonomous Full Access`, `Custom`
 
-`Autonomous Agent` means Empyralis does not ask action-by-action approval prompts for that dedicated runtime. It does not bypass owner binding, tenant/workspace isolation, revocation, offline/degraded state, quota, billing, audit, stop/cancel, provider limits, or OS boundaries.
+`Default Guarded` runs low-risk work automatically and asks before risky file, terminal, browser, message, payment, install, or system actions.
+
+`Autonomous Full Access` means Empyralis does not ask action-by-action approval prompts for allowed actions on a dedicated runtime. It does not bypass owner binding, tenant/workspace isolation, revocation, offline/degraded state, quota, billing, audit, stop/cancel, provider limits, OS boundaries, or blocked actions.
+
+`Custom` lets the owner define allowed folders, terminal/network policy, app/browser access, approval memory, budgets, and emergency stop behavior. Until a custom policy is saved, it remains approval-gated.
 
 ## Canonical Runtime Targets
 

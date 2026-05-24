@@ -46,7 +46,7 @@ class HardwareAccessPolicyServiceTests(unittest.TestCase):
             )
         )
 
-    def test_autonomous_agent_skips_empyralis_action_approval(self) -> None:
+    def test_full_access_skips_empyralis_action_approval(self) -> None:
         self.assertFalse(
             policy.hardware_action_requires_software_approval(
                 runtime_access_mode="full_access",
@@ -60,6 +60,22 @@ class HardwareAccessPolicyServiceTests(unittest.TestCase):
             policy.runtime_access_metadata("full_access", None)["approval_mode"],
             "no_empyralis_action_approvals",
         )
+
+    def test_custom_access_remains_approval_gated(self) -> None:
+        self.assertTrue(
+            policy.hardware_action_requires_software_approval(
+                runtime_access_mode="custom",
+                capability_id="shell.execute",
+                action_id="shell.execute",
+                arguments={"command": "rm -rf /tmp/demo"},
+                require_approval=None,
+            )
+        )
+        self.assertEqual(
+            policy.runtime_access_metadata("custom", None)["approval_mode"],
+            "custom_policy_guarded",
+        )
+        self.assertTrue(policy.runtime_access_metadata("custom", None)["empyralis_action_approvals_enabled"])
 
 
 if __name__ == "__main__":

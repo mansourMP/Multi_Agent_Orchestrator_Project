@@ -385,6 +385,24 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
             "default_guarded",
         )
 
+    def test_normalize_runtime_access_mode_supports_custom_without_disabling_approval(self):
+        normalized = contract.normalize_computer_automation_config(
+            {
+                "enabled": True,
+                "runtime_class": "local_browser",
+                "allowed_domains": ["example.com"],
+                "max_concurrent_sessions": 1,
+                "daily_budget_usd": 5,
+                "monthly_budget_usd": 25,
+                "runtime_access_mode": "custom",
+                "requires_owner_approval": False,
+                "max_session_runtime_seconds": 900,
+            }
+        )
+
+        self.assertEqual(normalized["runtime_access_mode"], "custom")
+        self.assertTrue(normalized["requires_owner_approval"])
+
     def test_normalize_computer_automation_requires_explicit_full_access_to_disable_owner_approval(self):
         guarded = contract.normalize_computer_automation_config(
             {
@@ -417,7 +435,7 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
         self.assertEqual(full_access["runtime_access_mode"], "full_access")
         self.assertFalse(full_access["requires_owner_approval"])
 
-    def test_validate_mode_capability_matrix_allows_autonomous_agent_computer_mode(self):
+    def test_validate_mode_capability_matrix_allows_full_access_computer_mode(self):
         contract.validate_mode_capability_matrix(
             studio_agent_mode="my_computer_agent",
             runtime_placement="customer_local",

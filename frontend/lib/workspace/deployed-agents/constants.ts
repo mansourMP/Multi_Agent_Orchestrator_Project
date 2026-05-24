@@ -229,12 +229,17 @@ export const STUDIO_RUNTIME_ACCESS_MODE_OPTIONS: ReadonlyArray<{
   {
     value: 'default_guarded',
     label: 'Default Guarded',
-    hint: 'Runs normal safe work; risky computer actions ask inline for owner approval.',
+    hint: 'Runs low-risk work automatically. Risky file, terminal, browser, message, payment, install, or system actions ask first.',
   },
   {
     value: 'full_access',
-    label: 'Autonomous Agent',
-    hint: 'No Empyralis per-action approval prompts after setup warning; owner binding, revocation, quota, stop/cancel, and OS/provider limits still apply.',
+    label: 'Autonomous Full Access',
+    hint: 'For a dedicated Agent Computer. Allowed computer actions skip per-action prompts; stop, revoke, quotas, audit, OS permissions, and blocked actions still apply.',
+  },
+  {
+    value: 'custom',
+    label: 'Custom',
+    hint: 'Choose what this agent can access, what always asks first, and what is blocked. Starts approval-gated until a policy is saved.',
   },
 ];
 

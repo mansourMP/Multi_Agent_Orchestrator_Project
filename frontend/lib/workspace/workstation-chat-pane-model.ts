@@ -988,7 +988,7 @@ export function chatPermissionModeLabel(
     return 'Default Guarded';
   }
   if (effectiveMode === 'autopilot') {
-    return 'Autonomous Agent';
+    return 'Autonomous Full Access';
   }
   if (effectiveMode === 'device_access') {
     return 'Default Guarded';
@@ -2263,7 +2263,7 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
     title: 'This Device is ready',
     meta: `${agentComputerLabel} · ${local.sampleAttachmentLabel ?? local.label} · Default Guarded`,
     body: local.supportsFullAccess
-      ? 'Sage still uses cloud execution for ordinary turns. Device work starts in Default Guarded mode, and dedicated hardware can be switched to Autonomous Agent mode during setup.'
+      ? 'Sage still uses cloud execution for ordinary turns. Device work starts in Default Guarded mode, and dedicated hardware can be switched to Autonomous Full Access during setup.'
       : 'Sage still uses cloud execution for ordinary turns. Device work starts in Default Guarded mode on This Device.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
     localPill: `${agentComputerLabel} · This Device · ${local.statusLabel ?? 'Ready'}`,

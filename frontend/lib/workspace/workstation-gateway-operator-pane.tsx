@@ -14,6 +14,7 @@ import {
   FormReadout,
   FormSelect,
   FormSection,
+  FormTokenListEditor,
 } from '@/lib/ui/form-controls';
 import {
   WorkstationActionButton,
@@ -37,7 +38,52 @@ type GatewayRegistrationRecord = Record<string, unknown> & {
   runtime_access_label?: string | null;
   runtime_access_setup_warning?: string | null;
   autonomous_agent_setup_warning_acknowledged?: boolean | null;
+  agent_computer_policy_id?: string | null;
+  agent_computer_emergency_stop?: Record<string, unknown> | null;
   last_seen_at?: string | null;
+};
+
+type AgentComputerPolicyRecord = Record<string, unknown> & {
+  policy_id?: string | null;
+  autonomy_mode?: string | null;
+  allowed_capabilities?: unknown;
+  approval_required_capabilities?: unknown;
+  blocked_capabilities?: unknown;
+  filesystem_scope?: unknown;
+  blocked_filesystem_scope?: unknown;
+  domain_allowlist?: unknown;
+  terminal_policy?: string | null;
+  network_policy?: string | null;
+  browser_access_policy?: string | null;
+  app_access_policy?: string | null;
+  approval_ttl_seconds?: number | null;
+  max_runtime_seconds?: number | null;
+  max_budget_cents?: number | null;
+  emergency_stop_enabled?: boolean | null;
+};
+
+type AgentComputerPolicyPayload = Record<string, unknown> & {
+  computer_id?: string | null;
+  policy_id?: string | null;
+  saved?: boolean | null;
+  runtime_access_mode?: string | null;
+  custom_policy_ready?: boolean | null;
+  policy?: AgentComputerPolicyRecord | null;
+  effective_policy?: AgentComputerPolicyRecord | null;
+  emergency_stop?: Record<string, unknown> | null;
+};
+
+type AgentComputerPolicyDraft = {
+  allowedFolders: string[];
+  blockedFolders: string[];
+  domains: string[];
+  terminalPolicy: string;
+  networkPolicy: string;
+  browserAccessPolicy: string;
+  appAccessPolicy: string;
+  approvalTtlSeconds: string;
+  maxRuntimeSeconds: string;
+  maxBudgetDollars: string;
 };
 
 type GatewayPairingIntentRecord = Record<string, unknown> & {
@@ -231,6 +277,70 @@ function readString(value: unknown, fallback = 'Unknown'): string {
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function readStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : [];
+}
+
+function readNumberString(value: unknown, fallback: string): string {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : fallback;
+}
+
+function defaultAgentComputerPolicyDraft(): AgentComputerPolicyDraft {
+  return {
+    allowedFolders: [],
+    blockedFolders: [],
+    domains: [],
+    terminalPolicy: 'review_required',
+    networkPolicy: 'approval_required',
+    browserAccessPolicy: 'approval_required',
+    appAccessPolicy: 'approval_required',
+    approvalTtlSeconds: '900',
+    maxRuntimeSeconds: '0',
+    maxBudgetDollars: '0',
+  };
+}
+
+function policyDraftFromPayload(payload: AgentComputerPolicyPayload | null): AgentComputerPolicyDraft {
+  const policy = readRecord(payload?.policy ?? payload?.effective_policy);
+  return {
+    allowedFolders: readStringList(policy.filesystem_scope),
+    blockedFolders: readStringList(policy.blocked_filesystem_scope),
+    domains: readStringList(policy.domain_allowlist),
+    terminalPolicy: readString(policy.terminal_policy, 'review_required'),
+    networkPolicy: readString(policy.network_policy, 'approval_required'),
+    browserAccessPolicy: readString(policy.browser_access_policy, 'approval_required'),
+    appAccessPolicy: readString(policy.app_access_policy, 'approval_required'),
+    approvalTtlSeconds: readNumberString(policy.approval_ttl_seconds, '900'),
+    maxRuntimeSeconds: readNumberString(policy.max_runtime_seconds, '0'),
+    maxBudgetDollars: (() => {
+      const cents = Number.parseInt(String(policy.max_budget_cents ?? '0'), 10);
+      return Number.isFinite(cents) && cents > 0 ? String(Math.round(cents) / 100) : '0';
+    })(),
+  };
+}
+
+function policyPayloadFromDraft(draft: AgentComputerPolicyDraft, existing: AgentComputerPolicyPayload | null): Record<string, unknown> {
+  const maxBudget = Math.max(0, Math.round(Number.parseFloat(draft.maxBudgetDollars || '0') * 100));
+  return {
+    policy_id: readString(existing?.policy_id, readString(existing?.policy?.policy_id, '')),
+    autonomy_mode: 'trusted_workstation',
+    filesystem_scope: draft.allowedFolders,
+    blocked_filesystem_scope: draft.blockedFolders,
+    domain_allowlist: draft.domains,
+    terminal_policy: draft.terminalPolicy,
+    network_policy: draft.networkPolicy,
+    browser_access_policy: draft.browserAccessPolicy,
+    app_access_policy: draft.appAccessPolicy,
+    approval_ttl_seconds: Math.max(60, Number.parseInt(draft.approvalTtlSeconds || '900', 10) || 900),
+    max_runtime_seconds: Math.max(0, Number.parseInt(draft.maxRuntimeSeconds || '0', 10) || 0),
+    max_budget_cents: Number.isFinite(maxBudget) ? maxBudget : 0,
+    emergency_stop_enabled: true,
+  };
 }
 
 function normalizeWorkspaceRuntimeSessions(payload: unknown): WorkspaceRuntimeSessionRecord[] {
@@ -1065,6 +1175,8 @@ export function WorkstationGatewayOperatorPane({
   const [approvals, setApprovals] = useState<GatewayApprovalsPayload | null>(null);
   const [browserSessions, setBrowserSessions] = useState<GatewayBrowserSessionsPayload | null>(null);
   const [gatewayEvents, setGatewayEvents] = useState<GatewayEventsPayload | null>(null);
+  const [agentComputerPolicy, setAgentComputerPolicy] = useState<AgentComputerPolicyPayload | null>(null);
+  const [policyDraft, setPolicyDraft] = useState<AgentComputerPolicyDraft>(() => defaultAgentComputerPolicyDraft());
   const [activeRuntimeSessions, setActiveRuntimeSessions] = useState<WorkspaceRuntimeSessionRecord[]>([]);
   const [pairingDraft, setPairingDraft] = useState<PairingDraft>({
     displayName: 'My device',
@@ -1265,6 +1377,8 @@ export function WorkstationGatewayOperatorPane({
       setApprovals(null);
       setBrowserSessions(null);
       setGatewayEvents(null);
+      setAgentComputerPolicy(null);
+      setPolicyDraft(defaultAgentComputerPolicyDraft());
       return;
     }
     if (showLoading) {
@@ -1279,6 +1393,7 @@ export function WorkstationGatewayOperatorPane({
       nextApprovals,
       nextBrowserSessions,
       nextGatewayEvents,
+      nextAgentComputerPolicy,
     ] = await Promise.all([
       requestOptionalPayload<PersonalChannelViewPayload>(
         `/api/personal-channels/whatsapp/gateways/${encodeURIComponent(gatewayId)}`,
@@ -1295,6 +1410,9 @@ export function WorkstationGatewayOperatorPane({
       requestOptionalPayload<GatewayEventsPayload>(
         `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/events?limit=500`,
       ),
+      requestOptionalPayload<AgentComputerPolicyPayload>(
+        `/api/agent-computers/${encodeURIComponent(gatewayId)}/policy${buildQueryString({ workspace_id: workspaceId })}`,
+      ),
     ]);
     setDoctor(nextDoctor);
     setWhatsapp(nextWhatsapp);
@@ -1302,6 +1420,8 @@ export function WorkstationGatewayOperatorPane({
     setApprovals(nextApprovals);
     setBrowserSessions(nextBrowserSessions);
     setGatewayEvents(nextGatewayEvents);
+    setAgentComputerPolicy(nextAgentComputerPolicy);
+    setPolicyDraft(policyDraftFromPayload(nextAgentComputerPolicy));
     setErrorMessage(null);
     setLoadingGatewayDetail(false);
   }
@@ -1346,6 +1466,8 @@ export function WorkstationGatewayOperatorPane({
       setApprovals(null);
       setBrowserSessions(null);
       setGatewayEvents(null);
+      setAgentComputerPolicy(null);
+      setPolicyDraft(defaultAgentComputerPolicyDraft());
       return;
     }
     let cancelled = false;
@@ -1478,9 +1600,82 @@ export function WorkstationGatewayOperatorPane({
       setApprovals(null);
       setBrowserSessions(null);
       setGatewayEvents(null);
+      setAgentComputerPolicy(null);
+      setPolicyDraft(defaultAgentComputerPolicyDraft());
       await refreshRegistrations(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not revoke the selected computer.');
+    } finally {
+      setBusyActionKey(null);
+    }
+  }
+
+  async function handleSaveAgentComputerPolicy() {
+    if (!selectedGatewayId) {
+      setErrorMessage('Select an Agent Computer before saving a custom policy.');
+      return;
+    }
+    setBusyActionKey('policy:save');
+    setErrorMessage(null);
+    try {
+      const payload = await requestPayload<AgentComputerPolicyPayload>(
+        `/api/agent-computers/${encodeURIComponent(selectedGatewayId)}/policy`,
+        {
+          method: 'PUT',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            policy: policyPayloadFromDraft(policyDraft, agentComputerPolicy),
+          }),
+        },
+      );
+      setAgentComputerPolicy(payload);
+      setPolicyDraft(policyDraftFromPayload(payload));
+      setStatusMessage('Custom Agent Computer policy saved.');
+      await refreshGatewayDetail(selectedGatewayId, false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not save the Agent Computer policy.');
+    } finally {
+      setBusyActionKey(null);
+    }
+  }
+
+  async function handleAgentComputerEmergencyStop(clear = false) {
+    if (!selectedGatewayId) {
+      return;
+    }
+    const action = clear ? 'clear-emergency-stop' : 'emergency-stop';
+    const confirmed = clear || window.confirm('Stop this Agent Computer now? Running local work will be interrupted.');
+    if (!confirmed) {
+      return;
+    }
+    setBusyActionKey(clear ? 'policy:clear-stop' : 'policy:stop');
+    setErrorMessage(null);
+    try {
+      const payload = await requestPayload<AgentComputerPolicyPayload>(
+        `/api/agent-computers/${encodeURIComponent(selectedGatewayId)}/${action}`,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            reason: clear ? 'Cleared from Agent Computer settings.' : 'Stopped from Agent Computer settings.',
+          }),
+        },
+      );
+      setAgentComputerPolicy(payload);
+      setPolicyDraft(policyDraftFromPayload(payload));
+      setStatusMessage(clear ? 'Emergency stop cleared.' : 'Agent Computer stopped.');
+      await refreshRegistrations(false);
+      await refreshGatewayDetail(selectedGatewayId, false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not update the emergency stop state.');
     } finally {
       setBusyActionKey(null);
     }
@@ -1714,6 +1909,10 @@ export function WorkstationGatewayOperatorPane({
       : selectedGateway
         ? activeGatewayRuntimeAccessLabel
         : 'No active computer session';
+  const selectedEmergencyStop = readRecord(agentComputerPolicy?.emergency_stop);
+  const emergencyStopActive = Boolean(selectedEmergencyStop.active);
+  const customPolicySaved = Boolean(agentComputerPolicy?.saved);
+  const customPolicyStateLabel = customPolicySaved ? 'Custom saved' : 'Guarded until saved';
   const selectedTakeoverStatus = browserItems[0]
     ? browserTakeoverStatus(browserItems[0])
     : 'No browser session';
@@ -1800,7 +1999,7 @@ export function WorkstationGatewayOperatorPane({
         <div className="gateway-computer-sheet__header">
           <div>
             <h2>Connect a computer</h2>
-            <p>One connection gives Sage the full local power layer. No capability picking here.</p>
+            <p>Agent Computer is optional local runtime for files, browser, terminal, desktop apps, and personal channels.</p>
           </div>
           <AppButton
             type="button"
@@ -1821,7 +2020,7 @@ export function WorkstationGatewayOperatorPane({
               <span className={`sage-computer-connect__status${myComputerStatus.id === 'online' ? ' sage-computer-connect__status--online' : ''}`}>
                 {myComputerStatus.id === 'online' ? 'Online and ready' : myComputerStatus.label}
               </span>
-              <strong>Default local capability for Sage.</strong>
+              <strong>Selected local runtime for Sage.</strong>
               <p>
                 Browser, files, shell, screenshots, personal channels, and local models stay on the selected computer.
                 Sage can use them only through the governed runtime when you ask.
@@ -1849,6 +2048,14 @@ export function WorkstationGatewayOperatorPane({
             <div>
               <span>Last seen</span>
               <strong>{trustSummary.lastSeenLabel}</strong>
+            </div>
+            <div>
+              <span>Policy</span>
+              <strong>{customPolicyStateLabel}</strong>
+            </div>
+            <div>
+              <span>Stop</span>
+              <strong>{emergencyStopActive ? 'Stopped' : 'Ready'}</strong>
             </div>
           </div>
           <details className="sage-computer-connect__config">
@@ -1992,6 +2199,149 @@ export function WorkstationGatewayOperatorPane({
             <WorkstationSurfaceNotice tone="neutral">
               Custom starts approval-gated. Use it for policy-defined access to folders, terminal/network rules, app/browser access, approval memory, budget, and emergency stop behavior.
             </WorkstationSurfaceNotice>
+          ) : null}
+          {selectedGateway ? (
+            <FormSection
+              title="Custom access policy"
+              description="Saved policy is required before Custom can become less restrictive than Default Guarded."
+            >
+              <FormGrid columns="repeat(2, minmax(0, 1fr))">
+                <FormField label="Allowed folders" hint="Add explicit folder paths this Agent Computer may use.">
+                  <FormTokenListEditor
+                    value={policyDraft.allowedFolders}
+                    onChange={(allowedFolders) => setPolicyDraft((current) => ({ ...current, allowedFolders }))}
+                    placeholder="/Users/mansur/Work"
+                    addLabel="Add folder"
+                    emptyLabel="No folder access saved."
+                  />
+                </FormField>
+                <FormField label="Blocked folders" hint="These paths stay blocked even inside an allowed folder.">
+                  <FormTokenListEditor
+                    value={policyDraft.blockedFolders}
+                    onChange={(blockedFolders) => setPolicyDraft((current) => ({ ...current, blockedFolders }))}
+                    placeholder="/Users/mansur/Work/secrets"
+                    addLabel="Block folder"
+                    emptyLabel="No blocked folders saved."
+                  />
+                </FormField>
+                <FormField label="Network domains" hint="Leave empty to keep network actions approval-gated.">
+                  <FormTokenListEditor
+                    value={policyDraft.domains}
+                    onChange={(domains) => setPolicyDraft((current) => ({ ...current, domains }))}
+                    placeholder="example.com"
+                    addLabel="Add domain"
+                    emptyLabel="No domains allowlisted."
+                  />
+                </FormField>
+                <FormField label="Terminal policy">
+                  <FormSelect
+                    value={policyDraft.terminalPolicy}
+                    onChange={(event) => {
+                      const terminalPolicy = event.currentTarget.value;
+                      setPolicyDraft((current) => ({ ...current, terminalPolicy }));
+                    }}
+                  >
+                    <option value="blocked">Blocked</option>
+                    <option value="review_required">Review required</option>
+                    <option value="allowlist">Approved scripts only</option>
+                  </FormSelect>
+                </FormField>
+                <FormField label="Network policy">
+                  <FormSelect
+                    value={policyDraft.networkPolicy}
+                    onChange={(event) => {
+                      const networkPolicy = event.currentTarget.value;
+                      setPolicyDraft((current) => ({ ...current, networkPolicy }));
+                    }}
+                  >
+                    <option value="approval_required">Approval required</option>
+                    <option value="allowlist">Allowlisted domains</option>
+                    <option value="blocked">Blocked</option>
+                  </FormSelect>
+                </FormField>
+                <FormField label="Browser access">
+                  <FormSelect
+                    value={policyDraft.browserAccessPolicy}
+                    onChange={(event) => {
+                      const browserAccessPolicy = event.currentTarget.value;
+                      setPolicyDraft((current) => ({ ...current, browserAccessPolicy }));
+                    }}
+                  >
+                    <option value="approval_required">Approval required</option>
+                    <option value="allow">Allow within policy</option>
+                    <option value="blocked">Blocked</option>
+                  </FormSelect>
+                </FormField>
+                <FormField label="App access">
+                  <FormSelect
+                    value={policyDraft.appAccessPolicy}
+                    onChange={(event) => {
+                      const appAccessPolicy = event.currentTarget.value;
+                      setPolicyDraft((current) => ({ ...current, appAccessPolicy }));
+                    }}
+                  >
+                    <option value="approval_required">Approval required</option>
+                    <option value="allow">Allow within policy</option>
+                    <option value="blocked">Blocked</option>
+                  </FormSelect>
+                </FormField>
+                <FormField label="Approval memory seconds">
+                  <FormInput
+                    type="number"
+                    min="60"
+                    value={policyDraft.approvalTtlSeconds}
+                    onChange={(event) => {
+                      const approvalTtlSeconds = event.currentTarget.value;
+                      setPolicyDraft((current) => ({ ...current, approvalTtlSeconds }));
+                    }}
+                  />
+                </FormField>
+                <FormField label="Max runtime seconds">
+                  <FormInput
+                    type="number"
+                    min="0"
+                    value={policyDraft.maxRuntimeSeconds}
+                    onChange={(event) => {
+                      const maxRuntimeSeconds = event.currentTarget.value;
+                      setPolicyDraft((current) => ({ ...current, maxRuntimeSeconds }));
+                    }}
+                  />
+                </FormField>
+                <FormField label="Max budget dollars">
+                  <FormInput
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={policyDraft.maxBudgetDollars}
+                    onChange={(event) => {
+                      const maxBudgetDollars = event.currentTarget.value;
+                      setPolicyDraft((current) => ({ ...current, maxBudgetDollars }));
+                    }}
+                  />
+                </FormField>
+              </FormGrid>
+              <div className="settings-action-row">
+                <WorkstationActionButton
+                  type="button"
+                  disabled={busyActionKey === 'policy:save'}
+                  onClick={() => {
+                    void handleSaveAgentComputerPolicy();
+                  }}
+                >
+                  {busyActionKey === 'policy:save' ? 'Saving policy…' : 'Save custom policy'}
+                </WorkstationActionButton>
+                <WorkstationActionButton
+                  type="button"
+                  tone={emergencyStopActive ? 'secondary' : 'danger'}
+                  disabled={busyActionKey === 'policy:stop' || busyActionKey === 'policy:clear-stop'}
+                  onClick={() => {
+                    void handleAgentComputerEmergencyStop(emergencyStopActive);
+                  }}
+                >
+                  {emergencyStopActive ? 'Clear emergency stop' : 'Emergency stop'}
+                </WorkstationActionButton>
+              </div>
+            </FormSection>
           ) : null}
           <div className="settings-action-row">
             <WorkstationActionButton
@@ -2174,6 +2524,19 @@ export function WorkstationGatewayOperatorPane({
                 {busyActionKey === `revoke:${selectedGatewayId}` ? 'Revoking…' : 'Revoke access'}
               </WorkstationActionButton>
             ) : null}
+            {selectedGateway ? (
+              <WorkstationActionButton
+                type="button"
+                tone={emergencyStopActive ? 'secondary' : 'danger'}
+                disabled={busyActionKey === 'policy:stop' || busyActionKey === 'policy:clear-stop'}
+                onClick={() => {
+                  setManageOpen(false);
+                  void handleAgentComputerEmergencyStop(emergencyStopActive);
+                }}
+              >
+                {emergencyStopActive ? 'Clear emergency stop' : 'Emergency stop'}
+              </WorkstationActionButton>
+            ) : null}
             <WorkstationActionButton
               type="button"
               tone="secondary"
@@ -2220,6 +2583,8 @@ export function WorkstationGatewayOperatorPane({
             <FormReadout label="State" value={<DataBadge tone={myComputerStatus.tone}>{myComputerStatus.label}</DataBadge>} />
             <FormReadout label="Runtime lane" value={selectedRuntimeLane} />
             <FormReadout label="Approval mode" value={selectedApprovalMode} />
+            <FormReadout label="Custom policy" value={customPolicyStateLabel} />
+            <FormReadout label="Emergency stop" value={<DataBadge tone={emergencyStopActive ? 'danger' : 'success'}>{emergencyStopActive ? 'Stopped' : 'Ready'}</DataBadge>} />
             <FormReadout label="Platform" value={humanizeToken(selectedGateway.platform, 'Unknown')} />
             <FormReadout label="Trust state" value={trustSummary.trustLabel} />
             <FormReadout label="Last connected" value={trustSummary.lastConnectedLabel} />

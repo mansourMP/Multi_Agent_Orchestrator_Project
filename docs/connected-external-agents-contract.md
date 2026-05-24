@@ -75,6 +75,11 @@ Optional fields:
 - `capability_required`
 - `actions_endpoint_ref`
 
+Studio renders every declared section as read-only in this pass. `actions_endpoint_ref`
+may be stored as future contract metadata, but the frontend does not call it and the
+backend does not expose a section action route until approval, audit, and revoke
+semantics are implemented.
+
 Supported `display_kind` values:
 
 - `table`
@@ -83,7 +88,7 @@ Supported `display_kind` values:
 - `timeline`
 - `key_value`
 - `artifact_list`
-- `approval_queue`
+- `approval_queue` (read-only queue display only)
 
 Section endpoint responses must be JSON objects. List-like displays should return:
 

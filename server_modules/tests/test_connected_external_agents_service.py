@@ -69,6 +69,16 @@ class _MalformedManifestClient:
         })
 
 
+class _UnsupportedSchemaManifestClient:
+    async def get(self, url: str, headers: dict[str, str] | None = None) -> _FakeResponse:
+        return _FakeResponse({
+            "id": "external-new-schema",
+            "schema_version": "studio.external_agent.v99",
+            "capabilities": ["chat"],
+            "endpoints": {"chat": "https://example.com/chat"},
+        })
+
+
 class _HealthHandshakeClient:
     def __init__(self, **_kwargs: Any) -> None:
         self.closed = False
@@ -255,6 +265,7 @@ async def test_manifest_surface_sections_fetch_external_owned_objects_through_pr
         )
 
     assert refreshed["surface_sections"][0]["id"] == "run_history"
+    assert refreshed["surface_sections"][0]["interaction"] == "read_only"
     assert refreshed["object_types"] == ["external_agent_event"]
     assert section["display_kind"] == "timeline"
     assert section["section"]["title"] == "Run History"
@@ -391,6 +402,14 @@ async def test_refresh_manifest_rejects_oversized_and_malformed_manifests() -> N
                 workspace_id="ws-1",
                 external_agent_id=created["id"],
                 http_client=_MalformedManifestClient(),
+            )
+
+        with pytest.raises(ValueError, match="schema_version is unsupported"):
+            await service.refresh_connected_external_agent_manifest(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                external_agent_id=created["id"],
+                http_client=_UnsupportedSchemaManifestClient(),
             )
 
 

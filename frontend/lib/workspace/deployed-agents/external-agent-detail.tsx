@@ -43,6 +43,7 @@ type ExternalSurfaceSection = {
   dataEndpointRef: string;
   actionsEndpointRef: string;
   displayKind: string;
+  interaction: string;
 };
 
 export function createEmptyExternalAgentChatSession(): ExternalAgentChatSessionState {
@@ -93,12 +94,17 @@ function normalizeSurfaceSections(value: unknown): ExternalSurfaceSection[] {
       dataEndpointRef: readString(record.data_endpoint_ref),
       actionsEndpointRef: readString(record.actions_endpoint_ref),
       displayKind: readString(record.display_kind, 'key_value'),
+      interaction: readString(record.interaction, 'read_only'),
     };
   }).filter((item) => item.id && item.dataEndpointRef);
 }
 
 function externalOwnershipLabel(value: unknown): string {
   return readString(value, 'external') === 'external' ? 'External-owned' : humanizeToken(value, 'External-owned');
+}
+
+function sectionCacheKey(externalAgentId: string, sectionId: string): string {
+  return `${externalAgentId}:${sectionId}`;
 }
 
 export const ConnectedExternalAgentDetailView = memo(({
@@ -240,11 +246,15 @@ export const ConnectedExternalAgentDetailView = memo(({
   }
 
   async function loadExternalSection(section: ExternalSurfaceSection) {
-    if (!externalAgentId || !section.id || loadingSectionIds.has(section.id)) {
+    if (!externalAgentId || !section.id) {
+      return;
+    }
+    const cacheKey = sectionCacheKey(externalAgentId, section.id);
+    if (loadingSectionIds.has(cacheKey)) {
       return;
     }
     setLocalError(null);
-    setLoadingSectionIds((current) => new Set([...current, section.id]));
+    setLoadingSectionIds((current) => new Set([...current, cacheKey]));
     try {
       const payload = await services.client.getConnectedExternalAgentSectionData({
         externalAgentId,
@@ -252,14 +262,14 @@ export const ConnectedExternalAgentDetailView = memo(({
       });
       setSectionPayloads((current) => ({
         ...current,
-        [section.id]: readRecord(payload),
+        [cacheKey]: readRecord(payload),
       }));
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : 'External section could not be loaded.');
     } finally {
       setLoadingSectionIds((current) => {
         const next = new Set(current);
-        next.delete(section.id);
+        next.delete(cacheKey);
         return next;
       });
     }
@@ -398,8 +408,9 @@ export const ConnectedExternalAgentDetailView = memo(({
                               <div className="studio-agent-overview__card-icon"><FileText size={15} aria-hidden="true" /></div>
                               <div>
                                 <strong>{section.title}</strong>
-                                <span>{humanizeToken(section.displayKind)} · {humanizeToken(section.dataEndpointRef)}</span>
+                                <span>{humanizeToken(section.displayKind)} · {humanizeToken(section.interaction, 'Read only')}</span>
                                 {section.capabilityRequired ? <span>Requires {humanizeToken(section.capabilityRequired)}</span> : null}
+                                {section.actionsEndpointRef ? <span>Actions declared, disabled here</span> : null}
                               </div>
                             </div>
                           ))}
@@ -540,15 +551,18 @@ export const ConnectedExternalAgentDetailView = memo(({
                   </AppSurfaceStatGrid>
                   <div className="app-stack-3">
                     {externalSections.length > 0 ? externalSections.map((section) => {
-                      const payload = sectionPayloads[section.id];
-                      const isLoading = loadingSectionIds.has(section.id);
+                      const cacheKey = sectionCacheKey(externalAgentId, section.id);
+                      const payload = sectionPayloads[cacheKey];
+                      const isLoading = loadingSectionIds.has(cacheKey);
                       return (
                         <ListDetailPanel
                           key={section.id}
                           className="studio-panel studio-panel--detail"
                           eyebrow={humanizeToken(section.displayKind)}
                           title={section.title}
-                          subtitle="External-owned records loaded through the backend proxy."
+                          subtitle={section.actionsEndpointRef
+                            ? 'External-owned records load read-only. Action endpoints are disabled in this pass.'
+                            : 'External-owned records loaded read-only through the backend proxy.'}
                           actions={(
                             <AppButton
                               type="button"

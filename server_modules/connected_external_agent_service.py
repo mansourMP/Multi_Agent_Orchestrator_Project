@@ -495,6 +495,7 @@ def _normalize_surface_sections(value: Any, capabilities: Dict[str, Any]) -> Lis
             "data_endpoint_ref": data_endpoint_ref,
             "actions_endpoint_ref": normalized_actions_endpoint_ref,
             "display_kind": display_kind,
+            "interaction": "read_only",
         })
     return out
 
@@ -513,6 +514,9 @@ def _normalize_local_connector(value: Any) -> Dict[str, Any]:
 
 
 def _normalize_manifest_projection(payload: Dict[str, Any]) -> Dict[str, Any]:
+    schema_version = _read_string(payload.get("schema_version"))
+    if schema_version and schema_version != EXTERNAL_AGENT_MANIFEST_SCHEMA_VERSION:
+        raise ValueError(f"External agent manifest schema_version is unsupported: {schema_version}.")
     capabilities = _normalize_capabilities(payload)
     protocols = _normalize_protocols(payload.get("protocols"))
     if not protocols and _read_string(payload.get("protocol")):
@@ -524,7 +528,7 @@ def _normalize_manifest_projection(payload: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError(f"External agent protocol is unsupported: {protocols[0]['kind']}.")
     objects = _normalize_external_object_types(payload.get("objects") or payload.get("object_types"))
     return {
-        "schema_version": _read_string(payload.get("schema_version"), EXTERNAL_AGENT_MANIFEST_SCHEMA_VERSION),
+        "schema_version": schema_version or EXTERNAL_AGENT_MANIFEST_SCHEMA_VERSION,
         "protocols": protocols,
         "capability_manifest": capabilities,
         "surface_sections": _normalize_surface_sections(payload.get("surface_sections"), capabilities),

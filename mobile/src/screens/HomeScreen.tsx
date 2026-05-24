@@ -283,7 +283,7 @@ export default function HomeScreen() {
               </View>
             ))}
             {!chatContextQuery.isLoading && recentCaptainActivity.length === 0 ? (
-              <EmptyCard label="Activity summaries will appear here once Sage or a specialist finishes work." />
+              <EmptyCard label="Activity summaries will appear here once Sage or a Business Agent finishes work." />
             ) : null}
           </View>
 
@@ -652,7 +652,7 @@ function summarizeMemoryBoundary(unifiedMemory: UnifiedMemorySummary | undefined
 
 function formatActivityActor(item: ActivitySummary): string {
   if (item.actor_type === "sage") return "Sage";
-  if (item.actor_type === "specialist") return item.actor_id ? `Specialist · ${humanizeToken(item.actor_id)}` : "Specialist";
+  if (item.actor_type === "specialist") return item.actor_id ? `Business Agent · ${humanizeToken(item.actor_id)}` : "Business Agent";
   if (item.actor_type === "application") return item.actor_id ? `Tool · ${humanizeToken(item.actor_id)}` : "Tool";
   return humanizeToken(item.actor_type || item.event_class || "activity");
 }

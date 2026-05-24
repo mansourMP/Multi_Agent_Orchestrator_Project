@@ -643,7 +643,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     }
     return {
       id: source.agentId,
-      label: source.agentName || "Specialist",
+      label: source.agentName || "Business Agent",
       runtimeRole: source.runtimeRole,
       subtitle: source.title !== "New thread" ? source.title : undefined,
       specialistId: source.agentId,
@@ -667,7 +667,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     return {
       ...sage,
       id: requestedAgentId,
-      label: "Specialist",
+      label: "Business Agent",
       runtimeRole: "specialist",
       specialistId: requestedAgentId,
       provider: undefined,
@@ -1461,7 +1461,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           <InspectorCard
             eyebrow="Proof rows"
             title={`${proofCardCount} in this chat`}
-            body="Commands, browser use, screenshots, artifacts, approvals, and specialists appear inline before Sage answers."
+            body="Commands, browser use, screenshots, artifacts, approvals, and delegated work appear inline before Sage answers."
           />
           <InspectorCard
             eyebrow="Approvals"
@@ -1606,7 +1606,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                 textAlign: embeddedMode ? "center" : "left",
               }}
             >
-              {String(channelRole || "specialist").replace(/[_-]+/g, " ")}
+              {requestedAgentId ? "Business Agent" : String(channelRole || "Sage").replace(/[_-]+/g, " ")}
             </Text>
           ) : null}
           <TouchableOpacity

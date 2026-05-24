@@ -397,7 +397,25 @@ test.describe('deployed agents surface', () => {
 
   test('wizard, deploy, pause, inbox, and transcript flow render through the deployed-agent APIs', async ({ page }) => {
     await loginAsOwner(page);
-    const agents = [buildAgent()];
+    const agents = [
+      buildAgent(),
+      buildAgent({
+        id: 'dagent-billing',
+        backing_install_id: 'ainstall-billing',
+        name: 'Billing Guide',
+        persona: 'Billing support specialist',
+        system_prompt: 'Explain invoices and payment steps.',
+        channels: {},
+        knowledge_sources: [],
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        metadata: {
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          memory_enabled: false,
+        },
+      }),
+    ];
     const providerCatalog = buildProviderCatalog();
     const seedConversations = [
       buildConversationRecord({
@@ -465,6 +483,56 @@ test.describe('deployed agents surface', () => {
     ]);
     const businessInsightsByAgent = new Map([[agents[0].id, buildBusinessInsights(agents[0].id)]]);
     const conversationsByAgent = new Map([[agents[0].id, buildConversationList(agents[0].id, seedConversations)]]);
+    const testTurnBodies = [];
+    const externalChatBodies = [];
+    let connectedExternalAgents = [
+      {
+        id: 'extagent-openclaw',
+        surface_kind: 'connected_external_agent',
+        studio_object_type: 'connected_external_agent',
+        workspace_id: 'ws-1',
+        tenant_id: 'tenant-1',
+        name: 'OpenClaw Gateway',
+        provider_kind: 'openclaw',
+        status: 'active',
+        enabled: true,
+        connection_state: 'verified',
+        trust_state: 'verified',
+        endpoint_refs: {
+          manifest_url: 'https://example.com/openclaw/manifest.json',
+          chat_url: 'https://example.com/openclaw/chat',
+        },
+        capability_manifest: {
+          capabilities: ['chat', 'logs'],
+          chat: true,
+          logs: true,
+        },
+        manifest: {
+          id: 'openclaw-gateway',
+          capabilities: ['chat', 'logs'],
+        },
+        last_manifest_refresh_at: '2026-04-13T12:00:00Z',
+      },
+    ];
+    const runtimeAttachmentsPayload = {
+      attachments: [
+        {
+          attachment_id: 'computer-macbook',
+          attachment_kind: 'self_hosted_business_node',
+          runtime_profile_id: 'runtime-macbook',
+          runtime_node_id: 'node-macbook',
+          label: 'Mansur MacBook',
+          online: true,
+          healthy: true,
+          owner_approved: true,
+          status: 'online',
+          self_hosted_node_status: 'online',
+          node_kind: 'macbook',
+          heartbeat_at: '2026-04-13T12:10:00Z',
+          capabilities: ['browser', 'files'],
+        },
+      ],
+    };
     const transcriptsByAgent = new Map([
       [
         `${agents[0].id}:sess-${agents[0].id}-telegram-open`,
@@ -608,6 +676,132 @@ test.describe('deployed agents surface', () => {
         contentType: 'application/json',
         body: JSON.stringify(providerCatalog),
       });
+    });
+
+    await page.route('**/agent-registry/runtime-attachments**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(runtimeAttachmentsPayload),
+      });
+    });
+
+    await page.route('**/api/studio/agent-surfaces**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          workspace_id: 'ws-1',
+          tenant_id: 'tenant-1',
+          native_studio_agents: agents.map((agent) => ({
+            id: agent.id,
+            surface_kind: 'native_studio_agent',
+            name: agent.name,
+            status: agent.deployment_state,
+            record: agent,
+          })),
+          connected_external_agents: connectedExternalAgents,
+          agent_computers: [
+            {
+              id: 'computer-macbook',
+              surface_kind: 'agent_computer',
+              name: 'Mansur MacBook',
+              status: 'online',
+              record: runtimeAttachmentsPayload.attachments[0],
+            },
+          ],
+          items: [],
+        }),
+      });
+    });
+
+    await page.route('**/api/studio/external-agents**', async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = url.pathname;
+      const method = request.method().toUpperCase();
+      const segments = path.split('/').filter(Boolean);
+
+      if (segments.length === 3 && segments[0] === 'api' && segments[1] === 'studio' && segments[2] === 'external-agents' && method === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ items: connectedExternalAgents }),
+        });
+        return;
+      }
+
+      if (segments.length >= 4 && segments[0] === 'api' && segments[1] === 'studio' && segments[2] === 'external-agents') {
+        const externalAgentId = segments[3];
+        const externalAgent = connectedExternalAgents.find((item) => item.id === externalAgentId);
+
+        if (!externalAgent) {
+          await route.fulfill({
+            status: 404,
+            contentType: 'application/json',
+            body: JSON.stringify({ detail: 'Not found.' }),
+          });
+          return;
+        }
+
+        if (segments.length === 4 && method === 'GET') {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(externalAgent),
+          });
+          return;
+        }
+
+        if (segments.length === 5 && segments[4] === 'chat-turn' && method === 'POST') {
+          const body = request.postDataJSON();
+          externalChatBodies.push(body);
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              reply: `OpenClaw answered privately: ${body.message}`,
+              run_details: {
+                surface_kind: 'connected_external_agent',
+                endpoint: 'chat_url',
+              },
+            }),
+          });
+          return;
+        }
+
+        if (segments.length === 5 && segments[4] === 'refresh-manifest' && method === 'POST') {
+          connectedExternalAgents = connectedExternalAgents.map((item) => item.id === externalAgentId ? {
+            ...item,
+            connection_state: 'verified',
+            trust_state: 'verified',
+            last_manifest_refresh_at: '2026-04-13T12:12:00Z',
+          } : item);
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(connectedExternalAgents.find((item) => item.id === externalAgentId)),
+          });
+          return;
+        }
+
+        if (segments.length === 5 && segments[4] === 'disconnect' && method === 'POST') {
+          connectedExternalAgents = connectedExternalAgents.map((item) => item.id === externalAgentId ? {
+            ...item,
+            connection_state: 'revoked',
+            trust_state: 'revoked',
+            enabled: false,
+          } : item);
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(connectedExternalAgents.find((item) => item.id === externalAgentId)),
+          });
+          return;
+        }
+      }
+
+      await route.fallback();
     });
 
     await page.route('**/api/deployed-agents**', async (route) => {
@@ -811,6 +1005,38 @@ test.describe('deployed agents surface', () => {
           return;
         }
 
+        if (segments.length === 4 && segments[3] === 'test-turn' && method === 'POST') {
+          const body = request.postDataJSON();
+          testTurnBodies.push(body);
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              reply: `I can help with returns privately. You said: ${body.message}`,
+              policy_decisions: [],
+              tools_considered: [],
+              tools_used: [],
+              memory_context: { enabled: false },
+              approval_required: false,
+              audit_events: [],
+              trace_id: 'trace-owner-chat-1',
+              transparency_events: [
+                { surface: 'studio_test', kind: 'owner_chat' },
+              ],
+              model_provider: 'openai',
+              model: 'gpt-4o',
+              usage: { input_tokens: 12, output_tokens: 8 },
+              prompt_context: {
+                recent_messages_included: body.recent_messages?.length ?? 0,
+                persona_applied: true,
+                stored_instructions_applied: true,
+                context_truncated: false,
+              },
+            }),
+          });
+          return;
+        }
+
         if (segments.length === 6 && segments[3] === 'business-insights' && method === 'POST') {
           const insightId = segments[4];
           const action = segments[5];
@@ -980,15 +1206,65 @@ test.describe('deployed agents surface', () => {
 
     const surface = page.locator('[data-workstation-surface="deployed-agents"]');
     await expect(surface).toBeVisible();
-    await expect(surface).toContainText(/create one working business assistant/i);
-    await expect(surface).toContainText(/restaurant orders/i);
-    await expect(surface).toContainText(/dental receptionist/i);
-    await expect(surface).toContainText(/support faq/i);
+    await expect(page.getByLabel(/search business agents/i)).toBeVisible();
     await expect(surface).toContainText(/store assistant/i);
     await expect(surface).toContainText(/messages/i);
     await expect(surface).toContainText(/open/i);
     await expect(surface).toContainText(/monthly cost/i);
     await expect(surface).toContainText(/\$8\.00/);
+    await expect(surface).toContainText(/chat with this agent/i);
+    await expect(surface).toContainText(/studio agent/i);
+    await expect(surface).toContainText(/private workspace/i);
+    await expect(surface).toContainText(/connected agents/i);
+    await expect(surface).toContainText(/openclaw gateway/i);
+    await expect(surface).toContainText(/agent computers/i);
+    await expect(surface).toContainText(/mansur macbook/i);
+    const sectionRail = surface.locator('.studio-agent-detail-tabs--rail');
+    await expect(sectionRail).toBeVisible();
+    const sectionRailBox = await sectionRail.boundingBox();
+    const detailContentBox = await surface.locator('.studio-agent-detail-content').boundingBox();
+    expect(sectionRailBox?.y ?? 0).toBeLessThan(detailContentBox?.y ?? 0);
+    expect(sectionRailBox?.width ?? 0).toBeGreaterThan(sectionRailBox?.height ?? 0);
+    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /openclaw gateway/i }).click();
+    await expect(surface).toContainText(/connected agent/i);
+    await expect(surface).toContainText(/connected agents start private/i);
+    await expect(surface).not.toContainText(/go live/i);
+    await page.getByRole('tab', { name: /^chat$/i }).click();
+    await expect(surface).toContainText(/private external-agent chat/i);
+    await page.getByPlaceholder(/message this connected agent privately/i).fill('Hello external agent');
+    await page.getByRole('button', { name: /^send$/i }).click();
+    await expect(surface).toContainText(/OpenClaw answered privately/i);
+    expect(externalChatBodies).toHaveLength(1);
+    expect(externalChatBodies[0].workspace_id).toBe('ws-1');
+    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /mansur macbook/i }).click();
+    await expect(surface).toContainText(/runtime resource/i);
+    await expect(surface).toContainText(/chat surface/i);
+    await expect(page.getByRole('tab', { name: /^chat$/i })).toHaveCount(0);
+    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /store assistant/i }).click();
+    await page.getByRole('tab', { name: /^chat$/i }).click();
+    const chatPanel = page.locator('.studio-panel--chat');
+    await expect(chatPanel).toContainText(/workspace chat/i);
+    await expect(chatPanel).toContainText(/private workspace chat · no customer send/i);
+    await expect(chatPanel).not.toContainText(/telegram bot/i);
+    await expect(chatPanel).not.toContainText(/whatsapp business/i);
+    await page.getByPlaceholder(/message this agent privately/i).fill('Can you explain the return policy?');
+    await page.getByLabel(/send private workspace chat message/i).click();
+    await expect(chatPanel).toContainText(/I can help with returns privately/i);
+    await expect(chatPanel).toContainText(/Run details/i);
+    expect(testTurnBodies).toHaveLength(1);
+    expect(testTurnBodies[0].channel).toBe('test');
+    await page.getByRole('tab', { name: /^model$/i }).click();
+    await page.getByRole('tab', { name: /^chat$/i }).click();
+    await expect(chatPanel).toContainText(/I can help with returns privately/i);
+    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /billing guide/i }).click();
+    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /store assistant/i }).click();
+    await page.getByRole('tab', { name: /^chat$/i }).click();
+    await expect(chatPanel).toContainText(/I can help with returns privately/i);
+    await page.getByRole('tab', { name: /^model$/i }).click();
+    await expect(surface).toContainText(/recommended/i);
+    await expect(surface).toContainText(/bring your own key/i);
+    await expect(surface).toContainText(/developer\/local/i);
+    await expect(surface).toContainText(/personal subscription/i);
     await page.getByRole('tab', { name: /results/i }).click();
     await expect(surface).toContainText(/owner intelligence/i);
     await expect(surface).toContainText(/price-match or discount pressure detected/i);
@@ -996,7 +1272,7 @@ test.describe('deployed agents surface', () => {
     await expect(surface).toContainText(/orange · approved/i);
     await page.goto('/w/ws-1/inbox');
     const inboxSurface = page.locator('[data-workstation-surface="deployed-agents"]');
-    await expect(inboxSurface).toContainText(/assistant inbox/i);
+    await expect(inboxSurface).toContainText(/business agent inbox/i);
     await expect(inboxSurface).toContainText(/live conversation inbox/i);
     await expect(inboxSurface).toContainText(/showing 3 of 3 customer sessions/i);
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).toContainText(/customer one/i);
@@ -1024,21 +1300,109 @@ test.describe('deployed agents surface', () => {
     await page.goto('/w/ws-1/studio');
     await page.getByRole('button', { name: /add agent/i }).first().click();
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toBeVisible();
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/create agent/i);
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/create business agent/i);
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/agent name/i);
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).not.toContainText(/launch settings/i);
-    await page.getByLabel(/agent name/i).first().fill('Returns Concierge');
-    await page.getByRole('button', { name: /^create agent$/i }).click();
+    const createWizard = page.locator('[data-deployed-agent-wizard="root"]');
+    const agentNameInput = createWizard.getByRole('textbox', { name: /business agent name/i });
+    await agentNameInput.fill('Returns Concierge');
+    await expect(agentNameInput).toHaveValue('Returns Concierge');
+    await page.getByRole('button', { name: /^create business agent$/i }).click();
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toHaveCount(0);
 
     const studioSurface = page.locator('[data-workstation-surface="deployed-agents"]');
     const createdAgentRow = studioSurface
       .locator('.studio-agents-nav__agent')
       .filter({ hasText: /returns concierge/i });
-    await expect(createdAgentRow).toContainText(/empyralis cloud/i);
+    await expect(createdAgentRow).toContainText(/cloud worker/i);
     await expect(createdAgentRow).not.toContainText(/customer computer|self-hosted/i);
+    await expect(createdAgentRow).toContainText(/studio agent/i);
+    await expect(createdAgentRow).toContainText(/private workspace/i);
     await page.getByRole('tab', { name: /^integrations$/i }).click();
     await expect(studioSurface).toContainText(/model providers/i);
-    await expect(studioSurface).toContainText(/studio agents use cloud api accounts only/i);
+    await expect(studioSurface).toContainText(/personal subscription and local routes stay visible in model/i);
+    await expect(studioSurface).toContainText(/connect external agent/i);
+    await expect(studioSurface).toContainText(/external agents start private/i);
+    await expect(studioSurface).toContainText(/agent group/i);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/w/ws-1/studio');
+    const narrowStudioSurface = page.locator('[data-workstation-surface="deployed-agents"]');
+    await expect(narrowStudioSurface).toBeVisible();
+    await expect(page.locator('.workstation-mobile-bottom-nav')).toBeVisible();
+    const mobileReturn = narrowStudioSurface.locator('.studio-agent-mobile-return');
+    if (await mobileReturn.isVisible()) {
+      await mobileReturn.getByRole('button', { name: /^back$/i }).click();
+    }
+    await expect(page.locator('.workstation-mobile-bottom-nav')).toBeVisible();
+    await expect(narrowStudioSurface.locator('.studio-agents-nav__toolbar')).toBeVisible();
+    await expect(page.locator('.workstation-titlebar__nav .workstation-titlebar__link').filter({ hasText: /^All$/ })).toBeVisible();
+    await expect(narrowStudioSurface.locator('.studio-agent-detail-tabs')).toBeHidden();
+    await narrowStudioSurface.locator('.studio-agents-nav__agent').filter({ hasText: /store assistant/i }).click();
+    await expect(mobileReturn).toBeVisible();
+    await expect(mobileReturn.getByRole('button', { name: /^back$/i })).toBeVisible();
+    const mobileBackChrome = await mobileReturn.getByRole('button', { name: /^back$/i }).evaluate((node) => {
+      const style = window.getComputedStyle(node);
+      return {
+        backgroundColor: style.backgroundColor,
+        borderRadius: style.borderRadius,
+        borderWidth: style.borderWidth,
+        boxShadow: style.boxShadow,
+        fontSize: style.fontSize,
+      };
+    });
+    expect(mobileBackChrome.borderRadius).toBe('0px');
+    expect(mobileBackChrome.borderWidth).toBe('0px');
+    expect(mobileBackChrome.boxShadow).toBe('none');
+    expect(mobileBackChrome.fontSize).not.toBe('0px');
+    const mobileHeaderGutterChrome = await mobileReturn.evaluate((node) => {
+      const style = window.getComputedStyle(node, '::before');
+      return {
+        borderRightWidth: style.borderRightWidth,
+      };
+    });
+    expect(mobileHeaderGutterChrome.borderRightWidth).toBe('0px');
+    await expect(page.locator('.workstation-mobile-bottom-nav')).toBeHidden();
+    await expect(page.locator('.workstation-shell--studio-agent-detail .workstation-shell__topbar')).toBeHidden();
+    await expect(page.locator('.workstation-titlebar__nav .workstation-titlebar__link').filter({ hasText: /^All$/ })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: /^overview$/i })).toBeVisible();
+    const mobileSectionRail = narrowStudioSurface.locator('.studio-agent-detail-tabs--rail');
+    const mobileReturnBox = await mobileReturn.boundingBox();
+    const mobileBackBox = await mobileReturn.getByRole('button', { name: /^back$/i }).boundingBox();
+    const mobileAgentNameBox = await mobileReturn.locator('.studio-agent-mobile-return__agent-name').boundingBox();
+    const mobileSectionRailBox = await mobileSectionRail.boundingBox();
+    const mobileDetailContentBox = await narrowStudioSurface.locator('.studio-agent-detail-content').boundingBox();
+    expect(mobileReturnBox?.y ?? 1).toBeLessThanOrEqual(1);
+    expect(mobileBackBox?.x ?? 1).toBeLessThanOrEqual(1);
+    expect(Math.round(mobileBackBox?.width ?? 0)).toBe(Math.round(mobileSectionRailBox?.width ?? 0));
+    expect(mobileAgentNameBox?.x ?? 0).toBeGreaterThan((mobileBackBox?.x ?? 0) + (mobileBackBox?.width ?? 0));
+    expect(mobileSectionRailBox?.x ?? 1).toBeLessThanOrEqual(1);
+    expect(mobileSectionRailBox?.y ?? 0).toBeGreaterThanOrEqual(
+      ((mobileReturnBox?.y ?? 0) + (mobileReturnBox?.height ?? 0)) - 1,
+    );
+    expect(mobileSectionRailBox?.x ?? 0).toBeLessThan(mobileDetailContentBox?.x ?? 0);
+    expect(mobileSectionRailBox?.height ?? 0).toBeGreaterThan(mobileSectionRailBox?.width ?? 0);
+    const mobileRailLabelBoxes = await mobileSectionRail.locator('span').evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const box = node.getBoundingClientRect();
+        return { height: box.height, width: box.width };
+      }),
+    );
+    expect(mobileRailLabelBoxes.every((box) => box.width <= 2 && box.height <= 2)).toBe(true);
+    const detailScroll = narrowStudioSurface.locator(
+      '.studio-agents-workbench--detail-open .workstation-split-workbench__main-scroll',
+    );
+    await expect(detailScroll).toBeVisible();
+    const detailScrollMetrics = await detailScroll.evaluate((node) => ({
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+    }));
+    expect(detailScrollMetrics.scrollHeight).toBeGreaterThan(detailScrollMetrics.clientHeight);
+    await detailScroll.evaluate((node) => node.scrollTo(0, node.scrollHeight));
+    await expect.poll(async () => detailScroll.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    await expect(narrowStudioSurface.locator('.studio-agent-overview__next-steps')).toBeVisible();
+    await expect(mobileReturn.getByRole('button', { name: /^back$/i })).toBeVisible();
+    await page.getByRole('tab', { name: /^chat$/i }).click();
+    await expect(page.locator('.studio-panel--chat')).toContainText(/private workspace chat/i);
   });
 });

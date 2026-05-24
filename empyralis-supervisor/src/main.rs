@@ -501,6 +501,8 @@ mod tests {
             trace_id: "trace-1".to_string(),
             workspace_id: "ws-1".to_string(),
             arguments: serde_json::json!({}),
+            runtime_access_mode: None,
+            empyralis_approved: None,
             nonce: "nonce-1".to_string(),
             expires_at: expires_at.clone(),
             signature,

@@ -736,6 +736,7 @@ export type WorkstationClientPaths = {
   deployedAgentAuditExport: (deployedAgentId: string, limit?: number) => string;
   deployedAgentTestTurn: (deployedAgentId: string) => string;
   deployedAgentKnowledgeVerify: (deployedAgentId: string) => string;
+  deployedAgentKnowledgeFiles: (deployedAgentId: string) => string;
   deployedAgentAnalyticsRoster: string;
   deployedAgentAnalyticsDetail: (deployedAgentId: string) => string;
   deployedAgentAdminDashboard: (deployedAgentId: string, limit?: number, offset?: number) => string;
@@ -1052,6 +1053,11 @@ export type WorkstationClient = {
   pauseDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
   testTurnDeployedAgent: (options: { deployedAgentId: string; body: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
   verifyDeployedAgentKnowledge: (options: { deployedAgentId: string; query: string; limit?: number }) => Promise<Record<string, unknown> | null>;
+  uploadDeployedAgentKnowledgeFile: (options: {
+    deployedAgentId: string;
+    fileName: string;
+    contentText: string;
+  }) => Promise<Record<string, unknown> | null>;
   listDeployedAgentAnalytics: () => Promise<Record<string, unknown>>;
   getDeployedAgentAnalytics: (options: {
     deployedAgentId: string;
@@ -1420,6 +1426,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/test-turn`,
     deployedAgentKnowledgeVerify: (deployedAgentId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/knowledge/verify`,
+    deployedAgentKnowledgeFiles: (deployedAgentId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/knowledge/files`,
     deployedAgentAnalyticsRoster:
       `/api/deployed-agents/analytics${buildQueryString({ workspace_id: workspaceId })}`,
     deployedAgentAnalyticsDetail: (deployedAgentId) =>
@@ -3134,6 +3142,20 @@ export function createWorkstationClient(
             workspace_id: scope.workspaceId,
             query,
             limit,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    uploadDeployedAgentKnowledgeFile: ({ deployedAgentId, fileName, contentText }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentKnowledgeFiles(deployedAgentId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            file_name: fileName,
+            content_text: contentText,
           }),
         },
         policy: WRITE_REQUEST_POLICY,

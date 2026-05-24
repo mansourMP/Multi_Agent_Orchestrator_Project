@@ -40,6 +40,8 @@ import type {
 } from './deployed-agents/types';
 import {
   CUSTOM_STUDIO_TEMPLATE,
+  DEFAULT_SAFE_AGENT_PERSONA,
+  DEFAULT_SAFE_AGENT_SYSTEM_PROMPT,
   DEFAULT_STUDIO_TEMPLATE,
   normalizeSpecialistOverlayTabId,
   STUDIO_TEMPLATES,
@@ -100,6 +102,7 @@ import {
   normalizeTemplateToken,
   studioTemplateById,
   normalizeStudioTemplates,
+  parseKnowledgeSources,
 } from './deployed-agents/utils';
 
 function useStableEvent<TArgs extends unknown[], TResult>(
@@ -112,6 +115,49 @@ function useStableEvent<TArgs extends unknown[], TResult>(
   }, [handler]);
 
   return useCallback((...args: TArgs) => handlerRef.current(...args), []);
+}
+
+type StudioRosterFilterId = 'all' | 'live' | 'draft' | 'needs_attention' | 'paused';
+
+function normalizeStudioRosterFilter(value: string | null): StudioRosterFilterId {
+  return value === 'live' || value === 'draft' || value === 'needs_attention' || value === 'paused'
+    ? value
+    : 'all';
+}
+
+function agentDeploymentState(agent: DeployedAgentRecord): string {
+  return readString(agent.deployment_state ?? agent.status, 'draft').toLowerCase();
+}
+
+function agentNeedsAttention(agent: DeployedAgentRecord): boolean {
+  const config = readRecord(agent.config);
+  const metadata = readRecord(agent.metadata);
+  const state = agentDeploymentState(agent);
+  const error = readString(
+    agent.last_error
+    ?? config.last_error
+    ?? metadata.last_error
+    ?? config.blocker
+    ?? metadata.blocker,
+  );
+  return Boolean(error) || /attention|blocked|error|failed|invalid/.test(state);
+}
+
+function agentMatchesStudioRosterFilter(agent: DeployedAgentRecord, filter: StudioRosterFilterId): boolean {
+  const state = agentDeploymentState(agent);
+  if (filter === 'live') {
+    return state === 'live';
+  }
+  if (filter === 'paused') {
+    return state === 'paused' || state === 'disabled' || state === 'inactive' || state === 'suspended';
+  }
+  if (filter === 'needs_attention') {
+    return agentNeedsAttention(agent);
+  }
+  if (filter === 'draft') {
+    return state !== 'live' && state !== 'paused' && state !== 'disabled' && state !== 'inactive' && state !== 'suspended';
+  }
+  return true;
 }
 
 export function WorkstationDeployedAgentsPane({
@@ -156,6 +202,7 @@ export function WorkstationDeployedAgentsPane({
   const [isLoadingOverlayMemory, setIsLoadingOverlayMemory] = useState(false);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
   const [isLoadingRuntimeAttachments, setIsLoadingRuntimeAttachments] = useState(false);
+  const [isSavingProviderCredential, setIsSavingProviderCredential] = useState(false);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [wizardMode, setWizardMode] = useState<WizardMode>('create');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() => CUSTOM_STUDIO_TEMPLATE.id);
@@ -264,6 +311,10 @@ export function WorkstationDeployedAgentsPane({
     [searchParams],
   );
   const requestedCreateAgent = searchParams.get('createAgent') === '1';
+  const studioRosterFilter = useMemo(
+    () => normalizeStudioRosterFilter(searchParams.get('studioFilter')),
+    [searchParams],
+  );
   const requestedOverlayTab = useMemo(
     () => normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab')),
     [searchParams],
@@ -876,17 +927,21 @@ export function WorkstationDeployedAgentsPane({
     try {
       if (needsDeploySafeDefaults) {
         const currentState = buildWizardState(selectedAgent);
+        const safePersona = currentState.persona.trim() || DEFAULT_SAFE_AGENT_PERSONA;
+        const safeSystemPrompt = currentState.systemPrompt.trim() || DEFAULT_SAFE_AGENT_SYSTEM_PROMPT;
         const route = resolveProviderModelForTier(currentState.aiTier, providerCatalog);
         const resolvedProviderId = route.providerId || currentState.providerId || selectedProviderId(selectedAgent) || null;
         const resolvedModelId = route.modelId || currentState.modelId || selectedModelId(selectedAgent) || null;
         const patched = await services.client.updateDeployedAgent({
           deployedAgentId: agentId,
-          persona: currentState.persona,
-          systemPrompt: currentState.systemPrompt,
+          persona: safePersona,
+          systemPrompt: safeSystemPrompt,
           provider: resolvedProviderId,
           model: resolvedModelId,
           config: buildDeploymentConfig({
             ...currentState,
+            persona: safePersona,
+            systemPrompt: safeSystemPrompt,
             providerId: resolvedProviderId || '',
             modelId: resolvedModelId || '',
           }),
@@ -932,6 +987,8 @@ export function WorkstationDeployedAgentsPane({
     const currentState = buildWizardState(selectedAgent);
     const nextState: WizardState = {
       ...currentState,
+      persona: detailConfigDraft.persona,
+      systemPrompt: detailConfigDraft.systemPrompt,
       aiTier: detailConfigDraft.aiTier,
       aiSource: detailConfigDraft.aiSource,
       providerId: detailConfigDraft.providerId,
@@ -980,6 +1037,9 @@ export function WorkstationDeployedAgentsPane({
     try {
       const updated = await services.client.updateDeployedAgent({
         deployedAgentId: agentId,
+        persona: nextState.persona.trim(),
+        systemPrompt: nextState.systemPrompt.trim(),
+        knowledgeSources: parseKnowledgeSources(nextState.knowledgeSourceText),
         provider: resolvedProviderId || null,
         model: resolvedModelId || null,
         billingPlan: nextState.billingPlan,
@@ -990,7 +1050,7 @@ export function WorkstationDeployedAgentsPane({
       setAgents((current) => upsertAgentRecord(current, record));
       setSelectedAgentDetail(record);
       setDetailConfigDraft(buildDetailConfigDraft(record));
-      setStatusMessage(`Updated ${readString(record.name, 'assistant')} AI, actions, and memory settings.`);
+      setStatusMessage(`Updated ${readString(record.name, 'assistant')} purpose, AI, actions, and memory settings.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'AI, actions, and memory settings could not be saved.');
     } finally {
@@ -999,13 +1059,26 @@ export function WorkstationDeployedAgentsPane({
   }
 
   function updateDetailAiTier(nextTier: WizardState['aiTier']) {
-    const route = resolveProviderModelForTier(nextTier, providerCatalog);
-    setDetailConfigDraft((current) => current ? {
-      ...current,
-      aiTier: nextTier,
-      providerId: route.providerId || current.providerId,
-      modelId: route.modelId || current.modelId,
-    } : current);
+    setDetailConfigDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      if (current.aiSource === 'empyralis_credits') {
+        const route = resolveProviderModelForTier(nextTier, providerCatalog);
+        return {
+          ...current,
+          aiTier: nextTier,
+          providerId: route.providerId || current.providerId,
+          modelId: route.modelId || current.modelId,
+        };
+      }
+      const provider = providerCatalogIndex[current.providerId] ?? null;
+      return {
+        ...current,
+        aiTier: nextTier,
+        modelId: provider ? pickStudioModelForTier(provider, nextTier) : current.modelId,
+      };
+    });
   }
 
   function updateDetailProvider(nextProviderId: string) {
@@ -1035,26 +1108,32 @@ export function WorkstationDeployedAgentsPane({
 
   const activeChannels = listEnabledChannels(selectedAgent?.channels);
   const studioTitle = currentStudioSubview === 'agents'
-    ? 'Agents'
+    ? 'Business Agents'
     : currentStudioSubview === 'inbox'
-      ? 'Assistant inbox'
-      : 'Assistant launch';
+      ? 'Business Agent inbox'
+      : 'Business Agent launch';
   const studioSubtitle = currentStudioSubview === 'agents'
-    ? 'Manage customer-facing text/API agents with optional computer or self-hosted deployment modes.'
+    ? 'Workers Sage can run for customer, channel, and business workflows.'
     : currentStudioSubview === 'inbox'
-      ? 'Customer sessions and handoffs for assistants that are already working.'
-      : 'Go-live checks and spending guardrails for customer-facing assistants.';
+      ? 'Customer sessions and handoffs for Business Agents already working.'
+      : 'Go-live checks and spending guardrails for Business Agents.';
   const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
   const showReadinessPanel = currentStudioSubview === 'deploy';
   const visibleErrorMessage = isWizardScopedError(errorMessage) ? null : summarizeStudioErrorMessage(errorMessage);
   const isRecoverableLoadTimeout = Boolean(visibleErrorMessage && /too long to respond|timed out/i.test(visibleErrorMessage));
+  const isWorkspaceLoadAccessError =
+    visibleErrorMessage === 'Business Agents cannot load that workspace data right now. Refresh, or check workspace access if it keeps happening.';
+  const hasVisibleAgentWorkspace = Boolean(selectedAgent || agents.length > 0);
   const isAgentListUnavailable = Boolean(visibleErrorMessage && !isRecoverableLoadTimeout && !isLoadingAgents && agents.length === 0);
   const isAgentListPriming = agents.length === 0 && (
     isLoadingAgents
     || isRecoverableLoadTimeout
     || (!hasLoadedAgentListOnce && !isAgentListUnavailable)
   );
-  const visibleGlobalErrorMessage = isRecoverableLoadTimeout ? null : visibleErrorMessage;
+  const visibleGlobalErrorMessage =
+    isRecoverableLoadTimeout || (isWorkspaceLoadAccessError && hasVisibleAgentWorkspace)
+      ? null
+      : visibleErrorMessage;
   const hasGatewayOnlineTarget = useMemo(
     () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'local_companion' && target.online),
     [bootstrap.runtime.runtimeTargets],
@@ -1157,7 +1236,7 @@ export function WorkstationDeployedAgentsPane({
       return;
     }
     const confirmed = window.confirm(
-      `Delete saved conversation data for ${selectedExternalUserLabel} from this assistant? This removes message history, memory summaries, and usage records for that user.`,
+      `Delete saved conversation data for ${selectedExternalUserLabel} from this Business Agent? This removes message history, memory summaries, and usage records for that user.`,
     );
     if (!confirmed) {
       return;
@@ -1178,7 +1257,7 @@ export function WorkstationDeployedAgentsPane({
         loadAgentAnalytics(agentId),
         loadMemoryEntries(agentId),
       ]);
-      setStatusMessage(`Deleted saved data for ${selectedExternalUserLabel} from ${readString(selectedAgent?.name, 'this assistant')}.`);
+      setStatusMessage(`Deleted saved data for ${selectedExternalUserLabel} from ${readString(selectedAgent?.name, 'this Business Agent')}.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Customer data could not be deleted.');
     } finally {
@@ -1197,7 +1276,7 @@ export function WorkstationDeployedAgentsPane({
   const handleExportAudit = useStableEvent(async (agentId: string) => {
     const cleanAgentId = readString(agentId, '');
     if (!cleanAgentId) {
-      setErrorMessage('Select an assistant before exporting its audit log.');
+      setErrorMessage('Select a Business Agent before exporting its audit log.');
       return;
     }
     setBusyAuditExportAgentId(cleanAgentId);
@@ -1258,8 +1337,57 @@ export function WorkstationDeployedAgentsPane({
     setDetailConfigDraft((current) => current ? { ...current, ...next } : current);
   });
 
+  const handleUploadKnowledgeFile = useStableEvent(async (file: File) => {
+    const agentId = readString(selectedAgentId);
+    if (!agentId) {
+      throw new Error('Select a Business Agent before uploading knowledge.');
+    }
+    const contentText = await file.text();
+    const uploaded = await services.client.uploadDeployedAgentKnowledgeFile({
+      deployedAgentId: agentId,
+      fileName: file.name,
+      contentText,
+    });
+    const uploadedRecord = readRecord(readRecord(uploaded).deployed_agent);
+    if (!Object.keys(uploadedRecord).length) {
+      throw new Error('Knowledge file uploaded, but the Business Agent record was not returned.');
+    }
+    const record = uploadedRecord as DeployedAgentRecord;
+    setAgents((current) => upsertAgentRecord(current, record));
+    setSelectedAgentDetail(record);
+    setDetailConfigDraft(buildDetailConfigDraft(record));
+    setStatusMessage(`Added ${file.name} to ${readString(record.name, 'Business Agent')} knowledge.`);
+  });
+
   const handleRefreshProviderModelsEvent = useStableEvent((id: string) => {
     void refreshProviderModels(id);
+  });
+
+  const handleSaveProviderCredential = useStableEvent(async (providerId: string, apiKey: string) => {
+    const normalizedProviderId = readString(providerId);
+    const normalizedApiKey = readString(apiKey);
+    if (!normalizedProviderId || !normalizedApiKey) {
+      throw new Error('Select a provider and paste its API key first.');
+    }
+    setIsSavingProviderCredential(true);
+    setErrorMessage(null);
+    try {
+      await services.client.upsertWorkspaceProviderCredential({
+        provider: normalizedProviderId,
+        apiKey: normalizedApiKey,
+        baseUrl: null,
+        model: null,
+      });
+      await refreshProviderModels(normalizedProviderId);
+      const providerLabel = providerCatalogIndex[normalizedProviderId]?.label ?? normalizedProviderId;
+      setStatusMessage(`${providerLabel} API key saved for this workspace.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'API key could not be saved.';
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setIsSavingProviderCredential(false);
+    }
   });
 
   const handleDeploy = useStableEvent(() => {
@@ -1288,6 +1416,10 @@ export function WorkstationDeployedAgentsPane({
   const overlayMemoryEntries = overlayMemoryAgentId
     ? agentMemoryById[overlayMemoryAgentId] ?? []
     : [];
+  const filteredAgents = useMemo(
+    () => agents.filter((agent) => agentMatchesStudioRosterFilter(agent, studioRosterFilter)),
+    [agents, studioRosterFilter],
+  );
 
   return (
     <WorkstationSurfaceRoot surface="deployed-agents">
@@ -1302,7 +1434,7 @@ export function WorkstationDeployedAgentsPane({
         {visibleGlobalErrorMessage ? (
           <PlatformNotification
             tone="danger"
-            title="Agents Studio is having trouble loading"
+            title="Business Agents are having trouble loading"
             detail="Studio keeps successfully loaded agent data visible while retrying failed requests."
             onClose={() => setErrorMessage(null)}
           >
@@ -1341,7 +1473,7 @@ export function WorkstationDeployedAgentsPane({
               currentStudioSubview={currentStudioSubview}
               onRefreshAgents={handleRefreshAgentsEvent}
               studioTemplates={studioTemplates}
-              agents={agents}
+              agents={filteredAgents}
               selectedAgentId={selectedAgentId}
               busyAuditExportAgentId={busyAuditExportAgentId}
               onSelectAgent={handleSelectAgent}
@@ -1377,7 +1509,7 @@ export function WorkstationDeployedAgentsPane({
                 ) : isAgentListUnavailable ? (
                   <>
                     <strong>Agent list did not load</strong>
-                    <span>Retry the workspace agent list.</span>
+                    <span>Retry the Business Agent list.</span>
                     <AppButton type="button" tone="secondary" onClick={handleRefreshAgentsEvent}>
                       Retry
                     </AppButton>
@@ -1385,17 +1517,25 @@ export function WorkstationDeployedAgentsPane({
                 ) : null}
               </div>
             ) : agents.length === 0 ? (
-              <div className="studio-agent-detail-empty" aria-label="No Studio agents">
-                <strong>No agents yet</strong>
-                <span>Create a Studio agent to configure knowledge, model, actions, and test chat.</span>
+              <div className="studio-agent-detail-empty" aria-label="No Business Agents">
+                <strong>No Business Agents yet</strong>
+                <span>Create a worker to configure knowledge, model, actions, channels, and test chat.</span>
                 <AppButton type="button" onClick={() => openCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                  Create agent
+                  Create Business Agent
+                </AppButton>
+              </div>
+            ) : filteredAgents.length === 0 ? (
+              <div className="studio-agent-detail-empty" aria-label="No matching Business Agents">
+                <strong>No Business Agents match this filter</strong>
+                <span>Choose another Studio filter or create a new Business Agent.</span>
+                <AppButton type="button" tone="secondary" onClick={handleRefreshAgentsEvent}>
+                  Refresh
                 </AppButton>
               </div>
             ) : (
               <div className="app-watermark">
                 <StudioIcon className="app-watermark__icon" size={48} />
-                <div className="app-watermark__text">Select an agent to view configuration and signals</div>
+                <div className="app-watermark__text">Select a Business Agent to view configuration and signals</div>
               </div>
             )
           ) : null}
@@ -1408,9 +1548,12 @@ export function WorkstationDeployedAgentsPane({
               onSaveDetailConfig={handleSaveDetailConfigEvent}
               isSavingDetailConfig={isSavingDetailConfig}
               onUpdateDetailConfig={handleUpdateDetailConfig}
+              onUploadKnowledgeFile={handleUploadKnowledgeFile}
               providerCatalog={providerCatalog}
               isLoadingProviderCatalog={isLoadingProviderCatalog}
               onRefreshProviderModels={handleRefreshProviderModelsEvent}
+              onSaveProviderCredential={handleSaveProviderCredential}
+              isSavingProviderCredential={isSavingProviderCredential}
               workspaceId={workspaceId}
               services={services}
               bootstrap={bootstrap}

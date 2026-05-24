@@ -27,7 +27,7 @@ export function AgentActionCapabilitySections({
     <div className="studio-actions">
       <div className="studio-actions__summary" aria-label="Actions summary">
         <div className="studio-actions__summary-copy">
-          <span>Action system</span>
+          <span>Allowed actions</span>
           <strong>{readySkills.length} workflows ready</strong>
           <p>Playbooks are the customer-facing workflows. Tools are the permissions those workflows can call.</p>
         </div>
@@ -50,7 +50,7 @@ export function AgentActionCapabilitySections({
         <div className="studio-actions__section-head">
           <div>
             <span>Action playbooks</span>
-            <strong>Workflows this agent can perform</strong>
+            <strong>Workflows this Business Agent can perform</strong>
           </div>
           <small>Powered by enabled actions</small>
         </div>
@@ -79,7 +79,7 @@ export function AgentActionCapabilitySections({
         <div className="studio-actions__section-head">
           <div>
             <span>Tools</span>
-            <strong>Actions this agent is allowed to use</strong>
+            <strong>Actions this Business Agent is allowed to use</strong>
           </div>
           <div className="studio-actions__section-head-actions">
             <small>{selectedToolIds.length} enabled</small>

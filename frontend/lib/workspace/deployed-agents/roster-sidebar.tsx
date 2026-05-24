@@ -185,10 +185,10 @@ export const AgentRosterSidebar = memo(({
                     <AppButton
                       type="button"
                       tone="secondary"
-                      onClick={() => onOpenAssistantDetail(recentlyCreatedAgentId)}
-                    >
-                      Open assistant detail
-                    </AppButton>
+                  onClick={() => onOpenAssistantDetail(recentlyCreatedAgentId)}
+                >
+                  Open Business Agent detail
+                </AppButton>
                   </div>
                 </ListDetailPanel>
               ) : null}
@@ -196,15 +196,15 @@ export const AgentRosterSidebar = memo(({
               <ListDetailPanel
                 className="studio-panel studio-panel--demo-path"
                 eyebrow="Start here"
-                title="Create one working business assistant"
+                title="Create one working Business Agent"
                 subtitle="Choose a common business job, add the facts it should trust, test privately, then go live."
                 actions={(
                   <AppButton type="button" tone="primary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                    Create assistant
+                    Create Business Agent
                   </AppButton>
                 )}
               >
-                <div className="deployed-agents-card__badges" aria-label="Business assistant creation steps">
+                <div className="deployed-agents-card__badges" aria-label="Business Agent creation steps">
                   <span className="deployed-agents-card__badge">1. Pick business</span>
                   <span className="deployed-agents-card__badge">2. Add trusted info</span>
                   <span className="deployed-agents-card__badge">3. Test privately</span>
@@ -243,7 +243,7 @@ export const AgentRosterSidebar = memo(({
                 </div>
                 {additionalStudioTemplates.length > 0 ? (
                   <details className="app-stack-3">
-                    <summary>More assistant types</summary>
+                    <summary>More Business Agent templates</summary>
                     <div className="studio-template-grid" data-studio-template-grid="more">
                       {additionalStudioTemplates.map((template) => (
                         <StudioTemplateCard
@@ -265,7 +265,7 @@ export const AgentRosterSidebar = memo(({
               collapsed && 'studio-agents-nav--collapsed',
               agents.length === 0 && 'studio-agents-nav--empty',
             )}
-            aria-label="Workspace agents"
+            aria-label="Business Agents"
           >
             {collapsed && agents.length === 0 ? null : isAgentListPriming ? (
               <div className="studio-agents-nav__loading">
@@ -276,26 +276,26 @@ export const AgentRosterSidebar = memo(({
             ) : isAgentListUnavailable ? (
               <div className="studio-agents-nav__empty">
                 <div className="studio-agents-nav__empty-copy">
-                  <strong>Could not load agents</strong>
-                  <span>Retry the agent list, or create a new workspace agent.</span>
+                  <strong>Could not load Business Agents</strong>
+                  <span>Retry the worker list, or create a new Business Agent.</span>
                 </div>
                 <div className="studio-agents-nav__empty-actions">
                   <AppButton type="button" tone="primary" onClick={onRefreshAgents}>
                     Retry
                   </AppButton>
                   <AppButton type="button" tone="secondary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                    Create agent
+                    Create Business Agent
                   </AppButton>
                 </div>
               </div>
             ) : agents.length === 0 ? (
               <div className="studio-agents-nav__empty">
                 <div className="studio-agents-nav__empty-copy">
-                  <strong>No agents yet</strong>
-                  <span>Create the first workspace agent.</span>
+                  <strong>No Business Agents yet</strong>
+                  <span>Create the first worker for a customer, channel, or business workflow.</span>
                 </div>
                 <AppButton type="button" tone="primary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
-                  Create agent
+                  Create Business Agent
                 </AppButton>
               </div>
             ) : (
@@ -323,7 +323,7 @@ export const AgentRosterSidebar = memo(({
           className="studio-panel studio-panel--readiness"
           eyebrow="Readiness"
           title="Launch readiness"
-          subtitle="The launch contract for this customer-facing text/API agent."
+          subtitle="The launch contract for this Business Agent."
           actions={selectedAgent ? (
             <AppButton
               type="button"
@@ -352,7 +352,7 @@ export const AgentRosterSidebar = memo(({
               </DataBadge>
             </div>
             <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-              <FormReadout label="Runtime type" value={selectedAgentRuntimePlacement === 'managed_cloud' ? 'Text/API cloud agent' : selectedAgentRuntimeOption.label} />
+              <FormReadout label="Runtime type" value={selectedAgentRuntimePlacement === 'managed_cloud' ? 'Cloud worker' : selectedAgentRuntimeOption.label} />
               <FormReadout label="Computer required" value={selectedAgentRuntimePlacement === 'managed_cloud' ? 'No' : 'Yes, setup required'} />
               <FormReadout label="Runtime owner" value={selectedAgentRuntimeOption.supplier === 'empyralis' ? 'Empyralis' : 'Customer'} />
               <FormReadout label="Cost posture" value={selectedAgentRuntimeOption.costRisk} />
@@ -391,7 +391,7 @@ export const AgentRosterSidebar = memo(({
                 <StateBanner
                   tone="success"
                   title="Self-hosted readiness passed"
-                  detail="This assistant runs on customer-hosted compute only. No silent fallback to platform-hosted compute."
+                  detail="This Business Agent runs on customer-hosted compute only. No silent fallback to platform-hosted compute."
                 />
               )}
             </div>

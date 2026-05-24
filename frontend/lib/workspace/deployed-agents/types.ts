@@ -54,6 +54,7 @@ export type WizardState = {
   computerAutomationMaxSessions: string;
   computerAutomationDailyBudgetUsd: string;
   computerAutomationMonthlyBudgetUsd: string;
+  runtimeAccessMode: 'default_guarded' | 'full_access';
   approvalMode: 'guarded' | 'balanced' | 'autonomous';
   customerChannel: 'telegram' | 'whatsapp' | 'web_widget' | 'draft';
   telegramEnabled: boolean;
@@ -131,7 +132,7 @@ export type StudioPaneCache = {
 
 export type DetailConfigDraft = Pick<
   WizardState,
-  'aiTier' | 'aiSource' | 'providerId' | 'modelId' | 'billingPlan' | 'selectedToolIds' | 'memoryEnabled' | 'contextBudgetPreset' | 'retentionPreset'
+  'persona' | 'systemPrompt' | 'knowledgeSourceText' | 'aiTier' | 'aiSource' | 'providerId' | 'modelId' | 'billingPlan' | 'selectedToolIds' | 'memoryEnabled' | 'contextBudgetPreset' | 'retentionPreset'
 >;
 
 export type ProviderCatalogModelSnapshot = {

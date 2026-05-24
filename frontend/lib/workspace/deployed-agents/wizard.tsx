@@ -38,6 +38,7 @@ import {
   STUDIO_AI_TIER_OPTIONS,
   STUDIO_APPROVAL_MODE_OPTIONS,
   STUDIO_DEFAULT_RUNTIME_PLACEMENT,
+  STUDIO_RUNTIME_ACCESS_MODE_OPTIONS,
   STUDIO_RUNTIME_OPTIONS,
   STUDIO_TOOL_OPTIONS,
 } from './constants';
@@ -272,7 +273,7 @@ export function AgentWizard({
     if (mode === 'create') {
       const name = stateForSave.name.trim();
       if (!name) {
-        setWizardErrorMessage('Name the agent before creating it.');
+        setWizardErrorMessage('Name the Business Agent before creating it.');
         return;
       }
       setIsSubmittingWizard(true);
@@ -298,7 +299,7 @@ export function AgentWizard({
             },
             memory_policy: {
               memory_enabled: false,
-              context_budget_preset: 'balanced',
+              context_budget_preset: 'standard',
               retention_preset: 'standard',
             },
             escalation_policy: {
@@ -328,7 +329,7 @@ export function AgentWizard({
         });
         onSuccess(created as DeployedAgentRecord);
       } catch (error) {
-        setWizardErrorMessage(error instanceof Error ? error.message : 'The agent could not be created.');
+        setWizardErrorMessage(error instanceof Error ? error.message : 'The Business Agent could not be created.');
       } finally {
         setIsSubmittingWizard(false);
       }
@@ -386,16 +387,16 @@ export function AgentWizard({
         return;
       }
       if (!stateForSave.selfHostedPrivacyAccepted) {
-        setWizardErrorMessage('Accept the privacy contract before saving a self-hosted assistant.');
+        setWizardErrorMessage('Accept the privacy contract before saving a Server/VPS Business Agent.');
         return;
       }
       if (!stateForSave.selfHostedSafetyAccepted) {
-        setWizardErrorMessage('Accept the safety contract before saving a self-hosted assistant.');
+        setWizardErrorMessage('Accept the safety contract before saving a Server/VPS Business Agent.');
         return;
       }
     }
     if (stateForSave.customerChannel === 'telegram' && stateForSave.telegramEnabled && !stateForSave.telegramConnectorId.trim()) {
-      setWizardErrorMessage('Choose a Telegram connected app before saving a live-ready assistant.');
+      setWizardErrorMessage('Choose a Telegram connected app before saving a live-ready Business Agent.');
       return;
     }
 
@@ -447,7 +448,7 @@ export function AgentWizard({
     };
 
     if (!payload.name) {
-      setWizardErrorMessage('An assistant needs a public name before it can be saved.');
+      setWizardErrorMessage('A Business Agent needs a public name before it can be saved.');
       return;
     }
 
@@ -456,7 +457,7 @@ export function AgentWizard({
     try {
       const agentId = editAgentId;
       if (!agentId) {
-        throw new Error('Select an assistant before editing it.');
+        throw new Error('Select a Business Agent before editing it.');
       }
       const updated = await services.client.updateDeployedAgent({
         deployedAgentId: agentId,
@@ -464,7 +465,7 @@ export function AgentWizard({
       });
       onSuccess(updated as DeployedAgentRecord);
     } catch (error) {
-      setWizardErrorMessage(error instanceof Error ? error.message : 'The assistant could not be saved.');
+      setWizardErrorMessage(error instanceof Error ? error.message : 'The Business Agent could not be saved.');
     } finally {
       setIsSubmittingWizard(false);
     }
@@ -473,11 +474,11 @@ export function AgentWizard({
   return (
     <CommandSheet
       open={open}
-      title={mode === 'create' ? 'Create agent' : 'Edit agent'}
+      title={mode === 'create' ? 'Create Business Agent' : 'Edit Business Agent'}
       description={
         mode === 'create'
-          ? 'Start with a profile. You can add knowledge, integrations, and channels after it exists.'
-          : 'Adjust the assistant profile, knowledge, customer channel, and safety behavior.'
+          ? 'Start with a worker profile. You can add knowledge, connections, and channels after it exists.'
+          : 'Adjust the worker profile, knowledge, customer channel, and safety behavior.'
       }
       onClose={onClose}
       actions={(
@@ -508,7 +509,7 @@ export function AgentWizard({
               }}
               disabled={isSubmittingWizard}
             >
-              {mode === 'create' ? 'Create agent' : 'Save changes'}
+              {mode === 'create' ? 'Create Business Agent' : 'Save changes'}
             </AppButton>
           )}
         </div>
@@ -544,18 +545,18 @@ export function AgentWizard({
             mode === 'create' ? (
               <div className="deployed-agents-wizard__create-draft">
                 <div className="deployed-agents-wizard__quickstart">
-                  <FormField label="Agent name" hint="The name your team sees in the agent list.">
+                  <FormField label="Business Agent name" hint="The name your team sees in the worker list.">
                     <FormInput
                       value={wizardState.name}
                       onChange={(event) => setWizardField('name', event.currentTarget.value)}
-                      placeholder="New agent"
+                      placeholder="New Business Agent"
                     />
                   </FormField>
                 </div>
               </div>
             ) : (
               <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                <FormField label="Assistant name" hint="The public name customers will see.">
+                <FormField label="Business Agent name" hint="The public name customers will see.">
                   <FormInput
                     value={wizardState.name}
                     onChange={(event) => setWizardField('name', event.currentTarget.value)}
@@ -569,17 +570,17 @@ export function AgentWizard({
                     placeholder="https://example.com/avatar.png"
                   />
                 </FormField>
-                <FormField label="Personality" hint="Short description of how this assistant should speak and behave.">
+                <FormField label="Tone" hint="Optional voice and style for this Business Agent.">
                   <FormTextarea
-                    rows={4}
+                    rows={3}
                     value={wizardState.persona}
                     onChange={(event) => setWizardField('persona', event.currentTarget.value)}
-                    placeholder="Fast, friendly customer assistant for a cafe, clinic, shop, or support desk."
+                    placeholder="Friendly, concise, formal, warm, luxury, clinic front desk..."
                   />
                   <div className="deployed-agents-wizard__memory-toggle">
                     <div className="sage-tool-row__copy">
                       <strong className="sage-tool-row__title">Enable persistent memory</strong>
-                      <p className="sage-tool-row__description">Assistant remembers useful customer facts across conversations.</p>
+                      <p className="sage-tool-row__description">Business Agent remembers useful customer facts across conversations.</p>
                     </div>
                     <button
                       type="button"
@@ -592,7 +593,7 @@ export function AgentWizard({
                     </button>
                   </div>
                 </FormField>
-                <FormField label="Purpose and behavior" hint="Core customer instructions this assistant follows.">
+                <FormField label="Purpose and behavior" hint="Core customer instructions this Business Agent follows.">
                   <FormTextarea
                     rows={6}
                     value={wizardState.systemPrompt}
@@ -600,7 +601,7 @@ export function AgentWizard({
                     placeholder="Answer menu questions, check specials and availability, confirm orders clearly, and escalate edge cases to a human."
                   />
                 </FormField>
-                <FormField label="Knowledge references" hint="Menu, catalog, FAQ, or Google Sheet references, one per line.">
+                <FormField label="Files and sources" hint="Menu, catalog, FAQ, website, or Google Sheet references, one per line.">
                   <FormTextarea
                     rows={6}
                     value={wizardState.knowledgeSourceText}
@@ -618,7 +619,7 @@ export function AgentWizard({
 
           {wizardStep.id === 'knowledge' ? (
             <div className="app-stack-3">
-              <FormField label="Knowledge source" hint="Paste a sheet, text document, URL, or leave empty and add it later.">
+              <FormField label="Files and sources" hint="Paste a sheet, text document, URL, or leave empty and add it later.">
                 <FormTextarea
                   rows={5}
                   value={wizardState.knowledgeSourceText}
@@ -626,7 +627,7 @@ export function AgentWizard({
                   placeholder={selectedStudioTemplate.knowledgePlaceholder}
                 />
               </FormField>
-              <FormField label="Instructions" hint="Specific rules this assistant must follow when answering customers.">
+              <FormField label="Instructions" hint="Specific rules this Business Agent must follow when answering customers.">
                 <FormTextarea
                   data-deployed-agent-instructions-input="true"
                   rows={6}
@@ -644,7 +645,7 @@ export function AgentWizard({
                     placeholder="Quickly ask questions, check availability, and get help."
                   />
                 </FormField>
-                <FormField label="Core value" hint="One sentence explaining what this assistant does for customers.">
+                <FormField label="Core value" hint="One sentence explaining what this Business Agent does for customers.">
                   <FormTextarea
                     rows={3}
                     value={wizardState.welcomeCoreValue}
@@ -658,7 +659,7 @@ export function AgentWizard({
 
           {wizardStep.id === 'tools' ? (
             <div className="app-stack-3">
-              <FormField label="Actions this assistant can take" hint="Keep this narrow. Add only the actions needed for the job.">
+              <FormField label="Allowed actions" hint="Keep this narrow. Add only the actions and playbooks needed for the job.">
                 <div className="deployed-agents-wizard__tool-grid">
                   {STUDIO_TOOL_OPTIONS.map((tool) => {
                     const selected = wizardState.selectedToolIds.includes(tool.id);
@@ -710,7 +711,7 @@ export function AgentWizard({
                 <SkeletonBlock height="5rem" />
               ) : null}
               <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                <FormField label="Telegram state" hint="Enable Telegram when this assistant is ready for live customer conversations.">
+                <FormField label="Telegram state" hint="Enable Telegram when this Business Agent is ready for live customer conversations.">
                   <FormSelect
                     value={wizardState.telegramEnabled ? 'enabled' : 'disabled'}
                     onChange={(event) => {
@@ -760,7 +761,7 @@ export function AgentWizard({
               {!isLoadingTelegramReadiness && (selectedTelegramReadiness?.connectors.length ?? 0) === 0 ? (
                 <div className="app-stack-3">
                   <StateBanner tone="neutral" title="No Telegram bot connected yet.">
-                    Build needs one Telegram bot before this assistant can go live.
+                    Build needs one Telegram bot before this Business Agent can go live.
                   </StateBanner>
                   <div className="app-inline-actions">
                     <AppButton
@@ -828,7 +829,7 @@ export function AgentWizard({
           {wizardStep.id === 'safety' ? (
             <div className="app-stack-3">
               <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                <FormField label="Human handoff" hint="When the assistant should involve a human.">
+                <FormField label="Human handoff" hint="When the Business Agent should involve a human.">
                   <FormSelect
                     value={wizardState.escalationPreset}
                     onChange={(event) => setWizardField('escalationPreset', event.currentTarget.value)}
@@ -891,11 +892,11 @@ export function AgentWizard({
               <StateBanner
                 tone="neutral"
                 title="Draft review"
-                detail="This is the pre-launch checklist. Create the assistant, test it privately, then deploy from the detail panel."
+                detail="This is the pre-launch checklist. Create the Business Agent, test it privately, then deploy from the detail panel."
               />
               <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                 <FormReadout label="Template" value={selectedStudioTemplate.title} />
-                <FormReadout label="Assistant name" value={wizardState.name || 'Not named'} />
+                <FormReadout label="Business Agent" value={wizardState.name || 'Not named'} />
                 <FormReadout label="Channel" value={wizardState.customerChannel === 'telegram' ? 'Telegram bot' : wizardState.customerChannel === 'draft' ? 'Draft only' : humanizeToken(wizardState.customerChannel, 'Draft only')} />
                 <FormReadout label="Knowledge" value={wizardState.knowledgeSourceText.trim() ? 'Source added' : 'Add later'} />
                 <FormReadout label="Actions" value={`${wizardState.selectedToolIds.length} enabled`} />
@@ -908,11 +909,11 @@ export function AgentWizard({
             <div className="app-stack-3">
               <StateBanner
                 tone="neutral"
-                title="Launch contract for this business assistant"
-                detail="Defaults are safe for production. Change these only when the assistant needs a different runtime, channel, or spending cap."
+                title="Launch contract for this Business Agent"
+                detail="Defaults are safe for production. Change these only when the worker needs a different runtime, channel, or spending cap."
               />
               <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                <FormField label="AI tier" hint="Product-level capability for this assistant.">
+                <FormField label="AI tier" hint="Product-level capability for this Business Agent.">
                   <FormSelect
                     value={wizardState.aiTier}
                     onChange={(event) => {
@@ -936,7 +937,7 @@ export function AgentWizard({
                     {STUDIO_AI_TIER_OPTIONS.find((item) => item.value === wizardState.aiTier)?.hint}
                   </div>
                 </FormField>
-                <FormField label="Where it runs" hint="Studio agents start as text/API agents in Empyralis Cloud. Computer and customer-owned deployments require setup.">
+                <FormField label="Where it runs" hint="Business Agents start as Cloud workers. Agent Computer options require explicit setup.">
                   <RuntimeModeSelector
                     value={wizardState.runtimePlacement}
                     options={STUDIO_RUNTIME_OPTIONS}
@@ -951,7 +952,7 @@ export function AgentWizard({
                     }}
                   />
                 </FormField>
-                <FormField label="Approval mode" hint="How much autonomy this assistant gets before human handoff.">
+                <FormField label="Customer handoff mode" hint="How much routine customer work this Business Agent handles before human handoff.">
                   <FormSelect
                     value={wizardState.approvalMode}
                     onChange={(event) => {
@@ -979,7 +980,7 @@ export function AgentWizard({
                     {STUDIO_APPROVAL_MODE_OPTIONS.find((item) => item.value === wizardState.approvalMode)?.hint}
                   </div>
                 </FormField>
-                <FormField label="Customer Channels" hint="Primary live channel for this assistant.">
+                <FormField label="Customer Channels" hint="Primary live channel for this Business Agent.">
                   <FormSelect
                     value={wizardState.customerChannel}
                     onChange={(event) => {
@@ -1038,7 +1039,7 @@ export function AgentWizard({
                     <FormReadout label="Capabilities" value={selectedSelfHostedNode?.capabilities.length ? selectedSelfHostedNode.capabilities.join(', ') : 'n/a'} />
                   </FormGrid>
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Privacy contract" hint="Required before a self-hosted assistant can be saved.">
+                    <FormField label="Privacy contract" hint="Required before a Server/VPS Business Agent can be saved.">
                       <FormSelect
                         value={wizardState.selfHostedPrivacyAccepted ? 'accepted' : 'pending'}
                         onChange={(event) => setWizardField('selfHostedPrivacyAccepted', event.currentTarget.value === 'accepted')}
@@ -1047,7 +1048,7 @@ export function AgentWizard({
                         <option value="accepted">Accepted</option>
                       </FormSelect>
                     </FormField>
-                    <FormField label="Safety contract" hint="Required before a self-hosted assistant can be saved.">
+                    <FormField label="Safety contract" hint="Required before a Server/VPS Business Agent can be saved.">
                       <FormSelect
                         value={wizardState.selfHostedSafetyAccepted ? 'accepted' : 'pending'}
                         onChange={(event) => setWizardField('selfHostedSafetyAccepted', event.currentTarget.value === 'accepted')}
@@ -1067,10 +1068,10 @@ export function AgentWizard({
               <details className="app-stack-3">
                 <summary>Computer Automation Add-on</summary>
                 <p className="app-surface-field-help">
-                  Off by default. Enable only when this assistant must operate websites or apps without APIs.
+                  Off by default. Enable only when this Business Agent must operate websites or apps without APIs.
                 </p>
                 <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                  <FormField label="Automation" hint="Customer messages cannot start computer sessions while this is off.">
+                  <FormField label="Automation" hint="Customer messages cannot start Agent Computer sessions while this is off.">
                     <FormSelect
                       value={wizardState.computerAutomationEnabled ? 'enabled' : 'disabled'}
                       onChange={(event) => setWizardState((current) => ({
@@ -1079,7 +1080,20 @@ export function AgentWizard({
                       }))}
                     >
                       <option value="disabled">Off</option>
-                      <option value="enabled">On — approval gated</option>
+                      <option value="enabled">On</option>
+                    </FormSelect>
+                  </FormField>
+                  <FormField label="Access mode" hint="Default Guarded asks inline only for risky computer actions. Autonomous Agent skips Empyralis per-action prompts after setup warning.">
+                    <FormSelect
+                      value={wizardState.runtimeAccessMode}
+                      disabled={!wizardState.computerAutomationEnabled}
+                      onChange={(event) => setWizardField('runtimeAccessMode', event.currentTarget.value as WizardState['runtimeAccessMode'])}
+                    >
+                      {STUDIO_RUNTIME_ACCESS_MODE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </FormSelect>
                   </FormField>
                   <FormField label="Computer add-on" hint="Choose the computer environment for this add-on.">
@@ -1103,7 +1117,7 @@ export function AgentWizard({
                       placeholder="supplier.example.com, portal.example.com"
                     />
                   </FormField>
-                  <FormField label="Max active sessions" hint="Many agents can be registered; active sessions stay capped and the rest queue.">
+                  <FormField label="Max active sessions" hint="Many Business Agents can be registered; active sessions stay capped and the rest queue.">
                     <FormInput
                       type="number"
                       min="1"
@@ -1137,7 +1151,7 @@ export function AgentWizard({
               <details className="app-stack-3">
                 <summary>AI model and cost details</summary>
                 <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                  <FormField label="AI model provider" hint="Choose the AI model provider for this assistant.">
+                  <FormField label="AI model provider" hint="Choose the AI model provider for this Business Agent.">
                     <FormSelect
                       data-deployed-agent-provider-select="true"
                       value={wizardState.providerId}
@@ -1166,7 +1180,7 @@ export function AgentWizard({
                       ))}
                     </FormSelect>
                   </FormField>
-                  <FormField label="Model" hint="Choose the model this assistant should use.">
+                  <FormField label="Model" hint="Choose the model this Business Agent should use.">
                     <FormSelect
                       data-deployed-agent-model-select="true"
                       value={wizardState.modelId}
@@ -1206,7 +1220,7 @@ export function AgentWizard({
                 />
               </details>
               <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                <FormField label="Budget cap (USD)" hint="Automatic monthly pause threshold for this assistant.">
+                <FormField label="Budget cap (USD)" hint="Automatic monthly pause threshold for this Business Agent.">
                   <FormInput
                     value={wizardState.monthlyCostCapUsd}
                     onChange={(event) => setWizardField('monthlyCostCapUsd', event.currentTarget.value)}

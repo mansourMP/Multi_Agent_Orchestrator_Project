@@ -60,6 +60,7 @@ export function ListDetailPanel({
   subtitle,
   actions,
   className,
+  hideHeaderText = false,
   children,
 }: PropsWithChildren<{
   eyebrow?: ReactNode;
@@ -67,21 +68,29 @@ export function ListDetailPanel({
   subtitle?: ReactNode;
   actions?: ReactNode;
   className?: string;
+  hideHeaderText?: boolean;
 }>) {
+  const showHeaderText = !hideHeaderText;
+  const showHeader = showHeaderText || Boolean(actions);
+
   return (
     <MotionSlidePanel className={joinClassNames('app-list-detail-panel', className)}>
-      <div className="app-list-detail-panel__header">
-        <div className="app-list-detail-panel__title-group">
-          {eyebrow ? (
-            <span className="app-list-detail-panel__eyebrow">{eyebrow}</span>
+      {showHeader ? (
+        <div className={joinClassNames('app-list-detail-panel__header', !showHeaderText && 'app-list-detail-panel__header--actions-only')}>
+          {showHeaderText ? (
+            <div className="app-list-detail-panel__title-group">
+              {eyebrow ? (
+                <span className="app-list-detail-panel__eyebrow">{eyebrow}</span>
+              ) : null}
+              <strong className="app-list-detail-panel__title">{title}</strong>
+              {subtitle ? (
+                <div className="app-list-detail-panel__subtitle">{subtitle}</div>
+              ) : null}
+            </div>
           ) : null}
-          <strong className="app-list-detail-panel__title">{title}</strong>
-          {subtitle ? (
-            <div className="app-list-detail-panel__subtitle">{subtitle}</div>
-          ) : null}
+          {actions}
         </div>
-        {actions}
-      </div>
+      ) : null}
       <div className="app-list-detail-panel__body">
         {children}
       </div>

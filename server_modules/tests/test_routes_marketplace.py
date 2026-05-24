@@ -19,6 +19,12 @@ def _build_app() -> FastAPI:
     return app
 
 
+def _seed_browser_session(client: httpx.AsyncClient, *, csrf: bool) -> None:
+    client.cookies.set(routes_marketplace.auth_module.AUTH_ACCESS_COOKIE_NAME, "access-cookie", path="/")
+    if csrf:
+        client.cookies.set(routes_marketplace.auth_module.AUTH_CSRF_COOKIE_NAME, "csrf-cookie", path="/")
+
+
 def _patch_app_registry(monkeypatch: pytest.MonkeyPatch, temp_root: Path) -> None:
     registry_path = temp_root / "apps.json"
 
@@ -40,6 +46,47 @@ def _patch_app_registry(monkeypatch: pytest.MonkeyPatch, temp_root: Path) -> Non
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("path", "json_body"),
+    [
+        (
+            "/api/workspaces/ws-1/marketplace/providers",
+            {"label": "Provider", "description": "Provider package."},
+        ),
+        (
+            "/api/workspaces/ws-1/marketplace/apps",
+            {"label": "App", "description": "App package."},
+        ),
+        ("/api/workspaces/ws-1/marketplace/packages/pkg-1/install", None),
+        (
+            "/api/workspaces/ws-1/marketplace/packages/pkg-1/runtime-events",
+            {"event_type": "runtime_ok"},
+        ),
+    ],
+)
+async def test_workspace_marketplace_mutations_reject_cookie_session_without_csrf(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    json_body: dict[str, object] | None,
+) -> None:
+    app = _build_app()
+    routes_marketplace.auth_module.CSRF_FAILURE_RATE_LIMIT_BUCKETS.clear()
+
+    def fail_decode_token(_token: str):
+        pytest.fail("cookie auth token should not be decoded before CSRF validation")
+
+    monkeypatch.setattr(routes_marketplace.auth_module, "_decode_token_payload", fail_decode_token)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_session(client, csrf=False)
+        response = await client.post(path, json=json_body)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "CSRF validation failed."
 
 
 @pytest.mark.anyio

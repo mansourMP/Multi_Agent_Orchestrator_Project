@@ -18,6 +18,12 @@ def _build_app() -> FastAPI:
     return app
 
 
+def _seed_browser_session(client: httpx.AsyncClient, *, csrf: bool) -> None:
+    client.cookies.set(routes_mini_apps.auth_module.AUTH_ACCESS_COOKIE_NAME, "access-cookie", path="/")
+    if csrf:
+        client.cookies.set(routes_mini_apps.auth_module.AUTH_CSRF_COOKIE_NAME, "csrf-cookie", path="/")
+
+
 async def _grant_mini_app_ai_invoke(client: httpx.AsyncClient, workspace_id: str = "ws-1", app_id: str = "writing"):
     response = await client.put(
         f"/api/workspaces/{workspace_id}/mini-apps/{app_id}",
@@ -147,6 +153,53 @@ def test_active_session_secret_fails_closed_in_production_without_real_secret():
 def test_active_session_secret_keeps_local_dev_fallback_compatibility():
     with patch.dict(os.environ, {"ORION_ENV": "local"}, clear=True):
         assert routes_mini_apps._active_session_secret().startswith(b"empyralis-mini-app-active-session")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("PUT", "/api/workspaces/ws-1/mini-apps/writing", {"label": "Writing"}),
+        ("POST", "/api/workspaces/ws-1/mini-apps/writing/share-link", None),
+        ("POST", "/api/workspaces/ws-1/mini-apps/install-shared", {"token": "share-token"}),
+        ("POST", "/api/workspaces/ws-1/mini-apps/writing/records/retrieve", {}),
+        ("POST", "/api/workspaces/ws-1/mini-apps/writing/active-session", {}),
+        (
+            "POST",
+            "/api/workspaces/ws-1/mini-apps/writing/bridge/messages",
+            {"origin": "https://apps.example.com", "bridge_kind": "command", "bridge_type": "ping"},
+        ),
+        ("POST", "/api/workspaces/ws-1/mini-apps/writing/invoke", {"input": "Rewrite this."}),
+        ("POST", "/api/workspaces/ws-1/mini-apps/calorie_tracking/events", {}),
+        ("PUT", "/api/workspaces/ws-1/mini-apps/calorie_tracking/goals", {}),
+        ("POST", "/api/workspaces/ws-1/mini-apps/flashcards/cards", {"front": "Q", "back": "A"}),
+        ("POST", "/api/workspaces/ws-1/mini-apps/flashcards/generate", {"deck": "Deck", "source_text": "Source"}),
+        ("PUT", "/api/workspaces/ws-1/mini-apps/flashcards/decks", {"deck": "Deck"}),
+        ("POST", "/api/workspaces/ws-1/mini-apps/flashcards/reviews", {"deck": "Deck"}),
+        ("POST", "/api/workspaces/ws-1/mini-apps/flashcards/records", {}),
+    ],
+)
+async def test_mini_app_mutations_reject_cookie_session_without_csrf(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+    json_body: dict[str, object] | None,
+) -> None:
+    app = _build_app()
+    routes_mini_apps.auth_module.CSRF_FAILURE_RATE_LIMIT_BUCKETS.clear()
+
+    def fail_decode_token(_token: str):
+        pytest.fail("cookie auth token should not be decoded before CSRF validation")
+
+    monkeypatch.setattr(routes_mini_apps.auth_module, "_decode_token_payload", fail_decode_token)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_session(client, csrf=False)
+        response = await client.request(method, path, json=json_body)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "CSRF validation failed."
 
 
 @pytest.mark.anyio

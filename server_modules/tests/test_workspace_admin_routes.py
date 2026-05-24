@@ -138,6 +138,52 @@ async def test_provider_admin_routes_reject_missing_csrf(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        (
+            "POST",
+            "/workspaces",
+            {
+                "name": "Workspace",
+                "workspace_type": "personal",
+                "preferred_shell_profile": "personal_shell",
+                "default_route": "/chat",
+            },
+        ),
+        ("PATCH", "/workspaces/ws-1", {"name": "Updated Workspace"}),
+        ("POST", "/workspaces/ws-1/members/invites", {"email": "guest@example.com", "role": "member"}),
+        ("DELETE", "/workspaces/ws-1/members/invites/invite-1", None),
+        ("PATCH", "/workspaces/ws-1/members/user-2", {"role": "viewer"}),
+        ("DELETE", "/workspaces/ws-1/members/user-2", None),
+        ("PATCH", "/workspaces/ws-1/policies", {"machine_enrollment_scope": "tenant"}),
+        ("PATCH", "/workspaces/ws-1/sage/tool-policy", {"tool": "web_search", "enabled": False}),
+    ],
+)
+async def test_workspace_mutation_routes_reject_cookie_session_without_csrf(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+    json_body: dict[str, object] | None,
+) -> None:
+    app = _build_app()
+    routes_workspaces.auth_module.CSRF_FAILURE_RATE_LIMIT_BUCKETS.clear()
+
+    def fail_decode_token(_token: str):
+        pytest.fail("cookie auth token should not be decoded before CSRF validation")
+
+    monkeypatch.setattr(routes_workspaces.auth_module, "_decode_token_payload", fail_decode_token)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_session(client, csrf=False)
+        response = await client.request(method, path, json=json_body)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "CSRF validation failed."
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
     ("method", "path", "json_body", "service_name", "expected"),
     [
         (

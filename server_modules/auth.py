@@ -5588,6 +5588,8 @@ def get_current_user(
         bearer_token = auth_header[7:].strip()
     else:
         bearer_token = str(auth_cookie_access_token(request) or "").strip()
+        if bearer_token:
+            validate_csrf(request)
 
     if bearer_token:
         payload = _decode_token_payload(bearer_token)

@@ -109,6 +109,11 @@ class TestPilotInviteRoutes:
         app.include_router(routes_pilot.router, prefix="/api")
         return app
 
+    def _seed_browser_session(self, client: AsyncClient, *, csrf: bool) -> None:
+        client.cookies.set(routes_pilot.auth.AUTH_ACCESS_COOKIE_NAME, "access-cookie", path="/")
+        if csrf:
+            client.cookies.set(routes_pilot.auth.AUTH_CSRF_COOKIE_NAME, "csrf-cookie", path="/")
+
     @pytest.mark.anyio
     async def test_public_validate_endpoint(self):
         invite = await pilot_invite_service.create_pilot_invite()
@@ -133,6 +138,36 @@ class TestPilotInviteRoutes:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/api/pilot/invites", json={})
         assert response.status_code == 401
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("method", "path", "json_body"),
+        [
+            ("post", "/api/pilot/invites", {}),
+            ("delete", "/api/pilot/invites/invite-1", None),
+        ],
+    )
+    async def test_admin_invite_mutations_reject_cookie_session_without_csrf(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        method: str,
+        path: str,
+        json_body: dict[str, object] | None,
+    ):
+        app = self._build_app()
+        routes_pilot.auth.CSRF_FAILURE_RATE_LIMIT_BUCKETS.clear()
+
+        def fail_decode_token(_token: str):
+            pytest.fail("cookie auth token should not be decoded before CSRF validation")
+
+        monkeypatch.setattr(routes_pilot.auth, "_decode_token_payload", fail_decode_token)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            self._seed_browser_session(client, csrf=False)
+            response = await client.request(method.upper(), path, json=json_body)
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "CSRF validation failed."
 
     @pytest.mark.anyio
     async def test_admin_list_requires_auth(self):

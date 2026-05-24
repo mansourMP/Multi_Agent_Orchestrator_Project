@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 from fastapi import FastAPI
 from starlette.responses import Response
 from starlette.requests import Request
@@ -92,6 +92,89 @@ async def test_browser_refresh_requires_csrf_when_using_cookie_session():
 
     assert response.status_code == 403
     assert response.json()["detail"] == "CSRF validation failed."
+
+
+@pytest.mark.anyio
+async def test_cookie_authenticated_mutation_requires_csrf_before_user_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    app = _build_app()
+    auth.CSRF_FAILURE_RATE_LIMIT_BUCKETS.clear()
+    token_decoded = False
+
+    def fake_decode_token_payload(token: str):
+        nonlocal token_decoded
+        token_decoded = True
+        return {"sub": "user-1"}
+
+    monkeypatch.setattr(auth, "_decode_token_payload", fake_decode_token_payload)
+
+    @app.post("/protected-mutation")
+    async def protected_mutation(current_user=Depends(auth.get_current_user)):
+        return {"user_id": current_user["user_id"]}
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_cookies(client, refresh=False, csrf=False)
+        response = await client.post("/protected-mutation", json={"ok": True})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "CSRF validation failed."
+    assert token_decoded is False
+
+
+@pytest.mark.anyio
+async def test_cookie_authenticated_mutation_accepts_matching_csrf_header(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    app = _build_app()
+    auth.CSRF_FAILURE_RATE_LIMIT_BUCKETS.clear()
+
+    monkeypatch.setattr(
+        auth,
+        "_decode_token_payload",
+        lambda token: {
+            "sub": "user-1",
+            "email": "owner@example.com",
+            "role": "owner",
+            "workspace_ids": ["ws-1"],
+            "channel": "web",
+        },
+    )
+    monkeypatch.setattr(
+        auth,
+        "_validated_bearer_context",
+        lambda payload, *, touch_session=False: {
+            "user_id": "user-1",
+            "email": "owner@example.com",
+            "workspace_ids": ["ws-1"],
+            "identity_versions": {},
+            "auth_session": {"session_id": "session-1", "channel": "web"},
+        },
+    )
+    monkeypatch.setattr(auth, "_resolved_bearer_role", lambda user_id, email, role: "owner")
+    monkeypatch.setattr(auth, "_has_auth_admin_identity", lambda user_id, email: False)
+    monkeypatch.setattr(
+        auth,
+        "_effective_workspace_access",
+        lambda **kwargs: {"ws-1": {"tenant_id": "tenant-1", "role": "owner"}},
+    )
+
+    @app.post("/protected-mutation")
+    async def protected_mutation(current_user=Depends(auth.get_current_user)):
+        return {"user_id": current_user["user_id"]}
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        _seed_browser_cookies(client, refresh=False, csrf=True)
+        response = await client.post(
+            "/protected-mutation",
+            json={"ok": True},
+            headers={"x-csrf-token": "csrf-cookie"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["user_id"] == "user-1"
 
 
 @pytest.mark.anyio

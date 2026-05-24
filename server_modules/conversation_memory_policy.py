@@ -13,6 +13,9 @@ SPECIALIST_PRIVATE_PROFILE = "specialist_private"
 OWNER_SAGE_VIEW_PROFILE = "owner_sage_view"
 
 CONTEXT_BUDGET_PRESET_COMPACT = "compact"
+CONTEXT_BUDGET_PRESET_STANDARD = "standard"
+CONTEXT_BUDGET_PRESET_EXTENDED = "extended"
+CONTEXT_BUDGET_PRESET_MAX = "max"
 CONTEXT_BUDGET_PRESET_BALANCED = "balanced"
 CONTEXT_BUDGET_PRESET_DEEP = "deep"
 
@@ -60,18 +63,31 @@ _BASE_RETENTION = MemoryRetentionContract(
     event_memory_days=365,
 )
 
+_CONTEXT_BUDGET_PRESET_ALIASES = {
+    CONTEXT_BUDGET_PRESET_BALANCED: CONTEXT_BUDGET_PRESET_STANDARD,
+    CONTEXT_BUDGET_PRESET_DEEP: CONTEXT_BUDGET_PRESET_EXTENDED,
+}
+
 _CONTEXT_BUDGET_PRESETS = {
     CONTEXT_BUDGET_PRESET_COMPACT: {
-        "max_prompt_tokens": 900,
+        "window_share": 0.16,
+        "max_prompt_tokens": 24_000,
         "preserve_last_messages": 6,
     },
-    CONTEXT_BUDGET_PRESET_BALANCED: {
-        "max_prompt_tokens": 1100,
+    CONTEXT_BUDGET_PRESET_STANDARD: {
+        "window_share": 0.32,
+        "max_prompt_tokens": 96_000,
         "preserve_last_messages": 8,
     },
-    CONTEXT_BUDGET_PRESET_DEEP: {
-        "max_prompt_tokens": 2200,
+    CONTEXT_BUDGET_PRESET_EXTENDED: {
+        "window_share": 0.55,
+        "max_prompt_tokens": 400_000,
         "preserve_last_messages": 12,
+    },
+    CONTEXT_BUDGET_PRESET_MAX: {
+        "window_share": 0.82,
+        "max_prompt_tokens": None,
+        "preserve_last_messages": 20,
     },
 }
 
@@ -184,9 +200,14 @@ def get_memory_policy_profile(profile: str | MemoryPolicyProfile) -> MemoryPolic
 
 def normalize_context_budget_preset(value: str | None) -> str:
     token = str(value or "").strip().lower()
+    token = _CONTEXT_BUDGET_PRESET_ALIASES.get(token, token)
     if token in _CONTEXT_BUDGET_PRESETS:
         return token
-    return config_defaults_service.default_context_budget_preset()
+    default_token = str(config_defaults_service.default_context_budget_preset() or "").strip().lower()
+    default_token = _CONTEXT_BUDGET_PRESET_ALIASES.get(default_token, default_token)
+    if default_token in _CONTEXT_BUDGET_PRESETS:
+        return default_token
+    return CONTEXT_BUDGET_PRESET_STANDARD
 
 
 def normalize_retention_preset(value: str | None) -> str:
@@ -196,27 +217,51 @@ def normalize_retention_preset(value: str | None) -> str:
     return config_defaults_service.default_retention_preset()
 
 
+def _context_budget_tokens(*, preset: str, context_window_tokens: int | None) -> int:
+    window = max(8_000, int(context_window_tokens or 128_000))
+    output_reserve = _clamp(int(window * 0.08), 2_048, 32_000)
+    system_tool_reserve = _clamp(int(window * 0.06), 2_000, 24_000)
+    retrieval_reserve = _clamp(int(window * 0.10), 2_000, 64_000)
+    usable_input = max(1_000, window - output_reserve - system_tool_reserve - retrieval_reserve)
+    settings = _CONTEXT_BUDGET_PRESETS[normalize_context_budget_preset(preset)]
+    target = int(usable_input * float(settings["window_share"]))
+    cap = settings.get("max_prompt_tokens")
+    if isinstance(cap, int) and cap > 0:
+        target = min(target, cap)
+    return _clamp(target, 800, max(800, int(window * 0.82)))
+
+
 def build_external_channel_memory_profile(
     *,
     context_budget_preset: str | None = None,
     retention_preset: str | None = None,
+    context_window_tokens: int | None = None,
 ) -> MemoryPolicyProfile:
     base = _PROFILE_REGISTRY[EXTERNAL_CHANNEL_CUSTOMER_PROFILE]
     resolved_budget_preset = normalize_context_budget_preset(context_budget_preset)
     resolved_retention_preset = normalize_retention_preset(retention_preset)
     budget = _CONTEXT_BUDGET_PRESETS[resolved_budget_preset]
+    context_budget = _context_budget_tokens(
+        preset=resolved_budget_preset,
+        context_window_tokens=context_window_tokens,
+    )
     retention_days = _RETENTION_PRESET_DAYS[resolved_retention_preset]
+    preserve_last_messages = _clamp(
+        int(context_budget / 600),
+        int(budget["preserve_last_messages"]),
+        40,
+    )
     return MemoryPolicyProfile(
         name=EXTERNAL_CHANNEL_CUSTOMER_PROFILE,
-        max_prompt_tokens=budget["max_prompt_tokens"],
-        preserve_last_messages=budget["preserve_last_messages"],
-        summary_trigger_messages=base.summary_trigger_messages,
-        summary_trigger_tokens=base.summary_trigger_tokens,
+        max_prompt_tokens=context_budget,
+        preserve_last_messages=preserve_last_messages,
+        summary_trigger_messages=max(base.summary_trigger_messages, preserve_last_messages + 2),
+        summary_trigger_tokens=max(base.summary_trigger_tokens, int(context_budget * 0.80)),
         semantic_retrieval_k=base.semantic_retrieval_k,
-        max_summary_chars=base.max_summary_chars,
-        max_business_plan_chars=base.max_business_plan_chars,
+        max_summary_chars=_clamp(int(context_budget / 4), base.max_summary_chars, 12_000),
+        max_business_plan_chars=_clamp(int(context_budget / 3), base.max_business_plan_chars, 18_000),
         max_recent_log_days=base.max_recent_log_days,
-        max_transcript_items=base.max_transcript_items,
+        max_transcript_items=_clamp(preserve_last_messages + 2, base.max_transcript_items, 48),
         raw_transcript_enabled=base.raw_transcript_enabled,
         semantic_write_enabled=base.semantic_write_enabled,
         semantic_read_enabled=base.semantic_read_enabled,

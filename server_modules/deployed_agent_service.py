@@ -15,6 +15,7 @@ from server_modules import agent_specialist_repository
 from server_modules import auth as auth_module
 from server_modules import config_defaults_service
 from server_modules import control_plane_repository
+from server_modules import conversation_memory_policy
 from server_modules import deployed_agent_config_schema
 from server_modules import deployed_agent_runtime_contract_service
 from server_modules import deployed_agent_analytics_service
@@ -998,6 +999,7 @@ def _self_hosted_runtime_binding_payload(
         "filesystem_scope": _normalize_text(automation.filesystem_default_access, default="none"),
         "domain_allowlist": list(automation.allowed_domains or []),
         "approval_policy": {
+            "runtime_access_mode": _normalize_text(automation.runtime_access_mode, default="default_guarded"),
             "requires_owner_approval": bool(automation.requires_owner_approval),
             "required_owner_approval_actions": list(automation.required_owner_approval_actions or []),
             "sensitive_action_confirmation_required": bool(automation.sensitive_action_confirmation_required),
@@ -2227,7 +2229,9 @@ def _apply_workspace_admin_defaults_to_config(
         not _config_field_present(config_payload, "memory_policy", "context_budget_preset")
         and "context_budget_preset" not in owner_metadata
     ):
-        memory_policy["context_budget_preset"] = workspace_defaults.context_budget_preset
+        memory_policy["context_budget_preset"] = conversation_memory_policy.normalize_context_budget_preset(
+            workspace_defaults.context_budget_preset
+        )
     if (
         not _config_field_present(config_payload, "memory_policy", "retention_preset")
         and "retention_preset" not in owner_metadata

@@ -461,7 +461,7 @@ async def test_create_deployed_agent_route_passes_typed_config(monkeypatch: pyte
     async def fake_create_draft_deployed_agent(**kwargs):
         config = kwargs["config"]
         assert config["customer_policy"]["paused_message"] == "Please come back later."
-        assert config["memory_policy"]["context_budget_preset"] == "deep"
+        assert config["memory_policy"]["context_budget_preset"] == "extended"
         assert config["safety_policy"]["enabled"] is True
         assert config["escalation_policy"]["handoff_mode"] == "manual_resume"
         return _created_payload()

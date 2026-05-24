@@ -860,7 +860,7 @@ def _evaluate_action_policy_and_approval(
     deny_classes = set(_normalize_class_list(vc_risk_policy.get("deny_classes") or []))
     allow_orange_without_approval = bool(vc_risk_policy.get("allow_orange_without_approval"))
     red_policy = str(vc_risk_policy.get("red_policy") or "block").strip().lower()
-    if red_policy not in {"block", "owner_approval"}:
+    if red_policy not in {"block", "owner_approval", "allow"}:
         red_policy = "block"
     deny_wins = bool(vc_risk_policy.get("deny_wins", RISK_DENY_WINS_DEFAULT))
 
@@ -886,9 +886,11 @@ def _evaluate_action_policy_and_approval(
     if risk_class == RISK_CLASS_RED:
         if red_policy == "block":
             raise RuntimeError("Computer-use RED-risk action is blocked by policy.")
-        if not owner_or_admin:
+        if red_policy == "owner_approval" and not owner_or_admin:
             raise RuntimeError("Computer-use RED-risk action requires owner/admin mode.")
-        requires_approval = True
+        requires_approval = red_policy == "owner_approval"
+    if red_policy == "allow":
+        requires_approval = False
     if requires_approval and not approval_granted:
         raise RuntimeError(f"Computer-use action requires explicit approval before execution ({risk_class}).")
     return {

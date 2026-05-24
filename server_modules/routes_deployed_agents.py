@@ -9,6 +9,7 @@ from server_modules import auth as auth_module
 from server_modules import deployed_agent_business_insights_service
 from server_modules import deployed_agent_service
 from server_modules import deployed_agent_test_turn_service
+from server_modules import conversation_memory_policy
 from server_modules.deployed_agent_admin_dashboard_service import get_deployed_agent_admin_dashboard_service
 from server_modules.schemas import DeployedAgentTestTurnRequest
 
@@ -105,6 +106,21 @@ def _raise_for_value_error(error: ValueError, *, default_status: int = 400) -> N
     raise HTTPException(status_code=default_status, detail=message) from error
 
 
+def _normalize_deployed_agent_config_input(config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(config, dict):
+        return config
+    payload = dict(config)
+    memory_policy = payload.get("memory_policy")
+    if isinstance(memory_policy, dict):
+        next_memory_policy = dict(memory_policy)
+        if "context_budget_preset" in next_memory_policy:
+            next_memory_policy["context_budget_preset"] = conversation_memory_policy.normalize_context_budget_preset(
+                next_memory_policy.get("context_budget_preset")
+            )
+        payload["memory_policy"] = next_memory_policy
+    return payload
+
+
 @router.post("/deployed-agents")
 async def create_deployed_agent(
     body: DeployedAgentCreateRequest,
@@ -125,7 +141,7 @@ async def create_deployed_agent(
             runtime_target=body.runtime_target,
             billing_plan=body.billing_plan,
             metadata=body.metadata,
-            config=body.config,
+            config=_normalize_deployed_agent_config_input(body.config),
             runtime_profile_id=body.runtime_profile_id,
             provider=body.provider,
             model=body.model,
@@ -431,6 +447,8 @@ async def update_deployed_agent(
     auth_module.validate_csrf(request)
     updates = body.model_dump(exclude_none=True)
     updates.pop("workspace_id", None)
+    if "config" in updates:
+        updates["config"] = _normalize_deployed_agent_config_input(updates.get("config"))
     try:
         payload = await deployed_agent_service.update_deployed_agent(
             deployed_agent_id=deployed_agent_id,

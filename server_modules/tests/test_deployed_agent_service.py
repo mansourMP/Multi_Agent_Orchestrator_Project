@@ -1096,7 +1096,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(persisted_kwargs["runtime_target"], "local")
         self.assertEqual(persisted_kwargs["billing_plan"], "pro")
         self.assertEqual(persisted_kwargs["metadata"]["platform_cta_label"], "Join now")
-        self.assertEqual(persisted_kwargs["metadata"]["context_budget_preset"], "deep")
+        self.assertEqual(persisted_kwargs["metadata"]["context_budget_preset"], "extended")
         self.assertEqual(persisted_kwargs["metadata"]["retention_preset"], "extended")
         self.assertTrue(persisted_kwargs["metadata"]["health_safety_enabled"])
         specialist_kwargs = create_specialist_mock.await_args.kwargs

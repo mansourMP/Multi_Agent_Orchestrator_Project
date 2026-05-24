@@ -211,6 +211,7 @@ from server_modules.routes_personal_channels import router as personal_channels_
 from server_modules.routes_pilot import router as pilot_router
 from server_modules.routes_platform_analytics import router as platform_analytics_router
 from server_modules.routes_runs import router as runs_router
+from server_modules.routes_studio import router as studio_router
 from server_modules.routes_workspaces import router as workspaces_router
 from server_modules.routes_workflows import router as workflows_router
 
@@ -326,6 +327,7 @@ app.include_router(agent_traces_router, prefix="/api")
 app.include_router(platform_analytics_router, prefix="/api")
 app.include_router(marketplace_router, prefix="/api")
 app.include_router(pilot_router, prefix="/api")
+app.include_router(studio_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/v1")
 
 

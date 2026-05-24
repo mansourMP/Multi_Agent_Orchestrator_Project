@@ -250,6 +250,7 @@ class SingleAppRootTests(unittest.TestCase):
             "routes_pilot": types.ModuleType("server_modules.routes_pilot"),
             "routes_platform_analytics": types.ModuleType("server_modules.routes_platform_analytics"),
             "routes_runs": types.ModuleType("server_modules.routes_runs"),
+            "routes_studio": types.ModuleType("server_modules.routes_studio"),
             "routes_workspaces": types.ModuleType("server_modules.routes_workspaces"),
             "routes_workflows": types.ModuleType("server_modules.routes_workflows"),
         }
@@ -268,6 +269,7 @@ class SingleAppRootTests(unittest.TestCase):
         route_modules["routes_pilot"].router = _build_router("/pilot-router")
         route_modules["routes_platform_analytics"].router = _build_router("/platform-analytics-router")
         route_modules["routes_runs"].router = _build_router("/runs-router")
+        route_modules["routes_studio"].router = _build_router("/studio-router")
         route_modules["routes_workspaces"].router = _build_router("/workspaces-router")
         route_modules["routes_workflows"].router = _build_router("/workflows-router")
 
@@ -366,6 +368,7 @@ class SingleAppRootTests(unittest.TestCase):
             "/api/marketplace-router",
             "/api/mini-apps-router",
             "/api/pilot-router",
+            "/api/studio-router",
             "/api/v1/auth-router",
         }
         for path in expected_paths:

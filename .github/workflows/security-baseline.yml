@@ -34,7 +34,21 @@ jobs:
           sudo install /tmp/gitleaks /usr/local/bin/gitleaks
 
       - name: Scan current tree for secrets
-        run: gitleaks dir --redact --exit-code=2 --no-banner --config .gitleaks.toml .
+        run: |
+          set +e
+          gitleaks dir \
+            --redact \
+            --exit-code=2 \
+            --no-banner \
+            --config .gitleaks.toml \
+            --report-format json \
+            --report-path /tmp/gitleaks-report.json \
+            .
+          status=$?
+          if [ -s /tmp/gitleaks-report.json ]; then
+            jq -r '.[] | "\(.File):\(.StartLine) \(.RuleID)"' /tmp/gitleaks-report.json
+          fi
+          exit "$status"
 
   python-dependency-audit:
     name: Python dependency audit

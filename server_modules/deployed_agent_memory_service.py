@@ -10,6 +10,7 @@ from server_modules import deployed_agent_business_insights_service
 from server_modules import deployed_agent_config_schema
 from server_modules import failure_policy_service
 from server_modules import memory_summary_service
+from server_modules import provider_profiles
 from server_modules.conversation_memory_policy import (
     EXTERNAL_CHANNEL_CUSTOMER_PROFILE,
     MemoryPolicyProfile,
@@ -113,9 +114,11 @@ def _memory_policy_for_deployed_agent(
     deployed_agent: Optional[Dict[str, Any]],
 ) -> MemoryPolicyProfile:
     config = deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent)
+    context_window_tokens = provider_profiles.context_window_for_model(config.provider, config.model)
     return build_external_channel_memory_profile(
         context_budget_preset=config.memory_policy.context_budget_preset,
         retention_preset=config.memory_policy.retention_preset,
+        context_window_tokens=context_window_tokens,
     )
 
 

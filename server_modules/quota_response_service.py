@@ -28,7 +28,7 @@ _HTTP_DETAIL_BY_REASON = {
 
 _CHANNEL_REPLY_BY_REASON = {
     "thread_busy": "I’m still finishing the previous message in this conversation. One moment.",
-    "agent_limit_exceeded": "This specialist is helping other customers right now. Please try again in a moment.",
+    "agent_limit_exceeded": "This Business Agent is helping other customers right now. Please try again in a moment.",
     "workspace_limit_exceeded": "The workspace is helping other customers right now. Please try again in a moment.",
     "workspace_rate_limited": "I’m receiving too many requests right now. Please try again in a moment.",
     "runtime_cap_exceeded": "I’m taking longer than the current service window allows. Please try again in a moment.",
@@ -110,12 +110,12 @@ def channel_reply_for_reason(
     normalized_reason = str(reason or "").strip()
     details = dict(metadata or {})
     if normalized_reason == "deployed_agent_daily_limit_exceeded":
-        specialist_name = str((deployed_agent or {}).get("name") or "").strip() or "this specialist"
+        business_agent_name = str((deployed_agent or {}).get("name") or "").strip() or "this Business Agent"
         cta = _daily_limit_cta_payload(
             deployed_agent=deployed_agent,
             metadata=details,
         )
-        reply = f"{specialist_name} has reached today's free message limit."
+        reply = f"{business_agent_name} has reached today's free message limit."
         if cta.get("url") and cta.get("label"):
             reply = f"{reply} {cta['label']}: {cta['url']}"
         elif cta.get("url"):
